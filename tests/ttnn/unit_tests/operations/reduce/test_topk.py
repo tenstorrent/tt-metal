@@ -1562,3 +1562,49 @@ def test_topk_stable_float32_signed_zero(largest, device):
     # torch.eq treats -0.0 == 0.0, so the values check is sign-insensitive by design.
     assert_equal(golden_values, ttnn_torch_values)
     assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, k",
+    [
+        ([1, 1, 64, 64], -2, 32),
+        ([1, 1, 64, 64], 2, 32),
+        ([2, 64, 64], 1, 16),
+        ([1, 1, 64, 64], -1, 32),  # control: dim last
+    ],
+)
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_output_tensor_writes_into_caller_tensor(shape, dim, k, largest, device):
+    torch.manual_seed(0)
+    # Distinct small integers along the reduced dim, exact in bfloat16, so the indices are unique.
+    input = torch.argsort(torch.rand(shape), dim=dim).to(torch.bfloat16)
+    torch_values, torch_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
+
+    out_shape = list(shape)
+    out_shape[dim] = k
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    # Sentinels that no top-k value or index can equal, so an unwritten output cannot pass.
+    value_tensor = ttnn.from_torch(
+        torch.full(out_shape, 12345.0, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.full(out_shape, 9999, dtype=torch.int32), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+    values_address = value_tensor.buffer_address()
+    indices_address = index_tensor.buffer_address()
+    # A second handle on the same buffers, as a caller holding a view or alias of the output would have.
+    values_alias = ttnn.reshape(value_tensor, out_shape)
+    indices_alias = ttnn.reshape(index_tensor, out_shape)
+
+    returned_values, returned_indices = ttnn.topk(
+        ttnn_input, k, dim=dim, largest=largest, sorted=True, output_tensor=(value_tensor, index_tensor)
+    )
+
+    assert value_tensor.buffer_address() == values_address
+    assert index_tensor.buffer_address() == indices_address
+    assert returned_values.buffer_address() == values_address
+    assert returned_indices.buffer_address() == indices_address
+    assert_equal(torch_values, ttnn.to_torch(value_tensor))
+    assert_equal(torch_indices, ttnn.to_torch(index_tensor, dtype=torch.int32).to(torch.int64))
+    assert_equal(torch_values, ttnn.to_torch(values_alias))
+    assert_equal(torch_indices, ttnn.to_torch(indices_alias, dtype=torch.int32).to(torch.int64))
