@@ -27,6 +27,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.decode_matmul import lm_head_out_block_w_config, lm_head_out_block_w_from_env
 from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.mesh_orientation import decode_flag, set_decode_fusion_profile
@@ -1506,7 +1507,28 @@ class Gemma4Model:
                 k=self.hidden_size,
                 n=self.lm_head_weight.shape[-1],
             )
-            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
+            lm_head_ckc = None
+            # GEMMA4_LM_HEAD_OUT_BLOCK_W (opt-in): fix out_block_w of the one-tile-row lm_head that otherwise runs on
+            # ttnn's automatic config (a full vocab on one chip, N > 64K); see decode_matmul.lm_head_out_block_w_config.
+            out_block_w = lm_head_out_block_w_from_env("GEMMA4_LM_HEAD_OUT_BLOCK_W")
+            if out_block_w is not None and int(hidden_states.shape[2]) <= ttnn.TILE_SIZE:
+                tp = max(1, int(getattr(self.mesh_config, "tp", 1) or 1))
+                if tp > 1 or lm_head_pc is not None:
+                    raise ValueError(
+                        "GEMMA4_LM_HEAD_OUT_BLOCK_W applies only to a single-chip lm_head on ttnn's automatic config "
+                        f"(N > 64K); this one has tp={tp}, N={int(self.lm_head_weight.shape[-1])}"
+                    )
+                lm_head_pc, lm_head_ckc = lm_head_out_block_w_config(
+                    self.mesh_device,
+                    k=self.hidden_size,
+                    n=int(self.lm_head_weight.shape[-1]),
+                    out_block_w=out_block_w,
+                    x_dtype=hidden_states.dtype,
+                    w_dtype=self.lm_head_weight.dtype,
+                )
+            logits = ttnn.linear(
+                hidden_states, self.lm_head_weight, program_config=lm_head_pc, compute_kernel_config=lm_head_ckc
+            )
             # ``deallocate_input=False`` is required when the caller owns a
             # *persistent* buffer that outlives this call — notably the batched
             # prefill-sampling trace, whose input is written by
