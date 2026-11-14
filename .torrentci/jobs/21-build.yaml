@@ -1,0 +1,88 @@
+---
+# The Merge Gate "build" compile (merge-gate.yaml build -> build-artifact.yaml
+# with build-type Release, the default clang-20 libstdc++ toolchain, tracy
+# off, system SFPI, skip-tt-train false => --build-all), in the image
+# ci-build-image builds. Same shape as 20-asan-build.yaml.
+#
+# Differences from the GitHub job:
+# - Ubuntu 24.04 (the ci-build chain image), not 22.04.
+# - Only the .deb packages are published, as one flat tar: no .ddeb debug
+#   packages, no ttm_any build tarball and no in-place wheel. Artifact storage
+#   is tight and nothing here consumes those yet.
+# - retention: dependents, so the tar goes as soon as nothing needs it.
+# No triggers: run it by hand.
+jobs:
+  - id: build
+    description: Configure and compile tt-metal (Release, --build-all) in the CI build image
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        resources:
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 32Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_DIR, value: /workspace/.cache/ccache}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CCACHE_TEMPDIR, value: /tmp/ccache}
+      - {name: CCACHE_COMPRESS, value: 'true'}
+      - {name: CCACHE_COMPRESSLEVEL, value: '3'}
+      - {name: CCACHE_MAXSIZE, value: 4G}
+      - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
+      - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+    artifacts:
+      publish:
+        - name: packages-ubuntu-24.04-amd64-Release-x86_64-linux-clang-20-libstdcpp
+          path: packages.tar
+          content-type: application/x-tar
+          retention: dependents
+    steps:
+      - id: check-image
+        kind: shell
+        shell:
+          run:
+            - . tt_metal/sfpi-version
+            - echo "repo sfpi ${sfpi_version} ${sfpi_x86_64_debian_deb_hash}"
+            - echo "image sfpi $(cat /opt/tenstorrent/sfpi/.torrentci-sfpi-version)"
+            - test "$(cat /opt/tenstorrent/sfpi/.torrentci-sfpi-version)" = "${sfpi_version} ${sfpi_x86_64_debian_deb_hash}"
+      - id: submodules
+        kind: shell
+        shell:
+          run:
+            - git submodule sync --recursive
+            - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$CCACHE_DIR" "$CCACHE_TEMPDIR"
+            - ccache -z
+            - >-
+              ./build_metal.sh --build-dir build --build-type Release
+              --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+              --build-all --enable-ccache --configure-only
+              --use-system-sfpi --disable-profiler
+      - id: compile
+        kind: shell
+        shell:
+          run:
+            - cmake --build build --target install
+            - ccache -s -v
+      - id: package
+        kind: shell
+        shell:
+          run:
+            - cmake --build build --target package
+            - ls -1sh build/*.deb build/*.ddeb || true
+      - id: stage-packages
+        kind: shell
+        shell:
+          run:
+            - find build -maxdepth 1 -type f -name '*.deb' -printf '%f\n' | sort > packages.list
+            - test -s packages.list
+            - tar -cf packages.tar -C build -T packages.list
+            - ls -l packages.tar
