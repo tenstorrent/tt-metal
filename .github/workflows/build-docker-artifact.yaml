@@ -439,7 +439,7 @@ jobs:
 
       - name: Build and push Ubuntu images
         if: steps.bake.outputs.targets != ''
-        uses: tenstorrent/.github/actions/docker-bake-publish@7d1204cf0aad17be9dc569ab95df752c6491a7fc # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-bake-publish@bbb36c4c8293018cce2a1f082356228fad38c3ae # nsexton/docker-sbom
         env:
           # Bake variables are read from the environment.
           UBUNTU_VERSION: ${{ fromJson(needs.metadata.outputs.platform_data).version }}
@@ -540,7 +540,7 @@ jobs:
           } >> $GITHUB_OUTPUT
 
       - name: Build and push ManyLinux image
-        uses: tenstorrent/.github/actions/docker-bake-publish@7d1204cf0aad17be9dc569ab95df752c6491a7fc # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-bake-publish@bbb36c4c8293018cce2a1f082356228fad38c3ae # nsexton/docker-sbom
         with:
           bake-file: dockerfile/docker-bake.hcl
           targets: manylinux

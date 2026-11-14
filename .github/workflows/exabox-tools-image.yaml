@@ -117,7 +117,7 @@ jobs:
       # Gates the image (OCI labels, Trivy) before anything is pushed, then
       # attaches the SBOM. No harbor-prefix: GitHub-hosted runners cannot reach Harbor.
       - name: Build and push
-        uses: tenstorrent/.github/actions/docker-publish@7d1204cf0aad17be9dc569ab95df752c6491a7fc # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-publish@bbb36c4c8293018cce2a1f082356228fad38c3ae # nsexton/docker-sbom
         with:
           file: dockerfile/exabox_tools/Dockerfile
           platforms: linux/amd64
