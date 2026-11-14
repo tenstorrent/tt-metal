@@ -2481,6 +2481,18 @@ def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
     assert pcc > 0.999, f"pcc {pcc} at C={C} G={G} with tile padding = {padding_value}"
 
 
+# Grid for the fp32 accuracy tests below (wide groups with fp32 DEST, FLOAT32 input with narrow groups, and the user
+# compute_kernel_config's fp32_dest_acc_en). 4x4 fits the smaller worker grids some devices have, such as the 5x4
+# Blackhole configuration and the harvested Wormhole n300 board (7x8, or 8x7 with dispatch on a row), and still reaches
+# both the mcast and no-mcast factories. skip_if_grid_too_small skips the tests on any smaller grid.
+SMALL_DEVICE_GRID = ttnn.CoreGrid(y=4, x=4)
+
+
+def skip_if_grid_too_small(device, grid):
+    if device.core_grid.x < grid.x or device.core_grid.y < grid.y:
+        pytest.skip(f"device grid too small for {grid.x}x{grid.y}")
+
+
 # The interleaved factories used to pick channel subblocks of up to 8 tiles. The statistics loops fill a whole
 # subblock in one DEST acquire, and an fp32 DEST in half-sync mode only holds 4 tiles, so groups of 5 or more
 # channel tiles got wrong statistics. The sharded factory already caps the subblock at 4 in that case.
@@ -2491,14 +2503,15 @@ def test_group_norm_sharded_dirty_padding_tile_aligned_groups(
     ids=["fp32", "bf16_fp32_dest", "bf16"],
 )
 @pytest.mark.parametrize("dst_full_sync_en", [False, True], ids=["half_sync", "full_sync"])
-# One sample on an 8x8 grid takes the mcast factory. Eight samples on an 8x4 grid (one group per core column)
-# fill all virtual rows, which selects the no-mcast factory.
-@pytest.mark.parametrize("N, HW, core_grid", [(1, 1024, (8, 8)), (8, 128, (8, 4))], ids=["mcast", "no_mcast"])
-def test_group_norm_interleaved_wide_groups_fp32_dest(
-    device, C, dtype, fp32_dest_acc_en, dst_full_sync_en, N, HW, core_grid
-):
+# On the 4x4 grid each group gets one core column (4 virtual rows). One sample takes the mcast factory; four samples
+# fill all virtual rows, which selects the no-mcast factory. HW keeps 2 (mcast) and 4 (no-mcast) tile rows per core:
+# more rows per core overflow L1 for fp32 at 8 channel tiles and push the bf16 DEST error past the tolerance.
+@pytest.mark.parametrize("N, HW", [(1, 256), (4, 128)], ids=["mcast", "no_mcast"])
+def test_group_norm_interleaved_wide_groups_fp32_dest(device, C, dtype, fp32_dest_acc_en, dst_full_sync_en, N, HW):
     torch.manual_seed(0)
     G = 4
+    grid = SMALL_DEVICE_GRID
+    skip_if_grid_too_small(device, grid)
     x = torch.randn(N, 1, HW, C)
     if dtype == ttnn.bfloat16:
         x = x.bfloat16().float()
@@ -2516,7 +2529,7 @@ def test_group_norm_interleaved_wide_groups_fp32_dest(
         tt_input,
         num_groups=G,
         epsilon=1e-5,
-        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+        core_grid=grid,
         inplace=False,
         compute_kernel_config=compute_kernel_config,
     )
@@ -2525,3 +2538,174 @@ def test_group_norm_interleaved_wide_groups_fp32_dest(
     max_abs_err = (out - ref).abs().max().item()
     tolerance = 0.03 if dtype == ttnn.float32 else 0.08
     assert max_abs_err < tolerance, f"max abs error {max_abs_err} at C={C} ({C // G // 32} channel tiles per group)"
+
+
+# Mean abs error bound for FLOAT32 input with groups narrower than a tile: between the fixed error and the error
+# when SrcB truncated those groups to bf16 (#29960). Over seeds 0-9, the fixed kernels give 8.4e-4 to 9.1e-4 and the
+# truncating kernels 1.68e-3 to 1.76e-3. The values are the same on Wormhole (HiFi3) and Blackhole (HiFi4), on 4x4 and
+# 8x8 grids, and on both the mcast and sharded factories.
+FP32_INPUT_NARROW_GROUPS_MEAN_ERR_LIMIT = 1.2e-3
+
+
+# With 16 channels per group, every group after the first in a tile goes through the accumulate that truncated it to
+# bf16 for FLOAT32 input (#29960). This test checks that the error stays below that truncation level.
+@pytest.mark.parametrize("path", ["mcast", "sharded"])
+def test_group_norm_welford_fp32_input_narrow_groups_accuracy(device, path):
+    torch.manual_seed(0)
+    N, HW, C, G = 1, 1024, 512, 32
+    x = 3.0 * torch.randn(N, 1, HW, C) + 16.0
+    ref = torch.nn.functional.group_norm(x.double().permute(0, 3, 1, 2), G, eps=1e-5).permute(0, 2, 3, 1)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        # HiFi4 with fp32_dest_acc_en is avoided on Wormhole (#38306).
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+    )
+    grid = SMALL_DEVICE_GRID
+    skip_if_grid_too_small(device, grid)
+    tt_input = ttnn.from_torch(
+        x, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT if path == "sharded" else ttnn.TILE_LAYOUT, device=device
+    )
+    if path == "sharded":
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        # COL_MAJOR splits the channels (C) across grid.y and the rows (N * HW) across grid.x.
+        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // grid.x, C // grid.y), ttnn.ShardOrientation.COL_MAJOR)
+        memory_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+        tt_input = ttnn.interleaved_to_sharded(tt_input, memory_config, keep_l1_aligned=True)
+        kwargs = {"memory_config": memory_config, "inplace": True}
+    else:
+        kwargs = {"inplace": False}
+    tt_output = ttnn.group_norm(
+        tt_input,
+        num_groups=G,
+        epsilon=1e-5,
+        core_grid=grid,
+        compute_kernel_config=compute_kernel_config,
+        use_welford=True,
+        **kwargs,
+    )
+    if path == "sharded":
+        tt_output = ttnn.sharded_to_interleaved(tt_output, ttnn.L1_MEMORY_CONFIG)
+    out = ttnn.to_torch(tt_output).double()
+    err = (out - ref).abs().mean().item()
+    assert err < FP32_INPUT_NARROW_GROUPS_MEAN_ERR_LIMIT, f"mean abs error {err}"
+
+
+# Helper for the user compute_kernel_config tests below: runs group_norm on x (N, 1, HW, C) on one factory, all on
+# the 4x4 grid (4 virtual rows for C=512, G=4):
+#   - "mcast": interleaved TILE input; one sample selects the mcast factory.
+#   - "no_mcast": interleaved TILE input; with N=4 every virtual row is filled, which selects the no-mcast factory.
+#   - "sharded": block-sharded ROW_MAJOR input, with no caller-supplied input mask.
+def _run_group_norm_user_kernel_config(device, x, G, path, dtype, compute_kernel_config, use_welford):
+    N, _, HW, C = x.shape
+    grid = SMALL_DEVICE_GRID
+    skip_if_grid_too_small(device, grid)
+    if path == "sharded":
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        shard_spec = ttnn.ShardSpec(shard_grid, (N * HW // grid.y, C // grid.x), ttnn.ShardOrientation.ROW_MAJOR)
+        memory_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+        tt_input = ttnn.from_torch(
+            x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+        )
+        kwargs = {"core_grid": grid, "memory_config": memory_config}
+    else:
+        tt_input = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        kwargs = {"core_grid": grid, "inplace": False}
+    tt_output = ttnn.group_norm(
+        tt_input,
+        num_groups=G,
+        epsilon=1e-5,
+        compute_kernel_config=compute_kernel_config,
+        use_welford=use_welford,
+        **kwargs,
+    )
+    return ttnn.to_torch(tt_output).double()
+
+
+# (N, HW) per factory for the user compute_kernel_config tests; see _run_group_norm_user_kernel_config.
+USER_KERNEL_CONFIG_PATHS = [("mcast", 1, 1024), ("no_mcast", 4, 128), ("sharded", 1, 1024)]
+
+
+# The two helpers below mirror group_norm's default compute_kernel_config, set in groupnorm.cpp (math_fidelity,
+# approx_mode and fp32_acc). Tests that compare a user config against the op's default build it with these helpers, so
+# if the default changes, those tests fail and point here. Update both helpers to match the new default.
+#
+# The default uses HiFi4 on every architecture, including Wormhole. On Wormhole, HiFi4 with fp32_dest_acc_en can give
+# rare wrong outputs from a hardware bug (#38306), so other ops (matmul, softmax, batch norm, reductions) drop to HiFi3
+# there. group_norm's default does not yet, so the user config here also uses HiFi4 on Wormhole: otherwise it would not
+# match the default and the comparison would fail for a reason unrelated to the setting under test.
+def group_norm_default_kernel_config(device, fp32_dest_acc_en):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+
+# The default's fp32_dest_acc_en: on for welford (which requires it) and for FLOAT32 input, off otherwise.
+def group_norm_default_fp32_dest_acc_en(dtype, use_welford):
+    return use_welford or dtype == ttnn.float32
+
+
+# A user compute_kernel_config replaces the op's default config wholesale, so its fp32_dest_acc_en must reach the
+# kernels unchanged. Float32 input defaults to fp32 DEST, so an explicit fp32_dest_acc_en=False is only rejected if
+# the user's value is actually the one in effect.
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize("path, N, HW", USER_KERNEL_CONFIG_PATHS, ids=[p[0] for p in USER_KERNEL_CONFIG_PATHS])
+def test_group_norm_user_fp32_dest_acc_en_off_rejected_for_fp32_input(device, use_welford, path, N, HW, expect_error):
+    C, G = 512, 4
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+    )
+    with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
+        _run_group_norm_user_kernel_config(
+            device, torch.randn(N, 1, HW, C), G, path, ttnn.float32, compute_kernel_config, use_welford
+        )
+
+
+# With bf16 input the op's default is fp32 DEST for welford and bf16 DEST for legacy. Only fp32_dest_acc_en differs
+# between the two user configs, so matching outputs would mean the flag was dropped. Only welford is checked for an
+# accuracy gain: legacy packs its statistics to bf16 intermediate CBs between steps, so fp32 DEST can round the mean
+# to a worse bf16 value.
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize("path, N, HW", USER_KERNEL_CONFIG_PATHS, ids=[p[0] for p in USER_KERNEL_CONFIG_PATHS])
+def test_group_norm_user_fp32_dest_acc_en_honored_for_bf16_input(device, use_welford, path, N, HW):
+    torch.manual_seed(0)
+    C, G = 512, 4
+    # A nonzero mean makes bf16 rounding of the statistics visible.
+    x = (torch.randn(N, 1, HW, C) + 4.0).bfloat16().float()
+    ref = torch.nn.functional.group_norm(x.double().permute(0, 3, 1, 2), G, eps=1e-5).permute(0, 2, 3, 1)
+
+    def run(fp32_dest_acc_en):
+        compute_kernel_config = None
+        if fp32_dest_acc_en is not None:
+            # The op's default config with only fp32_dest_acc_en changed (HiFi4 on Wormhole too; see the helper).
+            compute_kernel_config = group_norm_default_kernel_config(device, fp32_dest_acc_en)
+        return _run_group_norm_user_kernel_config(device, x, G, path, ttnn.bfloat16, compute_kernel_config, use_welford)
+
+    out_default = run(None)
+    out_off = run(False)
+    out_on = run(True)
+
+    assert not torch.equal(out_on, out_off), "fp32_dest_acc_en in the user compute_kernel_config had no effect"
+    default_fp32_dest = group_norm_default_fp32_dest_acc_en(ttnn.bfloat16, use_welford)
+    assert torch.equal(out_default, out_on if default_fp32_dest else out_off), (
+        "a user compute_kernel_config that matches the op's default gave a different output. If group_norm's default "
+        "compute config in groupnorm.cpp changed, update group_norm_default_kernel_config and "
+        "group_norm_default_fp32_dest_acc_en to match."
+    )
+
+    if use_welford:
+        err_on = (out_on - ref).abs().mean().item()
+        err_off = (out_off - ref).abs().mean().item()
+        assert err_on < err_off, f"fp32 DEST mean abs error {err_on} is not below bf16 DEST {err_off}"
