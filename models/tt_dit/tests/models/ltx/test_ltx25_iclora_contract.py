@@ -389,3 +389,150 @@ def test_existing_ltx25_reference_sampler_is_deterministic(monkeypatch):
     assert native._denoise_no_guidance(None, None, trace_key="s1")["ancestral"] is True
     for trace_key in ("s1_ref", "s2_ref"):
         assert native._denoise_no_guidance(None, None, trace_key=trace_key)["ancestral"] is False
+
+
+@pytest.fixture
+def constructor_native(contract, monkeypatch):
+    """Execute the native factories and constructors; stub only their collaborators."""
+    import weakref
+    from contextlib import nullcontext
+
+    events = []
+    state = SimpleNamespace(cold=False, capture_only=False, error=None)
+
+    def capture_only(enabled):
+        state.capture_only = enabled
+        events.append(("capture_only", enabled))
+
+    kp = SimpleNamespace(
+        kernel_prewarm_cold_start_needed=lambda: state.cold,
+        kernel_prewarm_set_capture_only=capture_only,
+        kernel_prewarm_offline_compile=lambda: events.append(("compile",)) or 3,
+    )
+    namespace = dict(
+        os=os,
+        weakref=weakref,
+        ttnn=SimpleNamespace(
+            Topology=SimpleNamespace(Linear="linear", Ring="ring"),
+            device=SimpleNamespace(is_blackhole=lambda: True),
+            _ttnn=SimpleNamespace(device=kp),
+        ),
+        EncoderParallelConfig=SimpleNamespace,
+        ParallelFactor=SimpleNamespace,
+        DiTParallelConfig=SimpleNamespace,
+        VaeHWParallelConfig=SimpleNamespace,
+        CCLManager=lambda mesh, **kw: SimpleNamespace(**kw),
+        StateTensor=lambda: object(),
+        resolve_audio_traced=lambda traced, audio: traced if audio is None else audio,
+        set_kernel_prewarm_capturing=lambda flag: events.append(("tracer_capture_only", flag)),
+        logger=SimpleNamespace(info=lambda *a: None, warning=lambda *a: None),
+        safe_open=lambda *a, **kw: nullcontext(SimpleNamespace(metadata=lambda: {"model_version": "2.5"})),
+    )
+
+    def load_class(filename, name, base):
+        tree = ast.parse(SOURCE.with_name(filename).read_text())
+        node = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == name)
+        # Retain the exact production methods, including decorators and super() dispatch.
+        node.bases = [ast.Name(id=base, ctx=ast.Load())] if base else []
+        node.body = [
+            n for n in node.body
+            if isinstance(n, ast.AnnAssign)
+            or (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id.isupper() for t in n.targets))
+            or (isinstance(n, ast.FunctionDef) and n.name in {"__init__", "create_pipeline"})
+        ]
+        module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), node], type_ignores=[])
+        exec(compile(ast.fix_missing_locations(module), str(SOURCE.with_name(filename)), "exec"), namespace)
+        return namespace[name]
+
+    base = load_class("pipeline_ltx.py", "LTXPipeline", None)
+    load_class("pipeline_ltx_distilled.py", "LTXDistilledPipeline", "LTXPipeline")
+    native = load_class("pipeline_ltx25_distilled.py", "LTX25DistilledPipeline", "LTXDistilledPipeline")
+    base._resolve_checkpoint_file = staticmethod(lambda path: path)
+    base._make_gemma_encoder_pair = lambda self, path: SimpleNamespace(
+        gemma_path=path, defer_trace_capture=lambda: events.append(("defer_encode",))
+    )
+    for name in ("_load_config_from_checkpoint", "_instantiate_modules", "_register_coresident_exclusions", "_maybe_apply_quant_config", "_prime_caches"):
+        setattr(base, name, lambda *a, **kw: None)
+    base.release_traces = lambda self: events.append(("release",))
+
+    def warmup(self, **kwargs):
+        stages = kwargs.get("stages", ("s1", "s2"))
+        events.append(("warmup", kwargs.copy(), self._traced, state.capture_only))
+        if state.error:
+            raise state.error
+        for stage in stages:
+            if self._traced and stage not in self._trace_state:
+                events.append(("allocate", stage))
+                self._trace_state[stage] = object()
+        if self._traced and not state.capture_only:
+            events.append(("capture", stages))
+
+    base.warmup_buffers = warmup
+    distilled = SimpleNamespace(
+        DISTILLED_SIGMA_VALUES=contract.module.S1_SIGMAS,
+        STAGE_2_DISTILLED_SIGMA_VALUES=contract.module.S2_SIGMAS,
+        KEYFRAME_S1_STRENGTH=0.5,
+        KEYFRAME_S1_STRENGTH_COARSE=0.25,
+    )
+    monkeypatch.setattr(contract.module, "__package__", "constructor_ltx")
+    monkeypatch.setitem(sys.modules, "constructor_ltx", SimpleNamespace(pipeline_ltx_distilled=distilled))
+    monkeypatch.setitem(sys.modules, "constructor_ltx.pipeline_ltx25_distilled", SimpleNamespace(LTX25DistilledPipeline=native))
+    mesh = SimpleNamespace(shape=(4, 8), clear_program_cache=lambda: events.append(("clear_cache",)))
+    factory = contract.raw_native_factory
+    monkeypatch.setattr(contract.module, "_native_factory", lambda: lambda ignored, **kw: factory()(mesh, **kw))
+    return state, events
+
+
+@pytest.mark.parametrize("traced", [False, True])
+@pytest.mark.parametrize("cold", [False, True])
+@pytest.mark.parametrize("dynamic_load", [False, True])
+def test_constructor_reference_allocation_before_capture(contract, constructor_native, traced, cold, dynamic_load):
+    state, events = constructor_native
+    state.cold = cold
+    pipe = contract.create(traced=traced, dynamic_load=dynamic_load)
+    native = pipe._pipeline
+    assert native._traced is traced
+    assert native._vae_traced is traced
+    assert native._audio_traced is traced
+    assert native.fps == 24
+    assert (native._init_num_frames, native._init_height, native._init_width) == (9, 128, 128)
+    assert native._diffusion_decoder is False
+    assert native.use_ancestral_sampler is False
+    implicit = [e for e in events if e[0] == "warmup"]
+    assert len(implicit) == (2 if cold and traced and not dynamic_load else int(traced))
+    pipe.warmup_buffers()
+    for _, kw, actual_traced, _ in (e for e in events if e[0] == "warmup"):
+        assert (kw["num_frames"], kw["height"], kw["width"]) == (9, 128, 128)
+        assert kw.get("ref_num_frames") == 9
+        assert kw.get("stages") == ("s1_ref", "s2_ref")
+        assert actual_traced is traced
+    captures = [i for i, e in enumerate(events) if e[0] == "capture"]
+    if traced:
+        assert captures
+        assert [e for e in events[:captures[0]] if e[0] == "allocate"] == [
+            ("allocate", "s1_ref"), ("allocate", "s2_ref")
+        ]
+        assert not any(e[0] == "allocate" for e in events[captures[0]:])
+        assert implicit[-1][1]["capture_all"] is cold
+    else:
+        assert not captures
+    if cold and traced and not dynamic_load:
+        assert implicit[0][1]["capture_all"] is True
+        assert implicit[0][1]["capture_traced"] is True
+        assert implicit[0][3] is True
+        assert events.index(("compile",)) < events.index(("release",)) < events.index(("clear_cache",)) < captures[0]
+    else:
+        assert ("compile",) not in events
+    assert state.capture_only is False
+
+
+@pytest.mark.parametrize("error", [RuntimeError("capture failed"), KeyboardInterrupt()])
+def test_constructor_cold_capture_cleanup(contract, constructor_native, error):
+    state, events = constructor_native
+    state.cold = True
+    state.error = error
+    with pytest.raises(type(error)):  # allow-pytest.raises: CPU-only run excludes native conftest
+        contract.create(traced=True, dynamic_load=False)
+    assert state.capture_only is False
+    assert events[-2:] == [("tracer_capture_only", False), ("capture_only", False)]
+    assert ("compile",) not in events
