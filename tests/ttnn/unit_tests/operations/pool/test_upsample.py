@@ -178,8 +178,12 @@ def upsample_multicore_common(
                 nshards -= 1
             ncores = nshards
         elif shard_strategy == ttnn.ShardStrategy.BLOCK:
-            max_nshards_h = min(batch_size * height * width, max_grid_size[0])  ## height along NHW
-            max_nshards_w = min(num_channels, max_grid_size[1])  ## width along C
+            if shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+                max_nshards_h = min(batch_size * height * width, max_grid_size[1])  ## height along NHW (X axis)
+                max_nshards_w = min(num_channels, max_grid_size[0])  ## width along C (Y axis)
+            else:
+                max_nshards_h = min(batch_size * height * width, max_grid_size[0])  ## height along NHW (Y axis)
+                max_nshards_w = min(num_channels, max_grid_size[1])  ## width along C (X axis)
             ## find nshards_h along NHW
             nshards_h = max_nshards_h
             while nshards_h > 0:
@@ -197,7 +201,10 @@ def upsample_multicore_common(
                 pytest.skip("nshards_h or nshards_w is 0")
 
             ncores = (nshards_h, nshards_w)
-        shard_grid = get_shard_grid_from_num_cores(device, ncores)
+        if shard_strategy == ttnn.ShardStrategy.BLOCK and shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+            shard_grid = get_shard_grid_from_num_cores(device, (ncores[1], ncores[0]))
+        else:
+            shard_grid = get_shard_grid_from_num_cores(device, ncores)
 
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
         tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
@@ -277,8 +284,6 @@ def upsample_multicore_common(
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("run_twice", [False])
 def test_upsample_multicore(device, input_shape, scale_h, scale_w, shard_strategy, shard_orientation, run_twice):
-    if (shard_strategy == ttnn.ShardStrategy.BLOCK) and (shard_orientation == ttnn.ShardOrientation.COL_MAJOR):
-        pytest.skip("Disabled until illegal shard configs are fixed (#17795)")
 
     (torch_result, output_tensor) = upsample_multicore_common(
         device,
@@ -320,8 +325,6 @@ def test_upsample_multicore(device, input_shape, scale_h, scale_w, shard_strateg
 def test_upsample_multicore_corerange(
     device, input_shape, scale_h, scale_w, shard_strategy, shard_orientation, core_range, run_twice
 ):
-    if (shard_strategy == ttnn.ShardStrategy.BLOCK) and (shard_orientation == ttnn.ShardOrientation.COL_MAJOR):
-        pytest.skip("Disabled until illegal shard configs are fixed (#17795)")
 
     if (len(core_range) != 1) and (shard_strategy == ttnn.ShardStrategy.BLOCK):
         pytest.skip("illegal core range for BLOCK strategy")
@@ -659,3 +662,29 @@ def test_upsample_nearest_float_rejects_uint32_overflow(device, expect_error):
     )
     with expect_error(RuntimeError, "overflows uint32"):
         ttnn.upsample(input_tensor, [1e10, 1.0], mode="nearest")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_upsample_block_sharded_col_major_regression_64933(device):
+    torch.manual_seed(0)
+
+    # Non-square 2x4 grid (0,0)-(1,3), BLOCK_SHARDED + COL_MAJOR
+    # 2 NHW cores along X (8 sticks/core), 4 channel cores along Y (32 ch/core)
+    x_nchw = torch.randn((1, 128, 4, 4), dtype=torch.bfloat16)
+    x_nhwc = x_nchw.permute(0, 2, 3, 1).contiguous()
+    golden = (
+        torch.nn.functional.interpolate(x_nchw.float(), scale_factor=(2, 2), mode="nearest")
+        .bfloat16()
+        .permute(0, 2, 3, 1)
+    )
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))})
+    shard_spec = ttnn.ShardSpec(grid, (8, 32), ttnn.ShardOrientation.COL_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_in = ttnn.from_torch(
+        x_nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    tt_out = ttnn.upsample(tt_in, (2, 2), mode="nearest")
+    out = ttnn.to_torch(tt_out)
+    assert torch.equal(out, golden)
