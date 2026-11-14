@@ -70,7 +70,7 @@ import torch
 
 import ttnn
 
-from . import ccl, host_alloc
+from . import ccl, host_alloc, lean
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import (
@@ -906,6 +906,11 @@ class TtWindowCache:
         self._before_ring_write(start)
         q_rows = g.q_rows
         pieces = []
+        pin = True
+        if lean.ON[0]:  # LEAN_PY=on (P.66): no per-chip _pin_put call when the chunk's rows miss the pin's span
+            pin = self.pin is not None and max(start, self.pin_at - WINDOW, 0) < min(
+                start + g.n * q_rows, self.pin_at, -(-int(end) // 32) * 32
+            )
         for q in range(g.n):
             a, b = max(lo - start, q * q_rows), min(hi - start, (q + 1) * q_rows)
             if a < b:
@@ -913,7 +918,8 @@ class TtWindowCache:
                     pieces += self.ring.plan(a - q * q_rows, start + a, b - a, end, q)
                 else:
                     self.ring.put(own_rm, a - q * q_rows, start + a, b - a, end, q)
-            self._pin_put(own_rm, 0, start + q * q_rows, q_rows, end, q)
+            if pin:
+                self._pin_put(own_rm, 0, start + q * q_rows, q_rows, end, q)
         self._after_ring_write(end)
         return pieces if defer else None
 
@@ -2219,8 +2225,21 @@ class TtWindowAttention:
         if self.sp32:
             # ATTN_SP32_PROJ=on (P.9): the whole sum over K here: wo_b writes the GPU code's bf16 output of the chip's
             # rows [1, 1, S/(SP TP), H]; ONE all_to_all over TP (split H, concat rows) -> [1, 1, S/SP, H/TP]
+            # LEAN_PY=on (P.66, OWN_ROWS): the attention output into one load-time buffer for every layer (read by this
+            # layer's attn_residual only, which the next layer's wo_b is queued after; the block's free skips it)
+            zo = (
+                host_alloc.mm_out(self.mesh, "attn.wo_b_out", yq, self.wo_b, act_dtype())
+                if self.keep_rows and lean.ON[0]
+                else None
+            )
             z = mm.linear(
-                yq, self.wo_b, site="attn.wo_b", dtype=act_dtype(), compute_kernel_config=self.ckc, memory_config=DRAM
+                yq,
+                self.wo_b,
+                site="attn.wo_b",
+                dtype=act_dtype(),
+                compute_kernel_config=self.ckc,
+                memory_config=DRAM,
+                out=zo,
             )
             dealloc(yq)
             if self.keep_rows:  # OWN_ROWS=on (P.23): the residual rests on these rows

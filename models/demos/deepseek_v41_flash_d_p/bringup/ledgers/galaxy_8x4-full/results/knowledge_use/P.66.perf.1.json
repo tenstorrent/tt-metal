@@ -1,0 +1,97 @@
+{
+ "used": [
+  {
+   "id": "DS41-172",
+   "how": "chose load-time outputs (alloc + free ~35 us a call) for the three per-layer intermediates read only inside their layer, over pure Python trims",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-174",
+   "how": "reused host_alloc's site / fork-out buffer pattern (reserved at load, pinned) for the new sites",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-149",
+   "how": "the call sites hand on the load-time object itself, not the op's new wrapper, so ccl.dealloc's _KEEP skip holds",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "every new buffer reserved at load (host_alloc.reserve_sites / reserve_forks), never mid-forward",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-259",
+   "how": "measured with 4 alternating rounds a side and paired differences with their standard error, not one pass a side",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-183",
+   "how": "every device run started with devjob and waited in short calls",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-171",
+   "how": "census aimed at allocations and frees (the host after prepared programs), not at Python-built ops",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how much of tt/'s 'Python' time (P.57 a) is pybind calls (deallocate, is_allocated, shape) that cProfile charges to the calling function: now in DS41-269"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or inflated; the new buffers have each op's exact output spec"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the changed calls are C++ ops (linear, add) and the mhc_post fork's existing stats_output option"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new tests/test_lean_py.py and the model-level checks (measure parts, gate)"
+  }
+ ],
+ "cited_only": [
+  "DS41-269"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.66",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T18:13:50",
+  "head": "067e6876f67",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.66.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.66_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.66_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.66_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.66.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_lean_py.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/lean.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

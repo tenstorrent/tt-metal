@@ -1808,3 +1808,62 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Re-run: probe `scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_snapshot_send.py -s` (~1 min); gate unit `gate P.65 --spec <spec>
   --check --unit 'P.65#test_moe_prev_replicas'` (~9 min, devjob); `orchestrator measure --spec <spec> --task P.65`.
+
+## P.66 (perf, attempt 1): per-layer Python glue trimmed (LEAN_PY legacy | on)
+- Expected per chunk (written before the change was measured; perf_guide 2 / 3): census of the current code (novel,
+  prev, chunks 0..10, tests/test_lean_py.py P66_CENSUS): 630 ccl.dealloc frees a chunk at ~7.8 us (4.9 ms), 386 more
+  dealloc calls on pinned tensors (Python only), 63 Python allocations (40 of them the MoE arena, 88 us each, L1:
+  not removable without the arena time-sharing L1). Removable without changing any op: the block's per-call step
+  wrappers (a dict of 15 closures, a set and a dict per step: ~0.7 ms), the pybind is_allocated before the pinned
+  check (~0.3 ms), and three fixed-shape per-layer outputs read only inside their layer written into load-time
+  buffers (alloc in the op + free ~35 us each, DS41-172): the ffn residual's dead stats row (37 a chunk), wo_b's
+  output (40), the MoE output's add (40): ~3.9 ms. Host -4 to -6 ms a chunk, device 0, launches 0 (the same ops).
+  The wall moves only where the chunk is host-bound (prev: host ~138-144 vs device ~141-148 ms, P.65).
+- Terms: host = first host call of a chunk to the last layer's enqueue; busy = host minus the engram worker wait; wall =
+  to the sync after the last layer (clean: no profiler); prev / off = MOE_REPLICAS=prev (lean host path, shipped) /
+  switched off in the loaded model; legacy / on = LEAN_PY, switched in the loaded model (tt/lean.set_mode). Means of
+  chunks 1..10 of fresh requests, 4 rounds with the sides alternating, +- = standard error of the paired difference.
+- Built (LEAN_PY = legacy | on, tt/settings.py, default on; tt/lean.py holds the switch as `ON[0]`):
+  1. tt/model.py: the block's step wrappers made once per layer (`_lean_overrides`; the caller's ids in
+     `self._protect` during the call), a step with nothing to free runs unwrapped; `_free` checks ccl._KEEP (the
+     load-time tensors) before the pybind `is_allocated`. MOE_TRACE=moe keeps the per-call path.
+  2. Three per-layer outputs read only inside their layer written into load-time buffers (tt/host_alloc.py, reserved at
+     load only under on; pinned, so the block's free skips them; every next writer is queued after the readers on the
+     same chip): ffn_residual's mhc_post stats row on the POST_COLLAPSE path, which nothing reads ("fork.post.dead_row",
+     stats_output=); wo_b's output = the attention output under OWN_ROWS ("attn.wo_b_out", optional_output_tensor);
+     the MoE output's ttnn.add on the own rows ("moe.out", output_tensor=; not under MOE_TRACE).
+  3. tt/attention.write_own: no per-chip `_pin_put` call when the chunk misses the pin's span (32 -> 0 a layer on
+     most chunks); host_alloc.fork_out: a tuple shape as its key (no generator).
+  Same ops, same order, same programs' arguments except the given outputs: no launch added or removed.
+- Probe (tests/test_lean_py.py, new; one model load, the 4 sides alternating, outputs of chunks 1 and 10 vs the first
+  side): max |diff| 0 on every side, both prompts.
+
+  | wl, moe | host legacy -> on | busy diff | wall legacy -> on |
+  |---|---|---|---|
+  | novel, prev | 138.1 -> 133.0 | -4.76 +- 0.98 | 161.5 -> 160.2 (-1.3 +- 0.9) |
+  | novel, off | 136.9 -> 135.6 | -2.44 +- 1.35 | 171.8 -> 173.7 (+2.0 +- 1.6) |
+  | code, prev | 140.0 -> 135.7 | -4.27 +- 1.95 | 160.0 -> 159.0 (-1.1 +- 2.9) |
+  | code, off | 137.8 -> 134.4 | -3.08 +- 1.77 | 164.7 -> 164.1 (-0.6 +- 2.4) |
+
+  Census a chunk (novel, prev): frees 630 -> 513 (4.93 -> 4.30 ms); cProfile: ttnn op calls -5.4 ms (the outputs no
+  longer allocated), the wrappers' dict / set building gone, _pin_put 1280 -> 128 calls. Launches unchanged.
+- `measure --task P.66` (change on: LEAN_PY=on ENGRAM_TABLE=resident): determinism 0 (novel, code, state); quick
+  pcc_chunk_out 0.60548579 (= P.65: the same output bytes), host transfers per layer 0, clean wall 159.4 ms (spread
+  5.5); p51200 (random ids) wall 167.7 (spread 5.7; P.65 168.0), device_ms_total 150.27 (P.65 149.69),
+  host_launch_calls 1136 (= P.65), host overhead 17.4 (18.3). The p51200 chunk is device-bound (wall ~ device + 17):
+  the host cut cannot show there.
+- Gate `P.66 --check`: PASS (determinism + ladder last, test_moe_prev_replicas, test_profile x2; 1200 s). Its
+  prev-replicas unit (change on only, one pass a side, +-4 ms noise, DS41-259), chunks 1..10, host / wall / device
+  ms: novel off 131.3 / 172.2 / 162.75, prev lean 141.0 / 169.9 / 146.05; code off 134.0 / 166.3 / 152.50, prev lean
+  134.9 / 158.8 / 141.80; maxdiff 0, repeat 0, mirror 0 mismatches. The on / off difference is the alternated probe
+  above, not these single passes.
+- Expected vs got: host -4 to -6 expected, -4.3 to -5.1 ms got with prev (-1.2 to -3.4 with off, noisier); device 0.
+  The wall does not follow: in this probe wall ~160 ms vs host ~133-138 ms, i.e. the chunk is device-bound here
+  (perf_guide 1), so the host cut is headroom until the device time drops.
+- Left (not in this pick): the MoE arena's L1 allocation (40 x 88 us + its free; L1 is time-shared, a load-time arena
+  would clash with other ops' CBs), the boundary streams (h, pre: 82 frees, the caller owns them), sparse_sdpa's q /
+  o rows (2 x 38 frees; rope_chain's output_tensor is scalar-form only), nlp_concat_heads' output (no output option in
+  the fork), run_block (framework, ~1.6 ms under cProfile). Prepared (OV-23): no Python-built op touched. OV-3:
+  nothing padded. Cores (rule 18): unchanged (the same ops on the same grids). Fork suites not run (OV-25).
+- Re-run: `P66_CLEAN=4 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_lean_py.py -s` (~9 min with the load; devjob).

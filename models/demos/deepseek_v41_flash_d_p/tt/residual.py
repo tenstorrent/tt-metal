@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import ttnn
 
-from . import host_alloc
+from . import host_alloc, lean
 from .ccl import dealloc
 from .common import DRAM, cast
 from .cores import max_grid, sub_cores, sub_cores_tiled
@@ -55,6 +55,10 @@ class TtHcResidual:
         self.fold = settings.get("GLUE_FOLD") == "on"
         # FORK_OUT_BUFFERS=on (P.16, tt/host_alloc.reserve_forks): fused()'s stats row / partials scratch sites
         self.out_sites = (None, None)
+        # LEAN_PY=on (P.66, tt/host_alloc.reserve_forks): _collapse's stats row, which nothing reads on that path, into
+        # one load-time buffer when out_sites names no row site (ffn_residual's: its row would be read by the next
+        # layer on the non-collapse path)
+        self.dead_row_site = None
         self._scratch_shapes: dict = {}
 
     def __call__(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
@@ -154,6 +158,8 @@ class TtHcResidual:
             so = host_alloc.fork_out(
                 hc.mesh, self.out_sites[1], self._scratch(hc.mesh, rows, y.shape[-1]), ttnn.float32
             )
+        if ro is None and self.dead_row_site is not None and lean.ON[0]:
+            ro = host_alloc.fork_out(hc.mesh, self.dead_row_site, (1, 1, rows, 32), ttnn.float32)
         kw = hc.collapse_kwargs(mix, rows, y.shape[-1], x.dtype)
         if hc_out is not None:  # (MOE_TRACE=moe: the step's hc into the layer's load-time buffer)
             assert kw["hc_output"] is None, "hc_out: the step's hc has a site already"

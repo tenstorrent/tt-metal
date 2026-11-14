@@ -1225,9 +1225,26 @@ class TtMoEBlockMainLayer:
             f"{tuple(x_own.shape)}"
         )
         yt = ttnn.to_layout(y_own, ttnn.TILE_LAYOUT, memory_config=DRAM)  # (y_own, se: the block's, kept)
+        # LEAN_PY=on (P.66): the MoE output into one load-time buffer for every layer (read by this layer's
+        # ffn_residual only, which the next layer's add is queued after; the block's free skips it)
+        ob = _lean_out(self.mesh, yt, se)
+        if ob is not None:
+            ttnn.add(yt, se, memory_config=DRAM, output_tensor=ob)
+            dealloc(yt)
+            return ob  # (the object itself: the op hands back a new wrapper of its buffer, DS41-149)
         out = ttnn.add(yt, se, memory_config=DRAM)
         dealloc(yt)
         return out
+
+
+def _lean_out(mesh, yt, se):
+    """LEAN_PY=on (P.66): the load-time MoE output for yt's spec (tt/host_alloc.reserve_sites' "moe.out"), or None
+    (legacy, no such buffer, or an add whose output dtype is not yt's)."""
+    from . import host_alloc, lean
+
+    if not lean.ON[0] or se.dtype != yt.dtype:
+        return None
+    return host_alloc.out(mesh, "moe.out", yt.shape, yt.dtype)
 
 
 _FX: dict = {}  # id(resources) -> P.55c stream state: res, tables, empty jobs, links, dir_of, limit, layers with jobs

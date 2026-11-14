@@ -58,7 +58,7 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
-from . import ccl, ffn_feed, host_alloc, moe_trace
+from . import ccl, ffn_feed, host_alloc, lean, moe_trace
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc
 from .collapse import TtHcCollapse
@@ -173,6 +173,13 @@ class TailHidden:
         self.t, self.start, self.end = t, int(start), int(end)
 
 
+_NO_IDS: frozenset = frozenset()
+
+
+def _no_cpu(name):
+    raise AssertionError(f"step {name} has no device module (all-device model)")
+
+
 class Keep:
     """A step output the per-layer state owns (a served-cache marker, a top-k kept for this chunk's readers): the
     block's freeing never touches it."""
@@ -196,6 +203,13 @@ def _tensors(v) -> list:
 
 
 def _free(v, protect: set[int] = frozenset()) -> None:
+    if lean.ON[0]:  # LEAN_PY=on (P.66): a load-time tensor (ccl._KEEP) is skipped before the pybind is_allocated query
+        keep = ccl._KEEP
+        for t in _tensors(v):
+            i = id(t)
+            if i not in protect and i not in keep and t.is_allocated():
+                dealloc(t)
+        return
     for t in _tensors(v):
         if id(t) not in protect and t.is_allocated():
             dealloc(t)  # GLUE_FOLD=on (P.19): the binding itself (tt/ccl.py:dealloc)
@@ -638,6 +652,7 @@ class TtDS41Block:
         self.dead = {
             s.name: [n for n in dict.fromkeys(s.inputs) if last[n] == s.name and n != "in"] for s in self.steps
         }
+        self._protect = _NO_IDS  # (LEAN_PY=on, P.66: the caller's tensor ids during a call)
 
     def _ffn_feed_kwargs(self) -> dict:
         """FFN_FEED=on (P.36): mhc_post's feed arguments for this layer's ffn_hc pass."""
@@ -930,6 +945,17 @@ class TtDS41Block:
         # could hand its id to a new tensor, which _free would then skip (a deallocate fewer, at random: FIX.5)
         held = h.tensors()
         protect = {id(t) for t in held}
+        if lean.ON[0] and self.seg is None:  # LEAN_PY=on (P.66): the step wrappers built once (_lean_overrides)
+            self._protect = protect
+            try:
+                out = run_block(self.steps, _no_cpu, ctx, h, overrides=self._lean_overrides())
+            finally:
+                self._protect = _NO_IDS
+            del held
+            if state.memo is not None:
+                for slot in self.model.memo_last.get(self.layer, ()):
+                    state.memo.drop(slot)
+            return out
 
         def wrap(step, fn):
             dead = self.dead[step.name]
@@ -957,6 +983,39 @@ class TtDS41Block:
             for slot in self.model.memo_last.get(self.layer, ()):
                 state.memo.drop(slot)
         return out
+
+    def _lean_overrides(self) -> dict:
+        """LEAN_PY=on (P.66): the block's step wrappers, made once per layer. Each frees the same boundaries as
+        __call__'s per-call ``wrap`` (its inputs whose last reader it is, ``self.dead``), protecting the caller's
+        tensors (``self._protect``, set for the call) and the step's own output; a step with nothing to free returns
+        its output with no set built."""
+        ov = self.__dict__.get("_lean_ov")
+        if ov is not None:
+            return ov
+        layer = self
+
+        def wrap(step, fn):
+            idx = []
+            for n in self.dead[step.name]:
+                idx.append(step.inputs.index(n))  # (the first position of the name: dict(zip()) kept the same object)
+            idx = tuple(idx)
+            if not idx:
+                return fn
+
+            def run(c, *args):
+                out = fn(c, *args)
+                if type(out) is Keep or out is None:
+                    keep = layer._protect
+                else:
+                    keep = layer._protect | {id(t) for t in _tensors(out)}
+                for j in idx:
+                    _free(args[j], keep)
+                return out
+
+            return run
+
+        ov = self._lean_ov = {s.name: wrap(s, self.fns[s.name]) for s in self.steps}
+        return ov
 
     def _segment(self, overrides: dict) -> None:
         """MOE_TRACE=moe (P.61): ffn_norm only notes its input, router .. moe_add do nothing, and ffn_residual runs the
@@ -1051,6 +1110,7 @@ class TtDS41Model:
         # NORM_IN_MHC=on (P.35): those passes also normalize the collapsed y (the norm's weight and eps; tt/mhc.py)
         self.norm_in_mhc = self.post_collapse and settings.get("NORM_IN_MHC") == "on"
         ccl.configure()  # GLUE_FOLD=on (P.19): tt/ccl.py:dealloc through the binding
+        lean.configure()  # LEAN_PY (P.66): the trimmed per-layer glue
         for i in self.layers:
             missing = [j for j in cfg.sources(i) if j not in self.layers]
             assert not missing, f"layer {i} reads the state of layers {missing}, which are not loaded"

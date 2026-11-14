@@ -612,6 +612,15 @@ TABLE = {
         "chip's 128 rows go to every chip's slab over a broadcast tree of 1-hop fabric unicasts (the owner's column, "
         "then each row); 1 launch a layer, no gather buffer. Data movement only: outputs bit-identical",
     ),
+    "LEAN_PY": Setting(
+        "on",
+        ("legacy", "on"),
+        "P.66 (owner 2026-11-14: fewer host calls, one change per run): the per-layer Python glue in tt/ trimmed "
+        "(tt/lean.py). legacy = the glue as before P.66. on = the same ops in the same order with less host work "
+        "around them (the block's step wrappers built once per layer instead of every call, no per-call dict / set / "
+        "closure building, fewer pybind queries before a free, constant per-call lookups hoisted to load time). Host "
+        "only: outputs bit-identical",
+    ),
     "MOE_TRACE": Setting(
         "off",
         ("off", "moe"),
