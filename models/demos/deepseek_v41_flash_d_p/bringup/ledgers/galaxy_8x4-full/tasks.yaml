@@ -3946,13 +3946,43 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.57
+  title: 'Host-bound wall: where the ~191 ms of host time per chunk goes with P.56 on (device ~156 ms), and whether it is fixable (Metal trace first); analysis + a one-layer trace prototype, no shipped change'
+  step: integrate
+  role: perf
+  device: true
+  deps:
+  - P.56
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  brief:
+    details: |-
+      OWNER 2026-11-14, EXPERIMENTAL (this branch): P.56 cut device time per chunk to ~156 ms (novel) but the clean wall stays ~191 ms: the chunk is host-bound, so device wins do not reach the wall. Known so far: DS41-99 (host ~0.04-0.1 ms a call x ~1900 calls; begin_chunk host work; "next: trace") and DS41-205 (host-bound short turns; "trace would take the host"). Find out where the host time goes NOW and whether it is fixable.
+
+      STEP 1, MEASURE (no model change): one warm chunk at position 51,200 and one real novel chunk (chunk 10 after the device's own prefill), MOE_REPLICAS=prev + MOE_FILL=piggyback (P.56) and off. Break the host wall per chunk into: (a) Python in the model code (tt/, per module), (b) ttnn op dispatch per call (C++ enqueue, program cache lookup, runtime-arg updates), (c) prepared-program launches (ttnn.bringup.run_prepared), (d) host<->device transfers and waits (reads, syncs, events), (e) begin_chunk / per-chunk host work (engram, planner guard), (f) anything else; plus op calls per chunk and host us per call by op type. Use the framework's host profile (BRINGUP_PROFILE_HOST, testing/profile.py) and the device profile from the same build; say how wall = max(host, device) + gaps holds. Never the device profiler's per-op mode.
+
+      STEP 2, FIXABILITY: for each part, what removes it and its estimated ms per chunk: Metal trace capture/replay of the chunk (or per layer); fewer launches (fusion, batched runtime-arg updates); moving host glue off the critical path; prepared programs where ops still go through slow paths. For TRACE specifically: list every blocker in this model (host inputs per chunk, shapes or args that change per chunk/position, host reads inside the chunk, P.56's host call-counting guard, engram begin_chunk, buffers allocated inside the chunk, CCL/fabric ops and semaphores) and whether each can be lifted.
+
+      STEP 3, PROTOTYPE (only if step 2 says trace is feasible): capture and replay ONE decoder layer (or the MoE block) at a fixed position; report host ms and device ms per layer traced vs not, outputs bit-identical to untraced. Do not wire trace into the shipped path.
+
+      DELIVERABLE: test models/demos/deepseek_v41_flash_d_p/tests/test_host_bound.py recording host_ms_chunk, device_ms_chunk, wall_ms_chunk (prev and off), host_ms_<part> for each part above, op_calls_chunk, and (if step 3 ran) trace_host_ms_layer / untraced_host_ms_layer / trace_bit_identical. Report: the breakdown table, the fix list ranked by ms per chunk with effort in agent-hours, the trace verdict (feasible / blockers), the prototype numbers. Plain language, short, every term defined. Agent rules 18 and 19 hold. SAFETY: a hang or a board reset need: STOP and report, never reset.
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_host_bound.py
+    metrics:
+      host_ms_chunk*: '> 0'
+      device_ms_chunk*: '> 0'
+      wall_ms_chunk*: '> 0'
 - id: P.54
   title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
   step: perf
   role: perf
   device: true
   deps:
-  - P.56
+  - P.57
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
