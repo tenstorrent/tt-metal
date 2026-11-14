@@ -258,9 +258,14 @@ void kernel_main() {
                // float): the BEST page is in L1 once PACK passed its push - PACK tells MATH (RT_MSYNC)
                 const uint32_t bvc = get_arg_val<uint32_t>(t1 + 1), olc = get_arg_val<uint32_t>(t1 + 2);
                 const uint32_t scl = get_arg_val<uint32_t>(t1 + 3), sv = get_arg_val<uint32_t>(t1 + 4);
+#ifdef RT_NIT
+                const uint32_t mt0 = get_arg_val<uint32_t>(t1 + 6) + it * 32 * RT_RBI;  // (my row tile of it)
+#else
+                const uint32_t mt0 = get_arg_val<uint32_t>(t1 + 6);
+#endif
                 PACK(({
                     *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
-                    rows_::make<K, ET>(bvc, sv, olc, scl, 24, 32);
+                    rows_::make<K, ET>(bvc, sv, olc, scl, 24, 32, mt0);
                     *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
                 }));
                 MATH(({
@@ -270,7 +275,7 @@ void kernel_main() {
                     if constexpr (NIT > 1) {
                         *ms = 0;  // (re-arm: PACK sets it again only after the next iteration's top-K)
                     }
-                    rows_::make<K, ET>(bvc, sv, olc, scl, 16, 24);
+                    rows_::make<K, ET>(bvc, sv, olc, scl, 16, 24, mt0);
                     *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
                 }));
             }

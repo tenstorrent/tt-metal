@@ -241,7 +241,75 @@ const CombineState& state(
     return st;
 }
 
+struct FillInput {
+    bool enabled = false;
+    bool exact = false;  // (MOE_REPLICAS=exact: REC_FX)
+    std::shared_ptr<const CombineFillCall> call;
+};
+constexpr const char* kFillInput = "routed_experts_combine/fill";
+
+const FillInput* fill_input(const MoEBlockResources& res) {
+    const std::any* a = res.op_input(kFillInput);
+    return a == nullptr ? nullptr : std::any_cast<FillInput>(a);
+}
+
+const ttnn::Tensor& fill_done_words(MoEBlockResources& res, const CombinePlan& plan) {
+    return res.persistent_words(
+        "routed_experts_combine/fill_done",
+        CoreRangeSet(CoreRange(plan.collector, plan.collector)),
+        plan.topo.num_chips() + 16);
+}
+
+const ttnn::Tensor& fill_exact_words(MoEBlockResources& res, const CombinePlan& plan) {
+    return res.persistent_words(
+        "routed_experts_combine/fill_exact", CoreRangeSet(CoreRange(plan.collector, plan.collector)), kFxWords);
+}
+
 }  // namespace routed_experts_combine_detail
+
+void set_combine_fill_exact(MoEBlockResources& resources, bool enabled, const std::optional<CombineFillCall>& call) {
+    using namespace routed_experts_combine_detail;
+    FillInput in{.enabled = enabled, .exact = enabled};
+    if (enabled) {
+        TT_FATAL(call && call->exact.has_value(), "routed_experts_combine: the exact fill needs its jobs tensor");
+        in.call = std::make_shared<const CombineFillCall>(*call);
+    }
+    resources.set_op_input(kFillInput, in);
+}
+
+ttnn::Tensor combine_fill_exact_words(MoEBlockResources& resources) {
+    using namespace routed_experts_combine_detail;
+    const auto* st = resources.find_plan<CombineState>("routed_experts_combine/state");
+    TT_FATAL(st != nullptr, "combine_fill_exact_words: the combine has not run on these resources");
+    return fill_exact_words(resources, *st->plan);
+}
+
+void set_combine_fill(MoEBlockResources& resources, bool enabled, const std::optional<CombineFillCall>& call) {
+    using namespace routed_experts_combine_detail;
+    FillInput in{.enabled = enabled};
+    if (call) {
+        TT_FATAL(enabled, "routed_experts_combine: fill jobs with the fill disabled");
+        const uint32_t N = resources.topology().num_chips();
+        for (const auto& j : call->jobs) {
+            TT_FATAL(j.src < N && j.dst < N && j.src != j.dst, "fill job ({}, {}): chips out of range", j.src, j.dst);
+            TT_FATAL(
+                j.table < 256 && j.dst < 256 && j.p0 <= j.p1,
+                "fill job: table {} pieces [{}, {})",
+                j.table,
+                j.p0,
+                j.p1);
+        }
+        in.call = std::make_shared<const CombineFillCall>(*call);
+    }
+    resources.set_op_input(kFillInput, in);
+}
+
+ttnn::Tensor combine_fill_done(MoEBlockResources& resources) {
+    using namespace routed_experts_combine_detail;
+    const auto* st = resources.find_plan<CombineState>("routed_experts_combine/state");
+    TT_FATAL(st != nullptr, "combine_fill_done: the combine has not run on these resources");
+    return fill_done_words(resources, *st->plan);
+}
 
 uint32_t routed_experts_combine_static_cb_bytes(
     MoEBlockResources& resources,
@@ -297,7 +365,8 @@ ttnn::Tensor routed_experts_combine(
     uint32_t activation,
     const std::optional<ttnn::Tensor>& arena,
     const flat_routed_expert::FlatLayoutOptions& layout,
-    const CombineConfig& combine) {
+    const CombineConfig& combine,
+    bool cached_slots) {
     using namespace routed_experts_combine_detail;
     const uint32_t rows_cap = table.logical_shape()[-2] * 32;
     const auto& st = state(resources, rows_cap, max_tokens_per_expert, activation, layout, combine);
@@ -329,6 +398,14 @@ ttnn::Tensor routed_experts_combine(
     params.plan_key = resources.plan_key();
     params.plan = st.plan;
     params.flat_plan = st.flat.plan;
+    params.cached_slots = cached_slots;
+    std::optional<ttnn::Tensor> fill_done;
+    if (const auto* f = fill_input(resources); f != nullptr && f->enabled) {
+        params.fill = true;
+        params.fill_exact = f->exact;
+        params.fill_call = f->call;
+        fill_done = f->exact ? fill_exact_words(resources, *st.plan) : fill_done_words(resources, *st.plan);
+    }
     auto out = ttnn::prim::moe_block_main_routed_experts_combine(
         params,
         RoutedExpertsCombineInputs{
@@ -338,6 +415,7 @@ ttnn::Tensor routed_experts_combine(
             .bar = st.bar,
             .hcache = st.hcache,
             .lut = st.lut,
+            .fill_done = fill_done,
             .flat = flat_routed_expert::FlatRoutedExpertInputs{
                 .x = dispatched,
                 .counts = counts,

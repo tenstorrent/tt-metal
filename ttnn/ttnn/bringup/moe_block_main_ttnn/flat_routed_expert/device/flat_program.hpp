@@ -27,6 +27,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
 
 #include "flat_routed_expert_device_operation_types.hpp"
 #include "flat_routed_expert_plan.hpp"
@@ -68,10 +70,20 @@ struct FlatProgramHandles {
         return a;
     }();
     std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
+    // cached_slots (P.63): each patch's runtime-args record in this handles' program (Kernel keeps one record a core
+    // for its lifetime; only the record's data pointer moves), filled on the first such hit: a hit then writes the
+    // moved addresses without a kernel lookup a patch. Empty: not filled yet.
+    mutable std::vector<tt::tt_metal::RuntimeArgsData*> slots;
     // config.cmb_rt: the y writer kernels / cores whose report args the combine overlap fills, in program order (a
     // writer's index in the combine's L1 hand-off)
     std::vector<std::pair<tt::tt_metal::KernelHandle, tt::tt_metal::CoreCoord>> y_writers;
+    // config.fx_spare: the weight readers' fx_wait.hpp args (kernel, core, first arg index), written every call by
+    // routed_experts_combine's exact fill
+    std::vector<std::tuple<tt::tt_metal::KernelHandle, tt::tt_metal::CoreCoord, uint32_t>> fx_readers;
 };
+
+// fx_wait.hpp's runtime args (SE_FX_RT ..)
+constexpr uint32_t kFlatFxArgs = 6;
 
 // The y writers' L1 hand-off args after the 4 report args (y_row_major.hpp SE_Y_L1).
 constexpr uint32_t kFlatYL1Args = 8 + 5 * 32;
@@ -86,8 +98,12 @@ FlatProgramHandles add_flat_routed_expert_program(
     const FlatRoutedExpertInputs& tensors);
 
 // Re-applies every buffer address of `tensors` (a program-cache hit; only addresses differ from the build).
+// cached_slots (P.63): through the handles' cached runtime-args records (the same values; no kernel lookup a patch).
 void override_flat_routed_expert_addresses(
-    tt::tt_metal::Program& program, const FlatProgramHandles& handles, const FlatRoutedExpertInputs& tensors);
+    tt::tt_metal::Program& program,
+    const FlatProgramHandles& handles,
+    const FlatRoutedExpertInputs& tensors,
+    bool cached_slots = false);
 
 // `config` for a combine overlap: row-major bf16 y, the report args after the writers' own (cmb_rt), cumulative
 // counts in slot order without a go handshake; `y_l1`: the writers hand rows to the combine's L1 instead of DRAM.

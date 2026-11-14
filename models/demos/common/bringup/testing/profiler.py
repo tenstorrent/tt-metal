@@ -105,6 +105,7 @@ def enable(mesh, ops: bool = False, timeline: bool = False, calls: bool = False,
         rt=rt,
         rt_records={},
         rt_handle=None,
+        replays=[],
     )
     ttnn.synchronize_device(mesh)
     if rt:
@@ -154,9 +155,54 @@ def finish_rt(settle_s: float = 1.0) -> list:
             f"the real-time profiler dropped {p['rt_dropped'][0]} record(s): the receiver could not keep up, the "
             "section times would under-report"
         )
-    p["rt_records"] = unwrap_ids(p["rt_records"], p["markers"][0][0], p["rt_end"])
+    p["rt_records"] = remap_replays(p["rt_records"], p.get("replays") or [], p["markers"][0][0], p["rt_end"])
     charge_rt(p, p["rt_records"])
     return p["calls"]
+
+
+def trace_replay(lo: int, hi: int, marks=()) -> None:
+    """A Metal trace replayed here, whose programs keep the runtime ids [lo, hi) they got at its capture. The
+    device-operation id counter skips hi - lo ids, so the replay owns [x, x + hi - lo) as an eager launch of the same
+    programs would (sections, calls and totals see it where it ran); in rt mode finish_rt moves the replay's records
+    there (remap_replays). ``marks``: [(section, id offset from lo)] the capture's signposts, replayed at their ids (the
+    sections split as in an eager run). Call it right before ttnn.execute_trace (any model; no device work)."""
+    import ttnn
+
+    x = ttnn._ttnn.get_device_operation_id()
+    for name, off in marks:
+        ttnn._ttnn.set_device_operation_id(x + off)
+        signpost(name)
+    ttnn._ttnn.set_device_operation_id(x + (hi - lo))
+    if _P.get("rt") and _P.get("mesh") is not None:
+        _P.setdefault("replays", []).append((x, lo, hi))
+
+
+def remap_replays(recs: dict, replays: list, lo: int, hi: int) -> dict:
+    """unwrap_ids, with trace replays first: the records of capture id lo_c + k (16-bit) go to the replay's id x + k
+    (trace_replay). A capture range replayed twice in the window has one record set (the receiver sums a runtime id's
+    programs): it goes to the first replay. An eager id of the window with the same low 16 bits as a replayed capture
+    id cannot be told apart (counted: replay_clashes, a warning)."""
+    if not replays:
+        return unwrap_ids(recs, lo, hi)
+    moved, taken = {}, set()
+    owned = set()
+    for x, c_lo, c_hi in replays:
+        owned.update(range(x, x + c_hi - c_lo))
+        for k in range(c_hi - c_lo):
+            r = (c_lo + k) % RT_ID_SPAN
+            if r in taken or r not in recs:
+                continue
+            taken.add(r)
+            moved[x + k] = recs[r]
+    clashes = sum(1 for i in range(lo, hi) if i not in owned and i % RT_ID_SPAN in taken)
+    _P["replay_clashes"] = clashes
+    if clashes:
+        import warnings
+
+        warnings.warn(f"profiler: {clashes} eager program id(s) share their 16-bit runtime id with a replayed trace's")
+    out = unwrap_ids({r: e for r, e in recs.items() if r not in taken}, lo, hi)
+    out.update(moved)
+    return out
 
 
 def unwrap_ids(recs: dict, lo: int, hi: int) -> dict:

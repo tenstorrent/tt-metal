@@ -40,7 +40,7 @@ import types
 
 import ttnn
 
-from . import ccl
+from . import ccl, lean
 from .cores import worker_grid
 from .settings import settings
 
@@ -87,6 +87,11 @@ def reserve_sites(model) -> None:
     # the attention's window kv rows (ATTN_SP32=on: the chip's own S/(SP TP) rows) gathered over TP to the SP row's W
     ccl.reserve(mesh, "attn.kv_tp", [1, 1, rows, 512], bf16, tile)
     _reserve_attention(model)
+    # LEAN_PY=on (P.66): the block MoE's output on the chip's own rows (OWN_ROWS; tt/moe_block_main_adapter._own_rows),
+    # read by the layer's ffn_residual only (not under MOE_TRACE: the traced half keeps its own outputs)
+    if lean_on() and getattr(model, "own", False) and settings.get("MOE_TRACE") == "off":
+        if any(getattr(b, "moe_block", None) is not None for b in model.blocks.values()):
+            ccl.reserve(mesh, "moe.out", [1, 1, model.rows, model.cfg.dim], bf16, tile)
 
 
 def _reserve_attention(model) -> None:
@@ -116,6 +121,8 @@ def _reserve_attention(model) -> None:
     ccl.reserve(mesh, "attn.oa", [1, att.g_l, q, att.hpg * att.d], gdt, tile)
     ydt = gdt if (att.glue and bf16_activations()) else ttnn.float32
     ccl.reserve(mesh, "attn.wo_a", [1, att.g_l, q, int(att.wo_a.shape[-1])], ydt, tile)
+    if lean_on() and att.keep_rows:  # LEAN_PY=on (P.66, OWN_ROWS): wo_b's output, the attention output
+        ccl.reserve(mesh, "attn.wo_b_out", [1, 1, q, int(att.wo_b.shape[-1])], act_dtype(), tile)
     # _window_packed's carry from the served cache (CKV_PACK_BEFORE_GATHER, carry_owner): the 128 local rows it packs,
     # and the owner's 4 gathered blocks before their slice_write
     from .attention import WINDOW, WINDOW_BLOCK_BYTES
@@ -238,6 +245,11 @@ FORK_MISSES: dict = {}  # site -> calls whose output spec had no load-time buffe
 _POST_MAX_COLS, _POST_UNIT_COST, _POST_MAX_PARTIALS = 8, 4, 64
 
 
+def lean_on() -> bool:
+    """LEAN_PY=on (P.66) at load: the extra load-time outputs of the trimmed glue are reserved (legacy: none)."""
+    return settings.get("LEAN_PY") == "on"
+
+
 def forks_on() -> bool:
     return settings.get("FORK_OUT_BUFFERS") == "on"
 
@@ -262,7 +274,10 @@ def fork_out(mesh, site: str | None, shape, dtype):
     hit = _FORKS.get(id(mesh))
     if hit is None or hit[0] is not mesh:
         return None
-    t = hit[1].get((site, tuple(int(d) for d in shape), dtype))
+    if type(shape) is tuple and lean.ON[0]:  # LEAN_PY=on (P.66): a tuple of ints as it is (no generator)
+        t = hit[1].get((site, shape, dtype))
+    else:
+        t = hit[1].get((site, tuple(int(d) for d in shape), dtype))
     if t is None:
         FORK_MISSES[site] = FORK_MISSES.get(site, 0) + 1
     return t
@@ -322,6 +337,9 @@ def reserve_forks(model) -> None:
             blk.ffn_res.out_sites = (None, "fork.post.scratch")
             _reserve_fork(mesh, "fork.post.row", [1, 1, rows, 32], f32)
             _reserve_fork(mesh, "fork.post.scratch", post_scratch_shape(mesh, rows, hid), f32)
+            if lean_on():  # LEAN_PY=on (P.66): ffn_residual's collapse-path stats row (read by nothing)
+                blk.ffn_res.dead_row_site = "fork.post.dead_row"
+                _reserve_fork(mesh, "fork.post.dead_row", [1, 1, rows, 32], f32)
         # the norms: attn_norm (the chip's rows under ATTN_SP32, else the column split), q_norm / kv_norm on the
         # projection's rows, ffn_norm (column split: the stats and the output)
         sp32 = getattr(blk, "sp32", False)

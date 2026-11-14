@@ -14,6 +14,7 @@
 #pragma once
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "fx_wait.hpp"
 
 constexpr uint32_t SE_GU_RT_ARGS = 5;
 constexpr uint32_t SE_GU_TRID0 = 8;  // (x forwarding writes use ids 1..; the h writes id 0)
@@ -27,6 +28,9 @@ struct SeGuRead {
     // next piece of the block being issued
     static constexpr uint32_t pieces = SE_GU_PIECES;
     uint32_t pbytes = 0, pc = 0;
+#ifdef SE_FX_RT
+    SeFxWait fx;  // (P.55c: the replica's weights only once its copy has landed)
+#endif
     volatile tt_l1_ptr uint32_t* grant = nullptr;
     volatile tt_l1_ptr uint32_t* data = nullptr;
     const volatile tt_l1_ptr uint32_t* loads = nullptr;  // expert | region << 8 a load
@@ -59,6 +63,11 @@ struct SeGuRead {
     bool step() {
         while (iss < total && iss - done < depth && *grant >= iss / pieces + 1) {
             const uint32_t v = loads[l];
+#ifdef SE_FX_RT
+            if ((v & 0xFF) == SE_FX_SPARE && !fx.ready()) {
+                break;
+            }
+#endif
             const uint32_t src = base + ((v & 0xFF) * per_e + ce) * chunk + pc * pbytes;
             const uint32_t dst = land + (((v >> 8) & 0xFF) * per_e + ce) * blk + pc * pbytes;
             noc_async_read_set_trid(SE_GU_TRID0 + ri);

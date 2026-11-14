@@ -134,6 +134,8 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
         resources.dims().top_k);
     plan->S = in.S;
     plan->W = in.W;
+    plan->fill_chunk =
+        std::min<uint32_t>(static_cast<uint32_t>(resources.fabric_max_payload_bytes()), 16384u) / 64u * 64u;
     const uint32_t N = mesh.topo.num_chips();
     TT_FATAL(N <= kMaxChips, "routed_experts_combine: {} chips > {}", N, kMaxChips);
     plan->pc = row_slot(in.W);
@@ -442,7 +444,9 @@ CombineHandles add_combine_program(
     ChipCoord ch,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineBuffers& bufs,
-    const FlatHandoff& flat) {
+    const FlatHandoff& flat,
+    bool fill,
+    bool fill_exact) {
     using namespace combine_program_detail;
     const auto& topo = plan.topo;
     const uint32_t N = topo.num_chips(), L = plan.L, A = plan.A;
@@ -621,6 +625,17 @@ CombineHandles add_combine_program(
             }
         };
         pool_defs(defs);
+        if (fill) {  // (MOE_FILL=piggyback: its table and staging slots at the end of the port's arena)
+            const uint32_t off = combine_fill_offset(plan, fill_exact);
+            defs["REC_FILL"] = "1";
+            if (fill_exact) {
+                defs["REC_FX"] = "1";
+            }
+            defs["REC_F_OFF"] = std::to_string(off);
+            defs["REC_F_NSTG"] = std::to_string(kFillStages);
+            defs["REC_F_CHUNK"] = std::to_string(plan.fill_chunk);
+            defs["REC_F_TABB"] = std::to_string(kFillTabBytes);
+        }
         accessor(ct, defs, "CMB_PLAN_CT", CombineBuf::Plan);
         accessor(ct, defs, "CMB_HC_CT", CombineBuf::Hcache);
         if (plan.perchip) {
@@ -699,6 +714,11 @@ CombineHandles add_combine_program(
                 }
                 a.lit(static_cast<uint32_t>(bt.size() / 3));
                 a.lits(bt);
+            }
+            if (fill) {  // (the fill args: written on every call, set_combine_fill_args)
+                h.fill_ports.push_back(
+                    {k, p.core, static_cast<uint32_t>(a.v.size()), static_cast<uint32_t>(p.dir), p.li});
+                a.lits(std::vector<uint32_t>(kFillArgs, 0u));
             }
             set_args(program, k, p.core, a, bufs, h);
         }
@@ -841,7 +861,154 @@ CombineHandles add_combine_program(
     return h;
 }
 
-void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& bufs) {
+uint32_t combine_fill_offset(const CombinePlan& plan, bool exact) {
+    const uint32_t need = kFillTabBytes + kFillStages * plan.fill_chunk + (exact ? kFxL1 : 0u);
+    const uint32_t used = plan.fused ? plan.inj_off + plan.QP * plan.pc.slot : plan.tab_off_port + kTabCbBytes;
+    const uint32_t off = (plan.arena_bytes - need) / 64 * 64;
+    TT_FATAL(
+        plan.arena_bytes >= need && off >= align64(used),
+        "routed_experts_combine: MOE_FILL needs {} B at the end of a port's arena, the port uses {} of {} B",
+        need,
+        used,
+        plan.arena_bytes);
+    return off;
+}
+
+void set_combine_fill_args(
+    tt::tt_metal::Program& program,
+    const CombineHandles& h,
+    const CombinePlan& plan,
+    ChipCoord ch,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const CombineFillCall* call,
+    uint32_t done_addr,
+    bool exact,
+    uint32_t token) {
+    const auto& topo = plan.topo;
+    const uint32_t me = topo.index(ch);
+    if (exact) {  // (MOE_REPLICAS=exact: every port reads its jobs page; the chip's first port zeroes and waits)
+        TT_FATAL(call != nullptr && call->exact.has_value(), "routed_experts_combine: the exact fill needs its jobs");
+        TT_FATAL(4 * plan.L <= kFxChipPage, "routed_experts_combine: the exact fill has pages for 2 links");
+        const auto& jt = *call->exact;
+        const uint32_t ring = call->exact_ring;
+        TT_FATAL(
+            jt.dtype() == DataType::UINT32 && jt.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                jt.buffer()->aligned_page_size() == 4 * kFxPageWords &&
+                jt.logical_volume() == std::max<uint32_t>(ring, 1u) * kFxPages * kFxPageWords,
+            "routed_experts_combine: the exact jobs must be uint32 DRAM rows of {} words, {} a chip (x {} ring slots)",
+            kFxPageWords,
+            kFxPages,
+            std::max<uint32_t>(ring, 1u));
+        TT_FATAL(
+            ring < (1u << 16) &&
+                (ring == 0 || (call->exact_ordinal.has_value() && call->exact_ordinal->dtype() == DataType::UINT32 &&
+                               call->exact_ordinal->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM)),
+            "routed_experts_combine: an exact ring needs its ordinal word (uint32 DRAM) and < 65536 slots");
+        const uint32_t tabb = static_cast<uint32_t>(call->runs.buffer()->aligned_page_size());
+        TT_FATAL(tabb <= kFillTabBytes, "routed_experts_combine: a fill run table of {} B > {}", tabb, kFillTabBytes);
+        const auto rx = mesh_device.worker_core_from_logical_core(plan.collector);
+        if (call->prev_counts) {
+            const uint32_t n = topo.num_chips(), spc = call->prev_spc;
+            TT_FATAL(
+                ring > 0 && call->prev_landing.has_value() && n <= 32 && n < 256 && spc > 0 && spc % 16 != 0 &&
+                    spc < 256 && 4 * spc + 128 + 4 * ((spc + 15) / 16 * 16) <= plan.fill_chunk && kFillArgs >= 18,
+                "routed_experts_combine: the prev counts (P.62b) need the exact ring, the landing rows, <= 32 chips "
+                "and "
+                "a tag word past the slots (spc {}: not a multiple of 16, below 256; a row and its window in a staging "
+                "slot)",
+                spc);
+            const auto& ct = *call->prev_counts;
+            TT_FATAL(
+                ct.dtype() == DataType::UINT32 && ct.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                    ct.buffer()->num_pages() == 1 && ct.buffer()->page_size() >= 4 * n * spc,
+                "routed_experts_combine: the prev counts are one uint32 DRAM page of chips x spc words");
+            const auto& lt = *call->prev_landing;
+            TT_FATAL(
+                lt.dtype() == DataType::UINT32 && lt.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                    lt.buffer()->aligned_page_size() == 4 * ((spc + 15) / 16 * 16) && lt.buffer()->num_pages() == 2 * n,
+                "routed_experts_combine: the prev landing rows are 2 x chips uint32 DRAM pages of al16(spc) words");
+        }
+        for (size_t i = 0; i < h.fill_ports.size(); ++i) {
+            const auto& fp = h.fill_ports[i];
+            auto& rt = tt::tt_metal::GetRuntimeArgs(program, fp.kernel, fp.core);
+            uint32_t* w = &rt[fp.index];
+            std::fill(w, w + kFillArgs, 0u);
+            w[0] = static_cast<uint32_t>(call->gu.buffer()->address());
+            w[1] = static_cast<uint32_t>(call->d.buffer()->address());
+            w[2] = static_cast<uint32_t>(call->runs.buffer()->address());
+            w[3] = tabb | (fp.dir * plan.L + fp.li) << 16 | (i == 0 ? 3u << 30 : 0u);
+            w[4] = done_addr;
+            w[5] = static_cast<uint32_t>(jt.buffer()->address());
+            w[6] = static_cast<uint32_t>(rx.x) | static_cast<uint32_t>(rx.y) << 16;
+            w[7] = call->exact_limit;
+            w[8] = kFxChipPage;
+            w[9] = token;  // (P.55c: the waiter writes it into the landed word, kFxLanded)
+            if (ring) {    // (P.60: the port reads its ring slot from the ordinal word)
+                w[10] = static_cast<uint32_t>(call->exact_ordinal->buffer()->address());
+                w[11] = ring | kFxPages << 16;
+            }
+            if (call->prev_counts) {  // (P.62b: the counts row - targets: the chips whose first hop is this port)
+                const uint32_t n = topo.num_chips(), spc = call->prev_spc, spw = (spc + 15) / 16 * 16;
+                uint32_t mask = 0;
+                for (uint32_t k = 0; k < n && fp.li == 0; ++k) {
+                    if (k != me && static_cast<uint32_t>(*first_hop(ch, topo.coord(k), topo)) == fp.dir) {
+                        mask |= 1u << k;
+                    }
+                }
+                const auto pc = mesh_device.worker_core_from_logical_core(call->prev_core);
+                w[12] = static_cast<uint32_t>(call->prev_counts->buffer()->address());
+                w[13] = static_cast<uint32_t>(call->prev_landing->buffer()->address());
+                w[14] = call->prev_sem;
+                w[15] = static_cast<uint32_t>(pc.x) | static_cast<uint32_t>(pc.y) << 16;
+                w[16] = mask;
+                w[17] = (i == 0 ? 1u : 0u) | spc << 8 | spw << 16 | n << 24;
+            }
+        }
+        return;
+    }
+    for (const auto& fp : h.fill_ports) {
+        auto& rt = tt::tt_metal::GetRuntimeArgs(program, fp.kernel, fp.core);
+        uint32_t* w = &rt[fp.index];
+        std::fill(w, w + kFillArgs, 0u);
+        if (call == nullptr) {
+            continue;
+        }
+        uint32_t nj = 0;
+        for (const auto& jb : call->jobs) {
+            if (jb.src != me || jb.p1 < jb.p0) {
+                continue;
+            }
+            const ChipCoord b = topo.coord(jb.dst);
+            // (the port facing the first hop toward dst, on link 0: the route the call's start barrier and ring
+            // layouts to dst take, so a later call's packets on it land after these pieces)
+            if (fp.li != 0 || static_cast<uint32_t>(*first_hop(ch, b, topo)) != fp.dir) {
+                continue;
+            }
+            TT_FATAL(nj < kFillMaxJobs, "routed_experts_combine: more than {} fill jobs on one port", kFillMaxJobs);
+            const auto rx = mesh_device.worker_core_from_logical_core(plan.accs.at(b).at(0));
+            uint32_t* j = w + 6 + 4 * nj;
+            j[0] = jb.table | jb.dst << 8 | (jb.last ? 1u : 0u) << 16;
+            j[1] = jb.p0;
+            j[2] = jb.p1;
+            j[3] = static_cast<uint32_t>(rx.x) | static_cast<uint32_t>(rx.y) << 16;
+            ++nj;
+        }
+        if (nj == 0) {
+            continue;
+        }
+        const uint32_t tabb = static_cast<uint32_t>(call->runs.buffer()->aligned_page_size());
+        TT_FATAL(tabb <= kFillTabBytes, "routed_experts_combine: a fill run table of {} B > {}", tabb, kFillTabBytes);
+        w[0] = static_cast<uint32_t>(call->gu.buffer()->address());
+        w[1] = static_cast<uint32_t>(call->d.buffer()->address());
+        w[2] = static_cast<uint32_t>(call->runs.buffer()->address());
+        w[3] = tabb;
+        w[4] = done_addr;
+        w[5] = nj | std::max<uint32_t>(call->cap, 1u) << 8;
+    }
+}
+
+void override_combine_addresses(
+    tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& bufs, bool cached_slots) {
     using namespace combine_program_detail;
     // (a source's args - the arena's CBs with it - only when its address differs from the one they were last written
     // with: CombineHandles::last)
@@ -853,9 +1020,25 @@ void override_combine_addresses(tt::tt_metal::Program& program, const CombineHan
             h.last[b] = a;
         }
     }
-    for (const auto& p : h.patches) {
-        if (moved[static_cast<size_t>(p.buf)]) {
-            tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core)[p.index] = addr_of(bufs, p.buf) + p.offset;
+    if (cached_slots) {
+        if (h.slots.size() != h.patches.size()) {
+            h.slots.clear();
+            h.slots.reserve(h.patches.size());
+            for (const auto& p : h.patches) {
+                h.slots.push_back(&tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core));
+            }
+        }
+        for (size_t i = 0; i < h.patches.size(); ++i) {
+            const auto& p = h.patches[i];
+            if (moved[static_cast<size_t>(p.buf)]) {
+                (*h.slots[i])[p.index] = addr_of(bufs, p.buf) + p.offset;
+            }
+        }
+    } else {
+        for (const auto& p : h.patches) {
+            if (moved[static_cast<size_t>(p.buf)]) {
+                tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core)[p.index] = addr_of(bufs, p.buf) + p.offset;
+            }
         }
     }
     if (moved[static_cast<size_t>(CombineBuf::Arena)]) {

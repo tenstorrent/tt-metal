@@ -30,6 +30,16 @@ void ExpertActivation::check() const {
 void MoEModelDims::check() const {
     const uint32_t E = num_experts, K = top_k;
     TT_FATAL(K > 0 && K <= E, "moe_block: top_k {} must be in (0, {}]", K, E);
+    if (router.candidates) {  // (replica slots: num_experts slots, router.candidates router rows)
+        TT_FATAL(
+            router.fold == 1 && router.expert_groups == 1 && router.candidates % config_detail::TILE == 0 &&
+                router.candidates <= E && K <= router.candidates,
+            "moe_block: replica slots need fold 1, no expert groups, candidates {} a multiple of 32 in [top_k {}, "
+            "num_experts {}]",
+            router.candidates,
+            K,
+            E);
+    }
     TT_FATAL(
         router.expert_groups > 0 && E % router.expert_groups == 0,
         "moe_block: {} experts don't split into {} groups",

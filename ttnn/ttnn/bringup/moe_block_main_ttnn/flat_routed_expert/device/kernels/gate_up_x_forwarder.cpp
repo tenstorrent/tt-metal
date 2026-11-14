@@ -52,6 +52,10 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* mb =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF);
         gr.init(6, SE_GU_BLK, SE_GU_PER_E, SE_GU_DEPTH, mb[0], mb + 1, sem(SE_GU_GRANT_SEM), sem(SE_GU_DATA_SEM));
+#ifdef SE_FX_RT
+        // (P.55c: the poll's 16 B at the end of this RISC's half of CB 7, past the loads list)
+        gr.fx.init(get_write_ptr(tt::CBIndex::c_7) + 4 * SE_DYN_HALF - 64);
+#endif
         g_done = gr.total == 0;
     }
     // a short last sub-block: its blocks' pieces past its row tiles holding tokens carry nothing - counted (XARR), not

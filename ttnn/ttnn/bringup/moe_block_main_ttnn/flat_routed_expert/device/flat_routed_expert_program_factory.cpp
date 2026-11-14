@@ -72,6 +72,9 @@ std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
         {"SE_RPS", std::to_string(p.mt * 32)},
         {"SE_MAX_E", std::to_string(se_max_e)},
         {"SE_GU_NREG", std::to_string(p.ring_g / p.nk_gu)}};
+    if (cfg.fx_spare) {  // (P.55c: every role builds the schedule with the replica last)
+        d.emplace_back("SE_FX_SPARE", std::to_string(cfg.fx_spare - 1));
+    }
     if (cfg.pin) {
         d.emplace_back("SE_PIN_MIN", std::to_string(cfg.pin));
         // pin only a dominant expert (se_dyn_pin); layout.pin_ratio (0: always pin)
@@ -121,13 +124,29 @@ FlatProgramHandles add_flat_routed_expert_program(
     // successor has freed the block's slot. One snake a rectangle (2: the relay writes every block twice - GLM-5.3 M
     // 1024 238.7 vs 205.5 us / expert, multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC
     // (gate_up_x_forwarder.cpp) on NOC0 with 3 pieces in flight, the receiver (gate_up_core_reader.cpp, BRISC) on NOC1.
+    // (bring-up P.59, layout.x_min_piece_bytes > 0: Marko Staletovic's 1e2ab798da1 x-pieces hunk - the most (4 / 2 /
+    // 1) pieces of at least that many bytes (8192 there): the forwarder's bytes in flight bound the snake's x rate,
+    // and 3 x 4.3 KB starved the gate/up cores of 64-row sub-blocks (his flat us, DSv4.1-Flash 12 experts a chip, M
+    // 256 / 1024 / 2048, 4 vs 2 pieces: 946 / 3128 / 6034 vs 748 / 2610 / 5089; 128-row sub-blocks keep 4). 0: the
+    // source's choice.)
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
-    const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    if (const uint32_t min_piece = cfg.layout.x_min_piece_bytes; min_piece > 0) {
+        x_pieces = 1;
+        for (uint32_t n : {4u, 2u}) {
+            if (aligned(n) && x_bytes / n >= min_piece) {
+                x_pieces = n;
+                break;
+            }
+        }
+    }
     constexpr uint32_t X_FWD_DEPTH = 3;
     log_info(
         tt::LogOp,
-        "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} NCRISC forwarder NOC0 depth {})",
+        "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} of {} B NCRISC forwarder NOC0 "
+        "depth {})",
         x_pieces,
+        x_bytes / x_pieces,
         X_FWD_DEPTH);
     struct XLink {
         uint32_t pred = 0, succ0 = 0;
@@ -438,6 +457,13 @@ FlatProgramHandles add_flat_routed_expert_program(
             {"SE_GU_DATA_SEM", std::to_string(DATA)},
             {"SE_DYN_HALF", dyn_def.at("SE_DYN_HALF")}};
         gu_reader_def.insert(gu_def.begin(), gu_def.end());
+        // P.55c: the x forwarder's 11 args (6 + SE_GU_RT_ARGS), then fx_wait.hpp's
+        constexpr uint32_t kGuFxRt = 6 + 5;
+        Defines gu_fwd_def = gu_def;
+        if (cfg.fx_spare) {
+            gu_fwd_def["SE_FX_SPARE"] = std::to_string(cfg.fx_spare - 1);
+            gu_fwd_def["SE_FX_RT"] = std::to_string(kGuFxRt);
+        }
         if (p.nu) {  // 16-column units: the h run from K-tile cg NU / 2, half tiles at the ends
             gu_reader_def["SE_HG_NU"] = std::to_string(p.nu);
             gu_reader_def["SE_HPC"] = std::to_string(p.hpc);
@@ -458,7 +484,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                DataMovementProcessor::RISCV_1,
                NOC::NOC_0,
                {p.x_slots, x_bytes, x_pieces, XARR, SFREE, 2, 3, X_FWD_DEPTH, p.nsb * p.sbt / kKBlk, MT},
-               gu_def);
+               gu_fwd_def);
         const bool gu_rp = p.gu_rp && !p.gu_full_sync;
         Defines cdef = with(
             dyn_def,
@@ -508,6 +534,12 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(pk(p.relays[p.rect_of(gc)]))
                     .a(FlatAddr::Words, 0);
                 f.cat(gw);
+                if (cfg.fx_spare) {
+                    TT_FATAL(
+                        f.v.size() == kGuFxRt, "flat_routed_expert: x forwarder args {} != {}", f.v.size(), kGuFxRt);
+                    sv.fx_readers.emplace_back(k_x_forwarder, gc, kGuFxRt);
+                    f.lits(std::vector<uint32_t>(kFlatFxArgs, 0u));
+                }
                 add_rt(k_x_forwarder, gc, f);
                 SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{(cg_ * p.nu) & 1u});
             }
@@ -543,6 +575,11 @@ FlatProgramHandles add_flat_routed_expert_program(
                {2,    p.h_tiles, kBf8Tile, H_PIECES, 16, out, V,  S,    ngu,   ND,    HARR, HSFREE,
                 GATH, DONE,      GO,       p.hbuf,   MT, pw,  Ht, GATH, GATH1, GATH2, E},
                plus(yrm_def(dyn_def, pw), ync));
+        // P.55c: the down reader's args (3 + the schedule's, y's 2, the combine overlap's report / hand-off ones),
+        // then fx_wait.hpp's
+        const uint32_t dn_fx_rt = (y_nc && cfg.cmb_rt) ? cfg.cmb_rt + 4 + (cfg.y_l1 ? kFlatYL1Args : 0)
+                                                       : 3 + static_cast<uint32_t>(dyn.v.size()) + (y_nc ? 2u : 0u);
+        Defines dn_fx = cfg.fx_spare ? Defines{{"SE_FX_RT", std::to_string(dn_fx_rt)}} : Defines{};
         const auto kw =
             dm("down_weight_reader.cpp",
                cores,
@@ -551,9 +588,11 @@ FlatProgramHandles add_flat_routed_expert_program(
                {1, slot, w_tile, E * nblk, DW_BATCH, E, MT, pw, Ht},
                plus(
                    plus(
-                       y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
-                       Defines{{"SE_DW_ROT", std::to_string(banks)}}),
-                   Defines{{"SE_DW_RING", std::to_string(ring)}}));
+                       plus(
+                           y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
+                           Defines{{"SE_DW_ROT", std::to_string(banks)}}),
+                       Defines{{"SE_DW_RING", std::to_string(ring)}}),
+                   dn_fx));
         const auto kc =
             cp("down_compute.cpp",
                cores,
@@ -584,7 +623,14 @@ FlatProgramHandles add_flat_routed_expert_program(
             if (y_nc) {
                 w.a(FlatAddr::Y).lit(p.col0s[d]);
             }
-            add_rt(kw, dc, y_nc ? add_writer_rt(kw, dc, w) : w);
+            Args wf = y_nc ? add_writer_rt(kw, dc, w) : w;
+            if (cfg.fx_spare) {
+                TT_FATAL(
+                    wf.v.size() == dn_fx_rt, "flat_routed_expert: down reader args {} != {}", wf.v.size(), dn_fx_rt);
+                sv.fx_readers.emplace_back(kw, dc, dn_fx_rt);
+                wf.lits(std::vector<uint32_t>(kFlatFxArgs, 0u));
+            }
+            add_rt(kw, dc, wf);
             SetRuntimeArgs(program, kc, dc, std::vector<uint32_t>{0});
         }
     }
@@ -671,7 +717,10 @@ FlatProgramHandles add_flat_routed_expert_program(
 }
 
 void override_flat_routed_expert_addresses(
-    tt::tt_metal::Program& program, const FlatProgramHandles& handles, const FlatRoutedExpertInputs& t) {
+    tt::tt_metal::Program& program,
+    const FlatProgramHandles& handles,
+    const FlatRoutedExpertInputs& t,
+    bool cached_slots) {
     using namespace tt::tt_metal;
     std::array<uint32_t, static_cast<size_t>(FlatAddr::Count)> addr{};
     addr[size_t(FlatAddr::X)] = t.x.buffer()->address();
@@ -692,9 +741,26 @@ void override_flat_routed_expert_addresses(
         moved[s] = handles.last[s] != addr[s];
         handles.last[s] = addr[s];
     }
-    for (const auto& pa : handles.patches) {
-        if (moved[size_t(pa.src)]) {
-            GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index] = addr[size_t(pa.src)] + pa.offset;
+    if (cached_slots) {
+        auto& slots = handles.slots;
+        if (slots.size() != handles.patches.size()) {
+            slots.clear();
+            slots.reserve(handles.patches.size());
+            for (const auto& pa : handles.patches) {
+                slots.push_back(&GetRuntimeArgs(program, pa.kernel, pa.core));
+            }
+        }
+        for (size_t i = 0; i < handles.patches.size(); ++i) {
+            const auto& pa = handles.patches[i];
+            if (moved[size_t(pa.src)]) {
+                (*slots[i])[pa.index] = addr[size_t(pa.src)] + pa.offset;
+            }
+        }
+    } else {
+        for (const auto& pa : handles.patches) {
+            if (moved[size_t(pa.src)]) {
+                GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index] = addr[size_t(pa.src)] + pa.offset;
+            }
         }
     }
     if (moved[size_t(FlatAddr::Arena)]) {

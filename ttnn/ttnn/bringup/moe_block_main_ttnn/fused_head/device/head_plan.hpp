@@ -38,6 +38,9 @@ struct HeadShape {
     uint32_t I = 0;  // the shared expert's intermediate a TP chip
     uint32_t G = 0;  // TP
     uint32_t E = 0;  // router candidates (num_experts x fold)
+    // replica slots (RouterSpec.candidates): the slots of every chip (num_experts), the router's rows mapped to them by
+    // the layer's slot map (an extra tile on the router bias); 0 - none, the experts are E / fold
+    uint32_t NE = 0;
     uint32_t K = 0;
     std::optional<uint32_t> latent;
     uint32_t fold = 1;
@@ -63,7 +66,8 @@ struct HeadShape {
     uint32_t N() const { return R * G; }
     uint32_t S() const { return rows / G; }
     uint32_t SA() const { return S() * loops; }  // a chip's owned tokens of the whole chunk (every loop's)
-    uint32_t EPC() const { return E / fold / N(); }
+    uint32_t EPC() const { return (NE ? NE : E / fold) / N(); }
+    bool smap() const { return NE != 0; }
     bool operator==(const HeadShape&) const = default;
 };
 

@@ -41,7 +41,24 @@ ttnn::Tensor routed_experts_combine(
     uint32_t activation,
     const std::optional<ttnn::Tensor>& arena = std::nullopt,
     const flat_routed_expert::FlatLayoutOptions& layout = {},
-    const CombineConfig& combine = {});
+    const CombineConfig& combine = {},
+    bool cached_slots = false);
+
+// MOE_FILL=piggyback (P.53): expert replica copies carried by the combine's port senders (CombineFillJob). enabled:
+// the next calls on these resources build the port senders with the fill path (a program of its own in the cache);
+// call: the jobs every following call carries until it is replaced (nullopt: none). The jobs are runtime args only.
+void set_combine_fill(MoEBlockResources& resources, bool enabled, const std::optional<CombineFillCall>& call);
+// The fill's done words (after a call with the fill enabled): uint32 [1, chips + 16] on the combine's collector cell,
+// word s of chip d counting the completed copies from chip s; words chips + p / chips + 8 + p: the pieces chip d's
+// port p sent inside the combine's main loop / after it (all cumulative, never reset).
+ttnn::Tensor combine_fill_done(MoEBlockResources& resources);
+
+// MOE_REPLICAS=exact (P.55b): the fill path's exact variant (REC_FX) on the next combine calls (enabled), its jobs a
+// DRAM tensor (call->exact; combine_program.hpp), or off (enabled false: the stock port writer).
+void set_combine_fill_exact(MoEBlockResources& resources, bool enabled, const std::optional<CombineFillCall>& call);
+
+// MOE_REPLICAS=exact: the exact words, uint32 [1, kFxWords] a chip on the collector (flags, stamps, arrivals).
+ttnn::Tensor combine_fill_exact_words(MoEBlockResources& resources);
 
 // The combine's L1 plan at a dispatch row group: the flat expert's config fitted into the combine's arena (the
 // largest free L1 block less what stays below it, or combine.arena_bytes), the static CBs below the arena and the

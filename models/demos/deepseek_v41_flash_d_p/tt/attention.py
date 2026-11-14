@@ -70,7 +70,7 @@ import torch
 
 import ttnn
 
-from . import ccl, host_alloc
+from . import ccl, host_alloc, lean
 from . import mm_configs as mm
 from .ccl import dealloc
 from .common import (
@@ -216,6 +216,7 @@ class WindowTables:
         self._scalars = {}
         self._rings = {}  # WINDOW_KV_KEEP=none (P.32): {layer: the working WindowRing every slot's cache shares}
         self._snap_buf = None  # WINDOW_KV_KEEP=snapshot128 (P.42): the snapshot gather's load-time output
+        self._snap_send = None  # CHEAP_CCL=on (P.65): the snapshot's prepared broadcast (tt/snapshot_send.py)
         # GLUE_FOLD=on (P.19): the server-order index row of the latest start, sliced once for every cache write of
         # the chunk (window caches, compressed caches); the device scalars memoized likewise (tt/served.DeviceScalars)
         self.fold = settings.get("GLUE_FOLD") == "on"
@@ -434,6 +435,17 @@ class WindowTables:
             self._snap_buf = (alloc(g.tp * RING) if g.tp > 1 else None, alloc(g.n * RING) if g.sp > 1 else None)
         return self._snap_buf
 
+    def snapshot_send(self):
+        """CHEAP_CCL=on (P.65): the window snapshot's one-program broadcast (tt/snapshot_send.SnapshotSend), made at
+        load time (the first snapshot cache); None on one chip or under CHEAP_CCL=legacy."""
+        if self.geo.n < 2 or not cheap_snapshot():
+            return None
+        if self._snap_send is None:
+            from .snapshot_send import SnapshotSend
+
+            self._snap_send = SnapshotSend(self.mesh)
+        return self._snap_send
+
     def shared_ring(self, layer: int) -> "WindowRing":
         """WINDOW_KV_KEEP=none (P.32): layer's working ring (made at the first slot's state, then shared): what the
         running request's next chunk reads; no slot keeps window rows of its own."""
@@ -469,6 +481,11 @@ class WindowTables:
 
 RING = WINDOW + 64  # WINDOW_KV_KEEP=ring (P.32): rows kept a layer, the window + the server's kv_block_size
 SNAP = WINDOW  # WINDOW_KV_KEEP=snapshot128 (P.42): rows of the served window snapshot a layer (position p at p % 128)
+
+
+def cheap_snapshot() -> bool:
+    """CHEAP_CCL (P.65): on = the window snapshot as one prepared fabric broadcast (tt/snapshot_send.py)."""
+    return settings.get("CHEAP_CCL") == "on"
 
 
 def window_keep() -> str:
@@ -552,12 +569,8 @@ class WindowRing:
         """src [1, 1, R, 512] bf16 ROW_MAJOR (every chip the same op, not consumed): its rows [row0, row0 + n) are
         positions [p0, p0 + n) (32-aligned), valid below ``valid`` (zeros past it) -> ring rows p mod 192 (one or two
         pieces: the wrap), held by ``owner``."""
-        assert p0 % 32 == 0 and n % 32 == 0 and row0 % 32 == 0, (p0, n, row0)
         rows = int(src.shape[-2])
-        p, r = p0, row0
-        while p < p0 + n:
-            slot = p % RING
-            take = min(RING - slot, p0 + n - p)
+        for r, slot, take in self.plan(row0, p0, n, valid, owner):
             whole = r == 0 and take == rows  # (a full-range slice returns src's own buffer, K-1)
             piece = (
                 src
@@ -571,11 +584,23 @@ class WindowRing:
             )
             if not whole:
                 dealloc(piece)
+
+    def plan(self, row0: int, p0: int, n: int, valid: int, owner: int | None) -> list[tuple[int, int, int]]:
+        """Host only: ``put``'s bookkeeping, and its pieces [(source row, ring row, rows)] (one or two: the wrap) for
+        the caller to copy (``put``, or ATTN_FUSE=on's fused window write, tt/window_send.WindowSend.fused)."""
+        assert p0 % 32 == 0 and n % 32 == 0 and row0 % 32 == 0, (p0, n, row0)
+        pieces = []
+        p, r = p0, row0
+        while p < p0 + n:
+            slot = p % RING
+            take = min(RING - slot, p0 + n - p)
+            pieces.append((r, slot, take))
             for q in range(p, p + take, 32):
                 j = (q // 32) % self.BLOCKS
                 self.pos[j], self.vend[j], self.own[j] = q, max(q, min(q + 32, valid)), owner
             p += take
             r += take
+        return pieces
 
     def host_rows(self) -> list[torch.Tensor]:
         """Every chip's ring [192, 512] (chip-linear), host."""
@@ -640,7 +665,8 @@ class TtWindowCache:
             assert (slab.rows, slab.width) == (SNAP, self.WIDTH), (slab.rows, slab.width)
             self.snap, slab = slab, None
             self.ring_owned, self.ring = True, WindowRing(mesh, self.WIDTH)
-            tables.snapshot_gather_buf()  # (load time)
+            if tables.snapshot_send() is None:  # (load time: CHEAP_CCL=on gathers nothing, P.65)
+                tables.snapshot_gather_buf()
             if self.max_seq - g.chunk > 0:
                 self.pin, self.pin_at = WindowRing(mesh, self.WIDTH), self.max_seq - g.chunk
         else:
@@ -874,22 +900,36 @@ class TtWindowCache:
         dealloc(rows)
 
     # ------------------------------------------------------------------ WINDOW_KV_KEEP=ring | none (P.32)
-    def write_own(self, own_rm: ttnn.Tensor, start: int, end: int) -> None:
+    def write_own(self, own_rm: ttnn.Tensor, start: int, end: int, defer: bool = False) -> list | None:
         """WINDOW_KV_KEEP=ring | none: own_rm [1, 1, q_rows, 512] bf16 ROW_MAJOR, each chip its own rows of the chunk
         (chip-linear q: chunk offsets [q q_rows, (q + 1) q_rows), WindowGeometry.query_offsets), rows at or past end
-        zero: the chunk's last 192 rows into the ring, each block held by the chip whose rows they are (no gather)."""
+        zero: the chunk's last 192 rows into the ring, each block held by the chip whose rows they are (no gather).
+        ``defer`` (ATTN_FUSE=on, P.64): the ring pieces [(own_rm row, ring row, rows)] are returned for the caller to
+        copy in its fused window write (WindowSend.fused, after the carry is taken here); the pin's pieces are still
+        copied here."""
         g = self.geo
         assert self.ring is not None and start % 32 == 0 and start < end <= start + g.chunk, (start, end)
         assert own_rm.shape[-2] == g.q_rows, (own_rm.shape, g.q_rows)
         lo, hi = self._ring_span(start, end)
         self._before_ring_write(start)
         q_rows = g.q_rows
+        pieces = []
+        pin = True
+        if lean.ON[0]:  # LEAN_PY=on (P.66): no per-chip _pin_put call when the chunk's rows miss the pin's span
+            pin = self.pin is not None and max(start, self.pin_at - WINDOW, 0) < min(
+                start + g.n * q_rows, self.pin_at, -(-int(end) // 32) * 32
+            )
         for q in range(g.n):
             a, b = max(lo - start, q * q_rows), min(hi - start, (q + 1) * q_rows)
             if a < b:
-                self.ring.put(own_rm, a - q * q_rows, start + a, b - a, end, q)
-            self._pin_put(own_rm, 0, start + q * q_rows, q_rows, end, q)
+                if defer:
+                    pieces += self.ring.plan(a - q * q_rows, start + a, b - a, end, q)
+                else:
+                    self.ring.put(own_rm, a - q * q_rows, start + a, b - a, end, q)
+            if pin:
+                self._pin_put(own_rm, 0, start + q * q_rows, q_rows, end, q)
         self._after_ring_write(end)
+        return pieces if defer else None
 
     def _pin_put(self, src: ttnn.Tensor, row0: int, p0: int, n: int, valid: int, owner: int | None) -> None:
         """snapshot128: rows [row0, row0 + n) of ``src`` are positions [p0, p0 + n) (valid below ``valid``); the part in
@@ -1078,6 +1118,21 @@ class TtWindowCache:
         while lo > max(0, cap - SNAP) and src.history and src.ring.holds(lo - 32, lo):
             lo -= 32
         self.snap_missing = (max(0, cap - SNAP), lo) if lo > max(0, cap - SNAP) else None
+        send = self.tables.snapshot_send()
+        if send is not None:  # CHEAP_CCL=on (P.65): one prepared program, the owner's rows only (tt/snapshot_send.py)
+            ring = src.ring
+            blocks = []
+            for k0 in range(0, SNAP, 32):
+                p = cap - SNAP + ((k0 - cap) % SNAP)  # (as _snapshot_rows: the position at snapshot rows [k0, k0 + 32))
+                if p < lo:
+                    blocks.append(("zero", 0))
+                else:
+                    o = ring.own[(p // 32) % ring.BLOCKS]
+                    blocks.append(("local" if o is None else int(o), p % RING))
+            snap = self.snap
+            send(ring.t, snap.tensor, snap.batch * snap.rows, blocks)
+            self.snap_cap = cap
+            return
         rows = self._snapshot_rows(cap, lo, src.ring) if lo < cap else self.tables.zero_carry
         # every chip writes the same 128 rows at local row 0 of its (slot, layer) slab: kv_actual_global 0 is the
         # uniform per-device offset 0 on every SP row (and TP column: no tp_axis); the input is replicated
@@ -1669,6 +1724,8 @@ class TtWindowAttention:
         # 2. the chip's own rows -> region rows [128, 128 + q_rows) (pad rows zero, as the served rows)
         om = tables.mask_chip(own, end - start)
         bf = self.region.dtype == ttnn.bfloat16
+        # ATTN_FUSE=on (P.64): the region write, the ring pieces and the neighbour send in one prepared program (step 4)
+        fused = None
         if cache.ring is not None:  # (P.32: the chip's own bf16 rows into the ring, before the carry is read: the
             # ring takes the carry first when the write would overwrite it, TtWindowCache._before_ring_write)
             if bf:
@@ -1678,10 +1735,13 @@ class TtWindowAttention:
                 orm = ttnn.untilize_with_unpadding(
                     om, output_tensor_end=end_ix, memory_config=DRAM, sub_core_grids=cache.ring.cores
                 )
-            cache.write_own(orm, start, end)
-            if bf:
-                self._put_rows(orm, self.region, WINDOW)
-            dealloc(orm)
+            if bf and tables.send is not None and settings.get("ATTN_FUSE") == "on":
+                fused = (orm, cache.write_own(orm, start, end, defer=True))
+            else:
+                cache.write_own(orm, start, end)
+                if bf:
+                    self._put_rows(orm, self.region, WINDOW)
+                dealloc(orm)
         elif bf:  # WINDOW_KV_FORMAT=bf16_tiles (P.26): the bf16 rows as they are (no rounding step)
             orm = to_rm(om, memory_config=DRAM)
             self._put_rows(orm, self.region, WINDOW)
@@ -1741,7 +1801,12 @@ class TtWindowAttention:
             )
             dealloc(ct)
         # 4. the neighbour send; the last chip keeps its own last rows: the next chunk's carry when this one is whole
-        tables.send(self.region, cache.rtail)
+        if fused is not None:  # ATTN_FUSE=on (P.64): + the region rows and the ring pieces, from the untilized rows
+            orm, pieces = fused
+            tables.send.fused(self.region, cache.rtail, orm, cache.ring.t, pieces)
+            dealloc(orm)
+        else:
+            tables.send(self.region, cache.rtail)
         cache.rtail_end = end if end == start + g.chunk else None
 
     @staticmethod
@@ -2168,8 +2233,21 @@ class TtWindowAttention:
         if self.sp32:
             # ATTN_SP32_PROJ=on (P.9): the whole sum over K here: wo_b writes the GPU code's bf16 output of the chip's
             # rows [1, 1, S/(SP TP), H]; ONE all_to_all over TP (split H, concat rows) -> [1, 1, S/SP, H/TP]
+            # LEAN_PY=on (P.66, OWN_ROWS): the attention output into one load-time buffer for every layer (read by this
+            # layer's attn_residual only, which the next layer's wo_b is queued after; the block's free skips it)
+            zo = (
+                host_alloc.mm_out(self.mesh, "attn.wo_b_out", yq, self.wo_b, act_dtype())
+                if self.keep_rows and lean.ON[0]
+                else None
+            )
             z = mm.linear(
-                yq, self.wo_b, site="attn.wo_b", dtype=act_dtype(), compute_kernel_config=self.ckc, memory_config=DRAM
+                yq,
+                self.wo_b,
+                site="attn.wo_b",
+                dtype=act_dtype(),
+                compute_kernel_config=self.ckc,
+                memory_config=DRAM,
+                out=zo,
             )
             dealloc(yq)
             if self.keep_rows:  # OWN_ROWS=on (P.23): the residual rests on these rows

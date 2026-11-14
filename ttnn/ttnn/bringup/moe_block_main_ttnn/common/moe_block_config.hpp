@@ -40,6 +40,13 @@ struct RouterSpec {
     uint32_t expert_groups = 1;  // group-limited routing; 1: plain top-k
     uint32_t topk_groups = 1;
     uint32_t fold = 1;  // proxy: candidates num_experts x fold, candidate c is expert c / fold (the fused head only)
+    // Replica slots (the fused head only; DeepSeek-V4.1 MOE_REPLICAS): 0 - the router's candidates are the experts
+    // (num_experts x fold). n > 0 - the router ranks n candidates (its rows) and num_experts is the SLOT count
+    // (slots per chip x chips, > n): the head maps each (token, chosen candidate) to a slot through the layer's slot
+    // map (prepare_fused_head_weights(slot_map=): runtime data, one extra tile on the router bias), so a candidate may
+    // have several slots (copies of one expert's weights) and every later stage (route words, planner, dispatch,
+    // experts, combine) works on slots. Needs fold 1.
+    uint32_t candidates = 0;
 
     bool operator==(const RouterSpec&) const = default;
 };

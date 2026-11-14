@@ -226,9 +226,10 @@ struct SeEngineSizing {
 // arr_first (token loops): the peers' logits arrivals before the bias, so the last loop's routing planner overlays them
 // too (they are dead once every router core's rows are written; an earlier loop's planner never overlays them - a peer
 // one loop ahead writes its next logits there)
+// smap (replica slots, HeadShape.NE): the bias region holds one more tile - the layer's slot map, read with the bias
 std::pair<Regions, int64_t> router_layout(
-    uint32_t G, uint32_t ET, uint32_t K, uint32_t ETF = 0, bool arr_first = false);
-int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K);
+    uint32_t G, uint32_t ET, uint32_t K, uint32_t ETF = 0, bool arr_first = false, bool smap = false);
+int64_t router_min_bytes(uint32_t G, uint32_t E, uint32_t K, bool smap = false);
 
 // ---- combine_rf/routing_a2a.py ----
 int64_t routing_header_bytes(uint32_t EPC, uint32_t M);

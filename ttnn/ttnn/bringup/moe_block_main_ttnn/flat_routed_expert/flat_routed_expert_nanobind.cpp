@@ -86,6 +86,9 @@ void bind_flat_routed_expert(nb::module_& mod) {
                 h buffers, then 2, then fewer sub-block rows).
             gu_read_pieces (int): each gate/up weight block read as 1 / 2 / 4 pieces (-1: the plan's choice, pieces of
                 at least 6 KB).
+            weights_nk (bool): (bring-up) the weights laid out from nn.Linear's [N, K] matrices.
+            x_min_piece_bytes (int): (bring-up) the x snake's cut-through pieces: 0 = the source's (4 when aligned),
+                > 0 = the most of 4 / 2 / 1 of at least this many bytes each (8192: Marko Staletovic's 1e2ab798da1).
     )doc")
         .def(
             "__init__",
@@ -93,22 +96,26 @@ void bind_flat_routed_expert(nb::module_& mod) {
                uint32_t pin_ratio,
                int32_t arena_bytes,
                int32_t gu_read_pieces,
-               bool weights_nk) {
+               bool weights_nk,
+               uint32_t x_min_piece_bytes) {
                 new (self) FlatLayoutOptions{
                     .pin_ratio = pin_ratio,
                     .arena_bytes = arena_bytes,
                     .gu_read_pieces = gu_read_pieces,
-                    .weights_nk = weights_nk};
+                    .weights_nk = weights_nk,
+                    .x_min_piece_bytes = x_min_piece_bytes};
             },
             nb::kw_only(),
             nb::arg("pin_ratio") = 8,
             nb::arg("arena_bytes") = -1,
             nb::arg("gu_read_pieces") = -1,
-            nb::arg("weights_nk") = false)
+            nb::arg("weights_nk") = false,
+            nb::arg("x_min_piece_bytes") = 0)
         .def_rw("pin_ratio", &FlatLayoutOptions::pin_ratio)
         .def_rw("arena_bytes", &FlatLayoutOptions::arena_bytes)
         .def_rw("gu_read_pieces", &FlatLayoutOptions::gu_read_pieces)
         .def_rw("weights_nk", &FlatLayoutOptions::weights_nk)
+        .def_rw("x_min_piece_bytes", &FlatLayoutOptions::x_min_piece_bytes)
         .def("key", &FlatLayoutOptions::key)
         .def("__repr__", [](const FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })
         .def("__eq__", [](const FlatLayoutOptions& a, const FlatLayoutOptions& b) { return a == b; });

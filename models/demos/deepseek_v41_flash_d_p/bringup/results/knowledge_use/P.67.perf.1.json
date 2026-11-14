@@ -1,0 +1,34 @@
+{
+  "used": [
+    {
+      "id": "DS41-245",
+      "how": "explained the first measure's 29 ms 'slowdown': the new side ran unset DS41_ENGRAM_TABLE (mmap under pytest) vs resident before; fixed measure() to use ab.env on both sides"
+    },
+    {
+      "id": "DS41-240",
+      "how": "the clash base: kept model_bringup's rewrite of DS41-240 and its 241..245; renumbered the branch's 241..269 to 246..274"
+    }
+  ],
+  "contradicted": [],
+  "missing": [
+    "orchestrator measure ignored ab.before (F230) and ran the new side without ab.env: now DS41-275",
+    "test_decoder_skip_decode can fail intermittently after the merge (ATTN_FUSE + CHEAP_CCL on): now DS41-276"
+  ],
+  "overseer": [
+    {
+      "id": "OV-3",
+      "answer": "n/a",
+      "evidence": "merge only; nothing padded or inflated beyond what the branch already shipped"
+    },
+    {
+      "id": "OV-23",
+      "answer": "n/a",
+      "evidence": "no Python-built op added or touched by this step beyond the branch's own (taken as is, per the owner)"
+    },
+    {
+      "id": "OV-25",
+      "answer": "done",
+      "evidence": "no fork suite run on the 8x4; only measure --task P.67 and the model-level gate"
+    }
+  ]
+}

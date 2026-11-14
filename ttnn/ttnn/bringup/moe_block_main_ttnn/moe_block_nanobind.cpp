@@ -12,6 +12,7 @@
 #include "common/common_nanobind.hpp"
 #include "common/moe_block_config.hpp"
 #include "common/moe_block_resources.hpp"
+#include "expert_slot_copy/expert_slot_copy_nanobind.hpp"
 #include "flat_routed_expert/flat_routed_expert_nanobind.hpp"
 #include "fused_head/fused_head_nanobind.hpp"
 #include "fused_tail/fused_tail_nanobind.hpp"
@@ -29,6 +30,7 @@ void bind_moe_block(nb::module_& bringup) {
     flat_routed_expert::bind_flat_routed_expert(mod);
     routed_experts_combine::bind_routed_experts_combine(mod);
     fused_tail::bind_fused_tail(mod);
+    expert_slot_copy::bind_expert_slot_copy(mod);
 
     nb::class_<BlockL1Plan>(mod, "BlockL1Plan", "The block's L1 plan (moe_block_plan).")
         .def_ro("dispatch_group", &BlockL1Plan::dispatch_group)
