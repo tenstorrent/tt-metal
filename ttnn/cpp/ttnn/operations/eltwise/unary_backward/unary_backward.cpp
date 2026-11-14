@@ -1075,6 +1075,18 @@ std::vector<std::optional<Tensor>> silu_bw(
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config, input_grad)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::SILU_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()),
+            input_grad)};
+    }
+
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
     input_grad =
