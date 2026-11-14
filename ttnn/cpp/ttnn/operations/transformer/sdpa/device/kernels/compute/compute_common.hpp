@@ -1554,7 +1554,7 @@ enum SDPAType {
  * @param iter_q_end - Query iteration end
  * @param q_num_chunks - Total query chunks
  * @param local_q_start - Local query start
- * @param chunked_q_chunk_offset - Chunked query offset
+ * @param chunked_q_offset_t - Chunked query offset
  * @param iter_k_chunk_start - Key chunk iteration start
  * @param iter_k_chunk_end - Key chunk iteration end
  * @param q_chunk_tiles - Query chunk tiles
@@ -1632,7 +1632,7 @@ void sdpa_inner_loop(
     const uint32_t iter_q_end,
     const uint32_t q_num_chunks,
     const uint32_t local_q_start,
-    const uint32_t chunked_q_chunk_offset,
+    const uint32_t chunked_q_offset_t,
     const uint32_t iter_k_chunk_start,
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
@@ -1709,11 +1709,11 @@ void sdpa_inner_loop(
             // Mod is a no-op when the input is per-head ([0, q_num_chunks)) and extracts the
             // per-head q_chunk when it's a flat global index (global Q scheduling spans heads).
             uint32_t q_chunk = remap_q_index(linear_q_chunk, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
-            // Get Q chunk
-            if constexpr (is_chunked) {
-                q_chunk = chunked_q_chunk_offset + q_chunk;
-            }
             q_start_tile = q_chunk * Sq_chunk_t;
+            if constexpr (is_chunked) {
+                // Tile offset of Q row 0 in the full sequence; not necessarily a multiple of Sq_chunk_t.
+                q_start_tile += chunked_q_offset_t;
+            }
             if (is_causal) {
                 // Clamp to total K-tile extent. Mirrors reader_interleaved's clamp; without
                 // both, the reader and compute disagree on K-chunk count when Q-chunk extends
@@ -2228,7 +2228,7 @@ void sdpa_standard(
     const uint32_t iter_q_end,
     const uint32_t q_num_chunks,
     const uint32_t local_q_start,
-    const uint32_t chunked_q_chunk_offset,
+    const uint32_t chunked_q_offset_t,
     const uint32_t k_num_chunks,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
@@ -2289,7 +2289,7 @@ void sdpa_standard(
         iter_q_end,
         q_num_chunks,
         local_q_start,
-        chunked_q_chunk_offset,
+        chunked_q_offset_t,
         0,             // iter_k_chunk_start
         k_num_chunks,  // iter_k_chunk_end
         q_chunk_tiles,
@@ -2410,7 +2410,7 @@ void sdpa_joint(
         local_q_end,    // iter_q_end
         0,              // q_num_chunks (not used)
         local_q_start,
-        0,             // chunked_q_chunk_offset (not used)
+        0,             // chunked_q_offset_t (not used)
         0,             // iter_k_chunk_start
         k_num_chunks,  // iter_k_chunk_end
         q_chunk_tiles,
@@ -2562,7 +2562,7 @@ void sdpa_ring(
         global_q_end,    // iter_q_end
         q_num_chunks,    // q_num_chunks (total per-head chunks: local + joint)
         0,               // local_q_start (not used)
-        0,               // chunked_q_chunk_offset (not used)
+        0,               // chunked_q_offset_t (not used)
         0,
         iter_k_chunk_end,
         q_chunk_tiles,

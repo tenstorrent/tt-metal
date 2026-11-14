@@ -183,14 +183,15 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
 
     // Calculate chunk offsets for ring distribution
-    uint32_t chunked_q_chunk_offset_phase_1 = (chunk_1 * Sq) / q_chunk_size;
-    uint32_t chunked_q_chunk_offset_phase_2 = (chunk_2 * Sq) / q_chunk_size;
+    uint32_t chunked_q_offset_t_phase_1 = (chunk_1 * Sq) / TILE_HEIGHT;
+    uint32_t chunked_q_offset_t_phase_2 = (chunk_2 * Sq) / TILE_HEIGHT;
 
     // Add chunk_start_idx offset for prefix caching
-    // The offset should be relative to the full Q sequence, so we add chunk_start_idx / q_chunk_size
+    // The offset should be relative to the full Q sequence, so we add chunk_start_idx / TILE_HEIGHT (offsets are in
+    // tiles)
     if (is_chunked) {
-        chunked_q_chunk_offset_phase_1 += chunk_start_idx.value() / q_chunk_size;
-        chunked_q_chunk_offset_phase_2 += chunk_start_idx.value() / q_chunk_size;
+        chunked_q_offset_t_phase_1 += chunk_start_idx.value() / TILE_HEIGHT;
+        chunked_q_offset_t_phase_2 += chunk_start_idx.value() / TILE_HEIGHT;
     }
 
     // Global Q scheduling: distribute the flat B*NQH*q_num_chunks Q-chunk space evenly across cores
@@ -550,9 +551,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
              static_cast<Buffer*>(nullptr),  // attention_sink
              static_cast<Buffer*>(nullptr),  // chunk_start_idx (ring has none)
              2u,
-             chunked_q_chunk_offset_phase_1,
+             chunked_q_offset_t_phase_1,
              read_offset_phase_1,
-             chunked_q_chunk_offset_phase_2,
+             chunked_q_offset_t_phase_2,
              read_offset_phase_2,
              global_q_start,
              global_q_count});
@@ -562,9 +563,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
             {out0_buffer,
              2u,
              0u,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
-             chunked_q_chunk_offset_phase_1,
+             chunked_q_offset_t_phase_1,
              write_offset_phase_1,
-             chunked_q_chunk_offset_phase_2,
+             chunked_q_offset_t_phase_2,
              write_offset_phase_2,
              global_q_start,
              global_q_count,
@@ -575,8 +576,8 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
             core,
             {2u,
              0u,  // use_chunk_start_idx_tensor (ring has no chunk_start_idx_tensor)
-             chunked_q_chunk_offset_phase_1,
-             chunked_q_chunk_offset_phase_2,
+             chunked_q_offset_t_phase_1,
+             chunked_q_offset_t_phase_2,
              global_q_start,
              global_q_count});
     }

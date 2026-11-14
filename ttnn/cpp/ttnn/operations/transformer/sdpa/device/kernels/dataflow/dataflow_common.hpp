@@ -896,7 +896,7 @@ void generate_causal_sliding_window_mask(
     Noc noc,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
-    uint32_t q_chunk,
+    uint32_t q_start_tile,
     uint32_t k_chunk,
     bool is_causal = true,
     uint32_t sliding_window_size = 0) {
@@ -912,7 +912,7 @@ void generate_causal_sliding_window_mask(
 
     int32_t min_window_start, max_window_start, min_window_end, max_window_end;
     for (uint32_t q_tile = 0; q_tile < Sq_chunk_t; ++q_tile) {
-        uint32_t global_q_tile = Sq_chunk_t * q_chunk + q_tile;
+        uint32_t global_q_tile = q_start_tile + q_tile;
         uint32_t q_tile_start = global_q_tile * tt::constants::TILE_HEIGHT;
         uint32_t q_tile_end = q_tile_start + tt::constants::TILE_HEIGHT - 1;  // inclusive
         if (sliding_window_size > 0) {
@@ -1796,19 +1796,18 @@ void generate_mask(
     const uint32_t Sq_chunk_t,
     const uint32_t Sk_chunk_t,
     const uint32_t q_chunk,
-    const uint32_t chunk_start_t_in_q_chunks,
+    const uint32_t chunk_start_t,
     const bool generate_mask_0,
     const bool generate_mask_1,
     const uint32_t unpadded_Sk_mask_0,
     const uint32_t unpadded_Sk_mask_1,
     const bool is_causal) {
     if (is_causal || sliding_window_size > 0) {
-        uint32_t offset_q_chunk = q_chunk;
+        uint32_t q_low_idx = q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
         if constexpr (is_chunked) {
-            // Bump it up to the chunk start
-            offset_q_chunk += chunk_start_t_in_q_chunks;
+            // chunk_start_t is the tile offset of Q row 0 in the full sequence; it need not be a multiple of Sq_chunk_t
+            q_low_idx += chunk_start_t;
         }
-        uint32_t q_low_idx = offset_q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
         uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
         // Non-causal legacy compute consumes every K chunk, including those
@@ -1829,7 +1828,7 @@ void generate_mask(
                 // If no sliding window, only generate mask along diagonal
                 // Otherwise, generate mask for all chunks
                 generate_causal_sliding_window_mask<cb_mask_in>(
-                    noc, Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk, is_causal, sliding_window_size);
+                    noc, Sq_chunk_t, Sk_chunk_t, q_low_idx, k_chunk, is_causal, sliding_window_size);
             }
         }
     } else if constexpr (padded_or_joint_masks) {

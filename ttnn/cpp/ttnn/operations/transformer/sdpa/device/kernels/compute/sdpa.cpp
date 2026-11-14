@@ -52,10 +52,10 @@ void kernel_main() {
 
     const uint32_t num_phases = get_arg_val<uint32_t>(0);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(1);
-    uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(2);
-    uint32_t chunked_q_chunk_offset_phase_2 = 0;
+    uint32_t chunked_q_offset_t_phase_1 = get_arg_val<uint32_t>(2);
+    uint32_t chunked_q_offset_t_phase_2 = 0;
     if (num_phases == 2) {
-        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(3);
+        chunked_q_offset_t_phase_2 = get_arg_val<uint32_t>(3);
     }
 
     // Global Q scheduling args follow phase_2 slot.
@@ -88,7 +88,7 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 16);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 17);
     constexpr uint32_t cb_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 18);
-    uint32_t chunked_q_chunk_offset = 0;
+    uint32_t chunked_q_offset_t = 0;
     CircularBuffer cb_chunk_start_idx_obj(cb_chunk_start_idx);
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
     CircularBuffer cb_mask_in_obj(cb_mask_in);
@@ -100,10 +100,9 @@ void kernel_main() {
             cb_chunk_start_idx_obj.wait_front(1);
             uint32_t chunk_start_idx = ckernel::read_tile_value(cb_chunk_start_idx, 0, 0);
             cb_chunk_start_idx_obj.pop_front(1);
-            const uint32_t q_chunk_size = Sq_chunk_t * TILE_HEIGHT;
-            chunked_q_chunk_offset_phase_1 = chunk_start_idx / q_chunk_size;
+            chunked_q_offset_t_phase_1 = chunk_start_idx / TILE_HEIGHT;
             if (num_phases == 2) {
-                chunked_q_chunk_offset_phase_2 = chunked_q_chunk_offset_phase_1;
+                chunked_q_offset_t_phase_2 = chunked_q_offset_t_phase_1;
             }
         }
     }
@@ -189,7 +188,7 @@ void kernel_main() {
             cb_sum_A,
             cb_sum_B,
             global_q_start,
-            chunked_q_chunk_offset_phase_1,
+            chunked_q_offset_t_phase_1,
             lw_mask,
             q_num_chunks,
             use_zigzag_balancing,
@@ -209,9 +208,9 @@ void kernel_main() {
 
         for (uint32_t phase = 0; phase < num_phases; ++phase) {
             if (phase == 0) {
-                chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+                chunked_q_offset_t = chunked_q_offset_t_phase_1;
             } else {
-                chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+                chunked_q_offset_t = chunked_q_offset_t_phase_2;
             }
 
             // Global Q scheduling: sdpa_standard walks the per-core flat range over
@@ -250,7 +249,7 @@ void kernel_main() {
                 /*iter_q_end=*/global_q_count,
                 q_num_chunks,
                 /*local_q_start=*/global_q_start,
-                chunked_q_chunk_offset,
+                chunked_q_offset_t,
                 k_num_chunks,
                 q_chunk_tiles,
                 k_chunk_tiles,
