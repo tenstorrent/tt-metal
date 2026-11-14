@@ -659,8 +659,27 @@ def spec_multi_groups(env=os.environ) -> int:
     if env.get("GLM53_SPEC_MULTI", "0") != "1":
         return 0
     G = int(env.get("GLM53_SPEC_MULTI_USERS", "4") or 4)
-    assert G >= 2, ("GLM53_SPEC_MULTI_USERS: >= 2 users (one user is the single-user step: GLM53_SPEC_MULTI=0)", G)
+    # (GLM53_SPEC_LONE_BUILD, set only while StackBackend builds the GLM53_SPEC_MULTI_LONE step: a G 1 multi-user step)
+    assert G >= 2 or (G == 1 and env.get("GLM53_SPEC_LONE_BUILD", "0") == "1"), (
+        "GLM53_SPEC_MULTI_USERS: >= 2 users (one user is the single-user step: GLM53_SPEC_MULTI=0)", G)  # fmt: skip
     return G
+
+
+def spec_multi_lone(env=os.environ) -> bool:
+    """GLM53_SPEC_MULTI_LONE=1 (default off; GLM53_SPEC_MULTI + GLM53_SPEC_MTP_SPARSE, F20 2026-11-14): the backend also
+    builds a LONE-USER step -- the primary's K drafts for ONE user on group base 0 (G 1: K + 1 verify rows, e.g. 4 for
+    K 3) -- next to the primary (and GLM53_SPEC_MULTI_ALT's alternate), sharing their sparse MTP layer and per-slot state
+    (tt/spec_mtp.py SpecSwitch). It is listed FIRST in spec_steps, so spec_pick_step / generate_batch choose it when the
+    only live user sits on slot 0 (the served 1 M lone user ran the G 4 K 3 step's 16 verify rows: 81.8 tok/s/u served vs
+    93.3 for the 4-row single-user step on metal, 2026-11-13 23:57). Needs K + 1 as a decode width of the build
+    (spec_widths: e.g. GLM53_STACK_NARROW_WIDTHS=4 for K 3)."""
+    if env.get("GLM53_SPEC_MULTI_LONE", "0") != "1":
+        return False
+    if env.get("GLM53_SPEC_MULTI", "0") != "1" or env.get("GLM53_SPEC_MTP_SPARSE", "0") != "1":
+        raise ValueError(
+            "GLM53_SPEC_MULTI_LONE: with GLM53_SPEC_MULTI=1 and GLM53_SPEC_MTP_SPARSE=1 (the shared MTP state)"
+        )
+    return True
 
 
 def spec_mtp_sparse(env=os.environ) -> bool:

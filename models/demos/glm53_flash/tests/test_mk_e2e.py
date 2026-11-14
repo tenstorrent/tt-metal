@@ -46,6 +46,7 @@ logs tau per user, the step and the effective tok/s/u. On the B 16 slot build at
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
 
@@ -330,6 +331,8 @@ def _last_logits(gen, ids: list[int]):
 
 def _first_mismatch(gen, tok, prompt, plain, sids):
     """(first index where the spec ids leave the plain ids or None, the plain model's top-2 gap there or None)"""
+    if plain is None:  # (GLM53_MK_SPEC_ONLY without GLM53_MK_EXPECT_IDS_FILE: no reference, the gate is skipped)
+        return None, None
     n = min(len(plain), len(sids))
     first = next((j for j in range(n) if plain[j] != sids[j]), None)
     if first is None and len(plain) != len(sids):
@@ -342,6 +345,19 @@ def _first_mismatch(gen, tok, prompt, plain, sids):
         logger.info(f"MK_SPEC first mismatch at {first}: plain {plain[first: first + 4]} spec {sids[first: first + 4]} "
                     f"plain top-2 {top.indices.tolist()} gap {gap:.3f}")  # fmt: skip
     return first, gap
+
+
+def _ref_ids(live: int):
+    """GLM53_MK_EXPECT_IDS_FILE: a GLM53_MK_DUMP_IDS json of an earlier PLAIN run (same build / ISL / users) -> its
+    per-user greedy ids (the spec-only pass's gate), else None (the gate is skipped and flagged)"""
+    path = os.environ.get("GLM53_MK_EXPECT_IDS_FILE", "")
+    if not path:
+        return None
+    with open(path) as f:
+        d = json.load(f)
+    users = d["users"]
+    assert len(users) >= live, f"{path}: {len(users)} users < {live} live"
+    return [list(u) for u in users[:live]]
 
 
 def _spec_timing(tag: str, st: dict, tau: float, plain_ms: float) -> None:
@@ -436,19 +452,21 @@ def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing
     steps = int(st["spec_steps"])
     spec_ms = st["decode_s"] / max(1, steps) * 1e3
     eff = st["decode_steps"] / st["decode_s"] if st["decode_s"] > 0 else 0.0
-    res = [_first_mismatch(gen, tok, prompts[u], plains[u], souts[u]) for u in range(G)]
+    res = [_first_mismatch(gen, tok, prompts[u], None if plains is None else plains[u], souts[u]) for u in range(G)]
     taus = [c / max(1, steps) for c in st.get("spec_committed_u", [0] * G)]
     for u in range(G):
         logger.info(f"MK_SPEC_MULTI user {u}: tau {taus[u]:.2f} (committed {st['spec_committed_u'][u]}, accepts "
                     f"n=0..K {st['spec_accepts_u'][u]}), ids equal {res[u][0] is None} (first mismatch {res[u][0]}, "
-                    f"plain top-2 gap {res[u][1]}); spec ids {souts[u][:16]} plain {plains[u][:16]}")  # fmt: skip
+                    f"plain top-2 gap {res[u][1]}); spec ids {souts[u][:16]} plain "
+                    f"{None if plains is None else plains[u][:16]}")  # fmt: skip
     logger.info(
         f"MK_SPEC_MULTI: G {G} K {K} tau mean {sum(taus) / max(1, G):.2f} per user {[round(t, 2) for t in taus]} "
         f"({steps} steps), spec step {spec_ms:.1f} ms, effective {eff:.1f} tok/s/u (decode {st['decode_steps']} tokens "
         f"in {st['decode_s'] * 1e3:.0f} ms), plain {plain_ms:.1f} ms/step = {1e3 / plain_ms:.1f} tok/s/u, speedup "
         f"{eff * plain_ms / 1e3:.2f}x; TTFT spec {st['prefill_s'] * 1e3:.0f} ms vs plain "
         f"{plain_timing['prefill_s'] * 1e3:.0f} ms (MTP prefill rows {st.get('spec_mtp_prefill_rows')} of "
-        f"{sum(len(p) - 1 for p in prompts)}); ids equal per user {[r[0] is None for r in res]}"
+        f"{sum(len(p) - 1 for p in prompts)}); ids equal per user "
+        f"{[r[0] is None for r in res] if plains is not None else 'SKIPPED (spec-only, no reference ids)'}"
     )
     _spec_timing("MK_SPEC_MULTI", st, sum(taus) / max(1, G), plain_ms)
     logger.info(f"MK_SPEC_MULTI_TEXT user 0: {tok.decode([t for t in souts[0] if 0 <= t < tok.vocab_size])!r}")
@@ -478,17 +496,7 @@ def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_
     tau = committed / max(1, steps)
     spec_ms = st["decode_s"] / max(1, steps) * 1e3
     eff = st["decode_steps"] / st["decode_s"] if st["decode_s"] > 0 else 0.0
-    n = min(len(plain), len(sids))
-    first = next((j for j in range(n) if plain[j] != sids[j]), None)
-    if first is None and len(plain) != len(sids):
-        first = n
-    gap = None
-    if first is not None:  # the plain model's top-2 gap at the first mismatch (its context: prompt + plain[:first])
-        lg = _last_logits(gen, list(prompt) + list(plain[:first]))
-        top = lg[: tok.vocab_size].topk(2)
-        gap = float(top.values[0] - top.values[1])
-        logger.info(f"MK_SPEC first mismatch at {first}: plain {plain[first: first + 4]} spec {sids[first: first + 4]} "
-                    f"plain top-2 {top.indices.tolist()} gap {gap:.3f}")  # fmt: skip
+    first, gap = _first_mismatch(gen, tok, prompt, plain, sids)
     text = tok.decode([t for t in sids if 0 <= t < tok.vocab_size])
     logger.info(
         f"MK_SPEC: K {K} tau {tau:.2f} (committed {committed} / {steps} steps, accepts n=0..K {st['spec_accepts']}), "
@@ -496,7 +504,8 @@ def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_
         f"{st['decode_s'] * 1e3:.0f} ms), plain {plain_ms:.1f} ms/step = {1e3 / plain_ms:.1f} tok/s/u, speedup "
         f"{eff * plain_ms / 1e3:.2f}x; TTFT spec {st['prefill_s'] * 1e3:.0f} ms vs plain {plain_timing['prefill_s'] * 1e3:.0f} ms "
         f"(MTP prefill rows {st.get('spec_mtp_prefill_rows')} of {len(prompt) - 1}); ids equal "
-        f"{first is None} (first mismatch {first}, plain top-2 gap {gap}); spec ids {sids[:24]}"
+        f"{(first is None) if plain is not None else 'SKIPPED (spec-only, no reference ids)'} (first mismatch {first}, "
+        f"plain top-2 gap {gap}); spec ids {sids[:24]}"
     )
     _spec_timing("MK_SPEC", st, tau, plain_ms)
     logger.info(f"MK_SPEC_TEXT: {text!r}")
@@ -506,7 +515,7 @@ def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_
     # GLM53_MK_SPEC_TTFT_RATIO (e.g. 1.10): the spec request's TTFT (its prefill fills the MTP cache) within that ratio
     # of the plain request's on the same build; GLM53_MK_SPEC_MIN_TAU: a floor on tau
     ratio = float(os.environ.get("GLM53_MK_SPEC_TTFT_RATIO", "0") or 0)
-    if ratio:
+    if ratio and plain_timing["prefill_s"] == plain_timing["prefill_s"]:  # (nan: spec-only, no plain prefill)
         assert (
             st["prefill_s"] <= ratio * plain_timing["prefill_s"]
         ), f"spec TTFT {st['prefill_s'] * 1e3:.0f} ms > {ratio} x plain {plain_timing['prefill_s'] * 1e3:.0f} ms"
@@ -616,6 +625,41 @@ def test_mk_e2e(mesh_device, monkeypatch):
     # one call: TTFT = prefill of every user + its first token, decode = the rest (the generator splits its wall at the
     # first predictions: last_batch_timing). A separate TTFT call and decode = (second call - TTFT) / (OSL - 1) put the
     # difference of two prefills into every step: at 1 M context ~0.05 % of a 46 min prefill is ~20 ms per step
+    # GLM53_MK_SPEC_ONLY=1 (F20, with GLM53_SPEC_K, greedy text users): skip the plain pass -- at ~1 M each pass prefills
+    # every user (~282 s per user), so a G-user spec row prefilled twice. Plain ms/step for the speedup: GLM53_MK_PLAIN_MS
+    # (else the GLM53_MK_EXPECT_IDS_FILE json's step_ms, else unreported); the ids gate: GLM53_MK_EXPECT_IDS_FILE (a
+    # GLM53_MK_DUMP_IDS json of the plain run), else SKIPPED and flagged in the MK_SPEC lines
+    spec_k0 = int(os.environ.get("GLM53_SPEC_K", "0") or 0)
+    if os.environ.get("GLM53_MK_SPEC_ONLY", "0") == "1" and spec_k0 > 0:
+        assert sampling is None and mm_in is None, "GLM53_MK_SPEC_ONLY: greedy text users only"
+        assert (
+            getattr(backend, "spec", None) is not None and backend.spec.drafter == "mtp"
+        ), "GLM53_MK_SPEC_ONLY: the MTP step"
+        ref = _ref_ids(live)
+        pms = float(os.environ.get("GLM53_MK_PLAIN_MS", "0") or 0)
+        if not pms and os.environ.get("GLM53_MK_EXPECT_IDS_FILE"):
+            with open(os.environ["GLM53_MK_EXPECT_IDS_FILE"]) as f:
+                pms = float(json.load(f).get("step_ms", 0) or 0)
+        pms = pms or float("nan")
+        logger.info(f"MK_SPEC_ONLY: no plain pass; plain {pms:.1f} ms/step "
+                    f"({'GLM53_MK_PLAIN_MS / reference' if pms == pms else 'unreported'}); reference ids "
+                    f"{'from ' + os.environ['GLM53_MK_EXPECT_IDS_FILE'] if ref is not None else 'NONE -> ids gate SKIPPED'}; "
+                    f"ISL {len(ids)} OSL {OSL} live {live} B {B}")  # fmt: skip
+        nan_t = {"prefill_s": float("nan")}
+        G = gen.spec_groups()
+        g_max = max((g for _k, g, _b in gen.spec_steps()), default=G)
+        if G and (live == G or (live <= g_max and gen.spec_partial_groups())):
+            _spec_ab_multi(gen, backend, mesh_device, tok, prompts, ref, nan_t, pms, spec_k0, stop)
+        elif not G and live == 1:
+            _spec_ab(
+                gen, backend, mesh_device, tok, prompts[0], None if ref is None else ref[0], nan_t, pms, spec_k0, stop
+            )
+        else:
+            raise AssertionError(f"GLM53_MK_SPEC_ONLY: no step serves {live} live users (G {G}, partial "
+                                 f"{gen.spec_partial_groups()})")  # fmt: skip
+        if isinstance(source, MkTileCacheSource) and source._added:
+            source.save_manifest()
+        return
     outs = gen.generate_batch(prompts, OSL, sampling=sampling, stop_on_eos=stop, enable_trace=True, mm=mm)
     ttnn.synchronize_device(mesh_device)
     timing = gen.last_batch_timing
@@ -638,6 +682,12 @@ def test_mk_e2e(mesh_device, monkeypatch):
         f"({len(outs)} users, {sum(len(o) for o in outs)} ids)"
     )
     logger.info(f"MK_E2E counters: {gen.counters_report()}")
+    dump = os.environ.get("GLM53_MK_DUMP_IDS", "")
+    if dump:  # (F20: the reference of a later GLM53_MK_SPEC_ONLY row -- GLM53_MK_EXPECT_IDS_FILE)
+        with open(dump, "w") as f:
+            json.dump(dict(users=[list(o) for o in outs], live=live, isl=len(ids), osl=OSL, B=B, step_ms=step_ms,
+                           ttft_ms=ttft_s * 1e3), f)  # fmt: skip
+        logger.info(f"MK_E2E_DUMP_IDS: {dump} ({live} users)")
     assert n_gen >= 1
     if mm_in is not None and sampling is None:  # the image gate: the HF greedy reference's ids
         exp = mm_in["expect"]

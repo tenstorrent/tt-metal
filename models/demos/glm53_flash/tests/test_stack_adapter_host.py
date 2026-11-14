@@ -1939,6 +1939,30 @@ def test_spec_widths_rules(monkeypatch):
         spec_multi_groups({"GLM53_SPEC_MULTI": "1", "GLM53_SPEC_MULTI_USERS": "1"})
 
 
+def test_spec_multi_lone_step():
+    """GLM53_SPEC_MULTI_LONE (F20): a (K, G 1) multi-user step built under GLM53_SPEC_LONE_BUILD only (G 1 stays refused
+    elsewhere), K + 1 rows on a build width (narrow 4 for K 3), listed FIRST so the step pick prefers it for a lone
+    user on slot 0 and falls through to the primary / alternate for anything else"""
+    from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_lone
+
+    lone_env = {"GLM53_SPEC_MULTI": "1", "GLM53_SPEC_MULTI_USERS": "1", "GLM53_SPEC_LONE_BUILD": "1"}
+    assert spec_multi_groups(lone_env) == 1
+    with expect_error(AssertionError, ">= 2 users"):
+        spec_multi_groups({**lone_env, "GLM53_SPEC_LONE_BUILD": "0"})
+    assert spec_widths(3, 16, (4,), groups=1) == dict(w=4, lone=4, wv=4, cu=4, ch=4, mode="multi", ts=(4,))
+    with expect_error(AssertionError, "must be a decode width of the build"):
+        spec_widths(3, 16, (), groups=1)  # (no narrow 4: the lone step has no 4-row programs)
+    on = {"GLM53_SPEC_MULTI": "1", "GLM53_SPEC_MTP_SPARSE": "1", "GLM53_SPEC_MULTI_LONE": "1"}
+    assert spec_multi_lone(on) is True and spec_multi_lone({}) is False
+    with expect_error(ValueError, "GLM53_SPEC_MULTI_LONE"):
+        spec_multi_lone({"GLM53_SPEC_MULTI_LONE": "1", "GLM53_SPEC_MULTI": "1"})
+    steps = [(3, 1, (0,)), (3, 4, (0, 4, 8, 12)), (1, 8, (0, 2, 4, 6, 8, 10, 12, 14))]
+    assert spec_pick_step(steps, [0]) == (0, [0])  # the lone user on slot 0: the 4-row step
+    assert spec_pick_step(steps, [4]) == (1, [4])  # a lone user elsewhere: the primary (partial)
+    assert spec_pick_step(steps, [0, 4]) == (1, [0, 4]) and spec_pick_step(steps, [0, 2]) == (2, [0, 2])
+    assert spec_pick_step(steps, [0], room=lambda i: i != 0) == (1, [0])  # no room on the lone step: the next one
+
+
 def test_mtp_prefill_span_covers_the_prompt():
     """the MTP-cache rows of a chunked prompt: every position 0 .. L - 2 exactly once (L - 1 is the bootstrap's)"""
     L, got = 300, []

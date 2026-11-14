@@ -684,6 +684,11 @@ class StackBackend(ModelBackend):
                         if alt is not None:
                             spec_ts |= set(spec_widths(alt[1], self.chunk, tuple(self.narrow_widths)
                                                        + tuple(self.native_widths), groups=alt[0])["ts"])  # fmt: skip
+                        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_lone
+
+                        if spec_multi_lone():  # (GLM53_SPEC_MULTI_LONE: the lone-user step's G 1 row counts)
+                            spec_ts |= set(spec_widths(k_spec, self.chunk, tuple(self.narrow_widths)
+                                                       + tuple(self.native_widths), groups=1)["ts"])  # fmt: skip
                     ts = tuple(sorted({self.chunk} | set(self.narrow_widths) | spec_ts))
                     d = TPD.TPDsaLayer(self.mesh, self.cfg, L, source, OptimizedDecoderConfig(), moe=moe, ts=ts,
                                        share=dsa_share, dsa=self.dsa_decode, defer=self.dsa_defer,
@@ -1181,13 +1186,26 @@ class StackBackend(ModelBackend):
             from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_alt
 
             alt = spec_multi_alt()
-            if alt is not None:
+            # GLM53_SPEC_MULTI_LONE (generator.spec_multi_lone): a lone-user step (the primary's K, G 1) listed FIRST so
+            # the step pick prefers it when the only live user is on slot 0; the primary stays current at startup
+            from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_lone
+
+            lone = spec_multi_lone()
+            if alt is not None or lone:
                 from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import SpecSwitch
                 from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import env as _spec_env
 
-                with _spec_env(GLM53_SPEC_MULTI_USERS=str(alt[0])):
-                    second = SpecMTP(self, kv, K=int(alt[1]), drafter=self.spec.drafter, share=self.spec)
-                self.spec = SpecSwitch([self.spec, second])
+                steps = [self.spec]
+                if alt is not None:
+                    with _spec_env(GLM53_SPEC_MULTI_USERS=str(alt[0])):
+                        steps.append(SpecMTP(self, kv, K=int(alt[1]), drafter=self.spec.drafter, share=self.spec))
+                if lone:
+                    with _spec_env(GLM53_SPEC_MULTI_USERS="1", GLM53_SPEC_LONE_BUILD="1"):
+                        one = SpecMTP(self, kv, K=int(self.spec.K), drafter=self.spec.drafter, share=self.spec)
+                    steps = [one] + steps
+                self.spec = SpecSwitch(steps)
+                if lone:
+                    self.spec.select(1)  # (the primary current, as without the lone step)
         if self.pos_c:  # per-chunk page tables (rows 4c..4c+3 at rows 0..3)
             host = (torch.arange(rows * kv.blocks_per_seq, dtype=torch.int32) % kv.num_blocks).reshape(rows, -1)
             if shard_pt:
