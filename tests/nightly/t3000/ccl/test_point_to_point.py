@@ -327,3 +327,47 @@ def test_point_to_point_cache_hit_with_output_tensor(mesh_device):
 
     assert_equal(in1_torch[idx_start0:idx_end0, :, :, :], out1_torch[idx_start1:idx_end1, :, :, :])
     assert_equal(in2_torch[idx_start0:idx_end0, :, :, :], out2_torch[idx_start1:idx_end1, :, :, :])
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_point_to_point_out_of_place_after_in_place_cache(mesh_device):
+    # Regression test for issue #63643: an in-place cross-device point_to_point call
+    # (output_tensor == input_tensor) followed by an out-of-place call with the same specs
+    # must not reuse the in-place receiver writer binding (slot 0 = input) and overwrite
+    # the second call's input on the receiver.
+    shape, coords = ((1, 1, 32, 64), ((0, 0), (0, 1)))
+    coord0, coord1 = (ttnn.MeshCoordinate(c) for c in coords)
+
+    devices = prod(list(mesh_device.shape))
+    multi_device_shape = tuple(s * (devices if i == 0 else 1) for i, s in enumerate(shape))
+    lcoord0, lcoord1 = (_linear_coord(c, list(mesh_device.shape)) for c in coords)
+    idx_start0, idx_end0 = lcoord0 * shape[0], (lcoord0 + 1) * shape[0]
+    idx_start1, idx_end1 = lcoord1 * shape[0], (lcoord1 + 1) * shape[0]
+
+    def _to_device(torch_tensor):
+        return ttnn.from_torch(
+            torch_tensor,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+
+    torch.manual_seed(0)
+    x_torch = torch.randn(multi_device_shape, dtype=torch.bfloat16)
+    x = _to_device(x_torch)
+    ttnn.point_to_point(x, coord0, coord1, topology=ttnn.Topology.Linear, output_tensor=x)
+
+    y_torch = torch.randn(multi_device_shape, dtype=torch.bfloat16)
+    z_torch = torch.zeros(multi_device_shape, dtype=torch.bfloat16)
+    y = _to_device(y_torch)
+    z = _to_device(z_torch)
+    ttnn.point_to_point(y, coord0, coord1, topology=ttnn.Topology.Linear, output_tensor=z)
+
+    y_after = ttnn.to_torch(y, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    z_after = ttnn.to_torch(z, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
+    assert_equal(y_torch, y_after)
+    assert_equal(y_torch[idx_start0:idx_end0, :, :, :], z_after[idx_start1:idx_end1, :, :, :])
+
