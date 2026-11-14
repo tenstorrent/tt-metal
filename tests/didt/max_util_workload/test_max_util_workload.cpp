@@ -864,6 +864,38 @@ static bool validate_compute_output(IDevice* device, const MaxUtilConfig& cfg) {
 }
 
 // ---------------------------------------------------------------------------
+// log_output_crcs – reads the last output tile of every worker core and logs
+// one CRC-32 per core. Inputs are fixed-seed and every core runs the same
+// math, so a host can vote these CRCs across chips to find a core that
+// computed wrong values. Logical core coordinates are reported.
+// ---------------------------------------------------------------------------
+
+static uint32_t crc32_words(const std::vector<uint32_t>& words) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t word : words) {
+        for (int b = 0; b < 4; ++b) {
+            crc ^= (word >> (8 * b)) & 0xFFu;
+            for (int k = 0; k < 8; ++k) {
+                crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+            }
+        }
+    }
+    return ~crc;
+}
+
+static void log_output_crcs(IDevice* device, const MaxUtilConfig& cfg) {
+    const uint32_t tile_bytes = tile_size_bytes(DataFormat::Float16_b);
+    const uint32_t last_tile_addr = cfg.l1_buffer2_addr + (cfg.num_tiles - 1) * tile_bytes;
+    for (uint32_t y = cfg.grid_start.y; y <= cfg.grid_end.y; ++y) {
+        for (uint32_t x = cfg.grid_start.x; x <= cfg.grid_end.x; ++x) {
+            std::vector<uint32_t> tile;
+            detail::ReadFromDeviceL1(device, CoreCoord{x, y}, last_tile_addr, tile_bytes, tile, CoreType::WORKER);
+            log_info(LogTest, "Device {}: output crc core {},{} 0x{:08x}", device->id(), x, y, crc32_words(tile));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // log_fpu_utilization – reads back-pressured unpack-thread timestamps from a
 // representative worker and reports useful MVMUL cycles / pipeline cycles.
 // ---------------------------------------------------------------------------
@@ -1076,6 +1108,7 @@ static bool run_single_device(const shared_ptr<distributed::MeshDevice>& mesh_de
     distributed::Finish(cq);
 
     bool valid_compute_output = validate_compute_output(device, cfg);
+    log_output_crcs(device, cfg);
     bool valid_fpu_timing = log_fpu_utilization(device, cfg);
 
     // Report per-ETH-core DRAM bandwidth after the program completes.
@@ -1180,6 +1213,7 @@ static bool run_all_devices(
     bool valid_eth_timing = true;
     for (const auto& run : runs) {
         valid_compute_output &= validate_compute_output(run.device, run.cfg);
+        log_output_crcs(run.device, run.cfg);
         valid_fpu_timing &= log_fpu_utilization(run.device, run.cfg);
         valid_eth_timing &= log_eth_bw(run.device, run.cfg, run.eth_dram_buffer);
     }
