@@ -362,6 +362,7 @@ class Gemma4DecoderLayer:
         mm_attn_mask=None,
         traced_short_bucket=False,
         continuation=None,
+        prefill_traced=False,
     ):
         """
         Decoder layer forward pass.
@@ -473,7 +474,7 @@ class Gemma4DecoderLayer:
             expert_input = self.pre_feedforward_layernorm_2.forward(residual_for_router)
 
             # MoE: router(residual) → dense_routing → experts(normed_input, routing)
-            expert_output = self.moe(residual_for_router, expert_input)
+            expert_output = self.moe(residual_for_router, expert_input, prefill_traced=prefill_traced)
             expert_input.deallocate(True)
 
             # post_feedforward_layernorm_2 on expert output
