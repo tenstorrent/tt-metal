@@ -53,13 +53,16 @@ def build_injection(
     return rows, mask
 
 
+TILE_HEIGHT = 32
+
+
 def table_height(rows: int) -> int:
-    """Snap a partial table's height to a power of two (min 32, one tile).
+    """Snap a partial table's height to a power of two, at least one tile.
 
     k moves with how many images a forward names, so an exact height would compile a new program for
     every image count and could never be preallocated. Snapping leaves a handful of shapes: the program
     cache hits, and compile() can warm each one so trace capture has somewhere to put them."""
-    height = 32
+    height = TILE_HEIGHT
     while height < rows:
         height *= 2
     return height
