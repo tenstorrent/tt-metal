@@ -16,6 +16,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/operations/kernel_helper_functions/local_l1_copy.hpp"
 
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
@@ -170,6 +171,54 @@ inline void read_block_to_dfb(
         idx++;
     }
     noc.async_read_barrier();
+    dfb.push_back(static_cast<uint16_t>(block.full_block_size()));
+}
+
+/**
+ * @brief Read a block of a row-major gamma/beta tensor into tile layout.
+ *
+ * A row-major affine tensor holds one 32-datum page per tile column. Each page lands in row 0 of its
+ * tile: the first 16 datums stay in face 0 and the last 16 are copied into face 1. Only row 0 is
+ * written, which is all the row-broadcast consumers read.
+ *
+ * @param tile_bytes The size of a tile in bytes in the affine tensor's data format
+ * @param offset Global offset for page ID
+ */
+template <typename T, typename Block, typename DFB>
+inline void read_row_major_affine_block_to_dfb(
+    Noc& noc, DFB& dfb, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
+    const uint32_t datum_bytes = tile_bytes / tt::constants::TILE_HW;
+    const uint32_t row_bytes = tt::constants::TILE_WIDTH * datum_bytes;
+    const uint32_t face_bytes = tt::constants::FACE_HW * datum_bytes;
+    const uint32_t half_row_bytes = tt::constants::FACE_WIDTH * datum_bytes;
+
+    dfb.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+    uint32_t num_tiles = 0;
+    for (auto r : block.local()) {
+        noc.async_read(addr, dfb, row_bytes, {.page_id = offset + r}, {.offset_bytes = num_tiles * tile_bytes});
+        num_tiles++;
+    }
+    noc.async_read_barrier();
+    const uint32_t base = dfb.get_write_ptr();
+#ifdef ARCH_QUASAR
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        const uint32_t tile_base = base + (i * tile_bytes);
+        local_l1_copy(tile_base + face_bytes, tile_base + half_row_bytes, half_row_bytes);
+    }
+#else
+    const UnicastEndpoint local_ep;
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        noc.async_read(
+            local_ep,
+            dfb,
+            half_row_bytes,
+            {.noc_x = my_x[noc.get_noc_id()],
+             .noc_y = my_y[noc.get_noc_id()],
+             .addr = base + (i * tile_bytes) + half_row_bytes},
+            {.offset_bytes = (i * tile_bytes) + face_bytes});
+    }
+    noc.async_read_barrier();
+#endif
     dfb.push_back(static_cast<uint16_t>(block.full_block_size()));
 }
 
