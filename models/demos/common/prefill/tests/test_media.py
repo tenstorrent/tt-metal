@@ -125,9 +125,11 @@ def test_table_height_snaps_to_powers_of_two(rows, want):
     assert table_height(rows) == want
 
 
-def test_table_is_bucketed_and_tail_stays_zero():
+def test_table_is_bucketed_and_row_zero_stays_zero():
+    """Row 0 is the "not this row's" sentinel and is read, so it must stay zero. Rows above the slots in
+    use are not read — lookup never points at them — so the staging buffer may leave them stale."""
     chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)]
     embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
     table, lookup, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
     assert table.shape[1] == table_height(int(lookup.max()) + 1)
-    assert not table[:, int(lookup.max()) + 1 :].any(), "padding rows must stay zero"
+    assert not table[:, 0].any(), "the sentinel row must stay zero"

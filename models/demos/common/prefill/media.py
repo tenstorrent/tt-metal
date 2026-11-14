@@ -55,6 +55,17 @@ def build_injection(
 
 TILE_HEIGHT = 32
 
+# Host staging, reused across forwards. s_total is fixed for a deployment and table_height snaps to a
+# power of two, so these shapes repeat and a forward allocates none of them.
+_STAGING: dict = {}
+
+
+def _staged(shape: tuple, dtype) -> torch.Tensor:
+    buf = _STAGING.get((shape, dtype))
+    if buf is None:
+        buf = _STAGING[(shape, dtype)] = torch.zeros(shape, dtype=dtype)
+    return buf
+
 
 def table_height(rows: int) -> int:
     """Snap a partial table's height to a power of two, at least one tile.
@@ -85,6 +96,9 @@ def build_media_partials(
 
     ``lookup`` and ``is_img`` are indexed by the all-gathered token order (chip-major, _positions), not
     by natural position: that is the order the lookup sees inside _forward_2d.
+
+    The three tensors are staging buffers kept per shape, so a caller must consume them before the next
+    call rather than hold them.
     """
     if not refs:
         return None
@@ -112,9 +126,15 @@ def build_media_partials(
 
     s_total = positions.numel()
     hidden = rows_of(refs[0]).shape[1]
-    table = torch.zeros(sp, table_height(int(slot.max()) + 1 if slot.numel() else 1), hidden, dtype=torch.bfloat16)
-    lookup = torch.zeros(sp, s_total, dtype=torch.int32)
-    is_img = torch.zeros(s_total, dtype=torch.bool)
+    height = table_height(int(slot.max()) + 1 if slot.numel() else 1)
+    table = _staged((sp, height, hidden), torch.bfloat16)
+    lookup = _staged((sp, s_total), torch.int32)
+    is_img = _staged((s_total,), torch.bool)
+    # lookup and is_img are read in full, so they are cleared; the table is not. Slots are 1 and up, so
+    # row 0 keeps the zeros it was allocated with, and the rows above this forward's slots hold the
+    # last forward's bytes — lookup never points at them, so they are never read.
+    lookup.zero_()
+    is_img.zero_()
     lookup[sp_row, flats] = slot.to(torch.int32)
     is_img[flats] = True
     for j, ref in enumerate(refs):  # one gather per ref, not one per image row
