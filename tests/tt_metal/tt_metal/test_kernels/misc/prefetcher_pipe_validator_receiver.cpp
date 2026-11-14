@@ -85,6 +85,9 @@ void kernel_main() {
             const uint32_t phys_blk = streaming ? ((lead_block + blk) % num_blocks) : blk;
             prefetcher_validator::read_expected_block_tiles(
                 accessor, scratch, tile_bytes, phys_blk, k_block_w_tiles, total_n_tiles, n_col_start, n_per_recv_tiles);
+            // The expected tiles arrive over the NoC behind the cache, so the lock is what lets the compare
+            // below see them on Quasar instead of stale cached lines. Elsewhere it compiles away.
+            const auto expected_lock = scratch.scoped_lock(page_bytes / sizeof(uint32_t));
 
             const uint32_t mismatch_word = prefetcher_validator::first_mismatching_word(page, scratch, page_bytes);
             if (mismatch_word != prefetcher_validator::kNoMismatch) {
