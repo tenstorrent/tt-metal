@@ -227,7 +227,19 @@ echo "Fetching sfpi $sfpi_version ..." | dupstderr
  git submodule update --depth 1 --init --recursive)
 
 echo | dupstderr
+echo "Applying local patches ..." | dupstderr
+patches_dir=$(dirname $(realpath $0))/patches
+for p in "$patches_dir"/*.patch; do
+    [[ -f $p ]] || continue
+    (set -x; git -C gcc apply --check "$p" 2>/dev/null && git -C gcc apply "$p") \
+        || echo "Patch already applied or not applicable: $p" >&2
+done
+
+echo | dupstderr
 echo "Building ..." | dupstderr
+# GCC 16+ defaults to C++20 where u8"" literals become char8_t[], breaking
+# libcody's S2C helper which expects char[]. Opt back out to pre-C++20 behaviour.
+export CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }-fno-char8_t"
 (set -x; rm -rf build)
 (set -x; scripts/build.sh --checking=release --test-tt 2>&1)
 
