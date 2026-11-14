@@ -472,7 +472,7 @@ endif()
 CPMAddPackage(
     NAME ttexalens
     GITHUB_REPOSITORY tenstorrent/tt-exalens
-    GIT_TAG 6f5720240b7254b25cb3d78aef81769fc12a30f9
+    GIT_TAG 0e956c264eca3464a8f1974c7307d312a37d4b0c
     SOURCE_SUBDIR ttexalens/cpp/elf
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
