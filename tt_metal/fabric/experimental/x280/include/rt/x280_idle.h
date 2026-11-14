@@ -12,9 +12,11 @@
  * instead of jumping back strands the L2CPU out of reset with no recovery short
  * of `tt-smi -r`.
  *
- * WFI is not an alternative: host NOC writes raise no interrupt on this part, so
- * a WFI-parked hart never wakes. Nor is CEASE, which stops the hart until the
- * next reset. The only correct exit is to jump to the idle FW's _start.
+ * WFI is not an alternative: the harness enables no interrupt, so a WFI-parked
+ * hart never wakes (an image may enable the MSI catcher doorbell for itself, see
+ * rt/x280_plic.h, but that is a wait, not an exit). Nor is CEASE, which stops
+ * the hart until the next reset. The only correct exit is to jump to the idle
+ * FW's _start.
  *
  * Static inline so each freestanding firmware target can use it directly.
  */

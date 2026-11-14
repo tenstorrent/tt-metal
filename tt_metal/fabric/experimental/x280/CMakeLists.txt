@@ -24,6 +24,10 @@ x280_add_image(NAME firmware-pinned-input-prepare SOURCES src/x280_pinned_input.
 # the deliberate non-conformer that traps and CEASEs hart 2.
 x280_add_image(NAME firmware-atomic-bench SOURCES src/atomic_bench.c)
 x280_add_image(NAME firmware-active-session-fault SOURCES src/active_session_fault.c DEFINES X280_ACTIVE_FAULT_HART=2)
+# Test-only images for the hardware facts README § 4 states: the MSI catcher doorbell, and which
+# NOC alias of the tile's local DRAM is coherent with the X280 caches.
+x280_add_image(NAME firmware-doorbell SOURCES src/doorbell.c)
+x280_add_image(NAME firmware-coherent-alias SOURCES src/coherent_alias.c)
 
 add_test(
     NAME x280_image_layout
@@ -50,6 +54,7 @@ set(_x280_abi_headers
     rt/x280_noc_map.h
     rt/x280_pll.h
     rt/x280_pinned_input.h
+    rt/x280_plic.h
 )
 set(_x280_asm_headers
     x280_address_map.h
@@ -251,6 +256,8 @@ _x280_device_test(x280_runtime_device_tests
     tests/device/test_x280_active_hw.cpp
     tests/device/test_x280_active_workloads_hw.cpp
     tests/device/test_x280_device_hw.cpp
+    tests/device/test_x280_doorbell_hw.cpp
+    tests/device/test_x280_coherent_alias_hw.cpp
 )
 _x280_device_test(x280_runtime_coordinate_tests tests/device/test_x280_coordinates.cpp)
 _x280_device_test(x280_active_failure_test tests/device/test_x280_active_failure_hw.cpp)
