@@ -1,0 +1,42 @@
+---
+# One dashboard per GitHub gate workflow: pr-gate mirrors pr-gate.yaml and
+# merge-gate mirrors merge-gate.yaml. Each publishes its verdict as its own
+# check, `TorrentCI / <id>`, derived from its members without a pod.
+#
+# merge-gate does not nest pr-gate. On GitHub both workflows run on every
+# merge_group event as two separate required statuses, and merge-gate.yaml
+# itself does not contain the PR Gate jobs. The merge-queue trigger targets
+# both dashboards, so the queue runs both, just as GitHub does; nesting would
+# add nothing there and would make merge-gate's verdict differ from the
+# workflow it mirrors. A job in both (asan-build) runs once per revision and
+# counts toward both verdicts.
+#
+# Conditional members (torrentci#697) are not implemented, so every member
+# always runs; GitHub skips many of these jobs by changed paths.
+dashboards:
+  # Ported so far: asan-build ("Build ASan ubuntu 24.04") and
+  # llk-hardware-free (llk-hardware-free-tests).
+  # Missing from pr-gate.yaml: runtime-smoke-tests, ttnn-smoke-tests,
+  # runtime-examples, ttnn-examples, code-analysis, model-charts-sync,
+  # build-docs, llk-smoke-tests, llk-quasar-tests, verify-time-budgets.
+  # smoke-cpu-asan, smoke-n150-asan and llk-smoke-n150-g1/g2 exist here but
+  # are not validated against the PR Gate, so they are not members yet.
+  - id: pr-gate
+    description: tt-metal PR Gate (pr-gate.yaml), the ported part
+    report: {check: true}
+    members:
+      - job: asan-build
+      - job: llk-hardware-free
+  # Ported so far: asan-build (build-asan).
+  # Missing from merge-gate.yaml: static-checks, build (the Release build,
+  # 21-build.yaml, left out until the ci-build chain image imports on civ2,
+  # torrentci#2768), build-tsan, build-sweeps, runtime-smoke-tests,
+  # runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests,
+  # ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests,
+  # scaleout-unit-tests, scaleout-cpu-only-unit-tests, llk-build-quasar-perf,
+  # llk-unit-tests, llk-perf-merge-gate, ttsim-quasar-merge-gate-tests.
+  - id: merge-gate
+    description: tt-metal Merge Gate (merge-gate.yaml), the ported part
+    report: {check: true}
+    members:
+      - job: asan-build

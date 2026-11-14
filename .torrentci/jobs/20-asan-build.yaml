@@ -10,7 +10,7 @@
 # drop the ref and run-id suffix: TorrentCI scopes artifacts to the producing
 # job execution. ccache is remote; no TorrentCI cache (large restores fail
 # today, torrentci#1179). On afuller/baby-steps it runs on every merge-queue
-# entry; here it has no trigger: run it by hand.
+# entry; here it runs through the pr-gate and merge-gate dashboards.
 jobs:
   - id: asan-build
     description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
