@@ -212,7 +212,17 @@ def _configuration_accesses_in_block(statements, bound=False):
 
 
 def _undefined_configuration_accesses(function):
-    return _configuration_accesses_in_block(function.body)[0]
+    parameters = [
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    ]
+    if function.args.vararg is not None:
+        parameters.append(function.args.vararg)
+    if function.args.kwarg is not None:
+        parameters.append(function.args.kwarg)
+    bound = any(parameter.arg == "configuration" for parameter in parameters)
+    return _configuration_accesses_in_block(function.body, bound)[0]
 
 
 def test_perf_backed_functional_module_discovery_is_not_empty():
@@ -251,6 +261,12 @@ def run(is_perf, collect_result):
 
 
 def test_stale_configuration_analysis_requires_a_local_binding():
+    parameter = ast.parse(
+        """
+def run(configuration):
+    return configuration.variant_stimuli
+"""
+    ).body[0]
     bound = ast.parse(
         """
 def run():
@@ -297,6 +313,7 @@ def run(use_existing):
     return configuration.variant_stimuli
 """
     ).body[0]
+    assert not _undefined_configuration_accesses(parameter)
     assert not _undefined_configuration_accesses(bound)
     assert _undefined_configuration_accesses(stale)
     assert _undefined_configuration_accesses(late)
