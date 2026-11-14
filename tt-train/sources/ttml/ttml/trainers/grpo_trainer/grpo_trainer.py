@@ -1066,6 +1066,8 @@ class GRPOTrainer:
         optimizer_dict: Optional[dict] = None,
         callbacks: Optional[List[Any]] = None,
         reward_funcs: Optional[List[Callable[..., List[float]]]] = None,
+        *,
+        precision: Optional[dict] = None,
     ) -> None:
         """
         Args:
@@ -1077,6 +1079,13 @@ class GRPOTrainer:
                 with checkpoints.
             dataset_func: Zero-argument callable that returns the training
                 dataset. The trainer calls it once, in the constructor.
+            precision: Keyword only. The YAML's ``training_config.precision``
+                block as a dict (``master_dtype``, ``reduce_dtype``), applied
+                once, right after the model is built and before its weights or
+                a trainer checkpoint load, so fp32 master weights resume
+                unrounded and the optimizer state follows the stored dtype.
+                ``None`` (default) means no block, as in ``create_optimizer``:
+                the parameters keep their dtype and no reduce dtype is stored.
 
         The trainer opens the device and builds the policy model and tokenizer
         (``self.model`` / ``self.tokenizer``) with
@@ -1105,6 +1114,7 @@ class GRPOTrainer:
         # Constructor inputs (immutable during ``train``).
         self.config = config
         self.optimizer_dict = optimizer_dict
+        self.precision = precision
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
 
@@ -1164,7 +1174,9 @@ class GRPOTrainer:
                 self.callbacks.append(GRPOMonitor(cfg))
 
         if cfg.backend.in_process:
-            self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+            self.model, self.tokenizer = setup_ttml_model(
+                transformer_config, device_config, self.model_source, precision=self.precision
+            )
             self._batch_layout = resolve_batch_layout()
             self.rollout_sampler = build_rollout_sampler(
                 cfg.backend.sampler,
@@ -1184,7 +1196,9 @@ class GRPOTrainer:
             with exit_on_error():
                 autograd_ctx = ttml.autograd.AutoContext.get_instance()
                 autograd_ctx.initialize_distributed_context(*sys.argv)
-                self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+                self.model, self.tokenizer = setup_ttml_model(
+                    transformer_config, device_config, self.model_source, precision=self.precision
+                )
                 self._batch_layout = resolve_batch_layout()
                 bridge = HostWeightBridge.init_sender(mesh=autograd_ctx.get_device(), peer_rank=TTT_RANK)
                 self._rollout_client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)

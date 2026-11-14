@@ -9,7 +9,7 @@ import pytest
 import ttml
 import ttnn
 from ttml.common import muon_optimizer
-from ttml.common.utils import create_optimizer
+from ttml.common.utils import apply_precision, create_optimizer
 from ttml.modules import AbstractModuleBase, Parameter
 
 from tensor_helpers import stored_dtypes
@@ -561,3 +561,26 @@ def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):
     config = {"training_config": {"precision": {"params_dtype": "float32"}, "optimizer": {"type": "AdamW"}}}
     with expect_error(RuntimeError, "Unknown key precision.params_dtype"):
         create_optimizer(_ModelWithoutParameters(), config)
+
+
+# The checks behind these bindings are covered case by case by ParameterDtypeTest in C++; Python adds the dict-to-YAML
+# conversion and the exception type, so each binding keeps one valid and one invalid case.
+
+
+def test_apply_precision_takes_ttnn_dtypes_and_none_means_no_block(gradient_reduce_default):
+    """A ``ttnn.DataType`` value means what its YAML name does, as it does for ``fully_shard`` and
+    ``ttml.sync_gradients``; ``None`` is no block and stores no reduce dtype, as ``create_optimizer`` does for a config
+    without one. No parameter is touched, so this needs no device."""
+    apply_precision(_ModelWithoutParameters(), {"reduce_dtype": ttnn.DataType.FLOAT32})
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
+
+    apply_precision(_ModelWithoutParameters(), None)
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() is None
+
+
+@pytest.mark.parametrize("value", [ttnn.DataType.UINT32, 32])
+def test_apply_precision_rejects_values_that_would_read_as_unset(expect_error, value):
+    """Anything but a name, None or a bf16/fp32 ``ttnn.DataType`` would reach C++ as a YAML null and read as unset, so
+    it raises naming the key. No device needed."""
+    with expect_error(TypeError, "precision.reduce_dtype must be"):
+        apply_precision(_ModelWithoutParameters(), {"reduce_dtype": value})

@@ -424,6 +424,125 @@ def test_save_checkpoint_round_trip_llama(patch_llama_weight_loading, tmp_path):
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+FP32_PRECISION = {"master_dtype": "float32", "reduce_dtype": "float32"}
+
+
+def _stored_dtypes(model) -> set:
+    return {p.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for p in model.parameters().values()}
+
+
+@pytest.mark.requires_device
+def test_setup_ttml_model_resumes_fp32_master_weights_bit_for_bit(
+    patch_llama_weight_loading, tmp_path, gradient_reduce_default
+):
+    """The precision block is applied right after the model is built, before a trainer checkpoint loads, so fp32
+    master weights resume exactly. Without the block the same checkpoint loads into bf16 parameters, rounded."""
+    model, tokenizer = grpo_ttml_model.setup_ttml_model(
+        TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID, precision=FP32_PRECISION
+    )
+    assert _stored_dtypes(model) == {ttnn.DataType.FLOAT32}
+    rng = np.random.default_rng(0)
+    for param in model.parameters().values():
+        ttml.autograd.assign_numpy(param, rng.standard_normal(param.shape()).astype(np.float32))
+    save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=patch_llama_weight_loading)
+    ckpt_dir = str(tmp_path / "checkpoints" / "grpo_step_1")
+
+    resumed, _ = grpo_ttml_model.setup_ttml_model(
+        TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, ckpt_dir, precision=FP32_PRECISION
+    )
+    assert _stored_dtypes(resumed) == {ttnn.DataType.FLOAT32}
+    _assert_same_parameters(model, resumed)
+
+    rounded, _ = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, ckpt_dir)
+    assert _stored_dtypes(rounded) == {ttnn.DataType.BFLOAT16}
+    name, saved = next(iter(model.parameters().items()))
+    assert not np.array_equal(
+        rounded.parameters()[name].to_numpy(ttnn.DataType.FLOAT32), saved.to_numpy(ttnn.DataType.FLOAT32)
+    ), "premise: without the block the checkpoint's fp32 values are rounded"
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+class _GradientDtypes(TrainerCallback):
+    """Records the gradients' dtypes right before each optimizer step."""
+
+    def __init__(self) -> None:
+        self.per_step: list[set] = []
+
+    def on_before_optimizer_step(self, trainer):
+        self.per_step.append(
+            {p.get_grad().dtype for p in trainer.model.parameters().values() if p.is_grad_initialized()}
+        )
+
+
+@pytest.mark.requires_device
+def test_grpo_trainer_trains_fp32_master_weights_with_fp32_gradient_accumulation(
+    patch_llama_weight_loading, tmp_path, gradient_reduce_default
+):
+    """precision= reaches the model before its weights load: fused AdamW then steps fp32 master weights on gradients
+    added up in fp32 over two micro-batches, and every parameter moves."""
+    grpo_cfg = GRPOConfig(
+        epsilon=0.2,
+        per_device_train_batch_size=4,
+        num_iterations=1,
+        gradient_accumulation_steps=2,
+        logging_steps=1,
+        output_dir=str(tmp_path),
+        checkpointing=False,
+        checkpoint_interval=999,
+        prompts_to_train=8,
+        temperature=1.0,
+        max_completion_length=4,
+        num_generations=2,
+        warmup_steps=0,
+        rollout_backend="ttml_in_process_sync",
+        lr_scheduler_type="constant",
+    )
+    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
+    prompts = ["What is 1+1?", "Name a color.", "Name a fruit.", "What is 2+2?"] * 2
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True
+                )
+                for p in prompts
+            ],
+            "answer": ["2", "blue", "apple", "4"] * 2,
+        }
+    )
+    gradients = _GradientDtypes()
+
+    trainer = GRPOTrainer(
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
+        dataset_func=lambda: dataset,
+        config=grpo_cfg,
+        reward_func=lambda completions, **_: [float(i % 2) for i in range(len(completions))],
+        optimizer_dict={"type": "AdamW", "lr": 1.0e-3},
+        callbacks=[gradients],
+        precision=FP32_PRECISION,
+    )
+    assert _stored_dtypes(trainer.model) == {ttnn.DataType.FLOAT32}
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
+    before = {name: p.to_numpy(ttnn.DataType.FLOAT32) for name, p in trainer.model.parameters().items()}
+
+    trainer.train()
+
+    assert gradients.per_step and all(
+        dtypes == {ttnn.DataType.FLOAT32} for dtypes in gradients.per_step
+    ), gradients.per_step
+    parameters = trainer.model.parameters()
+    assert _stored_dtypes(trainer.model) == {ttnn.DataType.FLOAT32}
+    moved = [
+        name for name, p in parameters.items() if not np.array_equal(p.to_numpy(ttnn.DataType.FLOAT32), before[name])
+    ]
+    assert len(moved) == len(parameters), f"unchanged: {sorted(set(parameters) - set(moved))}"
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
 @pytest.mark.requires_device
 def test_policy_forward_is_causal(patch_llama_weight_loading):
     """A change to the last token changes no earlier -log pi; full attention would change them."""

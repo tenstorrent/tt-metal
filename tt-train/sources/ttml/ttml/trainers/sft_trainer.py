@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 import ttml
 from ttml.common.profiler_utils import profiler_marker
 from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
-from ttml.common.utils import no_grad, validate_clip_grad_norm
+from ttml.common.utils import apply_precision, no_grad, validate_clip_grad_norm
 from ttml.datasets import Batch, TTMLDataloader
 from ttml.trainers.callback import TrainerCallback
 
@@ -130,6 +130,7 @@ class SFTTrainer:
         checkpoint_loader: Optional[Callable[["SFTTrainer", str], int]] = None,
         *,
         lr_lambda: Optional[Callable[[int], float]] = None,
+        precision: Optional[dict] = None,
     ) -> None:
         """
         Args:
@@ -177,6 +178,16 @@ class SFTTrainer:
                 LR (PyTorch's ``LambdaLR``), so param groups keep their ratios.
                 ``None`` (default) -- linear warmup over
                 ``config.warmup_steps``, then a constant factor of 1.
+            precision: The YAML's ``training_config.precision`` block as a
+                dict (e.g. ``{"master_dtype": "float32", "reduce_dtype":
+                "float32"}``), applied with
+                ``ttml.common.utils.apply_precision`` after the LoRA wrapping
+                and before the optimizer is built from a dict or the default.
+                ``None`` (default) means no block, as in ``create_optimizer``:
+                the parameters keep their dtype and no reduce dtype is stored.
+                With a ready optimizer instance nothing is applied, and passing
+                a block raises ``ValueError``: that optimizer's state is
+                already sized for the parameters' dtype.
 
         Note:
             When ``config.gradient_checkpointing`` is ``True`` the model's
@@ -204,7 +215,8 @@ class SFTTrainer:
         if self.config.max_grad_norm > 0:
             validate_clip_grad_norm(self.model)
 
-        self._optimizer = self._build_optimizer(optimizer)
+        self._optimizer = self._build_optimizer(optimizer, precision)
+        self._warn_about_fp32_frozen_parameters()
         if lr_schedule is not None:
             if lr_lambda is not None:
                 raise ValueError("pass lr_lambda or the deprecated lr_schedule, not both")
@@ -490,15 +502,25 @@ class SFTTrainer:
         self.step = step
         return step
 
-    def _build_optimizer(self, optimizer: Any):
+    def _build_optimizer(self, optimizer: Any, precision: Optional[dict] = None):
         """Resolve the *optimizer* argument into an ``OptimizerBase``.
 
-        * ``OptimizerBase`` instance -- returned as-is.
+        * ``OptimizerBase`` instance -- returned as-is; *precision* must be ``None``.
         * ``dict`` -- forwarded to ``ttml.optimizers.create_optimizer``.
         * ``None`` -- a default AdamW is created with ``learning_rate=config.learning_rate``.
+
+        For a dict or the default, *precision* is applied to the model first.
         """
         if isinstance(optimizer, ttml.optimizers.OptimizerBase):
+            if precision is not None:
+                raise ValueError(
+                    "SFTTrainer: precision is applied before the optimizer is created, but this optimizer already "
+                    "exists with its state sized for the current parameters. Apply the block when you create it "
+                    "(ttml.common.utils.create_optimizer with the whole config), or pass the optimizer as a dict."
+                )
             return optimizer
+
+        apply_precision(self.model, precision)
 
         if isinstance(optimizer, dict):
             return ttml.optimizers.create_optimizer(optimizer, self.model.parameters())
@@ -508,6 +530,23 @@ class SFTTrainer:
             {"type": "AdamW", "lr": self.config.learning_rate},
             self.model.parameters(),
         )
+
+    def _warn_about_fp32_frozen_parameters(self) -> None:
+        """A frozen parameter stored in fp32, such as a LoRA base converted before it was wrapped, takes 4 bytes plus
+        its 2-byte bf16 view while training only reads the view: warn once, naming one of them."""
+        frozen_fp32 = [
+            name
+            for name, tensor in self.model.parameters().items()
+            if not tensor.get_requires_grad() and tensor.dtype() == ttnn.DataType.FLOAT32
+        ]
+        if frozen_fp32:
+            logger.warning(
+                "SFTTrainer: %d frozen parameter(s), such as %s, are stored in fp32. Training doesn't update them, "
+                "so they cost 6 bytes per element instead of 2; apply the precision block after freezing (for LoRA, "
+                "pass it as precision=) rather than before.",
+                len(frozen_fp32),
+                frozen_fp32[0],
+            )
 
     def _build_loss_composer(self, loss_composer: Optional[Any] = None):
         """Create a mesh composer for aggregating loss across devices."""
