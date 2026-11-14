@@ -1652,3 +1652,59 @@ def test_transpose_sharded_rm_width(device, dim0, dim1, input_sharding, output_s
         layout=ttnn.ROW_MAJOR_LAYOUT,
         input_dtype=dtype,
     )
+
+
+@pytest.mark.parametrize(
+    "grid_kind, orientation",
+    [
+        ("offset_row", ttnn.ShardOrientation.ROW_MAJOR),
+        ("offset_col", ttnn.ShardOrientation.ROW_MAJOR),
+        ("offset_2x2", ttnn.ShardOrientation.ROW_MAJOR),
+        ("offset_2x2", ttnn.ShardOrientation.COL_MAJOR),
+        ("disjoint", ttnn.ShardOrientation.ROW_MAJOR),
+    ],
+)
+@pytest.mark.parametrize(
+    "shape, shard_height",
+    [
+        ((1, 4, 16, 32), 16),  # special-case path
+        ((1, 5, 12, 32), 15),  # generic path
+    ],
+    ids=["special_case", "generic_case"],
+)
+def test_transpose_hc_sharded_offset_and_disjoint_grids(device, grid_kind, orientation, shape, shard_height):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 5 or compute_grid.y < 4:
+        pytest.skip(f"Compute grid {compute_grid} too small for offset HC transpose test")
+
+    if grid_kind == "offset_row":
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 0))})
+    elif grid_kind == "offset_col":
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(3, 1))})
+    elif grid_kind == "offset_2x2":
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2))})
+    else:
+        grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(3, 1), ttnn.CoreCoord(4, 1)),
+            }
+        )
+
+    torch.manual_seed(1234)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(1, 2)
+
+    shard_spec = ttnn.ShardSpec(grid, [shard_height, shape[3]], orientation)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    tt_output = ttnn.transpose(tt_input, 1, 2, memory_config=mem_config)
+    got = ttnn.to_torch(tt_output)
+    assert torch.equal(got, torch_output)
