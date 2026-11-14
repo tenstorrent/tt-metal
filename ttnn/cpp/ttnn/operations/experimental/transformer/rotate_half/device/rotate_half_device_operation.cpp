@@ -20,6 +20,15 @@ void RotateHalfDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotate half need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands to rotate half need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to rotate half must be tilized");
+    // The split point is logical_width / 2, but the factory derives it from padded_shape()[-1] / 2.
+    // A width that picks up implicit tile padding (48 -> 64, 100 -> 128) passes the padded-width
+    // check below and is rotated at the padded midpoint, returning silently wrong values.
+    TT_FATAL(
+        input_tensor.logical_shape()[-1] == input_tensor.padded_shape()[-1],
+        "Input X dimension ({}) carries implicit tile padding (padded to {}); rotate_half splits at the logical "
+        "midpoint, so the logical and padded widths must match.",
+        input_tensor.logical_shape()[-1],
+        input_tensor.padded_shape()[-1]);
     TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
