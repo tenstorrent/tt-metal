@@ -254,7 +254,7 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
                 compute_grid_size.x,
                 compute_grid_size.y);
         } else {
-            log_info(
+            log_debug(
                 tt::LogDevice,
                 "Slow dispatch mode: Using full logical grid ({}, {})",
                 compute_grid_size.x,

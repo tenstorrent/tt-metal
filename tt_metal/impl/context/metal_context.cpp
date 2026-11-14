@@ -442,7 +442,7 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
 
     MetalEnvDescriptor desc{};
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+        log_debug(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
         desc.mock_cluster_desc_path = std::move(*mock_cluster_desc);
     }
     g_default_env = new MetalEnv(std::move(desc));
