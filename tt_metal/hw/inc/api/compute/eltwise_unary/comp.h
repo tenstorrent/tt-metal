@@ -576,6 +576,162 @@ ALWI void lez_tile_init() {
 #endif
 }
 
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x == value, else 0, where x is each UInt32 element of a tile
+ * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
+ * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_eq_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_unary_uint32,
+        (APPROX, SfpuType::unary_eq, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0));
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x != value, else 0, where x is each UInt32 element of a tile
+ * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
+ * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_ne_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_unary_uint32,
+        (APPROX, SfpuType::unary_ne, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0));
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x > value, else 0, where x is each UInt32 element of a tile
+ * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
+ * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_gt_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_unary_uint32,
+        (APPROX, SfpuType::unary_gt, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0));
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x >= value, else 0, where x is each UInt32 element of a tile
+ * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
+ * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_ge_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_unary_uint32,
+        (APPROX, SfpuType::unary_ge, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0));
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x < value, else 0, where x is each UInt32 element of a tile
+ * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
+ * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_lt_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_unary_uint32,
+        (APPROX, SfpuType::unary_lt, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0));
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of:  result = 1 if x <= value, else 0, where x is each UInt32 element of a tile
+ * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
+ * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
+ */
+// clang-format on
+ALWI void unary_le_tile_uint32(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp_unary_uint32,
+        (APPROX, SfpuType::unary_le, 8 /*ITERATIONS*/),
+        idst,
+        VectorMode::RC,
+        param0));
+}
+
 // Integer comparison-to-zero variants. These read int32/uint operands from Dest, which on Quasar
 // requires 32-bit unpack-to-Dest that is not supported yet, so the whole block stays gated off there.
 #ifndef ARCH_QUASAR
@@ -787,162 +943,6 @@ ALWI void nez_tile_uint16(uint32_t idst) {
 ALWI void nez_tile_uint32(uint32_t idst) {
     MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_nez_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
-}
-
-// clang-format off
-/**
- * Performs element-wise computation of:  result = 1 if x == value, else 0, where x is each UInt32 element of a tile
- * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
- * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
- */
-// clang-format on
-ALWI void unary_eq_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_comp_unary_uint32,
-        (APPROX, SfpuType::unary_eq, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0));
-}
-
-// clang-format off
-/**
- * Performs element-wise computation of:  result = 1 if x != value, else 0, where x is each UInt32 element of a tile
- * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
- * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
- */
-// clang-format on
-ALWI void unary_ne_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_comp_unary_uint32,
-        (APPROX, SfpuType::unary_ne, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0));
-}
-
-// clang-format off
-/**
- * Performs element-wise computation of:  result = 1 if x > value, else 0, where x is each UInt32 element of a tile
- * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
- * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
- */
-// clang-format on
-ALWI void unary_gt_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_comp_unary_uint32,
-        (APPROX, SfpuType::unary_gt, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0));
-}
-
-// clang-format off
-/**
- * Performs element-wise computation of:  result = 1 if x >= value, else 0, where x is each UInt32 element of a tile
- * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
- * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
- */
-// clang-format on
-ALWI void unary_ge_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_comp_unary_uint32,
-        (APPROX, SfpuType::unary_ge, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0));
-}
-
-// clang-format off
-/**
- * Performs element-wise computation of:  result = 1 if x < value, else 0, where x is each UInt32 element of a tile
- * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
- * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
- */
-// clang-format on
-ALWI void unary_lt_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_comp_unary_uint32,
-        (APPROX, SfpuType::unary_lt, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0));
-}
-
-// clang-format off
-/**
- * Performs element-wise computation of:  result = 1 if x <= value, else 0, where x is each UInt32 element of a tile
- * in DST register at index tile_index. Both x and value are compared as unsigned 32-bit integers. The value is
- * provided as const param0. The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | The unsigned value to be compared with the input tensor                    | uint32_t |                                                       | True     |
- */
-// clang-format on
-ALWI void unary_le_tile_uint32(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_comp_unary_uint32,
-        (APPROX, SfpuType::unary_le, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC,
-        param0));
 }
 #endif  // !ARCH_QUASAR
 

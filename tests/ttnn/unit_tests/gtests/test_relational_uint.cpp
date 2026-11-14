@@ -97,7 +97,14 @@ std::vector<uint32_t> make_input(uint32_t scalar, size_t volume) {
 }  // namespace
 
 class RelationalUintFixture : public TTNNFixtureWithSuiteDevice<RelationalUintFixture>,
-                              public testing::WithParamInterface<RelationalUintParam> {};
+                              public testing::WithParamInterface<RelationalUintParam> {
+protected:
+    void SetUp() override {
+        if (device_->arch() == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "UInt32 unary comparisons are not supported on Quasar.";
+        }
+    }
+};
 
 TEST_P(RelationalUintFixture, MatchesUnsignedReference) {
     const auto [op, scalar] = GetParam();
@@ -138,6 +145,12 @@ INSTANTIATE_TEST_SUITE_P(
 
 class RelationalUintScalarRangeFixture : public TTNNFixtureWithSuiteDevice<RelationalUintScalarRangeFixture> {
 protected:
+    void SetUp() override {
+        if (device_->arch() == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "UInt32 unary comparisons are not supported on Quasar.";
+        }
+    }
+
     ttnn::Tensor make_tensor() const {
         const ttnn::Shape shape({32, 32});
         const TensorSpec spec(
