@@ -47,6 +47,7 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local
 from ....utils.test import skip_if_unsupported_num_links
 from .common import (
     GALAXY_RING,
+    GALAXY_RING_AND_LINE,
     REAL_BLOCK_CONFIG,
     ROPE_FREQ_DIM,
     ROPE_THETA,
@@ -1054,7 +1055,7 @@ def test_minimax_h3_transformer_block(
     assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
 
 
-@GALAXY_RING
+@GALAXY_RING_AND_LINE
 def test_minimax_h3_transformer_block_dynamic_length(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -1066,15 +1067,11 @@ def test_minimax_h3_transformer_block_dynamic_length(
 ) -> None:
     """One dynamic-length block serves two lengths from one program set: warm at the capacity length, then
     the shorter one must add no program; PCC against the reference at both."""
-    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+    from tt_py_test_utils_common.utils_for_testing import assert_program_cache_flat
 
     MIN_PCC = 0.9995
 
     skip_if_unsupported_num_links(mesh_device, num_links)
-    if not is_blackhole():
-        # The Wormhole grid has no pinned ff2 MM+RS program, so the block falls back to the row-parallel linear
-        # whose reduce-scatter keys its program on the row count: a second length always adds a program there.
-        pytest.skip("dynamic_length zero-miss gate is Blackhole-only: the Wormhole ff2 fallback keys on rows")
     big = _block_setup(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 512, 3072)
     small = _block_setup(
         mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280, torch_model=big.torch_model

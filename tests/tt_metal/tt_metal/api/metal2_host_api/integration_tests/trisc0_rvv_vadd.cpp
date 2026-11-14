@@ -25,7 +25,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, Trisc0RvvVectorAdd) {
     auto mesh_device = devices_[0];
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
@@ -46,39 +46,42 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, Trisc0RvvVectorAdd) {
     const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     slow_dispatch::WriteToL1(*mesh_device, node, l1_address, init_values);
 
-    const experimental::KernelSpecName COMPUTE_KERNEL{"trisc0_rvv_vadd"};
+    const KernelSpecName COMPUTE_KERNEL{"trisc0_rvv_vadd"};
 
-    experimental::ComputeHardwareConfig hw_config{};
-    hw_config.config_2xx = experimental::ComputeHardwareConfig::Compute2XXConfig{.enable_unpack_rvv = true};
+    ComputeHardwareConfig hw_config{};
+    hw_config.config_2xx = ComputeHardwareConfig::Compute2XXConfig{.enable_unpack_rvv = true};
 
-    experimental::KernelSpec compute_kernel_spec{
+    KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/trisc0_rvv_vadd_quasar.cpp",
         .num_threads = 1,
-        .runtime_arg_schema = { .runtime_arg_names = {"l1_address"}, },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"l1_address"},
+            },
         .hw_config = hw_config,
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "trisc0_rvv_vadd",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
     }};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

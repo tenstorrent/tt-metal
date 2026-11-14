@@ -230,7 +230,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         std::optional<LLKMetadata> metadata;
         uint8_t pap;
         uint8_t cap;
-        std::vector<experimental::NodeRange> watcher_node_ranges;
+        std::vector<NodeRange> watcher_node_ranges;
     };
     vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
@@ -255,7 +255,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Watcher: the nodes each DFB and semaphore exists on, emitted next to its token for checking multicasts into it.
     const auto attach_node_ranges =
-        [](auto& entries, const std::string& name, const std::vector<experimental::NodeRange>& node_ranges) {
+        [](auto& entries, const std::string& name, const std::vector<NodeRange>& node_ranges) {
             if (auto it = std::find_if(
                     entries.begin(), entries.end(), [&name](const auto& entry) { return entry.name == name; });
                 it != entries.end()) {
@@ -263,10 +263,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             }
         };
     settings.process_watcher_node_ranges(
-        [&](const std::string& name, const std::vector<experimental::NodeRange>& node_ranges) {
+        [&](const std::string& name, const std::vector<NodeRange>& node_ranges) {
             attach_node_ranges(dfb_entries, name, node_ranges);
         },
-        [&](const std::string& name, const std::vector<experimental::NodeRange>& node_ranges) {
+        [&](const std::string& name, const std::vector<NodeRange>& node_ranges) {
             attach_node_ranges(sem_entries, name, node_ranges);
         });
 

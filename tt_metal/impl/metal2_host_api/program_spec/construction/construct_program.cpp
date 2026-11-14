@@ -9,7 +9,7 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -22,7 +22,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/hal.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 Program BuildProgram(
     distributed::MeshDevice& mesh_device,
@@ -48,4 +48,4 @@ Program BuildProgram(
     return Program(std::move(program_impl));
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

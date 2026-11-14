@@ -11,7 +11,7 @@ from collections import OrderedDict
 from typing import Dict, Any, List, Tuple
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 from models.experimental.transfuser.reference.config import GlobalConfig
 from models.experimental.transfuser.reference.lidar_center_net import LidarCenterNet, process_input

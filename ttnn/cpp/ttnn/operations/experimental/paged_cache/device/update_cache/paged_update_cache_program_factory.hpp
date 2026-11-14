@@ -6,7 +6,7 @@
 
 #include "paged_update_cache_device_operation_types.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
 
@@ -24,7 +24,7 @@ struct PagedUpdateCacheProgramFactory {
     // input-shard DFB re-resolves from its own binding) and the cache-write offsets derived from
     // update_idxs, which the program hash excludes so decode steps differing only in position
     // cache-hit.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const PagedUpdateCacheParams& operation_attributes,
         const PagedUpdateCacheInputs& tensor_args,
         Tensor& tensor_return_value,
@@ -42,7 +42,7 @@ struct PagedUpdateCacheMeshWorkloadFactory {
 
     // Same program body as PagedUpdateCacheProgramFactory, so it reuses that patch. Only coordinates
     // inside mesh_coords have a program, so every range reaching this hook is an included one.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const PagedUpdateCacheParams& operation_attributes,
         const PagedUpdateCacheInputs& tensor_args,
         Tensor& tensor_return_value,

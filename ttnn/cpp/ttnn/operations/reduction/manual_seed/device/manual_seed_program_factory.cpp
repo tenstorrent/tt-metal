@@ -5,8 +5,8 @@
 #include "manual_seed_program_factory.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -17,7 +17,6 @@
 
 namespace ttnn::prim {
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 // Helper function to compute core grid from device and operation attributes

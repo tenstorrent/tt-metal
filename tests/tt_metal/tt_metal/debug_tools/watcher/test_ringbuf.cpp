@@ -114,7 +114,7 @@ void RunTest(
     // Push past capacity so the oldest entries are overwritten, whatever the buffer size.
     uint32_t num_pushes = hal.get_ring_buffer_capacity() + 12;
     constexpr const char* kernel_metal2 = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
-    const experimental::KernelSpecName kRingbufKernelName{"ringbuf_kernel"};
+    const KernelSpecName kRingbufKernelName{"ringbuf_kernel"};
 
     CoreCoord logical_core, virtual_core;
     switch (processor.core_type) {
@@ -122,7 +122,7 @@ void RunTest(
             logical_core = CoreCoord{0, 0};
             virtual_core = device->worker_core_from_logical_core(logical_core);
             // ETH/DRAM below stay on the legacy host API; it has no Metal 2.0 equivalent.
-            experimental::KernelSpec kernel_spec{.unique_id = kRingbufKernelName, .source = kernel_metal2};
+            KernelSpec kernel_spec{.unique_id = kRingbufKernelName, .source = kernel_metal2};
             switch (processor.processor_class) {
                 case HalProcessorClassType::DM: {
                     kernel_spec.compile_time_args["num_pushes"] = num_pushes;
@@ -130,11 +130,11 @@ void RunTest(
                         // Launch on all 6 user DM threads (DM0/DM1 are reserved for the runtime) and filter in-kernel.
                         kernel_spec.num_threads = 6;
                         kernel_spec.compile_time_args["dm_id"] = processor.processor_type;
-                        kernel_spec.hw_config = experimental::DataMovementHardwareConfig{};
+                        kernel_spec.hw_config = DataMovementHardwareConfig{};
                     } else {
-                        kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
+                        kernel_spec.hw_config = DataMovementHardwareConfig{
                             .config_1xx =
-                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                DataMovementHardwareConfig::DataMovement1XXConfig{
                                     .processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type),
                                     .noc = (processor.processor_type == 0) ? tt_metal::NOC::RISCV_0_default
                                                                            : tt_metal::NOC::RISCV_1_default,
@@ -149,20 +149,20 @@ void RunTest(
                         {fmt::format("WATCHER_RINGBUF_TRISC{}", processor.processor_type), "1"}};
                     if (is_quasar) {
                         kernel_spec.num_threads = 1;
-                        kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
+                        kernel_spec.hw_config = ComputeHardwareConfig{};
                     } else {
-                        kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
+                        kernel_spec.hw_config = ComputeHardwareConfig{};
                     }
                     break;
                 }
             }
-            experimental::WorkUnitSpec wu{
+            WorkUnitSpec wu{
                 .name = "main",
                 .kernels = {kRingbufKernelName},
-                .target_nodes = experimental::NodeCoord{logical_core},
+                .target_nodes = NodeCoord{logical_core},
             };
-            experimental::ProgramSpec spec{.name = "watcher_ringbuf", .kernels = {kernel_spec}, .work_units = {wu}};
-            program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+            ProgramSpec spec{.name = "watcher_ringbuf", .kernels = {kernel_spec}, .work_units = {wu}};
+            program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
             break;
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
@@ -261,16 +261,16 @@ void RunMultiWriterTest(
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED));
     constexpr const char* kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
 
-    std::vector<experimental::KernelSpec> specs;
-    std::vector<experimental::KernelSpecName> names;
-    auto add_spec = [&](const char* name, experimental::KernelSpec spec) {
-        spec.unique_id = experimental::KernelSpecName{name};
+    std::vector<KernelSpec> specs;
+    std::vector<KernelSpecName> names;
+    auto add_spec = [&](const char* name, KernelSpec spec) {
+        spec.unique_id = KernelSpecName{name};
         spec.source = kernel;
         spec.compile_time_args["num_pushes"] = NUM_PUSHES_MULTI;
         if (sem_wrap) {
             spec.compiler_options.defines["WATCHER_RINGBUF_SEM_WRAP"] = "1";
-            spec.compile_time_args["num_dm_threads"] = experimental::QUASAR_USER_DM_CORES_PER_NODE;
-            spec.compile_time_args["num_tensixes"] = experimental::QUASAR_TENSIX_ENGINES_PER_NODE;
+            spec.compile_time_args["num_dm_threads"] = QUASAR_USER_DM_CORES_PER_NODE;
+            spec.compile_time_args["num_tensixes"] = QUASAR_TENSIX_ENGINES_PER_NODE;
             spec.compile_time_args["head_addr"] = head_addr;
         }
         names.push_back(spec.unique_id);
@@ -284,28 +284,24 @@ void RunMultiWriterTest(
     if (is_quasar) {
         add_spec(
             "dm",
-            {.num_threads = experimental::QUASAR_USER_DM_CORES_PER_NODE,
+            {.num_threads = QUASAR_USER_DM_CORES_PER_NODE,
              .compiler_options = {.defines = {{"MULTI_DM_TEST", "1"}}},
-             .hw_config = experimental::DataMovementHardwareConfig{}});
+             .hw_config = DataMovementHardwareConfig{}});
         add_spec(
             "compute",
-            {.num_threads = experimental::QUASAR_TENSIX_ENGINES_PER_NODE,
+            {.num_threads = QUASAR_TENSIX_ENGINES_PER_NODE,
              .compiler_options = {.defines = {{"MULTI_DM_TEST", "1"}}},
-             .hw_config = experimental::ComputeHardwareConfig{}});
+             .hw_config = ComputeHardwareConfig{}});
         // DM0/DM1 are reserved, so the launched threads land on DM2...DM7.
         const uint32_t num_trisc_writers = hal.get_processor_types_count(
             HalProgrammableCoreType::TENSIX, static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
         const uint32_t first_trisc_hw_id =
             hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0);
         append_expected_writers(
-            expected,
-            tensix_name,
-            experimental::QUASAR_USER_DM_CORES_PER_NODE,
-            experimental::QUASAR_RESERVED_DM_CORES_PER_NODE);
+            expected, tensix_name, QUASAR_USER_DM_CORES_PER_NODE, QUASAR_RESERVED_DM_CORES_PER_NODE);
         append_expected_writers(expected, tensix_name, num_trisc_writers, first_trisc_hw_id);
         if (sem_wrap) {
-            const uint32_t total_pushes =
-                (experimental::QUASAR_USER_DM_CORES_PER_NODE + num_trisc_writers) * NUM_PUSHES_MULTI;
+            const uint32_t total_pushes = (QUASAR_USER_DM_CORES_PER_NODE + num_trisc_writers) * NUM_PUSHES_MULTI;
             expected_head = total_pushes - total_pushes / 2;
             // Cleared so a kernel that never hands the head over fails the check.
             const uint32_t zero = 0;
@@ -314,18 +310,18 @@ void RunMultiWriterTest(
     } else {
         add_spec(
             "brisc",
-            {.hw_config = experimental::DataMovementHardwareConfig{
+            {.hw_config = DataMovementHardwareConfig{
                  .config_1xx =
-                     experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                     DataMovementHardwareConfig::DataMovement1XXConfig{
                          .processor = tt_metal::DataMovementProcessor::RISCV_0,
                          .noc = tt_metal::NOC::RISCV_0_default,
                      },
              }});
         add_spec(
             "ncrisc",
-            {.hw_config = experimental::DataMovementHardwareConfig{
+            {.hw_config = DataMovementHardwareConfig{
                  .config_1xx =
-                     experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                     DataMovementHardwareConfig::DataMovement1XXConfig{
                          .processor = tt_metal::DataMovementProcessor::RISCV_1,
                          .noc = tt_metal::NOC::RISCV_1_default,
                      },
@@ -338,14 +334,13 @@ void RunMultiWriterTest(
                       {{"WATCHER_RINGBUF_TRISC0", "1"},
                        {"WATCHER_RINGBUF_TRISC1", "1"},
                        {"WATCHER_RINGBUF_TRISC2", "1"}}},
-             .hw_config = experimental::ComputeHardwareConfig{}});
+             .hw_config = ComputeHardwareConfig{}});
         append_expected_writers(expected, tensix_name, 5);
     }
 
-    experimental::WorkUnitSpec wu{
-        .name = "main", .kernels = names, .target_nodes = experimental::NodeCoord{logical_core}};
-    experimental::ProgramSpec spec{.name = "watcher_ringbuf_multi", .kernels = specs, .work_units = {wu}};
-    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    WorkUnitSpec wu{.name = "main", .kernels = names, .target_nodes = NodeCoord{logical_core}};
+    ProgramSpec spec{.name = "watcher_ringbuf_multi", .kernels = specs, .work_units = {wu}};
+    workload.add_program(device_range, tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec));
 
     const int dumps_before_run = MetalContext::instance().watcher_server()->dump_count();
     fixture->RunProgram(mesh_device, workload, true);
@@ -369,7 +364,7 @@ void RunDispatchEngineMultiWriterTest(
     const auto& hal = MetalContext::instance().hal();
     const uint32_t num_dms = hal.get_processor_types_count(
         HalProgrammableCoreType::DISPATCH, static_cast<uint32_t>(HalProcessorClassType::DM));
-    const uint32_t first_user_dm = experimental::QUASAR_RESERVED_DM_CORES_PER_NODE;
+    const uint32_t first_user_dm = QUASAR_RESERVED_DM_CORES_PER_NODE;
     const CoreCoord logical_core = detail::dispatch_engine_core(*mesh_device, 0);
 
     Program program = CreateProgram(*mesh_device);
