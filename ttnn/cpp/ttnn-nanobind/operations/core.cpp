@@ -14,6 +14,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/pad_value_arg.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -29,6 +30,26 @@
 namespace ttnn::operations::core {
 
 struct DeviceComputeKernelConfigPlaceholder {};
+
+namespace {
+
+ttnn::Tensor to_layout_wrapper(
+    const ttnn::Tensor& tensor,
+    ttnn::Layout layout,
+    const std::optional<ttnn::DataType>& dtype,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const ttnn::operations::data_movement::PadValueArg& pad_value) {
+    return ttnn::to_layout(
+        tensor,
+        layout,
+        dtype,
+        memory_config,
+        sub_core_grids,
+        ttnn::operations::data_movement::to_pad_value(pad_value, tensor.dtype()));
+}
+
+}  // namespace
 
 void py_module_types(nb::module_& mod) {
     export_enum<compute_throttle_utils::ThrottleLevel>(mod, "ThrottleLevel", R"doc(
@@ -443,12 +464,12 @@ void py_module(nb::module_& mod) {
             dtype (ttnn.DataType, optional): the optional output data type.
             memory_config (ttnn.MemoryConfig, optional): the optional output memory configuration.
             sub_core_grids (ttnn.CoreRangeSet, optional): the optional sub core grids. Defaults to `None`.
-            pad_value (float, optional): the optional pad value. Defaults to `0.0f`.
+            pad_value (int or float, optional): the optional pad value. Integers are kept exact for int32 and uint32 tensors. Defaults to `0.0f`.
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
         )doc",
-        &ttnn::to_layout,
+        &to_layout_wrapper,
         nb::arg("tensor"),
         nb::arg("layout"),
         nb::arg("dtype") = nb::none(),

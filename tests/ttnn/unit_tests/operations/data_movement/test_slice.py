@@ -2563,6 +2563,41 @@ def test_slice_rm_wide_row_after_l1_fills(device):
         ttnn.deallocate(resident)
 
 
+_INT_PAD_CASES = [
+    (ttnn.int32, torch.int32, 7),
+    (ttnn.int32, torch.int32, 16777217),
+    (ttnn.int32, torch.int32, 2147483000),
+    (ttnn.int32, torch.int32, -2147483000),
+    (ttnn.uint32, torch.int32, 7),
+    (ttnn.uint32, torch.int32, 16777217),
+    (ttnn.uint32, torch.int32, 2147483000),
+]
+_INT_PAD_IDS = [f"{c[0].name.lower()}-{c[2]}" for c in _INT_PAD_CASES]
+
+
+@pytest.mark.parametrize("dtype,torch_dtype,value", _INT_PAD_CASES, ids=_INT_PAD_IDS)
+def test_slice_int_pad_value_exact(device, dtype, torch_dtype, value):
+    torch.manual_seed(0)
+    torch_input = torch.randint(0, 2**31, (1, 1, 64, 64), dtype=torch_dtype)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 40, 50], pad_value=value)
+    out = tt_out.cpu().to_torch_with_padded_shape().to(torch.int64)
+    expected = torch.full((1, 1, 64, 64), value, dtype=torch.int64)
+    expected[:, :, :40, :50] = torch_input[:, :, :40, :50].to(torch.int64)
+    assert torch.equal(out, expected)
+
+
+def test_slice_bf16_float_pad_value_control(device):
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 40, 50], pad_value=1.5)
+    out = tt_out.cpu().to_torch_with_padded_shape()
+    expected = torch.full((1, 1, 64, 64), 1.5, dtype=torch.bfloat16)
+    expected[:, :, :40, :50] = torch_input[:, :, :40, :50]
+    assert torch.equal(out, expected)
+
+
 def _docstring_unit_step_dtypes():
     """Dtypes the ttnn.slice docstring says need a ``slice_step`` of 1."""
     names = re.findall(r"``(\w+)``\s+tensors\s+need\s+a\s+``slice_step``\s+of\s+1", ttnn.slice.__doc__)

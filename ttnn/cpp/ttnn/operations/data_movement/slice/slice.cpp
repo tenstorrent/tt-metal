@@ -99,7 +99,7 @@ ttnn::Tensor slice(
     ttsl::Span<const T> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value,
+    const std::optional<PadValue>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
@@ -465,7 +465,7 @@ ttnn::Tensor slice(
     const std::array<T, N>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value,
+    const std::optional<PadValue>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     ttsl::Span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
     ttsl::Span<const T> end(output_tensor_end.begin(), output_tensor_end.end());
@@ -482,7 +482,7 @@ ttnn::Tensor slice(
     const std::optional<ttsl::SmallVector<T>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value,
+    const std::optional<PadValue>& pad_value,
     const std::optional<uint32_t>& slice_dim,
     const std::optional<uint32_t>& num_devices,
     const std::optional<CoreRangeSet>& sub_core_grids) {
@@ -593,7 +593,7 @@ template ttnn::Tensor slice<int32_t>(
     ttsl::Span<const int32_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value,
+    const std::optional<PadValue>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
 template ttnn::Tensor slice<int64_t>(
@@ -603,7 +603,7 @@ template ttnn::Tensor slice<int64_t>(
     ttsl::Span<const int64_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value,
+    const std::optional<PadValue>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
 template ttnn::Tensor slice<uint32_t>(
@@ -613,7 +613,7 @@ template ttnn::Tensor slice<uint32_t>(
     ttsl::Span<const uint32_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value,
+    const std::optional<PadValue>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
 // Template instantiations for std::array version
@@ -624,7 +624,7 @@ template ttnn::Tensor slice<uint32_t, 4>(
     const std::array<uint32_t, 4>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value,
+    const std::optional<PadValue>& pad_value,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
 // Template instantiations for Tensor version
@@ -635,7 +635,7 @@ template ttnn::Tensor slice<uint32_t>(
     const std::optional<ttsl::SmallVector<uint32_t>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value,
+    const std::optional<PadValue>& pad_value,
     const std::optional<uint32_t>& slice_dim,
     const std::optional<uint32_t>& num_devices,
     const std::optional<CoreRangeSet>& sub_core_grids);

@@ -8,10 +8,12 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
+#include "ttnn/operations/data_movement/common/pad_value_arg.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_force.hpp"
 #include "ttnn/types.hpp"
@@ -21,16 +23,60 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
-ttnn::Tensor reshape_shape_vector_wrapper(
+ttnn::Tensor reshape_shape_wrapper(
     const ttnn::Tensor& input_tensor,
-    const ttsl::SmallVector<int32_t>& shape,
+    const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<PadValue>& pad_value,
+    const std::optional<PadValueArg>& pad_value,
     const ttnn::TileReshapeMapMode reshape_tile_mode,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const bool skip_padding_fill) {
     return ttnn::reshape(
-        input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids, skip_padding_fill);
+        input_tensor,
+        shape,
+        memory_config,
+        to_pad_value(pad_value, input_tensor.dtype()),
+        reshape_tile_mode,
+        sub_core_grids,
+        skip_padding_fill);
+}
+
+ttnn::Tensor reshape_logical_padded_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValueArg>& pad_value,
+    const ttnn::TileReshapeMapMode reshape_tile_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const bool skip_padding_fill) {
+    return ttnn::reshape(
+        input_tensor,
+        logical_shape,
+        padded_shape,
+        memory_config,
+        to_pad_value(pad_value, input_tensor.dtype()),
+        reshape_tile_mode,
+        sub_core_grids,
+        skip_padding_fill);
+}
+
+ttnn::Tensor reshape_shape_vector_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int32_t>& shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValueArg>& pad_value,
+    const ttnn::TileReshapeMapMode reshape_tile_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const bool skip_padding_fill) {
+    return ttnn::reshape(
+        input_tensor,
+        shape,
+        memory_config,
+        to_pad_value(pad_value, input_tensor.dtype()),
+        reshape_tile_mode,
+        sub_core_grids,
+        skip_padding_fill);
 }
 
 void bind_reshape_view_operation(nb::module_& mod) {
@@ -96,14 +142,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
 
         // Overload 1: single shape (ttnn::Shape)
         ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const ttnn::Shape&,
-                const std::optional<MemoryConfig>&,
-                const std::optional<PadValue>&,
-                TileReshapeMapMode,
-                const std::optional<CoreRangeSet>&,
-                bool>(&ttnn::reshape),
+            &reshape_shape_wrapper,
             nb::arg("input_tensor"),
             nb::arg("shape"),
             nb::kw_only(),
@@ -115,15 +154,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
 
         // Overload 2: logical_shape and padded_shape (ttnn::Shape, ttnn::Shape)
         ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const ttnn::Shape&,
-                const ttnn::Shape&,
-                const std::optional<MemoryConfig>&,
-                const std::optional<PadValue>&,
-                TileReshapeMapMode,
-                const std::optional<CoreRangeSet>&,
-                bool>(&ttnn::reshape),
+            &reshape_logical_padded_wrapper,
             nb::arg("input_tensor"),
             nb::arg("logical_shape"),
             nb::arg("padded_shape"),

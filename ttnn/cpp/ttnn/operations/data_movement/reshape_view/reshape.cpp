@@ -58,22 +58,21 @@ static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
     return 0;
 }
 
-// Flatten PadValue to float for fill_implicit_tile_padding.
-//   - uint32 + FLOAT32: caller-supplied uint32 is the bit pattern of the desired float, use bit_cast.
-//   - Otherwise: caller-supplied value is a numeric integer or float, use static_cast.
-// Note: integer pad values > 2^24 lose precision through this float bottleneck.
-static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
-    return std::visit(
-        [dtype](auto v) -> float {
-            using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, uint32_t>) {
-                if (dtype == DataType::FLOAT32) {
-                    return std::bit_cast<float>(v);
-                }
-            }
-            return static_cast<float>(v);
-        },
-        pad_value);
+// PadValue handed to fill_implicit_tile_padding.
+//   - INT32 / UINT32: the uint32 arm is an exact integer (raw two's-complement word for INT32), pass it through.
+//   - Otherwise a uint32 arm is flattened to a float: the bit pattern for FLOAT32, a numeric value for the rest.
+static PadValue pad_value_for_fill(const PadValue& pad_value, DataType dtype) {
+    if (std::holds_alternative<uint32_t>(pad_value)) {
+        const uint32_t v = std::get<uint32_t>(pad_value);
+        if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
+            return PadValue{v};
+        }
+        if (dtype == DataType::FLOAT32) {
+            return PadValue{std::bit_cast<float>(v)};
+        }
+        return PadValue{static_cast<float>(v)};
+    }
+    return pad_value;
 }
 
 // True if the inner-2D of `shape` is not tile-aligned, i.e. the tiled output has implicit padding lanes.
@@ -375,8 +374,7 @@ ttnn::Tensor reshape_tiled(
     bool explicit_memory_config,
     const bool skip_padding_fill,
     const bool pad_value_explicit) {
-    // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
-    const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
+    const PadValue fill_value = detail::pad_value_for_fill(pad_value, tensor.dtype());
     // squeeze input tensor and requested shape to 3D
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
