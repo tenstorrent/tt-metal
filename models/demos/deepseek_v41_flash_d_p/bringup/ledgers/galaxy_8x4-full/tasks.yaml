@@ -4027,6 +4027,81 @@ tasks:
       unwritten_records_changed_decoder_skip: == 0
       decode_acks_failures: == 0
       device_ms_total: '> 0'
+- id: P.67
+  title: 'Bring the replica branch''s wins to model_bringup: merge bringup/deepseek_v41_flash_d_p/moe_replication @ b9a45fb0b80 (code only; its ledger stays out):
+    MoE replicas learned from the previous chunk (P.45-P.62b), x pieces (P.59), host cuts (P.63-P.66), MoE-half trace (P.61, off)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.51
+  paths:
+  - models/demos/common/bringup
+  - models/demos/common/bringup/orchestrator.py
+  - models/demos/common/bringup/testing
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - ttnn/ttnn/bringup/INDEX.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CMakeLists.txt
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/README.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/common
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/expert_slot_copy
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/moe_block_nanobind.cpp
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine
+  brief:
+    details: 'OWNER 2026-11-14: "bring wins to model_bringup". Take branch bringup/deepseek_v41_flash_d_p/moe_replication at b9a45fb0b80 (local branch in this repo)
+      into model_bringup. It forked at 6bdf324e716; since then model_bringup gained FIX.28-FIX.31 (framework: one-process gates, run records, env keys), P.49/P.50/P.51
+      accepts and X.3 - keep ALL of them. MERGE (git merge or cherry-picks of the replica branch''s code commits, your choice; record which): take every code / test
+      / fork / knowledge change; DO NOT take anything under models/demos/deepseek_v41_flash_d_p/bringup/ledgers/ (the replica run''s own tasks, state, results, dashboard:
+      model_bringup keeps its own). Files both sides changed: models/demos/common/bringup/orchestrator.py, models/demos/deepseek_v41_flash_d_p/tt/attention.py, tt/model.py,
+      bringup/BREADCRUMBS.md, known_issues.md, repo_map.md: merge by hand keeping both sides'' intent; known_issues ids must stay unique (the branch used DS41-236..268:
+      renumber only on a real clash and update references). Take it as is otherwise: change nothing else. Settings defaults as on the branch (EXPERT_X_PIECES=min8k,
+      MOE_REPLICAS=prev, MOE_FILL=piggyback, MOE_PREV_HOST=device, MOE_PREV_HOST2=lean, MOE_PLANNER=folded, MESH_PROGRAMS=on, ATTN_FUSE=on, CHEAP_CCL=on, LEAN_PY=on,
+      MOE_TRACE=off), and every switch must still work with model_bringup''s settings (COMBINE_SPLIT from P.50, DECODER_SKIP=decode from P.51, the P.49 decode cap):
+      check that replicas, the combine split and the decoder-skip path are compatible (P.56''s guard already runs layers off on skipped chunks; confirm on the decode-skip
+      test). Rebuild (build_Release). CHECKS: the model-level gate (ladder, contract, adapter acks, decoder-skip, determinism incl. decoder_skip, the replica test)
+      and the A/B before/after the merge (the orchestrator measures ''before'' on today''s model_bringup first). No fork suites on the 8x4 (owner rule). If a branch
+      change conflicts with a model_bringup rule or test in a way you cannot resolve honestly, stop and report it. Report: what merged, conflicts and how resolved,
+      before/after numbers. SAFETY: a hang or a board reset need: STOP and report, never reset.'
+  ab:
+    before: true
+    env:
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      contract_checks_failed: == 0
+      acks_early: == 0
+      served_bytes_differ: == 0
+      chunk_wall_ms: '> 0'
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed_decoder_skip: == 0
+      acks_early_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      decode_acks_failures: == 0
+      device_ms_total: '> 0'
+      determinism_max_abs_diff: == 0
 - id: FIX.28
   title: 'Gates cover DECODER_SKIP=decode (Kartik''s cut): determinism, contract and acks run with the skip active, not only
     the full path'
