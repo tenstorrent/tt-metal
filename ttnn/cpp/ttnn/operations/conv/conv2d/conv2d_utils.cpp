@@ -563,6 +563,24 @@ bool use_matmul_for_1x1_conv(
            (not is_width_sharded);
 }
 
+bool is_folded_pointwise_conv(
+    bool kernel_stride_folding,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    const std::array<uint32_t, 2>& dilation) {
+    // Kernel-stride folding turns a conv with kernel == stride into a 1x1 stride 1 conv. Such a conv
+    // reads its weights as one contiguous [kernel window channels, out channels] block, but an
+    // explicitly sharded conv (or a pre-sharded input) skips the auto-shard path and used to prepare
+    // them in the conv layout, which pads the channels to the shard boundary and no longer matches the
+    // folded activation K. Auto sharding already asked for the pointwise layout, so only the folded
+    // case is added here.
+    const bool pointwise = kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == 1 && stride[1] == 1 &&
+                           padding[0] == 0 && padding[1] == 0 && padding[2] == 0 && padding[3] == 0 &&
+                           dilation[0] == 1 && dilation[1] == 1;
+    return kernel_stride_folding && pointwise;
+}
+
 bool is_1d_conv(uint32_t kernel_height, uint32_t image_height) { return kernel_height == 1 && image_height == 1; }
 
 bool is_1d_depthwise_conv(
