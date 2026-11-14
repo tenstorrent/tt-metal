@@ -1,0 +1,20 @@
+# One sender core and one receiver core carrying configs that take different engines: compute-generated/verified
+# (small write, multi-tile write, scatter) next to one the sender/receiver handle (atomic_inc, which has no payload).
+# Run with TT_FABRIC_TEST_SFPU_PAYLOAD=1 TT_FABRIC_TEST_SFPU_VERIFY=1; must pass.
+allocation_policies:
+  receiver:
+    max_configs_per_core: 4
+
+Tests:
+  - name: "SfpuMixedLinear"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+    senders:
+      - device: [0, 0]
+        patterns:
+          - {ftype: unicast, ntype: unicast_write, size: 48, num_packets: 10000, destination: {device: [0, 1]}}
+          - {ftype: unicast, ntype: atomic_inc, size: 16, num_packets: 10000, destination: {device: [0, 1]}}
+          - {ftype: unicast, ntype: unicast_write, size: 4336, num_packets: 10000, destination: {device: [0, 1]}}
+          - {ftype: unicast, ntype: {type: unicast_scatter_write, chunks: 2}, size: 272, num_packets: 10000, destination: {device: [0, 1]}}

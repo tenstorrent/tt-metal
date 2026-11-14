@@ -31,32 +31,34 @@ struct FlowDescriptor {
 };
 
 struct SenderMetadataFields {
-    SenderMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
-        num_packets(num_packets), seed(seed), payload_buffer_size(payload_buffer_size) {}
+    SenderMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size, bool sfpu_payload) :
+        num_packets(num_packets), seed(seed), payload_buffer_size(payload_buffer_size), sfpu_payload(sfpu_payload) {}
 
     std::vector<uint32_t> get_args() const {
-        std::vector<uint32_t> args = {num_packets, seed, payload_buffer_size};
+        std::vector<uint32_t> args = {num_packets, seed, payload_buffer_size, sfpu_payload ? 1u : 0u};
         return args;
     }
 
     uint32_t num_packets;
     uint32_t seed;
     uint32_t payload_buffer_size;
+    bool sfpu_payload;  // payloads come from the core's compute engine (tt_fabric_test_payload_gen.cpp)
 };
 
 struct ReceiverMetadataFields {
     // TODO: add sender id to these fields
-    ReceiverMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size) :
-        num_packets(num_packets), seed(seed), payload_buffer_size(payload_buffer_size) {}
+    ReceiverMetadataFields(uint32_t num_packets, uint32_t seed, uint32_t payload_buffer_size, bool sfpu_verify) :
+        num_packets(num_packets), seed(seed), payload_buffer_size(payload_buffer_size), sfpu_verify(sfpu_verify) {}
 
     std::vector<uint32_t> get_args() const {
-        std::vector<uint32_t> args = {num_packets, seed, payload_buffer_size};
+        std::vector<uint32_t> args = {num_packets, seed, payload_buffer_size, sfpu_verify ? 1u : 0u};
         return args;
     }
 
     uint32_t num_packets;
     uint32_t seed;
     uint32_t payload_buffer_size;
+    bool sfpu_verify;  // payloads are checked on the core's compute engine (tt_fabric_test_payload_verify.cpp)
 };
 
 struct ChipUnicastFields1D {
@@ -339,7 +341,8 @@ struct TestTrafficSenderConfig {
 
     FlowUid flow_uid = 0;  // Host-only: index into TestContext::flow_descriptors_
 
-    std::vector<uint32_t> get_args(bool is_sync_config = false) const;
+    // sfpu_payload: this config's payloads come from the core's compute engine.
+    std::vector<uint32_t> get_args(bool is_sync_config = false, bool sfpu_payload = false) const;
 };
 
 struct TestTrafficSyncConfig {
@@ -360,16 +363,17 @@ struct TestTrafficReceiverConfig {
 
     FlowUid flow_uid = 0;  // Host-only: index into TestContext::flow_descriptors_
 
-    std::vector<uint32_t> get_args() const;
+    // sfpu_verify: this config's payloads are checked on the core's compute engine.
+    std::vector<uint32_t> get_args(bool sfpu_verify = false) const;
 };
 
-inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_config) const {
+inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_config, bool sfpu_payload) const {
     std::vector<uint32_t> args;
     args.reserve(20);  // Reserve a reasonable upper bound to avoid reallocations
 
     if (!is_sync_config) {
-        const auto metadata =
-            SenderMetadataFields(this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size);
+        const auto metadata = SenderMetadataFields(
+            this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size, sfpu_payload);
         const auto metadata_args = metadata.get_args();
         args.insert(args.end(), metadata_args.begin(), metadata_args.end());
     }
@@ -497,12 +501,12 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
     return args;
 }
 
-inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
+inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args(bool sfpu_verify) const {
     std::vector<uint32_t> args;
     args.reserve(10);  // Reserve a reasonable upper bound to avoid reallocations
 
-    const auto metadata =
-        ReceiverMetadataFields(this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size);
+    const auto metadata = ReceiverMetadataFields(
+        this->parameters.num_packets, this->parameters.seed, this->payload_buffer_size, sfpu_verify);
     const auto metadata_args = metadata.get_args();
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 

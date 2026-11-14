@@ -1,0 +1,24 @@
+# Verifier canary at 16 B on the compute verifier: run with TT_FABRIC_TEST_CORRUPT_PAYLOAD=2 or 3; must fail with
+# DATA_MISMATCH.
+allocation_policies:
+  receiver:
+    max_configs_per_core: 4
+
+Tests:
+  - name: "CanaryTailSmall16"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      size: [16]
+    defaults:
+      ftype: unicast
+      num_packets: 100
+    senders:
+      - device: [0, 0]
+        patterns:
+          - {ntype: unicast_write, destination: {device: [0, 1]}}
+          - {ntype: fused_atomic_inc, destination: {device: [0, 1]}}
+          - {ntype: unicast_write, destination: {device: [0, 1]}}
+          - {ntype: fused_atomic_inc, destination: {device: [0, 1]}}

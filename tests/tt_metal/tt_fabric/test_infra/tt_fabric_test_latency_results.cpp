@@ -344,6 +344,12 @@ void LatencyResultsManager::report_latency_results(
     net_latencies_cycles.reserve(num_samples);
     per_hop_latency_cycles.reserve(num_samples);
 
+    // One stream for all samples: reopening the file per sample costs milliseconds each on network filesystems
+    std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::app);
+    if (!csv_stream.is_open()) {
+        log_error(tt::LogTest, "Failed to open CSV file for appending: {}", csv_file_path_.string());
+    }
+
     for (uint32_t i = 0; i < num_samples; i++) {
         // Read elapsed times directly (already computed on device)
         uint64_t raw_latency = sender_data[i];
@@ -419,7 +425,9 @@ void LatencyResultsManager::report_latency_results(
 
         // Add to results vector and write to detailed CSV immediately
         results_.push_back(sample_result);
-        append_to_csv(config, sample_result);
+        if (csv_stream.is_open()) {
+            append_to_csv(csv_stream, sample_result);
+        }
 
         // Collect cycle values for summary statistics calculation
         raw_latencies_cycles.push_back(raw_latency);
@@ -427,6 +435,8 @@ void LatencyResultsManager::report_latency_results(
         net_latencies_cycles.push_back(net_latency);
         per_hop_latency_cycles.push_back(per_hop_latency);
     }
+
+    csv_stream.close();
 
     if (raw_latencies_cycles.empty()) {
         log_warning(tt::LogTest, "No valid latency samples collected");
@@ -646,14 +656,7 @@ void LatencyResultsManager::write_summary_csv_to_file(
     log_info(tt::LogTest, "Latency results written to CSV file: {}", csv_file_path_.string());
 }
 
-void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unused]], const LatencyResult& result) {
-    // Open CSV file in append mode
-    std::ofstream csv_stream(csv_file_path_, std::ios::out | std::ios::app);
-    if (!csv_stream.is_open()) {
-        log_error(tt::LogTest, "Failed to open CSV file for appending: {}", csv_file_path_.string());
-        return;
-    }
-
+void LatencyResultsManager::append_to_csv(std::ostream& csv_stream, const LatencyResult& result) {
     csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology << ","
                << result.sender_device_id << "," << result.sender_core_x << "," << result.sender_core_y << ","
                << result.responder_device_id << "," << result.responder_core_x << "," << result.responder_core_y << ","
@@ -664,8 +667,6 @@ void LatencyResultsManager::append_to_csv(const TestConfig& config [[maybe_unuse
                << result.responder_p99_ns << "," << result.raw_min_ns << "," << result.raw_max_ns << ","
                << result.raw_avg_ns << "," << result.raw_p99_ns << "," << result.per_hop_min_ns << ","
                << result.per_hop_max_ns << "," << result.per_hop_avg_ns << "," << result.per_hop_p99_ns << "\n";
-
-    csv_stream.close();
 }
 
 void LatencyResultsManager::load_golden_csv() {

@@ -1,0 +1,28 @@
+# SFPU gen/verify vs sender/receiver per payload size: run the same traffic with TT_FABRIC_TEST_SFPU_PAYLOAD /
+# TT_FABRIC_TEST_SFPU_VERIFY on and off, with TT_FABRIC_TEST_PERF_BREAKDOWN=1 for device loop times.
+Tests:
+  - name: "SfpuOverheadLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      size: [16, 32, 48, 64, 128, 256, 512, 1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    patterns:
+      - type: all_to_all
+
+  - name: "SfpuOverheadMesh"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [16, 32, 48, 64, 128, 256, 512, 1024, 2048, 4096]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      num_packets: 50000
+    patterns:
+      - type: all_to_all

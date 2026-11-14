@@ -23,6 +23,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/math.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -33,6 +34,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
+#include "tt_fabric_test_perf_breakdown.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
@@ -375,6 +377,25 @@ public:
             return;
         }
 
+        if (perf_breakdown::enabled() && perf_breakdown::host_detail()) {
+            // Split the enqueue: compile + finalize (kernel hashes, JIT on a cache miss, ELF reads, CB layout), then
+            // binary upload + dispatch command generation + issue.
+            {
+                perf_breakdown::ScopedDetail phase("sub_enq_prepare");
+                tt::tt_metal::experimental::program_preparation::prepare(*mesh_device_, *mesh_workload_);
+            }
+            {
+                perf_breakdown::ScopedDetail phase("sub_enq_dispatch");
+                tt::tt_metal::distributed::EnqueueMeshWorkload(
+                    mesh_device_->mesh_command_queue(), *mesh_workload_, false);
+            }
+            uint64_t kernels = 0;
+            for (auto& [_, program] : mesh_workload_->get_programs()) {
+                kernels += program.impl().num_kernels();
+            }
+            perf_breakdown::Collector::get().add_workload(mesh_workload_->get_programs().size(), kernels);
+            return;
+        }
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, false);
     }
 
@@ -777,12 +798,22 @@ public:
         const std::vector<tt::tt_metal::CoreCoord>& cores,
         uint32_t address,
         uint32_t size_bytes) const override {
-        auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
-
+        const auto t0 = perf_breakdown::Clock::now();
         const auto total_size = size_bytes * cores.size();
-        std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
-        tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
+        if (perf_breakdown::batched_host_writes()) {
+            const std::vector<uint32_t> zero_buffer(size_bytes / sizeof(uint32_t), 0);
+            for (const auto& core : cores) {
+                write_to_worker_core_non_blocking(device_coord, core, address, zero_buffer.data(), size_bytes);
+            }
+        } else {
+            auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
+            std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
+            tt::tt_metal::distributed::WriteShard(
+                mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
+        }
+        if (perf_breakdown::enabled()) {
+            perf_breakdown::Collector::get().add_host_write(true, perf_breakdown::ms_since(t0), total_size);
+        }
     }
 
     // Local runtime args function - writes args to local args buffer instead of using SetRuntimeArgs
@@ -791,15 +822,41 @@ public:
         const tt::tt_metal::CoreCoord& core,
         uint32_t local_args_address,
         const std::vector<uint32_t>& args) const override {
-        auto mesh_buffer = create_mesh_buffer_helper({core}, local_args_address, args.size() * sizeof(uint32_t));
-
+        const auto t0 = perf_breakdown::Clock::now();
         const auto total_size = args.size() * sizeof(uint32_t);
-        std::vector<uint32_t> all_args_buffer;
-        all_args_buffer.reserve(total_size / sizeof(uint32_t));
-        all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
+        if (perf_breakdown::batched_host_writes()) {
+            write_to_worker_core_non_blocking(device_coord, core, local_args_address, args.data(), total_size);
+        } else {
+            auto mesh_buffer = create_mesh_buffer_helper({core}, local_args_address, total_size);
 
-        tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);
+            std::vector<uint32_t> all_args_buffer;
+            all_args_buffer.reserve(total_size / sizeof(uint32_t));
+            all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
+
+            tt::tt_metal::distributed::WriteShard(
+                mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);
+        }
+        if (perf_breakdown::enabled()) {
+            perf_breakdown::Collector::get().add_host_write(false, perf_breakdown::ms_since(t0), total_size);
+        }
+    }
+
+    // Non-blocking write straight to a worker core's L1. The data is copied into the command queue before this
+    // returns; callers must finish() the command queue before relying on the write having landed.
+    void write_to_worker_core_non_blocking(
+        const MeshCoordinate& device_coord,
+        const tt::tt_metal::CoreCoord& logical_core,
+        uint32_t address,
+        const void* data,
+        uint32_t size_bytes) const {
+        auto* device = mesh_device_->impl().get_device(device_coord);
+        auto virtual_core = device->worker_core_from_logical_core(logical_core);
+        dynamic_cast<tt::tt_metal::distributed::FDMeshCommandQueue&>(mesh_device_->mesh_command_queue())
+            .enqueue_write_shard_to_core(
+                tt::tt_metal::distributed::DeviceMemoryAddress{device_coord, virtual_core, address},
+                data,
+                size_bytes,
+                false);
     }
 
     // ======================================================================================
