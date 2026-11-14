@@ -51,6 +51,9 @@
 #include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "llk_sfpu/ckernel_sfpu_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_gcd.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_geglu_tanh.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_hardmish.h"
 #include "llk_sfpu/ckernel_sfpu_hardshrink.h"
@@ -92,6 +95,9 @@
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_silu.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_silu_glu.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #ifndef SOFTPLUS_TEST_BETA
@@ -1779,6 +1785,12 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // gcd_init records the per-iteration REPLAY buffer used by the binary-GCD loop.
         SFPU_BINARY_INIT_FN_NO_ARGS(add1, sfpu::calculate_sfpu_gcd_init);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::GEGLU_TANH)
+    {
+        SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::geglu_tanh_init);
+    }
+#endif
     else if constexpr (BINOP == BinaryOp::LCM)
     {
         // lcm_init records the binary-GCD REPLAY buffer (shared with gcd) and loads
@@ -1903,6 +1915,12 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // polynomial coefficients the Wormhole kernel keeps in vConstFloatPrgm0..2.
         SFPU_BINARY_INIT_FN(add1, logsigmoid_init, (APPROXIMATION_MODE));
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::SILU_GLU)
+    {
+        SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::silu_glu_init);
+    }
+#endif
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
@@ -2270,6 +2288,21 @@ void call_binary_sfpu_operation(
         // int32 gcd via the binary-GCD REPLAY loop recorded in gcd_init.
         SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_gcd, (PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::GEGLU_TANH)
+    {
+        // geglu_tanh(gate, up) with gate = in0 and up = in1; DST_ACCUM_MODE selects the in-kernel BF16 round.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_geglu_tanh,
+            (DST_ACCUM_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+#endif
     else if constexpr (BINOP == BinaryOp::LCM)
     {
         // int32 lcm = a/gcd(a,b) * b (binary-GCD + reciprocal); operands assumed < 2^15.
@@ -2377,6 +2410,14 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (BINOP == BinaryOp::SILU_GLU)
+    {
+        // silu_glu(gate, up) with gate = in0 and up = in1; DST_ACCUM_MODE selects the in-kernel BF16 round.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu_glu, (DST_ACCUM_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    }
+#endif
     // Integer relational eq/ne: XOR-based exact compare over Int32 dest bits.
     else if constexpr (BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT)
     {
