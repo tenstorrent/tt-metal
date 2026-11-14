@@ -628,3 +628,75 @@ def test_argmax_reduce_all_first_index_wins_across_cores(device, dtype, early, l
     ttnn_t = ttnn.from_torch(t, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     got = int(ttnn.to_torch(ttnn.from_device(ttnn.argmax(ttnn_t))).reshape(-1)[0])
     assert got == int(torch.argmax(t.reshape(-1))) == early, f"expected {early}, got {got}"
+
+
+def _l1_bytes_per_bank(pages, page_bytes, banks):
+    """Bytes the L1 allocator reserves in each bank for an interleaved buffer of `pages` pages."""
+    aligned_page = -(-page_bytes // ttnn.get_l1_alignment()) * ttnn.get_l1_alignment()
+    pages_per_bank = -(-pages // banks)
+    quantum = ttnn.get_dram_alignment()
+    return -(-max(pages_per_bank * aligned_page, quantum) // quantum) * quantum
+
+
+def _argmax_rows_input(pages, out_last_dim, width, keepdim):
+    torch.manual_seed(0)
+    rows = pages * out_last_dim
+    t = torch.argsort(torch.rand(rows, width), dim=1).to(torch.bfloat16)
+    return t.reshape(pages, width) if keepdim else t.reshape(pages, out_last_dim, width)
+
+
+@pytest.mark.parametrize("out_last_dim", [1, 4, 8, 12, 20], ids=lambda v: f"page{4 * v}B")
+@pytest.mark.parametrize("pages_per_bank", [1, 2, 3, 4, 8])
+def test_argmax_l1_output_does_not_write_past_its_pages(device, out_last_dim, pages_per_bank):
+    """Each output page must be written with its own size, not the size rounded up to 32 B.
+
+    Pages of 4, 16, 48 and 80 B are 16 B above a multiple of 32. For the last page of an L1 bank whose allocation is
+    full, the extra 16 B land in the tensor allocated just before the output, here a canary.
+    """
+    banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
+    pages = pages_per_bank * banks
+    keepdim = out_last_dim == 1
+    t = _argmax_rows_input(pages, out_last_dim, 64, keepdim)
+    expected = torch.argmax(t.to(torch.float32), dim=-1, keepdim=keepdim)
+
+    canary_ref = ((torch.arange(2 * banks * 64, dtype=torch.int64) * 2654435761 + 1) % (2**31 - 1)).to(torch.int32)
+    canary_ref = canary_ref.reshape(2 * banks, 64)
+    canary = ttnn.from_torch(
+        canary_ref, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    out = ttnn.zeros(
+        list(expected.shape),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    if out.buffer_address() + _l1_bytes_per_bank(pages, 4 * out_last_dim, banks) != canary.buffer_address():
+        pytest.skip("the L1 allocator did not place the output directly below the canary")
+
+    ttnn_in = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    result = ttnn.argmax(ttnn_in, dim=-1, keepdim=keepdim, output_tensor=out)
+
+    assert_equal(expected, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
+    clobbered = ttnn.to_torch(ttnn.from_device(canary)) != canary_ref
+    assert not clobbered.any(), f"argmax wrote past its L1 output into {int(clobbered.any(dim=1).sum())} canary rows"
+
+
+@pytest.mark.parametrize("out_last_dim", [1, 8, 12], ids=lambda v: f"page{4 * v}B")
+def test_argmax_l1_output_keeps_l1_input_intact(device, out_last_dim):
+    """A plain call with an L1 input and an L1 output must not change its own input."""
+    banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
+    pages = 2 * banks
+    keepdim = out_last_dim == 1
+    t = _argmax_rows_input(pages, out_last_dim, 64, keepdim)
+    expected = torch.argmax(t.to(torch.float32), dim=-1, keepdim=keepdim)
+
+    ttnn_in = ttnn.from_torch(
+        t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    result = ttnn.argmax(ttnn_in, dim=-1, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if result.buffer_address() + _l1_bytes_per_bank(pages, 4 * out_last_dim, banks) != ttnn_in.buffer_address():
+        pytest.skip("the L1 allocator did not place the output directly below the input")
+
+    assert_equal(expected, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
+    assert torch.equal(ttnn.to_torch(ttnn.from_device(ttnn_in)), t), "argmax changed its own L1 input"
