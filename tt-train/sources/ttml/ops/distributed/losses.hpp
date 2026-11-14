@@ -42,10 +42,14 @@ namespace ttml::ops::distributed {
 //                nullopt for a 1-D mesh where all devices are TP.
 // reduce  : ReduceType::MEAN (default) or ReduceType::NONE.  ReduceType::SUM
 //           is rejected to match the ttml::ops::cross_entropy_loss contract.
+// vocab_size : logical vocabulary size when the last shard contains tile-alignment
+//              padding columns. Columns >= vocab_size are masked out of the
+//              softmax normalizer and receive zero gradient in backward.
 autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     const autograd::TensorPtr& logits,
     const autograd::TensorPtr& targets,
     std::optional<uint32_t> cluster_axis = std::nullopt,
-    ReduceType reduce = ReduceType::MEAN);
+    ReduceType reduce = ReduceType::MEAN,
+    std::optional<uint32_t> vocab_size = std::nullopt);
 
 }  // namespace ttml::ops::distributed

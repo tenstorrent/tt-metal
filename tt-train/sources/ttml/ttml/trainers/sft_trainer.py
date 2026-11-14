@@ -543,10 +543,17 @@ class SFTTrainer:
         mesh = ttml.mesh()
         if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
             tp_cluster_axis = mesh.axis_index("tp")
+            target = self.model.model if hasattr(self.model, "model") else self.model
+            cfg = getattr(target, "config", None)
+            vocab_size = getattr(cfg, "vocab_size", None)
 
             def vocab_parallel_loss(logits, labels, reduce):
                 return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
-                    logits, labels, cluster_axis=tp_cluster_axis, reduce=reduce
+                    logits,
+                    labels,
+                    cluster_axis=tp_cluster_axis,
+                    reduce=reduce,
+                    vocab_size=vocab_size,
                 )
 
             return vocab_parallel_loss

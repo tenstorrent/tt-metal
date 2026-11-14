@@ -12,6 +12,7 @@ from math import sqrt
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import ttnn
 import ttml
 from ttml.common.utils import build_rope_params_from_config
@@ -218,9 +219,9 @@ class Llama(AbstractModuleBase):
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32 -- i.e. the padded global
             # size must be a multiple of 32 * tp_size. The trailing padded
-            # columns are kept on-device and handled by the downstream
-            # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
-            # free to be arbitrary.
+            # columns are masked in forward (and can also be masked by passing
+            # ``vocab_size=config.vocab_size`` to ``vocab_parallel_cross_entropy_loss``),
+            # so ``config.vocab_size`` is free to be arbitrary.
             tp_size = ttml.mesh().axis_size("tp")
             align = 32 * tp_size
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
@@ -308,6 +309,7 @@ class Llama(AbstractModuleBase):
         )
 
         self.ln_fc = RMSNormLayer(config.hidden_size, config.rms_norm_eps)
+        self._tp_vocab_padding_mask: Optional[ttnn.Tensor] = None
 
     def forward(
         self,
@@ -360,11 +362,23 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
-        # In TP mode the LM head output stays vocab-sharded; the trailing
-        # padded columns are handled by vocab_parallel_cross_entropy_loss.
-        # The non-TP path returns full-vocab logits, so we still need to drop
-        # the tile-alignment padding before handing them off to the caller.
-        if not self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
+        # In TP mode the LM head output stays vocab-sharded; mask any trailing
+        # tile-alignment padding columns (>= config.vocab_size) with -1e4 so
+        # downstream vocab_parallel_cross_entropy_loss excludes them from its
+        # softmax normalizer and backward gradient even when called without an
+        # explicit vocab_size. The non-TP path slices the padding away directly.
+        if self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
+            if self._tp_vocab_padding_mask is None:
+                mask_np = np.zeros((1, 1, 1, self.padded_vocab_size), dtype=np.float32)
+                mask_np[..., self.config.vocab_size :] = -1e4
+                mask_mapper = ttml.mesh().axis_mapper("tp", tdim=3)
+                self._tp_vocab_padding_mask = ttml.autograd.Tensor.from_numpy(
+                    mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mask_mapper
+                ).get_value(ttml.autograd.PreferredPrecision.NATIVE)
+            logits = ttml.ops.binary.add(
+                logits, ttml.autograd.create_tensor(self._tp_vocab_padding_mask, requires_grad=False)
+            )
+        elif not self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 
