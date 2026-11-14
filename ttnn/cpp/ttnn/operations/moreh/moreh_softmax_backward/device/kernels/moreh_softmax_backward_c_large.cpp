@@ -14,6 +14,8 @@
 
 namespace ckl = compute_kernel_lib;
 
+constexpr uint32_t kSumBlock = 32;
+
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
@@ -32,12 +34,23 @@ void kernel_main() {
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
         for (uint32_t i = 0; i < dim_size; ++i) {
-            if (i == 0) {
+            if (i % kSumBlock == 0) {
                 copy_tile_to_dfb<dfb::dy, dfb::sum>(dfb_dy_obj, dfb_sum_obj);
             } else {
                 add_tiles_to_dfb<dfb::sum, dfb::dy, dfb::sum>(dfb_sum_obj, dfb_dy_obj, dfb_sum_obj);
             }
+            // The FPU add reads the running sum at TF32, so a tile added to a much larger sum is lost. Sum
+            // blocks of tiles and fold each block into dy_m_sum, which is free until the sum is done.
+            if (i % kSumBlock == kSumBlock - 1 || i == dim_size - 1) {
+                if (i < kSumBlock) {
+                    copy_tile_to_dfb<dfb::sum, dfb::dy_m_sum>(dfb_sum_obj, dfb_dy_m_sum_obj);
+                } else {
+                    add_tiles_to_dfb<dfb::dy_m_sum, dfb::sum, dfb::dy_m_sum>(
+                        dfb_dy_m_sum_obj, dfb_sum_obj, dfb_dy_m_sum_obj);
+                }
+            }
         }
+        copy_tile_to_dfb<dfb::dy_m_sum, dfb::sum>(dfb_dy_m_sum_obj, dfb_sum_obj);
 
         for (uint32_t i = 0; i < dim_size; ++i) {
             static constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
@@ -55,12 +68,21 @@ void kernel_main() {
         for (uint32_t i = 0; i < dim_size; ++i) {
             mul_tiles_to_dfb<dfb::y, dfb::dy, dfb::ydy>(dfb_y_obj, dfb_dy_obj, dfb_ydy_obj);
 
-            if (i == 0) {
+            if (i % kSumBlock == 0) {
                 copy_tile_to_dfb<dfb::ydy, dfb::sum>(dfb_ydy_obj, dfb_sum_obj);
             } else {
                 add_tiles_to_dfb<dfb::sum, dfb::ydy, dfb::sum>(dfb_sum_obj, dfb_ydy_obj, dfb_sum_obj);
             }
+            if (i % kSumBlock == kSumBlock - 1 || i == dim_size - 1) {
+                if (i < kSumBlock) {
+                    copy_tile_to_dfb<dfb::sum, dfb::dy_m_sum>(dfb_sum_obj, dfb_dy_m_sum_obj);
+                } else {
+                    add_tiles_to_dfb<dfb::dy_m_sum, dfb::sum, dfb::dy_m_sum>(
+                        dfb_dy_m_sum_obj, dfb_sum_obj, dfb_dy_m_sum_obj);
+                }
+            }
         }
+        copy_tile_to_dfb<dfb::dy_m_sum, dfb::sum>(dfb_dy_m_sum_obj, dfb_sum_obj);
 
         // compute final result
         for (uint32_t i = 0; i < dim_size; ++i) {

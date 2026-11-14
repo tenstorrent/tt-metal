@@ -21,6 +21,8 @@
 
 namespace ckl = compute_kernel_lib;
 
+constexpr uint32_t kSumBlock = 32;
+
 // MIN is SFPU-only: a Fast fp32 MIN does not exist, so an fp32 reduce input needs
 // ReduceFp32Mode::Accurate; bf16 ignores fp32_mode entirely. Deduce it from the compile-time
 // formats of the buffers THIS reduce can read (unpack_src_format[] is a constexpr descriptor
@@ -250,12 +252,23 @@ void kernel_main() {
 #endif
             }
 
-            if (w == 0) {
+            if (w % kSumBlock == 0) {
                 copy_tile_to_dfb<dfb::exps, dfb::add>(dfb_exps_obj, dfb_add_obj);
             } else {
                 add_tiles_to_dfb<dfb::add, dfb::exps, dfb::add>(dfb_add_obj, dfb_exps_obj, dfb_add_obj);
             }
+            // The FPU add reads the running sum at TF32, so a tile added to a much larger sum is lost. Sum
+            // blocks of tiles and fold each block into recip_sum_exps, which is free until the sum is done.
+            if (w % kSumBlock == kSumBlock - 1 || w == Wt - 1) {
+                if (w < kSumBlock) {
+                    copy_tile_to_dfb<dfb::add, dfb::recip_sum_exps>(dfb_add_obj, dfb_recipsumexps_obj);
+                } else {
+                    add_tiles_to_dfb<dfb::recip_sum_exps, dfb::add, dfb::recip_sum_exps>(
+                        dfb_recipsumexps_obj, dfb_add_obj, dfb_recipsumexps_obj);
+                }
+            }
         }
+        copy_tile_to_dfb<dfb::recip_sum_exps, dfb::add>(dfb_recipsumexps_obj, dfb_add_obj);
 
 #ifdef LOG
         // compute log(sum) - pop tile after reduce
