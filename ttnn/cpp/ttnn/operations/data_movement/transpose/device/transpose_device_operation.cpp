@@ -10,6 +10,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
+#include <numeric>
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 using ttnn::operations::data_movement::transpose::adjust_shard_spec_to_shape;
@@ -431,6 +433,31 @@ tt::tt_metal::TensorSpec TransposeDeviceOperation::compute_output_specs(
             output_mem_config,
             output_shape,
             output_padded_shape));
+}
+
+std::vector<tt::tt_metal::TensorTopology> TransposeDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+    ttsl::SmallVector<uint32_t> dims(input_tensor.logical_shape().rank());
+    std::iota(dims.begin(), dims.end(), 0u);
+    // The dims transposed_shapes() swaps; validation rejects the other TransposeOpDims.
+    const auto [first, second] = [&]() -> std::pair<uint32_t, uint32_t> {
+        switch (operation_attributes.dim) {
+            case TransposeOpDim::CN: return {0, 1};
+            case TransposeOpDim::HC: return {1, 2};
+            case TransposeOpDim::WH: return {2, 3};
+            default: return {0, 0};
+        }
+    }();
+    if (second >= dims.size()) {
+        return {};
+    }
+    std::swap(dims[first], dims[second]);
+    auto topology = ttnn::operations::data_movement::permuted_tensor_topology(input_tensor.tensor_topology(), dims);
+    if (!topology.has_value()) {
+        return {};
+    }
+    return {std::move(*topology)};
 }
 
 Tensor TransposeDeviceOperation::create_output_tensors(

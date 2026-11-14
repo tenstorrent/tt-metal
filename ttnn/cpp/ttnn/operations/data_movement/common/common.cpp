@@ -1086,4 +1086,49 @@ bool codegen_supported_on_arch(const ttnn::Tensor& input) {
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
+std::optional<tt::tt_metal::TensorTopology> permuted_tensor_topology(
+    const tt::tt_metal::TensorTopology& topology, const ttsl::SmallVector<uint32_t>& dims) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    const int rank = static_cast<int>(dims.size());
+    auto placements = topology.placements();
+    bool moved = false;
+    for (auto& placement : placements) {
+        auto* shard = std::get_if<Shard>(&placement);
+        if (shard == nullptr) {
+            continue;
+        }
+        const int dim = shard->dim < 0 ? shard->dim + rank : shard->dim;
+        const auto* const position = std::find(dims.begin(), dims.end(), static_cast<uint32_t>(dim));
+        if (dim < 0 || position == dims.end()) {
+            continue;  // a dim the tensor does not have keeps its number
+        }
+        const int destination = static_cast<int>(std::distance(dims.begin(), position));
+        const int spelled = shard->dim < 0 ? destination - rank : destination;
+        moved = moved || spelled != shard->dim;
+        shard->dim = spelled;
+    }
+    if (!moved) {
+        return std::nullopt;
+    }
+    return tt::tt_metal::TensorTopology(topology.distribution_shape(), std::move(placements), topology.mesh_coords());
+}
+
+void shift_shard_dims(Tensor& view, int offset) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    const auto& topology = view.tensor_topology();
+    auto placements = topology.placements();
+    bool shifted = false;
+    for (auto& placement : placements) {
+        auto* shard = std::get_if<Shard>(&placement);
+        if (shard != nullptr && shard->dim >= 0 && shard->dim + offset >= 0) {
+            shard->dim += offset;
+            shifted = true;
+        }
+    }
+    if (shifted) {
+        view.update_tensor_topology(
+            tt::tt_metal::TensorTopology(topology.distribution_shape(), std::move(placements), topology.mesh_coords()));
+    }
+}
+
 }  // namespace ttnn::operations::data_movement
