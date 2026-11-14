@@ -19,6 +19,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
+from ttnn.command_list import CmdListParam, call_with_cmd_list_params, has_cmd_list_param
 from ttnn.comparison import comp_pcc, comp_ulp
 from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
@@ -1234,6 +1235,8 @@ class FastOperation:
         )
 
     def __call__(self, *function_args, **function_kwargs):
+        if CmdListParam.any_created and has_cmd_list_param(function_args, function_kwargs):
+            return call_with_cmd_list_params(self, function_args, function_kwargs)
         if self._requires_slow_runtime():
             return self._slow_operation_instance()(*function_args, **function_kwargs)
 
@@ -1705,6 +1708,8 @@ class Operation:
         self.__doc__ = "\n".join(docstring_lines)
 
     def __call__(self, *function_args, **function_kwargs):
+        if CmdListParam.any_created and has_cmd_list_param(function_args, function_kwargs):
+            return call_with_cmd_list_params(self, function_args, function_kwargs)
         recording = ttnn.graph.is_python_io_recording_enabled()
         if recording:
             ttnn.graph.track_function_start(self.python_fully_qualified_name)

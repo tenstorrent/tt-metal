@@ -192,6 +192,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/async_runtime.hpp
     api/ttnn/cluster.hpp
     api/ttnn/command_list.hpp
+    api/ttnn/command_list_params.hpp
     api/ttnn/common/constants.hpp
     api/ttnn/common/guard.hpp
     api/ttnn/common/queue_id.hpp

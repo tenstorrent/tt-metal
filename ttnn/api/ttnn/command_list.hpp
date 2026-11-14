@@ -4,18 +4,48 @@
 
 #pragma once
 
+#include <cstddef>
 #include <optional>
+#include <span>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include <tt-metalium/experimental/command_list.hpp>
 
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/common/guard.hpp"
 #include "ttnn/common/queue_id.hpp"
 
-// Experimental and subject to change. Shares unqualified names with tt::tt_metal::experimental; qualify the Metal ones.
+// Experimental and subject to change.
 
-namespace ttnn::experimental {
+namespace ttnn::device_operation::detail {
+struct CmdListProgramBindings;
+}  // namespace ttnn::device_operation::detail
+
+namespace ttnn::command_list {
 
 class CommandList;
+
+namespace detail {
+
+// One encoding of a scalar TTNN param, written to the kernel arguments recorded under its Metal name.
+struct CmdListMetalScalar {
+    std::string metal_cmd_list_param_name;  // "<TTNN param>/<factory type>/<Metal param>"
+    CmdListEncodeFn encode;                 // from the first TTNN record of the Metal name
+    bool has_runtime = false;
+    bool has_common_runtime = false;
+};
+
+// What TTNN update_args writes for one TTNN param: its tensor, or each of its encodings.
+struct CmdListParamLayout {
+    bool is_tensor = false;
+    std::vector<CmdListMetalScalar> metal_scalars;
+};
+
+using CmdListLayout = std::unordered_map<std::string, CmdListParamLayout>;
+
+}  // namespace detail
 
 // Records TTNN device operations into a command list instead of launching them.
 // Only Metal 2.0 (ProgramSpec) programs can be recorded. Nothing needs to run before recording: recording compiles
@@ -54,12 +84,36 @@ public:
     tt::tt_metal::distributed::MeshDevice& device() const;
 
     // Adds one workload to the recording. binary_upload_cq_id is the command queue that writes its kernel binaries to
-    // the device.
-    void record(QueueId binary_upload_cq_id, tt::tt_metal::distributed::MeshWorkload& workload);
+    // the device. Also records as TTNN command-list parameters the pushed binds that match `programs`: the
+    // workload's programs with their stored CmdListBindings. Commits nothing if the workload cannot be recorded.
+    void record(
+        QueueId binary_upload_cq_id,
+        tt::tt_metal::distributed::MeshWorkload& workload,
+        std::span<const device_operation::detail::CmdListProgramBindings> programs);
+
+    // The TTNN command-list parameter binds of the op calls in progress while recording, for push_cmd_list_binds and
+    // pop_cmd_list_binds. Scopes nest; pop_binds(true) throws if a bind of the popped scope reached no recorded
+    // program.
+    void push_binds(std::string op_name, std::vector<CmdListBind> binds);
+    void pop_binds(bool validate);
+    bool has_binds() const;
 
 private:
+    struct ActiveBind {
+        CmdListBind bind;
+        bool claimed = false;
+    };
+
+    struct BindScope {
+        std::string op_name;
+        std::size_t start;  // index into binds_ where the scope starts
+    };
+
     tt::tt_metal::experimental::CommandListBuilder metal_builder_;
     bool recording_ = false;
+    std::vector<BindScope> bind_scopes_;
+    std::vector<ActiveBind> binds_;  // the binds of every scope in bind_scopes_, in push order
+    detail::CmdListLayout layout_;
 };
 
 // A replayable command list in device DRAM, bound to the command queue it was built for.
@@ -73,6 +127,10 @@ public:
     // Replays on the bound command queue.
     void enqueue(bool blocking = true, bool check_dram_overlap = false);
 
+    // Sets the values later replays use for the named TTNN command-list parameters. Unknown names, kind mismatches, and
+    // values an encoding rejects throw before anything is written. blocking waits for the write to finish.
+    void update_args(const std::unordered_map<std::string, CmdListValue>& values, bool blocking = false);
+
     // Releases device resources and invalidates the list. Repeated calls have no effect.
     void deallocate();
 
@@ -81,9 +139,10 @@ public:
 
 private:
     friend class CommandListBuilder;
-    explicit CommandList(tt::tt_metal::experimental::CommandList metal_list);
+    CommandList(tt::tt_metal::experimental::CommandList metal_list, detail::CmdListLayout layout);
 
     tt::tt_metal::experimental::CommandList metal_list_;
+    detail::CmdListLayout layout_;
 };
 
-}  // namespace ttnn::experimental
+}  // namespace ttnn::command_list

@@ -37,6 +37,10 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
+namespace ttnn::command_list {
+struct CmdListBindings;
+}  // namespace ttnn::command_list
+
 namespace ttnn::device_operation {
 
 template <typename T>
@@ -895,6 +899,9 @@ public:
             // outlive the cache miss and every program on the occupied ranges can reference them.
             // Shared ownership keeps the device allocation alive for the life of the cache entry.
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors;
+            // What a TTNN command-list recording may bind in this program. Set on the cache miss when the factory
+            // defines map_cmd_list_parameters, and shared by every range built from one ProgramArtifacts.
+            std::shared_ptr<const ttnn::command_list::CmdListBindings> cmd_list_bindings;
         };
 
         // Cache-hit tensor refresh, shared so the two adapters' hit paths cannot drift apart.
@@ -1066,6 +1073,10 @@ public:
         }
     };
 
+    // The shared variables of a workload built by a spec adapter, keyed by coordinate range.
+    using SpecSharedVariablesMap =
+        std::unordered_map<ttnn::MeshCoordinateRange, typename SpecBindingSupport::SpecSharedVariables>;
+
     // -----------------------------------------------------------------------
     template <typename SpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter : SpecBindingSupport {
@@ -1130,6 +1141,12 @@ public:
             // are identical for every program built from it.
             auto artifacts = SpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
             auto sv = make_shared_variables(attrs, artifacts, io_mesh_tensors);
+            if constexpr (requires { &SpecFactory::map_cmd_list_parameters; }) {
+                auto bindings =
+                    SpecFactory::map_cmd_list_parameters(attrs, tensor_args, artifacts.spec, artifacts.run_params);
+                bindings.factory_name = ttsl::get_type_name<SpecFactory>();
+                sv.cmd_list_bindings = std::make_shared<const decltype(bindings)>(std::move(bindings));
+            }
             for (const auto& range : tensor_coords.ranges()) {
                 shared_variables.emplace(range, sv);
                 program_specs.emplace(range, artifacts.spec);
