@@ -3976,13 +3976,47 @@ tasks:
       host_ms_chunk*: '> 0'
       device_ms_chunk*: '> 0'
       wall_ms_chunk*: '> 0'
+- id: P.58
+  title: 'TP=4 experts check: would tensor-parallel experts (8 groups of 4 chips, each expert split 4 ways by its FFN width) beat expert parallelism + P.56 replicas? CPU model + a dispatch/combine microbenchmark, no model change'
+  step: integrate
+  role: perf
+  device: true
+  deps:
+  - P.57
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-14, EXPERIMENTAL (this branch), a go/no-go CHECK, not an implementation. Today the experts are fully expert-parallel (EP=32: 384 experts, 12 per chip). Routing is very skewed: on the novel prompt the hottest expert takes ~10% of a layer's tokens (38x the average expert) and the busiest chip carries 4.4x the average (code: 2.8x). P.56 (replicas learned from the previous chunk) cuts the experts phase ~19 ms/chunk on novel, ~11 on code, but needs learning, a fill and host work.
+
+      QUESTION: with TP=4 experts (8 groups of 4 chips; each group holds 48 experts; each expert split 4 ways along its FFN/intermediate width; every chip of a group computes all of the group's tokens at 1/4 width; partial outputs summed), is the chunk faster than EP=32 off and than EP=32 + P.56?
+
+      Overseer's first estimate (P.55a's fitted per-chip model, results/P.55a_exact_bound.json: chip time = C0 + max(A x experts' weight reads, B x 32-row blocks)), compute side only, chunk 10 at 51,200: experts phase EP 49.9 / TP4 29.1 ms per chunk on novel (busiest/mean 4.4x -> 1.66x per group), EP 38.7 / TP4 28.3 on code. P.56-style replicas in the same model: 30.9 / 30.0. So the compute side is about as good as P.56, from chunk 0, on any prompt, with nothing to predict. The open question is the communication and the per-chip overheads.
+
+      STEP 1, CPU model (minutes): refine the compute side: 48 quarter-experts per chip (more, smaller weight reads: does A per byte hold?), 32-row block padding per expert at 1/4 width, the group placement on the 8x4 mesh (a group = 4 chips in a line so dispatch can drop off along it). Use the recorded counts (P.55a's per-layer tokens_slot, P.45's per-chunk counts, both prompts, several chunks).
+      STEP 2, MICROBENCHMARK (device, no model change): the existing dispatch and combine (moe_block_main fork) at a real layer's routing, today vs a TP=4 variant made as cheaply as possible (e.g. dispatch rows sent to all 4 chips of the expert's group via the drop-off path; combine receiving 4 partial rows per token-expert and summing them; or a separate reduce within the group): added device time per layer for dispatch, combine and the reduce, at 5,120 tokens. A rough prototype is fine; correctness of the sums must be checked (bit-exact where the math is the same, otherwise error vs fp32).
+      STEP 3, VERDICT: per chunk at 51,200, novel and code: EP off vs EP + P.56 (measured, P.56) vs TP4 (model compute + measured comms + reduce), the precision effect of summing partial outputs, the weight-read efficiency, and the effort to build it for real in agent-hours. Go if TP4 beats EP + P.56 by a clear margin or matches it with less complexity; else no-go.
+
+      DELIVERABLE: test models/demos/deepseek_v41_flash_d_p/tests/test_moe_tp4_check.py recording tp4_experts_ms_<prompt>, ep_experts_ms_<prompt>, tp4_dispatch_added_ms, tp4_combine_added_ms, tp4_reduce_ms, tp4_chunk_ms_<prompt> (model), plus the per-layer table in results. Report plainly, short, every term defined. Agent rules 18 and 19 hold. Fork-first rule (ttnn/ttnn/bringup/INDEX.md). No device profiler per-op mode. SAFETY: a hang or a board reset need: STOP and report, never reset.
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_tp4_check.py
+    metrics:
+      tp4_experts_ms_*: '> 0'
+      ep_experts_ms_*: '> 0'
+      tp4_dispatch_added_ms: '>= 0'
+      tp4_combine_added_ms: '>= 0'
 - id: P.54
   title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
   step: perf
   role: perf
   device: true
   deps:
-  - P.57
+  - P.58
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
