@@ -44,8 +44,6 @@ enum class TensixProcessorTypes : uint8_t {
     COUNT = 24
 };
 
-// A Keraunos ethernet core is one HSIO tile: both CCEs, eight harts each. Processors interleave the
-// CCEs, so processor 2 * hart + eth_cce is that CCE's hart (DM0 = CCE0 hart 0, DM1 = CCE1 hart 0).
 enum class EthProcessorTypes : uint8_t {
     DM0 = 0,
     DM1 = 1,
@@ -55,15 +53,7 @@ enum class EthProcessorTypes : uint8_t {
     DM5 = 5,
     DM6 = 6,
     DM7 = 7,
-    DM8 = 8,
-    DM9 = 9,
-    DM10 = 10,
-    DM11 = 11,
-    DM12 = 12,
-    DM13 = 13,
-    DM14 = 14,
-    DM15 = 15,
-    COUNT = 16
+    COUNT = 8
 };
 
 enum class DispatchEngineProcessorTypes : uint8_t {

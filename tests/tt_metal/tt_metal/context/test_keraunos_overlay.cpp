@@ -100,7 +100,7 @@ TEST_F(KeraunosOverlay, AddrgenStridedIdma) {
     EXPECT_EQ(read_words(*core, kDstOffset, kCount * words_per_elem), expected);
 }
 
-// Every hart EthernetConfig can name (processors 0-7: harts 0-3 of CCE0 and of CCE1) issues its own copy
+// Every hart of the CCE (processors 0-7) issues its own copy
 // at the same time. Each CPU has its own command buffer registers.
 TEST_F(KeraunosOverlay, AllHartsIdmaCopyInParallel) {
     const auto core = hsio_core(0);

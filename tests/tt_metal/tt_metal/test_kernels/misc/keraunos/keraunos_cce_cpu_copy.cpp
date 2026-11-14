@@ -5,7 +5,8 @@
 // Word-by-word CPU copy on a Keraunos CCE hart: volatile 32-bit loads from src, stores to dst, then a
 // fence. Either side may be a core-local SRAM offset or a global (HSIO / D2D) address, so the same kernel
 // probes CPU reads and CPU writes on every path. A core-local offset is accessed through this core's
-// uncached alias (MEM_L1_UNCACHED_BASE), which the kernel adds; the host never does.
+// uncached alias (MEM_L1_UNCACHED_BASE), which the kernel adds; the host never does. A peer offset is an
+// offset in the sibling CCE's SRAM, reached through its uncached alias (the kernel adds the sibling's base).
 //
 // Status words (uint32, uncached alias): 0 started, 1 index of the next word to load (so a hang shows how
 // far the loads got), 4 done.
@@ -15,7 +16,8 @@
 //   2, 3: destination address, low and high 32 bits
 //   4:    number of 32-bit words
 //   5:    status block, local SRAM offset
-//   6:    flags: bit 0 = source is a core-local offset, bit 1 = destination is a core-local offset
+//   6:    flags: bit 0 = source is a core-local offset, bit 1 = destination is a core-local offset,
+//         bit 2 = source is a sibling-CCE offset, bit 3 = destination is a sibling-CCE offset
 
 #include <cstdint>
 
@@ -27,15 +29,18 @@ uint64_t arg_u64(uint32_t index) {
     return (static_cast<uint64_t>(get_arg_val<uint32_t>(index + 1)) << 32) | get_arg_val<uint32_t>(index);
 }
 
-volatile uint32_t* resolve(uint64_t addr, bool is_local) {
+volatile uint32_t* resolve(uint64_t addr, bool is_local, bool is_peer) {
+    if (is_peer) {
+        return reinterpret_cast<volatile uint32_t*>(MEM_IERISC_UNCACHED_BASE + ETH_CCE_PEER_BASE + addr);
+    }
     return reinterpret_cast<volatile uint32_t*>(is_local ? MEM_L1_UNCACHED_BASE + addr : addr);
 }
 }  // namespace
 
 void kernel_main() {
     const uint32_t flags = get_arg_val<uint32_t>(6);
-    volatile uint32_t* src = resolve(arg_u64(0), flags & 1);
-    volatile uint32_t* dst = resolve(arg_u64(2), flags & 2);
+    volatile uint32_t* src = resolve(arg_u64(0), flags & 1, flags & 4);
+    volatile uint32_t* dst = resolve(arg_u64(2), flags & 2, flags & 8);
     const uint32_t words = get_arg_val<uint32_t>(4);
     volatile uint32_t* status =
         reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + get_arg_val<uint32_t>(5));

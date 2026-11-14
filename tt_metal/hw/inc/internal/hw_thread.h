@@ -27,12 +27,7 @@ inline __attribute__((always_inline)) uint32_t read_hw_thread_idx() {
 #else
     uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
-#if defined(COMPILE_FOR_IDLE_ERISC)
-    // A Keraunos core interleaves its two CCEs: processor 2 * hart + eth_cce (MEM_IERISC_ETH_CCE_BASE).
-    return static_cast<uint32_t>(hartid % MEM_IERISC_LOCAL_HARTS) * MEM_IERISC_ETH_CCES + ETH_PHYSICAL_CCE_ID;
-#else
     return static_cast<uint32_t>(hartid);
-#endif
 #endif
 }
 
@@ -68,7 +63,7 @@ inline __attribute__((always_inline)) void init_hw_thread_idx() { hw_thread_idx 
 // Wormhole and Blackhole ethernet use PROCESSOR_INDEX (one binary per ERISC).
 // ETH Wormhole: Index 0
 // ETH Blackhole: Index 0 to 1
-// Quasar idle ethernet: 2 * hart + CCE, Index 0 to 15 (CCE0 hart 0, CCE1 hart 0, CCE0 hart 1, ...).
+// Quasar idle ethernet uses the cached mhartid, same as a DM hart.
 inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
 #if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
     // A stack overflow into the TLS region below clobbers hw_thread_idx, which then indexes the debug

@@ -47,9 +47,8 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
 uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
 
-// One image per CCE: CCE0's is linked at local 0, CCE1's MEM_IERISC_ETH_CCE_BASE(1) up. Both reach the
-// shared mailbox in CCE0's SRAM at the same local address. Processor 0 (CCE0 hart 0) is the master
-// for all sixteen harts; every other hart, CCE1's included, is a subordinate.
+// Each CCE of an HSIO tile is its own core with its own firmware build, linked into the CCE's SRAM at its native
+// address (ETH_CCE_LOCAL_BASE: 0 for CCE0, 4 MiB for CCE1). The sibling CCE's SRAM is MEM_IERISC_PEER_CCE_BASE.
 // Uncached alias. L2 does not snoop the host's NOC->TL1 writes, so a cached read of the go
 // message would spin on the stale line the previous iteration left behind.
 inline tt_l1_ptr mailboxes_t* ierisc_mailboxes() {
@@ -64,15 +63,8 @@ inline tt_l1_ptr subordinate_map_t* ierisc_subordinate_sync() {
 #define mailboxes (ierisc_mailboxes())
 #define subordinate_sync (ierisc_subordinate_sync())
 
-// One byte per subordinate, processors 1-15: the DM bytes, the padding byte and the first Neo bytes of
-// subordinate_map_t (an ethernet core has no Neo). Byte 15 has no processor and stays 0.
 inline __attribute__((always_inline)) volatile uint8_t* subordinate_sync_slot(uint32_t hartid) {
     return (volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1;
-}
-
-inline __attribute__((always_inline)) bool all_subordinates_done() {
-    volatile uint64_t* words = (volatile uint64_t*)subordinate_sync;
-    return words[0] == RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE && words[1] == RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE;
 }
 
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
@@ -100,7 +92,8 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
-    while (!all_subordinates_done()) {
+    subordinate_sync->padding = 0;
+    while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE) {
     }
     WAYPOINT("NTD");
 }
@@ -110,22 +103,17 @@ extern "C" uint32_t _start1() {
     // it lives in, so caching it any earlier would just be discarded.
     uint32_t hartid = internal_::read_hw_thread_idx();
     configure_csr();
-    // Hart 0 of each CCE initializes that CCE's image. Processor 0 also owns the shared mailbox state.
-    constexpr uint32_t image_leader = ETH_PHYSICAL_CCE_ID;
-    if (hartid == image_leader) {
+    if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
-        if (hartid == 0) {
-            WATCHER_RING_BUFFER_INIT();
-            DEVICE_PRINT_INITIALIZE_LOCK();
-        }
-        risc_init();
-        mailboxes->fw_shared_globals_ready[image_leader] = SHARED_GLOBALS_READY_GO;
+        WATCHER_RING_BUFFER_INIT();
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        mailboxes->fw_shared_globals_ready[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
     internal_::init_hw_thread_idx();
-    while (mailboxes->fw_shared_globals_ready[image_leader] != SHARED_GLOBALS_READY_GO) {
+    while (mailboxes->fw_shared_globals_ready[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
 
@@ -160,6 +148,7 @@ extern "C" uint32_t _start1() {
         }
     }
 
+    risc_init();
     mailboxes->launch_msg_rd_ptr = 0;
     wait_subordinates();
     mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
