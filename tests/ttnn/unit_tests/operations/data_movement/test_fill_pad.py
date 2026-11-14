@@ -477,7 +477,6 @@ def test_fill_pad_program_cache_addr_change(device, factory_case):
     fill_value = 1.5
     dtype = ttnn.bfloat16
     torch_dtype = ttnn_dtype_to_torch_dtype[dtype]
-    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     if factory_case == "dram_interleaved":
         shape = (17, 17)  # single tile with both right and bottom implicit padding
@@ -506,7 +505,7 @@ def test_fill_pad_program_cache_addr_change(device, factory_case):
         )
         input_addrs.add(input_tensor.buffer_address())
 
-        output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
+        output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=input_mem_config)
         padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
         keep_alive += [input_tensor, output_tensor]
 

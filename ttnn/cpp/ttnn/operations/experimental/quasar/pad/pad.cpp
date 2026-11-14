@@ -414,7 +414,10 @@ ttnn::Tensor invoke_tile(
         return requested_padded_shape[i] == input_padded_shape[i];
     };
 
-    ttnn::Tensor output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
+    // The requested output config is applied by the routes below (pad_impl / to_memory_config). fill_pad is
+    // in-place and cannot take the config, so it gets no config here: passing one would move the input before
+    // padding and change which pad route runs.
+    ttnn::Tensor output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, std::nullopt);
     if (requested_rank == 1 || (!pad_upper_dims && pad_current_tile_dim(-1) && pad_current_tile_dim(-2))) {
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
 
