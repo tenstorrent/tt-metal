@@ -45,7 +45,10 @@ void kernel_main() {
     state_configure<Operand::PACK>(cb_out0, __builtin_LINE());
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
+    // DEST_TO_SRCA unpacks icb0 into SrcB, whereas DEST_TO_SRCB unpacks icb0 into SrcA.
     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_in2);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCB));
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     state_configure<Operand::PACK>(cb_out1, __builtin_LINE());
