@@ -27,6 +27,7 @@
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <llrt/tt_cluster.hpp>
 
@@ -46,24 +47,10 @@ T val(T v) {
 }
 }  // namespace
 
-void read_cq_memory_for_dump(
-    void* dst,
-    uint32_t size_bytes,
-    uint64_t byte_addr,
-    ChipId mmio_device_id,
-    uint16_t channel,
-    const SystemMemoryManager& sysmem_manager) {
-    MetalContext& metal_ctx = sysmem_manager.metal_context();
-    auto& cluster = sysmem_manager.env_impl().get_cluster();
-    if (sysmem_manager.is_dram_backed()) {
-        const uint32_t dram_channel = metal_ctx.device_manager()
-                                          ->get_active_device(mmio_device_id)
-                                          ->allocator_impl()
-                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
-        cluster.read_dram_vec(dst, size_bytes, mmio_device_id, dram_channel, byte_addr);
-    } else {
-        cluster.read_sysmem(dst, size_bytes, byte_addr, mmio_device_id, channel);
-    }
+// Reads a host-side CQ pointer of cq_id, in 16 B units.
+uint32_t read_host_cq_ptr(const CqBacking& backing, uint8_t cq_id, CommandQueueHostAddrType type, bool device_written) {
+    return backing.read_host_cq_word(
+        cq_id, backing.context().dispatch_mem_map().get_host_command_queue_addr(type), device_written);
 }
 
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
@@ -365,16 +352,12 @@ void print_progress_bar(float progress, bool init = false) {
 void dump_completion_queue_entries(
     std::ofstream& cq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
     MetalContext& metal_ctx = sysmem_manager.metal_context();
-    auto& cluster = sysmem_manager.env_impl().get_cluster();
-    ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = cluster.get_assigned_channel_for_device(sysmem_manager.get_device_id());
+    const CqBacking& backing = sysmem_manager.backing();
     uint32_t completion_write_ptr =
-        get_cq_completion_wr_ptr<true>(
-            metal_ctx, sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
+        read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::COMPLETION_Q_WR, /*device_written=*/true)
         << 4;
     uint32_t completion_read_ptr =
-        get_cq_completion_rd_ptr<true>(
-            metal_ctx, sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
+        read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::COMPLETION_Q_RD, /*device_written=*/false)
         << 4;
     uint32_t completion_q_bytes = cq_interface.completion_fifo_size << 4;
     TT_ASSERT(completion_q_bytes % DispatchSettings::TRANSFER_PAGE_SIZE == 0);
@@ -396,7 +379,7 @@ void dump_completion_queue_entries(
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < completion_q_bytes;) {  // page_offset increment at end of loop
         uint32_t page_addr = base_addr + page_offset;
-        read_cq_memory_for_dump(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel, sysmem_manager);
+        backing.read_cq_memory(read_data.data(), read_data.size(), page_addr);
 
         // Check if this page starts with a valid command id
         CQDispatchCmd* cmd = (CQDispatchCmd*)read_data.data();
@@ -465,18 +448,12 @@ void dump_completion_queue_entries(
 void dump_issue_queue_entries(
     std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
     MetalContext& metal_ctx = sysmem_manager.metal_context();
-    auto& cluster = sysmem_manager.env_impl().get_cluster();
-    ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = cluster.get_assigned_channel_for_device(sysmem_manager.get_device_id());
+    const CqBacking& backing = sysmem_manager.backing();
     // TODO: Issue Q read ptr is not prefetcly updated 0 try to read it out from chip on dump?
     uint32_t issue_read_ptr =
-        get_cq_issue_rd_ptr<true>(
-            metal_ctx, sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
-        << 4;
+        read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::ISSUE_Q_RD, /*device_written=*/true) << 4;
     uint32_t issue_write_ptr =
-        get_cq_issue_wr_ptr<true>(
-            metal_ctx, sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
-        << 4;
+        read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::ISSUE_Q_WR, /*device_written=*/false) << 4;
     uint32_t issue_q_bytes = cq_interface.issue_fifo_size << 4;
     uint32_t issue_q_base_addr = cq_interface.offset + cq_interface.cq_start;
 
@@ -496,9 +473,8 @@ void dump_issue_queue_entries(
     uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
     uint32_t end_of_curr_page =
         first_page_addr + DispatchSettings::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
-    read_cq_memory_for_dump(
-        read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel, sysmem_manager);
-    const auto& hal = sysmem_manager.env_impl().get_hal();
+    backing.read_cq_memory(read_data.data(), read_data.size(), first_page_addr);
+    const auto& hal = backing.env().get_hal();
     for (uint32_t offset = 0; offset < issue_q_bytes;) {  // offset increments at end of loop
         uint32_t curr_addr = issue_q_base_addr + offset;
         uint32_t page_offset = curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE;
@@ -506,8 +482,7 @@ void dump_issue_queue_entries(
         // Check if we need to read a new page
         if (curr_addr > end_of_curr_page) {
             uint32_t page_base = curr_addr - (curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-            read_cq_memory_for_dump(
-                read_data.data(), read_data.size(), page_base, mmio_device_id, channel, sysmem_manager);
+            backing.read_cq_memory(read_data.data(), read_data.size(), page_base);
             end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
         }
 
@@ -563,8 +538,7 @@ void dump_issue_queue_entries(
                     if (dispatch_curr_addr > end_of_curr_page) {
                         uint32_t page_base =
                             dispatch_curr_addr - (dispatch_curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-                        read_cq_memory_for_dump(
-                            read_data.data(), read_data.size(), page_base, mmio_device_id, channel, sysmem_manager);
+                        backing.read_cq_memory(read_data.data(), read_data.size(), page_base);
                         end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
                     }
 
@@ -612,32 +586,29 @@ void dump_command_queue_raw_data(
     SystemMemoryManager& sysmem_manager,
     SystemMemoryCQInterface& cq_interface,
     cq_queue_t queue_type) {
-    MetalContext& metal_ctx = sysmem_manager.metal_context();
-    auto& cluster = sysmem_manager.env_impl().get_cluster();
-    ChipId mmio_device_id = cluster.get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = cluster.get_assigned_channel_for_device(sysmem_manager.get_device_id());
+    const CqBacking& backing = sysmem_manager.backing();
 
     // The following variables depend on completion Q vs issue Q
     uint32_t write_ptr, read_ptr, base_addr, bytes_to_read = 0;
     std::string queue_type_name;
     if (queue_type == CQ_COMPLETION_QUEUE) {
-        write_ptr = get_cq_completion_wr_ptr<true>(
-                        metal_ctx, sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
+        write_ptr = read_host_cq_ptr(
+                        backing, cq_interface.id, CommandQueueHostAddrType::COMPLETION_Q_WR, /*device_written=*/true)
                     << 4;
-        read_ptr = get_cq_completion_rd_ptr<true>(
-                       metal_ctx, sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
+        read_ptr = read_host_cq_ptr(
+                       backing, cq_interface.id, CommandQueueHostAddrType::COMPLETION_Q_RD, /*device_written=*/false)
                    << 4;
         bytes_to_read = cq_interface.completion_fifo_size << 4;  // Page-aligned, Issue Q is not.
         TT_ASSERT(bytes_to_read % DispatchSettings::TRANSFER_PAGE_SIZE == 0);
         base_addr = cq_interface.issue_fifo_limit << 4;
         queue_type_name = "Completion";
     } else if (queue_type == CQ_ISSUE_QUEUE) {
-        write_ptr = get_cq_issue_wr_ptr<true>(
-                        metal_ctx, sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
-                    << 4;
-        read_ptr = get_cq_issue_rd_ptr<true>(
-                       metal_ctx, sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
-                   << 4;
+        write_ptr =
+            read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::ISSUE_Q_WR, /*device_written=*/false)
+            << 4;
+        read_ptr =
+            read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::ISSUE_Q_RD, /*device_written=*/true)
+            << 4;
         bytes_to_read = cq_interface.issue_fifo_size << 4;
         base_addr = cq_interface.offset + cq_interface.cq_start;
         queue_type_name = "Issue";
@@ -667,7 +638,7 @@ void dump_command_queue_raw_data(
         print_progress_bar(((float)page_offset / bytes_to_read) + 0.005);
 
         // Print in 16B per line
-        read_cq_memory_for_dump(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel, sysmem_manager);
+        backing.read_cq_memory(read_data.data(), read_data.size(), page_addr);
         TT_ASSERT(read_data.size() % 16 == 0);
         for (uint32_t line_offset = 0; line_offset < read_data.size(); line_offset += 16) {
             uint32_t line_addr = page_addr + line_offset;
