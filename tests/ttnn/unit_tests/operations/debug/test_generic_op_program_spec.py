@@ -237,7 +237,7 @@ def test_matmul(device):
                     runtime_arg_names=["output_tile_start_id", "num_output_tiles"],
                     common_runtime_arg_names=["Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "bcast_B", "MtNt"],
                 ),
-                hw_config=E.create_reader_datamovement_config(),
+                hw_config=E.create_reader_datamovement_config(disable_dfb_implicit_sync_for_all=True),
             ),
             E.KernelSpec(
                 unique_id="writer",
@@ -245,7 +245,7 @@ def test_matmul(device):
                 dfb_bindings=[E.consumer_of("out", "out")],
                 tensor_bindings=[E.TensorBinding(tensor_parameter_name="output", accessor_name="output")],
                 runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_pages", "start_id"]),
-                hw_config=E.create_writer_datamovement_config(),
+                hw_config=E.create_writer_datamovement_config(disable_dfb_implicit_sync_for_all=True),
             ),
         ]
         + [
