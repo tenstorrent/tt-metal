@@ -28,8 +28,8 @@ EXPECTED_PERF_BLACKHOLE = {
 }
 
 EXPECTED_PERF_WORMHOLE = {
-    320: 480,
-    640: 170,
+    320: 900,
+    640: 360,
 }
 
 
