@@ -1069,6 +1069,76 @@ def test_reshape_rm_nonclean_large_odd_dest_page_l1_cb(device, input_shape, outp
     assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
 
 
+@pytest.mark.parametrize("padded_widths", [(32, 64), (64, 32)], ids=["narrow_first", "wide_first"])
+def test_reshape_rm_padded_shape_is_new_program(device, padded_widths):
+    """The padded shape sets the RM output page size, so it must key the program cache (#55237)."""
+    torch.manual_seed(5)
+    torch_input = torch.randn((1, 1, 16, 60), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    logical_shape = ttnn.Shape([1, 1, 32, 30])
+    expected = torch_input.reshape(1, 1, 32, 30)
+    entries = device.num_program_cache_entries()
+    for i, padded_width in enumerate(padded_widths):
+        tt_out = ttnn.reshape(tt_input, logical_shape, ttnn.Shape([1, 1, 32, padded_width]))
+        assert list(tt_out.padded_shape) == [1, 1, 32, padded_width]
+        assert device.num_program_cache_entries() == entries + i + 1
+        assert_equal(expected, ttnn.to_torch(tt_out))
+
+
+def test_reshape_rm_nonclean_dest_slots_track_l1_pressure(device):
+    """The non-clean staging ring is budgeted against live L1, so a cache hit must not replay a ring
+    sized for an emptier L1 (#55237)."""
+    # dest page 10004 B (not 16 B aligned): 8 staging slots plus source scratch take ~89 KiB per core.
+    input_shape, output_shape = (64, 2501), (32, 5002)
+    torch.manual_seed(6)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    expected = torch_input.reshape(output_shape)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    reshape_native = ttnn._ttnn.operations.data_movement.reshape_force_native
+
+    def run():
+        tt_out = reshape_native(tt_input, list(output_shape), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(expected, ttnn.to_torch(tt_out))
+        ttnn.deallocate(tt_out)
+
+    run()
+    entries = device.num_program_cache_entries()
+
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    tiles_per_bank = (view.largest_contiguous_bytes_free_per_bank - 40 * 1024) // (32 * 32 * 2)
+    if tiles_per_bank <= 0:
+        pytest.skip("L1 already has less free space than the test needs")
+    hog = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, tiles_per_bank * view.num_banks * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        # Only ~3 slots fit now: a different program, not a hit on the 8-slot one.
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    # With L1 free again the 8-slot program is a hit.
+    run()
+    assert device.num_program_cache_entries() == entries + 1
+
+
 def test_quasar_reshape_rm_unit_last_dim(device):
     """Quasar RM factory/kernel: misaligned [N, 1] reshape must stay bit-exact (#50191)."""
     rows, cols = 32, 17

@@ -70,7 +70,57 @@ uint32_t choose_num_dest_write_slots(
     const uint32_t max_slots = (l1_available - source_scratch_bytes) / (dest_slot_size_bytes * num_kernel_copies);
     return std::max(1u, std::min(small_dest_write_slots, max_slots));
 }
+
+struct RMPagePlan {
+    uint32_t source_page_size_bytes;
+    uint32_t dest_page_size_bytes;
+    uint32_t source_read_size_bytes;
+    uint32_t dest_slot_size_bytes;
+    bool pages_noc_aligned;
+    bool can_use_dual_kernel;
+};
+
+RMPagePlan plan_rm_pages(const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args) {
+    const auto& input = tensor_args.input;
+    const uint32_t data_size = input.element_size();
+    const uint32_t source_page_size_bytes = input.logical_shape()[-1] * data_size;
+    const uint32_t dest_page_size_bytes = operation_attributes.logical_output_shape[-1] * data_size;
+
+    const bool pages_noc_aligned = (source_page_size_bytes % noc_page_alignment_bytes == 0) &&
+                                   (dest_page_size_bytes % noc_page_alignment_bytes == 0);
+    const bool dest_noc_aligned = (dest_page_size_bytes % noc_page_alignment_bytes == 0);
+    const bool pages_divisible =
+        (source_page_size_bytes % dest_page_size_bytes == 0 || dest_page_size_bytes % source_page_size_bytes == 0);
+    // Avoid dual-kernel when dest writes are too small for DRAM (Blackhole SYS-1419 / #50191).
+    // Only dest alignment matters: source alignment selects the clean-vs-staging read path
+    // but doesn't affect the size of writes hitting DRAM.
+    const bool can_use_dual_kernel =
+        pages_divisible && (dest_noc_aligned || !operation_attributes.output_mem_config.is_dram());
+
+    return RMPagePlan{
+        .source_page_size_bytes = source_page_size_bytes,
+        .dest_page_size_bytes = dest_page_size_bytes,
+        .source_read_size_bytes = static_cast<uint32_t>(((source_page_size_bytes - 1) & MASK_64) + 128),
+        .dest_slot_size_bytes = static_cast<uint32_t>(((dest_page_size_bytes - 1) & MASK_64) + 80),
+        .pages_noc_aligned = pages_noc_aligned,
+        .can_use_dual_kernel = can_use_dual_kernel,
+    };
+}
+
+uint32_t num_dest_write_slots_for(const MeshDevice& device, const RMPagePlan& plan) {
+    return choose_num_dest_write_slots(
+        device,
+        plan.pages_noc_aligned,
+        plan.can_use_dual_kernel,
+        plan.source_read_size_bytes,
+        plan.dest_slot_size_bytes);
+}
 }  // namespace
+
+uint32_t reshape_rm_num_dest_write_slots(
+    const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args) {
+    return num_dest_write_slots_for(*tensor_args.input.device(), plan_rm_pages(operation_attributes, tensor_args));
+}
 
 ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_program_artifacts(
     const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args, Tensor& tensor_return_value) {
@@ -99,9 +149,10 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     log_debug(tt::LogOp, "output shape: {}", output_log_shape);
     log_debug(tt::LogOp, "data size: {}", data_size);
 
-    uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
-    uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
-    uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
+    const RMPagePlan page_plan = plan_rm_pages(operation_attributes, tensor_args);
+    const uint32_t source_page_size_bytes = page_plan.source_page_size_bytes;
+    const uint32_t dest_page_size_bytes = page_plan.dest_page_size_bytes;
+    const uint32_t source_read_size_bytes = page_plan.source_read_size_bytes;
     uint32_t read_start_page = 0;
     uint32_t write_start_page = 0;
     Buffer* dst_buffer = output.buffer();
@@ -113,20 +164,11 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
         responsibility++;
     }
     const uint32_t scratch_size0 = source_read_size_bytes;
-    const uint32_t dest_slot_size_bytes = ((dest_page_size_bytes - 1) & MASK_64) + 80;
+    const uint32_t dest_slot_size_bytes = page_plan.dest_slot_size_bytes;
+    const bool pages_noc_aligned = page_plan.pages_noc_aligned;
+    const bool can_use_dual_kernel = page_plan.can_use_dual_kernel;
 
-    const bool pages_noc_aligned = (source_page_size_bytes % noc_page_alignment_bytes == 0) &&
-                                   (dest_page_size_bytes % noc_page_alignment_bytes == 0);
-    const bool dest_noc_aligned = (dest_page_size_bytes % noc_page_alignment_bytes == 0);
-    const bool pages_divisible =
-        (source_page_size_bytes % dest_page_size_bytes == 0 || dest_page_size_bytes % source_page_size_bytes == 0);
-    // Avoid dual-kernel when dest writes are too small for DRAM (Blackhole SYS-1419 / #50191).
-    // Only dest alignment matters: source alignment selects the clean-vs-staging read path
-    // but doesn't affect the size of writes hitting DRAM.
-    const bool can_use_dual_kernel = pages_divisible && (dest_noc_aligned || !dst_buffer->is_dram());
-
-    const uint32_t num_dest_write_slots = choose_num_dest_write_slots(
-        *device, pages_noc_aligned, can_use_dual_kernel, scratch_size0, dest_slot_size_bytes);
+    const uint32_t num_dest_write_slots = num_dest_write_slots_for(*device, page_plan);
     const uint32_t scratch_size1 = dest_slot_size_bytes * num_dest_write_slots;
 
     const uint32_t write_alignment =
