@@ -264,7 +264,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `type` | str | — | Optimizer type (e.g. `"AdamW"`, `"MorehAdamW"`) |
-| `lr` | float | 3e-4 | Learning rate |
+| `lr` | float | 1e-3 | Learning rate |
 | `beta1` | float | 0.9 | Exponential decay rate for first moment |
 | `beta2` | float | 0.999 | Exponential decay rate for second moment |
 | `epsilon` | float | 1e-8 | Numerical stability constant |
