@@ -54,10 +54,10 @@ def e2e_cls(request):
         raise AssertionError("no class defines _fuse_vision_into_text_embeddings")
 
 
-def _fuse(cls, tokens, features):
+def _fuse(cls, tokens, features, **kwargs):
     self = SimpleNamespace(args=SimpleNamespace(image_token_index=7))
     embd = torch.zeros(1, tokens.shape[-1], 4)
-    return cls._fuse_vision_into_text_embeddings(self, tokens, embd, features)
+    return cls._fuse_vision_into_text_embeddings(self, tokens, embd, features, **kwargs)
 
 
 def test_matching_counts_are_spliced(e2e_cls):
@@ -71,3 +71,10 @@ def test_count_mismatch_raises(e2e_cls, n_features, expect_error):
     tokens = torch.tensor([[1, 7, 7, 2]])
     with expect_error(ValueError, "Image features and image tokens do not match"):
         _fuse(e2e_cls, tokens, torch.ones(n_features, 4))
+
+
+def test_count_check_can_be_skipped_for_a_partial_prompt(e2e_cls):
+    # A cached-prefix or later chunk holds only some placeholders while the features cover the whole prompt.
+    tokens = torch.tensor([[1, 7, 2, 2]])
+    out = _fuse(e2e_cls, tokens, torch.arange(12, dtype=torch.float32).reshape(3, 4) + 1, check_counts=False)
+    assert out[0, 1, 0] == 1
