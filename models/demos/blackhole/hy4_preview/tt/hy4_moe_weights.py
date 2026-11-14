@@ -39,7 +39,9 @@ def load_moe_layer(
 ):
     """Dict of host tensors for MoE layer ``layer_id``. experts: iterable of expert ids to load (others stay zero), for single-expert tests."""
     W = W or Hy4Weights(ckpt_dir)
-    warm = (experts is None and _cache_warm(layer_id)) or not load_experts
+    warm = (
+        experts is None and _cache_warm(layer_id, os.environ.get("MOE_COMPUTE_BFP8_WEIGHTS", "0") == "1")
+    ) or not load_experts
     ids = [] if warm else (list(range(NUM_ROUTED)) if experts is None else list(experts))
     w0 = w1 = w2 = None
     if not warm:
