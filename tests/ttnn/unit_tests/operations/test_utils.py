@@ -9,6 +9,8 @@ import torch
 import math
 import ttnn
 
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
@@ -195,3 +197,36 @@ def get_ttnn_torch_dtype(ttnn_dtype: ttnn.DataType) -> torch.dtype:
 
 def create_ttnn_tilized_tensor(torch_tensor, device, dtype, pad_value=float("nan")):
     return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, pad_value=pad_value)
+
+
+def check_second_call_through_cache(device, build, run):
+    """Run an op on tensors A, then on new tensors B at other addresses, and check the second output.
+
+    On a program cache hit only the buffer addresses are patched, so a stale address makes the second call
+    read or write the buffer of the first. The second call must not add cache entries, and its output must
+    match torch and, bit for bit, the same call on a cold cache.
+
+    build(seed, second_call) allocates fresh device tensors from seeded data. It returns the inputs for
+    run() and the torch reference for them. second_call is False for the first run and True for the
+    others, so a test can change how the operands alias between the two calls.
+    run(inputs) runs the op and returns its output as a float32 torch tensor.
+    """
+    # first_inputs and the spacer stay referenced until return, so the new tensors cannot reuse their addresses.
+    first_inputs, _ = build(0, second_call=False)
+    run(first_inputs)
+
+    spacer = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    second_inputs, golden = build(1, second_call=True)
+
+    entries_before = device.num_program_cache_entries()
+    output = run(second_inputs)
+    assert device.num_program_cache_entries() == entries_before, "second call missed the program cache"
+
+    # Loose on purpose: a stale address gives garbage, and the exact check is the cold-cache comparison.
+    assert_with_pcc(golden, output, 0.99)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    cold_inputs, _ = build(1, second_call=True)
+    cold_output = run(cold_inputs)
+    assert torch.equal(output, cold_output), "cached second call differs from the same call on a cold cache"

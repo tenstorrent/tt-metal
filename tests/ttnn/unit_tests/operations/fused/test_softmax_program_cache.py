@@ -34,6 +34,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from tests.ttnn.unit_tests.operations.test_utils import check_second_call_through_cache
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -141,6 +142,36 @@ def test_softmax_cache_reuse_same_config_4d(device, isolate_program_cache):
 
     assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
+
+
+@pytest.mark.parametrize("masked", [False, True], ids=["softmax", "scale_mask_softmax"])
+def test_softmax_in_place_cache_hit_on_new_buffers(device, isolate_program_cache, masked):
+    """In place, so the output is the input buffer: a stale input address on the second call is also a stale
+    output address. The second call gets new tensors at other addresses and must hit the cache."""
+    B, C, H, W = 2, 2, 64, 128
+    scale = 0.125
+
+    def build(seed, second_call):
+        torch.manual_seed(seed)
+        torch_input = torch.randn((B, C, H, W), dtype=torch.bfloat16)
+        torch_mask = torch.where(torch.rand((B, 1, 1, W)) > 0.5, 0.0, -10000.0).to(torch.bfloat16)
+        if masked:
+            golden = F.softmax(torch_input.float() * scale + torch_mask.float(), dim=-1)
+        else:
+            golden = F.softmax(torch_input.float(), dim=-1)
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_mask = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        return (tt_input, tt_mask), golden
+
+    def run(inputs):
+        tt_input, tt_mask = inputs
+        if masked:
+            tt_output = ttnn.scale_mask_softmax_in_place(tt_input, scale, tt_mask)
+        else:
+            tt_output = ttnn.softmax_in_place(tt_input)
+        return ttnn.to_torch(tt_output).float()
+
+    check_second_call_through_cache(device, build, run)
 
 
 # =============================================================================
