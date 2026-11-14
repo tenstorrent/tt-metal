@@ -366,11 +366,24 @@ constexpr bool matmul_tile_mop = matmul_force_form ? !(MATMUL_FORCE_FORM_CHAR ==
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION)
-// llk_math_matmul_tile_mop of a plain call: the test's CBs are in0, in1 and the output
+// llk_math_matmul_tile_mop of a plain call: llk_math_matmul_kernel_has_32bit_cb over the production kernel's CB formats
+// (MATMUL_KERNEL_FORMATS, partials included) and the test's in0, in1 and output
 #ifdef RUNTIME_FORMATS
 constexpr bool matmul_prod_may_pack_32bit = true;
 #else
-constexpr bool matmul_prod_may_pack_32bit = ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_A_IN)) ||
+constexpr bool matmul_prod_kernel_has_32bit_cb()
+{
+    for (const std::uint8_t f : MATMUL_KERNEL_FORMATS)
+    {
+        if (f == ckernel::to_underlying(DataFormat::Float32) || f == ckernel::to_underlying(DataFormat::Tf32))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+constexpr bool matmul_prod_may_pack_32bit = matmul_prod_kernel_has_32bit_cb() ||
+                                            ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_A_IN)) ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_B_IN)) ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
 #endif
