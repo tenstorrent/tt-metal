@@ -293,4 +293,72 @@ void FabricBuilder::create_kernels() {
     }
 }
 
+// ============ Plugin Registration ============
+//
+// Thread safety: registration must happen before any fabric init call.
+// This is a program-startup operation, not a concurrent runtime operation.
+// No mutex is needed because the ordering contract is: register once during
+// setup, then fabric init reads it. Concurrent registration is a programming error.
+
+namespace {
+
+FabricBuildSessionFactory g_fabric_build_session_factory = nullptr;
+
+// Builds every device with the default FabricBuilder; holds no launch-wide state.
+class DefaultFabricBuildSession final : public FabricBuildSession {
+public:
+    std::unique_ptr<FabricBuilder> make_device_builder(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        FabricContext& fabric_context,
+        CoreType dispatch_core_type) const override {
+        return std::make_unique<FabricBuilder>(device, program, fabric_context, dispatch_core_type);
+    }
+};
+
+// Adapts a per-device factory to a session.
+class FactoryFabricBuildSession final : public FabricBuildSession {
+public:
+    explicit FactoryFabricBuildSession(FabricBuilderFactory factory) : factory_(std::move(factory)) {}
+
+    std::unique_ptr<FabricBuilder> make_device_builder(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        FabricContext& fabric_context,
+        CoreType dispatch_core_type) const override {
+        return factory_(device, program, fabric_context, dispatch_core_type);
+    }
+
+private:
+    FabricBuilderFactory factory_;
+};
+
+}  // namespace
+
+void register_fabric_build_session_factory(FabricBuildSessionFactory factory) {
+    TT_FATAL(
+        !g_fabric_build_session_factory || !factory,
+        "Fabric build session factory already registered. Call with nullptr to clear before re-registering.");
+    g_fabric_build_session_factory = std::move(factory);
+}
+
+std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& fabric_context) {
+    if (!g_fabric_build_session_factory) {
+        return std::make_unique<DefaultFabricBuildSession>();
+    }
+    auto session = g_fabric_build_session_factory(fabric_context);
+    TT_FATAL(session != nullptr, "Fabric build session factory returned a null session");
+    return session;
+}
+
+void register_fabric_builder_factory(FabricBuilderFactory factory) {
+    if (!factory) {
+        register_fabric_build_session_factory(nullptr);
+        return;
+    }
+    register_fabric_build_session_factory([factory = std::move(factory)](FabricContext&) -> std::unique_ptr<FabricBuildSession> {
+        return std::make_unique<FactoryFabricBuildSession>(factory);
+    });
+}
+
 }  // namespace tt::tt_fabric

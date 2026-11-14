@@ -29,6 +29,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
+#include "fabric/fabric_builder.hpp"
 #include "fabric/fabric_builder_context.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include <llrt/llrt.hpp>
@@ -450,6 +451,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
 void FabricFirmwareInitializer::reset_state(std::unordered_set<InitializerKey>& init_done) {
     // Release fabric programs before the devices they were compiled for are closed.
     fabric_programs_.clear();
+    // End this launch's build session; the next launch starts a new one.
+    build_session_.reset();
     devices_.clear();
     initialized_.clear();
     init_done.erase(key);
@@ -462,11 +465,21 @@ void FabricFirmwareInitializer::post_teardown() {
 
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_.test(); }
 
+FabricFirmwareInitializer::~FabricFirmwareInitializer() = default;
+
+void FabricFirmwareInitializer::begin_build_session() {
+    build_session_ = tt::tt_fabric::begin_fabric_build_session(descriptor_->env_impl());
+}
+
 std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) const {
+    if (!build_session_) {
+        return nullptr;
+    }
     auto fabric_program = tt::tt_fabric::create_and_compile_fabric_program(
         descriptor_->env_impl(),
         descriptor_->metal_context().get_dispatch_core_manager().get_dispatch_core_config(),
-        dev);
+        dev,
+        *build_session_);
     if (!fabric_program) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
@@ -513,6 +526,8 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // Each task writes only its own slot, and the vector is not resized while tasks are running.
     fabric_programs_.clear();
     fabric_programs_.resize(devices_.size());
+    // One session per launch, created on this thread before the parallel compiles that read it.
+    begin_build_session();
 
     std::vector<std::shared_future<void>> events;
     // The tasks write into this object, and detail::async futures do not join on destruction, so every exit
@@ -563,6 +578,7 @@ void FabricFirmwareInitializer::compile_fabric_only() {
     // races when devices compile in parallel.
     fabric_programs_.clear();
     fabric_programs_.resize(devices_.size());
+    begin_build_session();
     for (size_t i = 0; i < devices_.size(); ++i) {
         fabric_programs_[i] = compile_fabric(devices_[i]);
     }
