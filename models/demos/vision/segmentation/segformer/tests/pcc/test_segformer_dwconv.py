@@ -11,7 +11,7 @@ from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.vision.segmentation.segformer.common import load_torch_model
 from models.demos.vision.segmentation.segformer.reference.segformer_dwconv import SegformerDWConv
 from models.demos.vision.segmentation.segformer.tt.ttnn_segformer_dwconv import TtSegformerDWConv
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def create_custom_mesh_preprocessor(mesh_mapper=None):

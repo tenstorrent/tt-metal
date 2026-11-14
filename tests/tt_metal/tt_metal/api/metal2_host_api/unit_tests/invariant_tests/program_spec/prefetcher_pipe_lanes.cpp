@@ -8,7 +8,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "hostdev/remote_dfb_config_layout.h"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"

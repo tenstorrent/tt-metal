@@ -113,11 +113,14 @@ def run_dispatch(
     fp8_scaled_input,
     verbose,
     run_pcc_check,
+    sp_axis=0,
 ):
     """Run the TTNN dispatch op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
     num_experts_per_tok) shape axis."""
     num_devices = mesh_device.get_num_devices()
+    if num_routed_experts % num_devices != 0:
+        pytest.skip(f"{num_routed_experts} experts do not divide across {mesh_device.shape} devices")
 
     fp8_input = input_dtype == ttnn.fp8_e4m3
     fp8_output = output_dtype == ttnn.fp8_e4m3
@@ -127,12 +130,13 @@ def run_dispatch(
 
     torch.manual_seed(42)
 
-    mesh_config = extract_mesh_config(mesh_device)
-    sp_axis = mesh_config.sp_axis
+    mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(
+        f"Testing with {sp_axis=}, {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}"
+    )
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
@@ -299,7 +303,7 @@ def run_dispatch(
     )
 
     # Forward pass through TTNN dispatch
-    tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets)
+    tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets, sp_axis)
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
 
     tt_dispatched, tt_metadata = tt_dispatch_module(
@@ -315,7 +319,7 @@ def run_dispatch(
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets, scales=scales)
 
     # Convert TTNN outputs to torch for comparison
-    mesh_composer = get_ep_mesh_composer(mesh_device)
+    mesh_composer = get_ep_mesh_composer(mesh_device, sp_axis)
     if fp8_output:
         # Quantize the torch reference to fp8_e4m3fn so it carries the same precision as the TT
         # dispatch output (which packs BF16->FP8 at the untilize stage), isolating routing
@@ -371,8 +375,9 @@ def run_dispatch(
             verbose=verbose,
         )
 
+    # The op writes each token's source as a row-major mesh index; re-encode the reference's to match.
     metadata_result = validate_dispatch_metadata(
-        torch_metadata,
+        ExpertMapping.metadata_source_for_sp_axis(torch_metadata, num_dispatch_groups, dispatch_group_size, sp_axis),
         tt_out_metadata,
         expert_region_offsets,
         expert_token_counts,
@@ -482,6 +487,7 @@ def dispatch_shape_params():
 _MESH_IDS = (
     "fabric2d-torus-y-4x1-2link",
     "fabric2d-torus-y-8x1-2link",
+    "fabric2d-torus-x-4x4-2link",
     "fabric2d-torus-xy-8x4-2link",
 )
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
@@ -515,6 +521,10 @@ def _ci_unsupported_param_combos(**params):
         return True
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype != output_dtype:
+        return True
+
+    # Scaled fp8 input carries one scale per 128-wide block, so the hidden dim must divide into them.
+    if params["fp8_scaled_input"] and params["emb_dim"] % 128 != 0:
         return True
 
     # Production dispatch runs exactly two dtype/layout pairings; the rest have no coverage value.
@@ -563,9 +573,12 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
+# The SP (dispatch) axis. sp1 is the 4x4-stage layout, where the SP ring runs along mesh axis 1.
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
 def test_ttnn_dispatch(
     mesh_device,
     device_params,
+    sp_axis,
     model_name,
     seq_len_per_chip,
     emb_dim,
@@ -581,7 +594,9 @@ def test_ttnn_dispatch(
     verbose,
     run_pcc_check,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])[0]
+    if mesh_device.shape[sp_axis] == 1:
+        pytest.skip(f"mesh {tuple(mesh_device.shape)} has no extent along sp_axis={sp_axis}")
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_dispatch(
         mesh_device,
         model_name,
@@ -599,4 +614,5 @@ def test_ttnn_dispatch(
         fp8_scaled_input,
         verbose,
         run_pcc_check,
+        sp_axis=sp_axis,
     )

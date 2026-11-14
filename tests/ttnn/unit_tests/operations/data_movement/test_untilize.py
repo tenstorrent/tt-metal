@@ -3639,3 +3639,110 @@ def test_untilize_extra_dtypes(device, dtype):
         assert torch.equal(got, input_torch)
     else:
         assert torch.equal(got.to(torch.int64), input_torch.to(torch.int64))
+
+
+# ND-sharded DRAM input: the kernels run on the DRAM-bank worker cores, which are not the cores of the shard grid.
+# The per-core block count must follow the shards each worker processes, otherwise the device never finishes.
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 64], [2, 1, 96, 128]])
+@pytest.mark.parametrize("output_kind", ["interleaved_dram", "nd_dram", "interleaved_l1"])
+@pytest.mark.parametrize(
+    "distribution_strategy",
+    [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
+    ids=["round_robin_1d", "contiguous_1d"],
+)
+def test_untilize_multicore_nd_shard_dram_input(device, tensor_shape, output_kind, distribution_strategy):
+    torch.manual_seed(0)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_shape = ttnn.Shape([1, 1, 32, 32])
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, ttnn.ShardOrientation.ROW_MAJOR, distribution_strategy)
+    nd_dram_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard_spec)
+
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=nd_dram_config
+    )
+    output_memory_config = {
+        "interleaved_dram": ttnn.DRAM_MEMORY_CONFIG,
+        "nd_dram": nd_dram_config,
+        "interleaved_l1": ttnn.L1_MEMORY_CONFIG,
+    }[output_kind]
+
+    output_tensor = ttnn.untilize(input_tensor, memory_config=output_memory_config)
+    assert_equal(torch_input, ttnn.to_torch(output_tensor))
+
+
+# Row-major binary op on an ND-sharded DRAM operand converts to TILE and back with ttnn.untilize, so it reaches the
+# ND-sharded DRAM input path above.
+def test_subtract_scalar_row_major_nd_sharded_dram(device):
+    torch.manual_seed(0)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 32, 32]), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
+    )
+    nd_dram_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard_spec)
+    # multiples of 1/8 are exact in bfloat16
+    torch_input = (torch.randint(-16, 17, (1, 1, 64, 64)) / 8).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=nd_dram_config
+    )
+    output_tensor = ttnn.subtract(input_tensor, 1.0, memory_config=nd_dram_config)
+    assert_equal(torch_input - 1, ttnn.to_torch(output_tensor))
+
+
+# ND-sharded L1 input whose height is not a multiple of the tile height. The output has fewer rows per plane than the
+# padded input, so the writer must map rows plane by plane instead of treating the padded rows as one flat range.
+@pytest.mark.parametrize("height", [127, 129])
+@pytest.mark.parametrize(
+    "output_kind, output_shard_height",
+    [
+        ("interleaved", None),
+        ("height", "exact"),
+        ("height", 160),
+        ("width", None),
+        ("block", "exact"),
+    ],
+)
+def test_untilize_multicore_nd_shard_unaligned_height_to_legacy_shard(device, height, output_kind, output_shard_height):
+    torch.manual_seed(0)
+    tensor_shape = [4, height, 128]
+    column = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+    square = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=ttnn.Shape([3, 96, 96]), grid=column, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    tensor_spec = ttnn.TensorSpec(
+        shape=tensor_shape,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        nd_shard_spec=nd_shard_spec,
+        buffer_type=ttnn.BufferType.L1,
+    )
+    # distinct, bfloat16-exact values that differ between neighbouring rows
+    b, r, c = torch.meshgrid(torch.arange(4), torch.arange(height), torch.arange(128), indexing="ij")
+    torch_input = ((b * 137 + r * 7 + c) % 251 + 1).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, spec=tensor_spec, device=device)
+
+    if output_kind == "interleaved":
+        output_memory_config = ttnn.L1_MEMORY_CONFIG
+    elif output_kind == "height":
+        shard_height = height if output_shard_height == "exact" else output_shard_height
+        output_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(column, (shard_height, 128), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+    elif output_kind == "width":
+        output_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(column, (4 * height, 32), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+    else:
+        output_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(square, (2 * height, 64), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    output_tensor = ttnn.untilize(input_tensor, memory_config=output_memory_config, use_multicore=True)
+    assert_equal(torch_input, ttnn.to_torch(output_tensor))

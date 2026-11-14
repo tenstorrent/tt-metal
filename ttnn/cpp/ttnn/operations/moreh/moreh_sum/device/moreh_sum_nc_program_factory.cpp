@@ -19,7 +19,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumNCFactory::c
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input = tensor_args.input;
     auto dim = operation_attributes.dim;

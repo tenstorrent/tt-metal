@@ -4,15 +4,14 @@
 
 #include "pad_rm_sharded_width_only_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
@@ -106,7 +105,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value));
-        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
+        padding_value_as_u32 = static_cast<uint32_t>(bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {

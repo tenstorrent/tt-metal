@@ -105,7 +105,7 @@ def _run_device(model, context, group_ids):
 @pytest.mark.parametrize("mesh_device", DATA_PARALLEL_MESHES, indirect=True)
 def test_device_resident_paper_context_pcc(mesh_device, batch, groups, l1_resident):
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
     from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
@@ -176,7 +176,7 @@ def test_data_parallel_quantile_accuracy(mesh_device, group_size):
 
 def _check_quantile_accuracy(mesh_device, precision_name, group_size, l1_resident):
     pytest.importorskip("ttnn")
-    from tests.ttnn.utils_for_testing import assert_with_pcc
+    from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
     from models.experimental.chronos_forecast.tt.model import TtChronos
     from models.experimental.chronos_forecast.tt.program_configs import TtChronosPrecision
