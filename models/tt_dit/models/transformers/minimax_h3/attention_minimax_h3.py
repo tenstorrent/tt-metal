@@ -126,6 +126,9 @@ class MiniMaxH3Attention(Module):
         self.kv_gather_capacity = kv_gather_capacity
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dynamic_length = dynamic_length
+        # The projections' persistent all-gather pairs are sized at the norms' row capacity on the dynamic-length
+        # path, so every length shares one pair instead of pinning a pair per length served.
+        self.ag_row_capacity = norm_row_capacity if dynamic_length else None
 
         # is_sequence_parallel=False means the sequence is *replicated* on the SP axis rather than
         # fractured across it, so attention runs locally with plain SDPA and no ring all-gather. The
@@ -556,6 +559,7 @@ class MiniMaxH3Attention(Module):
             parallel_config=matmul_parallel_config,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            persistent_buffer_rows=self.ag_row_capacity,
             **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
         )
 
@@ -679,6 +683,7 @@ class MiniMaxH3Attention(Module):
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
+            persistent_buffer_rows=self.ag_row_capacity,
             **self._agmm_kwargs(self._out_pins, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND),
         )
         if addcmul_residual is not None and not fuse_gate:

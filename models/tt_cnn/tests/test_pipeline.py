@@ -21,7 +21,7 @@ from models.tt_cnn.tt.pipeline import (
     create_pipeline_from_config,
     get_memory_config_for_persistent_dram_tensor,
 )
-from tests.ttnn.utils_for_testing import assert_equal
+from tt_py_test_utils_common.utils_for_testing import assert_equal
 
 
 @dataclass
@@ -391,7 +391,7 @@ def test_get_memory_config_for_persistent_dram_tensor(shard_strategy):
 def test_get_dram_sharded_memory_config_for_tensor_invalid_grid_size():
     dram_grid_size = ttnn.CoreCoord(2, 2)
     shape = (1, 1, 64, 64)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: host-side check
         get_memory_config_for_persistent_dram_tensor(shape, ttnn.TensorMemoryLayout.WIDTH_SHARDED, dram_grid_size)
 
 

@@ -256,18 +256,16 @@ void kernel_main() {
                             // Mcast from/to same CB
                             if constexpr (extract_shard_sub_blocks) {
                                 if constexpr (in0_mcast_num_cores > 1) {
-                                    MulticastEndpoint mcast_dst;
                                     noc.async_write_multicast(
                                         CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                        mcast_dst,
+                                        cb_in0,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores - 1,
                                         {},
                                         {.noc_x_start = in0_mcast_dest_noc_start_x,
                                          .noc_y_start = in0_mcast_dest_noc_start_y,
                                          .noc_x_end = in0_mcast_dest_noc_end_x,
-                                         .noc_y_end = in0_mcast_dest_noc_end_y,
-                                         .addr = in0_tensor_local_l1_write_addr},
+                                         .noc_y_end = in0_mcast_dest_noc_end_y},
                                         true);
                                 }
                             }
@@ -284,18 +282,16 @@ void kernel_main() {
                                          .noc_y = in0_mcast_dest_noc_start_y,
                                          .addr = in0_tensor_local_l1_write_addr});
                                 } else {
-                                    MulticastEndpoint mcast_dst;
                                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                                         CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                        mcast_dst,
+                                        cb_in0,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores,
                                         {},
                                         {.noc_x_start = in0_mcast_dest_noc_start_x,
                                          .noc_y_start = in0_mcast_dest_noc_start_y,
                                          .noc_x_end = in0_mcast_dest_noc_end_x,
-                                         .noc_y_end = in0_mcast_dest_noc_end_y,
-                                         .addr = in0_tensor_local_l1_write_addr},
+                                         .noc_y_end = in0_mcast_dest_noc_end_y},
                                         true);
                                 }
                             }
@@ -313,18 +309,16 @@ void kernel_main() {
                             }
                         } else {
                             // If we are not part of receiver grid, always do a regular mcast to all cores
-                            MulticastEndpoint mcast_dst;
                             noc.async_write_multicast(
                                 CoreLocalMem<uint32_t>(in0_tensor_read_addr),
-                                mcast_dst,
+                                cb_in0,
                                 in0_block_size_bytes,
                                 in0_mcast_num_cores,
                                 {},
                                 {.noc_x_start = in0_mcast_dest_noc_start_x,
                                  .noc_y_start = in0_mcast_dest_noc_start_y,
                                  .noc_x_end = in0_mcast_dest_noc_end_x,
-                                 .noc_y_end = in0_mcast_dest_noc_end_y,
-                                 .addr = in0_tensor_local_l1_write_addr},
+                                 .noc_y_end = in0_mcast_dest_noc_end_y},
                                 true);
 
                             // We should also multicast the flag to destinations

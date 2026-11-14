@@ -22,7 +22,7 @@ inline void _sub_int_(
     // Operand B is input2 (int32/uint16)
     // Output is int32/uint16
     static_assert(
-        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     // Use '12' if Dest is in sign-magnitude format and '4' for 2's complement,
     // because integer add/sub requires 2's complement format in LREGs.
@@ -33,9 +33,9 @@ inline void _sub_int_(
     // so 64 raw rows == 32 sfpi stride units.
     constexpr std::uint32_t dst_tile_size = 32;
 
-    // out = in0 - in1. The DataLayout matches the load/store mode: INT32 -> I32, LO16 -> U16,
+    // out = in0 - in1. The DataLayout matches the load/store mode: INT32 -> I32, UINT16 -> U16,
     // INT32_2S_COMP -> SM32 (sign-magnitude <-> 2's complement).
-    constexpr sfpi::DataLayout layout = (sfpload_instr_mod == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16
+    constexpr sfpi::DataLayout layout = (sfpload_instr_mod == InstrModLoadStore::UINT16) ? sfpi::DataLayout::U16
                                         : (sfpload_instr_mod == InstrModLoadStore::INT32_2S_COMP)
                                             ? sfpi::DataLayout::SM32
                                             : sfpi::DataLayout::I32;

@@ -270,8 +270,8 @@ void validate_reduce_result(
     EXPECT_TRUE(pass);
 }
 
-static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
-    experimental::KernelSpec::CompilerOptions::Defines reduce_defines;
+static KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
+    KernelSpec::CompilerOptions::Defines reduce_defines;
     reduce_defines.emplace("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
     switch (test_config.reduce_type) {
         case ReduceType::SUM: reduce_defines.emplace("REDUCE_OP", "PoolType::SUM"); break;
@@ -305,7 +305,7 @@ std::vector<std::uint32_t> pack_floats_as_bf16_words(const std::vector<float>& f
 }
 
 void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const ReduceConfig& test_config) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const ReduceDims dims = compute_and_validate_reduce_dims(test_config);
 
@@ -329,30 +329,30 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 
     constexpr std::uint32_t num_buffer_tiles = 32;
     constexpr std::uint32_t num_output_buffer_tiles = 32;
-    const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
-    const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
-    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+    const DFBSpecName SRC0_DFB{"src0_dfb"};
+    const DFBSpecName SRC1_DFB{"src1_dfb"};
+    const DFBSpecName DST_DFB{"dst_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    experimental::DataflowBufferSpec src0_dfb_spec{
+    DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = input_tile_bytes,
         .num_entries = num_buffer_tiles,
         .data_format_metadata = test_config.input_format,
         .tile_format_metadata = test_config.tile_shape,
     };
-    experimental::DataflowBufferSpec src1_dfb_spec{
+    DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = 2 * TILE_WIDTH * TILE_HEIGHT,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = tt_metal::Tile({32, 32}),
     };
-    experimental::DataflowBufferSpec dst_dfb_spec{
+    DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = dims.single_tile_bytes,
         .num_entries = num_output_buffer_tiles,
@@ -362,8 +362,8 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 
     // Build reader spec depending on reduce dim
     std::string reader_kernel_path;
-    experimental::KernelSpec::CompileTimeArgs reader_cta_bindings;
-    experimental::KernelSpec::CompilerOptions::Defines reader_defines;
+    KernelSpec::CompileTimeArgs reader_cta_bindings;
+    KernelSpec::CompilerOptions::Defines reader_defines;
     std::vector<std::string> reader_runtime_arg_names;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp";
@@ -379,24 +379,24 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         reader_runtime_arg_names = {"num_tiles", "scaler"};
     }
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
+    DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
                 },
         };
     }
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = reader_kernel_path,
         .num_threads = 1,
@@ -405,14 +405,14 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "out_data",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "out_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args = reader_cta_bindings,
@@ -420,42 +420,42 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
+    DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
         };
     }
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    compute_hw_config = experimental::ComputeHardwareConfig{
+    ComputeHardwareConfig compute_hw_config;
+    compute_hw_config = ComputeHardwareConfig{
         .fpu_math_fidelity = test_config.math_fidelity,
         .enable_32_bit_dest = test_config.fp32_dest_acc_en,
         .double_buffer_dest = !test_config.dst_full_sync_en,
     };
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = get_compute_kernel_name(test_config.reduce_dim),
         .num_threads = 1,
@@ -464,32 +464,32 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "in_data",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "in_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "single_core_reduce",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
@@ -504,10 +504,10 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     // Reader/writer RTAs depend on reduce_dim
-    experimental::KernelRunArgs::RuntimeArgValues reader_named_rtas;
+    KernelRunArgs::RuntimeArgValues reader_named_rtas;
     std::uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+        reader_named_rtas = MakeRuntimeArgsForSingleNode(
             node,
             {
                 {"N", dims.N},
@@ -517,7 +517,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
             });
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+        reader_named_rtas = MakeRuntimeArgsForSingleNode(
             node,
             {
                 {"num_tiles", dims.num_tensor_tiles},
@@ -527,21 +527,21 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values = std::move(reader_named_rtas),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", writer_num_tiles}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", writer_num_tiles}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -590,7 +590,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 // both unpackers and the ALU back. The scaler is laid out like the bf16 scaler the other readers generate
 // (1.0 in the first row of each face, 0 elsewhere), which MxFp4 encodes exactly, so gold_reduce_h applies.
 void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_device, bool fp32_dest_acc_en) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     constexpr std::uint32_t num_input_tiles = 1;
     const std::uint32_t mxfp4_tile_bytes = tt::tile_size(tt::DataFormat::MxFp4);
     const std::uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
@@ -620,31 +620,31 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
     auto out_tensor =
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(bf16_tile_bytes, num_output_tiles));
 
-    const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
-    const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
-    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName SCALER_TENSOR{"scaler_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+    const DFBSpecName SRC0_DFB{"src0_dfb"};
+    const DFBSpecName SRC1_DFB{"src1_dfb"};
+    const DFBSpecName DST_DFB{"dst_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName SCALER_TENSOR{"scaler_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    const experimental::DataflowBufferSpec src0_dfb_spec{
+    const DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = mxfp4_tile_bytes,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::MxFp4,
         .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
     };
-    const experimental::DataflowBufferSpec src1_dfb_spec{
+    const DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = mxfp4_tile_bytes,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::MxFp4,
         .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
     };
-    const experimental::DataflowBufferSpec dst_dfb_spec{
+    const DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = bf16_tile_bytes,
         .num_entries = num_output_tiles,
@@ -652,13 +652,13 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
         .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
     };
 
-    const experimental::DataMovementHardwareConfig dm_hw_config{
+    const DataMovementHardwareConfig dm_hw_config{
         .config_2xx =
-            experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+            DataMovementHardwareConfig::DataMovement2XXConfig{
                 .disable_dfb_implicit_sync_for_all = true,
             },
     };
-    const experimental::KernelSpec reader_spec{
+    const KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_data_and_scaler_tile_2_0.cpp",
         .num_threads = 1,
@@ -666,30 +666,30 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "out_data",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "out_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .tensor_bindings =
             {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"},
              {.tensor_parameter_name = SCALER_TENSOR, .accessor_name = "scaler_tensor"}},
         .hw_config = dm_hw_config,
     };
-    const experimental::KernelSpec writer_spec{
+    const KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = dm_hw_config,
     };
-    const experimental::KernelSpec compute_spec{
+    const KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/reduce_h_2x_then_add.cpp",
         .num_threads = 1,
@@ -697,35 +697,35 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "in_data",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "in_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .hw_config =
-            experimental::ComputeHardwareConfig{
+            ComputeHardwareConfig{
                 .fpu_math_fidelity = reduce_config.math_fidelity,
                 .enable_32_bit_dest = reduce_config.fp32_dest_acc_en,
                 .double_buffer_dest = true,
             },
     };
 
-    const experimental::WorkUnitSpec wu{
+    const WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
-    const experimental::ProgramSpec spec{
+    const ProgramSpec spec{
         .name = "single_core_reduce_h_mxfp4_2x_then_add",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
@@ -739,19 +739,19 @@ void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_de
     };
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_output_tiles}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_output_tiles}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {SCALER_TENSOR, experimental::ProgramRunArgs::TensorArgument{scaler_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {SCALER_TENSOR, ProgramRunArgs::TensorArgument{scaler_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, params);
 

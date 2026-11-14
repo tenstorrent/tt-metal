@@ -325,7 +325,7 @@ bool initialize_program(
     tt_metal::Program& program,
     uint32_t run_cycles,
     PrefetcherPipes* prefetcher_pipes) {
-    namespace m2 = tt::tt_metal::experimental;
+    namespace m2 = tt::tt_metal;
     TT_FATAL(get_num_kernels(info) != 0, "The program needs a kernel; enable BRISC, NCRISC, or TRISC");
     TT_FATAL(
         prefetcher_pipes == nullptr || (info.brisc_enabled && info.n_kgs == 1 && info.n_subdevice_ranges == 1),
@@ -364,18 +364,19 @@ bool initialize_program(
     }
 
     m2::ProgramRunArgs run_args;
-    m2::PrefetcherPipeBinding pipe_binding{.accessor_name = "pipe"};
+    m2::experimental::PrefetcherPipeBinding pipe_binding{.accessor_name = "pipe"};
     if (prefetcher_pipes != nullptr) {
         for (std::size_t i = 0; i < prefetcher_pipes->pipes.size(); i++) {
-            m2::PrefetcherPipe& pipe = prefetcher_pipes->pipes[i];
-            const m2::PrefetcherPipeParamName name{"pipe_" + std::to_string(i)};
+            m2::experimental::PrefetcherPipe& pipe = prefetcher_pipes->pipes[i];
+            const m2::experimental::PrefetcherPipeParamName name{"pipe_" + std::to_string(i)};
             pipe_binding.pipe_parameter_names.push_back(name);
-            spec.advanced_options.prefetcher_pipe_parameters.push_back(m2::PrefetcherPipeParameter{
+            spec.advanced_options.prefetcher_pipe_parameters.push_back(m2::experimental::PrefetcherPipeParameter{
                 .unique_id = name,
                 .receivers = pipe.receiver_cores(),
                 .ring_size = pipe.ring_size(),
                 .entry_size = pipe.ring_size()});
-            run_args.advanced_options.prefetcher_pipe_args.emplace(name, m2::PrefetcherPipeArgument{pipe});
+            run_args.advanced_options.prefetcher_pipe_args.emplace(
+                name, m2::experimental::PrefetcherPipeArgument{pipe});
         }
     }
 
@@ -460,8 +461,8 @@ bool initialize_program(
         total_kg.start_coord.x = total_kg.end_coord.x;
     }
 
-    program = m2::MakeProgramFromSpec(*mesh_device, spec);
-    m2::SetProgramRunArgs(program, run_args);
+    program = m2::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    m2::experimental::SetProgramRunArgs(program, run_args);
     return true;
 }
 

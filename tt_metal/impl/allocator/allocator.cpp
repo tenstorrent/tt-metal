@@ -23,6 +23,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/allocator/allocator.hpp"
+#include "tt_metal/impl/allocator/allocation_request.hpp"
 
 namespace tt::tt_metal {
 
@@ -161,11 +162,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
         TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-        TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
-        const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-        bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-        auto cores = corerange_to_cores(grid, std::nullopt, row_major);
-        TT_FATAL(!cores.empty(), "per_core_allocation: shard grid resolved to zero cores");
+        const std::vector<CoreCoord> cores = allocator::per_node_allocation_nodes(buffer->impl().shard_spec_);
         DeviceAddr alloc_size = buffer->aligned_size_per_bank();
 
         std::unordered_map<CoreCoord, DeviceAddr> addrs;
@@ -204,29 +201,12 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             // buffer may instead be scanned against just the cores it occupies.
             //
             // Either way the scan spans devices: a mesh buffer holds the same address on all of them.
-            std::vector<CoreCoord> cores_to_scan;
             const bool scope_to_own_cores =
                 experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
-            // A tensor carries both specs, so the order matters: the distribution spec wins, as it
-            // does in Buffer::num_cores(). Its cores_with_data() is the set that actually gets an
-            // allocation, which the shard grid overstates when the data does not fill it.
-            if (const auto& distribution_spec = buffer->buffer_distribution_spec();
-                scope_to_own_cores && distribution_spec.has_value()) {
-                cores_to_scan = distribution_spec->cores_with_data();
-            } else if (scope_to_own_cores && buffer->has_shard_spec()) {
-                const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-                bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
-            }
-
-            // Scanning nothing is not a safe fallback -- it would place the buffer without avoiding
-            // anything. set_range_lockstep_allocation() requires one of the two specs and Buffer
-            // carries both through, so this cannot fire, but that invariant now lives in another
-            // file and this is where it is relied on.
-            TT_FATAL(
-                !scope_to_own_cores || !cores_to_scan.empty(),
-                "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
-                "distribution spec naming the cores it occupies");
+            const std::vector<CoreCoord> cores_to_scan =
+                scope_to_own_cores ? allocator::range_lockstep_allocation_nodes(
+                                         buffer->buffer_distribution_spec(), buffer->impl().shard_spec_)
+                                   : std::vector<CoreCoord>{};
 
             // PrefetcherPipe / persistent L1 regions sit outside BankManager, so lockstep must avoid
             // them too. They stay unscoped under range lockstep: they are reservations this allocator

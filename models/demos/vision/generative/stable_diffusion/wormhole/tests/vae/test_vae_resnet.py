@@ -13,7 +13,7 @@ from models.demos.vision.generative.stable_diffusion.wormhole.tt.vae.ttnn_vae_co
     UPBLOCK_RESNET_NORM_NUM_BLOCKS,
 )
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.vae.ttnn_vae_resnet import ResnetBlock
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)

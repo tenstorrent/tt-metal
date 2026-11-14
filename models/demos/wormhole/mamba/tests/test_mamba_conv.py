@@ -10,7 +10,7 @@ import ttnn
 from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.demos.wormhole.mamba.tt.mamba_conv import MambaConv, MambaConvConfig
 from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_allclose, comp_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

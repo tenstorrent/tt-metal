@@ -776,7 +776,9 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          # github.token is enough: this workflow grants actions: write, and
+          # workflow_dispatch is one of the two events the built-in token may raise.
+          token: ${{ github.token }}
           ref: stable
           inputs: |
             {
@@ -810,7 +812,9 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          # github.token is enough: this workflow grants actions: write, and
+          # workflow_dispatch is one of the two events the built-in token may raise.
+          token: ${{ github.token }}
           ref: ${{ needs.create-tag.outputs.version }}
           inputs: |
             {

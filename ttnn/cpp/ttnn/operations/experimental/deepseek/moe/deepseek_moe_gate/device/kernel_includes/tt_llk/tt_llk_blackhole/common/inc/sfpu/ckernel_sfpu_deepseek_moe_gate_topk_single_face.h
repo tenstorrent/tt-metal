@@ -31,7 +31,7 @@ inline void bitonic_topk_load16_single_face() {
     TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_7, bias_offset + 12);
 
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
     TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_offset + 4);
     TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_7, indices_offset + 8);
@@ -95,7 +95,7 @@ inline void bitonic_topk_store16_single_face() {
     TTI_SFPSTORE(p_sfpu::LREG3, 0, ADDR_MOD_7, bias_offset + 12);
 
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
     TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_offset + 4);
     TTI_SFPSTORE(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_7, indices_offset + 8);
@@ -109,7 +109,7 @@ inline void bitonic_topk_load8_even_cols_single_face() {
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_7, bias_offset + 4);
 
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
     TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_offset + 4);
 }
@@ -131,7 +131,7 @@ inline void bitonic_topk_store8_even_cols_single_face() {
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, bias_offset + 4);
 
     constexpr InstrModLoadStore instr_mod_index =
-        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+        is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
     TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, indices_offset + 0);
     TTI_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, indices_offset + 4);
 }

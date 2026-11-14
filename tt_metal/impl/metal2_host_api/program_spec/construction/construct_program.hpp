@@ -7,12 +7,12 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 
 #include "impl/context/metal_context.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 Program BuildProgram(
     distributed::MeshDevice& mesh_device,
@@ -20,4 +20,4 @@ Program BuildProgram(
     const CollectedSpecData& collected,
     MetalContext& metal_ctx);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -30,7 +30,7 @@ from models.demos.deepseek_v3_d_p.tests.v4.helpers import pack_streams, unpack_s
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.v4 import TtV4Block
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # The checkpoint's compress_ratios, truncated to the layers the rows below use.
 _COMPRESS_RATIOS = {
