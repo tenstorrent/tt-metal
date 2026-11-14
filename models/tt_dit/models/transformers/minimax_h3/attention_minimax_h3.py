@@ -45,7 +45,7 @@ def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
     Applied identically to the Q and K projection output channels, the QK-norm affine weight and the
     cos/sin tables. Attention sees Q and K only through `q . k`, which any *shared* permutation of the
     channel axis leaves unchanged, and V and `to_out` are untouched -- so the relayout is numerically
-    neutral, not an approximation. Same trick as `transformer_ideogram4.rope_halfsplit_to_interleaved_perm`,
+    neutral, not an approximation. Same trick as `utils.mochi.rope_halfsplit_to_interleaved_perm`,
     extended to a rotary_dim narrower than head_dim.
     """
     half = rotary_dim // 2
