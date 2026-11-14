@@ -141,6 +141,18 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
 
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
+    for (const auto& input_tensor : input_tensors) {
+        if (input_tensor.layout() == Layout::TILE) {
+            const auto& tile = input_tensor.tensor_spec().tile();
+            TT_FATAL(
+                tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+                "Concat TILE input requires tile shape {}x{}, got: {}x{}",
+                tt::constants::TILE_HEIGHT,
+                tt::constants::TILE_WIDTH,
+                tile.get_height(),
+                tile.get_width());
+        }
+    }
 
     const auto& first_input = input_tensors[0];
     auto shape_first = first_input.logical_shape();

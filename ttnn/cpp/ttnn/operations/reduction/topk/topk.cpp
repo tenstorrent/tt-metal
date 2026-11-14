@@ -572,6 +572,18 @@ std::vector<Tensor> topk(
         return {values, indices};
     }
 
+    // Checked here: the clone below would hand the device op a 32x32-tile copy.
+    if (input_tensor.layout() == TILE_LAYOUT) {
+        const auto& tile = input_tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "TopK TILE input requires tile shape {}x{}, got: {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+    }
+
     // Set up memory and execution configurations with defaults if not provided
     const auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
     const auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();

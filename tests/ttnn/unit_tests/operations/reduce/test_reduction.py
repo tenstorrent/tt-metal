@@ -209,6 +209,49 @@ def test_var_std_reject_off_default_tile(device, reduce_op, tile_shape, expect_e
         reduce_op(input_tensor, dim=-1, correction=False)
 
 
+@pytest.mark.parametrize(
+    "shape, reduce_op",
+    [
+        ((2, 1, 32, 64), lambda t: ttnn.sum(t, dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.mean(t, dim=-2)),
+        ((2, 1, 32, 64), lambda t: ttnn.max(t, dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.argmax(t, dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.topk(t, 32, dim=-1)),
+        ((2, 1, 32, 64), lambda t: ttnn.cumsum(t, dim=0)),
+        ((1, 1, 48, 80), lambda t: ttnn.sum(t, dim=-1)),
+        ((1, 1, 48, 80), lambda t: ttnn.max(t, dim=-1)),
+        ((1, 1, 48, 80), lambda t: ttnn.topk(t, 8, dim=-1)),
+        ((2, 3, 32, 64), lambda t: ttnn.sum(t, dim=1)),
+    ],
+    ids=[
+        "sum",
+        "mean",
+        "max",
+        "argmax",
+        "topk",
+        "cumsum",
+        "sum_unaligned",
+        "max_unaligned",
+        "topk_unaligned",
+        "sum_nc",
+    ],
+)
+@pytest.mark.parametrize("tile_shape", [(32, 32), (16, 32), (32, 16), (8, 32)])
+def test_reduce_reject_off_default_tile(device, shape, reduce_op, tile_shape, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+
+    if tile_shape == (32, 32):
+        reduce_op(input_tensor)
+        return
+    with expect_error(RuntimeError, "TILE input requires tile shape 32x32"):
+        reduce_op(input_tensor)
+
+
 # Regression test for FP32 variance precision under large mean offsets.
 # Uses a bit-exact integer input where the true variance is known analytically:
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
