@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import contextvars
 import os
 
 from loguru import logger
@@ -97,6 +99,181 @@ def allreduce_gather_sum_enabled() -> bool:
     message size the collectives are latency-bound: one collective's hops instead of two, the sum is ~5 us. Opt-in;
     validated per arm by tests/unit/test_layer_lanes_traced.py (traced one-layer step delta + parity)."""
     return os.environ.get("GEMMA4_CCL_ALLREDUCE_AG", "0") == "1"
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# One-shot decode all-reduce (GEMMA4_CCL_ONESHOT): the row-parallel decode matmuls (attention o_proj, MLP down_proj)
+# keep their partial sums in the DRAM-sharded kernel's L1 width-sharded output layout and ONE
+# ``ttnn.experimental.all_reduce_async(x, scratch, ...)`` gathers every chip's shards into an L1 scratch tensor and
+# reduces them locally (the ``gemma4_12b_qb2`` demo's ``MeshCCL.all_reduce``), instead of the reduce-scatter +
+# all-gather composite (``sync_all_reduce``). Two slots, "o" and "down", each with a pair of rotating global
+# semaphores created with the manager: consecutive uses of one slot are separated by the other slot's all-reduce
+# (o -> down -> next layer's o), which no chip completes before every chip has finished reading the first slot, and
+# the receiver resets its semaphore after the wait, so a rotation of two also covers back-to-back uses of one slot.
+# The scratch (``[1, 1, 32, width * tp]``, shard ``(32, shard_width * tp)`` on the input's grid: 120 KB per core
+# for the 12B o_proj at TP=4, 2 x that at TP=8) is allocated around the op like any intermediate
+# (``allocate_tensor_on_device``: no host data, free inside a trace replay) rather than kept resident: a resident
+# scratch lowers the L1 top for every program, and the prefill matmul slabs (``dram_sharded.prefill_slab_rows``)
+# are sized to the L1 without it (measured: the 12B 8x10-grid prefill matmul's CBs clash with a resident 144 KB).
+# The op's constraints (device op validate): input, scratch and output WIDTH_SHARDED in L1 (Blackhole refuses a DRAM
+# input), an even ring size, the scratch grid containing the output grid with a shard of at least TP x the output
+# shard, and ``num_links`` worker cores outside the output grid's bounding box; the output is bf16 in the input's
+# layout and goes back to interleaved for the norms and residual adds. Generic over the TP group: the 4-chip QB2
+# mesh (TP=4) and the (1,8) Galaxy DP4 engine (TP=8, a Linear line) take the same path with ``mesh_config.tp``.
+ONESHOT_SLOTS = ("o", "down")
+# Mesh shapes whose builds take the one-shot all-reduce by default (default_ccl_oneshot); the measured basis is in
+# its docstring. A shape joins when a served knob A/B measures a decode win with the PCC gates intact.
+# (1,8) is OFF: on the Blackhole Galaxy DP4 engine the one-shot op garbles long-context decode on two of the four
+# rows (2026-11-10, 31B, rows TT_VISIBLE_DEVICES 4-7/28-31 and 12-15/20-23: the 32K needle answers with a correct
+# first token, then garbage; rows 0 and 3 and every 1K prompt clean; GEMMA4_CCL_ONESHOT=0 alone restores all four
+# rows at a 1-3 % decode cost). The prose / PCC / 128-1K gates that qualified it never decode at long context.
+_ONESHOT_DEFAULT_ON_SHAPES = ((1, 4),)
+
+
+def default_ccl_oneshot(mesh_shape=None) -> bool:
+    """Default of the one-shot decode all-reduce for a mesh shape (``GEMMA4_CCL_ONESHOT=0|1`` overrides).
+
+    Policy: ON only on Blackhole for the shapes in ``_ONESHOT_DEFAULT_ON_SHAPES``, i.e. where a knob A/B on the
+    served model measured a decode gain with every PCC gate intact; OFF everywhere else (unmeasured shapes, the lane
+    engine, the fractured Galaxy, and Wormhole: the T3K shares the (1,8) shape and is unmeasured).
+
+    Measured basis for (1,4), 12B on the 4-chip Blackhole QB2 mesh (2026-11-06, tt-metal-port, bf16 payload):
+    traced B=1 decode step 17.59 -> 15.67 ms on the Linear line and 16.93 -> 15.31 ms on the ring with 2 links
+    (-10.9 / -9.6 %); per all-reduce call 21 -> 38 us (line) and 18 -> 28 us (ring) at the 3840-wide layouts,
+    11 -> 28 us at the 1024-wide MTP drafter. Served knob A/B on the ring entry (spec records on): prose c1 / c8 /
+    c16 +12 / +7 / +5 %, sampled c1 +17 %, greedy 128/128 c1 +9 / +28 % and 128/1K c1 +33 % (a second boot pair;
+    the first pair's greedy was flat) with first-token latency equal or lower (128/128 medians 87.8 / 98.7 ->
+    88.8 / 72.2 ms, 128/1K 91.7 -> 78.1 ms; the first pair's +23 ms was boot-to-boot variance of the spec host path,
+    whose release -> first-token chain runs no one-shot op), coherence pass, 0 throws. Decode PCC set (shared_mlp,
+    layer, 24 batched-attention nodes, full model) vs the composite on the same tree: 28 / 30 nodes equal or higher
+    (full-model decode 0.9697 -> 0.9735), two attention nodes 1e-6 and 2e-6 lower (bf16 summation order, below the
+    thresholds' precision; with fp32 destination accumulation 29 / 30 and one node 6e-6 lower at the same step
+    time); the bfp8 payload lowers 26 / 30 nodes by 1e-5..9e-5 and stays excluded.
+
+    Measured basis for (1,8), the Blackhole Galaxy DP4 engine (2026-11-07, the six port knobs together on the
+    BLACKHOLE_GALAXY entries, same seeds, 0 throws): 12B greedy 128/1K c1 68.6 -> 89.0 tok/s/u, sampled c1 +10 %,
+    prose c1 / c16 / c32 +8 / +14 / +7 %, TTFT lower at every point, GPQA subset 31/40 = base; 31B greedy c1
+    51.8 -> 55.8, sampled c1 +5 %, prose c1 / c16 / c32 +6 / +8 / +9 %, greedy after sampled +21 %, GPQA subset
+    65/80 with the six knobs vs 66/80 base over two rounds (five knobs without the wide grid 34/40, without the
+    one-shot 36/40: all within noise). The P150x8 Loudbox shares the arch and the shape and is unmeasured; the
+    T3K (Wormhole) is excluded by the arch guard.
+    """
+    if mesh_shape is None or not is_blackhole():
+        return False
+    return tuple(int(d) for d in mesh_shape) in _ONESHOT_DEFAULT_ON_SHAPES
+
+
+def ccl_oneshot_enabled(mesh_shape=None) -> bool:
+    """Whether the decode TP all-reduce of the row-parallel partial sums runs as the one-shot ``all_reduce_async``
+    (see the section comment above): ``GEMMA4_CCL_ONESHOT=1|0`` when set, else ``default_ccl_oneshot(mesh_shape)``.
+    Only the plain-TP decode step takes it (``ccl_oneshot_applicable``: TP > 1 and even, no lanes, no fracture, one
+    row tile, the matmul's L1 width-sharded output), where it takes precedence over GEMMA4_CCL_ALLREDUCE_AG and
+    GEMMA4_CCL_ASYNC; every other all-reduce (prefill, the lane engine, the fractured Galaxy, the drafter) is
+    unchanged. The payload dtype is GEMMA4_CCL_ONESHOT_DTYPE; the topology and link count are the CCLManager's."""
+    env = os.environ.get("GEMMA4_CCL_ONESHOT", "").strip()
+    if env != "":
+        return env == "1"
+    return default_ccl_oneshot(mesh_shape)
+
+
+def ccl_oneshot_dtype():
+    """GEMMA4_CCL_ONESHOT_DTYPE=bf16|bfp8 (default bf16): the dtype of the one-shot all-reduce payload, i.e. of the
+    row-parallel matmul's partial-sum output and of the persistent scratch (the reduced result is always bf16). bfp8
+    halves the scratch and the fabric traffic (the reference demo measured -5.4 us per layer) at the partial sums'
+    precision; keep it only where the PCC gates hold."""
+    name = os.environ.get("GEMMA4_CCL_ONESHOT_DTYPE", "bf16").strip().lower()
+    if name in ("bfp8", "bfloat8_b", "bf8"):
+        return ttnn.bfloat8_b
+    if name in ("bf16", "bfloat16", ""):
+        return ttnn.bfloat16
+    raise ValueError(f"GEMMA4_CCL_ONESHOT_DTYPE={name!r}: expected bf16 or bfp8")
+
+
+def ccl_oneshot_fp32_acc() -> bool:
+    """GEMMA4_CCL_ONESHOT_FP32_ACC=1: fp32 destination accumulation in the one-shot reduction (the Llama lm_head
+    all-reduce's remedy for the arrival-order dependence of a bf16 cross-chip sum). Default off."""
+    return os.environ.get("GEMMA4_CCL_ONESHOT_FP32_ACC", "0") == "1"
+
+
+def oneshot_wanted(mesh_config, ccl_manager) -> bool:
+    """Whether the decode row-parallel matmuls of this build should hand their partial sums to the one-shot
+    all-reduce (the knob, a manager, a plain TP group of an even width: no lanes, no fracture). Decides the matmul's
+    ``keep_sharded`` / payload dtype at the call sites; ``ccl_oneshot_applicable`` then checks the tensor."""
+    if ccl_manager is None or mesh_config is None:
+        return False
+    if not ccl_oneshot_enabled(mesh_shape=getattr(mesh_config, "mesh_shape", None)):
+        return False
+    if getattr(mesh_config, "lane_sharded", False) or getattr(mesh_config, "weight_fracture", False):
+        return False
+    tp = int(getattr(mesh_config, "tp", 1))
+    return tp > 1 and tp % 2 == 0
+
+
+def oneshot_matmul_kwargs(mesh_config, ccl_manager) -> dict:
+    """The ``DramShardedLinear`` call kwargs that produce the one-shot payload (``keep_sharded=True`` and the payload
+    dtype), or ``{}`` when the build does not take the one-shot path (``oneshot_wanted``)."""
+    if not oneshot_wanted(mesh_config, ccl_manager):
+        return {}
+    return {"keep_sharded": True, "dtype": ccl_oneshot_dtype()}
+
+
+def ccl_oneshot_applicable(tensor, mesh_config, ccl_manager) -> bool:
+    """Whether ``tensor`` (a row-parallel matmul's partial sums) can go through the one-shot all-reduce: the build
+    takes it (``oneshot_wanted``), one row tile of a 4D activation, L1 WIDTH_SHARDED, and the output grid's bounding
+    box leaves the op its ``num_links`` worker cores. Anything else takes the composite path."""
+    if not oneshot_wanted(mesh_config, ccl_manager):
+        return False
+    shape = tensor.shape
+    if len(shape) != 4 or int(shape[0]) != 1 or int(shape[1]) != 1 or not (1 <= int(shape[2]) <= ttnn.TILE_SIZE):
+        return False
+    if int(tensor.padded_shape[-2]) != ttnn.TILE_SIZE or tensor.layout != ttnn.TILE_LAYOUT:
+        return False
+    mem = tensor.memory_config()
+    if (
+        not mem.is_sharded()
+        or mem.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        or mem.buffer_type != ttnn.BufferType.L1
+        or mem.shard_spec is None
+    ):
+        return False
+    grid = ccl_manager.mesh_device.compute_with_storage_grid_size()
+    bbox = mem.shard_spec.grid.bounding_box()
+    bbox_cores = (bbox.end.x - bbox.start.x + 1) * (bbox.end.y - bbox.start.y + 1)
+    return bbox_cores + int(ccl_manager.num_links) <= grid.x * grid.y
+
+
+def _restore_rows(out, rows):
+    """A one-row-tile result presented as its ``rows`` logical rows again (the DRAM-sharded decode kernel runs the
+    tile as 32 rows under GEMMA4_DRAM_SHARD_ROW_VIEW; a metadata reshape, as ``DramShardedLinear`` does)."""
+    if rows is None or int(out.shape[-2]) == int(rows):
+        return out
+    n = int(out.shape[-1])
+    return ttnn.reshape(out, ttnn.Shape([1, 1, int(rows), n]), ttnn.Shape([1, 1, ttnn.TILE_SIZE, n]))
+
+
+def oneshot_all_reduce(tensor, slot, axis, memory_config, ccl_manager, tp, rows=None):
+    """The one-shot all-reduce of the L1 width-sharded partial sums ``tensor`` over ``tp`` chips on mesh ``axis``
+    through a scratch allocated around the op and ``slot``'s semaphore; the bf16 result in ``memory_config``
+    (interleaved, for the norms and residual adds) with ``rows`` logical rows. Consumes ``tensor``."""
+    in_mem = tensor.memory_config()
+    scratch = ccl_manager.oneshot_scratch(in_mem, tensor.dtype, tp)
+    reduced = ttnn.experimental.all_reduce_async(
+        tensor,
+        scratch,
+        cluster_axis=axis,
+        mesh_device=ccl_manager.mesh_device,
+        multi_device_global_semaphore=ccl_manager.oneshot_semaphore(slot),
+        dtype=ttnn.bfloat16,
+        memory_config=in_mem,
+        topology=ccl_manager.topology,
+        num_links=ccl_manager.num_links,
+        fp32_dest_acc=ccl_oneshot_fp32_acc(),
+    )
+    tensor.deallocate(True)
+    scratch.deallocate(True)
+    out = ttnn.to_memory_config(reduced, memory_config)
+    reduced.deallocate(True)
+    return _restore_rows(out, rows)
 
 
 def default_ccl_topology(mesh_device=None):
@@ -206,6 +383,12 @@ class CCLManager:
                 "ag_idx": 0,
                 "barrier_idx": 0,
             }
+        # One-shot decode all-reduce (ccl_oneshot_enabled): a semaphore pair per slot here, with the other pools
+        # (before any trace capture); the scratch is allocated around each op (oneshot_scratch).
+        oneshot = ccl_oneshot_enabled(mesh_shape=tuple(int(d) for d in mesh_device.shape))
+        self._oneshot_sems = {name: [_create() for _ in range(2)] for name in ONESHOT_SLOTS} if oneshot else {}
+        self._oneshot_idx = {name: 0 for name in self._oneshot_sems}
+        self._oneshot_layouts: set = set()  # (shard width, cores, dtype) layouts seen, for one log line each
         ttnn.synchronize_device(mesh_device)
         logger.info(
             f"Gemma4 CCLManager: semaphore pools per axis {sorted(str(k) for k in self._sem_pools)} depth={depth} "
@@ -331,6 +514,49 @@ class CCLManager:
             logger.debug(f"CCL persistent RS buffers allocated out={out_shape} inter={inter_shape}")
         return [inter, out]
 
+    def oneshot_scratch(self, memory_config, dtype, tp):
+        """The one-shot all-reduce's scratch for partial sums in the L1 width-sharded ``memory_config`` with payload
+        ``dtype`` over ``tp`` chips: ``[1, 1, 32, shard_width * cores * tp]`` on every chip, shard
+        ``(32, shard_width * tp)`` on the input's grid (the op gathers every chip's shard of a core into that core's
+        scratch shard). A device allocation without host data (trace-safe), freed by the caller after the op; the
+        layout is logged once per (shard width, grid, dtype)."""
+        spec = memory_config.shard_spec
+        shard_w = int(spec.shape[1])
+        num_cores = int(spec.grid.num_cores())
+        key = (shard_w, num_cores, str(dtype))
+        if key not in self._oneshot_layouts:
+            self._oneshot_layouts.add(key)
+            logger.info(
+                f"Gemma4 CCL one-shot scratch: {num_cores} cores x (32, {shard_w} x {tp}) {dtype} "
+                f"({shard_w * tp * ttnn.TILE_SIZE * (1 if dtype == ttnn.bfloat8_b else 2) // 1024} KB per core)"
+            )
+        scratch_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(spec.grid, (ttnn.TILE_SIZE, shard_w * tp), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, ttnn.TILE_SIZE, shard_w * num_cores * tp]),
+            dtype,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            scratch_mem,
+        )
+
+    def oneshot_semaphore(self, name):
+        """The next of slot ``name``'s two global semaphores (used in turn; see the one-shot section comment)."""
+        sems = self._oneshot_sems.get(name)
+        if sems is None:
+            # the slots are created with the manager (ccl_oneshot_enabled at that time); a slot missing here means
+            # the knob changed after the manager was built, and creating semaphores now could land inside a trace
+            raise RuntimeError(
+                f"Gemma4 CCL one-shot slot {name!r} has no semaphores: the CCLManager was created with "
+                "GEMMA4_CCL_ONESHOT off; set the knob before the model is built"
+            )
+        i = self._oneshot_idx[name]
+        self._oneshot_idx[name] = (i + 1) % len(sems)
+        return sems[i]
+
 
 _L1_SMALL_SEMAPHORES: dict = {}
 
@@ -365,7 +591,9 @@ def ccl_semaphores_in_l1_small(mesh_device) -> bool:
     return _L1_SMALL_SEMAPHORES[key]
 
 
-def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None, axis=None, group_size=None):
+def ccl_allreduce(
+    tensor, mesh_config, ccl_manager, memory_config=None, axis=None, group_size=None, slot=None, rows=None
+):
     """All-reduce across TP devices.
 
     Sync ``ttnn.all_reduce`` by default. With ``GEMMA4_CCL_ASYNC=1``, uses
@@ -373,12 +601,27 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None, axis=Non
     pattern) on ``ccl_manager.topology`` (Ring on P150x8).
 
     ``axis``/``group_size`` select another mesh axis; the defaults keep the tp-axis behavior.
+
+    ``slot`` ("o" / "down"): the decode row-parallel call sites. With GEMMA4_CCL_ONESHOT=1 and a one-row-tile L1
+    width-sharded ``tensor`` (the DRAM-sharded matmul's ``keep_sharded`` output) the one-shot all-reduce runs
+    (``oneshot_all_reduce``); a sharded tensor the one-shot cannot take goes interleaved first and then through the
+    composite. ``rows``: the logical row count to present the result in (the sharded tile carries 32).
     """
     if mesh_config is None or (axis is None and mesh_config.tp <= 1):
+        return tensor
+    if axis is None and _DEFER_TP_REDUCE.get():
+        # sequence-parallel prefill: the caller reduce-scatters the partial sums over rows itself
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis if axis is None else axis
+    if slot is not None and axis is None:
+        if ccl_oneshot_applicable(tensor, mesh_config, ccl_manager):
+            return oneshot_all_reduce(tensor, slot, tp_axis, memory_config, ccl_manager, int(mesh_config.tp), rows=rows)
+        if tensor.is_sharded():
+            interleaved = ttnn.to_memory_config(tensor, memory_config)
+            tensor.deallocate(True)
+            tensor = _restore_rows(interleaved, rows)
     topology = ccl_manager.topology
 
     chunks = ccl_chunks_per_sync()
@@ -595,6 +838,77 @@ def ccl_lane_scatter_rows(tensor, mesh_config, memory_config=None, ccl_manager=N
     reduced = sync_all_reduce(scattered, mesh_config.tp_axis, memory_config, ccl_manager)
     scattered.deallocate(True)
     return reduced
+
+
+# GEMMA4_PREFILL_SEQ_PARALLEL=1 (opt-in): a dense single-user prefill keeps the residual stream row-sharded over the
+# TP axis (each chip holds S / tp rows). The row-parallel o_proj / down_proj partial sums are reduce-scattered over
+# rows instead of all-reduced, the norms and residual adds between them run on the chip's own rows only, and the
+# next normed input is all-gathered over rows: the same reduce-scatter + all-gather bytes as the all-reduce composite,
+# 1 / tp of the norm and add work (every chip normed all S replicated rows before). Model side: model.py
+# (_prefill_seq_parallel_applies, mesh_partition before the layers, the row all-gather after) and layer.py.
+PREFILL_SEQ_PARALLEL_ENV = "GEMMA4_PREFILL_SEQ_PARALLEL"
+_DEFER_TP_REDUCE = contextvars.ContextVar("gemma4_defer_tp_reduce", default=False)
+
+
+def prefill_seq_parallel_enabled() -> bool:
+    """``GEMMA4_PREFILL_SEQ_PARALLEL``: the row-sharded residual for dense single-user prefill (the env when set, else
+    the build profile: on for the 31B (1,8) line, mesh_orientation.GALAXY_LINE_PAIR_ON; off elsewhere)."""
+    from models.demos.gemma4.tt.mesh_orientation import decode_flag
+
+    return decode_flag(PREFILL_SEQ_PARALLEL_ENV) == "1"
+
+
+@contextlib.contextmanager
+def deferred_tp_reduce():
+    """Inside this block ``ccl_allreduce`` on the TP axis returns its input unreduced (the caller owns the reduction:
+    ``ccl_reduce_scatter_rows``)."""
+    token = _DEFER_TP_REDUCE.set(True)
+    try:
+        yield
+    finally:
+        _DEFER_TP_REDUCE.reset(token)
+
+
+def ccl_reduce_scatter_rows(tensor, mesh_config, ccl_manager, memory_config=None):
+    """Sum the TP partials and keep this chip's block of rows: ``[1, 1, S, W]`` partial -> ``[1, 1, S / tp, W]``.
+
+    Default: reduce-scatter over COLUMNS (dim 3, the all-reduce composite's own reduction, so every sum is bitwise the
+    replicated path's) and an all-to-all that trades column blocks for row blocks (each chip sends (tp - 1) / tp of
+    an S x W / tp shard, 1 / tp of the all-gather's bytes). ``GEMMA4_PREFILL_SEQ_PARALLEL_RS=rows``: one
+    reduce-scatter over rows instead, measured 2026-11-11 on a Galaxy row at 1.05x the all-reduce's relative error
+    (4.59e-3 vs 4.36e-3 against an fp64 sum of bf16 partials) and -0.014 top-1 on the 31B / 12B 2K prose gates."""
+    memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+    l1_small = ccl_semaphores_in_l1_small(tensor.device())
+    if os.environ.get("GEMMA4_PREFILL_SEQ_PARALLEL_RS", "a2a") == "rows":
+        scattered = ttnn.reduce_scatter(
+            tensor,
+            dim=2,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=memory_config,
+            use_l1_small_for_semaphores=l1_small,
+        )
+        tensor.deallocate(True)
+        return scattered
+    cols = ttnn.reduce_scatter(
+        tensor,
+        dim=3,
+        cluster_axis=mesh_config.tp_axis,
+        memory_config=memory_config,
+        use_l1_small_for_semaphores=l1_small,
+    )
+    tensor.deallocate(True)
+    rows = ttnn.experimental.all_to_all_async_generic(
+        cols,
+        in_dim=3,  # the op grows in_dim by tp and splits out_dim by tp: [S, W / tp] -> [S / tp, W]
+        out_dim=2,
+        persistent_output_buffer=None,
+        num_links=ccl_manager.num_links,
+        memory_config=memory_config,
+        topology=ccl_manager.topology,
+        cluster_axis=mesh_config.tp_axis,
+    )
+    cols.deallocate(True)
+    return rows
 
 
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):

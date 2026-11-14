@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 import models.demos.gemma4.tt.ccl as ccl_module
 import models.demos.gemma4.tt.model as model_module
+import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tests.hf_reference_cache import hf_reference_cache_dir, hf_reference_key, hf_reference_logits
 from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
@@ -27,6 +28,7 @@ from models.demos.gemma4.tt.capacity import (
     max_cores_for_queue_depth,
     reads_in_flight,
 )
+from models.demos.gemma4.tt.compute_config import global_prefill_sdpa_fidelity
 from models.demos.gemma4.tt.dram_sharded import prefill_row_chunks
 from models.demos.gemma4.tt.generator import (
     _BLACKHOLE_MAX_BATCHED_PREFILL_USERS,
@@ -124,6 +126,8 @@ def _stub_model(n_layers, rows, width):
         _pad_page_table_host_to_shape=pad,
         _replicate_to_mesh_mapper=lambda: None,
         mesh_config=None,
+        _kv_pair_shard_layers=frozenset(),  # GEMMA4_KV_PAIR_SHARD off
+        _kv_write_table_by_read={},
         _pads=pads,
     )
     return stub
@@ -240,7 +244,10 @@ def test_prefill_row_record_is_off_for_the_batched_form():
     assert Mixin._g4_prefill_row_record("x", 0) is None
 
 
-# ===== merged from tests/unit/test_persistent_page_table_sharing.py: Layers handed the same host page table share one persistent device buffer,
+# ===== GEMMA4_SHARE_PAGE_TABLES (item 5 of the gemma4_12b_qb2 port): the layers of one vLLM KV-cache group slot
+# share one persistent device buffer; the slots follow the layer types (page_table_group_slots), never the host
+# objects a call carries, so the warmup's broadcast table and the first request's per-group tables land on the
+# same buffers (no reallocation under the captured traces, the 2026-11-05 hang).
 class _Dev:
     _n = 0
 
@@ -250,10 +257,16 @@ class _Dev:
         self.uid = _Dev._n
 
 
-def _model_persistent_page_table_sharing(monkeypatch, copies):
-    monkeypatch.setenv("GEMMA4_SHARE_PAGE_TABLES", "1")  # sharing is opt-in
+# six layers, two types: vLLM's group size is the smaller type count (2), so the four sliding layers form two
+# groups (layers 0, 2 and 1, 4) and the two full layers one (3, 5): three slots
+_LAYER_TYPES = ["sliding_attention"] * 3 + ["full_attention", "sliding_attention", "full_attention"]
+
+
+def _model_persistent_page_table_sharing(monkeypatch, copies, share=True, layer_types=_LAYER_TYPES):
     m = Gemma4Model.__new__(Gemma4Model)
     m.mesh_config = None
+    m._share_page_tables = share
+    m._page_table_slots, m._page_table_n_slots = model_module.page_table_group_slots(layer_types)
     monkeypatch.setattr(m, "_page_table_torch_to_ttnn", lambda pt, layer_idx=None: _Dev(list(pt.shape)), raising=False)
     monkeypatch.setattr(m, "_replicate_to_mesh_mapper", lambda: None, raising=False)
     monkeypatch.setattr(model_module.ttnn, "from_torch", lambda t, **kw: t)
@@ -261,48 +274,100 @@ def _model_persistent_page_table_sharing(monkeypatch, copies):
     return m
 
 
-def _tables(seed):
-    sliding = torch.arange(4 * 8, dtype=torch.int32).reshape(4, 8) + seed
-    full = torch.arange(4 * 8, dtype=torch.int32).reshape(4, 8) + 100 + seed
-    return [sliding, sliding, sliding, full, sliding, full]
+def _group_tables(seed, slots):
+    """One distinct host table per group slot, handed to every layer of the slot (the plugin's form)."""
+    per_slot = {}
+    for slot in sorted(set(slots)):
+        per_slot[slot] = torch.arange(4 * 8, dtype=torch.int32).reshape(4, 8) + 100 * slot + seed
+    return [per_slot[s] for s in slots]
 
 
-def test_layers_with_one_host_table_share_one_device_buffer(monkeypatch):
+def test_page_table_group_slots_follow_the_layer_types():
+    slots, n = model_module.page_table_group_slots(_LAYER_TYPES)
+    assert (slots, n) == ([0, 1, 0, 2, 1, 2], 3)
+    # the 12B: 40 sliding + 8 full layers = five sliding groups (layers i, i+6, ...) and one full group
+    types = (["sliding_attention"] * 5 + ["full_attention"]) * 8
+    slots, n = model_module.page_table_group_slots(types)
+    assert n == 6 and slots[:6] == [0, 1, 2, 3, 4, 5] and slots[6:12] == [0, 1, 2, 3, 4, 5]
+    assert all(slots[i] == 5 for i, t in enumerate(types) if t == "full_attention")
+    # a KV-shared layer has no cache of its own: it takes its source's slot (the table the generator hands it)
+    slots, n = model_module.page_table_group_slots(_LAYER_TYPES + ["sliding_attention"], {6: 4})
+    assert (slots, n) == ([0, 1, 0, 2, 1, 2, 1], 3)
+
+
+def test_layers_of_one_group_slot_share_one_device_buffer(monkeypatch):
     copies = []
     m = _model_persistent_page_table_sharing(monkeypatch, copies)
-    persistent = m._page_tables_to_ttnn(_tables(0))
+    persistent = m._page_tables_to_ttnn(_group_tables(0, m._page_table_slots))
     assert len(persistent) == 6
-    assert persistent[0] is persistent[1] is persistent[2] is persistent[4]
-    assert persistent[3] is persistent[5] and persistent[3] is not persistent[0]
+    assert persistent[0] is persistent[2] and persistent[1] is persistent[4] and persistent[3] is persistent[5]
+    assert len({id(d) for d in persistent}) == 3
+    # off: one buffer per layer, whatever the host objects
+    m_off = _model_persistent_page_table_sharing(monkeypatch, copies, share=False)
+    assert len({id(d) for d in m_off._page_tables_to_ttnn([torch.zeros(4, 8, dtype=torch.int32)] * 6)}) == 6
 
 
-def test_update_writes_each_shared_buffer_once_and_skips_unchanged_tables(monkeypatch):
+def test_warmup_broadcast_then_per_group_tables_land_on_the_same_buffers(monkeypatch):
     copies = []
     m = _model_persistent_page_table_sharing(monkeypatch, copies)
-    m.update_persistent_per_layer_page_tables(_tables(0))
-    assert sorted(copies) == sorted({d.uid for d in m._persistent_per_layer_page_tables}) and len(copies) == 2
+    m._invalidate_decode_traces_after_page_table_realloc = False
+    warmup = torch.zeros(4, 8, dtype=torch.int32)
+    m.update_persistent_per_layer_page_tables([warmup] * 6)  # the warmup: one legacy table for every layer
+    buffers = list(m._persistent_per_layer_page_tables)
+    assert len(copies) == 3 and sorted(copies) == sorted({d.uid for d in buffers})
     copies.clear()
-    m.update_persistent_per_layer_page_tables(_tables(0))
+    m.update_persistent_per_layer_page_tables(_group_tables(0, m._page_table_slots))  # the first real request
+    assert m._persistent_per_layer_page_tables == buffers  # the same objects: nothing reallocated
+    assert m._invalidate_decode_traces_after_page_table_realloc is False
+    assert len(copies) == 3
+    copies.clear()
+    m.update_persistent_per_layer_page_tables(_group_tables(0, m._page_table_slots))  # unchanged content
     assert copies == []
-    m.update_persistent_per_layer_page_tables(_tables(7))
-    assert len(copies) == 2
+    # equal content in distinct objects per layer (the plugin pads per layer): still one copy per slot
+    padded = [t.clone() for t in _group_tables(7, m._page_table_slots)]
+    m.update_persistent_per_layer_page_tables(padded)
+    assert len(copies) == 3
 
 
-def test_layers_that_stop_sharing_content_get_their_own_buffers(monkeypatch):
+def test_a_layer_that_leaves_its_group_slot_raises_instead_of_reallocating(monkeypatch, expect_error):
     copies = []
     m = _model_persistent_page_table_sharing(monkeypatch, copies)
-    m.update_persistent_per_layer_page_tables(_tables(0))
-    tables = _tables(3)
-    tables[1] = tables[1].clone() + 1000  # layer 1 diverges from the sliding group
-    copies.clear()
-    m.update_persistent_per_layer_page_tables(tables)
-    persistent = m._persistent_per_layer_page_tables
-    assert persistent[0] is not persistent[1]
-    assert m._invalidate_decode_traces_after_page_table_realloc is True
-    # Rebuilt unshared: every layer owns a buffer and each was written (the one
-    # copy made before the divergence was noticed lands on a replaced buffer).
-    assert len({id(d) for d in persistent}) == 6
-    assert len(copies) >= 6 and set(d.uid for d in persistent) <= set(copies)
+    m.update_persistent_per_layer_page_tables(_group_tables(0, m._page_table_slots))
+    buffers = list(m._persistent_per_layer_page_tables)
+    tables = _group_tables(3, m._page_table_slots)
+    tables[2] = tables[2].clone() + 1000  # layer 2 leaves slot 0 (layer 0's)
+    with expect_error(ValueError, "layers 0 and 2 differ inside one KV-cache group slot"):
+        m.update_persistent_per_layer_page_tables(tables)
+    assert m._persistent_per_layer_page_tables == buffers
+
+
+def test_share_page_tables_default_policy(monkeypatch):
+    """Host: the env var overrides, else the measured-shape policy; never on lanes / fractured meshes, under
+    bounded sliding or with KV-shared layers."""
+    mesh = SimpleNamespace(shape=(1, 4))
+    monkeypatch.setenv(model_module.SHARE_PAGE_TABLES_ENV, "1")
+    assert model_module.share_page_tables_default(mesh) is True
+    assert (
+        model_module.share_page_tables_default(mesh, SimpleNamespace(lane_sharded=True, weight_fracture=False)) is False
+    )
+    assert (
+        model_module.share_page_tables_default(mesh, SimpleNamespace(lane_sharded=False, weight_fracture=True)) is False
+    )
+    assert model_module.share_page_tables_default(mesh, bounded_sliding=True) is False
+    assert model_module.share_page_tables_default(mesh, kv_shared=True) is False
+    monkeypatch.setenv(model_module.SHARE_PAGE_TABLES_ENV, "0")
+    assert model_module.share_page_tables_default(mesh) is False
+    monkeypatch.delenv(model_module.SHARE_PAGE_TABLES_ENV)
+    monkeypatch.setattr(model_module, "SHARE_PAGE_TABLES_DEFAULT_SHAPES", ())
+    assert model_module.share_page_tables_default(mesh) is False
+    monkeypatch.setattr(model_module, "SHARE_PAGE_TABLES_DEFAULT_SHAPES", ((1, 4), (1, 8)))
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: True)
+    assert model_module.share_page_tables_default(mesh) is True
+    assert model_module.share_page_tables_default(SimpleNamespace(shape=(1, 8))) is True
+    assert model_module.share_page_tables_default(SimpleNamespace(shape=(8, 4))) is False
+    monkeypatch.setattr(model_module, "is_blackhole", lambda: False)  # Wormhole (T3K is (1,8) too)
+    assert model_module.share_page_tables_default(mesh) is False
+    assert model_module.share_page_tables_default(SimpleNamespace(shape=(1, 8))) is False
 
 
 def test_lane_parallel_prefill_table_shards_to_one_row_per_column():
@@ -887,6 +952,8 @@ KNOBS = (
     "GEMMA4_PREFILL_SDPA_GRID",
     "GEMMA4_PREFILL_SDPA_EXP_APPROX",
     "GEMMA4_PREFILL_SDPA_PROGCFG",
+    "GEMMA4_PREFILL_SDPA_NARROW",
+    "GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY",
     "GEMMA4_TEST_GRID",
 )
 
@@ -926,7 +993,8 @@ def test_every_config_fits_the_device_grid(device_grid, heads, head_dim):
     gx, gy = _grid(pc)
     assert gx * gy <= device_grid[0] * device_grid[1] and gx <= device_grid[0] and gy <= device_grid[1]
     if head_dim >= 512:
-        assert (gx, gy) == (min(8, device_grid[0]), min(4, device_grid[1])) and pc.q_chunk_size == 128
+        expect = tuple(device_grid) if is_blackhole() else (min(8, device_grid[0]), min(4, device_grid[1]))
+        assert (gx, gy) == expect and pc.q_chunk_size == 128
     elif heads >= ops.PREFILL_SDPA_WIDE_MIN_HEADS and is_blackhole() and device_grid[0] * device_grid[1] > 64:
         assert (gx, gy) == (min(12, device_grid[0]), min(10, device_grid[1])) and pc.q_chunk_size == 128  # wide
     else:
@@ -956,6 +1024,31 @@ def test_wide_on_the_galaxy_grid_and_the_12b_defaults(monkeypatch):
         monkeypatch.setenv("GEMMA4_PREFILL_SDPA_PROGCFG", "1")  # opt back in to the fixed config
         pc = ops.prefill_sdpa_program_config(256, 2048, sliding_window=None, num_heads=4, device_grid=(13, 10))
     assert _grid(pc) == (8, 8) and (pc.q_chunk_size, pc.k_chunk_size) == (256, 128)
+    pc = ops.prefill_sdpa_program_config(512, 4096, sliding_window=None, num_heads=4, device_grid=(12, 10))
+    assert _grid(pc) == ((12, 10) if is_blackhole() else (8, 4)) and (pc.q_chunk_size, pc.k_chunk_size) == (128, 128)
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_WIDE", "0")  # the fixed (8,4) global config
+    pc = ops.prefill_sdpa_program_config(512, 4096, sliding_window=None, num_heads=4, device_grid=(12, 10))
+    assert _grid(pc) == (8, 4) and (pc.q_chunk_size, pc.k_chunk_size) == (128, 128)
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_WIDE")
+    # GEMMA4_PREFILL_SDPA_NARROW=wide (opt-in): the narrow chips take the whole grid at q 128, k capped by the window
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_PROGCFG", raising=False)  # the narrow rule, not the fixed configs
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_NARROW", "wide")
+    pc = ops.prefill_sdpa_program_config(256, 4096, sliding_window=1024, num_heads=4, device_grid=(12, 10))
+    if is_blackhole():
+        assert _grid(pc) == (12, 10) and (pc.q_chunk_size, pc.k_chunk_size) == (128, 128)
+        pc = ops.prefill_sdpa_program_config(256, 4096, sliding_window=128, num_heads=4, device_grid=(12, 10))
+        assert (pc.q_chunk_size, pc.k_chunk_size) == (128, 64)
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_NARROW")
+    # GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY (opt-in): hifi4 by default (an empty value too), hifi2, anything else refused
+    assert global_prefill_sdpa_fidelity() == ttnn.MathFidelity.HiFi4
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY", "")
+    assert global_prefill_sdpa_fidelity() == ttnn.MathFidelity.HiFi4
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY", "HiFi2")
+    assert global_prefill_sdpa_fidelity() == ttnn.MathFidelity.HiFi2
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY", "lofi")
+    with pytest.raises(ValueError):  # allow-pytest.raises (pure)
+        global_prefill_sdpa_fidelity()
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY")
     monkeypatch.setenv("GEMMA4_PREFILL_SDPA_PROGCFG", "0")  # the op defaults everywhere
     assert ops.prefill_sdpa_program_config(256, 2048, sliding_window=None, num_heads=8, device_grid=(13, 10)) is None
 

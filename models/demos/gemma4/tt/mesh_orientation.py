@@ -148,12 +148,37 @@ DENSE_DECODE_FUSION_ON = {
     # composite 0.746 / 0.951 and 0.714 / 0.945; on the QB2 runner 31B 0.7993 / 0.9624, 12B 0.7285 / 0.9570 vs the
     # composite 0.7202 / 0.9448); Blackhole only (qkv_norm_rope_prefill_enabled refuses the flag on Wormhole)
     "GEMMA4_QKV_NORM_ROPE_PREFILL": "1",
+    # prefill: the residual row-sharded over TP between a column reduce-scatter + all-to-all and a row all-gather
+    # (ccl.py, GEMMA4_PREFILL_SEQ_PARALLEL) and matmul slabs that divide the chunk (dram_sharded.py,
+    # GEMMA4_PREFILL_DIVISOR_SLAB); last-token logits bitwise unchanged on every arm. Eager 4K chunk at position 0 /
+    # after an 8K prefix, both off -> on (2026-11-12, Galaxy, served env): 31B (1,8) 863 / 954 -> 690 / 780 ms, 12B
+    # (1,8) 487 / 551 -> 396 / 440, 31B (1,4) 1213 / 1368 -> 1038 / 1200, 12B (1,4) 604 / 647 -> 503 / 544.
+    "GEMMA4_PREFILL_SEQ_PARALLEL": "1",
+    "GEMMA4_PREFILL_DIVISOR_SLAB": "1",
 }
 # GEMMA4_SDPA_DECODE_SPLITFREE: the split-independent paged decode SDPA (custom_ops/sdpa_decode_splitfree; "1" the
 # global layers, "2" the sliding layers too). Off in every profile until device-validated; a build turns it on by
 # adding the name to its ON dict (tt/attention/decode.py reads it through decode_flag).
 SDPA_SPLITFREE_ENV = "GEMMA4_SDPA_DECODE_SPLITFREE"
-DECODE_FUSION_OFF = {name: "0" for name in {**DECODE_FUSION_ON, **DENSE_DECODE_FUSION_ON, SDPA_SPLITFREE_ENV: "0"}}
+# GEMMA4_SDPA_PAIR_SPLIT: the global layers' decode attention split over the two chips of a KV-head pair
+# (tt/sdpa_pair_split.py, custom_ops/sdpa_decode_lse in pair mode). On in GALAXY_LINE_PAIR_ON (the 31B on the (1,8)
+# line), off in every other profile; it is read at the weight build (the pair QKV / o_proj copies) and at the decode
+# call, both through decode_flag.
+SDPA_PAIR_SPLIT_ENV = "GEMMA4_SDPA_PAIR_SPLIT"
+# GEMMA4_SPEC_VERIFY_PREFIX_LSE: the serving verify's global layers attend the committed prefix once per row through
+# custom_ops/sdpa_decode_lse (pair-split on a pair build) plus the candidates' own keys, merged by their LSE
+# (tt/verify_prefix_lse.py), instead of the rung-wide masked packed attention.
+VERIFY_PREFIX_LSE_ENV = "GEMMA4_SPEC_VERIFY_PREFIX_LSE"
+DECODE_FUSION_OFF = {
+    name: "0"
+    for name in {
+        **DECODE_FUSION_ON,
+        **DENSE_DECODE_FUSION_ON,
+        SDPA_SPLITFREE_ENV: "0",
+        SDPA_PAIR_SPLIT_ENV: "0",
+        VERIFY_PREFIX_LSE_ENV: "0",
+    }
+}
 FOUR_CHIP_SHAPES = (ROW_MESH_SHAPE, COLUMN_MESH_SHAPE)
 # The dense Galaxy DP engine: 8 Blackhole chips opened as the (1,8) line, TP=8 over the columns, the same plain-TP
 # build as (1,4) (DramShardedLinear on wqkv / o_proj / gate_up / down; the decode grids derive from the per-chip
@@ -164,6 +189,16 @@ FOUR_CHIP_SHAPES = (ROW_MESH_SHAPE, COLUMN_MESH_SHAPE)
 # and keep the old defaults, as do the (8,1) column line and the lane engine.
 GALAXY_LINE_SHAPE = (1, 8)
 DENSE_FUSED_SHAPES = FOUR_CHIP_SHAPES + (GALAXY_LINE_SHAPE,)
+# A dense model on the (1,8) line whose global layers' KV heads sit on chip pairs (``kv_pairs``: Hq / Hkv_global ==
+# 2 * Hq / 8 -- the 31B, not the 12B) adds the pair-split decode attention and the prefix-LSE verify to the dense
+# set. Measured served on the 31B Galaxy row engines (2026-11-11, AgentX 256K c16 ci window, TIS 712dcec35): plain
+# b4 step 28.4..59.9 -> 29.6..46.4 ms over 0..262K, (5,3) verify at the 131K rung 78.6..82.9 -> 57.8..69.0 ms,
+# total 24,321 -> 28,154 tok/s, TPOT mean 50.6 -> 42.4 ms; needles 14/14 to 248K on every engine. Env overrides win.
+# The prefill pair GEMMA4_PREFILL_SEQ_PARALLEL / GEMMA4_PREFILL_DIVISOR_SLAB comes with the dense set
+# (DENSE_DECODE_FUSION_ON, measurements there).
+PREFILL_SEQ_PARALLEL_ENV = "GEMMA4_PREFILL_SEQ_PARALLEL"
+PREFILL_DIVISOR_SLAB_ENV = "GEMMA4_PREFILL_DIVISOR_SLAB"
+GALAXY_LINE_PAIR_ON = {**DENSE_DECODE_FUSION_ON, SDPA_PAIR_SPLIT_ENV: "1", VERIFY_PREFIX_LSE_ENV: "1"}
 # The Galaxy lane engine (the 26B-A4B on the (8,4) Blackhole mesh): the fused QKV norm + RoPE program on the lane
 # decode frame, the rest as before (the lane entry's catalog carries its own set). Window 13 (2026-10-25, lane layer
 # (2,4) gate fused vs composite pcc 0.999755; served): c1 32.4 -> 37.1 tok/s/user, c32 33.4 -> 36.3, c128 29.3 ->
@@ -193,22 +228,25 @@ def lane_fused_decode_build(shape, *, blackhole: bool, moe: bool) -> bool:
     return bool(blackhole) and bool(moe) and _shape(shape) == LANE_MESH_SHAPE
 
 
-def decode_fusion_defaults(shape, *, blackhole: bool, moe: bool) -> dict:
-    """The per-flag default value (the string an env var would carry) for this build."""
+def decode_fusion_defaults(shape, *, blackhole: bool, moe: bool, kv_pairs: bool = False) -> dict:
+    """The per-flag default value (the string an env var would carry) for this build. ``kv_pairs``: the model's
+    global KV heads sit on chip pairs at TP over the mesh columns (selects ``GALAXY_LINE_PAIR_ON`` on the line)."""
     if fused_decode_build(shape, blackhole=blackhole, moe=moe):
         return dict(DECODE_FUSION_ON)  # the dense-only names are absent: decode_flag reads them as "0"
     if dense_fused_decode_build(shape, blackhole=blackhole, moe=moe):
+        if kv_pairs and _shape(shape) == GALAXY_LINE_SHAPE:
+            return dict(GALAXY_LINE_PAIR_ON)
         return dict(DENSE_DECODE_FUSION_ON)  # the MoE-only names and the fused norm family absent: "0"
     if lane_fused_decode_build(shape, blackhole=blackhole, moe=moe):
         return dict(LANE_DECODE_FUSION_ON)
     return dict(DECODE_FUSION_OFF)
 
 
-def set_decode_fusion_profile(shape, *, blackhole: bool, moe: bool) -> dict:
+def set_decode_fusion_profile(shape, *, blackhole: bool, moe: bool, kv_pairs: bool = False) -> dict:
     """Record the build's defaults process-wide (the model build calls it before its layers are built, since the
     weight loaders and the norm modules read the flags at construction). Returns the recorded defaults."""
     global _decode_fusion_profile
-    _decode_fusion_profile = decode_fusion_defaults(shape, blackhole=blackhole, moe=moe)
+    _decode_fusion_profile = decode_fusion_defaults(shape, blackhole=blackhole, moe=moe, kv_pairs=kv_pairs)
     return dict(_decode_fusion_profile)
 
 

@@ -1,6 +1,6 @@
 {
   "_schema": {
-    "description": "Per-module dtype overrides keyed by model variant and mesh shape. Modules without an override use the model-wide default dtype (bfloat16). The model variant key is the basename of the model path; mesh shape is the worker grid (rows x cols, e.g. 1x2 / 1x8). Within a model, lookup tries the exact mesh-shape key first, then 'default'. Module keys: shared_mlp, attention, experts, router, lm_head, embedding. Allowed dtype values: bf16, bfp8, fp32.",
+    "description": "Per-module dtype overrides keyed by model variant and mesh shape. Modules without an override use the model-wide default dtype (bfloat16). The model variant key is the basename of the model path; mesh shape is the worker grid (rows x cols, e.g. 1x2 / 1x8). Within a model, 'default' applies on every mesh and a mesh-shape key (the exact shape, else its transpose: 1x8 also serves 8x1) overrides it module by module, so a mesh entry lists only what differs there. A mesh key covers every machine of that shape (the 31B 1x8 entry: the Galaxy (1,8) engines, a Wormhole T3K, a P150x8 line). Module keys: shared_mlp, attention, experts, router, lm_head, embedding. Allowed dtype values: bf16, bfp8, fp32.",
     "example": {
       "gemma-4-31B-it": {
         "default": {
@@ -12,17 +12,15 @@
         }
       }
     },
-    "bfp8_max_context": "Context ceiling(s) for bfp8 modules: an int (all bfp8 modules) or a {module: max_seq_len} dict. Above the limit the loader downgrades that module bfp8 -> bf16, because bfp8 error accumulates with sequence length. MEASURED on 31B/tp=8 at a true 262k prompt: shared_mlp in bfp8 degenerates, attention in bfp8 stays coherent, both bfp8 degenerates; 128k is fine with both. Override with GEMMA4_BFP8_MAX_CONTEXT (0 disables). May also be MESH-SCOPED as {\"RxC\": {...}, \"default\": {...}}: the downgrade doubles those weights, so it is only declared on meshes where bf16 fits (measured on tp=8; 31B bf16 shared_mlp at 262k does not fit on 1x4)."
+    "bfp8_max_context": "Context ceiling(s) for bfp8 modules: an int (all bfp8 modules) or a {module: max_seq_len} dict. Above the limit the loader downgrades that module bfp8 -> bf16, because bfp8 error accumulates with sequence length. History: on an older tree, MEASURED on 31B/tp=8 at a true 262k prompt: shared_mlp in bfp8 degenerates, attention in bfp8 stays coherent, both bfp8 degenerates; 128k is fine with both. Override with GEMMA4_BFP8_MAX_CONTEXT (0 disables). May also be MESH-SCOPED as {\"RxC\": {...}, \"default\": {...}}: the downgrade doubles those weights, so it is only declared on meshes where bf16 fits (measured on tp=8; 31B bf16 shared_mlp at 262k does not fit on 1x4). Re-measured 2026-11-10 on the Galaxy DP4 31B entry (1x8) with the current tree: bfp8 shared_mlp passes 248K needles on every row, a 255K verbatim echo and 247K free generation, so the 31B declares no ceiling."
   },
   "gemma-4-31B-it": {
     "default": {
       "shared_mlp": "bfp8",
       "attention": "bfp8"
     },
-    "bfp8_max_context": {
-      "1x8": {
-        "shared_mlp": 131072
-      }
+    "1x8": {
+      "lm_head": "bfp8"
     }
   },
   "gemma-4-12B-it": {

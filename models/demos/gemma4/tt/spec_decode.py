@@ -35,6 +35,7 @@ spec-decode is token-identical to plain greedy up to the first near-tie token
 and produces an equally-valid greedy trajectory thereafter.
 """
 
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -43,7 +44,9 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather
+from models.demos.gemma4.tt.kv_pair_shard import KV_PAIR_SHARD_ENV, kv_pair_shard_enabled
 from models.demos.gemma4.tt.lane_prefill import lane_frame_rows, lane_of_row, lane_row_groups
+from models.demos.gemma4.tt.sdpa_pair_split import pair_split_enabled
 from models.demos.gemma4.tt.spec_sampling import (
     SPEC_SAMPLED_VERIFY_ENV,
     LaneSamplingPlan,
@@ -54,6 +57,28 @@ from models.demos.gemma4.tt.spec_sampling import (
     select_verify_ids,
     select_verify_ids_frame,
     spec_sampled_verify_enabled,
+)
+from models.demos.gemma4.tt.verify_multipos import log_once as multipos_log_once
+from models.demos.gemma4.tt.verify_multipos import (
+    multipos_extra_bytes,
+    multipos_layer_reason,
+    multipos_page_table,
+    multipos_positions,
+    plan_verify_multipos,
+    verify_multipos_enabled,
+)
+from models.demos.gemma4.tt.verify_prefix_lse import PrefixLseGeometry, fresh_causal_mask, kv_dtype_name
+from models.demos.gemma4.tt.verify_prefix_lse import log_once as prefix_log_once
+from models.demos.gemma4.tt.verify_prefix_lse import (
+    plan_verify_prefix_lse,
+    prefix_bias,
+    prefix_effective_block,
+    prefix_head_splits,
+    prefix_lse_layer_reason,
+    prefix_lse_rung_reason,
+    prefix_positions,
+    verify_prefix_lse_enabled,
+    verify_prefix_pair_enabled,
 )
 
 # Device argmax tile rule: the multicore argmax is exact for one 32-row tile,
@@ -104,6 +129,10 @@ SPEC_LEAN_SEED_ENV = "GEMMA4_SPEC_LEAN_SEED"
 SPEC_ONE_UPLOAD_ENV = "GEMMA4_SPEC_ONE_UPLOAD"
 # Measured 12B TP8 (3 GB region): 21.9-31.9 MB per captured record, width-independent.
 SPEC_RECORD_MB_DEFAULT = 32.0
+# GEMMA4_SPEC_SLIDING_SPAN_RING (default 1): the serving records attend an UNBOUNDED sliding layer (vLLM hybrid
+# kv-cache groups) through a window-sized ring over its paged cache (serving_sliding_span_ring) instead of the
+# whole rung; "0" keeps the rung-wide sliding span. Plain engine only (the lane engine keeps the rung).
+SPEC_SLIDING_SPAN_RING_ENV = "GEMMA4_SPEC_SLIDING_SPAN_RING"
 
 
 def _to_probs(logits_row, temperature, top_p, top_k):
@@ -675,6 +704,101 @@ def serving_verify_table_widths(s_k, block_size_by_type, ring_by_type, blocks):
     return widths
 
 
+def sliding_span_ring_enabled() -> bool:
+    """``GEMMA4_SPEC_SLIDING_SPAN_RING`` (default on): see ``serving_sliding_span_ring``."""
+    return os.environ.get(SPEC_SLIDING_SPAN_RING_ENV, "1") != "0"
+
+
+def serving_sliding_span_ring(window, max_p, block_size, align=64):
+    """Key span (tokens) the serving verify gives an UNBOUNDED sliding layer: a ring of R slots over its paged cache.
+
+    The packed verify attends the table width times the block size, so with the rung as the sliding span each of
+    the sliding layers walked the whole rung (131072 keys at the 128K rung, 263168 at the top) to use the last
+    ``window`` of them: the verify cost followed the rung on the 50 sliding layers of the 31B, not the position.
+    Packed row p of a replay at c attends (c + p - window, c + p]; every such key lies in (top - R, top] for
+    top = c + P - 1 once R >= window + P - 1. Ring slot j then holds position ``top - ((top - j) mod R)`` (the
+    bounded ring's rule, so the ring mask and its uploaded scalars apply unchanged) and the table maps each slot
+    column to the block of the positions it holds (``serving_ring_window_table``). One column holds the top
+    block's slots up to ``top mod R`` and, past them, slots that wrap to positions R earlier; one more block of
+    span keeps those wrapped slots outside every row's window, so that column can name the top block:
+    R >= window + P - 1 + block_size, rounded up to ``align`` and the block (the tile and the packed SDPA's k
+    chunk divide 64)."""
+    window, max_p, block_size, align = int(window), int(max_p), int(block_size), int(align)
+    if min(window, max_p, block_size, align) < 1:
+        raise ValueError(
+            f"window, max_p, block_size and align must be >= 1, got {window}, {max_p}, {block_size}, {align}"
+        )
+    step = math.lcm(block_size, align)
+    need = window + max_p - 1 + block_size
+    return ((need + step - 1) // step) * step
+
+
+def serving_ring_window_table(table, positions, P, ring, block_size):
+    """Host ``[B, ring // block_size]`` int64 verify table of an unbounded paged sliding layer seen as a ring of
+    ``ring`` slots (``serving_sliding_span_ring``).
+
+    Row b (``positions[b] = c_b``, top = c_b + P - 1, tm = top mod ring, base = top - tm): column k holds the
+    row's block of the positions its slots carry, ``base + k * bs`` when ``k * bs <= tm`` (the top block's
+    column included), else ``base + k * bs - ring``; a column whose positions precede the sequence is block 0,
+    which the ring mask hides (``position < 0``). ``table`` is ``[B, cols]`` (row b = the row's absolute table);
+    the KV writes of the replay address the same table through ``cache_position_modulo = ring``
+    (position x -> slot x mod ring -> column), which lands every packed position c_b + p on its own block.
+    """
+    t = torch.as_tensor(table).to(torch.int64)
+    if t.dim() != 2:
+        raise ValueError(f"table must be [rows, blocks], got shape {tuple(t.shape)}")
+    if len(positions) != int(t.shape[0]):
+        raise ValueError(f"{len(positions)} positions for a {int(t.shape[0])}-row table")
+    return serving_ring_window_gather(t, serving_ring_window_index(positions, P, ring, block_size, int(t.shape[1])))
+
+
+def serving_ring_window_index(positions, P, ring, block_size, cols):
+    """``[B, ring // block_size]`` int64 absolute block index of every ring column (``serving_ring_window_table``),
+    -1 for a column whose positions precede the sequence. It depends on the replay's positions only, so a replay
+    builds it once and gathers every sliding slot's table through it (``serving_ring_window_gather``)."""
+    ring, bs, P, cols = int(ring), int(block_size), int(P), int(cols)
+    if ring % bs or ring < bs:
+        raise ValueError(f"ring {ring} is not a positive multiple of the block size {bs}")
+    k = torch.arange(ring // bs, dtype=torch.int64)
+    out = torch.empty(len(positions), ring // bs, dtype=torch.int64)
+    for b, c in enumerate(positions):
+        top = int(c) + P - 1
+        if top >= cols * bs:
+            raise ValueError(f"row {b}: position {top} is past its {cols}-block table")
+        tm = top % ring
+        start = (top - tm) + k * bs - (k * bs > tm).to(torch.int64) * ring
+        out[b] = torch.div(start, bs, rounding_mode="floor").clamp_(min=-1)
+    return out
+
+
+def serving_ring_window_gather(table, index):
+    """The ring table of ``table`` ``[B, cols]`` through ``index`` (``serving_ring_window_index``): block 0 where the
+    index is -1 (the ring mask hides those slots)."""
+    t = torch.as_tensor(table).to(torch.int64)
+    if tuple(index.shape[:1]) != tuple(t.shape[:1]):
+        raise ValueError(f"index rows {tuple(index.shape)} for a table of shape {tuple(t.shape)}")
+    return torch.where(index >= 0, torch.gather(t, 1, index.clamp(min=0)), torch.zeros((), dtype=torch.int64))
+
+
+def serving_virtual_rings(pv_ring, window, block_sizes, shapes, widths, lanes, enabled):
+    """``{layer_type: ring}`` of the serving verify's sliding span rings (``serving_sliding_span_ring``): only an
+    UNBOUNDED sliding pool (``pv_ring[lt] is None``) on a single-lane engine with GEMMA4_SPEC_SLIDING_SPAN_RING on
+    (``enabled``), and only when the ring is narrower than the narrowest verify rung; a bounded pool keeps its own
+    ring and the lane engine its rung-wide tables (its uploads read ``_pv_ring``)."""
+    if not enabled or int(lanes) > 1 or not window:
+        return {}
+    max_p = max(int(K) + 1 for _B, K in shapes)
+    narrowest = min(int(w) for ws in widths.values() for w in ws)
+    rings = {}
+    for lt, ring in pv_ring.items():
+        if lt != "sliding_attention" or ring is not None:
+            continue
+        span = serving_sliding_span_ring(window, max_p, block_sizes[lt])
+        if span < narrowest:
+            rings[lt] = span
+    return rings
+
+
 def serving_mask_padded_bytes(shape, width, elem_bytes=2):
     """Device bytes of ONE ``[B, 1, P, width]`` mask tensor or intermediate: TILE pads P to 32 rows."""
     rows, _k = spec_check_shape(shape)
@@ -825,6 +949,8 @@ class SpeculativeDecoder:
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
         # Serving records (see the "serving: batched fused records" section).
         self._srv_records = None  # {(shape, S_k): record} once serving_prepare ran
+        self._srv_vring = {}  # {layer_type: sliding span ring} (serving_prepare; serving_sliding_span_ring)
+        self._srv_slot_types = {}  # {KV group slot: layer type of its first layer} (serving_prepare)
         self._srv_captured = False
         self._srv_shape_bufs = {}  # {shape: width-independent buffers}
         self._srv_per_layer = None  # adapter-installed per-layer host page tables
@@ -2657,6 +2783,22 @@ class SpeculativeDecoder:
         # type): under hybrid groups the layers of one type are spread over
         # several groups with disjoint block ids.
         self._srv_slots, self._srv_n_slots = serving_kv_group_slots(self._srv_layer_types())
+        layer_types = self._srv_layer_types()
+        self._srv_slot_types = {}
+        for i, slot in enumerate(self._srv_slots):
+            self._srv_slot_types.setdefault(slot, layer_types[i])
+        # The sliding span of the verify records: an unbounded sliding pool attends a window-sized virtual ring
+        # (serving_sliding_span_ring) when it is narrower than the smallest rung; a bounded pool keeps its own ring.
+        self._srv_vring = serving_virtual_rings(
+            self._pv_ring, self._pv_window, self._pv_bs_t, shapes, widths, self._srv_lanes, sliding_span_ring_enabled()
+        )
+        if self._srv_vring:
+            _lg.info(
+                f"[spec-serving] sliding verify span: a {self._srv_vring['sliding_attention']}-slot ring over the "
+                f"paged sliding pool (window {self._pv_window}, up to {max(int(K) + 1 for _B, K in shapes)} packed "
+                f"rows, block {self._pv_bs_t['sliding_attention']}) in place of the rung ({SPEC_SLIDING_SPAN_RING_ENV}=0 "
+                "keeps the rung)"
+            )
         self._srv_uploaded = {}
         self._srv_last = None
         self._srv_phase_ms = {}
@@ -3090,10 +3232,15 @@ class SpeculativeDecoder:
         for rec in recs.values():
             if rec.get("id") is not None:
                 ttnn.release_trace(self.mesh_device, rec["id"])
-            for key in ("v_ptl_slots", "verify_x", "vidx"):
+            for t in (rec.get("v_ptl_slots") or ()) if kv_pair_shard_enabled() else ():
+                self.target._kv_write_table_by_read.pop(id(t), None)
+            for key in ("v_ptl_slots", "v_wt_slots", "v_ptl_mp_own", "verify_x", "vidx"):
                 self._free_tensor_tree(rec.get(key))
         for S in self._srv_shape_bufs.values():
+            for t in (S.get("d_ptl_slots") or ()) if kv_pair_shard_enabled() else ():
+                self.target._kv_write_table_by_read.pop(id(t), None)
             for key in (
+                "d_wt_slots",
                 "anchor_tok",
                 "seed_idx",
                 "seed_tok",
@@ -3104,6 +3251,10 @@ class SpeculativeDecoder:
                 "d_ptl_slots",
                 "v_pos",
                 "v_pos_rows",
+                "v_cur_pos",
+                "v_prefix_pos",
+                "v_prefix_bias",
+                "prefix_fresh_mask",
                 "write_idxs",
                 "ring_base",
                 "ring_tm",
@@ -3133,10 +3284,203 @@ class SpeculativeDecoder:
         self._srv_checked = {}
 
     # ── serving internals ────────────────────────────────────────────────────
+    def _srv_span_ring(self, lt):
+        """Ring (slots) the verify records attend a layer type through: a bounded pool's own ring, else the
+        sliding span ring of an unbounded sliding pool (serving_sliding_span_ring), else None (the rung)."""
+        ring = self._pv_ring.get(lt)
+        return ring if ring else self._srv_vring.get(lt)
+
+    def _srv_multipos_inputs(self):
+        """Whether the shapes carry the multi-position verify's cur_pos input (GEMMA4_SPEC_VERIFY_MULTIPOS on, plain
+        engine: the lane engine's inputs are lane frames and keep the masked verify)."""
+        return verify_multipos_enabled() and self._srv_lanes == 1
+
+    def _srv_multipos_plan(self, shape, s_k, widths):
+        """GEMMA4_SPEC_VERIFY_MULTIPOS: the ``MultiposPlan`` of record ``(shape, s_k)`` (``widths``: its verify table
+        width per layer type) when EVERY global layer takes the causal multi-position SDPA -- the record then builds
+        no full-attention mask -- else None, the reason logged once (every layer keeps the masked verify). The same
+        static per-layer check the layer makes (``verify_multipos.multipos_layer_reason``: layer configs, cache
+        shapes), then ``plan_verify_multipos`` on the device grid against the decode SDPA's CB budget."""
+        if not verify_multipos_enabled():
+            return None
+        from models.demos.gemma4.custom_ops.grid import sdpa_decode_cb_budget_bytes, sdpa_tile_bytes
+
+        B, K = shape
+        P = K + 1
+        types = self._srv_layer_types()
+        full = [i for i, lt in enumerate(types) if lt != "sliding_attention"]
+        reason = None
+        if self._srv_lanes > 1:
+            reason = "the lane engine (its record inputs are lane frames)"
+        elif not full:
+            reason = "no global layer"
+        geometry = set()
+        for i in full if reason is None else ():
+            attn = self.target.layers[i].self_attn
+            cfg = attn.config
+            k_cache = self.tt_kv_cache[i][0]
+            layer_reason = multipos_layer_reason(
+                is_sliding=cfg.is_sliding,
+                cache_position_modulo=cfg.cache_position_modulo,
+                kv_modulo=self._srv_span_ring(types[i]),
+                nkv_local=1 if attn.weights.kv_replicated else cfg.num_key_value_heads // self._tp,
+                h_local=cfg.num_attention_heads // self._tp,
+                head_dim=cfg.head_dim,
+                cache_shape=tuple(k_cache.padded_shape),
+            )
+            if layer_reason is not None:
+                reason = f"layer {i}: {layer_reason}"
+                break
+            geometry.add(
+                (types[i], int(cfg.head_dim), cfg.num_attention_heads // self._tp, sdpa_tile_bytes(k_cache.dtype))
+            )
+        if reason is None and len(geometry) != 1:
+            reason = f"the global layers differ in (type, head_dim, heads, K/V tile bytes): {sorted(geometry)}"
+        if reason is not None:
+            multipos_log_once(f"shape {shape}: every layer keeps the masked packed verify: {reason}")
+            return None
+        lt, head_dim, h_local, kv_tile_bytes = geometry.pop()
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        plan = plan_verify_multipos(
+            B,
+            P,
+            head_dim,
+            h_local,
+            (int(grid.x), int(grid.y)),
+            budget_bytes=sdpa_decode_cb_budget_bytes(getattr(self.mesh_device, "arch", lambda: None)()),
+            kv_tile_bytes=kv_tile_bytes,
+            extra_bytes=multipos_extra_bytes(widths[lt], B * P),
+        )
+        if not plan.fits:
+            multipos_log_once(f"shape {shape} S_k={s_k}: every layer keeps the masked packed verify: {plan.describe()}")
+            return None
+        multipos_log_once(f"shape {shape} S_k={s_k}: {plan.describe()}")
+        return plan
+
+    def _srv_prefix_lse_geometry(self, shape):
+        """GEMMA4_SPEC_VERIFY_PREFIX_LSE: the ``PrefixLseGeometry`` of ``shape`` when EVERY global layer takes the
+        prefix + fresh split (its record inputs are then allocated and the records build no full-attention mask),
+        else None, the reason logged once. The same static per-layer check the layer makes
+        (``verify_prefix_lse.prefix_lse_layer_reason``: layer configs, cache shapes); the plain engine only (the lane
+        engine's inputs are lane frames). The pair view (``geometry.pair``: the KV group's q heads per chip, the prefix
+        call split over the two chips of a pair) when every global layer has one (a GEMMA4_SDPA_PAIR_SPLIT build) and
+        GEMMA4_SPEC_VERIFY_PREFIX_LSE_PAIR is not 0."""
+        if not verify_prefix_lse_enabled():
+            return None
+        B, K = shape
+        P = K + 1
+        types = self._srv_layer_types()
+        full = [i for i, lt in enumerate(types) if lt != "sliding_attention"]
+        shared = getattr(self.target, "kv_shared_layer_map", None) or {}
+        reason = None
+        if self._srv_lanes > 1:
+            reason = "the lane engine (its record inputs are lane frames)"
+        elif not full:
+            reason = "no global layer"
+        pair = (
+            reason is None
+            and verify_prefix_pair_enabled()
+            and pair_split_enabled()
+            and all(getattr(self.target.layers[i].self_attn.weights, "pair", None) is not None for i in full)
+        )
+        head_tp = self._tp // 2 if pair else self._tp
+        geometry = set()
+        for i in full if reason is None else ():
+            attn = self.target.layers[i].self_attn
+            cfg = attn.config
+            k_cache = self.tt_kv_cache[i][0]
+            cache_shape = tuple(int(s) for s in k_cache.padded_shape)
+            layer_reason = prefix_lse_layer_reason(
+                is_sliding=cfg.is_sliding,
+                cache_position_modulo=cfg.cache_position_modulo,
+                kv_modulo=self._srv_span_ring(types[i]),
+                nkv_local=1 if attn.weights.kv_replicated else cfg.num_key_value_heads // self._tp,
+                head_dim=cfg.head_dim,
+                cache_shape=cache_shape,
+                is_kv_shared=i in shared,
+            )
+            if layer_reason is None and kv_dtype_name(k_cache.dtype) is None:
+                layer_reason = f"cache format {k_cache.dtype} is not bfloat16 or bfloat8_b"
+            v_shape = tuple(int(s) for s in self.tt_kv_cache[i][1].padded_shape)
+            if layer_reason is None and v_shape != cache_shape:
+                layer_reason = f"K and V caches differ in shape ({cache_shape} / {v_shape})"
+            if layer_reason is not None:
+                reason = f"layer {i}: {layer_reason}"
+                break
+            geometry.add(
+                (
+                    types[i],
+                    int(cfg.head_dim),
+                    cfg.num_attention_heads // head_tp,
+                    # the block the op reads the cache with: a buffer shared with the sliding layers (vLLM's hybrid
+                    # kv-cache groups, [blocks, 2, 64, 256] on the 31B) through the geometry override
+                    prefix_effective_block(cache_shape, cfg.head_dim),
+                    cache_shape[0],
+                    kv_dtype_name(k_cache.dtype),
+                )
+            )
+        if reason is None and len(geometry) != 1:
+            reason = f"the global layers differ in (type, head_dim, heads, block, blocks, format): {sorted(geometry)}"
+        if reason is None:
+            lt, head_dim, h_local, block, blocks, kv_dtype = geometry.pop()
+            splits = prefix_head_splits(h_local, P)
+            if not splits:
+                reason = f"one head's {P} candidates exceed a 32-row q tile"
+        if reason is not None:
+            prefix_log_once(f"shape {shape}: every layer keeps the masked packed verify: {reason}")
+            return None
+        return PrefixLseGeometry(
+            batch=B,
+            packed_p=P,
+            h_local=h_local,
+            head_dim=head_dim,
+            splits=splits,
+            block_size=block,
+            num_cache_blocks=blocks,
+            kv_dtype=kv_dtype,
+            layer_type=lt,
+            pair=pair,
+        )
+
+    def _srv_prefix_lse_plan(self, shape, S, s_k, widths):
+        """GEMMA4_SPEC_VERIFY_PREFIX_LSE: the ``PrefixLsePlan`` of record ``(shape, s_k)`` (``widths``: its verify table
+        width per layer type) when the shape has a geometry and the prefix call fits (the op's planner against the
+        decode SDPA's CB budget), else None (the record keeps the masked verify; the reason logged once)."""
+        geometry = S.get("prefix_geom")
+        # GEMMA4_KV_PAIR_SHARD: the masked verify reads every key, which no chip holds
+        shard = kv_pair_shard_enabled() and bool(self.target._kv_pair_shard_layers)
+        if geometry is None:
+            if shard:
+                raise ValueError(f"{KV_PAIR_SHARD_ENV}: shape {shape} has no prefix + fresh verify geometry")
+            return None
+        from models.demos.gemma4.custom_ops.grid import sdpa_decode_cb_budget_bytes
+        from models.demos.gemma4.custom_ops.sdpa_decode_lse import planner as lse_planner
+
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        plan = plan_verify_prefix_lse(
+            geometry,
+            widths[geometry.layer_type],
+            (int(grid.x), int(grid.y)),
+            sdpa_decode_cb_budget_bytes(getattr(self.mesh_device, "arch", lambda: None)()),
+            lse_planner,
+        )
+        if not plan.fits:
+            if shard:
+                raise ValueError(f"{KV_PAIR_SHARD_ENV}: shape {shape} S_k={s_k}: {plan.describe()}")
+            prefix_log_once(f"shape {shape} S_k={s_k}: every layer keeps the masked packed verify: {plan.describe()}")
+            return None
+        rung_reason = prefix_lse_rung_reason(geometry.splits, s_k)
+        if rung_reason is not None:
+            prefix_log_once(f"shape {shape} S_k={s_k}: keeps the masked packed verify: {rung_reason}")
+            return None
+        prefix_log_once(f"shape {shape} S_k={s_k}: {plan.describe()}")
+        return plan
+
     def _srv_alloc_shape(self, shape):
         """Width-independent persistent inputs of one shape (shared by its width records)."""
         B, K = shape
         P = K + 1
+        prefix_geom = self._srv_prefix_lse_geometry(shape)
         pu, pi = self._srv_pos_tensors(B)
         seed_pu, seed_pi = self._srv_pos_tensors(B)
         slots = self._srv_slots
@@ -3144,9 +3488,10 @@ class SpeculativeDecoder:
             self._srv_from_torch(torch.zeros(B, self._srv_blocks, dtype=torch.int32), ttnn.int32, lane_dim=0)
             for _ in range(self._srv_n_slots)
         ]
+        d_wt_slots = self._srv_alloc_write_tables(d_ptl_slots)
         # The assistant reads each type's shared-KV layer: its table is that layer's slot.
         d_ptl = {lt: d_ptl_slots[slots[self.target.last_kv_layer_by_type[lt]]] for lt in self._pv_ring}
-        ring = self._pv_ring.get("sliding_attention")
+        ring = self._srv_span_ring("sliding_attention")
         ring_scalars = {}
         if ring:
             # per-row ring geometry for the in-trace sliding mask (serving_mask_plan)
@@ -3169,6 +3514,7 @@ class SpeculativeDecoder:
             "seed_pi": seed_pi,  # [B] int32
             "d_ptl": d_ptl,  # {layer_type: [B, blocks] int32} the shared-KV layer's slot table per type
             "d_ptl_slots": d_ptl_slots,  # one [B, blocks] int32 table per KV group slot
+            "d_wt_slots": d_wt_slots,  # GEMMA4_KV_PAIR_SHARD: {global slot: its per-chip write table}
             "d_ptl_list": [d_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
             "v_pos": self._srv_from_torch(
                 torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32, lane_dim=1
@@ -3181,13 +3527,43 @@ class SpeculativeDecoder:
             "write_idxs": [
                 self._srv_from_torch(torch.zeros(B, dtype=torch.int32), ttnn.int32, lane_dim=0) for _ in range(P)
             ],
+            # GEMMA4_SPEC_VERIFY_MULTIPOS: [B*P] int32 cur_pos of the global layers' multi-position SDPA, entry
+            # b*P + p = c_b + p (verify_multipos.multipos_positions); None with the knob off
+            "v_cur_pos": (
+                self._srv_from_torch(torch.zeros(B * P, dtype=torch.int32), ttnn.int32, lane_dim=0)
+                if self._srv_multipos_inputs()
+                else None
+            ),
+            # GEMMA4_SPEC_VERIFY_PREFIX_LSE (None with the knob off or a refused shape): the static geometry, the [B]
+            # int32 prefix positions max(c_b - 1, 0), the [1, B, R, 1] fp32 row biases (verify_prefix_lse.prefix_bias)
+            # and the constant [1, B, R, 32] fp32 fresh mask (fresh_causal_mask), built here, before any capture
+            "prefix_geom": prefix_geom,
+            "v_prefix_pos": (
+                self._srv_from_torch(torch.zeros(B, dtype=torch.int32), ttnn.int32, lane_dim=0)
+                if prefix_geom is not None
+                else None
+            ),
+            "v_prefix_bias": (
+                self._srv_from_torch(
+                    torch.zeros(1, B, prefix_geom.rows, 1, dtype=torch.float32), ttnn.float32, layout=ttnn.TILE_LAYOUT
+                )
+                if prefix_geom is not None
+                else None
+            ),
+            "prefix_fresh_mask": (
+                self._srv_from_torch(
+                    fresh_causal_mask(B, prefix_geom.heads_per_call, P), ttnn.float32, layout=ttnn.TILE_LAYOUT
+                )
+                if prefix_geom is not None
+                else None
+            ),
             # GEMMA4_SPEC_ONE_UPLOAD: the two staging tensors the small inputs above go up in (None otherwise)
-            "staged": self._srv_alloc_staged(B, P),
+            "staged": self._srv_alloc_staged(B, P, prefix=prefix_geom is not None),
             # GEMMA4_SPEC_SAMPLED_VERIFY: the device sampler's per-chunk parameter rows, seed rows and draw outputs
             "sampler": self._srv_sampler.alloc(B, P) if self._srv_sampler is not None else None,
         }
 
-    def _srv_alloc_staged(self, B, P):
+    def _srv_alloc_staged(self, B, P, prefix=False):
         """The shape's staging tensors under GEMMA4_SPEC_ONE_UPLOAD (None otherwise): one row per small per-replay
         input, ``[rows, width]`` uint32 and int32 ROW_MAJOR, ``width`` the widest input rounded up to 32 columns.
         Every input is read as a row's first ``n`` columns (a stick-aligned slice); the row order is the scatter
@@ -3203,6 +3579,10 @@ class SpeculativeDecoder:
             ("v_pos_rows", B * H * P),  # [1, B*H*P]
         ]
         i32 = [("d_pi", B)] + [(("write_idxs", p), B) for p in range(P)]  # [B] each
+        if self._srv_multipos_inputs():
+            i32.append(("v_cur_pos", B * P))  # [B*P]
+        if prefix:
+            i32.append(("v_prefix_pos", B))  # [B] (GEMMA4_SPEC_VERIFY_PREFIX_LSE)
         width = max(n for _key, n in u32 + i32)
         width = ((width + SPEC_ROW_TILE - 1) // SPEC_ROW_TILE) * SPEC_ROW_TILE
         return {
@@ -3238,18 +3618,34 @@ class SpeculativeDecoder:
         # Width-matched to the type's mask with the type's OWN block size (see
         # serving_verify_table_widths): the packed SDPA attends the TABLE width
         # times that block size, and under hybrid groups the types differ.
-        widths = serving_verify_table_widths(s_k, self._pv_bs_t, self._pv_ring, self._srv_blocks)
+        span_rings = {lt: self._srv_span_ring(lt) for lt in self._pv_ring}
+        widths = serving_verify_table_widths(s_k, self._pv_bs_t, span_rings, self._srv_blocks)
         slots = self._srv_slots
-        layer_types = self._srv_layer_types()
-        slot_type = {}
-        for i, slot in enumerate(slots):
-            slot_type.setdefault(slot, layer_types[i])
+        slot_type = self._srv_slot_types  # serving_prepare: the type of each KV group slot
         v_ptl_slots = [
             self._srv_from_torch(torch.zeros(B, widths[slot_type[slot]], dtype=torch.int32), ttnn.int32, lane_dim=0)
             for slot in range(self._srv_n_slots)
         ]
+        v_wt_slots = self._srv_alloc_write_tables(v_ptl_slots)
         # The flat-table fallback reads each type's representative pool layer.
         v_ptl = {lt: v_ptl_slots[slots[self._pv_ring_rep[lt]]] for lt in self._pv_ring}
+        # GEMMA4_SPEC_VERIFY_PREFIX_LSE: the record's prefix call plan (takes precedence over the multi-position SDPA)
+        prefix_plan = self._srv_prefix_lse_plan(shape, S, s_k, widths)
+        # GEMMA4_SPEC_VERIFY_MULTIPOS: the record's plan and its global slots' group tables [B*G, width] (row
+        # b*G + g = row b, verify_multipos.multipos_page_table; the slot's own table when G = 1)
+        mp = self._srv_multipos_plan(shape, s_k, widths) if prefix_plan is None else None
+        mp_slots, mp_own = {}, []
+        for slot in range(self._srv_n_slots) if mp is not None else ():
+            if slot_type[slot] == "sliding_attention":
+                continue
+            if mp.groups == 1:
+                mp_slots[slot] = v_ptl_slots[slot]
+                continue
+            t = self._srv_from_torch(
+                torch.zeros(B * mp.groups, widths[slot_type[slot]], dtype=torch.int32), ttnn.int32, lane_dim=0
+            )
+            mp_slots[slot] = t
+            mp_own.append(t)
         return {
             "shape": shape,
             "S_k": int(s_k),
@@ -3258,7 +3654,13 @@ class SpeculativeDecoder:
             "P": P,
             "v_ptl": v_ptl,  # {layer_type: [B, width_lt] int32} the representative layer's slot table per type
             "v_ptl_slots": v_ptl_slots,  # one [B, width of its type] int32 table per KV group slot
+            "v_wt_slots": v_wt_slots,  # GEMMA4_KV_PAIR_SHARD: {global slot: its per-chip write table}
             "v_ptl_list": [v_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
+            "mp": mp,  # MultiposPlan, or None: every layer runs the masked packed verify
+            "v_ptl_mp_slots": mp_slots,  # {global slot: [B*G, width] int32}
+            "v_ptl_mp_own": mp_own,  # the group tables allocated for G > 1 (freed by serving_release)
+            "v_ptl_mp_list": [mp_slots.get(slot) for slot in slots],  # per target layer; None on sliding layers
+            "prefix_lse": prefix_plan,  # PrefixLsePlan, or None: the global layers keep the masked (or multipos) verify
             # The replay's outputs the host reads back (serving_step): the user-major verify input and its
             # argmax ids, allocated here, before any capture, and written in place by the body (ttnn.copy).
             # Taken from the body's own op outputs inside the capture they were the one allocation after the
@@ -3476,7 +3878,29 @@ class SpeculativeDecoder:
         # TP-sharded (the chip's [1, 1, B*P, V/tp] slice, no vocab all-gather in the record).
         sharded_verify = self._srv_sharded_verify_argmax and self._tp > 1
         verify_kwargs = {"keep_logits_sharded": True} if sharded_verify else {}
-        mask_full, mask_slide = self._srv_masks_device(S, rec)
+        # GEMMA4_SPEC_VERIFY_MULTIPOS: the global layers attend [0, c_b + p] per candidate through the causal
+        # multi-position SDPA (tt/verify_multipos.py), so the record builds no full-attention mask
+        mp = rec.get("mp")
+        prefix_plan = rec.get("prefix_lse")
+        if prefix_plan is not None:
+            # GEMMA4_SPEC_VERIFY_PREFIX_LSE: the global layers attend each row's prefix causally plus the candidates'
+            # own K / V (tt/verify_prefix_lse.py), so the record builds no full-attention mask either
+            verify_kwargs["verify_prefix_lse"] = {
+                "plan": prefix_plan,
+                "cur_pos": S["v_prefix_pos"],
+                "bias": S["v_prefix_bias"],
+                "fresh_mask": S["prefix_fresh_mask"],
+            }
+            mask_full, mask_slide = self._srv_masks_device(S, rec, full=False)
+        elif mp is None:
+            mask_full, mask_slide = self._srv_masks_device(S, rec)
+        else:
+            verify_kwargs["verify_multipos"] = {
+                "plan": mp,
+                "cur_pos": S["v_cur_pos"],
+                "page_tables": rec["v_ptl_mp_list"],
+            }
+            mask_full, mask_slide = self._srv_masks_device(S, rec, full=False)
         vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
             position_idx=S["v_pos"],
@@ -3490,9 +3914,11 @@ class SpeculativeDecoder:
             embed_idx_sliding=None,
             hot_pt=None,
             page_tables_per_layer=rec["v_ptl_list"],
+            kv_modulo_sliding=self._srv_vring.get("sliding_attention"),
             **verify_kwargs,
         )
-        mask_full.deallocate(True)
+        if mask_full is not None:
+            mask_full.deallocate(True)
         mask_slide.deallocate(True)
         # 5. publish this replay's logits (the shared readback buffer: gathered, or the chip's vocab slice under
         # the sharded verify argmax) and its verify hidden (next replay's seed gather) before anything consumes
@@ -3692,8 +4118,10 @@ class SpeculativeDecoder:
             j0 += n
         return out
 
-    def _srv_masks_device(self, S, rec):
-        """In-trace additive masks [B, 1, H*P, S_k] (full) and [B, 1, H*P, S_r] (sliding) for the record.
+    def _srv_masks_device(self, S, rec, full=True):
+        """In-trace additive masks [B, 1, H*P, S_k] (full) and [B, 1, H*P, S_r] (sliding) for the record; with
+        ``full=False`` (GEMMA4_SPEC_VERIFY_MULTIPOS: the global layers attend causally) the full mask is None and
+        only the sliding mask is built.
 
         Per key chunk, ``diff = iota - q`` (fp32, [B, 1, H*P, n] by the binary
         broadcast of [1, 1, 1, n] against the [B, 1, H*P, 1] packed-row query
@@ -3716,14 +4144,15 @@ class SpeculativeDecoder:
         B, P = S["B"], S["P"]
         H = self._packed_H()
         W = float(self._pv_window)
-        ring = self._pv_ring.get("sliding_attention")
+        ring = self._srv_span_ring("sliding_attention")
         neg = float(SPEC_MASK_NEG)
         # query positions per packed row [B, 1, H*P, 1] fp32 from the uploaded [1, B*H*P] row positions
         q = ttnn.typecast(
             ttnn.to_layout(ttnn.reshape(S["v_pos_rows"], (B, 1, H * P, 1)), ttnn.TILE_LAYOUT), ttnn.float32
         )
         full_parts, slide_parts = [], []
-        for j0, n in self._srv_mask_chunks(rec["S_k"]):
+        # the rung's keys feed the full mask and the unbounded sliding mask; with neither, nothing walks them
+        for j0, n in self._srv_mask_chunks(rec["S_k"]) if full or not ring else ():
             iota = self._srv_iota_for(n)
             qc = ttnn.sub(q, float(j0)) if j0 else q  # chunk-relative query positions
             diff = ttnn.sub(iota, qc)  # [B, 1, P, n] fp32: key - query
@@ -3732,7 +4161,8 @@ class SpeculativeDecoder:
             gt = ttnn.gtz(diff)
             gt_b = ttnn.typecast(gt, ttnn.bfloat16)
             gt.deallocate(True)
-            full_parts.append(ttnn.multiply(gt_b, neg))
+            if full:
+                full_parts.append(ttnn.multiply(gt_b, neg))
             if not ring:
                 shifted = ttnn.add(diff, W)
                 flipped = ttnn.multiply(shifted, -1.0)
@@ -3791,6 +4221,9 @@ class SpeculativeDecoder:
         q.deallocate(True)
         outs = []
         for parts in (full_parts, slide_parts):
+            if not parts:  # the full mask under full=False
+                outs.append(None)
+                continue
             mask = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=3)  # [B, 1, H*P, S] tile-aligned
             if len(parts) > 1:
                 for part in parts:
@@ -3813,6 +4246,34 @@ class SpeculativeDecoder:
         h.deallocate(True)
         self._srv_uploaded[key] = host.clone()
 
+    def _srv_alloc_write_tables(self, read_slots):
+        """GEMMA4_KV_PAIR_SHARD: ``{slot: write table}`` for the global KV group slots of ``read_slots`` (one
+        persistent ``[B, cols]`` read table per slot): per chip ``[B, 2 * cols]`` at the device page's granularity
+        (``half_block_write_tables``), registered with the target so its pair-sharded layers' cache writes find it
+        (``Gemma4Model.kv_write_table_for``). Empty without the shard."""
+        if not (kv_pair_shard_enabled() and self.target._kv_pair_shard_layers):
+            return {}
+        out = {}
+        for slot, read in enumerate(read_slots):
+            if self._srv_slot_types[slot] != "full_attention":
+                continue
+            host = torch.zeros(int(read.shape[0]), int(read.shape[-1]), dtype=torch.int32)
+            wt = ttnn.to_device(self.target._kv_write_tables_host(host), self.mesh_device)
+            self.target._kv_write_table_by_read[id(read)] = wt
+            out[slot] = wt
+        return out
+
+    def _srv_copy_write_table(self, key, host_read, wt):
+        """Upload the per-chip write tables of the ``host_read`` slot table into ``wt`` unless unchanged."""
+        host_read = host_read.to(torch.int32)
+        prev = self._srv_uploaded.get(key)
+        if prev is not None and prev.shape == host_read.shape and torch.equal(prev, host_read):
+            return
+        h = self.target._kv_write_tables_host(host_read)
+        ttnn.copy_host_to_device_tensor(h, wt)
+        h.deallocate(True)
+        self._srv_uploaded[key] = host_read.clone()
+
     def _srv_slot_table(self, slot, rows, page_tables):
         """Host [B, cols] int64 table of one KV group slot for the step's rows: the installed per-layer table of
         the slot's first layer (every layer of a slot carries the same table, serving_check_group_tables),
@@ -3827,8 +4288,10 @@ class SpeculativeDecoder:
         B = int(page_tables.shape[0])
         return serving_select_rows(src, rows, B, int(src.shape[1]), allow_clip=False)
 
-    def _srv_upload_tables(self, shape, rows, live, page_tables, rec):
-        """Upload the drafter tables of ``shape`` (and the verify tables of ``rec`` when given), one per KV group slot."""
+    def _srv_upload_tables(self, shape, rows, live, page_tables, rec, positions=None):
+        """Upload the drafter tables of ``shape`` (and the verify tables of ``rec`` when given), one per KV group slot.
+        ``positions`` (the replay's padded row positions) lays out the verify table of a slot whose type attends
+        through the sliding span ring (``serving_ring_window_table``); required when one does."""
         S = self._srv_shape_bufs[shape]
         B = S["B"]
         if not hasattr(page_tables, "dim") or page_tables.dim() != 2 or int(page_tables.shape[0]) != B:
@@ -3847,12 +4310,15 @@ class SpeculativeDecoder:
                 "bounded sliding target: serving_refresh_page_tables(per-layer tables) must run before the first "
                 "reseed/replay, or the sliding layers would read the flat table instead of their ring pool"
             )
+        ring_index = {}  # (ring, block) -> the replay's ring column index, shared by every sliding slot
         for slot in range(self._srv_n_slots):
             d_host = self._srv_slot_table(slot, rows, pt)
             d_host = serving_select_rows(d_host, list(range(B)), B, self._srv_blocks, allow_clip=False)
             if live < B:
                 d_host[live:] = d_host[0]
             self._srv_copy_if_changed(("d", shape, slot), d_host.to(torch.int32), S["d_ptl_slots"][slot], ttnn.int32)
+            if kv_pair_shard_enabled() and slot in S["d_wt_slots"]:
+                self._srv_copy_write_table(("dw", shape, slot), d_host, S["d_wt_slots"][slot])
             if rec is None:
                 continue
             v_host = self._srv_slot_table(slot, rows, pt)
@@ -3860,13 +4326,39 @@ class SpeculativeDecoder:
                 v_host = v_host.clone()
                 v_host[live:] = v_host[0]
             width = int(rec["v_ptl_slots"][slot].shape[-1])
-            # Fitted, not checked: the verify table is width-matched to its mask
-            # on purpose (serving_verify_table_widths); columns past the adapter's
-            # table are zero (block 0) and columns past the mask are never attended.
-            v_host = serving_select_rows(v_host, list(range(B)), B, width, allow_clip=True)
+            vring = self._srv_vring.get(self._srv_slot_types[slot]) if self._srv_vring else None
+            if vring:
+                # the window-sized ring over the paged sliding pool: column k = the block of the positions its slots
+                # hold this replay (the KV writes address it through cache_position_modulo = the ring)
+                if positions is None:
+                    raise ValueError(f"shape {shape}: the sliding span ring needs the replay's positions")
+                key = (vring, self._pv_bs_t[self._srv_slot_types[slot]])
+                if key not in ring_index:
+                    ring_index[key] = serving_ring_window_index(positions, S["P"], vring, key[1], int(v_host.shape[1]))
+                v_host = serving_ring_window_gather(v_host, ring_index[key])
+                if int(v_host.shape[1]) != width:
+                    raise ValueError(
+                        f"shape {shape}: ring table {tuple(v_host.shape)} for a {width}-column verify table"
+                    )
+            else:
+                # Fitted, not checked: the verify table is width-matched to its mask
+                # on purpose (serving_verify_table_widths); columns past the adapter's
+                # table are zero (block 0) and columns past the mask are never attended.
+                v_host = serving_select_rows(v_host, list(range(B)), B, width, allow_clip=True)
             self._srv_copy_if_changed(
                 ("v", shape, rec["S_k"], slot), v_host.to(torch.int32), rec["v_ptl_slots"][slot], ttnn.int32
             )
+            if kv_pair_shard_enabled() and slot in rec["v_wt_slots"]:
+                self._srv_copy_write_table(("vw", shape, rec["S_k"], slot), v_host, rec["v_wt_slots"][slot])
+            mp_table = rec.get("v_ptl_mp_slots", {}).get(slot)
+            if mp_table is not None and mp_table is not rec["v_ptl_slots"][slot]:
+                # GEMMA4_SPEC_VERIFY_MULTIPOS with G > 1: the global slot's table once per batch group
+                self._srv_copy_if_changed(
+                    ("vmp", shape, rec["S_k"], slot),
+                    multipos_page_table(v_host.to(torch.int32), rec["mp"].groups),
+                    mp_table,
+                    ttnn.int32,
+                )
 
     def _srv_greedy_plan(self, shape):
         """The all-greedy ``SamplingRowsPlan`` of ``shape`` (one per shape: the sampler stage of a replay without
@@ -3909,13 +4401,28 @@ class SpeculativeDecoder:
             for p in range(P):
                 wi = torch.tensor([c + p for c in pos], dtype=torch.int32)
                 self._srv_copy_if_changed(("widx", shape, p), wi, S["write_idxs"][p], ttnn.int32)
-        ring = self._pv_ring.get("sliding_attention")
+            if S.get("v_cur_pos") is not None:
+                # the multi-position SDPA's per-candidate bounds (ascending per row, checked on the host)
+                self._srv_copy_if_changed(("vcur", shape), multipos_positions(pos, P), S["v_cur_pos"], ttnn.int32)
+            if S.get("v_prefix_pos") is not None:
+                # the prefix call's causal bound per row, max(c_b - 1, 0)
+                self._srv_copy_if_changed(("vpre", shape), prefix_positions(pos), S["v_prefix_pos"], ttnn.int32)
+        if S.get("v_prefix_bias") is not None:
+            # a row at position 0 has no prefix: its prefix lse is pushed out of the merge (fp32, outside the staging)
+            self._srv_copy_if_changed(
+                ("vpbias", shape),
+                prefix_bias(pos, S["prefix_geom"].rows),
+                S["v_prefix_bias"],
+                ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+        ring = self._srv_span_ring("sliding_attention")
         if ring:
             plan = serving_mask_plan(pos, P, ring=ring)
             for key in ("ring_base", "ring_tm"):
                 host = plan[key.split("_")[1]].to(torch.float32).reshape(B, 1, 1, 1)
                 self._srv_copy_if_changed((key, shape), host, S[key], ttnn.float32, layout=ttnn.TILE_LAYOUT)
-        self._srv_upload_tables(shape, rows, live, page_tables, rec)
+        self._srv_upload_tables(shape, rows, live, page_tables, rec, positions=pos)
 
     def _srv_tp_group(self, first):
         """Row-major device indices of the TP group whose first chip is ``first`` (the chips holding one tensor's
@@ -3963,6 +4470,10 @@ class SpeculativeDecoder:
         }
         for p in range(P):
             values[("write_idxs", p)] = [int(c) + p for c in pos]
+        if S.get("v_cur_pos") is not None:
+            values["v_cur_pos"] = multipos_positions(pos, P).tolist()
+        if S.get("v_prefix_pos") is not None:
+            values["v_prefix_pos"] = prefix_positions(pos).tolist()
         for stage_key, rows_key, host_dtype, dev_dtype in (
             ("u32", "u32_rows", torch.int64, ttnn.uint32),  # int64 host source for uint32, as _host_tokens
             ("i32", "i32_rows", torch.int32, ttnn.int32),
@@ -4171,6 +4682,7 @@ class SpeculativeDecoder:
         sharded over the lane axis; the frame is lane-major, so ``v_pos`` / ``v_pos_rows`` keep each column's
         packed-row order. ``plan``: the replay's ``LaneSamplingPlan`` under GEMMA4_SPEC_SAMPLED_VERIFY (the
         greedy frame when None)."""
+        assert not self._srv_vring, "the lane engine keeps rung-wide sliding tables (serving_virtual_rings)"
         shape = rec["shape"]
         S = self._srv_shape_bufs[shape]
         B, P = S["B"], S["P"]
@@ -4211,6 +4723,7 @@ class SpeculativeDecoder:
         rows are selected from the installed per-layer tables by their GLOBAL ids (the engine's host tables span
         every lane's slots), the lane's padding rows mirror its row 0 and an idle lane stays on block 0, its own
         null block."""
+        assert not self._srv_vring, "the lane engine keeps rung-wide sliding tables (serving_virtual_rings)"
         S = self._srv_shape_bufs[shape]
         B = S["B"]
         lanes = self._srv_lanes

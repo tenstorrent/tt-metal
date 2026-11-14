@@ -53,6 +53,9 @@ from models.demos.gemma4.tt.generator_trace import (
     trace_short_prefill_opt_in,
     warmup_gemma4_model_prefill,
 )
+from models.demos.gemma4.tt.kv_pair_shard import KV_PAIR_SHARD_ENV
+from models.demos.gemma4.tt.kv_pair_shard import PAIR as KV_PAIR
+from models.demos.gemma4.tt.kv_pair_shard import half_block_head_size, kv_pair_shard_enabled
 from models.demos.gemma4.tt.lane_prefill import (
     lane_kv_pool_blocks,
     lane_prefill_batched_enabled,
@@ -675,6 +678,27 @@ def lane_prefill_frame_tables(per_layer_tables, rounds, lane_slots, scratch_bloc
     return out
 
 
+def log_dram_headroom(mesh_device, when):
+    """``GEMMA4_LOG_DRAM=1``: one line per chip of ``mesh_device`` with its DRAM allocator state (``ttnn.get_memory_view``:
+    per-bank totals x banks), so the KV pool can be sized to what a served engine actually leaves free."""
+    if os.environ.get("GEMMA4_LOG_DRAM", "0") != "1":
+        return
+    try:
+        views = [("mesh (lockstep, per chip)", ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM))]
+    except Exception:  # noqa: BLE001 - diagnostics only: fall back to the chips one by one
+        views = [
+            (f"chip {i}", ttnn.get_memory_view(d, ttnn.BufferType.DRAM))
+            for i, d in enumerate(mesh_device.get_devices())
+        ]
+    for name, v in views:
+        gib = float(v.num_banks) / (1 << 30)
+        logger.info(
+            f"Gemma4 DRAM {when}: {name} total {v.total_bytes_per_bank * gib:.2f} GiB, allocated "
+            f"{v.total_bytes_allocated_per_bank * gib:.2f} GiB, free {v.total_bytes_free_per_bank * gib:.2f} GiB, "
+            f"largest contiguous free {v.largest_contiguous_bytes_free_per_bank * gib:.2f} GiB"
+        )
+
+
 class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCausalLM):
     """Gemma4 — hybrid attention (sliding-window + full).
 
@@ -907,9 +931,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             for batch in sorted(sizes):
                 # Drop sampling traces from the previous batch — they bind logits
                 # tensor identity/batch and will ValueError on the next size.
-                for m in self.model:
+                for i, m in enumerate(self.model):
                     sampling = getattr(m, "sampling", None)
-                    if sampling is not None and hasattr(sampling, "reset_trace"):
+                    # bucket-keyed sampling traces (GEMMA4_SAMPLING_TRACE) outlive the sweep: each bucket replays its own
+                    if sampling is not None and hasattr(sampling, "reset_trace") and not self._g4_sampling_trace_on(i):
                         sampling.reset_trace()
                 logger.info("Gemma4 vLLM: decode warmup batch_size={}", batch)
                 super().warmup_model_decode(
@@ -923,6 +948,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         finally:
             self._g4_decode_warmup_active = False
         self._decode_warmup_complete = True
+        if any(self._g4_sampling_trace_on(i) for i in range(len(self.model))):
+            # the sweep's lazily captured sampling traces (one per bucket and plain key) are this generator's, not
+            # strays: every decode key re-takes its allocation baseline at its next replay
+            self._g4_trace_alloc_baseline = {}
         # Baseline for the decode-trace allocation guard: the level right after the captures, before
         # any request can leave a persistent allocation in the traces' scratch range.
         if enable_trace:
@@ -1007,6 +1036,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # (trace) pass (see the method).
         if getattr(self, "_decode_warmup_complete", False):
             self._g4_warmup_lane_prefill_group(kv_cache)
+        self._g4_warm_pair_shard_swaps(kv_cache)
         warmup_gemma4_model_prefill(
             self,
             kv_cache,
@@ -1856,6 +1886,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     f"sliding {sliding_kv_heads}x{sliding_head_dim}, mesh {mesh})"
                 )
             full_kv_heads_per_dev = (num // den) // tp
+        full_spec_head_size = full_head_dim
+        if kv_pair_shard_enabled():
+            # Pair-sharded global KV (tt/kv_pair_shard.py): each global KV head sits on exactly one chip pair, and
+            # each chip keeps half of every block's tokens; half the per-token bytes make vLLM's page-size
+            # unification give the global group 2x-token blocks over the same page bytes and the same shared pool.
+            mesh = max(1, (ttnn.get_num_devices() or 1) // max(1, parallel_config.data_parallel_size))
+            if not cls._HYBRID_KV_CACHE_GROUPS_ENABLED or mesh != KV_PAIR * full_kv_heads:
+                raise ValueError(
+                    f"{KV_PAIR_SHARD_ENV}=1 needs hybrid KV-cache groups and each global KV head on one chip pair "
+                    f"(hybrid groups {cls._HYBRID_KV_CACHE_GROUPS_ENABLED}, {full_kv_heads} global KV heads on "
+                    f"{mesh} devices per engine)"
+                )
+            full_spec_head_size = half_block_head_size(full_head_dim)
 
         dtype = (
             model_config.dtype
@@ -1903,7 +1946,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 spec_per_layer[name] = FullAttentionSpec(
                     block_size=block_size,
                     num_kv_heads=full_kv_heads_per_dev,
-                    head_size=full_head_dim,
+                    head_size=full_spec_head_size,
                     dtype=dtype,
                 )
             else:
@@ -2168,6 +2211,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         else:
             nkv_local = max(1, int(cfg.num_key_value_heads) // tp)
         full_block_size = int(effective_block_size(cache, int(cfg.head_dim), nkv_local))
+        if kv_pair_shard_enabled() and full_idx in model._kv_pair_shard_layers:
+            # GEMMA4_KV_PAIR_SHARD: a column of the group's table is a logical block, PAIR device pages (the
+            # layer fills through its per-chip write table, never this one)
+            full_block_size *= KV_PAIR
         return full_pt, full_block_size
 
     def _prefill_user_chunk_plan(self, tokens, kwargs):
@@ -2583,6 +2630,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 except (AttributeError, TypeError):  # a cache object without a shape: keep the declared size
                     bs = default
                 # a ValueError (a view the paged ops cannot address) propagates, as on the demo path
+            if kv_pair_shard_enabled() and i in self.model[0]._kv_pair_shard_layers:
+                bs *= KV_PAIR  # GEMMA4_KV_PAIR_SHARD: a column is a logical block (PAIR device pages)
             sizes.append(bs)
         return sizes
 
@@ -3391,6 +3440,29 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 submesh_kv[layer_idx] = submesh_kv[source_idx]
         self._attach_sdpa_splitfree_scratch(kv_cache)
         return kv_cache
+
+    def _g4_warm_pair_shard_swaps(self, kv_cache):
+        """GEMMA4_KV_PAIR_SHARD: create the pair-split prefill's point_to_point workloads (its fixed swap shapes)
+        before any decode trace is captured (``attention.prefill.pair_split_warm_swaps``); once."""
+        if not kv_pair_shard_enabled() or getattr(self, "_g4_pair_swaps_warmed", False):
+            return
+        from models.demos.gemma4.tt.attention.prefill import pair_split_warm_swaps
+
+        layers = self.model[0].layers
+        caches = kv_cache
+        if caches and len(caches) != len(layers) and isinstance(caches[0], (list, tuple)):
+            caches = caches[0]  # the plugin nests the caches per submesh
+        idx = min(self.model[0]._kv_pair_shard_layers)
+        mesh_device = caches[idx][0].device()
+        cfg = layers[idx].self_attn.config
+        num_heads = int(cfg.num_attention_heads) // int(mesh_device.shape[1])
+        t0 = time.perf_counter()
+        n = pair_split_warm_swaps(mesh_device, num_heads, int(cfg.head_dim))
+        self._g4_pair_swaps_warmed = True
+        logger.info(
+            f"{KV_PAIR_SHARD_ENV}: warmed {n} pair-split swap workloads ({num_heads} heads) in "
+            f"{time.perf_counter() - t0:.1f} s, before the decode-trace capture"
+        )
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """Broadcast legacy ``page_table`` to per-layer whenever the plugin
@@ -7319,6 +7391,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             self._mtp_prepare(kwargs.get("kv_cache"), kwargs.get("num_blocks"))
         self._mtp_capture()
         self._mtp_measure_costs(kwargs)
+        log_dram_headroom(self.mesh_device, "after the traced decode warmup")
         return out
 
     def _mtp_prepare(self, kv_cache, num_blocks):

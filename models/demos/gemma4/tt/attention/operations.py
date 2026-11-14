@@ -22,6 +22,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.custom_ops.grid import compute_grid
+from models.demos.gemma4.custom_ops.sdpa_prefill_splitk.op import SdpaPrefillSplitK
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.compute_config import prefill_linear_compute_kernel_config
 from models.demos.gemma4.tt.decode_matmul import DecodeLinear
@@ -326,8 +328,9 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
     (tenstorrent/tt-metal#51911) — up to ~3.7x slower on Gemma4 prefill shapes.
     Explicit larger chunks cut per-chunk launch + softmax-reduction overhead.
 
-    head_dim=512 (global) layers need the smaller (8,4) grid + 128 chunks to fit
-    L1 (q=k=256 overflows there); head_dim<=256 (sliding) layers run the full
+    head_dim=512 (global) layers take q=k=128 chunks (q=256 overflows L1) on the
+    device's whole grid on Blackhole ((8,4) elsewhere, or with
+    ``GEMMA4_PREFILL_SDPA_WIDE=0``); head_dim<=256 (sliding) layers run the full
     (8,8) grid with larger chunks. When ``sliding_window`` is set, cap
     ``k_chunk`` at ``window//2`` so the K loop does not walk mostly-masked
     chunks (#51911). Chunks are multiples of 32 and clamped to ``seq_len``.
@@ -343,17 +346,36 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
         os.environ.get(k)
         for k in ("GEMMA4_PREFILL_SDPA_QCHUNK", "GEMMA4_PREFILL_SDPA_KCHUNK", "GEMMA4_PREFILL_SDPA_GRID")
     )
-    if (
+    narrow = (
         progcfg != "1"
         and not explicit
         and head_dim <= 256
         and num_heads
         and int(num_heads) < PREFILL_SDPA_WIDE_MIN_HEADS
         and is_blackhole()
-    ):
+    )
+    if narrow and device_grid is not None and os.environ.get("GEMMA4_PREFILL_SDPA_NARROW", "") == "wide":
+        # opt-in A/B: the whole grid at q = k = 128 (window-capped) for the narrow chips (sliding square 4.32 -> 1.52 ms
+        # on a Galaxy chip, 31B TP8 shape); accuracy-gated before any default
+        k_cap = 128 if sliding_window is None else min(128, max(32, int(sliding_window) // 2))
+        q_n, k_n = (max(32, min(c, seq_len)) // 32 * 32 for c in (128, k_cap))
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(*_fit(device_grid, device_grid)),
+            q_chunk_size=q_n,
+            k_chunk_size=k_n,
+            exp_approx_mode=False,
+        )
+    if narrow:
         return None  # narrow chips (the 12B): the op defaults
     if head_dim >= 512:
-        grid = ttnn.CoreCoord(*_fit((8, 4), device_grid))
+        # The SDPA parallelises over (head, q-chunk) units and each unit walks the whole K on one core, so the grid
+        # only distributes work (the result is the same per unit). The (8,4) grid ran a 4-head chip's 4096-token
+        # chunk on 32 cores; the whole Blackhole grid, measured 2026-11-10 on a Galaxy chip (12x10; 4 Q / 1 KV heads,
+        # bfp8 paged K/V, one 4096-token chunk): 3.3 -> 1.7 ms at position 0, 101 -> 51 ms after a 64K cached prefix,
+        # 199 -> 101 ms after 128K, PCC unchanged. k stays 128: the chunked op needs every chunk start on a k-chunk
+        # multiple (chunk_start % k_chunk) and served cache hits are 128-aligned (SDPA_CHUNK_ALIGN).
+        wide = is_blackhole() and device_grid is not None and os.environ.get("GEMMA4_PREFILL_SDPA_WIDE", "1") != "0"
+        grid = ttnn.CoreCoord(*(_fit(device_grid, device_grid) if wide else _fit((8, 4), device_grid)))
         dq, dk = 128, 128
     else:
         # head_dim<=256: q=k=512 (~3.5 MB) and even q=k=256 (~1.58 MB) overflow
@@ -399,6 +421,45 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
     )
 
 
+SPLITK_ENV = "GEMMA4_PREFILL_SDPA_SPLITK"
+SPLITK_MIN_PREFIX_ENV = "GEMMA4_PREFILL_SDPA_SPLITK_MIN_PREFIX"
+
+
+def _splitk_eligible(q_chunk, k_cache, v_cache, page_table, chunk_start, geometry, program_config):
+    """Whether this chunked-prefill call takes ``SdpaPrefillSplitK`` (opt-in ``GEMMA4_PREFILL_SDPA_SPLITK=1``): a
+    host chunk start of at least ``GEMMA4_PREFILL_SDPA_SPLITK_MIN_PREFIX`` tokens (default 16384; one BH chip, 4 Q /
+    1 KV heads, head_dim 512, 4096 rows: 14.1 -> 10.8 ms at 16K, 50.8 -> 36.5 at 64K, 99.9 -> 71.8 at 128K), a
+    geometry where the split pays on this chip (``SdpaPrefillSplitK.pays``) and a call the op supports
+    (``SdpaPrefillSplitK.unsupported_reason``); everything else keeps the stock op."""
+    if os.environ.get(SPLITK_ENV, "0") != "1" or program_config is None:
+        return False
+    if chunk_start < int(os.environ.get(SPLITK_MIN_PREFIX_ENV, "16384")):
+        return False
+    gx, gy = compute_grid(q_chunk.device())
+    if not SdpaPrefillSplitK.pays(int(q_chunk.shape[1]), int(q_chunk.shape[2]), program_config.q_chunk_size, gx * gy):
+        return False  # the stock schedule already fills this chip (e.g. 8 heads on a 130-core chip)
+    ok = (
+        SdpaPrefillSplitK.unsupported_reason(
+            q_chunk,
+            k_cache,
+            v_cache,
+            page_table,
+            chunk_start,
+            num_kv_heads=geometry[0],
+            block_size=geometry[1],
+            q_chunk_size=program_config.q_chunk_size,
+            k_chunk_size=program_config.k_chunk_size,
+        )
+        is None
+    )
+    if ok and not getattr(_splitk_eligible, "_logged", False):
+        _splitk_eligible._logged = True
+        logger.info(
+            f"{SPLITK_ENV}: split-K prefill SDPA engaged (chunk start {chunk_start}, {int(q_chunk.shape[2])} rows)"
+        )
+    return ok
+
+
 def chunked_prefill_sdpa(
     tt_q,
     k_cache,
@@ -410,6 +471,7 @@ def chunked_prefill_sdpa(
     base_offset=0,
     num_kv_heads=None,
     mesh_config=None,
+    host_offset=None,
 ):
     """Chunked causal prefill SDPA over a paged KV cache.
 
@@ -472,11 +534,11 @@ def chunked_prefill_sdpa(
     # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
     # Matches the non-chunked prefill SDPA so long-context (>32768) prefill keeps
     # the same accumulation precision as the short-seq path.
-    from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+    from models.demos.gemma4.tt.compute_config import global_prefill_sdpa_fidelity, sdpa_fp32_dest_acc_en
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tt_q.device().arch(),
-        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
+        math_fidelity=global_prefill_sdpa_fidelity(),  # full-attention layers only (see the docstring)
         math_approx_mode=False,
         fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
         packer_l1_acc=False,
@@ -516,6 +578,11 @@ def chunked_prefill_sdpa(
             mesh_mapper=mesh_config.lane_shard_mapper(q_full.device(), 0),
         )
 
+    # split-K (GEMMA4_PREFILL_SDPA_SPLITK): the layer's own KV geometry (num_kv_heads, block_size) on the cache
+    if num_kv_heads is not None:
+        splitk_geometry = (int(num_kv_heads), effective_block_size(k_cache, head_dim, num_kv_heads))
+    else:
+        splitk_geometry = (int(k_cache.padded_shape[1]), int(k_cache.padded_shape[2]))
     outs = []
     start = 0
     while start < seq_len:
@@ -550,6 +617,30 @@ def chunked_prefill_sdpa(
                 paged_cache_geometry=paged_cache_geometry,
             )
             chunk_start_t.deallocate(True)
+        elif (
+            isinstance(base_offset, ttnn.Tensor)
+            and host_offset is not None
+            and _splitk_eligible(
+                q_chunk, k_cache, v_cache, user_pt, int(host_offset) + start, splitk_geometry, program_config
+            )
+        ):
+            # the eager continuation's device start tensor keys the stock program on the chunk length only; the
+            # split-K op compiles nothing per position (its starts and K ranges are runtime args), so it takes the
+            # host start the caller passes alongside (``host_offset``)
+            out_chunk = SdpaPrefillSplitK.op(
+                q_chunk,
+                k_cache,
+                v_cache,
+                user_pt,
+                int(host_offset) + start,
+                num_kv_heads=splitk_geometry[0],
+                block_size=splitk_geometry[1],
+                scale=scale,
+                q_chunk_size=program_config.q_chunk_size,
+                k_chunk_size=program_config.k_chunk_size,
+                compute_kernel_config=compute_kernel_config,
+                exp_approx_mode=bool(getattr(program_config, "exp_approx_mode", False)),
+            )
         elif isinstance(base_offset, ttnn.Tensor):
             # Traced multi-chunk: runtime offset from device tensor. Generator
             # chunks are <= PREFILL_CHUNK_SIZE so ``start`` is 0 here.
@@ -578,6 +669,24 @@ def chunked_prefill_sdpa(
             )
             if start:
                 chunk_start_t.deallocate(True)
+        elif _splitk_eligible(
+            q_chunk, k_cache, v_cache, user_pt, int(base_offset) + start, splitk_geometry, program_config
+        ):
+            # GEMMA4_PREFILL_SDPA_SPLITK: the same attention with each (head, Q chunk)'s K range split over cores
+            out_chunk = SdpaPrefillSplitK.op(
+                q_chunk,
+                k_cache,
+                v_cache,
+                user_pt,
+                int(base_offset) + start,
+                num_kv_heads=splitk_geometry[0],
+                block_size=splitk_geometry[1],
+                scale=scale,
+                q_chunk_size=program_config.q_chunk_size,
+                k_chunk_size=program_config.k_chunk_size,
+                compute_kernel_config=compute_kernel_config,
+                exp_approx_mode=bool(getattr(program_config, "exp_approx_mode", False)),
+            )
         else:
             out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q_chunk,
@@ -805,11 +914,16 @@ def concat_heads(
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights, prefill=False):
-    """Apply output projection (no bias for Gemma4). ``prefill``: fp32-accumulation config."""
+def apply_output_projection(tensor, weights: AttentionWeights, prefill=False, keep_sharded=False, dtype=None):
+    """Apply output projection (no bias for Gemma4). ``prefill``: fp32-accumulation config.
+
+    ``keep_sharded`` / ``dtype``: a DRAM-sharded decode o_proj returns its partial sums in the kernel's L1
+    width-sharded output layout, in ``dtype``, for the one-shot all-reduce (``ccl.oneshot_matmul_kwargs``); the other
+    projections ignore them (their interleaved output takes the composite all-reduce).
+    """
     ckc = prefill_linear_compute_kernel_config(tensor.device()) if prefill else None
     if isinstance(weights.o_proj, DramShardedLinear):
-        out = weights.o_proj(tensor, compute_kernel_config=ckc, prefill=prefill)
+        out = weights.o_proj(tensor, compute_kernel_config=ckc, prefill=prefill, keep_sharded=keep_sharded, dtype=dtype)
     elif isinstance(weights.o_proj, DecodeLinear):
         out = weights.o_proj(tensor, compute_kernel_config=ckc, prefill=prefill)
     else:
@@ -818,12 +932,13 @@ def apply_output_projection(tensor, weights: AttentionWeights, prefill=False):
     return out
 
 
-def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
+def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int, slot=None, rows=None):
     """Apply tensor-parallel allreduce if TP > 1.
 
     Also sufficient under weight_fracture: attention replicates across the other axis.
+    ``slot`` / ``rows``: the decode call sites name their one-shot slot ("o") and logical row count (``ccl_allreduce``).
     """
-    return ccl_allreduce(tensor, mesh_config, ccl_manager)
+    return ccl_allreduce(tensor, mesh_config, ccl_manager, slot=slot, rows=rows)
 
 
 def _paged_fill_cache(cache, x, *args, **kwargs):

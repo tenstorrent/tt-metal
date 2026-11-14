@@ -44,10 +44,13 @@ from models.demos.gemma4.tt.spec_decode import (
     serving_masks_host,
     serving_pad_rows,
     serving_plan,
+    serving_ring_window_table,
     serving_seed_index,
     serving_select_rows,
+    serving_sliding_span_ring,
     serving_trace_projection,
     serving_verify_table_widths,
+    serving_virtual_rings,
     serving_width_for,
     serving_width_ladder,
     spec_capture_shapes,
@@ -73,6 +76,17 @@ _H, _V = 2048, 5
 
 
 _MAX_CTX = 262144
+
+
+@pytest.fixture(autouse=True)
+def _no_decode_attention_env():
+    """These tests drive the serving records over stand-in targets on the default verify path: a tier leg that exports
+    the decode-attention knobs for its device tests (GEMMA4_SPEC_VERIFY_PREFIX_LSE=1 made the prefix-LSE geometry walk
+    a stand-in target's integer layers) must not switch them here."""
+    with pytest.MonkeyPatch.context() as mp:
+        for name in ("GEMMA4_SPEC_VERIFY_PREFIX_LSE", "GEMMA4_SPEC_VERIFY_MULTIPOS", "GEMMA4_SDPA_PAIR_SPLIT"):
+            mp.delenv(name, raising=False)
+        yield
 
 
 def _exact_bucket(start, horizon=_H, verify=_V):
@@ -1570,6 +1584,47 @@ def test_the_ring_mask_spans_ring_slots_with_the_pv_host_inputs_rule():
             ok = (d >= lo) & (d < lo + W) & (d <= top)
             ref = torch.where(ok, torch.tensor(0.0, dtype=torch.bfloat16), neg)
             assert torch.equal(ms[b, 0, p], ref), (b, p)
+    # The sliding span ring over an UNBOUNDED paged pool: the same ring mask, a per-replay table whose column k
+    # names the block of the positions its slots hold. Every key the ring mask lets a row see reads that key's own
+    # block and offset in the absolute table, the visible keys are exactly the unbounded window, and every packed
+    # position's KV write (slot x mod R through the same table) lands on its own block.
+    bs, W = 64, _W
+    assert serving_sliding_span_ring(W, 6, bs) == 1152  # window + P - 1 + one block, on the 64 grid
+    # which pools take the ring (serving_prepare): only an unbounded sliding pool, one lane, the knob on, and a ring
+    # narrower than the narrowest rung; the bounded pool, the lane engine, the knob off and a narrow rung keep theirs
+    rings = {"sliding_attention": None, "full_attention": None}
+    sizes = {"sliding_attention": bs, "full_attention": bs}
+    shapes, widths = [(1, 5), (5, 3)], {(1, 5): [2048, 8192], (5, 3): [2048, 8192]}
+    assert serving_virtual_rings(rings, W, sizes, shapes, widths, 1, True) == {"sliding_attention": 1152}
+    assert serving_virtual_rings({**rings, "sliding_attention": 2048}, W, sizes, shapes, widths, 1, True) == {}
+    assert serving_virtual_rings(rings, W, sizes, shapes, widths, 4, True) == {}
+    assert serving_virtual_rings(rings, W, sizes, shapes, widths, 1, False) == {}
+    assert serving_virtual_rings(rings, W, sizes, shapes, {(1, 5): [1024, 8192]}, 1, True) == {}
+    assert serving_sliding_span_ring(W, 4, 128) == 1280  # rounded to the block
+    gen = torch.Generator().manual_seed(5)
+    cols = 4096 // bs + 2
+    for P in (2, 4, 6):
+        R = serving_sliding_span_ring(W, P, bs)
+        # early context (positions < R), block and ring boundaries, the wrap straddling the packed rows
+        for cs in ([0, 1, 63, 64], [R - P, R - P + 1, R, 2 * R - 1], [1000, 1150, 2303, 3000], [4096 - P - 1]):
+            table = torch.randint(1, 10_000, (len(cs), cols), generator=gen)
+            ring_t = serving_ring_window_table(table, cs, P, R, bs)
+            assert ring_t.shape == (len(cs), R // bs) and ring_t.dtype == torch.int64
+            _mf, ms = serving_masks_host(cs, P, W, S_k=cols * bs, ring=R)
+            _mf, ms_abs = serving_masks_host(cs, P, W, S_k=cols * bs)
+            for b, c in enumerate(cs):
+                top = c + P - 1
+                for p in range(P):
+                    seen = (ms[b, 0, p] == 0).nonzero().reshape(-1).tolist()
+                    keys = sorted(top - ((top - j) % R) for j in seen)
+                    assert keys == (ms_abs[b, 0, p] == 0).nonzero().reshape(-1).tolist(), (P, cs, b, p)
+                    for j in seen:
+                        x = top - ((top - j) % R)
+                        assert int(ring_t[b, j // bs]) == int(table[b, x // bs]) and j % bs == x % bs, (b, p, j, x)
+                    x = c + p  # this row's KV write: cache_position_modulo = R through the ring table
+                    assert int(ring_t[b, (x % R) // bs]) == int(table[b, x // bs]), (b, p, x)
+    with pytest.raises(ValueError, match="past its"):  # allow-pytest.raises (pure)
+        serving_ring_window_table(torch.ones(1, 2, dtype=torch.int64), [125], 6, 1152, 64)
 
 
 # In-trace mask builder: its plan + op-for-op emulation must equal the host reference --------------
@@ -1906,6 +1961,16 @@ def _rail_allocates_nothing_after_capture(
     spec._packed_H = lambda: 4  # local query heads: the packed-row positions are B x 4 x P per shape
     spec._srv_blocks = ladder[-1] // 64
     spec._srv_slots, spec._srv_n_slots = serving_kv_group_slots(layer_types)
+    spec._srv_slot_types = {slot: layer_types[spec._srv_slots.index(slot)] for slot in range(spec._srv_n_slots)}
+    # as serving_prepare sets it: the sliding span ring (GEMMA4_SPEC_SLIDING_SPAN_RING) over the unbounded sliding
+    # pool, block 128 -- its ring scalars, ring-wide mask and per-replay ring tables are prepared buffers too; the
+    # sharded rail keeps the rung-wide sliding span (the knob off)
+    spec._pv_window = 1024
+    spec._srv_vring = (
+        {}
+        if sharded_verify
+        else {"sliding_attention": serving_sliding_span_ring(1024, max(K + 1 for _B, K in shapes), 128)}
+    )
     spec._srv_flat_type = "full_attention"
     spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
     spec._srv_lanes, spec._srv_lane_slots, spec._srv_lane_devices = (
@@ -1962,7 +2027,8 @@ def _rail_allocates_nothing_after_capture(
 
     def packed_verify(x, **kw):
         sharded = bool(kw.get("keep_logits_sharded", False))
-        verify_kw.append(sharded)
+        # the sliding KV writes of the body address the ring tables through cache_position_modulo = the ring
+        verify_kw.append((sharded, kw.get("kv_modulo_sliding")))
         rows = int(x.host.shape[-1])
         logits = columns(rows, vocab_padded // tp if sharded else vocab_padded)
         return logits, op(torch.zeros(1, 1, rows, backbone), fake.bfloat16)
@@ -1993,15 +2059,26 @@ def _rail_allocates_nothing_after_capture(
             prepared.update(buf.address for buf in allocated)
             for _j0, n_keys in spec._srv_mask_chunks(w):
                 spec._srv_iota_for(n_keys)
+            ring = spec._srv_vring.get("sliding_attention")
+            if ring:
+                # the sliding mask spans the ring: its iota, and ring-wide verify tables on the sliding slots
+                for _j0, n_keys in spec._srv_mask_chunks(ring):
+                    spec._srv_iota_for(n_keys)
+                for slot, lt in spec._srv_slot_types.items():
+                    want = ring // 128 if lt == "sliding_attention" else w // 64
+                    assert rec["v_ptl_slots"][slot].shape == (B, want), (slot, lt, rec["v_ptl_slots"][slot].shape)
             outs = spec._srv_body(rec)
             assert outs == (rec["verify_x"], rec["vidx"]), "the body returns the record's persistent outputs"
             assert rec["verify_x"].shape == (1, B * (K + 1)) and rec["vidx"].shape == (1, 1, B * (K + 1))
             spec._srv_records[(shape, w)] = rec
-    assert sorted(spec._srv_iota) == [1024, 2048, 8192, 32768]  # 263168 = 8 x 32768 + 1024
+    ring = spec._srv_vring.get("sliding_attention")
+    # 263168 = 8 x 32768 + 1024; the sliding span ring adds its own width (1280 = 1024 + 6 - 1 + 128 on the 128 grid)
+    assert sorted(spec._srv_iota) == sorted({1024, 2048, 8192, 32768} | ({ring} if ring else set()))
+    assert ring in (None, 1280)
     n_bodies = len(shapes) * len(ladder)
     # every body asked the packed verify for the shards exactly under the knob, and the shared logits buffer took
     # the chip's slice width (the readback concatenates tp of them) or the gathered width
-    assert verify_kw == [sharded_verify] * n_bodies
+    assert verify_kw == [(sharded_verify, spec._srv_vring.get("sliding_attention"))] * n_bodies
     assert spec._srv_logits.shape[-1] == (vocab_padded // tp if sharded_verify else vocab_padded)
     if sharded_verify:
         assert sharded_calls == [(B * (K + 1), vocab_padded // tp, True) for B, K in shapes for _w in ladder]
@@ -2602,6 +2679,7 @@ def test_every_layer_verifies_and_reseeds_through_its_own_group_table(monkeypatc
 
     spec = _bare_decoder(n_layers=48)
     spec._srv_slots, spec._srv_n_slots = slots, n_slots
+    spec._srv_vring = {}  # the rung-wide sliding span (GEMMA4_SPEC_SLIDING_SPAN_RING=0)
     spec._srv_blocks = blocks
     spec._pv_ring = {"sliding_attention": None, "full_attention": None}
     spec._pv_ring_rep = {"sliding_attention": 0, "full_attention": 5}

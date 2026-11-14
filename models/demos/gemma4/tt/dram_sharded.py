@@ -336,6 +336,91 @@ def _get_out_subblock_w(per_core_n, out_subblock_h):
     return 1
 
 
+PREFILL_WIDE_GRID_ENV = "GEMMA4_PREFILL_WIDE_GRID"
+# Blackhole mesh shape -> hidden sizes (the model) where the wide short-row prefill grid is the default (measured: see
+# prefill_wide_grid_default).
+# (1, 4) x hidden 3840 (12B TP4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): TTFT
+# 128/128 c1 99 -> 72 ms, 2K 346 -> 293, 8K 1409 -> 1276, 32K 6468 -> 5916, c32 1466 -> 1229 (aggregate +5 %), decode
+# flat, coherence PASS, matmul PCC vs torch identical to the narrow grid; test_full_model 0.955 -> 0.984.
+# (1, 4) x hidden 2816 (26B TP4): measured 2026-11-08 on a Galaxy QB2 block (26B P300X2 entry, same seeds, the six port
+# knobs together vs off): every point up (prose c1 59.9 -> 63.6 tok/s, c8 302 -> 356, +17.8 %), TTFT lower at every
+# point (c1 136.6 -> 125.7 ms), coherence PASS, GPQA subset 66/80 vs 67/80; the same arm without the grid read flat
+# to +5 % with the c1 TTFT unchanged, so the grid carries the 26B's TTFT gain.
+# (1, 8) x hidden 3840 (12B TP8): measured 2026-11-07 on the Galaxy DP4 engines with the six port knobs together
+# (see default_ccl_oneshot). 5376 (31B) stays out on both shapes: with the grid forced on, the 31B single-user
+# TTFTs improved (QB2 c1 128/1K 137 -> 130 ms, Galaxy 136 -> 128 vs the five-knob arm) but the multi-user TTFT read
+# worse than both the five-knob arm and the knobs-off arm (QB2 c8 593 / 662 -> 855 ms, Galaxy c32 747 / 797 -> 852),
+# so 5376 waits for a prefill microbenchmark that isolates the grid.
+PREFILL_WIDE_GRID_DEFAULT = {(1, 4): (3840, 2816), (1, 8): (3840,)}
+# in0_block_w cap of the wide config (the largest divisor of the K tiles up to it whose CBs fit the budget).
+PREFILL_WIDE_IN0_CAP = max(1, int(os.environ.get("GEMMA4_PREFILL_WIDE_IN0_CAP", "8")))
+
+
+def prefill_wide_grid_default(mesh_device, k=None, n=None) -> bool:
+    """Whether a weight's short-row prefill matmuls take the wide 2D grid (item 10 of the gemma4_12b_qb2 port,
+    ``prefill_wide_progcfg``): the grid width goes to the device's worker-grid width over the exact divisors of the
+    N tiles (the 12B TP=4 gate_up / down / o_proj: 10 columns instead of 6, 40 cores instead of 24 for the 4 row
+    tiles of a 128-token prompt) and in0_block_w to the largest divisor of the K tiles up to
+    ``PREFILL_WIDE_IN0_CAP`` whose static CBs fit the L1 budget (fp32 partials included: the HiFi2 + fp32 Dest
+    config stays). An uneven split over 10+ columns garbled the 31B once (``prefill_max_cols_default``), so only
+    exact divisors are taken and the default is per model: ``GEMMA4_PREFILL_WIDE_GRID=1|0`` overrides, else on when
+    ``PREFILL_WIDE_GRID_DEFAULT`` lists the weight's hidden size (``k`` or ``n``) for the Blackhole mesh shape (those
+    measured with the PCC gates intact: the 12B and 26B 1x4 QB2 blocks, the 12B (1,8) Galaxy DP4 engine), off
+    elsewhere (Wormhole; the P150x8 Loudbox shares the (1,8) shape and is unmeasured)."""
+    env = os.environ.get(PREFILL_WIDE_GRID_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    if not is_blackhole():
+        return False
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    hidden = PREFILL_WIDE_GRID_DEFAULT.get(shape, ())
+    return k in hidden or n in hidden
+
+
+def _device_grid_cols(mesh_device) -> int:
+    """The compute grid width of the device (the wide config's column bound); the safe default without one."""
+    try:
+        return int(mesh_device.compute_with_storage_grid_size().x)
+    except Exception:  # noqa: BLE001 - host-only stand-ins
+        return prefill_grid_default()[0]
+
+
+def prefill_wide_progcfg(
+    m, k, n, *, max_cols, in0_cap, weight_tile_bytes, fp32_acc, budget, grid_rows=None, fused_activation=None
+):
+    """The wide 2D multicast config of a prefill matmul (``prefill_wide_grid_default``): the most columns among
+    the exact divisors of the N tiles up to ``max_cols`` whose output subblock is at least 3 wide (else the widest
+    subblock), M over the grid rows, in0_block_w the largest divisor of the K tiles up to ``in0_cap`` whose static
+    CBs (``prefill_cb_bytes``) stay within ``budget``. None when no in0_block_w fits: the caller keeps the narrow
+    config."""
+    rows = grid_rows or prefill_grid_default()[1]
+    n_tiles = math.ceil(n / TILE_SIZE)
+    k_tiles = math.ceil(k / TILE_SIZE)
+    m_tiles = math.ceil(m / TILE_SIZE)
+    divisors = [c for c in range(1, max(1, int(max_cols)) + 1) if n_tiles % c == 0]
+    cols = max(divisors, key=lambda c: (min(_get_out_subblock_w(n_tiles // c, 1), 3), c))
+    per_core_N = n_tiles // cols
+    per_core_M = max(1, math.ceil(m_tiles / rows))
+    in0 = None
+    for d in range(min(int(in0_cap), k_tiles), 0, -1):
+        if k_tiles % d == 0 and prefill_cb_bytes(per_core_M, per_core_N, d, weight_tile_bytes, fp32_acc) <= budget:
+            in0 = d
+            break
+    if in0 is None:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=in0,
+        out_subblock_h=1,
+        out_subblock_w=_get_out_subblock_w(per_core_N, 1),
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=False,
+    )
+
+
 def _best_prefill_cols(n, max_cols):
     """Grid width (<=max_cols) maximizing the output subblock, tie-broken to more cores.
 
@@ -389,6 +474,27 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     )
 
 
+def prefill_divisor_slab(m, slab):
+    """GEMMA4_PREFILL_DIVISOR_SLAB=1 (opt-in): when the L1 slab does not divide ``m`` (a 4096-row chunk against the
+    31B's 2240-row fp32 slab ran 2240 + 1024 + 832 rows: three matmuls, three slices and a concat per projection,
+    ~96 ms of the 813 ms device time of a 4K chunk on a Galaxy row), the largest tile multiple <= ``slab`` that
+    divides ``m`` and is at least half the slab (2048 for 4096 / 8192), so the batch-reshape path runs one matmul
+    with no slice / concat; per_core_M never grows (fewer rows per slab), so the CBs still fit. Else ``slab``."""
+    if m <= slab or m % slab == 0:
+        return slab
+    from models.demos.gemma4.tt.mesh_orientation import decode_flag  # env when set, else the build profile
+
+    if decode_flag("GEMMA4_PREFILL_DIVISOR_SLAB") != "1":
+        return slab
+    for tiles in range(slab // TILE_SIZE, 0, -1):
+        rows = tiles * TILE_SIZE
+        if 2 * rows < slab:
+            break
+        if m % rows == 0:
+            return rows
+    return slab
+
+
 def prefill_row_chunks(m, slab=None, remainder=None):
     """Row ranges of a prefill matmul whose M is not a multiple of the slab: full slabs first, then the leftover in
     chunks of at most ``remainder`` rows (the pre-slab configs; see ``__call__``)."""
@@ -418,6 +524,13 @@ class DramShardedLinear:
         self.n = n
         self._dtype = dtype
         self._prefill_max_cols = prefill_max_cols_default(mesh_device)
+        # GEMMA4_PREFILL_WIDE_GRID (prefill_wide_grid_default): the wide short-row 2D config, bounded by the device
+        # grid (GEMMA4_PREFILL_MAX_COLS still caps it) and the L1 budget of the slab rule.
+        self._prefill_wide = prefill_wide_grid_default(mesh_device, k, n)
+        self._prefill_wide_cols = min(
+            _device_grid_cols(mesh_device), max(1, int(os.environ.get("GEMMA4_PREFILL_MAX_COLS") or 1 << 10))
+        )
+        self._weight_tile_bytes = weight_tile_bytes(dtype)
         # the slab this weight's CBs allow, per Dest accumulation format (GEMMA4_PREFILL_CUTOFF still pins it): the
         # fp32 Dest compute config of the prefill linears adds an fp32 partials block per core
         self._slab_rows_by_acc = {
@@ -491,7 +604,22 @@ class DramShardedLinear:
                 decode_compute_kernel_config(mesh_device),
             )
 
-    def _prefill_pc(self, m):
+    def _prefill_pc(self, m, fp32_acc=False):
+        """The 2D prefill config for ``m`` rows: the wide one when it is the policy and its CBs fit (with the fp32
+        partials block of an fp32-Dest compute config), else the narrow one."""
+        if self._prefill_wide:
+            pc = prefill_wide_progcfg(
+                m,
+                self.k,
+                self.n,
+                max_cols=self._prefill_wide_cols,
+                in0_cap=PREFILL_WIDE_IN0_CAP,
+                weight_tile_bytes=self._weight_tile_bytes,
+                fp32_acc=bool(fp32_acc),
+                budget=_L1_BYTES - max(0, _PREFILL_L1_HEADROOM),
+            )
+            if pc is not None:
+                return pc
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)
 
     def _decode_ckc(self, compute_kernel_config):
@@ -508,14 +636,16 @@ class DramShardedLinear:
         (the DRAM-sharded kernel; the 1D decode path reads interleaved rows)."""
         return self._decode_1d is None
 
-    def _decode_sharded_rows(self, x_sh, out_mc, compute_kernel_config, m_rows, keep_sharded=False):
-        """Decode on an activation that is already width-sharded in ``act_memory_config`` (no reshard program)."""
+    def _decode_sharded_rows(self, x_sh, out_mc, compute_kernel_config, m_rows, keep_sharded=False, dtype=None):
+        """Decode on an activation that is already width-sharded in ``act_memory_config`` (no reshard program).
+        ``dtype``: the kernel's output dtype (the one-shot all-reduce payload; None = the activation's)."""
         out = ttnn.linear(
             x_sh,
             self.weight,
             program_config=self._decode_pc,
             compute_kernel_config=self._decode_ckc(compute_kernel_config),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=dtype,
         )
         x_sh.deallocate(True)
         if keep_sharded:
@@ -527,10 +657,19 @@ class DramShardedLinear:
         return out
 
     def __call__(
-        self, x, compute_kernel_config=None, out_memory_config=None, keep_sharded=False, rows=None, prefill=False
+        self,
+        x,
+        compute_kernel_config=None,
+        out_memory_config=None,
+        keep_sharded=False,
+        rows=None,
+        prefill=False,
+        dtype=None,
     ):
         """``keep_sharded``: a decode (one row tile) result is returned in the kernel's L1 width-sharded output
-        layout (no sharded -> interleaved copy; the consumer reads the shards). ``rows``: the logical row count of
+        layout (no sharded -> interleaved copy; the consumer reads the shards), as 32 rows (the tile; a caller
+        with fewer logical rows presents them again). ``dtype``: that result's dtype (the one-shot all-reduce payload,
+        ``ccl.oneshot_matmul_kwargs``); None keeps the activation's. ``rows``: the logical row count of
         the result when the input is a width-sharded one-row-tile activation (its logical rows are the tile).
         ``prefill``: a tile-sized prefill (a 32-token prompt) takes the 2D prefill config, not the decode kernel."""
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
@@ -553,7 +692,12 @@ class DramShardedLinear:
             and x.memory_config() == self._act_memcfg
         ):
             return self._decode_sharded_rows(
-                x, out_mc, compute_kernel_config, M if rows is None else int(rows), keep_sharded=keep_sharded
+                x,
+                out_mc,
+                compute_kernel_config,
+                M if rows is None else int(rows),
+                keep_sharded=keep_sharded,
+                dtype=dtype,
             )
         flat_shape = [1, 1, M, n_in]
         x_work = x if x_shape == flat_shape else ttnn.reshape(x, flat_shape)
@@ -611,6 +755,7 @@ class DramShardedLinear:
                     program_config=self._decode_pc,
                     compute_kernel_config=self._decode_ckc(compute_kernel_config),
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    dtype=dtype,
                 )
                 x_sh.deallocate(True)
                 if keep_sharded:
@@ -633,9 +778,10 @@ class DramShardedLinear:
         if os.environ.get("GEMMA4_DEBUG_L1_DUMP") == "1" and not getattr(self, "_l1_dumped", False):
             self._l1_dumped = True  # diagnostics: the L1 residents a program's CBs must stay below
             ttnn.dump_device_memory_state(x_work.device(), f"prefill_matmul_k{self.k}_n{self.n}_M{M}")
-        slab = self._slab_rows_by_acc[fp32_dest_acc(compute_kernel_config)]
+        fp32 = fp32_dest_acc(compute_kernel_config)
+        slab = prefill_divisor_slab(M, self._slab_rows_by_acc[fp32])
         if M <= slab:
-            pc = self._prefill_pc(M)
+            pc = self._prefill_pc(M, fp32_acc=fp32)
             out = ttnn.linear(
                 x_work,
                 self.weight,
@@ -652,7 +798,7 @@ class DramShardedLinear:
             # single-size output — no concat, no memory doubling.
             batch = M // slab
             x_r = ttnn.reshape(x_work, (1, batch, slab, n_in))
-            pc = self._prefill_pc(slab)
+            pc = self._prefill_pc(slab, fp32_acc=fp32)
             out_r = ttnn.linear(
                 x_r, self.weight, program_config=pc, compute_kernel_config=compute_kernel_config, memory_config=out_mc
             )
@@ -670,7 +816,7 @@ class DramShardedLinear:
             # a slice over the whole extent is a view of x_work (freeing it would free the caller's activation)
             whole = start == 0 and end == M
             x_c = x_work if whole else ttnn.slice(x_work, [0, 0, start, 0], [1, 1, end, self.k])
-            pc = self._prefill_pc(end - start)
+            pc = self._prefill_pc(end - start, fp32_acc=fp32)
             outs.append(
                 ttnn.linear(
                     x_c,

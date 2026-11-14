@@ -27,10 +27,13 @@ from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.compute_config import global_prefill_sdpa_fidelity
 from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
+from models.demos.gemma4.tt.kv_pair_shard import KV_PAIR_SHARD_ENV, half_block_write_tables, kv_pair_shard_enabled
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.mesh_orientation import decode_flag, set_decode_fusion_profile
 from models.demos.gemma4.tt.rms_norm import RMSNorm
+from models.demos.gemma4.tt.sdpa_pair_split import pair_split_reason
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
@@ -286,6 +289,124 @@ class _LaneSamplingGenerator(SamplingGenerator):
         self.reset_output_state()
 
 
+SAMPLING_TRACE_ENV = "GEMMA4_SAMPLING_TRACE"
+# Blackhole mesh shapes where the replayed sampling trace is the default (measured: see sampling_trace_default).
+SAMPLING_TRACE_DEFAULT_SHAPES = ()
+
+
+def sampling_trace_default(mesh_device, mesh_config=None) -> bool:
+    """Whether a decode step's device sampler replays its own captured trace (item 3c of the gemma4_12b_qb2 port)
+    instead of running its programs eagerly after every decode-trace replay.
+
+    ``Gemma4Model._tt_disable_sampling_trace`` is the inverse. The shared generator captures a sampling trace at
+    every decode-trace capture already; Gemma4 never replayed it (#48037: one trace for every decode bucket, bound
+    to the bucket that captured it). With this on the mixin keys the sampling traces by decode bucket, captures the
+    plain keys (greedy = force-argmax, and sampled) during the warmup sweep and replays them; requests with an
+    explicit seed, penalties, log probs or a grammar mask keep the eager sampler (the seed tensor is rewritten
+    every token on the host), as does any key without a captured trace outside the warmup (no capture under load).
+    ``GEMMA4_SAMPLING_TRACE=1|0`` overrides. Policy when unset: on for the Blackhole mesh shapes in
+    ``SAMPLING_TRACE_DEFAULT_SHAPES`` (none: on the 12B 1x4 QB2 block the replay lost at single-user sampled, TTFT
+    99 -> 206 ms with decode-trace re-captures), off elsewhere. Never on the lane engine or a fractured mesh, whatever the
+    env says (the lane sampler groups rows per lane column; the fracture-aware sampler drops the top-k programs).
+    """
+    if mesh_config is not None and (
+        getattr(mesh_config, "lane_sharded", False) or getattr(mesh_config, "weight_fracture", False)
+    ):
+        return False
+    env = os.environ.get(SAMPLING_TRACE_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    return is_blackhole() and shape in SAMPLING_TRACE_DEFAULT_SHAPES
+
+
+SHARE_PAGE_TABLES_ENV = "GEMMA4_SHARE_PAGE_TABLES"
+# Blackhole mesh shapes where the per-group page-table buffers are the default (measured: see share_page_tables_default).
+# (1, 4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): the 48 per-layer page-table
+# copies per prefill become 6 per-group ones (install 9.2 -> 5.7 ms x2), TTFT 128/128 c1 99 -> 90 ms, decode flat,
+# coherence PASS, PCC bit-identical.
+# (1, 8): measured 2026-11-07 on the Galaxy DP4 engines with the six port knobs together (see default_ccl_oneshot).
+SHARE_PAGE_TABLES_DEFAULT_SHAPES = ((1, 4), (1, 8))
+
+
+def page_table_group_slots(layer_types, kv_shared_layer_map=None):
+    """vLLM's hybrid KV-cache grouping as one slot per layer: ``spec_decode.serving_kv_group_slots`` over the layers
+    that own a cache (the 12B: five sliding groups of 8 layers and one full group, disjoint block ids), a KV-shared
+    layer taking its source's slot (it has no cache and the generator hands it the source's table,
+    ``_apply_kv_share_to_per_layer_page_tables``). Returns ``(slot_per_layer, n_slots)``."""
+    from models.demos.gemma4.tt.spec_decode import serving_kv_group_slots
+
+    shared = {int(k): int(v) for k, v in (kv_shared_layer_map or {}).items()}
+    owners = [i for i in range(len(layer_types)) if i not in shared]
+    owner_slots, n_slots = serving_kv_group_slots([layer_types[i] for i in owners])
+    slots = [None] * len(layer_types)
+    for i, slot in zip(owners, owner_slots):
+        slots[i] = slot
+    for i, source in shared.items():
+        slots[i] = slots[source] if 0 <= source < len(slots) else None
+    return slots, n_slots
+
+
+def share_page_tables_default(mesh_device, mesh_config=None, *, bounded_sliding=False, kv_shared=False) -> bool:
+    """Whether the layers of one vLLM KV-cache group share one persistent page-table device buffer (item 5 of the
+    gemma4_12b_qb2 port): an install then costs one H2D copy per group (six on the 12B) instead of one per layer
+    (48), the host cost that sat at 9-16 ms of a 128-token prefill on the QB2 block (every served prefill follows
+    a decode step, which forces the re-upload). The buffers are keyed on the model's group slots
+    (``page_table_group_slots``), never on the host objects a call carries: the warmup broadcasts one legacy table
+    to every layer, so the earlier host-identity sharing put all 48 layers on one buffer and had to rebuild them
+    under the captured decode traces and the speculative records at the first real request (the 2026-11-05 hang).
+    ``GEMMA4_SHARE_PAGE_TABLES=1|0`` overrides. Policy when unset: on for the Blackhole mesh shapes in
+    ``SHARE_PAGE_TABLES_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact: the
+    12B 1x4 QB2 block and the (1,8) Galaxy DP4 engine), off elsewhere (Wormhole; the P150x8 Loudbox shares the
+    (1,8) shape and is unmeasured). Never on the lane engine or a fractured mesh (the
+    device layout is per layer), under bounded sliding (the ring remap is per layer) or with KV-shared layers (the
+    grouping is unverified there), whatever the env says.
+    """
+    if mesh_config is not None and (
+        getattr(mesh_config, "lane_sharded", False) or getattr(mesh_config, "weight_fracture", False)
+    ):
+        return False
+    if bounded_sliding or kv_shared:
+        return False
+    env = os.environ.get(SHARE_PAGE_TABLES_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    return is_blackhole() and shape in SHARE_PAGE_TABLES_DEFAULT_SHAPES
+
+
+PREFILL_TAIL_TRACE_ENV = "GEMMA4_PREFILL_TAIL_IN_TRACE"
+# Blackhole mesh shapes where the traced prefill tail is the default (measured: see prefill_tail_in_trace_default).
+# (1, 4): measured 2026-11-06 on a Galaxy QB2 block (12B P300X2 entry, same seeds): TTFT 2K/128 c1 346 -> 329 ms,
+# 128/128 flat, decode flat, coherence PASS, traced tail bit-exact vs the eager tail.
+# (1, 8): measured 2026-11-07 on the Galaxy DP4 engines with the six port knobs together (see default_ccl_oneshot).
+PREFILL_TAIL_TRACE_DEFAULT_SHAPES = ((1, 4), (1, 8))
+
+
+def prefill_tail_in_trace_default(mesh_device, mesh_config=None) -> bool:
+    """Whether a single-user prefill capture ends with the last-token tile, the lm_head and the softcap (item 4 of
+    the gemma4_12b_qb2 port) instead of returning the hidden states for an eager tail after every replay. The tile
+    is sliced at persistent device bounds the generator rewrites before the replay (one program per bucket), the
+    logits stay TP-sharded on their chips: the host reads one row per chip and concatenates the vocabulary
+    (``process_output_prefill``), the device sampler takes the shards as it does for decode. The eager tail stays
+    for the batched form, the traced chunk walk and bounded sliding (``_prefill_tail_in_trace_applies``).
+    ``GEMMA4_PREFILL_TAIL_IN_TRACE=1|0`` overrides. Policy when unset: on for the Blackhole mesh shapes in
+    ``PREFILL_TAIL_TRACE_DEFAULT_SHAPES`` (those where the served A/B measured a win with the PCC gates intact: the
+    12B 1x4 QB2 block and the (1,8) Galaxy DP4 engine), off elsewhere (Wormhole; the P150x8 Loudbox shares the
+    (1,8) shape and is unmeasured). Never on the lane engine or a fractured mesh (the
+    owner-lane readback and the fracture-aware sampler read the gathered tile), whatever the env says.
+    """
+    if mesh_config is not None and (
+        getattr(mesh_config, "lane_sharded", False) or getattr(mesh_config, "weight_fracture", False)
+    ):
+        return False
+    env = os.environ.get(PREFILL_TAIL_TRACE_ENV, "").strip().lower()
+    if env:
+        return env in ("1", "true", "yes", "on")
+    shape = tuple(int(s) for s in mesh_device.shape) if hasattr(mesh_device, "shape") else ()
+    return is_blackhole() and shape in PREFILL_TAIL_TRACE_DEFAULT_SHAPES
+
+
 class Gemma4Model:
     # Generator-interface flag. PLI models (E2B/E4B) recompute host per-layer
     # inputs from the token every step, so their decode-trace input buffers
@@ -338,7 +459,29 @@ class Gemma4Model:
         # The 4-chip Blackhole MoE build runs the fused decode step by default (tt/mesh_orientation.py, every
         # GEMMA4_* flag still an override); recorded before the layers are built since the weight loaders and
         # the norm modules read the switches at construction.
-        set_decode_fusion_profile(tuple(mesh_device.shape), blackhole=is_blackhole(), moe=hf_config.enable_moe_block)
+        # kv_pairs: the global layers' KV heads sit on chip pairs at TP over a one-row mesh's columns (the 31B on the
+        # (1,8) line) -- the line profile then adds the pair-split decode attention and the prefix-LSE verify.
+        mesh_shape = tuple(mesh_device.shape)
+        kv_pairs = False
+        if len(mesh_shape) == 2 and mesh_shape[0] == 1:
+            for i in range(hf_config.num_hidden_layers):
+                cfg = Gemma4AttentionConfig(hf_config, i)
+                if not cfg.is_sliding:
+                    kv_pairs = (
+                        pair_split_reason(
+                            is_sliding=False,
+                            num_q_heads=cfg.num_attention_heads,
+                            num_kv_heads=cfg.num_key_value_heads,
+                            tp=mesh_shape[1],
+                            mesh_shape=mesh_shape,
+                            kv_replicated=cfg.num_key_value_heads < mesh_shape[1],
+                        )
+                        is None
+                    )
+                    break
+        set_decode_fusion_profile(
+            mesh_shape, blackhole=is_blackhole(), moe=hf_config.enable_moe_block, kv_pairs=kv_pairs
+        )
         # Keep prompt-dependent slice bounds in persistent buffers. Literal
         # offsets compile a new program after prefill traces are already live.
         self._tail_slice_start = ttnn.from_torch(
@@ -393,6 +536,7 @@ class Gemma4Model:
         router_dtype = precision.get("router", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
+        global_prefill_sdpa_fidelity()  # GEMMA4_PREFILL_SDPA_GLOBAL_FIDELITY: a bad value fails at build
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type
@@ -412,6 +556,18 @@ class Gemma4Model:
                 logger.info(f"KV sharing enabled: {len(self.kv_shared_layer_map)} layers share KV from earlier layers")
 
         _inject_missing_kv_shared_attention_weights(state_dict, hf_config, self.kv_shared_layer_map)
+
+        # GEMMA4_SHARE_PAGE_TABLES: one persistent page-table device buffer per vLLM KV-cache group slot
+        # (share_page_tables_default); the slots follow the model structure (page_table_group_slots).
+        self._page_table_slots, self._page_table_n_slots = page_table_group_slots(
+            list(hf_config.layer_types[:n_layers]), self.kv_shared_layer_map
+        )
+        self._share_page_tables = share_page_tables_default(
+            mesh_device,
+            mesh_config,
+            bounded_sliding=bool(bounded_sliding_kv_cache),
+            kv_shared=bool(self.kv_shared_layer_map),
+        )
 
         # RoPE caches per layer type (sliding vs global)
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
@@ -501,6 +657,7 @@ class Gemma4Model:
         # Direct callers (text_demo, unit tests) pass them explicitly to
         # ``ttnn_prefill_forward`` and bypass this stash.
         self._prefill_input_ids_torch = None
+        self._prefill_page_table_host = None
         self._prefill_embeds_torch = None
         # The eager continuation's device inputs (attention/continuation.py), per prefill call.
         self._g4_prefill_continuation = None
@@ -642,6 +799,22 @@ class Gemma4Model:
                 layer.self_attn.kv_cache = kv_cache
             self.layers.append(layer)
 
+        # GEMMA4_KV_PAIR_SHARD (tt/kv_pair_shard.py): the global layers whose KV head sits on a chip pair (the
+        # pair-split view) keep half of every logical block per chip; their cache writes go through per-chip
+        # write tables, persistent device buffers beside the read tables (_attach_kv_write_tables), keyed by the
+        # read buffer they derive from.
+        self._kv_pair_shard_layers = frozenset()
+        self._kv_write_table_by_read = {}
+        if kv_pair_shard_enabled():
+            shard = [i for i, layer in enumerate(self.layers) if layer.self_attn.weights.pair is not None]
+            if not shard:
+                raise ValueError(
+                    f"{KV_PAIR_SHARD_ENV}=1 needs the pair-split view on the global layers (GEMMA4_SDPA_PAIR_SPLIT, "
+                    f"each global KV head on one chip pair of a one-row mesh); mesh {tuple(mesh_device.shape)}"
+                )
+            self._kv_pair_shard_layers = frozenset(shard)
+            logger.info(f"{KV_PAIR_SHARD_ENV}: global layers {sorted(shard)} keep half of every KV block per chip")
+
         # GEMMA4_SDPA_DECODE_SPLITFREE: the split-independent paged decode SDPA's persistent fp32 scratch
         # (``attach_sdpa_splitfree_scratch``), allocated with the KV caches. The vLLM build creates no caches here
         # (create_kv_cache=False): its generator attaches the scratch once the plugin has allocated the paged
@@ -707,6 +880,20 @@ class Gemma4Model:
         self._dflash_taps = []
         self._dflash_tap_buffers = None
 
+        # GEMMA4_SAMPLING_TRACE: replay the sampler's trace (sampling_trace_default) or run it eagerly (#48037).
+        # A model that restages its decode inputs from the host every step (PLI: no device token feedback) has no
+        # persistent token buffer for the trace to write into and keeps the eager sampler.
+        self._tt_disable_sampling_trace = not (
+            sampling_trace_default(mesh_device, mesh_config) and not self._tt_vllm_always_refresh_decode_trace_inputs
+        )
+        # GEMMA4_PREFILL_TAIL_IN_TRACE: the single-user prefill capture ends with the last-token tile, the lm_head and
+        # the softcap (prefill_tail_in_trace_default); the host reads one row of the TP shards per chip, so the
+        # vocabulary must split evenly over the shards (no per-shard padding to concatenate around).
+        _vocab_splits_evenly = tp <= 1 or (
+            hf_config.vocab_size % tp == 0
+            and _compute_per_device_vocab(hf_config.vocab_size, tp) == hf_config.vocab_size // tp
+        )
+        self._prefill_tail_in_trace = prefill_tail_in_trace_default(mesh_device, mesh_config) and _vocab_splits_evenly
         # On-device sampling (greedy/top-k/top-p) — avoids reading full vocab logits to CPU
         self.sampling = None
         if is_mesh and tp > 1:
@@ -1195,6 +1382,19 @@ class Gemma4Model:
             ):
                 continuation = candidate
 
+        # GEMMA4_PREFILL_SEQ_PARALLEL: the layers take and return this chip's S / tp rows (ccl.py)
+        seq_shard = self._prefill_seq_parallel_applies(hidden_states, is_decode, batch_size)
+        if seq_shard:
+            if not getattr(self, "_g4_seq_parallel_logged", False):
+                self._g4_seq_parallel_logged = True
+                logger.info(
+                    f"GEMMA4_PREFILL_SEQ_PARALLEL: prefill rows sharded over tp={self.mesh_config.tp} "
+                    f"({int(hidden_states.shape[-2])} rows)"
+                )
+            hidden_states = ttnn.mesh_partition(
+                hidden_states, dim=2, cluster_axis=self.mesh_config.tp_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
         # copy-mode dFlash taps index buffers per forward
         self._dflash_tap_idx = 0
         for i, layer in enumerate(self.layers):
@@ -1272,6 +1472,7 @@ class Gemma4Model:
                 keep_kv = True
 
             layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
+            layer_kv_write_table = self.kv_write_table_for(i, layer_page_table)
 
             layer_packed = None
             if packed is not None:
@@ -1283,6 +1484,11 @@ class Gemma4Model:
                 _hot = packed.get("hot_pt_sliding") if sliding else packed.get("hot_pt_full")
                 if _hot is None:
                     _hot = packed.get("hot_pt")
+                # GEMMA4_SPEC_VERIFY_MULTIPOS: a global layer's causal multi-position SDPA inputs (its group table)
+                _mp = packed.get("verify_multipos")
+                _mp_pt = _mp["page_tables"][i] if _mp is not None and not sliding else None
+                # GEMMA4_SPEC_VERIFY_PREFIX_LSE: a global layer's prefix positions, row biases and fresh mask
+                _pl = packed.get("verify_prefix_lse")
                 layer_packed = {
                     "packed_p": packed["packed_p"],
                     "position_idx": packed["position_idx"],
@@ -1291,6 +1497,13 @@ class Gemma4Model:
                     "rope_packed": rope_packed.get(lt),
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": _hot,
+                    "kv_modulo": packed.get("kv_modulo_sliding") if sliding else None,
+                    "multipos": (
+                        {"plan": _mp["plan"], "cur_pos": _mp["cur_pos"], "page_table": _mp_pt}
+                        if _mp_pt is not None
+                        else None
+                    ),
+                    "prefix_lse": _pl if _pl is not None and not sliding else None,
                 }
 
             hidden_states = layer(
@@ -1318,6 +1531,8 @@ class Gemma4Model:
                 mm_attn_mask=mm_attn_masks,
                 traced_short_bucket=traced_short_bucket,
                 continuation=continuation.for_layer(i) if continuation is not None else None,
+                seq_shard=seq_shard,
+                kv_write_table=layer_kv_write_table,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1385,6 +1600,11 @@ class Gemma4Model:
             # Intermediate generator chunk: do not flush (last chunk owns the ring).
             return None
 
+        if seq_shard:  # back to the replicated rows the final norm / last-token tile / lm_head expect
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            hidden_states = ccl_allgather(hidden_states, self.mesh_config, self.ccl_manager, dim=2)
+
         # Final norm (must run before batched early-return). Generator then
         # defers lm_head per slot via ``process_logits_after_prefill_trace``,
         # which expects *post-norm* hidden (same contract as traced prefill).
@@ -1408,10 +1628,15 @@ class Gemma4Model:
         # process_logits_after_prefill_trace). The lm_head over the full padded
         # sequence (262k vocab) dwarfs the entire model body — ~40x the body at
         # 4k tokens — so baking it into the trace makes traced prefill far
-        # SLOWER than non-traced. The last-token slice can't be baked into the
-        # trace (the index varies per prompt), so the whole lm_head is deferred
-        # to host-side post-processing on a 32-row slice of these hidden states.
+        # SLOWER than non-traced. The last-token slice is a literal index per
+        # prompt, so the whole lm_head is deferred to host-side post-processing
+        # on a 32-row slice of these hidden states -- unless the tile is sliced
+        # at persistent device bounds (GEMMA4_PREFILL_TAIL_IN_TRACE): then the
+        # tile, the lm_head and the softcap are part of the capture and the
+        # trace's output is the TP-sharded last-token logits.
         if not is_decode and getattr(self, "_prefill_trace_mode", False):
+            if self._prefill_tail_in_trace_applies(batch_size, chunk_page_table):
+                return self._prefill_tail_sharded(hidden_states)
             return hidden_states
 
         # Speculative decoding: logits and the returned drafter seed both come
@@ -1692,6 +1917,9 @@ class Gemma4Model:
         hot_pt_sliding=None,
         page_tables_per_layer=None,
         keep_logits_sharded=False,
+        kv_modulo_sliding=None,
+        verify_multipos=None,
+        verify_prefix_lse=None,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
 
@@ -1715,11 +1943,29 @@ class Gemma4Model:
             embed_idx_full / embed_idx_sliding: [1, nkv_local*S2] uint32 merge
                 gather indices (loop-free staging path; nkv differs per type).
             hot_pt: [1, PV_HOT_BLOCKS] int32 physical fill pages (-1 = skip).
+            kv_modulo_sliding: the sliding layers' KV write modulo when their
+                verify tables are the serving records' sliding span ring
+                (``spec_decode.serving_ring_window_table``: position x writes
+                ring slot x mod R through that table); None writes by the
+                layer's own ``cache_position_modulo``.
             keep_logits_sharded: leave the lm_head logits TP-sharded, the
                 chip's vocab slice ``[1,1,P,vocab / tp]`` (the serving records'
                 sharded verify argmax, GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX: no
                 vocab all-gather in the record). Default False gathers the
                 full vocab as before.
+            verify_multipos: GEMMA4_SPEC_VERIFY_MULTIPOS (the serving
+                records): ``{"plan", "cur_pos", "page_tables"}`` -- the
+                record's MultiposPlan, the [B*P] int32 candidate positions and
+                one [B*G, cols] table per layer (None for sliding layers); the
+                global layers then attend causally per candidate and
+                ``attn_mask_full`` may be None (tt/verify_multipos.py).
+            verify_prefix_lse: GEMMA4_SPEC_VERIFY_PREFIX_LSE (the serving
+                records): ``{"plan", "cur_pos", "bias", "fresh_mask"}`` -- the
+                record's PrefixLsePlan, the [B] int32 prefix positions, the
+                [1, B, R, 1] fp32 row biases and the constant [1, B, R, 32]
+                fresh mask; the global layers then attend each row's prefix
+                causally plus the candidates' own K / V and ``attn_mask_full``
+                may be None (tt/verify_prefix_lse.py).
 
         Returns:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
@@ -1753,6 +1999,9 @@ class Gemma4Model:
             # to the shared ``hot_pt`` when unset (unbounded callers).
             "hot_pt_full": hot_pt_full,
             "hot_pt_sliding": hot_pt_sliding,
+            "kv_modulo_sliding": kv_modulo_sliding,
+            "verify_multipos": verify_multipos,
+            "verify_prefix_lse": verify_prefix_lse,
         }
 
         # Same per-layer page-table contract as ttnn_verify_forward: bounded
@@ -1965,16 +2214,12 @@ class Gemma4Model:
                     "grow" if needs_grow else f"new batch key {batch_key} (keys {sorted(by_batch)})"
                 )
             persistent = []
-            # Layers handed the same host table (one per kv-cache group) share one
-            # device buffer: an update then costs one H2D per group, not per layer.
-            # Lane-sharded layouts depend on the layer, so they keep per-layer buffers.
-            # Opt-in (GEMMA4_SHARE_PAGE_TABLES=1): warmup broadcasts one legacy table to
-            # every layer, so the first real per-group tables diverge and the rebuild
-            # lands under live decode traces (garbage on 12B/31B QB2, 2026-10-05).
-            share = not (self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
-            share = share and getattr(self, "mesh_config_share_page_tables", True)
-            share = share and os.environ.get("GEMMA4_SHARE_PAGE_TABLES", "0") == "1"
-            by_host_id: dict = {}
+            # GEMMA4_SHARE_PAGE_TABLES: the layers of one vLLM KV-cache group slot share one device buffer
+            # (_page_table_buffer_slots, from the layer types: never the host objects a call carries, which the
+            # warmup broadcasts to every layer), so an update costs one H2D copy per group. Lane-sharded layouts
+            # depend on the layer and keep per-layer buffers.
+            slots = self._page_table_buffer_slots(page_tables_per_layer)
+            by_slot: dict = {}
             for i, pt in enumerate(page_tables_per_layer):
                 if pt is None:
                     persistent.append(None)
@@ -1982,15 +2227,76 @@ class Gemma4Model:
                 if isinstance(pt, ttnn.Tensor):
                     persistent.append(pt)
                     continue
-                shared = by_host_id.get(id(pt)) if share else None
+                slot = slots[i] if slots is not None else None
+                shared = by_slot.get(slot) if slot is not None else None
                 if shared is None:
                     shared = self._page_table_torch_to_ttnn(pt, layer_idx=i)
-                    if share:
-                        by_host_id[id(pt)] = shared
+                    if slot is not None:
+                        by_slot[slot] = shared
                 persistent.append(shared)
+            if self._kv_pair_shard_layers:
+                for t in by_batch.get(batch_key) or ():
+                    self._kv_write_table_by_read.pop(id(t), None)
             by_batch[batch_key] = persistent
+            if self._kv_pair_shard_layers:
+                self._attach_kv_write_tables(page_tables_per_layer, persistent)
         self._persistent_per_layer_page_tables = persistent
         return persistent
+
+    # GEMMA4_KV_PAIR_SHARD: set by __init__ when the knob is on (an instance built without it, e.g. a host-test
+    # stub, has no pair-sharded layer)
+    _kv_pair_shard_layers = frozenset()
+
+    def _kv_write_tables_host(self, pt_host):
+        """A pair-sharded global layer's per-chip write tables (``half_block_write_tables``) for its padded host
+        read table, as a host tensor sharded column by column."""
+        return ttnn.from_torch(
+            half_block_write_tables(pt_host, int(self.mesh_device.shape[1])),
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+        )
+
+    def _attach_kv_write_tables(self, host_tables, persistent):
+        """Allocate the write tables of the pair-sharded layers' freshly built read buffers (one per buffer: the
+        layers of a KV-cache group slot share it), filled from the same host tables."""
+        for i in sorted(self._kv_pair_shard_layers):
+            read, pt = persistent[i], host_tables[i]
+            if read is None or isinstance(pt, ttnn.Tensor) or id(read) in self._kv_write_table_by_read:
+                continue
+            pt_host = self._pad_page_table_host_to_shape(
+                pt if pt.dim() > 1 else pt.unsqueeze(0), int(read.shape[0]), int(read.shape[-1])
+            )
+            self._kv_write_table_by_read[id(read)] = ttnn.to_device(
+                self._kv_write_tables_host(pt_host), self.mesh_device
+            )
+
+    def kv_write_table_for(self, layer_idx, read_table):
+        """The per-chip write table of a pair-sharded global layer reading through ``read_table`` (a persistent
+        buffer of ``_page_tables_to_ttnn``), None for every other layer. A pair-sharded layer whose read table
+        has no write table raises: its cache writes would land in both halves."""
+        if layer_idx not in self._kv_pair_shard_layers or read_table is None:
+            return None
+        wt = self._kv_write_table_by_read.get(id(read_table))
+        if wt is None:
+            raise ValueError(
+                f"{KV_PAIR_SHARD_ENV}: layer {layer_idx}'s page table is not a persistent read buffer with a write "
+                "table (a device table handed straight through?)"
+            )
+        return wt
+
+    def _page_table_buffer_slots(self, page_tables_per_layer):
+        """The KV-cache group slot of every layer (``page_table_group_slots``) when the persistent buffers are shared
+        per slot (``share_page_tables_default``), else None: one buffer per layer."""
+        if not getattr(self, "_share_page_tables", False):
+            return None
+        if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            return None
+        slots = getattr(self, "_page_table_slots", None)
+        if not slots or len(slots) != len(page_tables_per_layer):
+            return None
+        return slots
 
     @staticmethod
     def _pad_page_table_host_to_shape(pt_host, target_b, target_w):
@@ -2038,9 +2344,10 @@ class Gemma4Model:
         # (padded) host tensor once and fan out to every persistent buffer.
         host_cache = {}
         new_last = [None] * len(page_tables_per_layer)
-        # Device buffers shared by several layers are written once per update;
-        # a second layer with different content means the sharing no longer
-        # holds, so the batch key's buffers are rebuilt unshared.
+        # A device buffer shared by the layers of one KV-cache group slot is written once per update, from the
+        # slot's first layer; every other layer of the slot must carry that table (the same object, or equal
+        # content: the plugin pads per layer when its shapes miss the warmup's), or the grouping assumption is
+        # wrong and the call fails loudly instead of reallocating under the captured traces.
         written: dict = {}
         # The layers of one kv-cache group are handed the same host tensor: pad it,
         # compare it with the last upload and snapshot it once per distinct
@@ -2054,6 +2361,20 @@ class Gemma4Model:
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
             pt_host = pt if pt.dim() > 1 else pt.unsqueeze(0)
+            first = written.get(id(persistent[i]))
+            if first is not None:
+                first_i, first_host, first_pt = first
+                if pt is not first_pt and not (
+                    tuple(pt_host.shape) == tuple(first_host.shape) and torch.equal(pt_host, first_host)
+                ):
+                    raise ValueError(
+                        f"Gemma4: the per-layer page tables of layers {first_i} and {i} differ inside one KV-cache "
+                        f"group slot (page_table_group_slots); the shared persistent buffers keep one table per "
+                        f"slot ({SHARE_PAGE_TABLES_ENV}=0 keeps one buffer per layer)"
+                    )
+                new_last[i] = new_last[first_i]
+                continue
+            written[id(persistent[i])] = (i, pt_host, pt)
             try:
                 target_b = int(persistent[i].shape[0])
                 target_w = int(persistent[i].shape[-1])
@@ -2090,22 +2411,6 @@ class Gemma4Model:
                 if snapshot is None:
                     snapshot = clone_cache[key] = pt_padded.detach().clone()
                 new_last[i] = snapshot
-            prev = written.get(id(persistent[i]))
-            if prev is not None:
-                if torch.equal(prev, pt_padded):
-                    continue
-                logger.warning(
-                    "Gemma4: per-layer page tables no longer share content across layers "
-                    "sharing a device buffer (layer {}); rebuilding the buffers unshared",
-                    i,
-                )
-                by_batch = getattr(self, "_persistent_pt_by_batch", {})
-                by_batch.pop(batch_key, None)
-                last_by_batch.pop(batch_key, None)
-                self._invalidate_decode_traces_after_page_table_realloc = True
-                self.mesh_config_share_page_tables = False
-                return self.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
-            written[id(persistent[i])] = pt_padded
             # Cache key includes target shape so B=1 and B=32 pads don't collide.
             host_pt = host_cache.get(key)
             if host_pt is None:
@@ -2118,6 +2423,9 @@ class Gemma4Model:
                 )
                 host_cache[key] = host_pt
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
+            wt = self._kv_write_table_by_read.get(id(persistent[i])) if self._kv_pair_shard_layers else None
+            if wt is not None:
+                ttnn.copy_host_to_device_tensor(self._kv_write_tables_host(pt_padded), wt)
         last_by_batch[batch_key] = new_last
 
     def prepare_inputs_prefill(
@@ -2239,6 +2547,8 @@ class Gemma4Model:
             page_table = _lane_table(page_table)
             pt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
 
+        # GEMMA4_KV_PAIR_SHARD: the host table, broadcast by ttnn_prefill_forward when no per-layer stash comes
+        self._prefill_page_table_host = page_table if not lane_sharded else None
         tt_page_table = None
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -2400,6 +2710,26 @@ class Gemma4Model:
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
         return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
+    def _prefill_seq_parallel_applies(self, hidden_states, is_decode, batch_size) -> bool:
+        """GEMMA4_PREFILL_SEQ_PARALLEL=1 on an eager single-user dense prefill over a TP axis whose rows split into
+        whole tiles per chip (S % (32 tp) == 0). Excluded: decode, batched prefill, the prefill trace, fractured /
+        lane-sharded meshes, MoE layers, per-layer inputs and dFlash taps (they read the full residual)."""
+        from models.demos.gemma4.tt.ccl import prefill_seq_parallel_enabled
+
+        if is_decode or batch_size != 1 or not prefill_seq_parallel_enabled():
+            return False
+        mc = self.mesh_config
+        if mc is None or int(getattr(mc, "tp", 1) or 1) <= 1:
+            return False
+        if getattr(mc, "weight_fracture", False) or getattr(mc, "lane_sharded", False):
+            return False
+        if getattr(self, "_prefill_trace_mode", False) or self._dflash_tap_layers is not None:
+            return False
+        if any(layer.enable_moe_block or layer.hidden_size_per_layer_input for layer in self.layers):
+            return False
+        shape = [int(s) for s in hidden_states.shape]
+        return len(shape) == 4 and shape[0] == 1 and shape[1] == 1 and shape[2] % (32 * int(mc.tp)) == 0
+
     def ttnn_prefill_forward(
         self,
         x,
@@ -2449,6 +2779,13 @@ class Gemma4Model:
             embeds_torch = self._prefill_embeds_torch
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        if page_tables_per_layer is None and self._kv_pair_shard_layers:
+            # GEMMA4_KV_PAIR_SHARD: no per-layer stash (a prefill outside the vLLM bridge, e.g. the boot warmups):
+            # every layer takes the legacy host table, so the pair-sharded ones get a write table beside it
+            host = self._prefill_page_table_host
+            if host is None:
+                raise ValueError(f"{KV_PAIR_SHARD_ENV}: a prefill without a host page table")
+            page_tables_per_layer = [host if host.dim() > 1 else host.unsqueeze(0)] * len(self.layers)
         continuation = getattr(self, "_g4_prefill_continuation", None)
         if continuation is not None and page_tables_per_layer is not None:
             # The hybrid groups' host tables, cut on the host per group (the device layout is the model's).
@@ -2530,10 +2867,15 @@ class Gemma4Model:
         try:
             if int(tt_out.shape[-2]) == 1:
                 try:
-                    first = ttnn.get_device_tensors(tt_out)[0]
+                    shards = ttnn.get_device_tensors(tt_out)
                 except Exception:  # noqa: BLE001 - a single-shard host tensor
-                    first = tt_out
-                return ttnn.to_torch(first)[..., 0, : self.vocab_size]
+                    shards = [tt_out]
+                if len(shards) > 1 and int(shards[0].shape[-1]) < self.vocab_size:
+                    # One row of the TP-sharded logits per chip (the traced tail keeps the shards on their chips,
+                    # GEMMA4_PREFILL_TAIL_IN_TRACE): the vocabulary is concatenated here, not all-gathered on the
+                    # device.
+                    return torch.cat([ttnn.to_torch(s) for s in shards], dim=-1)[..., 0, : self.vocab_size]
+                return ttnn.to_torch(shards[0])[..., 0, : self.vocab_size]
             if self._lane_sharded:
                 try:
                     shards = ttnn.get_device_tensors(tt_out)
@@ -2545,7 +2887,12 @@ class Gemma4Model:
                     owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
                     torch_output = ttnn.to_torch(shards[self.lane_device_indices()[owner]])
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
-                torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+                shards = ttnn.get_device_tensors(tt_out)
+                if len(shards) > 1 and int(shards[0].shape[-1]) < self.vocab_size:
+                    # the traced tail's TP-sharded tile read back whole (GEMMA4_PREFILL_ROW_READBACK=0)
+                    torch_output = torch.cat([ttnn.to_torch(s) for s in shards], dim=-1)
+                else:
+                    torch_output = ttnn.to_torch(shards[0])
             else:
                 torch_output = ttnn.to_torch(tt_out)
             return torch_output[..., last_token_idx, : self.vocab_size]
@@ -2582,6 +2929,52 @@ class Gemma4Model:
             self._g4_retired_dev_tensors = lst
         lst.append(t)
 
+    def _prefill_tail_in_trace_applies(self, batch_size, chunk_page_table) -> bool:
+        """Whether this prefill capture ends with the last-token tile, the lm_head and the softcap
+        (``prefill_tail_in_trace_default``): the single-user, single-chunk form only. The batched form's consumer
+        reads its own rows of the hidden states, the traced chunk walk's chunks keep the eager tail on the last one,
+        and a bounded-sliding prefill commits its deferred ring fills after the eager lm_head."""
+        return (
+            bool(getattr(self, "_prefill_tail_in_trace", False))
+            and int(batch_size) == 1
+            and chunk_page_table is None
+            and not getattr(self, "bounded_sliding_kv_cache", False)
+        )
+
+    def _write_prefill_tail_bounds(self, tile_start: int, width=None) -> None:
+        """Rewrite the persistent bounds of the last-token tile: rows ``tile_start`` .. +32 of the padded prefill,
+        ``width`` columns (the hidden size). Out of any trace: the capture and every replay read the buffers."""
+        width = int(self.hidden_size if width is None else width)
+        for device_tensor, values in (
+            (self._tail_slice_start, [0, 0, int(tile_start), 0]),
+            (self._tail_slice_end, [1, 1, int(tile_start) + 32, width]),
+        ):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    mesh_mapper=self._replicate_to_mesh_mapper(),
+                ),
+                device_tensor,
+            )
+
+    def _slice_prefill_tail_tile(self, hidden_states):
+        """The 32-row tile of ``hidden_states`` the persistent bounds name (one program for every prompt length of a
+        bucket: the bounds are runtime data)."""
+        return ttnn.slice(
+            input_tensor=hidden_states,
+            starts=self._tail_slice_start,
+            ends=self._tail_slice_end,
+            slice_dim=2,
+            num_devices=int(hidden_states.shape[-2]) // 32,
+        )
+
+    def _prefill_tail_sharded(self, hidden_states):
+        """The traced prefill tail: the last-token tile through the lm_head and the softcap, TP-sharded
+        ``[1, 1, 32, vocab / TP]`` (no vocabulary all-gather: the host concatenates one row per chip, the device
+        sampler consumes the shards)."""
+        sliced = self._slice_prefill_tail_tile(hidden_states)
+        return self._apply_lm_head(sliced, is_decode=False, keep_sharded_for_sampling=True)
+
     def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
         """Deferred lm_head for traced prefill (timed; see :meth:`_process_logits_after_prefill_trace`)."""
         t0 = time.perf_counter()
@@ -2616,27 +3009,15 @@ class Gemma4Model:
         # into the next replay via a batched-only gate (single-user prefill or
         # decode may be the next call).
         self._g4_retire_scavenge()
-        get_last_token = (last_token_idx // 32) * 32
-        for device_tensor, values in (
-            (self._tail_slice_start, [0, 0, get_last_token, 0]),
-            (self._tail_slice_end, [1, 1, get_last_token + 32, int(hidden_states.shape[-1])]),
-        ):
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    torch.tensor(values, dtype=torch.int32),
-                    mesh_mapper=self._replicate_to_mesh_mapper(),
-                ),
-                device_tensor,
-            )
-        sliced = ttnn.slice(
-            input_tensor=hidden_states,
-            starts=self._tail_slice_start,
-            ends=self._tail_slice_end,
-            slice_dim=2,
-            num_devices=int(hidden_states.shape[-2]) // 32,
-        )
-        if batched and hidden_states is not sliced:
-            hidden_states.deallocate(True)
+        if int(hidden_states.shape[-2]) == 32 and int(hidden_states.shape[-1]) != self.hidden_size:
+            # The traced tail's output (GEMMA4_PREFILL_TAIL_IN_TRACE): the last-token tile is already through the
+            # lm_head and the softcap, TP-sharded, and it is the trace's persistent output buffer.
+            sliced = hidden_states
+        else:
+            self._write_prefill_tail_bounds((last_token_idx // 32) * 32, width=int(hidden_states.shape[-1]))
+            sliced = self._slice_prefill_tail_tile(hidden_states)
+            if batched and hidden_states is not sliced:
+                hidden_states.deallocate(True)
         if sliced.shape[-1] == self.hidden_size:
             logits = self._apply_lm_head(sliced, is_decode=False)
             if batched and logits is not sliced:
@@ -3044,7 +3425,7 @@ class Gemma4Model:
                 _ls = self._lane_slots
                 torch_out = torch.cat([t.reshape(-1)[:_ls] for t in _lane_shards()], dim=0)
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
-                torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)
+                torch_out = ttnn.to_torch(_first_shard(tt_out)).reshape(-1)
             else:
                 torch_out = ttnn.to_torch(tt_out).reshape(-1)
             return torch_out[:B]
@@ -3053,10 +3434,18 @@ class Gemma4Model:
             _ls = self._lane_slots
             torch_out = torch.cat([t[:, :, :_ls, :] for t in _lane_shards()], dim=2)
         elif self.mesh_config is not None and self.mesh_config.tp > 1:
-            torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            torch_out = ttnn.to_torch(_first_shard(tt_out))
         else:
             torch_out = ttnn.to_torch(tt_out)
         return _decode_logits_rows(torch_out[:, :, :B, : self.vocab_size], B, S)
+
+
+def _first_shard(tt_out):
+    """Shard 0 of a mesh tensor; a one-shard host tensor (the GEMMA4_TOKEN_READ_SHARD0 readback) as it is."""
+    try:
+        return ttnn.get_device_tensors(tt_out)[0]
+    except Exception:  # noqa: BLE001 - a single-shard host tensor
+        return tt_out
 
 
 def _decode_logits_rows(logits, B, S=1):

@@ -9,7 +9,11 @@ tile, ``N = (hq + 2 hkv) * D`` laid out ``[q heads | k heads | v heads]``), ``gq
 ``[1, 1, 1, D]`` (bf16 TILE), ``cos`` / ``sin`` the position-gathered rows ``[1, 1, 32, D]`` (row ``u`` = user
 ``u``). Outputs ``q [1, B, hq, D]``, ``k`` / ``v [1, B, hkv, D]`` (bf16, TILE, L1 HEIGHT_SHARDED, one user per core,
 shard ``[32, D]`` with the heads on the rows: the layout ``nlp_create_qkv_heads_decode`` emits, so SDPA and
-``paged_update_cache`` take them unchanged).
+``paged_update_cache`` take them unchanged). ``v_memory_config`` puts V on another height-sharded grid of the
+same shard shape (``heads_v_disjoint_memory_config``: the ``batch`` cores after K's), the layout the fused K+V
+cache write (``paged_fused_update_cache``, GEMMA4_KV_FUSED_UPDATE) needs: it runs one kernel set per input on
+that input's shard cores, so K's and V's grids must not meet. The writer ships user ``u``'s V tiles to that
+grid's core ``u`` instead of its K/Q shard core; nothing else changes.
 
 One work unit per core = (user, tensor) when the grid holds 3 B cores (3 at batch 1, 96 at batch 32 on Blackhole),
 else one user per core with its three tensors in sequence (32 cores at batch 32 on an 8x8 grid; ``grid.py``
@@ -49,6 +53,35 @@ def heads_sharded_memory_config(device, batch: int, head_dim: int):
     )
 
 
+def shard_cores(core_range_set):
+    """The cores of a height-sharded grid in shard order: row-major inside each range, the ranges in order (the
+    ROW_MAJOR shard orientation), so shard ``u`` of a one-user-per-core tensor sits on ``shard_cores(grid)[u]``."""
+    cores = []
+    for rng in core_range_set.ranges():
+        for y in range(rng.start.y, rng.end.y + 1):
+            for x in range(rng.start.x, rng.end.x + 1):
+                cores.append(ttnn.CoreCoord(x, y))
+    return cores
+
+
+def heads_v_disjoint_memory_config(device, batch: int, head_dim: int):
+    """The L1 height-sharded config of a decode V head tensor on the ``batch`` cores AFTER the first ``batch`` of the
+    grid (row-major), disjoint from ``heads_sharded_memory_config``'s cores (``paged_fused_update_cache`` places one
+    kernel set per input on that input's shard cores, so K and V may not share a core). None when the grid holds
+    fewer than ``2 * batch`` cores."""
+    gx, gy = compute_grid(device)
+    if 2 * batch > gx * gy:
+        return None
+    cores = row_major_cores((gx, gy), 2 * batch)[batch:]
+    return ttnn.create_sharded_memory_config(
+        shape=(TILE, head_dim),
+        core_grid=core_range_set(cores),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 class QkvHeadsNormRope:
     CB_X, CB_OUT = 0, 16
     CB_G, CB_COS, CB_SIN, CB_SCALER = 3, 5, 6, 7
@@ -77,7 +110,7 @@ class QkvHeadsNormRope:
         return rope(norm(q, gq)), rope(norm(k, gk)), norm(v, None)
 
     @classmethod
-    def op(cls, x, hq: int, hkv: int, head_dim: int, gq, gk, cos, sin, eps: float):
+    def op(cls, x, hq: int, hkv: int, head_dim: int, gq, gk, cos, sin, eps: float, v_memory_config=None):
         D = int(head_dim)
         assert (
             x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16 and not x.is_sharded()
@@ -101,15 +134,27 @@ class QkvHeadsNormRope:
         half_t = cols_t // 2
         device = x.device()
         mem = heads_sharded_memory_config(device, B, D)
+        v_mem = mem if v_memory_config is None else v_memory_config
+        if v_memory_config is not None:
+            v_spec = v_memory_config.shard_spec
+            assert (
+                list(v_spec.shape) == [TILE, D] and v_spec.grid.num_cores() >= B
+            ), "v_memory_config: one user per core"
         outs = [
-            ttnn.allocate_tensor_on_device(ttnn.Shape([1, B, h, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, mem)
-            for h in (hq, hkv, hkv)
+            ttnn.allocate_tensor_on_device(ttnn.Shape([1, B, h, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, m)
+            for h, m in ((hq, mem), (hkv, mem), (hkv, v_mem))
         ]
         grid = compute_grid(device)
         n_cores, per_core = plan_qkv_heads_units(grid, B)  # (user, tensor) per core, or a user's three tensors
         cores = row_major_cores(grid, n_cores)  # row-major, as the shards (shard core of user u = cores[u])
         core_set = core_range_set(cores)
         shard_noc = [device.worker_core_from_logical_core(cores[u]) for u in range(B)]
+        # V's shard core of user u: its own grid's core u when V lives apart from K / Q, else the shared one
+        v_noc = (
+            shard_noc
+            if v_memory_config is None
+            else [device.worker_core_from_logical_core(c) for c in shard_cores(v_mem.shard_spec.grid)[:B]]
+        )
         tile_bytes = TILE * TILE * 2
         f32_tile = TILE * TILE * 4
 
@@ -149,7 +194,9 @@ class QkvHeadsNormRope:
                 x.buffer_address(), gq.buffer_address(), gk.buffer_address(), cos.buffer_address(),
                 sin.buffer_address(), u, t0, per_core,
             ]  # fmt: skip
-            writer_rt[core.x][core.y] = [shard_noc[u].x, shard_noc[u].y, t0, per_core] + out_addrs
+            writer_rt[core.x][core.y] = (
+                [shard_noc[u].x, shard_noc[u].y, t0, per_core] + out_addrs + [v_noc[u].x, v_noc[u].y]
+            )
             compute_rt[core.x][core.y] = [t0, per_core]
         compute_cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True
