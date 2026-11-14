@@ -65,7 +65,7 @@ def test_reference_bucket(expect_error):
     assert reference_bucket(4096) == 4096
     assert reference_bucket(4097) == REFERENCE_TOKEN_BUCKETS[1]
     assert reference_bucket(16384) == 16384
-    with expect_error(StopIteration, ""):
+    with expect_error(ValueError, "16385 reference tokens exceed 16384"):
         reference_bucket(16385)
 
 

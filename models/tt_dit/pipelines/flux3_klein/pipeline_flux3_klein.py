@@ -109,6 +109,8 @@ def prepare_reference(image: Image.Image) -> Image.Image:
 
 
 def reference_bucket(tokens: int) -> int:
+    if tokens > REFERENCE_TOKEN_BUCKETS[-1]:
+        raise ValueError(f"{tokens} reference tokens exceed {REFERENCE_TOKEN_BUCKETS[-1]}")
     return next(b for b in REFERENCE_TOKEN_BUCKETS if tokens <= b)
 
 
