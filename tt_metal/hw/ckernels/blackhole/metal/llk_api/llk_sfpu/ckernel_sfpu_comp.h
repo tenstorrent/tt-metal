@@ -132,7 +132,13 @@ inline void calculate_comp() {
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
     for (int d = 0; d < ITERATIONS; d++) {
-        vInt v = dst_reg[0];
+        // Int32 tiles sit in Dest as two's complement; read and write the word as it is (I32
+        // layout, SFPLOAD/SFPSTORE mod0 INT32). On Blackhole SFPI's Default vInt layout already
+        // resolves to I32 (it is SM32 only on Wormhole), so this spells out what the kernel relies
+        // on rather than changing the instruction. `v > 0` and `v <= 0` must not be used: SFPI
+        // lowers them through an integer subtraction (SFPIADD 0 - v) that overflows for INT32_MIN
+        // and classifies it as positive; `v >= 0 && v != 0` is two chained SFPSETCCs on the word.
+        vInt v = dst_reg[0].mode<sfpi::DataLayout::I32>();
         vInt zero = 0;
 
         // a[i] == 0
@@ -158,16 +164,18 @@ inline void calculate_comp_int() {
 
         // a[i] > 0
         if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-            v_if(v > zero) { v = 1; }
-            v_else { v = zero; }
+            vInt res = zero;
+            v_if(v >= 0 && v != 0) { res = 1; }
             v_endif;
+            v = res;
         }
 
         // a[i] <= 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            v_if(v <= zero) { v = 1; }
-            v_else { v = zero; }
+            vInt res = 1;
+            v_if(v >= 0 && v != 0) { res = zero; }
             v_endif;
+            v = res;
         }
 
         // a[i] >= 0
@@ -177,7 +185,7 @@ inline void calculate_comp_int() {
             v_endif;
         }
 
-        dst_reg[0] = v;
+        dst_reg[0].mode<sfpi::DataLayout::I32>() = v;
         dst_reg++;
     }
 }

@@ -852,7 +852,8 @@ def test_div_int32_optional_output(device):
         (-2147483647, 2147483647, -2147483647, 2147483647),  # full range
         (-10, 10, -2147483647, 2147483647),  # small numerator, large denominator
         (-2147483647, 2147483647, -10, 10),  # large numerator, small denominator
-        # a=-2147483648 and b=-1 is not supported
+        # b=-1 is kept out of the INT32_MIN rows: -2147483648 / -1 = 2^31 overflows the int32 result of
+        # trunc/floor only (rounding_mode=None asserts that pair in test_div_edge_cases)
         (-2147483648, 2147483647, -2147483648, -2),
         (-2147483648, 2147483647, 1, 2147483647),
         (2021531526, 2147483647, 9, 123),
@@ -860,11 +861,6 @@ def test_div_int32_optional_output(device):
 )
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
 def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, rounding_mode, device):
-    # Skip some cases for rounding_mode==None that aren't supported due to:
-    # https://github.com/tenstorrent/tt-metal/issues/33334
-    if rounding_mode is None and low_a == -2147483648:
-        pytest.skip("a == -2147483648 is not supported for rounding_mode=None")
-
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
     torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
     torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(input_shapes)
@@ -927,7 +923,19 @@ def test_div_edge_cases(rounding_mode, device):
         (2147483647, 1073741823),
         (1073741823, -2147483647),
         (1073741824, -2147483647),
+        (-2147483648, 2),  # INT32_MIN numerator
+        (5, -2147483648),  # INT32_MIN denominator
+        # INT32_MIN / INT32_MIN (rounding_mode=None: equal operands short-circuit to 1.0; trunc/floor go
+        # through div_int32_floor.h and the exact int64 golden, 1)
+        (-2147483648, -2147483648),
+        # INT32_MIN divisor (rounding_mode=None: through the conversion path, both operands round to -2^31
+        # in fp32 and the quotient is 1.0; trunc/floor: exact int64 golden, 0)
+        (-2147483647, -2147483648),
     ]
+    if rounding_mode is None:
+        # INT32_MIN / -1 = 2^31: representable in the fp32 quotient (the int32 -> fp32 conversion must
+        # see the dividend as -2^31, not -0.0); it overflows the int32 result of trunc/floor.
+        pairs.append((-2147483648, -1))
 
     numerators, denominators = zip(*pairs)
     torch_input_tensor_a = torch.tensor(numerators, dtype=torch.int32)
