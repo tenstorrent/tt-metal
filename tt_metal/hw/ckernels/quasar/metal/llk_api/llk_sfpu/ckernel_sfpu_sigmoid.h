@@ -20,7 +20,7 @@ namespace ckernel {
 namespace sfpu {
 
 // Two sigmoid implementations behind three names: TTI SFPNONLINEAR path (`calculate_sigmoid` /
-// `_calculate_sigmoid_` / `_calculate_sigmoid_regs_`, also what `_calculate_silu_` composes with)
+// `_calculate_sigmoid_` / `_calculate_sigmoid_regs_`, and the same sequence `_calculate_silu_` inlines)
 // and the SFPI body `_sfpu_sigmoid_` (used by `clamped_silu_glu` / ttnn swiglu_sfpu). Not bit-equivalent.
 
 // Calculates SIGMOID for results already in registers, used as a helper function.
