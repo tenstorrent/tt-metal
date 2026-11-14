@@ -1754,3 +1754,57 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_attn_launch_census.py
   -s` (~2.5 min; CENSUS_COMPARE=0 CENSUS_PASSES=3 for host ms); gate unit `gate P.64 --spec <spec> --check --unit
   'P.64#test_moe_prev_replicas'` (~9 min, devjob).
+
+## P.65 (perf, attempt 1): the window snapshot as one prepared fabric broadcast (CHEAP_CCL legacy | on)
+- Expected per chunk (written before any code change; perf_guide 3 / 8; OV-45): P.57's census charges
+  high_bw_all_gather 92 calls x ~106 us and mhc_post 82 x ~100 us. 80 of the 92 gathers are the window snapshot
+  (tt/attention.write_snapshot: 2 gathers of every chip's whole 192-row ring a layer), followed by 1-2 slices, a concat
+  and update_padded_kv_cache: 4-6 launches, ~470 us host a layer. mhc_post is a C++ fork op at ~100 us, already at the
+  floor of one launch on 32 chips (DS41-258), so only folding it into another program would remove it: not this pick.
+  The change: one prepared program a layer (tt/snapshot_send.py) that copies the owner chip's 128 snapshot rows
+  straight into every chip's slab over a fabric broadcast tree (1-hop unicasts: the owner's column first, then each
+  row), block by block. Host: 4-6 launches -> 1 (~100-130 us prepared), about -350 us a layer, so -12 to -15 ms a chunk
+  (40 layers) and -120 to -200 launches a chunk. Device: the two gathers move ~6 MB into each chip a layer; the tree
+  moves 128 KB into each chip. Expected 0 to -3 ms a chunk (the slices / concat / update programs gone, the gathers'
+  link time replaced by a ~50-80 us tree). Wall: as much of the host cut as the chunk is host-bound (P.64: prev host
+  144-150 vs device 145-148 ms, so small on real chunks; more on the off side). Outputs are bit-identical (data movement
+  only). Memory: the 6 MiB gather buffer is no longer allocated under on.
+- Terms: launch = one outermost ttnn op call or one run_prepared; host = first host call of a chunk to the last
+  layer's enqueue; wall = to the sync after the last layer (clean: profiler off); device = rt profiler, each program's
+  slowest chip summed; us a call = host time of one launch (Python wrapper inclusive); prev / off = MOE_REPLICAS=prev
+  (lean, the shipped path) / switched off in the same model; legacy / on = CHEAP_CCL.
+- Built (CHEAP_CCL = legacy | on, tt/settings.py, default on): tt/snapshot_send.py `SnapshotSend` (module docstring:
+  tree, home core, port cores); tt/attention.py `WindowTables.snapshot_send()` (None on 1 chip or legacy),
+  `TtWindowCache.write_snapshot` builds the 4 blocks (zero / local / owner chip, ring row) exactly as `_snapshot_rows`
+  picks them and makes one call; under on the 6 MiB gather buffer is not allocated at load. Programs: one per block
+  pattern (steady state: one, the last chip owns all 4), prepared (OV-23), io [ring, slab], value slots page0 (the
+  slab's (slot, layer) batch x 128) and the 4 ring rows. Cores (rule 18): 1 home + up to 4 port cores a chip (logical
+  (0..4, 0)). Applies to every box with > 1 chip (tree from mesh_plan's ports and torus wraps; 2x2 / 2x4 lines too).
+- Bits: tests/test_snapshot_send.py (new): two caches on one slab tensor (batches 1 and 2, batch 0 a guard), the same
+  rows, legacy vs on (on's batch poisoned first) vs the definition, every chip, 6 ends (cap 64, whole chunk owned by
+  chip 31, cap 6144 owned by chips 5 + 6, a replicated follow-up, owners 30 + 31 at an end mid-record, cap 0): all
+  equal, guard untouched. First version's bug (fixed before any number here): snapshot_send() returned the object
+  under legacy too, so the "legacy" side ran the new path.
+- Per call (probe, 8x4, steady pattern, median): host 352.3 -> 108.2 us; back-to-back wall 317.4 -> 72.5 us; device
+  163.2 -> 66.8 us, programs 4 -> 1.
+- `measure --task P.65` (change on: CHEAP_CCL=on ENGRAM_TABLE=resident): determinism 0 (novel, code, state); quick
+  min layer PCC 0.60548579 at L39 (= P.52-P.64: the same output bytes), host transfers per layer 0, clean wall 159.4
+  ms (spread 61.5; P.64 161.8); p51200 (random ids) wall 168.0 (spread 50.3: one 214.8 run, the rest 164.5-177.2,
+  loadavg 13.6; P.64 173.7), device_ms_total 149.69 (P.64 154.93), host_launch_calls 1136 (P.64 1376), host_launch_ms
+  90.3 (110.6), host overhead 18.3 (18.8), 0 new programs.
+- Gate unit P.65#test_moe_prev_replicas (PASS, change on, one pass a side), chunks 1..10 mean, host / wall / device ms
+  (P.64's gate unit in brackets): novel off 138.0 / 173.2 / 163.03 (207.4 / 235.2 / 167.71, a slow side); novel prev
+  138.1 / 164.2 / 145.24 (144.4 / 162.9 / 148.33); code off 143.7 / 169.0 / 152.57 (146.9 / 169.7 / 156.07); code prev
+  138.6 / 158.7 / 141.33 (150.0 / 164.5 / 144.89). maxdiff 0, repeat 0, mirror 0 mismatches (both prompts, three host
+  paths).
+- Expected vs got: launches -240 a chunk (exact; 6 a layer at p51200 -> 1); host -12 to -15 ms expected, per-call
+  numbers give -9.8 ms (40 x 244 us), p51200 host_launch_ms -20.3; device 0 to -3 expected, got -3.3 to -5.2 ms (the
+  gathers' link time was bigger than I guessed: 163 us a layer); wall -1 to -6 ms on real chunks (one pass a side,
+  +-4 ms noise, DS41-259), -5.7 at p51200. The orchestrator's A/B gives the on / off table.
+- Not done: mhc_post (82 calls ~100 us, a C++ fork op already at one launch's floor on 32 chips, DS41-258: only
+  folding it into a neighbouring program removes it) and the other 12 all_gathers (compressor layers): next picks.
+  The tree's device time could drop further with sub-block pipelining (depth 6 x 32 KB blocks); not needed for the
+  host goal.
+- Re-run: probe `scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_snapshot_send.py -s` (~1 min); gate unit `gate P.65 --spec <spec>
+  --check --unit 'P.65#test_moe_prev_replicas'` (~9 min, devjob); `orchestrator measure --spec <spec> --task P.65`.

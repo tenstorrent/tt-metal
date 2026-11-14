@@ -216,6 +216,7 @@ class WindowTables:
         self._scalars = {}
         self._rings = {}  # WINDOW_KV_KEEP=none (P.32): {layer: the working WindowRing every slot's cache shares}
         self._snap_buf = None  # WINDOW_KV_KEEP=snapshot128 (P.42): the snapshot gather's load-time output
+        self._snap_send = None  # CHEAP_CCL=on (P.65): the snapshot's prepared broadcast (tt/snapshot_send.py)
         # GLUE_FOLD=on (P.19): the server-order index row of the latest start, sliced once for every cache write of
         # the chunk (window caches, compressed caches); the device scalars memoized likewise (tt/served.DeviceScalars)
         self.fold = settings.get("GLUE_FOLD") == "on"
@@ -434,6 +435,17 @@ class WindowTables:
             self._snap_buf = (alloc(g.tp * RING) if g.tp > 1 else None, alloc(g.n * RING) if g.sp > 1 else None)
         return self._snap_buf
 
+    def snapshot_send(self):
+        """CHEAP_CCL=on (P.65): the window snapshot's one-program broadcast (tt/snapshot_send.SnapshotSend), made at
+        load time (the first snapshot cache); None on one chip or under CHEAP_CCL=legacy."""
+        if self.geo.n < 2 or not cheap_snapshot():
+            return None
+        if self._snap_send is None:
+            from .snapshot_send import SnapshotSend
+
+            self._snap_send = SnapshotSend(self.mesh)
+        return self._snap_send
+
     def shared_ring(self, layer: int) -> "WindowRing":
         """WINDOW_KV_KEEP=none (P.32): layer's working ring (made at the first slot's state, then shared): what the
         running request's next chunk reads; no slot keeps window rows of its own."""
@@ -469,6 +481,11 @@ class WindowTables:
 
 RING = WINDOW + 64  # WINDOW_KV_KEEP=ring (P.32): rows kept a layer, the window + the server's kv_block_size
 SNAP = WINDOW  # WINDOW_KV_KEEP=snapshot128 (P.42): rows of the served window snapshot a layer (position p at p % 128)
+
+
+def cheap_snapshot() -> bool:
+    """CHEAP_CCL (P.65): on = the window snapshot as one prepared fabric broadcast (tt/snapshot_send.py)."""
+    return settings.get("CHEAP_CCL") == "on"
 
 
 def window_keep() -> str:
@@ -640,7 +657,8 @@ class TtWindowCache:
             assert (slab.rows, slab.width) == (SNAP, self.WIDTH), (slab.rows, slab.width)
             self.snap, slab = slab, None
             self.ring_owned, self.ring = True, WindowRing(mesh, self.WIDTH)
-            tables.snapshot_gather_buf()  # (load time)
+            if tables.snapshot_send() is None:  # (load time: CHEAP_CCL=on gathers nothing, P.65)
+                tables.snapshot_gather_buf()
             if self.max_seq - g.chunk > 0:
                 self.pin, self.pin_at = WindowRing(mesh, self.WIDTH), self.max_seq - g.chunk
         else:
@@ -1086,6 +1104,21 @@ class TtWindowCache:
         while lo > max(0, cap - SNAP) and src.history and src.ring.holds(lo - 32, lo):
             lo -= 32
         self.snap_missing = (max(0, cap - SNAP), lo) if lo > max(0, cap - SNAP) else None
+        send = self.tables.snapshot_send()
+        if send is not None:  # CHEAP_CCL=on (P.65): one prepared program, the owner's rows only (tt/snapshot_send.py)
+            ring = src.ring
+            blocks = []
+            for k0 in range(0, SNAP, 32):
+                p = cap - SNAP + ((k0 - cap) % SNAP)  # (as _snapshot_rows: the position at snapshot rows [k0, k0 + 32))
+                if p < lo:
+                    blocks.append(("zero", 0))
+                else:
+                    o = ring.own[(p // 32) % ring.BLOCKS]
+                    blocks.append(("local" if o is None else int(o), p % RING))
+            snap = self.snap
+            send(ring.t, snap.tensor, snap.batch * snap.rows, blocks)
+            self.snap_cap = cap
+            return
         rows = self._snapshot_rows(cap, lo, src.ring) if lo < cap else self.tables.zero_carry
         # every chip writes the same 128 rows at local row 0 of its (slot, layer) slab: kv_actual_global 0 is the
         # uniform per-device offset 0 on every SP row (and TP column: no tp_axis); the input is replicated

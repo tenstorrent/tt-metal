@@ -601,6 +601,17 @@ TABLE = {
         "program, the ring pieces as per-call values, the send reading the carry from the untilized rows "
         "(WindowSend.fused): 2 launches a layer, -280 a chunk on 8x4. Data movement only: outputs bit-identical",
     ),
+    "CHEAP_CCL": Setting(
+        "on",
+        ("legacy", "on"),
+        "P.65 (owner 2026-11-14: fewer host calls; OV-45): the served window snapshot of every layer "
+        "(WINDOW_KV_KEEP=snapshot128, more than one chip; tt/attention.TtWindowCache.write_snapshot). legacy = every "
+        "chip's whole 192-row ring gathered over the mesh (two high_bw_all_gathers, TP then SP, ~6 MB into each chip), "
+        "the owner's rows sliced and concatenated, then ttnn.bringup.update_padded_kv_cache: 4-6 launches a layer. "
+        "on = one prepared program (tt/snapshot_send.SnapshotSend): each chip copies the blocks it holds, the owner "
+        "chip's 128 rows go to every chip's slab over a broadcast tree of 1-hop fabric unicasts (the owner's column, "
+        "then each row); 1 launch a layer, no gather buffer. Data movement only: outputs bit-identical",
+    ),
     "MOE_TRACE": Setting(
         "off",
         ("off", "moe"),

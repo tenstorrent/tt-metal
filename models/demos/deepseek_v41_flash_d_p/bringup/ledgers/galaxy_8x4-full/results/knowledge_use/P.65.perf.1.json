@@ -1,0 +1,85 @@
+{
+ "used": [
+  {
+   "id": "DS41-258",
+   "how": "mhc_post (~100 us, one C++ launch on 32 chips) left alone: a prepared / mesh program would not cut it; picked the snapshot's 4-6 launches instead",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-267",
+   "how": "kept the snapshot program's per-call values to 5 slots on few cores (home + ports), not per-row slots",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-259",
+   "how": "read the gate unit's one-pass-a-side host / wall as +-4 ms noise; judged on launches, per-call host and device",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every device run (probe, measure, gate unit) started with devjob and waited in short calls",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "no buffer allocated mid-forward: the semaphores and programs are made at load / first call; the gather buffer is simply not allocated under on",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "How a Python-built program sends one chip's rows to every chip (a broadcast tree of 1-hop unicasts with relay signals); now DS41-268 and the repo_map row for tt/snapshot_send.py"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the program moves only the owner's 128 rows, 32 KB blocks, one copy into each chip"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "SnapshotSend dispatches through ttnn.bringup.prepare_program / run_prepared (patch_count asserted); host 108 us a call on 8x4 (tests/test_snapshot_send.py)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new tests/test_snapshot_send.py and the model-level measure / gate unit; no fork changed"
+  },
+  {
+   "id": "OV-45",
+   "answer": "done",
+   "evidence": "write_snapshot under CHEAP_CCL=on: one prepared fabric broadcast of the owner's 128 rows instead of 2 high_bw_all_gathers + slice + concat + update_padded_kv_cache; bit-identical (test_snapshot_send, determinism 0, PCC unchanged); 8x4 host 352 -> 108 us, device 163 -> 67 us a call; p51200 launches 1376 -> 1136"
+  }
+ ],
+ "cited_only": [
+  "DS41-268"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.65",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T17:06:34",
+  "head": "9d9501bba90",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.65.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.65_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.65.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_snapshot_send.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/snapshot_send.py"
+  ]
+ }
+}
