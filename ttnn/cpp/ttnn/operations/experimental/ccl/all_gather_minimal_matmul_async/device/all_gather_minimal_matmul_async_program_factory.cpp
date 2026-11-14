@@ -583,6 +583,13 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // core, the norm's CBs (formats as dit_fused_distributed_rmsnorm's per-head path), gamma for the core's
     // q / k heads, and one output block's rows of cos / sin.
     if (fuse_qk_norm) {
+        // The norm loops over whole N blocks (qk_norm_rope_compute.hpp); a partial last block would read and
+        // write past the core's columns.
+        TT_FATAL(
+            N_tiles_per_core % N_block_tiles == 0,
+            "fused QK norm: N tiles per core ({}) must be a multiple of the N block ({})",
+            N_tiles_per_core,
+            N_block_tiles);
         const uint32_t dt = qk_norm->head_dim / tt::constants::TILE_WIDTH;
         const auto& perm = qk_norm->head_perm;
         auto block_of = [&](uint32_t col) {
