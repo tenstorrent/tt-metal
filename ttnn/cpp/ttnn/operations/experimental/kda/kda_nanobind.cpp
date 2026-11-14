@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/experimental/kda/affine_exclusive_scan/affine_exclusive_scan_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/chain_affine_transforms/chain_affine_transforms_nanobind.hpp"
+#include "ttnn/operations/experimental/kda/gdn_decode_step/gdn_decode_step_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/indexed_entry_copy/indexed_entry_copy_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/entry_correction/entry_correction_nanobind.hpp"
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/qkv_causal_conv1d_silu_nanobind.hpp"
@@ -22,6 +23,7 @@ void bind_kda(nb::module_& mod) {
     auto kda_module = mod.def_submodule("kda", "Experimental KDA operations");
     affine_exclusive_scan::detail::bind_affine_exclusive_scan(kda_module);
     chain_affine_transforms::detail::bind_chain_affine_transforms(kda_module);
+    gdn_decode_step::detail::bind_gdn_decode_step(kda_module);
     indexed_entry_copy::detail::bind_indexed_entry_copy(kda_module);
     entry_correction::detail::bind_entry_correction(kda_module);
     qkv_causal_conv1d_silu::detail::bind_qkv_causal_conv1d_silu(kda_module);

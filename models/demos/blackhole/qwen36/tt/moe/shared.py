@@ -34,7 +34,17 @@ class Qwen36SharedExpert:
         # The shared expert receives already-gathered (full/replicated) hidden — the MoE layer's
         # ff_norm does its own all-gather (layer._fuse_ff_agmm is off for MoE). So it must NOT run
         # the fused gate/up all-gather-matmul (that would re-gather full input → K mismatch).
-        self.mlp = Qwen36MLP(mesh_device, shared_state, shared_cache, args=args, tt_ccl=tt_ccl, use_gateup_agmm=False)
+        # Keep the shared expert's down_proj at BFP8 (QWEN36_BFP4_MLP_DOWN applies to the dense MLP only).
+        self.mlp = Qwen36MLP(
+            mesh_device,
+            shared_state,
+            shared_cache,
+            args=args,
+            tt_ccl=tt_ccl,
+            use_gateup_agmm=False,
+            down_dtype=ttnn.bfloat8_b,
+            gateup_dtype=ttnn.bfloat4_b,
+        )
 
         # shared_expert_gate.weight is [1, H] -> [1,1,H,1] for ttnn.linear, replicated.
         is_mesh = hasattr(mesh_device, "shape")

@@ -9,6 +9,7 @@ import math
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -27,6 +28,238 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
+
+# Same as COMPUTE_HIFI2 except LoFi (used for BFP4 GDN in-proj in decode only).
+COMPUTE_LOFI = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+
+FABRIC_PAYLOAD_ENV = "QWEN36_FABRIC_PAYLOAD_BYTES"
+
+
+def fabric_router_config():
+    """QWEN36_FABRIC_PAYLOAD_BYTES (default 8192; 0 = the fabric default of 4352): max fabric packet payload for the
+    multi-device meshes, the value qwen38_27b_qb2 uses. Larger packets cut per-packet overhead in the decode
+    all-reduces: TP=8 decode 20.25 -> 19.87 ms/token at B=1 and 25.31 -> 24.92 at B=32 (15232, the Blackhole maximum,
+    is slower than 8192). Returns a ttnn.FabricRouterConfig for set_fabric_config, or None for the fabric default."""
+    payload = int(os.environ.get(FABRIC_PAYLOAD_ENV, "8192") or 0)
+    if payload <= 0:
+        return None
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = payload
+    return router
+
+
+def kv_cache_bf8_enabled():
+    """bf8 paged KV cache (the qwen38_27b_qb2 KV dtype): QWEN36_KV_BF8 (default 1; 0 = bf16 cache) keeps the
+    prefill Q in bf16, QWEN_SDPA_BF8=1 additionally casts the prefill Q to bf8. Halves KV memory and the SDPA reads
+    that grow with context: TP=8 B=1 decode 22.75 -> 21.55 ms/token at 64k and 24.19 -> 22.57 at 103k, unchanged
+    at 128 tokens; accuracy_512 96.88 -> 97.27, accuracy_1536 95.96 -> 95.70 (QWEN_SDPA_BF8: 96.29 / 95.64)."""
+    return os.environ.get("QWEN_SDPA_BF8", "0") == "1" or os.environ.get("QWEN36_KV_BF8", "1") == "1"
+
+
+LMHEAD_CFG_ENV = "QWEN36_LMHEAD_CFG"
+_LMHEAD_LOGGED = False
+
+
+def lm_head_compute_config():
+    """Compute kernel config for LM-head matmuls, chosen by QWEN36_LMHEAD_CFG.
+    "default" (or unset): None (ttnn default: HiFi2, bf16 dest accumulation for bf16 output).
+    "hifi2_fp32" / "hifi4_fp32": fp32 dest accumulation, packer_l1_acc."""
+    global _LMHEAD_LOGGED
+    mode = os.environ.get(LMHEAD_CFG_ENV, "default").strip().lower()
+    if mode == "default":
+        cfg = None
+    elif mode in ("hifi2_fp32", "hifi4_fp32"):
+        cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2 if mode == "hifi2_fp32" else ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    else:
+        raise ValueError(f"{LMHEAD_CFG_ENV}={mode!r} invalid (default|hifi2_fp32|hifi4_fp32)")
+    if not _LMHEAD_LOGGED:
+        _LMHEAD_LOGGED = True
+        logger.info(f"LM head compute config ({LMHEAD_CFG_ENV}) = {mode}")
+    return cfg
+
+
+def lm_head_kwargs():
+    """ttnn.linear kwargs for LM head: empty for "default" so behavior is bit-identical."""
+    cfg = lm_head_compute_config()
+    return {} if cfg is None else {"compute_kernel_config": cfg}
+
+
+MLP_DECODE_DSHARD_ENV = "QWEN36_MLP_DECODE_DSHARD"
+_DSHARD_LOGGED = set()
+
+
+def _flag_logged(env, desc, default="0"):
+    on = os.environ.get(env, default) == "1"
+    if env not in _DSHARD_LOGGED:
+        _DSHARD_LOGGED.add(env)
+        logger.info(f"{desc}: {'on' if on else 'off'} ({env}={int(on)})")
+    return on
+
+
+def mlp_decode_dshard_enabled():
+    """QWEN36_MLP_DECODE_DSHARD (default 1; "0" disables): dense-MLP w1/w3 (TP=4 only) stored DRAM-WIDTH_SHARDED (N padded 4352 -> 4608) and run
+    with the 3-readers-per-bank DRAM-sharded matmul in decode (~-10 us per matmul). Dense TP layers only; prefill uses
+    the packed w_gate_up AGMM weight and never touches w1/w3.
+    Decode +3.5% at batch 1 and 32 on QB2; "0" restores the interleaved 1D-mcast gate/up."""
+    return _flag_logged(MLP_DECODE_DSHARD_ENV, "Dense-MLP decode DRAM-sharded gate/up", default="1")
+
+
+def ensure_memory_config(t, memory_config):
+    """as_tensor may hand back a cached tensor in a different memory layout than requested; re-shard if so."""
+    mc = t.memory_config()
+    if mc.memory_layout == memory_config.memory_layout and mc.buffer_type == memory_config.buffer_type:
+        return t
+    logger.warning(f"re-sharding cached weight {mc} -> {memory_config}")
+    new = ttnn.to_memory_config(t, memory_config)
+    ttnn.deallocate(t)
+    return new
+
+
+def l1_width_sharded_config(device, cores, width, height=TILE_SIZE):
+    """L1 WIDTH_SHARDED config: `cores` row-wise worker cores, [height, width] shard each."""
+    grid = ttnn.num_cores_to_corerangeset(cores, device.compute_with_storage_grid_size(), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [height, width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def dram_width_sharded_config(device, k, width_per_bank):
+    """DRAM WIDTH_SHARDED config over the first row of DRAM banks: [k, width_per_bank] shard per bank."""
+    banks = device.dram_grid_size().x
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(grid, [k, width_per_bank], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def pad_cols_per_device(t, tp, n_padded):
+    """[K, tp*n] -> [K, tp*n_padded]: zero-pad EACH device's column block (so a dim=-1 mesh shard gets n_padded cols)."""
+    k, total = t.shape
+    n = total // tp
+    if n == n_padded:
+        return t.contiguous()
+    return torch.nn.functional.pad(t.reshape(k, tp, n), (0, n_padded - n)).reshape(k, tp * n_padded).contiguous()
+
+
+BFP4_GDN_IN_ENV = "QWEN36_BFP4_GDN_IN"
+_BFP4_GDN_IN_LOGGED = False
+
+
+def bfp4_gdn_in_enabled():
+    """QWEN36_BFP4_GDN_IN (default 0): GDN input-projection weights in bfloat4_b (+ LoFi in decode only).
+    Opt-in because BFP4 here costs about 1 pt of accuracy_512 top-1 (98.63 -> 97.66) and about 0.065 of
+    B32 decode PCC, for +3.6% decode. Logs the choice once per process."""
+    global _BFP4_GDN_IN_LOGGED
+    on = os.environ.get(BFP4_GDN_IN_ENV, "0") == "1"
+    if not _BFP4_GDN_IN_LOGGED:
+        _BFP4_GDN_IN_LOGGED = True
+        if on:
+            logger.info(f"GDN in-proj weights: BFP4 + LOFI decode ({BFP4_GDN_IN_ENV}=1)")
+        else:
+            logger.info(f"GDN in-proj weights: BFP8 ({BFP4_GDN_IN_ENV}=0, default; =1 for BFP4 + LoFi decode)")
+    return on
+
+
+BFP4_ATTN_ENV = "QWEN36_BFP4_ATTN"
+_BFP4_ATTN_LOGGED = False
+
+
+def bfp4_attn_enabled():
+    """QWEN36_BFP4_ATTN (default 0, opt-in pending task evals): attention QKV and wo weights in bfloat4_b
+    (+ LoFi in decode only). +2.0% decode; accuracy_512 top-1 -0.19 on Qwen3.6, larger on Qwen3.8.
+    Logs the choice once per process."""
+    global _BFP4_ATTN_LOGGED
+    on = os.environ.get(BFP4_ATTN_ENV, "0") == "1"
+    if not _BFP4_ATTN_LOGGED:
+        _BFP4_ATTN_LOGGED = True
+        logger.info(f"Attention QKV/wo weights: {'BFP4 + LOFI decode' if on else 'BFP8'} ({BFP4_ATTN_ENV}={int(on)})")
+    return on
+
+
+BFP4_MLP_DOWN_ENV = "QWEN36_BFP4_MLP_DOWN"
+_BFP4_MLP_DOWN_LOGGED = False
+
+
+def bfp4_mlp_down_enabled():
+    """QWEN36_BFP4_MLP_DOWN (default 0, opt-in pending task evals): dense-MLP down_proj (w2) weights in bfloat4_b
+    instead of bfloat8_b. +4.4% decode; accuracy-neutral on Qwen3.6, not on Qwen3.8."""
+    return os.environ.get(BFP4_MLP_DOWN_ENV, "0") == "1"
+
+
+def resolve_mlp_down_dtype(down_dtype=None):
+    """Explicit `down_dtype` wins (MoE shared expert passes bfloat8_b); None -> decide from the flag.
+    Logs the dense-MLP choice once per process."""
+    global _BFP4_MLP_DOWN_LOGGED
+    if down_dtype is not None:
+        return down_dtype
+    on = bfp4_mlp_down_enabled()
+    if not _BFP4_MLP_DOWN_LOGGED:
+        _BFP4_MLP_DOWN_LOGGED = True
+        logger.info(f"MLP down weights: {'BFP4' if on else 'BFP8'} ({BFP4_MLP_DOWN_ENV}={'1' if on else '0'})")
+    return ttnn.bfloat4_b if on else ttnn.bfloat8_b
+
+
+BFP8_MLP_GATEUP_ENV = "QWEN36_MLP_GATEUP_BFP8"
+_BFP8_MLP_GATEUP_LOGGED = False
+
+
+def bfp8_mlp_gateup_enabled():
+    """QWEN36_MLP_GATEUP_BFP8 (default 1 (on); 0 reverts to bfloat4_b): dense-MLP gate/up (w1/w3, packed gate_up) weights in bfloat8_b instead of bfloat4_b."""
+    return os.environ.get(BFP8_MLP_GATEUP_ENV, "1") == "1"
+
+
+def resolve_mlp_gateup_dtype(gateup_dtype=None):
+    """Explicit `gateup_dtype` wins (MoE shared expert passes bfloat4_b); None -> decide from the flag.
+    Logs the dense-MLP choice once per process."""
+    global _BFP8_MLP_GATEUP_LOGGED
+    if gateup_dtype is not None:
+        return gateup_dtype
+    on = bfp8_mlp_gateup_enabled()
+    if not _BFP8_MLP_GATEUP_LOGGED:
+        _BFP8_MLP_GATEUP_LOGGED = True
+        logger.info(f"MLP gate/up weights: {'BFP8' if on else 'BFP4'} ({BFP8_MLP_GATEUP_ENV}={'1' if on else '0'})")
+    return ttnn.bfloat8_b if on else ttnn.bfloat4_b
+
+
+MLP_FIDELITY_ENV = "QWEN36_MLP_FIDELITY"
+_MLP_FIDELITY_LOGGED = False
+
+
+def mlp_fidelity(math_fidelity=None):
+    """QWEN36_MLP_FIDELITY (default hifi2; lofi still selectable): math fidelity of the dense-MLP matmuls (gate/up, down, fused swiglu AGMM;
+    prefill and decode). Values: lofi | hifi2 | hifi3 | hifi4. An explicit math_fidelity wins (MoE shared expert
+    passes LoFi). Logs the dense-MLP choice once per process."""
+    global _MLP_FIDELITY_LOGGED
+    if math_fidelity is not None:
+        return math_fidelity
+    name = os.environ.get(MLP_FIDELITY_ENV, "hifi2").strip().lower()
+    table = {
+        "lofi": ttnn.MathFidelity.LoFi,
+        "hifi2": ttnn.MathFidelity.HiFi2,
+        "hifi3": ttnn.MathFidelity.HiFi3,
+        "hifi4": ttnn.MathFidelity.HiFi4,
+    }
+    if name not in table:
+        raise ValueError(f"{MLP_FIDELITY_ENV}={name!r} invalid; expected one of {sorted(table)}")
+    if not _MLP_FIDELITY_LOGGED:
+        _MLP_FIDELITY_LOGGED = True
+        logger.info(f"MLP math fidelity: {name} ({MLP_FIDELITY_ENV})")
+    return table[name]
 
 
 # Grid helpers
@@ -236,21 +469,25 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+def create_matmul_1d_decode_progcfg(
+    m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, max_in0_block_w=8
+):
     """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
     the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
 
     Grid is shaped WIDE-first (cols up to `grid_w`, the device worker-grid width — 11 on BH P150, 8 on
     WH): for a fixed core budget a wide-short grid shortens the in0 multicast column and beats a
     tall-narrow one (~2% on this matmul; see test_mlp_matmul_sweep wide1d_* vs forced1d_*). Default
-    grid_w=8 preserves the legacy shaping for callers that don't pass the device width."""
+    grid_w=8 preserves the legacy shaping for callers that don't pass the device width.
+
+    `max_in0_block_w` caps in0_block_w (largest divisor of k_tiles <= cap); default 8 = legacy."""
     cols = min(grid_w, num_cores)
     rows = math.ceil(num_cores / cols)
     m_tiles = math.ceil(m / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
     # mcast_in0: every core streams the full K, so in0_block_w must divide the full k_tiles.
-    per_core_k = _find_largest_divisor(k_tiles)
+    per_core_k = _find_largest_divisor(k_tiles, max_in0_block_w)
     per_core_n = math.ceil(n_tiles / (cols * rows))
     cap = 4 if fp32_acc else 8  # fp32_dest_acc caps subblock area at 4
     sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)
@@ -936,6 +1173,213 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         compute_kernel_config=compute_cfg,
     )
     return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+# ---------------------------------------------------------------------------------------------
+# Decode-only replicated-residual path: ONE all_reduce_async per row-parallel output instead of
+# [DistributedNorm all-gather + reduce-scatter] (4 CCLs/layer -> 2).
+#
+#   QWEN36_DECODE_ALLREDUCE=1 (default)  decode residual is REPLICATED full-width ([1,1,B,dim]) in L1
+#                                        WIDTH_SHARDED on a 10x4 = 40-core grid (shard [32, dim/40]).
+#                                        Norms are local sharded rms_norms, residual adds stay in L1, each
+#                                        row-parallel output is resharded to that layout and summed with
+#                                        ttnn.experimental.all_reduce_async into a persistent L1 buffer.
+#                                        The embedding is all-gathered once at model entry.
+#   QWEN36_DECODE_ALLREDUCE=0            restores the previous behaviour: decode residual is hidden-fractured
+#                                        ([1,1,B,dim/tp], DRAM); every norm all-gathers, every
+#                                        row-parallel output reduce-scatters.
+#   QWEN36_DECODE_AR_GDN_FP32=0 (default) GDN out-proj partial (fp32 in A) is cast to bf16 before the
+#                                        all-reduce (as the qwen38 QB2 port does).
+#   QWEN36_DECODE_AR_GDN_FP32=1          GDN partial all-reduced in fp32 (fp32 persistent buffer,
+#                                        fp32 dest accumulation); the residual add then mixes bf16 + fp32
+#                                        exactly like the reduce-scatter path does today.
+#
+# Prefill never reads these flags: it keeps the fractured residual and produces only KV / GDN state,
+# so the residual format is private to each forward. Dispatch inside the layer / final norm is on
+# the tensor itself (last dim == dim -> replicated), so a fractured input always takes the old path.
+# ---------------------------------------------------------------------------------------------
+DECODE_AR_ENV = "QWEN36_DECODE_ALLREDUCE"
+DECODE_AR_GDN_FP32_ENV = "QWEN36_DECODE_AR_GDN_FP32"
+_DAR_GRID = (10, 4)  # RES40 core grid (x, y)
+_DAR_UNSET = object()
+
+
+class DecodeResidualAllReduce:
+    """Replicated 40-core L1 decode residual + its norm / all-reduce / entry-gather helpers.
+
+    One instance per TT_CCL (see get_decode_allreduce), shared by every layer and the model so the
+    persistent all-reduce buffer is allocated exactly once, at construction (never inside a trace).
+    """
+
+    def __init__(self, mesh_device, args, tt_ccl, gdn_fp32=False):
+        self.mesh = mesh_device
+        self.tt_ccl = tt_ccl
+        self.dim = args.dim
+        self.tp = list(mesh_device.shape)[1]
+        self.topology = args.ccl_topology()
+        # Same link count the fractured path's AG/RS use on this mesh (tt_ccl.get_num_links(axis)).
+        self.num_links = tt_ccl.get_num_links(1)
+        self.gdn_fp32 = gdn_fp32
+
+        ncores = _DAR_GRID[0] * _DAR_GRID[1]
+        grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_DAR_GRID[0] - 1, _DAR_GRID[1] - 1))}
+        )
+
+        def width_mem(width):
+            return ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(grid, [TILE_SIZE, width], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+
+        shard_w = self.dim // ncores
+        self.res_mem = width_mem(shard_w)  # RES40: [1,1,B<=32,dim] replicated residual
+        block_w = shard_w // TILE_SIZE
+        self.norm_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=_DAR_GRID,
+            subblock_w=min(4, block_w),
+            block_h=1,
+            block_w=block_w,
+            inplace=False,
+        )
+        # all_reduce_async stages every device's partial in this buffer: [32, dim*tp] over the same 40
+        # cores (shard [32, dim*tp/40]); it must contain the output grid and be tp x the output shard.
+        buf_mem = width_mem(self.dim * self.tp // ncores)
+
+        def alloc(dtype):
+            return ttnn.empty(
+                [1, 1, TILE_SIZE, self.dim * self.tp],
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=buf_mem,
+            )
+
+        self.buffer = alloc(ttnn.bfloat16)
+        self.buffer_fp32 = alloc(ttnn.float32) if gdn_fp32 else None
+
+    def enter(self, x):
+        """Model entry: hidden-fractured embedding [1,1,B,dim/tp] -> replicated [1,1,B,dim] in RES40."""
+        if x.shape[-2] > TILE_SIZE:
+            raise ValueError(f"QWEN36_DECODE_ALLREDUCE supports decode batch <= {TILE_SIZE}, got {x.shape[-2]}")
+        gathered = ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=self.num_links,
+            topology=self.topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        out = ttnn.to_memory_config(gathered, self.res_mem)
+        if out is not gathered:
+            ttnn.deallocate(gathered)
+        return out
+
+    def rms_norm(self, x, norm):
+        """Local sharded rms_norm on a RES40 input with the replicated full-width (1+w) gamma of the
+        framework `RMSNorm` `norm` (same eps / HiFi2 + fp32-acc kernel config as the fractured path)."""
+        return ttnn.rms_norm(
+            x,
+            epsilon=norm.eps,
+            weight=norm.weight,
+            program_config=self.norm_pc,
+            memory_config=self.res_mem,
+            compute_kernel_config=norm.compute_kernel_config_hifi2,
+        )
+
+    def final_norm(self, x, norm, output_memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """Final norm before the LM head: local sharded norm, then the layout the LM head expects."""
+        normed = self.rms_norm(x, norm)
+        out = ttnn.to_memory_config(normed, output_memory_config)
+        if out is not normed:
+            ttnn.deallocate(normed)
+        return out
+
+    def add(self, a, b):
+        """Residual add; both operands (and the result) live in RES40."""
+        return ttnn.add(a, b, memory_config=self.res_mem)
+
+    def all_reduce(self, partial, keep_fp32=False):
+        """Sum the per-device row-parallel partial [1,1,B,dim] across the TP axis -> replicated RES40.
+
+        keep_fp32: the caller's partial is fp32 (GDN out-proj); honoured only when QWEN36_DECODE_AR_GDN_FP32=1,
+        otherwise it is cast to bf16 (the persistent buffer / CCL dtype) after the reshard to RES40.
+        """
+        use_fp32 = keep_fp32 and self.gdn_fp32
+        dtype = ttnn.float32 if use_fp32 else ttnn.bfloat16
+        shape = list(partial.shape)
+        if shape[0] != 1 or shape[1] != 1:
+            partial = ttnn.reshape(partial, (1, 1, shape[-4] * shape[-3] * shape[-2], shape[-1]))
+        packed = ttnn.to_memory_config(partial, self.res_mem)
+        if packed is not partial:
+            ttnn.deallocate(partial)
+        if packed.dtype != dtype:
+            cast = ttnn.typecast(packed, dtype)
+            ttnn.deallocate(packed)
+            packed = cast
+        extra = dict(fp32_dest_acc=True) if use_fp32 else {}
+        out = ttnn.experimental.all_reduce_async(
+            packed,
+            self.buffer_fp32 if use_fp32 else self.buffer,
+            cluster_axis=1,
+            mesh_device=self.mesh,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+            topology=self.topology,
+            num_links=self.num_links,
+            memory_config=self.res_mem,
+            **extra,
+        )
+        ttnn.deallocate(packed)
+        return out
+
+
+def get_decode_allreduce(args, tt_ccl):
+    """Shared DecodeResidualAllReduce for this TT_CCL (default on), or None when QWEN36_DECODE_ALLREDUCE=0 or the
+    configuration is unsupported (those keep the fractured-residual decode path unchanged).
+
+    Created on first call (layer / model construction) and cached on `tt_ccl`; every later caller gets the
+    same instance, so layers and the model always agree on the decode residual format.
+    """
+    if tt_ccl is None:
+        return None
+    cached = getattr(tt_ccl, "_qwen36_decode_ar", _DAR_UNSET)
+    if cached is not _DAR_UNSET:
+        return cached
+    inst = None
+    if os.environ.get(DECODE_AR_ENV, "1") == "1":
+        mesh = tt_ccl.mesh_device
+        shape = list(mesh.shape)
+        grid = mesh.compute_with_storage_grid_size()
+        ncores = _DAR_GRID[0] * _DAR_GRID[1]
+        reason = None
+        if len(shape) != 2 or shape[0] != 1 or shape[1] < 2 or shape[1] % 2:
+            reason = f"needs a (1, even N>=2) mesh, got {shape}"  # all_reduce_async: cluster_axis=1, even ring
+        elif args.dim % (ncores * TILE_SIZE):
+            reason = f"hidden dim {args.dim} is not tile-shardable over {ncores} cores"
+        elif getattr(args, "tile_padded_batch_rows", TILE_SIZE) != TILE_SIZE:
+            reason = f"max_batch_size {args.max_batch_size} > {TILE_SIZE} (RES40 shard height is one tile)"
+        elif getattr(args, "moe_num_experts", 0) > 0:
+            reason = "MoE layers' decode MLP still reduce-scatters into the fractured residual"
+        elif grid.x < _DAR_GRID[0] or grid.y < _DAR_GRID[1]:
+            reason = f"compute grid {grid.x}x{grid.y} is smaller than {_DAR_GRID[0]}x{_DAR_GRID[1]}"
+        if reason is not None:
+            logger.warning(f"{DECODE_AR_ENV}=1 ignored ({reason}); keeping the fractured-residual decode path")
+        else:
+            inst = DecodeResidualAllReduce(
+                mesh, args, tt_ccl, gdn_fp32=os.environ.get(DECODE_AR_GDN_FP32_ENV, "0") == "1"
+            )
+            logger.info(
+                f"{DECODE_AR_ENV}=1: decode uses the replicated 40-core L1 residual + all_reduce_async "
+                f"(gdn_fp32={inst.gdn_fp32}, num_links={inst.num_links}, topology={inst.topology})"
+            )
+    tt_ccl._qwen36_decode_ar = inst
+    return inst
 
 
 def sharded_decode_matmul(

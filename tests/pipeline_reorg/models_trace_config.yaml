@@ -19,6 +19,6 @@ exclude_models:
 # Review the generated diff and run verify_time_budget.py before committing.
 sweeps:
   llama3.1-8b: [wh_n150, bh_p150, wh_llmbox_perf]
-  qwen3.6-27b: [bh_quietbox_2]
+  qwen3.8-27b: [bh_quietbox_2]
   gemma-4-26b-a4b: [wh_llmbox_perf, bh_quietbox_2]
   gpt-oss-120b: [wh_galaxy_perf, bh_quietbox_2, bh_galaxy]
