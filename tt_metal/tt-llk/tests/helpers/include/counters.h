@@ -73,6 +73,13 @@ constexpr std::uint32_t COUNTER_BANK_COUNT = llk::perf::NUM_BANKS;
 
 // Unbounded, a corrupt config word would hang every thread and surface only as TENSIX TIMED OUT.
 constexpr std::uint32_t MODE_REG_POLL_LIMIT = 1024;
+// On Quasar, TRISCs access the local debug-reg window directly; RISC-V store-then-load ordering guarantees the
+// mode register read sees the written value, so one attempt is sufficient and the poll cost is O(1) per slot.
+#if defined(ARCH_QUASAR)
+constexpr std::uint32_t SELECT_POLL_LIMIT = 1;
+#else
+constexpr std::uint32_t SELECT_POLL_LIMIT = MODE_REG_POLL_LIMIT;
+#endif
 // Stored when the mode register never confirms the selection: a stale count would look plausible, 2^32-1 does not.
 constexpr std::uint32_t COUNTER_SELECT_MISSED = 0xFFFFFFFFu;
 constexpr std::uint32_t COUNTER_SLOT_COUNT    = PERF_COUNTERS_CONFIG_WORDS;
@@ -465,8 +472,8 @@ inline __attribute__((always_inline)) void read_all_counters([[maybe_unused]] st
 #endif
         const BankRegsRef regs = llk::perf::bank_regs(static_cast<Bank>(bank_id));
         // No mux write: it is fixed once by configure_hardware and cannot be re-aimed afterwards.
-        // Without the readback the read samples the previous counter; a poll that never converges stores the sentinel.
-        const bool selected     = llk::perf::select<MODE_REG_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
+        // On a miss (SELECT_POLL_LIMIT retries exhausted) the sentinel is stored; see SELECT_POLL_LIMIT above.
+        const bool selected     = llk::perf::select<SELECT_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
         counter_counts[out_idx] = selected ? llk::perf::read_count(regs) : COUNTER_SELECT_MISSED;
         ++out_idx;
     }
