@@ -1839,8 +1839,8 @@ def test_group_norm_rejects_per_sample_non_tile_aligned_spatial(device, expect_e
 def test_group_norm_rejects_tile_input_with_inplace(device, expect_error):
     # Scope boundary, same argument as negative_mask above: inplace is only
     # allowed for ROW_MAJOR inputs, and a ROW_MAJOR tensor has padded_shape[2] == logical_shape[2],
-    # so inplace and the tile-padding correction can never be active at the same time. Note the
-    # binding defaults inplace to True, which is why every TILE-input test passes inplace=False.
+    # so inplace and the tile-padding correction can never be active at the same time. Leaving
+    # inplace unset on a TILE input runs out of place (see test_group_norm_default_inplace_*).
     C, HW, num_groups = 320, 128, 32
     input_tensor = ttnn.from_torch(
         torch.rand((1, 1, HW, C), dtype=torch.bfloat16),
@@ -1966,6 +1966,94 @@ def test_group_norm_tile_layout_declines_negative_mask(device):
     )
     ttnn.synchronize_device(device)
     assert output.layout == ttnn.TILE_LAYOUT
+
+    torch_output = torch.nn.functional.group_norm(torch_input, 32)
+    torch_output = torch_output.permute(0, 2, 3, 1).view(1, 1, 8 * 8, 320)
+    assert_numeric_metrics(
+        torch_output,
+        ttnn.to_torch(ttnn.from_device(output)),
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.016,
+    )
+
+
+@pytest.mark.parametrize("output_layout", [None, ttnn.TILE_LAYOUT], ids=["same_layout", "explicit_tile"])
+def test_group_norm_default_inplace_tile_input(device, output_layout):
+    # inplace left unset on a TILE input must run out of place instead of tripping the
+    # "Tile layout requires non-inplace tensors" check.
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+    torch.manual_seed(0)
+    torch_input, input_tensor, sharded_mem_config = _block_sharded_320ch_input(
+        device, grid_size, ttnn.TILE_LAYOUT, spatial=8
+    )
+
+    output = ttnn.group_norm(
+        input_tensor,
+        num_groups=32,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+        output_layout=output_layout,
+    )
+    assert output.layout == ttnn.TILE_LAYOUT
+
+    torch_output = torch.nn.functional.group_norm(torch_input, 32)
+    torch_output = torch_output.permute(0, 2, 3, 1).view(1, 1, 8 * 8, 320)
+    assert_numeric_metrics(
+        torch_output,
+        ttnn.to_torch(ttnn.from_device(output)),
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.016,
+    )
+
+
+def test_group_norm_default_inplace_tile_input_interleaved(device):
+    # Same as above on the DRAM interleaved path with the op choosing the core grid.
+    torch.manual_seed(0)
+    N, C, H, W, num_groups = 1, 320, 32, 32, 32
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).reshape(N, 1, H * W, C),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output = ttnn.group_norm(input_tensor, num_groups=num_groups, use_welford=True)
+
+    torch_output = torch.nn.functional.group_norm(torch_input, num_groups)
+    torch_output = torch_output.permute(0, 2, 3, 1).reshape(N, 1, H * W, C)
+    assert_numeric_metrics(
+        torch_output,
+        ttnn.to_torch(ttnn.from_device(output)),
+        pcc_threshold=0.99975,
+        rtol=0.14,
+        atol=0.085,
+        frobenius_threshold=0.02,
+    )
+
+
+def test_group_norm_default_inplace_row_major_input(device):
+    # Control: a ROW_MAJOR sharded input with inplace unset still runs in place, as before.
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+    torch.manual_seed(0)
+    torch_input, input_tensor, sharded_mem_config = _block_sharded_320ch_input(
+        device, grid_size, ttnn.ROW_MAJOR_LAYOUT, spatial=8
+    )
+    input_address = input_tensor.buffer_address()
+
+    output = ttnn.group_norm(
+        input_tensor,
+        num_groups=32,
+        memory_config=sharded_mem_config,
+        core_grid=grid_size,
+    )
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output.buffer_address() == input_address
 
     torch_output = torch.nn.functional.group_norm(torch_input, 32)
     torch_output = torch_output.permute(0, 2, 3, 1).view(1, 1, 8 * 8, 320)
