@@ -8,10 +8,10 @@
 // Circular buffers, semaphores and argument slots of the matmul_reduce_scatter_prefill kernels. The kernels and the
 // program factory index every slot through these names.
 //
-// Per-core runtime args carry what differs by core (block origins, port coordinates, schedule words); common runtime
-// args carry what is the same on every core of a kernel (tensor and mailbox addresses, global semaphore
-// addresses, chunk-credit counts). A per-core list has its fixed slots (COUNT of them) first, then a variable tail
-// whose start each kernel takes from that COUNT.
+// Per-core runtime args carry what differs by core (block origins, port coordinates, which half's schedule it
+// follows); common runtime args carry what is the same on every core of a kernel (tensor and mailbox addresses,
+// global semaphore addresses, chunk-credit counts, and the schedule tables, one copy per half). A per-core list has its
+// fixed slots (COUNT of them) first, then a variable tail whose start each kernel takes from that COUNT.
 namespace matmul_reduce_scatter_prefill {
 
 // Dense from 0, the generic op's ids. The kernels receive them at the compile-time positions below (unchanged).
@@ -99,13 +99,14 @@ enum : uint32_t {
     COUNT
 };
 }  // namespace reader_ct
+// Common; tail from COUNT: num_waves wave words (row_off | col_off << 8 | rows << 16 | cols << 24), then for half 0
+// and then half 1, per entry ENTRY_WORDS words [block | mask << 16 | lag << 20, thr_fwd | thr_bwd << 16].
 namespace reader_common {
 enum : uint32_t { A_ADDR, W_ADDR, ARR_FWD_ADDR, ARR_BWD_ADDR, REPORT_CHUNKS, COUNT };
 }  // namespace reader_common
-// Per-core; tail from COUNT: num_waves wave words (row_off | col_off << 8 | rows << 16 | cols << 24), then per entry
-// ENTRY_WORDS words [block | mask << 16 | lag << 20, thr_fwd | thr_bwd << 16], then the multicast args.
+// Per-core; HALF picks the core's entry table. Tail from COUNT: the multicast args.
 namespace reader_rt {
-enum : uint32_t { ROW0, COL0, TOTAL_FWD, TOTAL_BWD, SLOTS_FWD, SLOTS_BWD, REP_FWD_XY, REP_BWD_XY, COUNT };
+enum : uint32_t { ROW0, COL0, TOTAL_FWD, TOTAL_BWD, SLOTS_FWD, SLOTS_BWD, REP_FWD_XY, REP_BWD_XY, HALF, COUNT };
 constexpr uint32_t ENTRY_WORDS = 2;
 }  // namespace reader_rt
 
@@ -134,8 +135,11 @@ enum : uint32_t {
     COUNT
 };
 }  // namespace compute_ct
-// Per-core: no fixed slots. num_waves words (rows | cols << 8 | sb_h << 16 | sb_w << 24), then per entry
-// role | lag << role::LAG_SHIFT.
+// Common: num_waves words (rows | cols << 8 | sb_h << 16 | sb_w << 24), then for half 0 and then half 1, per entry
+// role | lag << role::LAG_SHIFT. Per-core: HALF picks the core's roles.
+namespace compute_rt {
+enum : uint32_t { HALF, COUNT };
+}  // namespace compute_rt
 
 // ---------------------------------------------------------------------------------------------------------------
 // Matmul writer (BRISC, NoC1)
@@ -161,13 +165,13 @@ enum : uint32_t {
     COUNT
 };
 }  // namespace writer_ct
+// Common; tail from COUNT: num_waves wave words, then for half 0 and then half 1, one kind word per entry.
 namespace writer_common {
 enum : uint32_t { OUT_ADDR, MAILBOX_ADDR, COUNT };
 }  // namespace writer_common
-// Per-core; MAILBOX_SLOT_OFFSET = k * MAILBOX_STRIDE (the kernel adds MAILBOX_ADDR). Tail from COUNT: num_waves wave
-// words, then one kind word per entry.
+// Per-core; MAILBOX_SLOT_OFFSET = k * MAILBOX_STRIDE (the kernel adds MAILBOX_ADDR); HALF picks the core's kinds.
 namespace writer_rt {
-enum : uint32_t { ROW0, COL0, FWD_PORT_XY, BWD_PORT_XY, MAILBOX_SLOT_OFFSET, COUNT };
+enum : uint32_t { ROW0, COL0, FWD_PORT_XY, BWD_PORT_XY, MAILBOX_SLOT_OFFSET, HALF, COUNT };
 }  // namespace writer_rt
 
 // ---------------------------------------------------------------------------------------------------------------

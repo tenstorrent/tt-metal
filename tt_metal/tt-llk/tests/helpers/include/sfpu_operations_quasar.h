@@ -1284,7 +1284,7 @@ void call_unary_sfpu_operation_quasar(
                 is_fp32_dest_acc_en,
                 TILE_SHAPE,
                 calculate_logical_not,
-                (APPROX, ckernel::InstrModLoadStore::LO16, ITERATIONS),
+                (APPROX, ckernel::InstrModLoadStore::UINT16, ITERATIONS),
                 dst_index,
                 vector_mode);
         }

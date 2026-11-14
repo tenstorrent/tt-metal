@@ -9,8 +9,8 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, load_window, run_golden
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import golden_floor
 
 TOKENS = list(range(10))
 SEGMENT = 4  # segments [0, 4), [4, 8), [8, 10): the last one is partial

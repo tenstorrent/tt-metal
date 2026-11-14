@@ -16,7 +16,7 @@
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -996,7 +996,7 @@ void CommandListBuilderImpl::resolve_parameters(
             const auto* expected_spec = program.get_tensor_parameter_layout(*info.param_name);
             TT_FATAL(expected_spec != nullptr, "TensorParameter '{}' is not declared by the program", info.param_name);
             for (const auto& binding : program.get_dfb_storage_bindings()) {
-                const auto* tensor_name = std::get_if<tt::tt_metal::experimental::TensorParamName>(&binding.source);
+                const auto* tensor_name = std::get_if<tt::tt_metal::TensorParamName>(&binding.source);
                 TT_FATAL(
                     tensor_name == nullptr || tensor_name->get() != *info.param_name,
                     "TensorParameter '{}' backs borrowed-memory DFB {}, which command lists cannot patch",

@@ -5,8 +5,8 @@
 #include "embeddings_fused_runtime_rows_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -385,7 +385,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedRuntimeRowsProgramFactor
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs EmbeddingsFusedRuntimeRowsProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs EmbeddingsFusedRuntimeRowsProgramFactory::override_runtime_arguments(
     const EmbeddingParams& /*operation_attributes*/,
     const EmbeddingInputs& tensor_args,
     Tensor& tensor_return_value,

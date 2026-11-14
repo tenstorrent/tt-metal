@@ -33,6 +33,11 @@ struct noc_traits_t<UnicastEndpoint>;
 template <>
 struct noc_traits_t<MulticastEndpoint>;
 
+// The arguments Noc's multicast APIs take for a destination of type T, such as a DataflowBuffer's node rectangle and
+// byte offset.
+template <typename T>
+using noc_dst_args_mcast_t = typename noc_traits_t<T>::dst_args_mcast_type;
+
 // May T be a local-L1 endpoint of noc.async_write_zeros?
 template <typename T>
 inline constexpr bool noc_zero_l1_endpoint_v = false;
@@ -128,8 +133,6 @@ private:
     using src_args_t = typename noc_traits_t<T>::src_args_type;
     template <typename T>
     using dst_args_t = typename noc_traits_t<T>::dst_args_type;
-    template <typename T>
-    using dst_args_mcast_t = typename noc_traits_t<T>::dst_args_mcast_type;
 
     template <AddressType address_type>
     using addr_underlying_t = std::conditional_t<address_type == AddressType::LOCAL_L1, uintptr_t, uint64_t>;
@@ -204,7 +207,7 @@ private:
     }
 
     template <AddressType address_type, typename Dst>
-    auto get_dst_ptr_mcast(const Dst& dst, const dst_args_mcast_t<Dst>& dst_args) const {
+    auto get_dst_ptr_mcast(const Dst& dst, const noc_dst_args_mcast_t<Dst>& dst_args) const {
         tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, Dst>();
         return addr_underlying_t<address_type>{
             noc_traits_t<Dst>::template dst_addr_mcast<address_type>(dst, *this, dst_args)};
@@ -502,7 +505,7 @@ public:
         uint32_t size_bytes,
         uint32_t num_dsts,
         const src_args_t<Src>& src_args,
-        const dst_args_mcast_t<Dst>& dst_args,
+        const noc_dst_args_mcast_t<Dst>& dst_args,
         bool linked = false) const {
         static_assert(!has_flag(opts, NocOptions::TXN_ID), "Mcasts with transaction id are not supported yet");
         static_assert(
@@ -817,6 +820,7 @@ public:
      *   - CircularBuffer / DataflowBuffer : get_write_ptr()
      *   - Scratchpad / LocalTensorAccessor / CoreLocalMem : the start of the local region
      * @p args.offset_bytes is in bytes, including for the typed handles (whose operator[] is not).
+     * A @p size_bytes of 0 issues nothing.
      *
      * @note The destination bytes are UNDEFINED until write_zeros_l1_barrier() returns: do not read
      *       or write the window before the barrier.

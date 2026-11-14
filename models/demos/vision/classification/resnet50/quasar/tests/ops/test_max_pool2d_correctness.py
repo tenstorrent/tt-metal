@@ -36,7 +36,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # (in_h, in_w, channels, kernel, stride, padding) — all sizes chosen so N*H*W is tile-aligned (multiple
 # of 32) for clean height sharding. Batch is fixed at 1. Larger H/W shard across >1 core on any real part
