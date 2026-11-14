@@ -32,7 +32,8 @@ sfpi_inline void calculate_where_operands(
         sfpi::vFloat true_val = true_input.load(d);
         sfpi::vFloat result = false_input.load(d);
 
-        v_if(cond != 0) { result = true_val; }
+        // Compare on |cond| so that IEEE-754 signed zero (-0.0) matches 0.0 and evaluates to false
+        v_if(sfpi::abs(cond) != 0.0f) { result = true_val; }
         v_endif;
 
         output.store(d, result);
