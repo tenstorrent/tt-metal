@@ -38,12 +38,21 @@ void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
 }
 
 inline void moreh_linear_backward_validate(
-    const Tensor& /*output_grad*/,
+    const Tensor& output_grad,
     const Tensor& input,
     const Tensor& weight,
     const std::optional<const Tensor>& input_grad,
     const std::optional<const Tensor>& weight_grad,
     const std::optional<const Tensor>& bias_grad) {
+    // The bias-grad, weight-grad and input-grad readers all read output_grad as whole tiles, so a
+    // ROW_MAJOR gradient is misread and the bias grad comes back mostly wrong with nothing rejecting
+    // the call. The layout requirement was already imposed on the other operands but never on this
+    // one, which is the one every gradient path is sized from.
+    TT_FATAL(
+        output_grad.layout() == Layout::TILE,
+        "moreh_linear_backward device op requires output_grad in TILE layout, got {}",
+        output_grad.layout());
+
     if (input_grad.has_value()) {
         const auto& input_grad_tensor = input_grad.value();
         TT_FATAL(is_same_shape(input, input_grad_tensor), "both tensors should be the same shape");
