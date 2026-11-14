@@ -1,0 +1,58 @@
+[
+  {
+    "layer": 4,
+    "attention_type": "full_attention",
+    "prefill_seq": 16384,
+    "chunk_threshold": 8192,
+    "finite": true,
+    "out_shape": [
+      1,
+      16384,
+      2048
+    ],
+    "out_std": 0.49448832869529724,
+    "wall_s": 9.85
+  },
+  {
+    "layer": 1,
+    "attention_type": "sliding_attention",
+    "prefill_seq": 16384,
+    "chunk_threshold": 8192,
+    "finite": true,
+    "out_shape": [
+      1,
+      16384,
+      2048
+    ],
+    "out_std": 0.49823641777038574,
+    "wall_s": 11.01
+  },
+  {
+    "layer": 1,
+    "attention_type": "sliding_attention",
+    "prefill_seq": 262144,
+    "chunk_threshold": 8192,
+    "finite": true,
+    "out_shape": [
+      1,
+      262144,
+      2048
+    ],
+    "out_std": 0.49828359484672546,
+    "wall_s": 39.34
+  },
+  {
+    "layer": 4,
+    "attention_type": "full_attention",
+    "prefill_seq": 262144,
+    "chunk_threshold": 8192,
+    "finite": true,
+    "out_shape": [
+      1,
+      262144,
+      2048
+    ],
+    "out_std": 0.4982531666755676,
+    "wall_s": 104.83
+  }
+]
