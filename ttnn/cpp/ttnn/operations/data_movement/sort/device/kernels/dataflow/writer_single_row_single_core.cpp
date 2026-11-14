@@ -149,7 +149,7 @@ void kernel_main() {
                            get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
         // Generate Wt index tiles (TILE / integer format) into the index DFB.
-        // The topk LLK reads indices via LO16 (uint16) or INT32 (uint32) mode, so
+        // The topk LLK reads indices via UINT16 (uint16) or INT32 (uint32) mode, so
         // the index DFB must contain raw unsigned integers, not floating-point values.
         for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {

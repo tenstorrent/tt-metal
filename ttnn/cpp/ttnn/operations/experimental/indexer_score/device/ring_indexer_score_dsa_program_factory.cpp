@@ -392,8 +392,9 @@ ProgramDescriptor build_ring_program_descriptor(
         .full_mesh = fused.full_mesh,
         .orientation = fused.snake_orientation,
         .mesh_rows = fused.mesh_rows,
-        .mesh_cols = fused.mesh_cols};
-    reader_ct.push_back(rank_mapping.full_mesh ? 1u : 0u);
+        .mesh_cols = fused.mesh_cols,
+        .column_major_ranks = fused.column_major};
+    reader_ct.push_back(rank_mapping_compile_time_arg(rank_mapping));
     reader_ct.push_back(static_cast<uint32_t>(rank_mapping.orientation));
     reader_ct.push_back(rank_mapping.mesh_rows);
     reader_ct.push_back(rank_mapping.mesh_cols);
@@ -618,7 +619,8 @@ ProgramDescriptor build_ring_program_descriptor(
             .mesh_rows = fused.mesh_rows,
             .mesh_cols = fused.mesh_cols,
             .ring_size = ring_size,
-            .route_plan_hash = fused.route_plan_hash};
+            .route_plan_hash = fused.route_plan_hash,
+            .column_major_ranks = fused.column_major};
         const auto position =
             ttnn::operations::ccl::common::get_mesh_ring_position(q, coord, mesh_ring_plan, fused.topology);
         TT_FATAL(

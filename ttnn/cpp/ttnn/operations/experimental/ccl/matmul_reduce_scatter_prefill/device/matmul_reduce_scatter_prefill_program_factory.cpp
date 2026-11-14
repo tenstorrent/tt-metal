@@ -72,6 +72,11 @@ KernelDescriptor::RTArgList mrs_rt_list(const std::vector<SlotValue>& slots) {
     return list;
 }
 
+// Appends schedule words to a common runtime-arg list.
+void mrs_append(std::vector<SlotValue>& dst, const std::vector<uint32_t>& src) {
+    dst.insert(dst.end(), src.begin(), src.end());
+}
+
 void mrs_append(std::vector<uint32_t>& dst, const std::vector<uint32_t>& src) {
     dst.insert(dst.end(), src.begin(), src.end());
 }
@@ -720,12 +725,12 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         r_rt[args::reader_rt::SLOTS_BWD] = n_arr[kBwd];
         r_rt[args::reader_rt::REP_FWD_XY] = n_arr[kFwd] != 0 ? mrs_xy16(*rep[kFwd]) : 0;
         r_rt[args::reader_rt::REP_BWD_XY] = n_arr[kBwd] != 0 ? mrs_xy16(*rep[kBwd]) : 0;
-        mrs_append(r_rt, wave_words);
-        mrs_append(r_rt, ent_words[h]);
+        // The schedule tables are common args (one copy per half); a core only says which half it follows.
+        r_rt[args::reader_rt::HALF] = h;
         reader.runtime_args.emplace_back(core, std::move(r_rt));
 
-        std::vector<uint32_t> c_rt = wave_mm_words;
-        mrs_append(c_rt, roles_words[h]);
+        std::vector<uint32_t> c_rt(args::compute_rt::COUNT);
+        c_rt[args::compute_rt::HALF] = h;
         compute.runtime_args.emplace_back(core, std::move(c_rt));
 
         std::vector<uint32_t> w_rt(args::writer_rt::COUNT);
@@ -734,8 +739,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         w_rt[args::writer_rt::FWD_PORT_XY] = pf.has_value() ? mrs_xy16(*pf) : 0;
         w_rt[args::writer_rt::BWD_PORT_XY] = pb.has_value() ? mrs_xy16(*pb) : 0;
         w_rt[args::writer_rt::MAILBOX_SLOT_OFFSET] = k * detail::kMailboxStride;
-        mrs_append(w_rt, wave_words);
-        mrs_append(w_rt, kind_words[h]);
+        w_rt[args::writer_rt::HALF] = h;
         writer.runtime_args.emplace_back(core, std::move(w_rt));
     }
 
@@ -745,11 +749,23 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     reader_common[args::reader_common::ARR_FWD_ADDR] = arr_addr[kFwd];
     reader_common[args::reader_common::ARR_BWD_ADDR] = arr_addr[kBwd];
     reader_common[args::reader_common::REPORT_CHUNKS] = credit_chunks;
+    mrs_append(reader_common, wave_words);
+    mrs_append(reader_common, ent_words[0]);
+    mrs_append(reader_common, ent_words[1]);
     reader.emplace_common_runtime_args(mrs_rt_list(reader_common));
+
+    std::vector<SlotValue> compute_common;
+    mrs_append(compute_common, wave_mm_words);
+    mrs_append(compute_common, roles_words[0]);
+    mrs_append(compute_common, roles_words[1]);
+    compute.emplace_common_runtime_args(mrs_rt_list(compute_common));
 
     std::vector<SlotValue> writer_common(args::writer_common::COUNT, 0u);
     writer_common[args::writer_common::OUT_ADDR] = output.buffer();
     writer_common[args::writer_common::MAILBOX_ADDR] = res.mailbox.buffer();
+    mrs_append(writer_common, wave_words);
+    mrs_append(writer_common, kind_words[0]);
+    mrs_append(writer_common, kind_words[1]);
     writer.emplace_common_runtime_args(mrs_rt_list(writer_common));
 
     // ---- multicast families (after the reader's own args) ----

@@ -42,6 +42,13 @@ const MAX_HEALTH_TIMEOUT_SECONDS = 30;
 const MAX_FETCH_TIMEOUT_SECONDS = 600;
 const DEFAULT_FETCH_TIMEOUT_SECONDS = 120;
 const DEFAULT_HEALTH_TIMEOUT_SECONDS = 2;
+// The upstream fallback aborts a fetch that averages under this rate for this
+// long, so actions/checkout's own fetch retry (3 attempts) reconnects. Some
+// connections to GitHub from CI networks lose packets for their whole life and
+// crawl at ~140KB/s until the job times out; a new connection usually takes a
+// healthy path. Healthy fetches run at several MB/s.
+const FALLBACK_LOW_SPEED_LIMIT = '524288';
+const FALLBACK_LOW_SPEED_SECONDS = '60';
 
 function fileCommand(file, key, value) {
   if (!file) return;
@@ -254,9 +261,17 @@ function getAll(state, file, key, includes = false) {
 // actions/checkout runs `git config --global include.path <credentials>`, which
 // replaces a single include.path (and fails on several). Conditional includes
 // stay as they are and are evaluated when Git reads the copy.
-function writeCheckoutConfig(directory, state) {
+//
+// The low-speed abort is scoped to the checked-out repository: actions/checkout
+// retries its fetch but not its submodule update, so a submodule must keep
+// crawling rather than fail.
+function writeCheckoutConfig(directory, state, config) {
   const entries = listEntries(state, ['--file', path.join(directory, 'global.config'), '--includes'])
     .filter(([key]) => key.toLowerCase() !== 'include.path');
+  if (config.upstreamValid && config.repositoryValid) {
+    const scope = `http.${config.upstream}/${config.repository}`;
+    entries.push([`${scope}.lowSpeedLimit`, FALLBACK_LOW_SPEED_LIMIT], [`${scope}.lowSpeedTime`, FALLBACK_LOW_SPEED_SECONDS]);
+  }
   // activate copies back only what checkout adds after this snapshot.
   state.checkoutSafeDirectories = entries.filter(([key]) => key.toLowerCase() === 'safe.directory').length;
   writePrivate(path.join(directory, 'checkout.config'), entries.map(([key, value]) => entry(key, value)).join(''));
@@ -278,7 +293,7 @@ function prepare() {
     try {
       removeManaged(state, path.join(existing, 'global.config'));
       state.active = false;
-      writeCheckoutConfig(existing, state);
+      writeCheckoutConfig(existing, state, config);
       writeState(existing, state);
     } catch (error) {
       try { disableInPlace(existing, state); writeState(existing, state); } catch {}
@@ -307,7 +322,7 @@ function prepare() {
     };
     const base = copyGlobals(directory, state, config.caches);
     writePrivate(path.join(directory, 'global.config'), base + PERFORMANCE.map(([key, value]) => entry(key, value)).join(''));
-    writeCheckoutConfig(directory, state);
+    writeCheckoutConfig(directory, state, config);
     writeState(directory, state);
     return {directory, state, created: true};
   } catch (error) {

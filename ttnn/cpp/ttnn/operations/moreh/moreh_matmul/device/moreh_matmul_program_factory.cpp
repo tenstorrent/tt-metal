@@ -113,7 +113,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
+    using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
     const Tensor& input = tensor_args.input;
     const Tensor& other = tensor_args.other;

@@ -218,14 +218,22 @@ void kernel_main() {
     }
 
     // Expert token counts: flat [num_routed_experts] array per device.
-    // Decompose linearized_mesh_coord into (row, col) using physical mesh dims,
-    // then map col -> dispatch_group_idx via modulo num_dispatch_groups.
-    // This handles DP replicas (ndg < mesh_cols) where multiple columns share the same group.
+    // Decompose linearized_mesh_coord into (row, col) using physical mesh dims. The coordinate along
+    // the combine (SP) axis is the chip's position in its dispatch group; the other coordinate maps
+    // to dispatch_group_idx via modulo num_dispatch_groups. This handles DP replicas (ndg smaller
+    // than the non-SP extent) where several groups share the same experts.
     constexpr uint32_t mesh_row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t mesh_col = linearized_mesh_coord % mesh_cols;
-    constexpr uint32_t dispatch_group_idx = mesh_col % num_dispatch_groups;
+#ifdef AXIS
+    constexpr bool sp_on_axis_1 = ReplicateGroup(AXIS) == ReplicateGroup::ROWS;
+#else
+    constexpr bool sp_on_axis_1 = false;
+#endif
+    constexpr uint32_t sp_coord = sp_on_axis_1 ? mesh_col : mesh_row;
+    constexpr uint32_t group_coord = sp_on_axis_1 ? mesh_row : mesh_col;
+    constexpr uint32_t dispatch_group_idx = group_coord % num_dispatch_groups;
     constexpr uint32_t experts_per_dispatch_group = experts_per_chip * num_chips;
-    constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + mesh_row * experts_per_chip;
+    constexpr uint32_t offset = dispatch_group_idx * experts_per_dispatch_group + sp_coord * experts_per_chip;
     // Multicast expert token counts + receive_buf_addr to all untilizer cores
     // Each sender multicasts token counts + its own receive_buf_addr to its dedicated untilizer
     // group. The mcast destination covers only this sender's k_s untilizer cores (per-sender
