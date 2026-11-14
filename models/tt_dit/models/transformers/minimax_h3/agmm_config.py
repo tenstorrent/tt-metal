@@ -107,6 +107,38 @@ _AGMM_LEGACY_BLOCKS: dict[tuple[int, int, int], tuple] = {
 }
 
 
+# MINIMAX_H3_AGMM_BLOCKS (default unset): override table entries for in-model A/B without a code change. Entries
+# "K,N,per_core_M=M_block,K_block,N_block,sub_h,sub_w" separated by ";", e.g. "5376,7168,5=5,6,22,1,2". The key must be
+# a table key; ff1 (fused SwiGLU) needs an even N_block. M / N block and subblock alone keep the accumulation order
+# (bit-identical); a different K_block moves where partial sums leave DEST (reassociation). Takes precedence over the
+# LEGACY switches. Malformed values raise at import.
+def _parse_agmm_overrides(value: str) -> dict[tuple[int, int, int], tuple]:
+    overrides: dict[tuple[int, int, int], tuple] = {}
+    for entry in filter(None, (e.strip() for e in value.split(";"))):
+        try:
+            key_text, blocks_text = entry.split("=")
+            key = tuple(int(v) for v in key_text.split(","))
+            m_block, k_block, n_block, sub_h, sub_w = (int(v) for v in blocks_text.split(","))
+        except ValueError:
+            raise ValueError(
+                f"MINIMAX_H3_AGMM_BLOCKS entry {entry!r}: expected K,N,per_core_M=M,K,N,sub_h,sub_w"
+            ) from None
+        if key not in AGMM_BLOCK_SIZES:
+            raise ValueError(f"MINIMAX_H3_AGMM_BLOCKS entry {entry!r}: {key} is not a table key")
+        k_tiles = key[0] // _TILE // 4  # TP 4 layouts (see the module docstring)
+        if min(m_block, k_block, n_block, sub_h, sub_w) < 1 or k_tiles % k_block or m_block % sub_h or n_block % sub_w:
+            raise ValueError(
+                f"MINIMAX_H3_AGMM_BLOCKS entry {entry!r}: K_block must divide {k_tiles}, the subblock the blocks"
+            )
+        if key[:2] == (5376, 7168) and n_block % 2:
+            raise ValueError(f"MINIMAX_H3_AGMM_BLOCKS entry {entry!r}: ff1 (fused SwiGLU) needs an even N_block")
+        overrides[key] = (m_block, k_block, n_block, (sub_h, sub_w))
+    return overrides
+
+
+_AGMM_OVERRIDES = _parse_agmm_overrides(os.environ.get("MINIMAX_H3_AGMM_BLOCKS", ""))
+
+
 # Blocking of the dynamic-length path per (K, N) layer and length class; to_qkv and to_out take one
 # blocking at every length, ff1 one per class.
 AGMM_PINNED_BLOCKING: dict[tuple[int, int], dict[str, tuple[int, int, int]]] = {
@@ -183,4 +215,4 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     if not divisors:
         return None
     key = (k, n, max(divisors))
-    return _AGMM_LEGACY_BLOCKS.get(key, AGMM_BLOCK_SIZES[key])
+    return _AGMM_OVERRIDES.get(key) or _AGMM_LEGACY_BLOCKS.get(key, AGMM_BLOCK_SIZES[key])
