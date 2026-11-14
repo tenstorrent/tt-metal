@@ -193,6 +193,43 @@ def worker_list(device, max_grid):
     return [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx) if (x, y) not in taken], ports
 
 
+def interleaved_strip_placement(workers, R, Q):
+    """used[g * Q + q] for slice sharing (w_share_early): member q's R cores sit in ONE grid column at rows
+    g * s + p (s = grid rows // R, phase p), so the W / norm weight shares travel short vertical hops, while row group g
+    keeps the compact band of rows [g * s, g * s + s) (coefficient multicast rectangles, combine tree). Strips are
+    taken phase by phase, column by column (q = p * columns + x: exactly row-major when Q = s * columns). Members with
+    no complete strip (cores taken by the ports) take, group by group, the free core nearest row group g's band (then
+    their own column). Falls back to row-major when R > grid rows."""
+    gx = 1 + max(c.x for c in workers)
+    gy = 1 + max(c.y for c in workers)
+    s = gy // R
+    if s == 0:
+        return workers[: R * Q]
+    free = {(c.x, c.y) for c in workers}
+    members, taken = [], set()
+    for p in range(s):
+        for x in range(gx):
+            strip = [(x, g * s + p) for g in range(R)]
+            if len(members) < Q and all(c in free for c in strip):
+                members.append(strip)
+                taken.update(strip)
+    left = [(c.x, c.y) for c in workers if (c.x, c.y) not in taken]
+    extra = [[None] * R for _ in range(Q - len(members))]
+    for g in range(R):
+        mid = g * s + (s - 1) / 2
+        for m in extra:
+            x0 = m[0][0] if g > 0 else 0
+            c = min(left, key=lambda c: (abs(c[1] - mid), abs(c[0] - x0)))
+            m[g] = c
+            left.remove(c)
+    members += extra
+    used = [None] * (R * Q)
+    for q, strip in enumerate(members):
+        for g in range(R):
+            used[g * Q + q] = ttnn.CoreCoord(*strip[g])
+    return used
+
+
 def balanced_passes(cols, cap):
     """(passes, block_cols) of a column range in passes of <= cap units, balanced so a ragged last pass carries the
     fewest filler units (W path: a ragged pass runs the full block on zeroed filler units)."""
@@ -350,7 +387,9 @@ def create_program_descriptor(
     R, Q = choose_split(t_tiles, c_tiles, len(workers), unit_bytes, int(has_w), n, C)
     row_ranges = _split(t_tiles, R)
     col_ranges = _split(c_tiles, Q)
-    used = workers[: R * Q]
+    # slice sharing (R > 1 with W): a column member's R cores in one grid column (short share forwards), row group g
+    # in the compact band of rows g * s .. (interleaved_strip_placement); else row-major
+    used = interleaved_strip_placement(workers, R, Q) if (has_w and R > 1 and SLICE_SHARE) else workers[: R * Q]
     core_ranges = _merged_ranges(used)
     max_core_c_tiles = col_ranges[0][1]
 
@@ -440,7 +479,7 @@ def create_program_descriptor(
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
-    # NoC coordinates of every used core (row-major L order), packed x | y << 16
+    # NoC coordinates of every used core (used order), packed x | y << 16
     xy = [(lambda v: v.x | (v.y << 16))(device.worker_core_from_logical_core(c)) for c in used] if has_w else []
     coef_mc = _coef_mcast_args(device, used, R, Q)
     for g in range(R):

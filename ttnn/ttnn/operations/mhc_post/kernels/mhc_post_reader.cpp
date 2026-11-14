@@ -303,16 +303,22 @@ void kernel_main() {
                     }
                 }
             };
-            forward(w_sl);
-            forward(nw_sl);
-            noc_async_write_barrier();
-            for (uint32_t g = 0; g < slice_share; ++g) {  // every peer counts every core (empty shares too)
-                if (g != group) {
-                    noc_semaphore_inc(peer(g, sem), 1);
+            {
+                MaybeDeviceZoneScope("r_share_fwd");  // my shares out + landed, then the peers' counts
+                forward(w_sl);
+                forward(nw_sl);
+                noc_async_write_barrier();
+                for (uint32_t g = 0; g < slice_share; ++g) {  // every peer counts every core (empty shares too)
+                    if (g != group) {
+                        noc_semaphore_inc(peer(g, sem), 1);
+                    }
                 }
             }
             volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem);
-            noc_semaphore_wait_min(cnt, slice_share - 1);
+            {
+                MaybeDeviceZoneScope("r_share_wait");  // the R - 1 peers' shares
+                noc_semaphore_wait_min(cnt, slice_share - 1);
+            }
             noc_semaphore_set(cnt, 0);
             noc_async_atomic_barrier();
         }
@@ -416,6 +422,7 @@ void kernel_main() {
                     push_slices();
                 }
                 if (row_idx == 0 && cb0 == 0) {
+                    MaybeDeviceZoneScope("r_issue_slices");
                     issue_slices();
                     slices_pending = (has_w && w_resident) || norm || slice_share > 1;
                 }
