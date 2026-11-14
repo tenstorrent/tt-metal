@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import ttnn
 
+from ....utils.device_constants import BLACKHOLE_COMPUTE_GRID, WORMHOLE_COMPUTE_GRID, compute_grid_key
 from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, resolves_fused_mmrs_config
 
 # ff2 per-device K = 14336 / tp 4 = 3584; N = 5376 is the full hidden size (the reduce-scatter
@@ -65,9 +66,40 @@ _SWEPT_BLOCKINGS = {
 
 _DEVICE_GRID = ttnn.CoreCoord(12, 10)
 
+# Blocking of the dynamic-length path per device compute grid.
+_PINNED_BLOCKINGS = {
+    BLACKHOLE_COMPUTE_GRID: FusedMMRSConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(12, 8),
+        M_block_size=6,
+        K_block_size=4,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        num_buffers_per_channel=None,
+        chunk_width_in_mm_blocks=1,
+    ),
+    WORMHOLE_COMPUTE_GRID: FusedMMRSConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 7),
+        M_block_size=6,
+        K_block_size=7,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        num_buffers_per_channel=None,
+        chunk_width_in_mm_blocks=1,
+    ),
+}
+
 _TILE = 32
 # The swept blocking's K divisibility holds for the fixed K: K_block 2 divides K/32 = 112. The
 # rule engine guarantees the same for its own picks (K_block is chosen among divisors of K/32).
+
+
+def pinned_mmrs_config(k: int, n: int, core_grid: ttnn.CoreCoord) -> FusedMMRSConfig | None:
+    """The M-independent fused MM+RS blocking of ff2 on the grid it was fitted for, else None (unfused path)."""
+    if (k, n) == (_K, _N):
+        return _PINNED_BLOCKINGS.get(compute_grid_key(core_grid))
+    return None
 
 
 def has_mmrs_config(m: int, k: int, n: int, core_grid: ttnn.CoreCoord) -> bool:

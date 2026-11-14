@@ -15,9 +15,11 @@ import pytest
 import torch
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, tp_axis_is_wrapped
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
     LayerNrmseThresholds,
@@ -34,9 +36,8 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 pytestmark = [
     run_for_blackhole(),
@@ -202,10 +203,13 @@ def _layer_call(
 def _assert_within_margin(what: str, measured_ms: float, reference_ms: float, margin: float) -> None:
     lower = reference_ms * (1.0 - margin)
     upper = reference_ms * (1.0 + margin)
-    assert lower <= measured_ms <= upper, (
-        f"{what} {measured_ms:.3f} ms is outside performance range "
-        f"[{lower:.3f}, {upper:.3f}] ms "
-        f"(reference {reference_ms:.3f} ms ± {margin:.0%})"
+    assert_perf_gate(
+        lower <= measured_ms <= upper,
+        (
+            f"{what} {measured_ms:.3f} ms is outside performance range "
+            f"[{lower:.3f}, {upper:.3f}] ms "
+            f"(reference {reference_ms:.3f} ms ± {margin:.0%})"
+        ),
     )
 
 

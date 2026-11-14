@@ -17,7 +17,7 @@ from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def ttnn_to_torch(input):

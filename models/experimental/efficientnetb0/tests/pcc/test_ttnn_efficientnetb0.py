@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 from models.experimental.efficientnetb0.tt.model_preprocessing import (
     create_efficientnetb0_input_tensors,
