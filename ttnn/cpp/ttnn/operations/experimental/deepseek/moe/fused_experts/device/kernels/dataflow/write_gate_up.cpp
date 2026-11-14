@@ -10,6 +10,9 @@
 #include "api/core_local_mem.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "../persistent.h"
+#if FE_GROUP_EXPERTS > 1
+#include "fetch_gate_up.h"
+#endif
 
 // The shared gate_up's K-split (see the program factory's shared_split): 1 = off.
 #ifndef FE_SHARED_SPLIT
@@ -19,6 +22,10 @@
 #ifndef FE_ROUTED_SPLIT
 #define FE_ROUTED_SPLIT 1u
 #endif
+
+// The routed split's partials a producer has taken (FE_ROUTED_SPLIT), cumulative over the persistent op's
+// iterations: one per expert.
+uint32_t fe_partials_total = 0;
 
 namespace {
 
@@ -155,7 +162,7 @@ void kernel_main() {
     constexpr uint32_t cb_ar_out_id = get_compile_time_arg_val(kArArg + 3);
     constexpr uint32_t ar_staging_slots = get_compile_time_arg_val(kArArg + 4);
 #endif
-    static_assert(out_tile_bytes == 64, "fused all-reduce slots are 1x32 bf16 faces");
+    static_assert(out_tile_bytes % 64 == 0, "fused all-reduce slots are (rows x 32) bf16 tiles");
     const uint32_t ar_scratch_addr = get_arg_val<uint32_t>(10);
     const uint32_t ar_slot = get_arg_val<uint32_t>(11);
     const uint32_t ar_sender_noc_x = get_arg_val<uint32_t>(12);
@@ -358,37 +365,80 @@ void kernel_main() {
         };
 
         if constexpr (num_expert_groups > 1) {
+#if FE_GROUP_EXPERTS > 1
+            // Several rows: the group's weight tiles, one per expert, once the route merge's weights (sent after the
+            // ids, so the reads start first) have landed.
+            if (down_core) {
+                DeviceZoneScopedN("FE_W_RSCALARS");
+                constexpr uint32_t rs = FE_RSCALAR_CT;
+                const uint32_t n = fe_group_hits(fe_wait_hits(iter), expert_group, num_expert_groups);
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_WEIGHTS)), iter + 1u);
+                for (uint32_t j = 0; j < n; ++j) {
+                    build_routing_scalars(
+                        get_compile_time_arg_val(rs),
+                        get_compile_time_arg_val(rs + 1),
+                        expert_group + j * num_expert_groups,
+                        1u,
+                        get_compile_time_arg_val(rs + 2),
+                        get_compile_time_arg_val(rs + 3),
+                        get_compile_time_arg_val(rs + 4),
+                        get_compile_time_arg_val(rs + 5),
+                        get_compile_time_arg_val(rs + 6),
+                        get_compile_time_arg_val(rs + 7));
+                }
+            }
+#endif
             const uint32_t scatter_tiles = i_shards_per_core * swiglu_tiles;
+            // This iteration's experts of the group (FE_GROUP_EXPERTS > 1), the j-th's activation at tile j * i_tiles.
+            uint32_t my_experts = 1u;
+#if FE_GROUP_EXPERTS > 1
+            const bool routed_core = swiglu_core || (FE_ROUTED_SPLIT > 1u && local_idx >= FE_PARTNER_BASE &&
+                                                     local_idx < FE_PARTNER_BASE + num_producers);
+            if (routed_core) {
+                my_experts = fe_group_hits(fe_wait_hits(iter), expert_group, num_expert_groups);
+            }
+#endif
 #if FE_ROUTED_SPLIT > 1
             {
                 // The routed gate_up's K-split: a partner sends its [gate | up] partial (cb_wtmp) into its producer's
                 // cb_wtmp, at the same address there; the producer publishes it to its compute, which adds it before
                 // the SwiGLU.
                 constexpr uint32_t kPartTiles = 2u * swiglu_tiles;
-                const uint32_t half = cores_per_expert / 2u;
+                const uint32_t half = FE_PARTNER_BASE;
                 CircularBuffer cb_wtmp(FE_CB_WTMP);
                 if (swiglu_core) {
-                    cb_wtmp.reserve_back(kPartTiles);
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_SHARED_PART)), iter + 1u);
-                    cb_wtmp.push_back(kPartTiles);
+                    // One partial per expert, counted cumulatively over the iterations.
+                    for (uint32_t j = 0; j < my_experts; ++j) {
+                        cb_wtmp.reserve_back(kPartTiles);
+                        fe_partials_total += 1u;
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_SHARED_PART)),
+                            fe_partials_total);
+                        cb_wtmp.push_back(kPartTiles);
+                    }
                 } else if (local_idx >= half && local_idx < half + num_producers) {
+                    // Expert j's partial into the producer's j-th slot (the producer's cb_wtmp holds an iteration's).
                     const auto& wtmp_if = get_local_cb_interface(FE_CB_WTMP);
-                    cb_wtmp.wait_front(kPartTiles);
-                    noc.async_write(
-                        cb_wtmp,
-                        UnicastEndpoint{},
-                        kPartTiles * out_tile_bytes,
-                        {.offset_bytes = 0},
-                        {.noc_x = peer_noc_x, .noc_y = peer_noc_y, .addr = wtmp_if.fifo_limit - wtmp_if.fifo_size});
-                    noc.async_write_barrier();
-                    noc_semaphore_inc(get_noc_addr(peer_noc_x, peer_noc_y, get_semaphore(FE_SEM_SHARED_PART)), 1);
-                    noc_async_atomic_barrier();
-                    cb_wtmp.pop_front(kPartTiles);
+                    for (uint32_t j = 0; j < my_experts; ++j) {
+                        cb_wtmp.wait_front(kPartTiles);
+                        noc.async_write(
+                            cb_wtmp,
+                            UnicastEndpoint{},
+                            kPartTiles * out_tile_bytes,
+                            {.offset_bytes = 0},
+                            {.noc_x = peer_noc_x,
+                             .noc_y = peer_noc_y,
+                             .addr = wtmp_if.fifo_limit - wtmp_if.fifo_size + j * kPartTiles * out_tile_bytes});
+                        noc.async_write_barrier();
+                        noc_semaphore_inc(get_noc_addr(peer_noc_x, peer_noc_y, get_semaphore(FE_SEM_SHARED_PART)), 1);
+                        noc_async_atomic_barrier();
+                        cb_wtmp.pop_front(kPartTiles);
+                    }
                 }
             }
 #endif
-            if (swiglu_core) {
+            for (uint32_t j = 0; swiglu_core && j < my_experts; ++j) {
                 {
                     DeviceZoneScopedN("FE_W_SCATTER_WAIT");
                     cb_out.wait_front(scatter_tiles);
@@ -401,7 +451,7 @@ void kernel_main() {
                     {.offset_bytes = 0},
                     {.noc_x = chunk_hub_x,
                      .noc_y = chunk_hub_y,
-                     .addr = act_slot_base + swiglu_col_start * act_tile_bytes});
+                     .addr = act_slot_base + (j * i_tiles + swiglu_col_start) * act_tile_bytes});
                 noc.async_write_barrier();
                 bump_gather();
                 cb_out.pop_front(scatter_tiles);
@@ -454,7 +504,8 @@ void kernel_main() {
                     {.offset_bytes = 0},
                     {.noc_x = num_hubs > 1 ? hub1_noc_x : hub0_noc_x,
                      .noc_y = num_hubs > 1 ? hub1_noc_y : hub0_noc_y,
-                     .addr = act_slot_base + (i_tiles + local_idx - shared_first_local) * act_tile_bytes});
+                     .addr = act_slot_base +
+                             (FE_GROUP_EXPERTS * i_tiles + local_idx - shared_first_local) * act_tile_bytes});
                 noc.async_write_barrier();
                 bump_gather();
                 cb_out.pop_front(1);
