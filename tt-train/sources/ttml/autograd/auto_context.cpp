@@ -81,6 +81,10 @@ void AutoContext::close_device() {
     // The CCL semaphores are L1 buffers of the mesh being closed; the next mesh allocates its own, and a set kept
     // from this one would point at addresses the next mesh hands out to other buffers.
     m_ccl_resources.reset();
+    // The intra-mesh sockets hold buffers of the mesh being closed too.
+    if (m_socket_manager) {
+        m_socket_manager->clear_intra_mesh_sockets();
+    }
     m_device_constants.clear();
     // Its axes and sizes were derived from the mesh being closed.
     m_parallelism_context.reset();
