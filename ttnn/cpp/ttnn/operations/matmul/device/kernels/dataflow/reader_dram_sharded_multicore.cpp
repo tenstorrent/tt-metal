@@ -16,8 +16,8 @@
 // runtime arguments are needed; the only per-core table is DSMC_ROLE (one byte per logical core:
 // 0 = idle, else wi + 1), which lets the program run on the bounding rectangle of its cores.
 //
-// Device 2.0 APIs throughout: Noc reads/writes with BankView (weight), UnicastEndpoint
-// (activation and output shards, group partials) and CoreLocalMem / DataflowBuffer (local L1),
+// Device 2.0 APIs throughout: Noc reads/writes with BankView (weight), ShardView (activation
+// and output shards), UnicastEndpoint (group partials) and CoreLocalMem / DataflowBuffer (local L1),
 // NocOptions::TXN_ID reads and barriers, Noc::is_read_trid_flushed for the in-order retire, and
 // Semaphore for the reduce. The read-command readiness check prevents completion counters
 // from being sampled before submission; the sticky transaction tag is cleared on exit.
@@ -30,7 +30,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
-#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 #ifdef DSMC_REDUCE
 #include "api/semaphore.h"
@@ -65,7 +64,7 @@ constexpr uint32_t SW = get_arg(args::SW);      // activation shard width (tiles
 constexpr uint32_t XL = get_arg(args::XL);      // activation blocks in flight ahead of the weight stream
 constexpr uint32_t OT = get_arg(args::OT);      // output tile bytes
 constexpr uint32_t OW = get_arg(args::OW);      // output shard width (tiles)
-constexpr uint32_t OCAP = get_arg(args::OCAP);  // output shard capacity over all shards (tiles)
+constexpr uint32_t OCAP = get_arg(args::OCAP);  // output columns held by the output's shards (tiles)
 constexpr uint32_t MAXOWN = get_arg(args::MAXOWN);
 constexpr uint32_t X_TRID0 = 8;
 #ifdef DSMC_STREAMING
@@ -74,9 +73,6 @@ constexpr uint32_t X_SLOTS = 3;
 constexpr uint32_t X_SLOTS = 8;
 #endif
 static_assert(XL >= 1 && XL <= 8, "at most 8 activation reads in flight (trids 8..15)");
-// NoC0 virtual coordinates (y << 16 | x) of the activation and output shard cores, in shard order.
-constexpr uint32_t kXCores[] = {DSMC_XC};
-constexpr uint32_t kOutCores[] = {DSMC_OC};
 #ifdef DSMC_REDUCE
 constexpr uint32_t PT = get_arg(args::PT);       // partial tile bytes (Dest precision)
 constexpr uint32_t kGroupCores[] = {DSMC_CORE};  // per work item
@@ -118,41 +114,45 @@ FORCE_INLINE void retire_x(const Noc& noc, DataflowBuffer& dfb_x, XQueue& xq) {
     }
 }
 
-// Activation rows [k, k + n) into L1 at l1, tagged trid: runs that sit in one shard are one read.
-FORCE_INLINE void read_x(const Noc& noc, uint32_t x_addr, uint32_t k, uint32_t n, uint32_t l1, uint32_t trid) {
+// Activation rows [k, k + n) of one M row into L1 at l1, tagged trid. row_base is that row's byte
+// offset in the shard. Runs that sit in one shard are one read.
+template <typename X>
+FORCE_INLINE void read_x(
+    const Noc& noc, const X& x, uint32_t row_base, uint32_t k, uint32_t n, uint32_t l1, uint32_t trid) {
     const uint32_t kend = k + n;
     while (k < kend) {
         const uint32_t s = k / SW, o = k % SW;
         const uint32_t run = (SW - o) < (kend - k) ? (SW - o) : (kend - k);
         noc.async_read<NocOptions::TXN_ID>(
-            kCore,
+            x,
             CoreLocalMem<uint32_t>(l1),
             run * XT,
-            {.noc_x = core_x(kXCores[s]), .noc_y = core_y(kXCores[s]), .addr = x_addr + o * XT},
+            {.shard_id = s, .offset_bytes = row_base + o * XT},
             {},
             {.trid = trid});
         l1 += run * XT;
         k += run;
     }
 }
-// A whole storage shard is contiguous across M, so issue one transfer for it.
-// Partial-shard blocks retain row strides without an intermediate layout conversion.
-FORCE_INLINE void read_x_block(const Noc& noc, uint32_t x_addr, uint32_t k, uint32_t rb, uint32_t l1, uint32_t trid) {
+// A whole storage shard is contiguous across M, so issue one transfer for it. row_base is this
+// M-group's first row. Partial-shard blocks retain row strides without an intermediate layout conversion.
+template <typename X>
+FORCE_INLINE void read_x_block(
+    const Noc& noc, const X& x, uint32_t row_base, uint32_t k, uint32_t rb, uint32_t l1, uint32_t trid) {
     if constexpr (MT > 1 && KB == SW) {
         if (rb == SW && k % SW == 0) {
-            const uint32_t xy = kXCores[k / SW];
             noc.async_read<NocOptions::TXN_ID>(
-                kCore,
+                x,
                 CoreLocalMem<uint32_t>(l1),
                 MT * SW * XT,
-                {.noc_x = core_x(xy), .noc_y = core_y(xy), .addr = x_addr},
+                {.shard_id = k / SW, .offset_bytes = row_base},
                 {},
                 {.trid = trid});
             return;
         }
     }
     for (uint32_t m = 0; m < MT; ++m) {
-        read_x(noc, x_addr + m * SW * XT, k, rb, l1 + m * KB * XT, trid);
+        read_x(noc, x, row_base + m * SW * XT, k, rb, l1 + m * KB * XT, trid);
     }
 }
 
@@ -249,9 +249,10 @@ void kernel_main() {
 #endif
 #ifdef DSMC_STREAM1
     DataflowBuffer dfb_x(dfb::x);
-    // Raw: same L1 address on the activation shard cores (no handle form yet).
-    const uint32_t x_addr =
-        tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in0)) + cm * MT * SW * XT;
+    const TensorAccessor x_acc(tensor::in0);
+    const ShardView x(x_acc);  // activation shard s holds K tiles [s * SW, (s + 1) * SW)
+    // This M-group's rows start this far into each activation shard.
+    const uint32_t x_row_base = cm * MT * SW * XT;
 #ifndef DSMC_STREAMING
     dfb_x.reserve_back(nblk * MT * KB);
 #endif
@@ -293,7 +294,8 @@ void kernel_main() {
 #endif
                     const uint32_t jx = (xq.issued + rot) % nblk, rx = jx * KB;
                     const uint32_t rbx = (rows - rx) < KB ? (rows - rx) : KB;
-                    read_x_block(noc, x_addr, k0 + rx, rbx, xl1 + slot * MT * KB * XT, X_TRID0 + (xq.issued % X_SLOTS));
+                    read_x_block(
+                        noc, x, x_row_base, k0 + rx, rbx, xl1 + slot * MT * KB * XT, X_TRID0 + (xq.issued % X_SLOTS));
                     xq.issued++;
 #ifdef DSMC_X_SYNC
                     wait_read_batch(noc, X_TRID0 + ((xq.issued - 1) % X_SLOTS));
@@ -373,29 +375,30 @@ void kernel_main() {
 #endif
     {
         DataflowBuffer dfb_out(dfb::out);
-        // Raw: same L1 address on the output shard cores (no handle form yet).
-        const uint32_t out_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::output));
+        const TensorAccessor out_acc(tensor::output);
+        const ShardView out(out_acc);  // output shard s holds columns [s * OW, (s + 1) * OW)
         dfb_out.wait_front(MT * MAXOWN);
         const uint32_t l1 = dfb_out.get_read_ptr();
-        for (uint32_t m = 0; m < MT; ++m) {
-            for (uint32_t i = 0; i < nown;) {
-                const uint32_t n = bank * Nbt + o0 + i;
-                if (n >= OCAP) {
-                    break;
-                }
-                const uint32_t offset = n % OW;
-                const uint32_t run = (OW - offset) < (nown - i) ? OW - offset : nown - i;
-                const uint32_t oxy = kOutCores[n / OW];
+        const uint8_t noc_id = noc.get_noc_id();
+        // Columns from OCAP on are padding. Each output shard is looked up once and reused across M rows.
+        // OCAP is a multiple of OW, so a run that starts inside a shard stays inside it.
+        for (uint32_t i = 0; i < nown;) {
+            const uint32_t n = bank * Nbt + o0 + i;
+            if (n >= OCAP) {
+                break;
+            }
+            const uint32_t offset = n % OW;
+            const uint32_t run = (OW - offset) < (nown - i) ? OW - offset : nown - i;
+            const auto out_shard = out.shard(n / OW, noc_id);
+            for (uint32_t m = 0; m < MT; ++m) {
                 noc.async_write(
                     CoreLocalMem<uint32_t>(l1),
-                    kCore,
+                    out_shard,
                     run * OT,
                     {.offset_bytes = (m * MAXOWN + i) * OT},
-                    {.noc_x = core_x(oxy),
-                     .noc_y = core_y(oxy),
-                     .addr = out_addr + ((cm * MT + m) * OW + offset) * OT});
-                i += run;
+                    {.offset_bytes = ((cm * MT + m) * OW + offset) * OT});
             }
+            i += run;
         }
         noc.async_write_barrier();
         dfb_out.pop_front(MT * MAXOWN);
