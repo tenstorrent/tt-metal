@@ -18,13 +18,24 @@ namespace ckernel
 
 struct dbg_cfgreg
 {
-    constexpr static std::uint32_t THREAD_0_CFG    = 0; // Thread 0 config
-    constexpr static std::uint32_t THREAD_1_CFG    = 1; // Thread 1 config
-    constexpr static std::uint32_t THREAD_2_CFG    = 2; // Thread 2 config
-    constexpr static std::uint32_t HW_CFG_0        = 3; // Hardware config state 0
-    constexpr static std::uint32_t HW_CFG_1        = 4; // Hardware config state 1
-    constexpr static std::uint32_t HW_CFG_SIZE     = 187;
-    constexpr static std::uint32_t THREAD_CFG_SIZE = THD_STATE_SIZE;
+    constexpr static std::uint32_t THREAD_0_CFG = 0; // Thread 0 config
+    constexpr static std::uint32_t THREAD_1_CFG = 1; // Thread 1 config
+    constexpr static std::uint32_t THREAD_2_CFG = 2; // Thread 2 config
+    constexpr static std::uint32_t HW_CFG_0     = 3; // Hardware config state 0
+    constexpr static std::uint32_t HW_CFG_1     = 4; // Hardware config state 1
+    // The debug CFG read indexes the RISC's word view of TENSIX_CFG_BASE:
+    //   Config[2][CFG_STATE_SIZE * 4], ConfigDualWrite[CFG_STATE_SIZE * 4], ThreadConfig[3][THD_STATE_SIZE]
+    // (one 16-bit thread value per word), so every base below follows this architecture's bank sizes.
+    // The HAL names the same layout in llk_lib/hal/cfg/detail/register_layout.h (StateCfgBankCount,
+    // ConfigDualWriteWords, ThreadCfgBase, CregSelectorMax); the two must agree.
+    constexpr static std::uint32_t HW_CFG_BANKS     = 2;                                            // HW_CFG_0 and HW_CFG_1
+    constexpr static std::uint32_t THREAD_CFG_BANKS = 3;                                            // THREAD_0_CFG to THREAD_2_CFG
+    constexpr static std::uint32_t HW_CFG_SIZE      = CFG_STATE_SIZE * 4;                           // Words in one hardware config state bank
+    constexpr static std::uint32_t DUAL_WRITE_SIZE  = HW_CFG_SIZE;                                  // Words in the dual-write window
+    constexpr static std::uint32_t THREAD_CFG_SIZE  = THD_STATE_SIZE;                               // Words in one thread config bank
+    constexpr static std::uint32_t THREAD_CFG_BASE  = HW_CFG_BANKS * HW_CFG_SIZE + DUAL_WRITE_SIZE; // First thread config bank
+    constexpr static std::uint32_t MAX_INDEX        = 0x7ff;                                        // Largest index the debug read selector encodes
+    static_assert(THREAD_CFG_BASE + THREAD_CFG_BANKS * THREAD_CFG_SIZE - 1 <= MAX_INDEX, "thread config banks exceed the debug read index space");
 };
 
 struct dbg_array_id
@@ -400,13 +411,13 @@ inline std::uint32_t dbg_read_cfgreg(const std::uint32_t cfgreg_id, const std::u
         case dbg_cfgreg::THREAD_0_CFG:
         case dbg_cfgreg::THREAD_1_CFG:
         case dbg_cfgreg::THREAD_2_CFG:
-            hw_base_addr = 2 * dbg_cfgreg::HW_CFG_SIZE + cfgreg_id * dbg_cfgreg::THREAD_CFG_SIZE;
+            hw_base_addr = dbg_cfgreg::THREAD_CFG_BASE + cfgreg_id * dbg_cfgreg::THREAD_CFG_SIZE;
             break;
         default:
             break;
     }
 
-    std::uint32_t hw_addr = hw_base_addr + (addr & 0x7ff); // hw address is 4-byte aligned
+    std::uint32_t hw_addr = hw_base_addr + (addr & dbg_cfgreg::MAX_INDEX); // addr is a word index within the bank
     reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, hw_addr);
 
     wait(1);
