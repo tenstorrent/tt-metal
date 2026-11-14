@@ -2199,3 +2199,24 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
   team: models
   budget_type: e2e
+
+# LLVC (KoeAI voice conversion). Small-config perf suite, then the real KoeAI checkpoint
+# (pre-staged in the HF cache) against reference_stream, the batched B=2 check and steady-state RTF.
+- name: LLVC e2e tests
+  cmd: |
+    exit_code=0
+    pytest --timeout 600 models/demos/llvc/tests/perf/test_perf.py -v -s || exit_code=$?
+    pytest --timeout 600 models/demos/llvc/tests/perf/test_checkpoint_ci.py -v -s || exit_code=$?
+    exit $exit_code
+  model: llvc
+  model_family: LLVC
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 3
+    bh_p150:
+      timeout: 15
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by samiyadev786)
+  team: models
+  budget_type: e2e
