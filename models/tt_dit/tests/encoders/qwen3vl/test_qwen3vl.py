@@ -64,7 +64,13 @@ def _reference_lm(weights: str):
 @pytest.mark.parametrize("masked", [pytest.param(False, id="nomask"), pytest.param(True, id="masked")])
 @pytest.mark.parametrize("seq_len", [128])
 @pytest.mark.parametrize(
-    "options", [pytest.param({}, id="default"), pytest.param({"rank4_hidden_states": True}, id="rank4")]
+    "options",
+    [
+        pytest.param({}, id="default"),
+        pytest.param({"rank4_hidden_states": True}, id="rank4"),
+        pytest.param({"fused_rope": True}, id="fused_rope"),
+        pytest.param({"rank4_hidden_states": True, "fused_rope": True}, id="rank4_fused_rope"),
+    ],
 )
 def test_qwen3vl_text_encoder(
     *, mesh_device: ttnn.MeshDevice, submesh_shape, tp_axis, weights: str, masked: bool, seq_len: int, options: dict
