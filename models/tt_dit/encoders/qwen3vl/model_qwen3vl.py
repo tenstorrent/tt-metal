@@ -58,12 +58,16 @@ class Qwen3VlContext:
     # One program set for every sequence length up to `kv_gather_capacity`, bar the 1D matmul and the attention
     # chunk up to their row limits; inputs arrive split per chip.
     dynamic_length: bool = False
+    # Hidden states stay [batch, 1, seq, hidden] through the decoder layers.
+    rank4_hidden_states: bool = False
 
     def __post_init__(self) -> None:
         if self.dynamic_length and (self.sp_axis is None or self.kv_gather_capacity is None):
             raise ValueError("dynamic_length needs sequence parallelism and a kv_gather_capacity")
         if self.dynamic_length and self.device.arch() != ttnn.device.Arch.BLACKHOLE:
             raise ValueError("dynamic_length is Blackhole only")
+        if self.dynamic_length and self.rank4_hidden_states:
+            raise ValueError("rank4_hidden_states does not support dynamic_length")
         if self.sp_axis is None:
             return
         if self.sp_axis == self.tp_axis:
@@ -169,6 +173,7 @@ class Qwen3VlTextEncoder(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
+        rank4_hidden_states: bool = False,
     ) -> None:
         super().__init__()
 
@@ -231,6 +236,7 @@ class Qwen3VlTextEncoder(Module):
             kv_gather_capacity=kv_gather_capacity,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
             dynamic_length=dynamic_length,
+            rank4_hidden_states=rank4_hidden_states,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -265,6 +271,7 @@ class Qwen3VlTextEncoder(Module):
         # Qwen3-VL checkpoint. The rope tables are built at this width, so it must agree.
         self._head_dim = head_dim if head_dim is not None else hidden_size // num_attention_heads
         self._rope_theta = rope_theta
+        self._rank4_hidden_states = rank4_hidden_states
         # When set, forward returns the raw hidden states after each of these decoder layers
         # (no final norm) — the Ideogram4 multi-layer feature tap. Otherwise returns the
         # final normalized hidden state.
@@ -369,6 +376,9 @@ class Qwen3VlTextEncoder(Module):
 
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
+        if self._rank4_hidden_states:
+            hidden_states = ttnn.unsqueeze(hidden_states, 1)
+            deepstack_rows = [ttnn.unsqueeze(rows, 1) for rows in deepstack_rows]
 
         logical_n = None
         if self._dynamic_length:
@@ -393,6 +403,8 @@ class Qwen3VlTextEncoder(Module):
         if self._activation_layers is None:
             # default: final normalized hidden state
             captured = [self.norm.forward(hidden_states)]
+        if self._rank4_hidden_states:
+            captured = [ttnn.squeeze(x, 1) for x in captured]
 
         if self._sp_axis is not None:
             captured = [
@@ -636,6 +648,7 @@ class Qwen3VlAttention(Module):
         self._row_capacity = ctx.row_capacity
         self._rotate_half = _MatmulRotateHalf(ctx.device, head_dim) if ctx.dynamic_length else _rotate_half
         self._empty_joint = self._empty_joint_tensors() if ctx.sp_axis is not None else None
+        self._rank4_hidden_states = ctx.rank4_hidden_states
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
@@ -703,7 +716,7 @@ class Qwen3VlAttention(Module):
         x = self.qkv_proj.forward(x, matmul_config=_above_1d_rows(self._qkv_config, x))
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.unsqueeze(x, 1),
+            x if self._rank4_hidden_states else ttnn.unsqueeze(x, 1),
             num_heads=self._num_local_heads,
             num_kv_heads=self._num_local_kv_heads,
             transpose_k_heads=False,
@@ -732,7 +745,10 @@ class Qwen3VlAttention(Module):
                 compute_kernel_config=self._sdpa_compute_kernel_config,
             )
 
-        x = ttnn.transformer.concatenate_heads(x, runtime_rows=self._dynamic_length)
+        if self._rank4_hidden_states:
+            x = ttnn.experimental.nlp_concat_heads(x)
+        else:
+            x = ttnn.transformer.concatenate_heads(x, runtime_rows=self._dynamic_length)
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather(
