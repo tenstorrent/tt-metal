@@ -5,6 +5,7 @@
 // Shared layout constants, score_tile/index_tile namespaces, generate_reduce_scalar,
 // write_single_scalar, gather<>, and overwrite_index_row_with_sentinel live in the common header.
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/device/kernels/dataflow/moe_gate_common_dataflow.hpp"
+#include "ckernel.h"
 
 FORCE_INLINE void generate_index_tile(
     const uint32_t cb_expert_index_template, const uint32_t index_write_addr, uint32_t start_expert_index) {
@@ -21,6 +22,10 @@ FORCE_INLINE void generate_index_tile(
         for (uint32_t i = 0; i < columns_per_face; i++) {
             index_cb_ptr[i] = current_index + i;
         }
+        // A baby-RISCV store can retire before its write lands in L1, and the RISCV core and the NoC are
+        // different L1 clients with no program-order guarantee; read back the last written word so the
+        // seed line is in L1 before the loop-back noc_async_read below replicates it.
+        (void)ckernel::load_blocking(index_cb_ptr + (columns_per_face - 1));
         uint32_t dm_engine_index_write_offset = index_write_face_offset + index32_tile::face_line_bytes;
         for (uint32_t i = 1; i < rows_per_face; i++) {
             noc_async_read(base_index_noc_addr, dm_engine_index_write_offset, index32_tile::face_line_bytes);
@@ -52,7 +57,9 @@ FORCE_INLINE void generate_index_tile_transposed(
                 p[r * columns_per_face + c] = v;
             }
         }
-        noc_async_read(get_noc_addr(face_addr), face_addr + index32_tile::face_size_bytes, index32_tile::face_size_bytes);
+        (void)ckernel::load_blocking(p + (elements_per_face - 1));
+        noc_async_read(
+            get_noc_addr(face_addr), face_addr + index32_tile::face_size_bytes, index32_tile::face_size_bytes);
     }
     noc_async_read_barrier();
     cb.push_back(1);
@@ -80,10 +87,12 @@ FORCE_INLINE void generate_group_indices_tiles(
     cb.reserve_back(1);
     uint32_t base_write_addr = cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_write_addr);
+    volatile tt_l1_ptr uint32_t* last_write_ptr = write_ptr;
     for (uint32_t group_index = 0; group_index < n_groups; group_index++) {
         for (uint32_t i = 0; i < columns_per_face; i++) {
             write_ptr[i] = group_index;
         }
+        last_write_ptr = write_ptr + (columns_per_face - 1);
         if (group_index > rows_per_face - 1) {
             constexpr uint32_t skip_elements = index32_tile::face_size_bytes / sizeof(uint32_t);
             write_ptr += skip_elements;
@@ -92,6 +101,7 @@ FORCE_INLINE void generate_group_indices_tiles(
             write_ptr += skip_elements;
         }
     }
+    (void)ckernel::load_blocking(last_write_ptr);
     uint64_t dm_engine_index_write_offset_face_1 = get_noc_addr(base_write_addr);
     uint64_t dm_engine_index_write_offset_face_3 = get_noc_addr(base_write_addr + 2 * index32_tile::face_size_bytes);
 
