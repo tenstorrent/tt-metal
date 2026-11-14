@@ -471,6 +471,17 @@ class Vocoder(Module):
         trace_live = any(t.trace_captured for t in tracers.values())
         if traced:
             prepared = self._prepared_audio_ccl.get(key)
+            current = getattr(manager, "audio_buffers_current", None)
+            if prepared is not None and prepared[0] is manager and current is not None and not current(prepared[1]):
+                # Stale record: a buffer it names was freed or replaced after it was made, e.g. an untraced
+                # decode inside the pipeline's transient CCL scope (ltx-server's warm gens) freed the pool it
+                # recorded. Drop it; if this shape's own trace is live, release this decoder's traces so the
+                # eager warm below can run and the capture is redone over the current buffers.
+                self._prepared_audio_ccl.pop(key, None)
+                prepared = None
+                if trace_key in tracers and tracers[trace_key].trace_captured:
+                    self.release_trace()
+                    trace_live = any(t.trace_captured for t in tracers.values())
             if (prepared is None or prepared[0] is not manager) and not trace_live:
                 # No trace is live (first decode after `release_trace`, e.g. a server's guard that releases
                 # before a decode, or a warm that skipped the decode warm): run the eager warm a capture needs

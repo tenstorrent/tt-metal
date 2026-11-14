@@ -328,12 +328,22 @@ class CCLManager:
             self._audio_buffer_record = None
             self._audio_buffer_capture = False
 
+    def audio_buffers_current(self, prepared) -> bool:
+        """True while every buffer a prepared record names is still the one this manager caches.
+
+        False once a buffer was freed or replaced after the record was made (e.g. by a
+        `transient_ping_pong_buffers` scope around an untraced decode).
+        """
+        return all(self._audio_buffer_matches(key, expected) for key, expected in prepared.items())
+
+    def _audio_buffer_matches(self, key, expected):
+        current = self._ping_pong_buffer_cache.get(key, ())
+        return expected is not None and len(current) == len(expected) and all(a is b for a, b in zip(current, expected))
+
     def _check_audio_buffer(self, key):
         if not getattr(self, "_audio_buffer_capture", False):
             return
-        expected = self._audio_buffer_record.get(key)
-        current = self._ping_pong_buffer_cache.get(key, ())
-        if expected is None or len(current) != len(expected) or any(a is not b for a, b in zip(current, expected)):
+        if not self._audio_buffer_matches(key, self._audio_buffer_record.get(key)):
             raise RuntimeError(f"audio CCL buffer {key} is not prepared; release traces and warm the decoder")
 
     def _record_audio_buffer(self, key):

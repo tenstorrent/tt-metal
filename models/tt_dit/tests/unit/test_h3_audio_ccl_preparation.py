@@ -66,6 +66,8 @@ def manager(native):
         "audio_buffer_scope",
         "_check_audio_buffer",
         "_record_audio_buffer",
+        "audio_buffers_current",
+        "_audio_buffer_matches",
     }
     cls = type("Manager", (), methods("parallel/manager.py", "CCLManager", names, {"ttnn": native}))
     obj = cls()
@@ -416,6 +418,69 @@ class PreparationTest(unittest.TestCase):
         self.assertEqual(native.freed, [slot])
         v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
         self.assertEqual(len(native.copies), 1)
+
+    def test_stale_record_from_a_transient_untraced_decode_warms_and_captures(self):
+        # ltx-server's warm gens decode untraced (trace_audio False) inside the pipeline's transient CCL scope,
+        # which frees the buffers the eager pass recorded; the served traced decode then found a record naming
+        # freed buffers and raised "audio CCL buffer ... is not prepared". The stale record is now dropped and
+        # the traced call warms eagerly on a copy, then captures over the current buffers.
+        ns = methods("pipelines/minimax_h3/pipeline_minimax_h3.py", "MiniMaxH3Pipeline", {"_audio_ccl_transient"}, {})
+        native = Native()
+        m = manager(native)
+        v = vocoder(m, native)
+        p = SimpleNamespace(
+            audio_ccl_manager=m, trace_audio=False, _warming_audio_trace=False, use_persistent_ccl_buffers=False
+        )
+        x = tensor()
+        with ns["_audio_ccl_transient"](p):
+            v.forward_device_BTC(x, t_pad=0, traced=p.trace_audio, trace_key="a")
+        self.assertEqual(m._ping_pong_buffer_cache, {})
+        self.assertIn("a", {k[0] for k in v._prepared_audio_ccl})
+        p.trace_audio = True
+        with ns["_audio_ccl_transient"](p):
+            v.forward_device_BTC(x, t_pad=0, traced=p.trace_audio, trace_key="a")
+        self.assertEqual(v.calls, [False, False, True])
+        # prepared again over the current buffers: the next traced call goes straight to the trace
+        v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+        self.assertEqual(v.calls, [False, False, True, True])
+
+    def test_stale_record_with_its_own_trace_live_releases_and_recaptures(self):
+        for mutation in ("removed", "replaced", "element"):
+            with self.subTest(mutation=mutation):
+                native = Native()
+                m = manager(native)
+                v = vocoder(m, native)
+                x = tensor()
+                v.forward_device_BTC(x, t_pad=0, trace_key="a")
+                v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+                tracer = SimpleNamespace(trace_captured=True)
+                tracer.release_trace = lambda t=tracer: setattr(t, "trace_captured", False)
+                type(v)._forward_device._tracers_keyed[v] = {"a": tracer}
+                v._tpad_mask_cache["mask"] = object()
+                k = next(iter(m._ping_pong_buffer_cache))
+                if mutation == "removed":
+                    m._ping_pong_buffer_cache.pop(k)
+                elif mutation == "element":
+                    m._ping_pong_buffer_cache[k][0] = object()
+                else:
+                    m._ping_pong_buffer_cache[k] = [object(), object()]
+                v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+                self.assertFalse(tracer.trace_captured)
+                self.assertEqual(v._tpad_mask_cache, {})
+                self.assertEqual(v.calls, [False, True, False, True])
+
+    def test_valid_record_goes_straight_to_capture(self):
+        native = Native()
+        m = manager(native)
+        v = vocoder(m, native)
+        x = tensor()
+        v.forward_device_BTC(x, t_pad=0, trace_key="a")
+        prepared = dict(v._prepared_audio_ccl)
+        copies, syncs = len(native.copies), native.syncs
+        v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+        self.assertEqual(v.calls, [False, True])
+        self.assertEqual((len(native.copies), native.syncs), (copies, syncs))
+        self.assertEqual(v._prepared_audio_ccl, prepared)
 
 
 class LtxUnchangedTest(unittest.TestCase):
