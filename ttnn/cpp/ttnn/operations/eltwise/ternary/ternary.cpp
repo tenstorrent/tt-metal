@@ -7,6 +7,7 @@
 #include <utility>
 #include <variant>
 #include <cstdint>
+#include <initializer_list>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -96,6 +97,35 @@ inline bool is_integer_dtype(DataType dtype) {
            dtype == DataType::UINT8;
 }
 
+// The SFPU ternary kernels read every operand in the op's floating-point format, so an integer tensor
+// mixed with floating-point ones is reinterpreted bit for bit. torch promotes such an operand to the
+// floating-point dtype; the ops below do the same before dispatch.
+inline bool mixes_integer_and_float(std::initializer_list<DataType> dtypes) {
+    bool any_integer = false;
+    bool any_float = false;
+    for (const auto dtype : dtypes) {
+        any_integer |= is_integer_dtype(dtype);
+        any_float |= is_floating_point(dtype);
+    }
+    return any_integer && any_float;
+}
+
+inline DataType promoted_float_dtype(std::initializer_list<DataType> dtypes) {
+    for (const auto dtype : dtypes) {
+        if (dtype == DataType::FLOAT32) {
+            return DataType::FLOAT32;
+        }
+    }
+    return DataType::BFLOAT16;
+}
+
+inline Tensor promote_integer_operand(
+    const Tensor& tensor, DataType float_dtype, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return is_integer_dtype(tensor.dtype())
+               ? ttnn::typecast(tensor, float_dtype, std::nullopt, std::nullopt, sub_core_grids)
+               : tensor;
+}
+
 void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtype) {
     if (tensor_dtype != DataType::INT32 && tensor_dtype != DataType::UINT32) {
         return;
@@ -113,11 +143,18 @@ void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtyp
 // TTT: tensor, tensor, tensor
 Tensor invoke_impl(
     const Tensor& predicate,
-    const Tensor& t_true,
-    const Tensor& t_false,
+    const Tensor& t_true_arg,
+    const Tensor& t_false_arg,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    Tensor t_true = t_true_arg;
+    Tensor t_false = t_false_arg;
+    if (mixes_integer_and_float({t_true.dtype(), t_false.dtype()})) {
+        const DataType float_dtype = promoted_float_dtype({t_true.dtype(), t_false.dtype()});
+        t_true = promote_integer_operand(t_true, float_dtype, sub_core_grids);
+        t_false = promote_integer_operand(t_false, float_dtype, sub_core_grids);
+    }
     Tensor condition = predicate;
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
@@ -383,13 +420,23 @@ Tensor addcmul(
 }
 
 Tensor addcdiv(
-    const Tensor& input_a,
-    const Tensor& input_b,
-    const Tensor& input_c,
+    const Tensor& input_a_arg,
+    const Tensor& input_b_arg,
+    const Tensor& input_c_arg,
     float value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Addcdiv LLK - TTT");
+
+    Tensor input_a = input_a_arg;
+    Tensor input_b = input_b_arg;
+    Tensor input_c = input_c_arg;
+    if (mixes_integer_and_float({input_a.dtype(), input_b.dtype(), input_c.dtype()})) {
+        const DataType float_dtype = promoted_float_dtype({input_a.dtype(), input_b.dtype(), input_c.dtype()});
+        input_a = promote_integer_operand(input_a, float_dtype);
+        input_b = promote_integer_operand(input_b, float_dtype);
+        input_c = promote_integer_operand(input_c, float_dtype);
+    }
 
     // Only TTT variant is supported for addcdiv
     auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
@@ -433,6 +480,11 @@ Tensor lerp(
         "lerp does not support UINT32 inputs. Got input={}, end={}",
         input.dtype(),
         end.dtype());
+    TT_FATAL(
+        !mixes_integer_and_float({input.dtype(), end.dtype()}),
+        "lerp cannot mix integer and floating-point tensors (input={}, end={}); typecast them to one dtype first",
+        input.dtype(),
+        end.dtype());
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
@@ -468,6 +520,13 @@ Tensor lerp(
     TT_FATAL(
         input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32 && weight.dtype() != DataType::UINT32,
         "lerp does not support UINT32 inputs. Got input={}, end={}, weight={}",
+        input.dtype(),
+        end.dtype(),
+        weight.dtype());
+    TT_FATAL(
+        !mixes_integer_and_float({input.dtype(), end.dtype(), weight.dtype()}),
+        "lerp cannot mix integer and floating-point tensors (input={}, end={}, weight={}); typecast them to one dtype "
+        "first",
         input.dtype(),
         end.dtype(),
         weight.dtype());
