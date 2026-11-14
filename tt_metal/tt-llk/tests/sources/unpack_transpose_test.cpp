@@ -196,7 +196,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "Tile index exceeds maximum destination tiles");
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(tile, L1_ADDRESS(buffer_Res[output_tile]));
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    // Wormhole PACK_ISOLATE also releases every section to drain the packers.
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_PACK_SECTION_RELEASE)
                     {
                         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                     }
