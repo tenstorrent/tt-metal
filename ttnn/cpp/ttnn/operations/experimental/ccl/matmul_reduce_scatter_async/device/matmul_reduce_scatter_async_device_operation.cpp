@@ -24,6 +24,13 @@
 namespace ttnn::experimental::prim {
 void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        !args.matmul_struct.transpose_a && !args.matmul_struct.transpose_b,
+        "MatmulReduceScatterAsync does not support transpose_a or transpose_b.");
+    TT_FATAL(
+        !args.matmul_struct.user_fused_activation.has_value(),
+        "MatmulReduceScatterAsync does not support activation; use program_config.fused_activation instead.");
+
     // Matmul validate
     ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(
         args.matmul_struct,
