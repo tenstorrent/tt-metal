@@ -30,7 +30,8 @@ inline void calculate_logical_not() {
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 
-#pragma GCC unroll 0
+    // Full unroll: the compiler records the row in the replay buffer once per call, not once per 8 rows.
+#pragma GCC unroll 32
     for (int d = 0; d < ITERATIONS; d++) {
         vType v = sfpi::dst_reg[0].mode<layout>();
         if constexpr (std::is_same_v<vType, sfpi::vFloat>) {
