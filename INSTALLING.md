@@ -192,9 +192,9 @@ For users who prefer more control over build options or have custom setups, you 
 ```bash
 mkdir build
 cd build
-cmake .. -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebugInfo -DCMAKE_CXX_COMPILER=<your compiler>
+cmake .. -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebugInfo -DCMAKE_INSTALL_PREFIX="$PWD" -DCMAKE_CXX_COMPILER=<your compiler>
 ninja
-ninja install # Installs to build directory by default, required for Python environment
+ninja install # Installs into the build directory set by CMAKE_INSTALL_PREFIX, required for Python environment
 ```
 
 #### Step 3. Virtual Environment Setup
