@@ -40,6 +40,10 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_moreh_mean_backward.cpp
     test_moreh_sum_backward.cpp
     test_matmul.cpp
+    test_gbdt_model.cpp
+    test_matmul_model_candidates.cpp
+    test_matmul_model_features.cpp
+    test_matmul_model_selector.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
     test_program_cache_l1.cpp
@@ -124,4 +128,7 @@ set(TEST_CCL_MULTI_CQ_MULTI_DEVICE_SOURCES multi_thread/test_ccl_multi_cq_multi_
 
 set(UNIT_TESTS_TTNN_EMITC_SOURCES emitc/test_sanity.cpp)
 
-set(UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES test_query_op_constraints_mock_device.cpp)
+set(UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES
+    test_query_op_constraints_mock_device.cpp
+    test_matmul_model_mock_device.cpp
+)
