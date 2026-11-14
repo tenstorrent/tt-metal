@@ -26,6 +26,7 @@
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <tt-umd/chip_helpers/host_cache.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
@@ -632,6 +633,18 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + issue_q_wr_ptr);
         return;
     }
+
+    // Fast-dispatch command bytes are written straight through the raw hugepage pointer that
+    // issue_queue_reserve returns -- payload copies via memcpy_to_device, and command headers stored
+    // in place -- so they never pass through UMD's write_to_sysmem and get no cache maintenance.
+    // Where inbound PCIe DMA is not snooped, the device's prefetch then reads stale DRAM. Clean the
+    // committed range here, the one point that covers it however the bytes arrived, and before the
+    // issue_fifo_wr_ptr write below tells the device to fetch them. wr_ptr_bytes was captured before
+    // the advance above, so it marks the start of those bytes; issue_queue_reserve wraps the pointer
+    // before handing it out, so this is correct across a ring wrap too. No-op where the platform is
+    // DMA-coherent, and compiled out entirely on architectures other than riscv64.
+    tt::umd::host_cache::clean_range(
+        this->cq_sysmem_start + (wr_ptr_bytes - this->channel_offset), push_size_16B << 4);
 
     // Also store this data in hugepages, so if a hang happens we can see what was written by host.
     ChipId mmio_device_id = env_.get_cluster().get_associated_mmio_device(this->device_id);
