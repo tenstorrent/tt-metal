@@ -114,6 +114,7 @@ def reference_bucket(tokens: int) -> int:
     return next(b for b in REFERENCE_TOKEN_BUCKETS if tokens <= b)
 
 
+# combine_cfg and euler_update compute in fp32 and round to bf16 where the reference computes in bf16.
 def combine_cfg(conditional: ttnn.Tensor, unconditional: ttnn.Tensor, guidance: ttnn.Tensor) -> ttnn.Tensor:
     c32 = ttnn.typecast(conditional, ttnn.float32)
     u32 = ttnn.typecast(unconditional, ttnn.float32)
