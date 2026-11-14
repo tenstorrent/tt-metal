@@ -132,7 +132,9 @@ inline std::vector<uint32_t> create_random_ones_and_twos_vector_of_bfloat16(uint
 }
 
 // Comparison functions
-inline bool equal_within_two_sig_figs(float a, float b) { return equal_within_n_sig_figs(a, b, 2); }
+// Approx-mode exp on this test's {0, 1} inputs misses std::exp by up to 3.4%
+// (exp(1) is 2.8125, bfloat16(std::exp(1)) is 2.71875).
+inline bool is_close_rtol_0p04(float a, float b) { return is_close(a, b, 0.04f); }
 
 inline bool equal_within_absolute_tolerance(float a, float b, float tol) { return std::abs(a - b) < tol; }
 
@@ -200,7 +202,7 @@ const std::map<std::string, std::function<std::vector<uint32_t>(uint32_t num_byt
     {"identity", create_random_vector_of_bfloat16_1_1}};
 
 const std::map<std::string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_function = {
-    {"exponential", equal_within_two_sig_figs},
+    {"exponential", is_close_rtol_0p04},
     {"reciprocal", equal_within_absolute_tolerance_of_0p03},
     {"gelu", is_close_0p015},
     {"relu", is_close_0p015},
