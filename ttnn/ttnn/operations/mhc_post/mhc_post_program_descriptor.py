@@ -48,7 +48,7 @@ W_RESIDENT_BUDGET = 256 * 1024  # bytes of resident W slice (R2 vs R2-W-streamed
 W_STREAM_BLOCKS = 2  # W-streamed: column passes of W in flight
 MAX_FEED_LINKS = 2  # feed: port cores reserved per direction (2 directions), whatever feed_num_links is
 FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch, 112 KiB ring)
-FEED_READ_BATCH = 4  # feed: chunks the port reader keeps in flight per read barrier (<= ring - in-flight packets)
+FEED_READ_BATCH = 4  # feed: chunks the port reader keeps in flight per read barrier (ring = in-flight packets + this)
 FEED_WAVE_ROWS = 1  # feed: local rows per port wave (the ports stream row i while the workers finish row i+1)
 # feed, T % 32 != 0: L1 of the landing port for the shared D tile rows (<= G - 1 a image, Cb tiles each; the largest
 # golden shape, C 7168, needs 336 KiB)
@@ -105,7 +105,7 @@ CB_NORM_W = 22  # norm: norm weight tiles of my columns, resident (reader -> com
 CB_RSTD_LAND = 23  # norm: reader-private landing of the root's rstd unicasts, one 128 B slot per row
 CB_RSTD_SEND = 24  # norm: root writer's 128 B rstd source (lane vector -> token order)
 CB_FEED_CHUNKS = 25  # feed (port cores): chunk ring between the port reader and the port sender
-CB_FEED_POLL = 26  # feed (port cores): port reader's private landing of the workers' SEM_FEED_ROWS (16 B each)
+CB_FEED_POLL = 26  # feed (workers + ports, one address): the workers' published-row counts on the ports, 16 B each
 CB_FEED_YSCR = 27  # feed, T % 32 != 0 (port cores): port reader's private y tiles of a shifted chunk (2 per tile)
 CB_FEED_LAND = 28  # feed, T % 32 != 0 (port cores): landing of the shared D tile rows (compact contributor blocks)
 
@@ -114,7 +114,7 @@ SEM_LEADER_COUNT = 0  # partials landed in my leader slots
 SEM_ROOT_COUNT = 1  # chunk sums landed in my root slots
 SEM_READY_BITS = 2  # bit (t mod 32): leader(t) has freed its slots for row t
 SEM_RSTD_COUNT = 3  # norm: rstd rows landed in my cb_rstd_land slots
-SEM_FEED_ROWS = 4  # feed (workers): my rows whose staged y has landed (polled by the ports)
+SEM_FEED_ROWS = 4  # feed (workers): armed by every port (its count slots are zeroed) before my first count
 
 NUM_CBS = 64
 
@@ -496,6 +496,7 @@ def create_program_descriptor(
         CB_RSTD_COL,
         root_lag,
         norm_lag,
+        CB_FEED_POLL,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(out_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(stats_for_args).get_compile_time_args())
@@ -511,6 +512,10 @@ def create_program_descriptor(
         # the block the workers write straight into D: mine when my rows start on a D tile boundary, else none (G)
         own_block = feed["me"] if f_tensor.shape[-2] % TILE == 0 else feed["G"]
         feed_common = [d_for_args.buffer_address(), own_block, feed["G"], c_tiles // feed["G"], ht_img]
+        port_xy = [device.worker_core_from_logical_core(c) for c in feed["port_list"]]
+        assert len(port_xy) <= 2 * MAX_FEED_LINKS
+        feed_common += [len(port_xy)] + [v.x | (v.y << 16) for v in port_xy]
+        feed_common += [0] * (2 * MAX_FEED_LINKS - len(port_xy))
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
         core_ranges=core_ranges,
@@ -686,8 +691,8 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
     d_tensor = feed["d_tensor"]
     page = d_tensor.buffer_page_size()
     run_pages = max(1, int(ttnn.get_tt_fabric_max_payload_size_bytes()) // page)
-    ring_chunks = 2 * FEED_CHUNKS_IN_FLIGHT
-    assert 1 <= FEED_READ_BATCH <= ring_chunks - FEED_CHUNKS_IN_FLIGHT, "reader batch + sender in flight <= ring"
+    ring_chunks = FEED_CHUNKS_IN_FLIGHT + FEED_READ_BATCH  # the sender's packets in flight + the reader's batch
+    assert FEED_READ_BATCH >= 1
     num_banks = _num_dram_banks(device)
     max_rows = row_ranges[0][1]
     t_tiles = sum(cnt for _, cnt in row_ranges)
@@ -708,7 +713,8 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
     worker_xy = [v.x | (v.y << 16) for v in worker_xy]
     program.cbs = list(program.cbs) + [
         _cb(CB_FEED_CHUNKS, d_tensor.dtype, page, ring_chunks * run_pages, port_crs),
-        _cb(CB_FEED_POLL, ttnn.float32, 16 * len(workers), 1, port_crs),
+        # on the workers too: one CB config, so a worker's get_write_ptr is the ports' slot address
+        _cb(CB_FEED_POLL, ttnn.float32, 16 * len(workers), 1, _merged_ranges(list(workers) + list(port_cores_used))),
     ]
     if shifted:
         program.cbs = list(program.cbs) + [_cb(CB_FEED_YSCR, d_tensor.dtype, page, 2 * run_pages, port_crs)]

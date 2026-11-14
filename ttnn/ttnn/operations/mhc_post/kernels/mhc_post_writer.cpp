@@ -30,8 +30,9 @@
 //   when p == me (written locally; the host passes me = G when T % 32 != 0, where my rows do not start on a D tile
 //   boundary and the ports place my own block too), else to y_output (staging, at its natural page) for the
 //   ports; after each of my
-//   rows (behind a write barrier) my own SEM_FEED_ROWS counts it (the ports poll every worker's count: a shared
-//   counter could not tell "every worker published row i" from "fast workers published rows i and i+1").
+//   rows (behind a write barrier) I write my row count into my slot of every port's cb_feed_poll (a per-worker
+//   count: a shared counter could not tell "every worker published row i" from "fast workers published rows i and
+//   i+1"); the ports arm me (SEM_FEED_ROWS) once their slots are zeroed.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -123,7 +124,8 @@ void kernel_main() {
     constexpr bool lagged = norm && root_lag > 0;
     constexpr uint32_t sumsq_pages = norm ? 2 : 1;  // per row: sum X'^2 [, sum y_b^2]
     constexpr uint32_t rstd_bytes = 32 * sizeof(uint32_t);
-    constexpr auto out_args = TensorAccessorArgs<33>();
+    constexpr uint32_t cb_feed_poll = get_compile_time_arg_val(33);  // feed: the ports' published-row slots
+    constexpr auto out_args = TensorAccessorArgs<34>();
     [[maybe_unused]] constexpr auto stats_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto hc_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto y_args = TensorAccessorArgs<hc_args.next_compile_time_args_offset()>();
@@ -131,7 +133,9 @@ void kernel_main() {
     constexpr uint32_t num_chunks = (group_q + fanin - 1) / fanin;
     // common args: out, stats, hc, y addresses; feed: D address, me, G, Cb, Ht; then the core table
     constexpr uint32_t FEED_BASE = 4;
-    constexpr uint32_t COORD_BASE = feed ? FEED_BASE + 5 : FEED_BASE;
+    constexpr uint32_t FEED_PORTS = FEED_BASE + 5;  // feed: port count, then MAX_FEED_PORTS port coordinates
+    constexpr uint32_t MAX_FEED_PORTS = 4;
+    constexpr uint32_t COORD_BASE = feed ? FEED_PORTS + 1 + MAX_FEED_PORTS : FEED_BASE;
 
     const uint32_t t_start = get_arg_val<uint32_t>(0);
     const uint32_t t_count = get_arg_val<uint32_t>(1);
@@ -181,11 +185,22 @@ void kernel_main() {
             cb_pop_front(cb_y_out, 1);
         }
     };
-    // feed: my row's staged y has landed in DRAM -> my published-row count (the ports poll it)
+    // feed: my row's staged y has landed in DRAM -> my published-row count into my slot of every port's cb_feed_poll
+    // (the first only once every port armed me: zeroed its slots, then counted on my SEM_FEED_ROWS)
+    [[maybe_unused]] uint32_t published = 0;
     [[maybe_unused]] auto publish_row = [&]() {
         if constexpr (feed) {
             noc_async_write_barrier();
-            noc_semaphore_inc(get_noc_addr(get_semaphore(sem_feed_rows_id)), 1);
+            const uint32_t n_ports = get_common_arg_val<uint32_t>(FEED_PORTS);
+            if (published++ == 0) {
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_feed_rows_id)), n_ports);
+            }
+            const uint32_t slot = get_write_ptr(cb_feed_poll) + (group * group_q + member_q) * 16;
+            for (uint32_t p = 0; p < n_ports; ++p) {
+                const uint32_t xy = get_common_arg_val<uint32_t>(FEED_PORTS + 1 + p);
+                noc_inline_dw_write(get_noc_addr(xy & 0xFFFF, xy >> 16, slot), published);
+            }
         }
     };
 

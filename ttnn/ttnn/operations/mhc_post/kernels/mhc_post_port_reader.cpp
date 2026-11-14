@@ -3,11 +3,11 @@
 
 // mhc_post feed port reader (RISCV_1, NoC0), regime R4 feed-DRAM-staged.
 //
-// One port core per (direction slot, link). The workers stage the y tiles bound for other chips in y_output and
-// count each local row they finished (behind their write barrier) in their own SEM_FEED_ROWS (a program semaphore:
-// 0 at every launch). Wave by wave this reader polls those counts until every worker has published the wave (a
-// per-worker minimum: a shared counter would let fast workers' later rows stand in for a slow worker's row), then
-// stages the items of its destinations (the shared walk, this link's share) into the chunk ring for the sender:
+// One port core per (direction slot, link). The workers stage the y tiles bound for other chips in y_output and,
+// behind their write barrier, write each row count they finished into their slot of every port's cb_poll (a
+// per-worker count: a shared counter would let fast workers' later rows stand in for a slow worker's row). Wave by
+// wave this reader waits (local scan) until every worker has published the wave, then stages the items of its
+// destinations (the shared walk, this link's share) into the chunk ring for the sender:
 //   D pages   one y_output page each when chip me's rows start on a tile boundary; otherwise (T % 32 != 0) the
 //             (at most two) y tiles the D tile's rows span land in cb_yscr and their face rows are copied into
 //             place in L1 (Refinement 2b);
@@ -27,8 +27,8 @@ void kernel_main() {
     constexpr uint32_t wave_rows = get_compile_time_arg_val(5);
     constexpr uint32_t max_rows = get_compile_time_arg_val(6);
     constexpr uint32_t group_q = get_compile_time_arg_val(7);
-    constexpr uint32_t sem_rows_id = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_poll = get_compile_time_arg_val(9);  // private scratch: one 16 B slot per worker
+    constexpr uint32_t sem_rows_id = get_compile_time_arg_val(8);  // workers' arm semaphore
+    constexpr uint32_t cb_poll = get_compile_time_arg_val(9);      // the workers' published-row counts, 16 B each
     constexpr uint32_t cb_yscr = get_compile_time_arg_val(10);  // private scratch: 2 y tiles per staged tile
     constexpr uint32_t read_batch = get_compile_time_arg_val(11);   // chunks in flight per read barrier
     constexpr uint32_t ring_chunks = get_compile_time_arg_val(12);  // chunk slots of cb_chunks
@@ -60,25 +60,24 @@ void kernel_main() {
     const auto y_acc = TensorAccessor(y_args, y_addr, page_bytes);
     const uint32_t num_workers = g.r * group_q;
     const uint32_t poll = get_write_ptr(cb_poll);
+    // Publication (push): every worker k writes its published-row count into slot k of this core's cb_poll (16 B a
+    // slot, the same address on every core) after each row, behind its y write barrier. Arm: zero the slots, then
+    // count one on every worker's SEM_FEED_ROWS; a worker writes its first count only once every port armed it, so no
+    // slot holds a previous call's count when it is read. The wave wait is then a local scan (no NoC polling).
     const uint32_t rows_sem = get_semaphore(sem_rows_id);
-    // wait until every worker k published min(i1, rows of its group) rows. `ready_rows` = rows every worker has
-    // published (a worker with all its rows counts as max_rows); a poll round re-reads only the workers not yet
-    // done (their slot caches the last count: counts only grow), so once the rows have landed later waves cost
-    // nothing (a full 106-worker poll is ~4 us).
+    for (uint32_t k = 0; k < num_workers; ++k) {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16) = 0;
+    }
+    for (uint32_t k = 0; k < num_workers; ++k) {
+        const uint32_t xy = get_arg_val<uint32_t>(workers_idx + k);
+        noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), 1);
+    }
+    // wait until every worker k published min(i1, rows of its group) rows; `ready_rows` = rows every worker has
+    // published (a worker with all its rows counts as max_rows)
     uint32_t ready_rows = 0;
-    bool polled = false;
     auto wait_wave = [&](uint32_t i1) {
         while (ready_rows < i1) {
-            for (uint32_t k = 0; k < num_workers; ++k) {
-                if (!polled || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16) <
-                                   mhc_feed::group_rows(g, k / group_q)) {
-                    const uint32_t xy = get_arg_val<uint32_t>(workers_idx + k);
-                    noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), poll + k * 16, 4);
-                }
-            }
-            noc_async_read_barrier();
             invalidate_l1_cache();
-            polled = true;
             ready_rows = max_rows;
             for (uint32_t k = 0; k < num_workers; ++k) {
                 const uint32_t cnt = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16);
