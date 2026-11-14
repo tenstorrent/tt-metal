@@ -927,6 +927,18 @@ std::vector<Tensor> leaky_relu_bw(
     const Tensor& input,
     float negative_slope,
     const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config) &&
+        std::bit_cast<uint32_t>(negative_slope) == 0x3c23d70au) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::LEAKY_RELU_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = where(
         ttnn::gtz(input, output_mem_config),
