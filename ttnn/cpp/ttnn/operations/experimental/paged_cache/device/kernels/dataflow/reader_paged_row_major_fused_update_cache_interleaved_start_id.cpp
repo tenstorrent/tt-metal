@@ -25,6 +25,53 @@ constexpr bool page_table_is_dram = true;
 constexpr bool page_table_is_dram = false;
 #endif
 
+#ifdef CONVERT_INPUT
+template <uint32_t src_bytes, uint32_t dst_bytes>
+void convert_row(uint32_t src_addr, uint32_t dst_addr) {
+    invalidate_l1_cache();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: invalidate L2 before reading the row.
+    invalidate_l2_cache_range(static_cast<uintptr_t>(src_addr), static_cast<size_t>(src_bytes));
+#endif
+    if constexpr (dst_bytes == 2 * src_bytes) {
+        volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+        volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+        static_assert(src_bytes % (4 * sizeof(uint32_t)) == 0, "Row must be a multiple of 8 values");
+        for (uint32_t i = 0; i < src_bytes / sizeof(uint32_t); i += 4) {
+            const uint32_t v0 = src[i];
+            const uint32_t v1 = src[i + 1];
+            const uint32_t v2 = src[i + 2];
+            const uint32_t v3 = src[i + 3];
+            dst[2 * i] = v0 << 16;
+            dst[2 * i + 1] = v0 & 0xFFFF0000;
+            dst[2 * i + 2] = v1 << 16;
+            dst[2 * i + 3] = v1 & 0xFFFF0000;
+            dst[2 * i + 4] = v2 << 16;
+            dst[2 * i + 5] = v2 & 0xFFFF0000;
+            dst[2 * i + 6] = v3 << 16;
+            dst[2 * i + 7] = v3 & 0xFFFF0000;
+        }
+    } else {
+        static_assert(src_bytes == 2 * dst_bytes, "Input rows must be FLOAT32 or BFLOAT16");
+        volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+        volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+        static_assert(dst_bytes % (2 * sizeof(uint32_t)) == 0, "Row must be a multiple of 4 values");
+        for (uint32_t i = 0; i < dst_bytes / sizeof(uint32_t); i += 2) {
+            const uint32_t a0 = src[2 * i];
+            const uint32_t a1 = src[2 * i + 1];
+            const uint32_t a2 = src[2 * i + 2];
+            const uint32_t a3 = src[2 * i + 3];
+            dst[i] = (a0 >> 16) | (a1 & 0xFFFF0000);
+            dst[i + 1] = (a2 >> 16) | (a3 & 0xFFFF0000);
+        }
+    }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: flush L2 before the writer copies the row.
+    flush_l2_cache_range(static_cast<uintptr_t>(dst_addr), static_cast<size_t>(dst_bytes));
+#endif
+}
+#endif
+
 void kernel_main() {
     Noc noc;
 
@@ -55,6 +102,12 @@ void kernel_main() {
 
     constexpr uint32_t head_offset_t = Wt * St;
 
+#ifdef CONVERT_INPUT
+    constexpr auto input_Wbytes = get_arg(args::input_Wbytes);
+    constexpr auto Wbytes = get_arg(args::Wbytes);
+    DataflowBuffer dfb_converted_input(dfb::converted_input);
+#endif
+
     // Which of the two inputs this instance serves is structural: the factory places one reader per
     // input shard grid, and each binds only its own input buffer.
     DataflowBuffer dfb_input(dfb::input);
@@ -68,6 +121,9 @@ void kernel_main() {
 
     // Kick off compute
     dfb_input.reserve_back(1);
+#ifdef CONVERT_INPUT
+    uint32_t input_l1_read_addr = dfb_input.get_write_ptr();
+#endif
     dfb_input.push_back(1);
 
     // get_entry_size(): this DFB's live per-program entry size. get_tile_size() reads a global descriptor
@@ -172,7 +228,14 @@ void kernel_main() {
                     s0, CoreLocalMem<uint32_t>(cache_l1_write_addr), cache_tile_bytes, {.page_id = curr_cache_id}, {});
                 cache_l1_write_addr += cache_tile_bytes;
             }
-
+        }
+#ifdef CONVERT_INPUT
+        dfb_converted_input.reserve_back(1);
+        convert_row<input_Wbytes, Wbytes>(input_l1_read_addr, dfb_converted_input.get_write_ptr());
+        dfb_converted_input.push_back(1);
+        input_l1_read_addr += input_Wbytes;
+#endif
+        if (!skip_update) {
             noc.async_read_barrier();
         }
         dfb_cache.push_back(Wt);
