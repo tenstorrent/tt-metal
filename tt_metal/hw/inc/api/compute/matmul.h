@@ -397,12 +397,31 @@ constexpr bool matmul_fe_hifi3_wide() {
 }
 
 #ifdef TRISC_MATH
+}  // namespace ckernel
+#include "llk_math_matmul_main.h"
+namespace ckernel {
+#endif
+
+#ifdef TRISC_MATH
 // llk_math_matmul_tile_mop, and the tile MOP for a plain call in the matmul_fe_hifi3_wide class when no plain call has a constant block
 template <bool row_mop_on, std::uint32_t kt_key, DataFormat form_out>
 constexpr bool matmul_fe_tile_mop() {
     return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>() ||
            (!row_mop_on && kt_key == 0 && matmul_fe_hifi3_wide() &&
             !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, kt_key>>(0));
+}
+#endif
+
+#ifdef TRISC_MATH
+// a plain call that takes none of the matmul forms in a kernel with no constant block (minimal_matmul's default cells): main's
+// math code, so the kernel's math TRISC is main's
+template <std::uint32_t llk_dir, bool row_mop_on, std::uint32_t kt_key, DataFormat form_out, int in1_order, bool row_end_fold, DataFormat in0_format,
+          DataFormat in1_format, DataFormat out_format, std::uint32_t block_rt, std::uint32_t block_ct>
+constexpr bool matmul_fe_main_math() {
+    return llk_dir == 0 && !row_mop_on && kt_key == 0 && form_out == DataFormat::Invalid && in1_order == 0 && !row_end_fold &&
+           in0_format == DataFormat::Invalid && in1_format == DataFormat::Invalid && out_format == DataFormat::Invalid && block_rt == 0 &&
+           block_ct == 0 && matmul_fe_tile_mop<false, 0, DataFormat::Invalid>() &&
+           !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, block_rt + kt_key>>(0);
 }
 #endif
 
@@ -430,6 +449,12 @@ ALWI void matmul_block_init_llk(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
     UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync, llk_dir, stream_z>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+#ifdef TRISC_MATH
+    if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
+        mm_main::llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
+        return;
+    }
+#endif
     MATH((llk_math_matmul_init<
           matmul_elided_fidelity<in0_format, in1_format, out_format>(),
           MM_THROTTLE,
@@ -512,6 +537,12 @@ ALWI void matmul_block_llk(
     const std::uint32_t held_a = matmul_held_a_init) {
     UNPACK((llk_unpack_AB_matmul<unpack_ttsync, kt_key, form_out, llk_dir, stream_z>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, held_a)));
+#ifdef TRISC_MATH
+    if constexpr (matmul_fe_main_math<llk_dir, row_mop_on, kt_key, form_out, in1_order, row_end_fold, in0_format, in1_format, out_format, block_rt, block_ct>()) {
+        mm_main::matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim);
+        return;
+    }
+#endif
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle<
           row_mop_on,
