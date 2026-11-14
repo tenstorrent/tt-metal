@@ -377,6 +377,11 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
+    TT_FATAL(
+        core_id < buffer_page_mapping.all_cores.size(),
+        "ReadShard: core_id {} is out of range, the buffer page mapping has {} cores",
+        core_id,
+        buffer_page_mapping.all_cores.size());
     auto core = buffer_page_mapping.all_cores[core_id];
     auto core_page_mappings = buffer_page_mapping.core_page_mappings[core_id];
     auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];

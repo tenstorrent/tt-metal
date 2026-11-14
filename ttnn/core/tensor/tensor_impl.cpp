@@ -469,6 +469,11 @@ template <typename T>
 ttnn::Tensor extract_shard_impl(const ttnn::Tensor& tensor, const uint32_t& core_id) {
     auto* buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
+    TT_FATAL(
+        core_id < buffer->num_cores().value(),
+        "extract_shard: core_id {} is out of range, the tensor has {} shards",
+        core_id,
+        buffer->num_cores().value());
     tt::tt_metal::Shape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
     std::vector<T> device_data;
     tt::tt_metal::detail::ReadShard(*buffer, device_data, core_id);
