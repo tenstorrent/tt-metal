@@ -183,6 +183,131 @@ def spec_async_enabled(env=os.environ, async_decode: bool | None = None) -> bool
 
 SPEC_ASYNC = spec_async_enabled()
 
+# GLM53_STACK_SPEC_TIMING=1 (default off): the served step's host decomposition. Every decode_forward (a verify or an
+# ordinary decode) and prefill_forward of the adapter is timed, and the gap between the adapter's consecutive calls
+# (= vLLM's scheduler + the plugin's accept walk / output processing / input build, i.e. everything outside the model)
+# is charged to the call that follows it; the fused step is split into the backend's submit (replay enqueue + record
+# copy) and collect (device wait + record parse). Every 256 decode calls: "GLM53 stack spec timing: ..." per-step means.
+SPEC_TIMING = os.environ.get("GLM53_STACK_SPEC_TIMING", "0") == "1"
+
+
+class _SpecTiming:
+    """the per-window accumulators of GLM53_STACK_SPEC_TIMING (one adapter; the engine thread drives every call)"""
+
+    KEYS = ("outside", "adapter", "submit", "collect", "prefill", "seed")
+
+    def __init__(self):
+        self.last_exit = None
+        self.reset()
+
+    def reset(self):
+        self.sum = {k: 0.0 for k in self.KEYS}
+        self.n = {"decode": 0, "fused": 0, "fallback": 0, "prefill": 0, "seed": 0, "outside_pf": 0}
+        self.pf_outside = 0.0
+
+    def gap(self, now, prefill=False):
+        if self.last_exit is not None:
+            g = now - self.last_exit
+            if prefill:
+                self.pf_outside += g
+                self.n["outside_pf"] += 1
+            else:
+                self.sum["outside"] += g
+
+    def report(self, stats):
+        n = max(1, self.n["decode"])
+        ms = lambda k, d=n: 1e3 * self.sum[k] / max(1, d)  # noqa: E731
+        logger.info(
+            f"GLM53 stack spec timing ({self.n['decode']} decode calls: {self.n['fused']} fused, {self.n['fallback']} "
+            f"fallback / ordinary): per decode call outside (vLLM + plugin) {ms('outside'):.2f} ms, adapter "
+            f"{ms('adapter'):.2f} ms, submit {ms('submit', max(1, self.n['fused'])):.2f} ms, collect (device wait + "
+            f"read) {ms('collect', max(1, self.n['fused'])):.2f} ms per fused step; prefill calls {self.n['prefill']} "
+            f"mean {ms('prefill', max(1, self.n['prefill'])):.1f} ms (+ {1e3 * self.pf_outside / max(1, self.n['outside_pf']):.2f} "
+            f"ms outside before each); seeds {self.n['seed']} mean {ms('seed', max(1, self.n['seed'])):.1f} ms; "
+            f"spec {stats}"
+        )  # fmt: skip
+        self.reset()
+
+
+def _install_spec_timing(cls):
+    """wrap the adapter's entry points (GLM53_STACK_SPEC_TIMING=1); the generator's spec_step_submit / collect are
+    wrapped per instance at the first timed verify"""
+    pc = time.perf_counter
+
+    def timer(self):
+        t = getattr(self, "_spec_timing", None)
+        if t is None:
+            t = self._spec_timing = _SpecTiming()
+        return t
+
+    def wrap_gen(self, t):
+        g = self.gen
+        if getattr(g, "_spec_timing_wrapped", False):
+            return
+        sub, col = g.spec_step_submit, g.spec_step_collect
+
+        def submit(*a, **k):
+            t0 = pc()
+            try:
+                return sub(*a, **k)
+            finally:
+                t.sum["submit"] += pc() - t0
+
+        def collect(*a, **k):
+            t0 = pc()
+            try:
+                return col(*a, **k)
+            finally:
+                t.sum["collect"] += pc() - t0
+
+        g.spec_step_submit, g.spec_step_collect = submit, collect
+        g._spec_timing_wrapped = True
+
+    dec, pf, seed = cls.decode_forward, cls.prefill_forward, cls._spec_seed
+
+    def decode_forward(self, *a, **k):
+        t = timer(self)
+        t0 = pc()
+        t.gap(t0)
+        if getattr(self, "spec", False) and getattr(self, "gen", None) is not None:
+            wrap_gen(self, t)
+        f0, s0, c0 = self.spec_stats["fused"], t.sum["submit"], t.sum["collect"]
+        try:
+            return dec(self, *a, **k)
+        finally:
+            t1 = pc()
+            fused = self.spec_stats["fused"] > f0
+            t.n["decode"] += 1
+            t.n["fused" if fused else "fallback"] += 1
+            t.sum["adapter"] += (t1 - t0) - (t.sum["submit"] - s0) - (t.sum["collect"] - c0)
+            t.last_exit = t1
+            if t.n["decode"] >= 256:
+                t.report(dict(self.spec_stats))
+
+    def prefill_forward(self, *a, **k):
+        t = timer(self)
+        t0 = pc()
+        t.gap(t0, prefill=True)
+        try:
+            return pf(self, *a, **k)
+        finally:
+            t1 = pc()
+            t.n["prefill"] += 1
+            t.sum["prefill"] += t1 - t0
+            t.last_exit = t1
+
+    def _spec_seed(self, *a, **k):
+        t = timer(self)
+        t0 = pc()
+        try:
+            return seed(self, *a, **k)
+        finally:
+            t.n["seed"] += 1
+            t.sum["seed"] += pc() - t0
+
+    cls.decode_forward, cls.prefill_forward, cls._spec_seed = decode_forward, prefill_forward, _spec_seed
+    return cls
+
 
 @dataclasses.dataclass
 class SpecReadback:
@@ -2275,3 +2400,7 @@ def declare_multimodal_class(api=None):
 
 
 GLM53StackForConditionalGeneration = declare_multimodal_class(_vllm_multimodal_api())
+
+
+if SPEC_TIMING:  # (GLM53_STACK_SPEC_TIMING=1: the served step's host decomposition; off = the classes unchanged)
+    _install_spec_timing(GLM53StackForCausalLM)
