@@ -18,6 +18,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -189,7 +190,7 @@ MatmulUnifiedPlan make_plan(
         (uint64_t)C_slice_M_tiles * plan.K_tiles * tt::tile_size(plan.A_format) <= MAX_DFB_EXTENT_BYTES;
     // B: the C slice's columns for all of K; C slices must span M.
     plan.B_shard_borrowable =
-        one_C_slice && C_slices_down_M == 1 &&
+        !base.B_from_pipes && one_C_slice && C_slices_down_M == 1 &&
         shard_matches(B.memory_config(), plan.K_tiles, C_slice_N_tiles, plan.cores) &&
         (uint64_t)plan.K_tiles * C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_EXTENT_BYTES;
     // C: its own shard spec, or the one the op allocates it with. Packed straight into the shard when subblock-major
@@ -218,11 +219,12 @@ MatmulUnifiedPlan make_plan(
         core_ranges[0].grid_size().y == C_slices_down_M &&
         (base.orientation == ShardOrientation::ROW_MAJOR || C_slices_across_N == 1 || C_slices_down_M == 1);
     plan.A_mcast_to_all_cores = one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_down_M == 1;
-    plan.B_mcast_to_all_cores = one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_across_N == 1;
+    plan.B_mcast_to_all_cores =
+        !base.B_from_pipes && one_C_slice_per_core_of_rectangle && !cores_tile_C && C_slices_across_N == 1;
     const uint32_t A_mcast_group = cores_tile_C ? C_slices_across_N : plan.A_mcast_to_all_cores ? plan.cores.size() : 1;
     const uint32_t B_mcast_group = cores_tile_C ? C_slices_down_M : plan.B_mcast_to_all_cores ? plan.cores.size() : 1;
     plan.A_mcast_num_dests = plan.A_shard_borrowable ? 0 : A_mcast_group - 1;
-    plan.B_mcast_num_dests = plan.B_shard_borrowable ? 0 : B_mcast_group - 1;
+    plan.B_mcast_num_dests = plan.B_shard_borrowable || base.B_from_pipes ? 0 : B_mcast_group - 1;
 
     // Subblock: the C slice's tiles accumulated in DST at once; the C slice is rounded up to it.
     plan.subblock_M_tiles = subblock_M_tiles;
@@ -255,8 +257,8 @@ MatmulUnifiedPlan make_plan(
     // DM threads and buffering (fixed; see the constants). Quasar's reader threads each read every
     // QUASAR_NUM_READER_THREADS-th K chunk into their own part of the A and B DFBs, which a borrowed shard cannot be
     // split into; reader threads beyond the K chunks of a C slice would only carry padding. A DFB that only one slice
-    // ever passes through holds one.
-    plan.num_reader_threads = is_quasar && !plan.borrow_A && !plan.borrow_B
+    // ever passes through holds one. Over prefetcher pipes the reader is the pipes' receiver, which is one thread.
+    plan.num_reader_threads = is_quasar && !plan.borrow_A && !plan.borrow_B && !plan.B_from_pipes
                                   ? std::min(QUASAR_NUM_READER_THREADS, plan.K_chunks_per_C_slice)
                                   : 1;
     plan.K_chunks_per_C_slice_padded = tt::round_up(plan.K_chunks_per_C_slice, plan.num_reader_threads);
@@ -289,8 +291,15 @@ MatmulUnifiedPlan make_plan(
     plan.B_entry_bytes = tt::tile_size(plan.B_format);
     plan.A_slice_entries = plan.borrow_A ? C_slice_M_tiles * plan.K_tiles
                                          : plan.C_slice_M_padded_tiles * K_chunk_tiles * plan.operand_buffer_depth;
-    plan.B_slice_entries = plan.borrow_B ? plan.K_tiles * C_slice_N_tiles
-                                         : K_chunk_tiles * plan.C_slice_N_padded_tiles * plan.operand_buffer_depth;
+    if (base.B_from_pipes) {
+        // The relay covers the pipe's whole entries; the pipe skips any gap left at its end.
+        plan.B_pipe_entry_bytes = K_chunk_tiles * C_slice_N_tiles * plan.B_entry_bytes;
+        const uint32_t pipe_bytes = attributes.prefetcher_pipes.front()->ring_size();
+        plan.B_slice_entries = (pipe_bytes - pipe_bytes % plan.B_pipe_entry_bytes) / plan.B_entry_bytes;
+    } else {
+        plan.B_slice_entries = plan.borrow_B ? plan.K_tiles * C_slice_N_tiles
+                                             : K_chunk_tiles * plan.C_slice_N_padded_tiles * plan.operand_buffer_depth;
+    }
     // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
     // (else compute packs slice i+1's partials over slice i before the writer drains it).
     const bool partials_ever_written = plan.K_chunks_per_C_slice > 1 && !plan.accumulate_in_C_slice;
@@ -301,10 +310,10 @@ MatmulUnifiedPlan make_plan(
                                   ? plan.C_entries_per_thread * plan.num_compute_threads
                                   : plan.num_compute_threads;
     plan.bias_entries = plan.has_bias ? plan.C_slice_N_padded_tiles * bias_buffer_depth : 0;
-    // Borrowed DFBs are the tensors' own memory and cost nothing here.
+    // Borrowed DFBs are the tensors' own memory and a relay the pipes': they cost nothing here.
     plan.l1_bytes =
         (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_entries * plan.A_entry_bytes) +
-        (plan.borrow_B ? 0 : (uint64_t)plan.B_slice_entries * plan.B_entry_bytes) +
+        (plan.borrow_B || plan.B_from_pipes ? 0 : (uint64_t)plan.B_slice_entries * plan.B_entry_bytes) +
         (plan.borrow_C ? 0 : (uint64_t)plan.C_slice_entries * plan.C_entry_bytes) +
         (plan.alias_C_partials_onto_C_slice ? 0 : (uint64_t)plan.C_partials_entries * plan.C_partials_entry_bytes) +
         (uint64_t)plan.bias_entries * plan.bias_entry_bytes;
@@ -366,11 +375,13 @@ std::pair<double, double> estimate_plan_cycles(
                                                                   subblock_tiles * model.tile_reload_cycles);
 
     // Data movement on the busiest core, a multicast sender: per C slice its A rows and B columns over all of K, which
-    // it also multicasts, and the C slice it writes. A borrowed operand does not move.
+    // it also multicasts, and the C slice it writes. A borrowed operand does not move, and B over prefetcher pipes is
+    // not read here (only its DRAM traffic counts).
     const double A_tiles =
         plan.borrow_A ? 0.0 : (double)plan.C_slice_M_tiles * plan.K_tiles * plan.A_entry_bytes / TILE_BYTES;
-    const double B_tiles =
+    const double B_dram_tiles =
         plan.borrow_B ? 0.0 : (double)plan.K_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes / TILE_BYTES;
+    const double B_tiles = plan.B_from_pipes ? 0.0 : B_dram_tiles;
     const double bias_tiles = (double)plan.C_slice_N_tiles * plan.bias_entry_bytes / TILE_BYTES;
     const double C_tiles = (double)plan.C_slice_M_tiles * plan.C_slice_N_tiles * plan.C_entry_bytes / TILE_BYTES;
     const double C_write_cycles = plan.borrow_C ? 0.0 : C_tiles * model.tile_write_cycles;
@@ -396,7 +407,7 @@ std::pair<double, double> estimate_plan_cycles(
     const double first_K_chunk_A_tiles =
         (double)plan.C_slice_M_tiles * plan.K_chunk_tiles * plan.A_entry_bytes / TILE_BYTES;
     const double first_K_chunk_B_tiles =
-        (double)plan.K_chunk_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes / TILE_BYTES;
+        plan.B_from_pipes ? 0.0 : (double)plan.K_chunk_tiles * plan.C_slice_N_tiles * plan.B_entry_bytes / TILE_BYTES;
     const double fill_cycles = (first_K_chunk_A_tiles + first_K_chunk_B_tiles) * model.tile_read_cycles +
                                ((plan.A_mcast_num_dests > 0 ? first_K_chunk_A_tiles : 0.0) +
                                 (plan.B_mcast_num_dests > 0 ? first_K_chunk_B_tiles : 0.0)) *
@@ -413,9 +424,9 @@ std::pair<double, double> estimate_plan_cycles(
 
     // DRAM, all cores: a multicast operand is read once per multicast group.
     const double total_C_slices = (double)plan.batch_size * plan.C_slices_per_batch;
-    const double dram_tiles =
-        total_C_slices * ((A_in_dram ? A_tiles / (plan.A_mcast_num_dests + 1) : 0.0) +
-                          (B_in_dram ? B_tiles / (plan.B_mcast_num_dests + 1) : 0.0) + (C_in_dram ? C_tiles : 0.0));
+    const double dram_tiles = total_C_slices * ((A_in_dram ? A_tiles / (plan.A_mcast_num_dests + 1) : 0.0) +
+                                                (B_in_dram ? B_dram_tiles / (plan.B_mcast_num_dests + 1) : 0.0) +
+                                                (C_in_dram ? C_tiles : 0.0));
     const double pipeline_cycles = fill_cycles + steady_cycles;
     return {
         std::max(pipeline_cycles, dram_tiles * model.dram_tile_cycles + model.read_latency_cycles + C_write_cycles),
@@ -522,26 +533,41 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
     const uint32_t l1_ceiling = device.lowest_occupied_compute_l1_address().value_or(device.l1_size_per_core());
     const uint64_t l1_budget = l1_ceiling - l1_base;
 
+    // B over prefetcher pipes: each core computes all of M for its own slice of N, and a K chunk is one pipe entry.
+    // validate_unified_prefetcher_pipes checks the plan against the pipes.
+    base.B_from_pipes = !attributes.prefetcher_pipes.empty();
+
     // ---- 4. C slice candidates ----
     // A C slice dim the config gives is fixed, and an auto one divides the largest C slice: M / N split over the
     // bounding box of the cores (one C slice per core). With batches that have their own B and batch groups allowed,
     // the groups keep the cores busy with C slices up to a whole batch's C, so an auto dim may also split M (N) into
     // any number of C slices (the smallest dim for that number). A sharded C's shard shape comes first, so its shards
-    // can be the C slices.
+    // can be the C slices. Prefetcher pipes fix the C slice (see above).
     const uint32_t core_rows = bounding_box.grid_size().y;
     const uint32_t core_columns = bounding_box.grid_size().x;
-    const bool M_fixed = config.C_slice_M_tiles.has_value();
-    const bool N_fixed = config.C_slice_N_tiles.has_value();
+    const bool M_fixed = config.C_slice_M_tiles.has_value() || base.B_from_pipes;
+    const bool N_fixed = config.C_slice_N_tiles.has_value() || base.B_from_pipes;
     const bool batch_groups_allowed = base.batch_size > 1 && config.num_batch_groups.value_or(2) > 1;
-    const uint32_t max_C_slice_M_tiles =
-        config.C_slice_M_tiles.value_or(batch_groups_allowed ? base.M_tiles : tt::div_up(base.M_tiles, core_rows));
-    const uint32_t max_C_slice_N_tiles =
-        config.C_slice_N_tiles.value_or(batch_groups_allowed ? base.N_tiles : tt::div_up(base.N_tiles, core_columns));
+    const uint32_t max_C_slice_M_tiles = config.C_slice_M_tiles.value_or(
+        base.B_from_pipes || batch_groups_allowed ? base.M_tiles : tt::div_up(base.M_tiles, core_rows));
+    const uint32_t max_C_slice_N_tiles = config.C_slice_N_tiles.value_or(
+        base.B_from_pipes      ? tt::div_up(base.N_tiles, static_cast<uint32_t>(config.cores.num_cores()))
+        : batch_groups_allowed ? base.N_tiles
+                               : tt::div_up(base.N_tiles, core_columns));
+    // An auto K chunk over prefetcher pipes is at most what MIN_PIPE_ENTRIES of fit in a pipe, which dfbs_fit does not
+    // bound; at least one tile, so validation reports a pipe that is too small.
+    const uint32_t max_K_chunk_tiles =
+        base.B_from_pipes ? std::clamp<uint32_t>(
+                                attributes.prefetcher_pipes.front()->ring_size() /
+                                    (MIN_PIPE_ENTRIES * max_C_slice_N_tiles * tt::tile_size(base.B_format)),
+                                1,
+                                base.K_tiles)
+                          : base.K_tiles;
 
     std::vector<std::pair<uint32_t, uint32_t>> C_slice_shapes;
     const std::optional<tt::tt_metal::ShardSpec>& C_shard =
         output.has_value() ? output->memory_config().shard_spec() : attributes.output_mem_config.shard_spec();
-    if (C_shard.has_value()) {
+    if (C_shard.has_value() && !base.B_from_pipes) {
         C_slice_shapes.emplace_back(
             config.C_slice_M_tiles.value_or(C_shard->shape[0] / TILE_HEIGHT),
             config.C_slice_N_tiles.value_or(C_shard->shape[1] / TILE_WIDTH));
@@ -609,11 +635,15 @@ std::optional<MatmulUnifiedPlan> plan_unified_matmul(
                      config.subblock_N_tiles.value_or(std::min(dst_capacity_tiles, C_slice_N_tiles));
                  subblock_N_tiles >= config.subblock_N_tiles.value_or(1);
                  --subblock_N_tiles) {
+                if (base.B_from_pipes && !config.subblock_N_tiles.has_value() &&
+                    C_slice_N_tiles % subblock_N_tiles != 0) {
+                    continue;
+                }
                 for (uint32_t subblock_M_tiles = config.subblock_M_tiles.value_or(
                          std::min(dst_capacity_tiles / subblock_N_tiles, C_slice_M_tiles));
                      subblock_M_tiles >= config.subblock_M_tiles.value_or(1);
                      --subblock_M_tiles) {
-                    for (uint32_t K_chunk_tiles = config.K_chunk_tiles.value_or(base.K_tiles);
+                    for (uint32_t K_chunk_tiles = config.K_chunk_tiles.value_or(max_K_chunk_tiles);
                          K_chunk_tiles >= config.K_chunk_tiles.value_or(1);
                          --K_chunk_tiles) {
                         if (base.K_tiles % K_chunk_tiles != 0) {
