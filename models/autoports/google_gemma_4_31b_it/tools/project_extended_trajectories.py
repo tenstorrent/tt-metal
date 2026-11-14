@@ -84,6 +84,17 @@ def fast_explain(rates, calls):
     }
 
 
+def select_with_margin(rows, run_timeout_hours, margin=1.25):
+    """Apply the planning margin once against the actual run deadline."""
+    if run_timeout_hours <= 0 or margin < 1:
+        raise ValueError("Need a positive timeout and margin >= 1")
+    return max(
+        (row for row in rows if row["hours"] * margin <= run_timeout_hours),
+        key=lambda row: row["count"],
+        default=None,
+    )
+
+
 def main():
     original = json.loads(SOURCE.read_text())
     rates = json.loads(RATES.read_text())
@@ -108,7 +119,8 @@ def main():
         projected = result["explained_hours"] + overhead / 3600
         rows.append({"count": count, "hours": projected, "hours_with_1_25_margin": projected * 1.25})
     plain = max((r for r in rows if r["hours"] <= 10), key=lambda r: r["count"])
-    margin = max((r for r in rows if r["hours_with_1_25_margin"] <= 10), key=lambda r: r["count"])
+    timeout = json.loads(Path("bringup/agentic_evals/inputs.json").read_text())["run_timeout_hours"]
+    margin = select_with_margin(rows, timeout, 1.25)
     out = {
         "status": "prospective_synthetic_projection_not_admission_not_scored_run",
         "source": str(SOURCE),
@@ -126,7 +138,9 @@ def main():
         "global_overhead_once_seconds": overhead,
         "full500": rows[-1],
         "largest_count_under10h": plain,
-        "largest_count_under10h_with_1_25_margin": margin,
+        "largest_count_with_1_25_margin_within_run_timeout": margin,
+        "run_timeout_hours": timeout,
+        "planning_margin": 1.25,
         "all_counts": rows,
         "limitations": [
             "Synthetic active concurrency uses observed-duration schedule and is not iterated to self-consistency after rate pricing.",
@@ -141,7 +155,9 @@ def main():
     out[
         "precision_condition"
     ] = "Baseline only, conditional on unchanged stage12_head_bfp8_lofi; a precision fix requires remeasured rows and regenerated projection before admission."
-    (BASE / "setup/extended_projection_trajectory_replay.json").write_text(json.dumps(out, indent=2) + "\n")
+    (BASE / "setup/extended_projection_trajectory_replay_corrected_margin.json").write_text(
+        json.dumps(out, indent=2) + "\n"
+    )
     print(
         json.dumps(
             {
@@ -150,7 +166,7 @@ def main():
                     "smallcase_oracle_validation",
                     "full500",
                     "largest_count_under10h",
-                    "largest_count_under10h_with_1_25_margin",
+                    "largest_count_with_1_25_margin_within_run_timeout",
                 )
             },
             indent=2,
