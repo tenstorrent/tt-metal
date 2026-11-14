@@ -245,7 +245,7 @@ void reduce_c(In0DFB& dfb_in0, ScaleDFB& dfb_scale, OutDFB& dfb_out, PrevDFB& df
         /**
          * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
          */
-        reduce_block_max_row_init<cols>(out_dfb);
+        reduce_block_max_row_init<cols>(in0_dfb, scale_dfb, out_dfb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t reduce_dst_idx = i;
             reduce_block_max_row<cols>(in0_dfb, scale_dfb, (row_start_idx + i) * cols, reduce_dst_idx);

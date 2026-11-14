@@ -390,7 +390,7 @@ inline void block_max_pool_batched(uint32_t unit_strip) {
     // One reduce_block_max_row per block folds block_tiles k-tiles into DEST[b] in one call, the 1.0
     // scaler resident in srcB across the block_tiles GMPOOL-MAX ops -- killing the per-reduce_tile
     // math-thread dispatch overhead that bound the pool. block_tiles is compile-time -> template arg.
-    reduce_block_max_row_init<block_tiles>(out_cb);
+    reduce_block_max_row_init<block_tiles>(acc_cb, scaler_cb, out_cb);
     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
         out.reserve_back(blocks_per_unit);
         tile_regs_acquire();
