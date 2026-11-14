@@ -9,16 +9,16 @@ from types import SimpleNamespace
 import pytest
 
 
-@pytest.mark.parametrize("fp32", [False, True])
+@pytest.mark.parametrize("fp32,bf16_weight", [(False, False), (True, True), (False, True), (True, False)])
 @pytest.mark.parametrize("decoding,per_core_n", [(False, 8), (True, 8), (True, 6)])
-def test_projection_subblock_respects_destination_capacity(fp32, decoding, per_core_n):
+def test_projection_subblock_respects_destination_capacity(fp32, bf16_weight, decoding, per_core_n):
     source = Path(__file__).parents[1] / "tt/optimized_decoder.py"
     tree = ast.parse(source.read_text())
     method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_linear")
     configs = []
     kernel = SimpleNamespace(fp32_dest_acc_en=fp32)
     x = SimpleNamespace(shape=(1, 1, 64, 128))
-    weight = SimpleNamespace(shape=(1, 1, 128, 32 * 8 * per_core_n))
+    weight = SimpleNamespace(shape=(1, 1, 128, 32 * 8 * per_core_n), dtype="BF16" if bf16_weight else "BFP8")
 
     def make_config(**kwargs):
         configs.append(kwargs)
@@ -32,6 +32,8 @@ def test_projection_subblock_respects_destination_capacity(fp32, decoding, per_c
         assert h * w <= (4 if fp32 else 8)
         if decoding:
             assert config["per_core_N"] % w == 0
+        else:
+            assert config["N_block_size"] == (8 if bf16_weight or fp32 else 16)
         return x
 
     ttnn = SimpleNamespace(

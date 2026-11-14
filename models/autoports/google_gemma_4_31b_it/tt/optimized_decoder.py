@@ -263,9 +263,11 @@ class OptimizedDecoder(LightweightModule):
             config = ttnn.MinimalMatmulConfig(
                 M_block_size=4,
                 K_block_size=8,
-                N_block_size=16,
+                # BF16 weights and FP32 intermediates need smaller L1 blocks.
+                N_block_size=8 if weight.dtype == ttnn.bfloat16 or kernel.fp32_dest_acc_en else 16,
                 subblock_h=1,
-                subblock_w=8,
+                # FP32 accumulation halves the destination tile capacity.
+                subblock_w=4 if kernel.fp32_dest_acc_en else 8,
                 compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
             )
             out = ttnn.experimental.minimal_matmul(
@@ -293,7 +295,7 @@ class OptimizedDecoder(LightweightModule):
             x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
             gy = min(10, math.ceil(x.shape[-2] / 32))
             pn = math.ceil(n / 32 / self.banks)
-            sub = max(v for v in (1, 2, 4, 8) if pn % v == 0)
+            sub = max(v for v in (1, 2, 4, 8) if pn % v == 0 and v <= (4 if kernel.fp32_dest_acc_en else 8))
             config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(self.banks, gy),
                 in0_block_w=4,
