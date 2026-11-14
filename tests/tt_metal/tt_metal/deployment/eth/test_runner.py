@@ -833,6 +833,8 @@ async def main():
 
         env = os.environ.copy()
         env["ETH_TEST_EXPECTED_LINKS"] = os.environ.get("ETH_TEST_EXPECTED_LINKS", str(10))
+        # Active Ethernet cores only accept kernels in slow dispatch.
+        env["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 
@@ -854,6 +856,17 @@ async def main():
         print_results(runs, logf)
 
     runs_to_jsonf(outfile, runs, sort_keys=True, indent=4)
+
+    # gtest exits 0 on skipped or unmatched tests, so every requested test must have actually passed.
+    if not opts.i:
+        for t in tests:
+            statuses = [r.status for r in runs if r.name.endswith(t.value)]
+            if not statuses or any(s != "OK" for s in statuses):
+                msg = f"Test {t.value} did not pass (status: {', '.join(statuses) or 'not run'})"
+                print(msg, file=sys.stderr)
+                if logf:
+                    print(msg, file=logf)
+                exit_status = exit_status or 1
 
     if logf:
         logf.close()

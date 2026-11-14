@@ -18,7 +18,8 @@ Run the deployment test suite (Ethernet, DRAM, PCIe read/write, NOC, DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
-An iteration is a board reset followed by one run of each test.
+An iteration is a board reset followed by one run of the Ethernet, DRAM and PCIe tests.
+After all iterations, the NOC tests run once, then the boards are reset and DIDT runs once.
 
 Optional:
     --output <logdir>                       Directory where the log file is written
@@ -113,10 +114,11 @@ mkdir -p "$LOGDIR"
 RUN_LOG="$LOGDIR/deployment_$(hostname)_$(date +%4Y-%m-%d-%H-%M-%S).log"
 : > "$RUN_LOG"
 
+WORKDIR="$(mktemp -d)"
 # Carries a command's exit status out of the tee pipeline
-RCFILE="$(mktemp)"
-trap 'rm -f "$RCFILE"' EXIT
-trap 'rm -f "$RCFILE"; exit 130' HUP INT TERM
+RCFILE="$WORKDIR/rc"
+trap 'rm -rf "$WORKDIR"' EXIT
+trap 'rm -rf "$WORKDIR"; exit 130' HUP INT TERM
 
 RULE_HEAVY='=============================================================================='
 RULE_LIGHT='------------------------------------------------------------------------------'
@@ -191,6 +193,53 @@ run_logged() {
 	rc="$(cat "$RCFILE")"
 }
 
+# run_gtest <command...>: run a gtest binary, failing if any selected test was skipped or none ran.
+run_gtest() {
+	results="$WORKDIR/gtest.json"
+	rm -f "$results"
+	"$@" --gtest_output=json:"$results" || return $?
+	$PYTHON - "$results" << 'PY'
+import json, sys
+
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (OSError, ValueError) as e:
+    sys.exit(f"Could not read gtest results: {e}")
+
+cases = [c for s in data.get("testsuites", []) for c in s.get("testsuite", [])]
+bad = [f"{c.get('classname')}.{c.get('name')} ({c.get('result', c.get('status'))})"
+       for c in cases if c.get("result") == "SKIPPED" or c.get("status") == "NOTRUN"]
+if not cases:
+    sys.exit("No tests were run")
+if bad:
+    sys.exit("Tests did not run: " + ", ".join(bad))
+PY
+}
+
+# run_benchmark <command...>: run a google benchmark binary, failing if any benchmark errored, was skipped, or none ran.
+run_benchmark() {
+	results="$WORKDIR/benchmark.json"
+	rm -f "$results"
+	"$@" --benchmark_out="$results" --benchmark_out_format=json || return $?
+	$PYTHON - "$results" << 'PY'
+import json, sys
+
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+except (OSError, ValueError) as e:
+    sys.exit(f"Could not read benchmark results: {e}")
+
+benches = data.get("benchmarks", [])
+bad = [b.get("name") for b in benches if b.get("error_occurred") or b.get("skipped")]
+if not benches:
+    sys.exit("No benchmarks were run")
+if bad:
+    sys.exit("Benchmarks errored or were skipped: " + ", ".join(bad))
+PY
+}
+
 # run_reset <message>: reset the boards and return its exit status.
 run_reset() {
 	emit_section "$1"
@@ -220,8 +269,8 @@ run_test() {
 	return 0
 }
 
-# run_tests: runs one round of every per-iteration test (DIDT runs once, separately, after all iterations).
-# Sets last_eth_ok, last_dram_ok, last_noc_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
+# run_tests: runs one round of every per-iteration test (NOC and DIDT run once, separately, after all iterations).
+# Sets last_eth_ok, last_dram_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
 # Returns 1 if any test failed, 0 otherwise.
 run_tests() {
 	failures=0
@@ -233,25 +282,11 @@ run_tests() {
 	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
 		last_dram_ok=1 || last_dram_ok=0
 
-	run_test 'PCIe read test' ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0 &&
+	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_read_ok=1 || last_pcie_read_ok=0
 
-	run_test 'PCIe write test' ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0 &&
+	run_test 'PCIe write test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Writing Host/1073741824/32768/0/1/0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_write_ok=1 || last_pcie_write_ok=0
-
-	# Runs last: it can leave chips wedged and open (exit code 2), which only a board reset recovers.
-	# Active Ethernet cores only accept kernels in slow dispatch.
-	if run_test 'NOC tests' env TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtest_filter='*DeploymentNoc*'
-	then
-		last_noc_ok=1
-	else
-		last_noc_ok=0
-		if [ "$rc" -eq 2 ]
-		then
-			emit ""
-			emit_bold "NOC tests left chips wedged. Reset the boards with '$RESET_CMD' before running anything else on them."
-		fi
-	fi
 
 	emit_section 'Test results'
 
@@ -272,7 +307,7 @@ run_tests() {
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
-emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write, NOC (per iteration), DIDT (once, after all iterations)')"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write (per iteration), NOC, DIDT (once, after all iterations)')"
 emit_setup
 emit "$RULE_HEAVY"
 
@@ -281,7 +316,6 @@ reset_failures=0
 iterations_run=0
 eth_pass=0
 dram_pass=0
-noc_pass=0
 pcie_read_pass=0
 pcie_write_pass=0
 
@@ -301,7 +335,6 @@ do
 	then
 		last_eth_ok=0
 		last_dram_ok=0
-		last_noc_ok=0
 		last_pcie_read_ok=0
 		last_pcie_write_ok=0
 		iteration_failures=$((iteration_failures + 1))
@@ -316,7 +349,6 @@ do
 	iterations_run=$((iterations_run + 1))
 	eth_pass=$((eth_pass + last_eth_ok))
 	dram_pass=$((dram_pass + last_dram_ok))
-	noc_pass=$((noc_pass + last_noc_ok))
 	pcie_read_pass=$((pcie_read_pass + last_pcie_read_ok))
 	pcie_write_pass=$((pcie_write_pass + last_pcie_write_ok))
 	if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$iteration_failures" -gt 0 ]
@@ -326,7 +358,26 @@ do
 	fi
 done
 
-# DIDT runs once, after all iterations, regardless of whether any iteration above failed.
+failures=0
+passes=0
+
+# NOC runs once, after all iterations, regardless of whether any iteration above failed.
+# It can leave chips wedged (exit code 2), which only a board reset recovers.
+emit_banner "NOC (single run after all iterations)"
+# Active Ethernet cores only accept kernels in slow dispatch.
+if run_test 'NOC tests' run_gtest env TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtest_filter='*DeploymentNoc*'
+then
+	noc_ok=1
+else
+	noc_ok=0
+	if [ "$rc" -eq 2 ]
+	then
+		emit ""
+		emit_bold "NOC tests left chips wedged. Reset the boards with '$RESET_CMD' before running anything else on them."
+	fi
+fi
+
+# DIDT runs once, after NOC, regardless of whether anything above failed.
 emit_banner "DIDT (single run after all iterations)"
 didt_reset_ok=1
 if [ "$SKIP_RESET" -eq 0 ]
@@ -336,13 +387,12 @@ then
 		didt_reset_ok=0
 	fi
 fi
-failures=0
-passes=0
 if [ "$didt_reset_ok" -eq 0 ]
 then
 	emit_status "DIDT tests:" failed
 	didt_ok=0
 else
+	sleep 5
 	run_test 'DIDT tests' sh tests/tt_metal/tt_metal/deployment/didt/test_runner.sh --output "$LOGDIR/didt" --mgd "$MGD" &&
 		didt_ok=1 || didt_ok=0
 fi
@@ -354,16 +404,16 @@ emit "$RULE_LIGHT"
 emit "$(printf '%-20s %s' 'Board resets:'     "$((iterations_run - reset_failures))/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
-emit "$(printf '%-20s %s' 'NOC tests:'       "$noc_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'NOC tests:'       "$([ "$noc_ok" -eq 1 ] && echo passed || echo failed)")"
 emit "$(printf '%-20s %s' 'DIDT tests:'      "$([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 emit "$RULE_LIGHT"
-if [ "$iteration_failures" -gt 0 ] || [ "$didt_ok" -eq 0 ]
+if [ "$iteration_failures" -gt 0 ] || [ "$noc_ok" -eq 0 ] || [ "$didt_ok" -eq 0 ]
 then
-	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed, DIDT $([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
+	emit_bold "$(printf '%-20s %s' 'Overall:' "$((iterations_run - iteration_failures))/$iterations_run iterations passed, NOC $([ "$noc_ok" -eq 1 ] && echo passed || echo failed), DIDT $([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
 	emit "$RULE_HEAVY"
 	exit 1
 fi
-emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed, DIDT passed")"
+emit_bold "$(printf '%-20s %s' 'Overall:' "All $iterations_run iterations passed, NOC passed, DIDT passed")"
 emit "$RULE_HEAVY"
