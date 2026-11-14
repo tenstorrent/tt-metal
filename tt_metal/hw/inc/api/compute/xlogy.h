@@ -44,8 +44,9 @@ ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 /**
  * Please refer to documentation for any_init.
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void xlogy_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::XLOGY))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::XLOGY, is_fp32_dest_acc_en))));
 }
 
 }  // namespace ckernel
