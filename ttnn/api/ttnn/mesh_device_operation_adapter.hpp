@@ -581,6 +581,7 @@ public:
             tensor_return_value_t& tensor_return_value) {
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+            auto& mesh_device = *mesh_device_operation_utils::get_mesh_device(attrs, tensor_args);
 
             if constexpr (has_workload_descriptor) {
                 // WorkloadDescriptor variant — declarative: the factory builds the entire
@@ -598,7 +599,7 @@ public:
                     attrs, tensor_args, tensor_return_value, tensor_coords);
                 auto programs = std::move(workload_descriptor.programs);
                 for (auto& [device_range, desc] : programs) {
-                    tt::tt_metal::Program program{desc};
+                    tt::tt_metal::Program program{mesh_device, desc};
                     auto collected = collect_tensor_buffers(tensor_args, tensor_return_value, workload_descriptor);
                     // The WorkloadDescriptor variant has NO slow-path rebuild (apply_descriptor only
                     // re-applies resolved bindings + dynamic args), so it must ALWAYS allow the in-place
@@ -639,7 +640,7 @@ public:
                         if (desc.kernels.empty() && desc.cbs.empty() && desc.semaphores.empty()) {
                             return;
                         }
-                        tt::tt_metal::Program program{desc};
+                        tt::tt_metal::Program program{mesh_device, desc};
                         if constexpr (has_override_runtime_arguments()) {
                             // The op re-derives all per-dispatch state on every hit via
                             // override_runtime_arguments(); no resolve_bindings needed.
@@ -757,7 +758,8 @@ public:
                             tensor_args,
                             tensor_return_value,
                             std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
-                        tt::tt_metal::Program parity_scratch{parity_desc};
+                        tt::tt_metal::Program parity_scratch{
+                            *mesh_device_operation_utils::get_mesh_device(attrs, tensor_args), parity_desc};
                         tt::tt_metal::apply_descriptor_runtime_args(parity_scratch, parity_desc);
                         tt::tt_metal::assert_fastpath_parity(
                             program, parity_scratch, parity_desc, ttsl::get_type_name<DeviceOperation>());
@@ -811,7 +813,8 @@ public:
                                 tensor_args,
                                 tensor_return_value,
                                 std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
-                            tt::tt_metal::Program parity_scratch{parity_desc};
+                            tt::tt_metal::Program parity_scratch{
+                                *mesh_device_operation_utils::get_mesh_device(attrs, tensor_args), parity_desc};
                             tt::tt_metal::apply_descriptor_runtime_args(parity_scratch, parity_desc);
                             tt::tt_metal::assert_fastpath_parity(
                                 program, parity_scratch, parity_desc, ttsl::get_type_name<DeviceOperation>());

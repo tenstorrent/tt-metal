@@ -1627,7 +1627,7 @@ constexpr uint32_t kSenderReadRingSlots = 4;
 
 // CT-arg layout must stay in sync with persistent_d2d_receiver.cpp.
 Program build_receiver_program(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const Buffer& output_buffer,
     const CoreCoord& service_core,
     uint32_t socket_config_addr,
@@ -1646,7 +1646,7 @@ Program build_receiver_program(
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const tt::tt_fabric::FabricNodeId& sender_node,
     uint32_t link_index) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     // One packet header is enough for the receiver (control-flow notify only);
     // allocate two to mirror the sender and leave headroom.
@@ -1735,7 +1735,7 @@ struct SenderExtraSegment {
 // the master, streaming the whole tensor. The SAME full CT layout goes to both
 // kernels; per-lane fields differ.
 Program build_sender_program(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const Buffer& input_buffer,
     const CoreCoord& service_core,
     uint32_t socket_config_addr,
@@ -1758,7 +1758,7 @@ Program build_sender_program(
     const tt::tt_fabric::FabricNodeId& sender_node,
     const tt::tt_fabric::FabricNodeId& receiver_node,
     const std::vector<uint32_t>& link_indices) {
-    auto program = CreateProgram();
+    auto program = CreateProgram(mesh_device);
 
     const uint32_t total_pages = plan.num_socket_pages * plan.pages_per_chunk;
     const uint32_t half = (total_pages + 1) / 2;  // lane 0 takes the odd page
@@ -1891,7 +1891,7 @@ std::unique_ptr<distributed::MeshWorkload> build_lease_workload(
 
     auto workload = std::make_unique<distributed::MeshWorkload>();
     for (const auto& [coord, svc_core] : service_cores) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         // WAIT needs a 1-word L1 staging slot for the NoC read; RELEASE doesn't.
         if (is_wait) {
             auto cb_cfg = CircularBufferConfig(scratch_bytes, {{kLeaseScratchCb, tt::DataFormat::UInt32}})
@@ -2925,7 +2925,7 @@ Program build_exit_relay_program(
         credit_conn[k] = it->second;
     }
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh);
     create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
     const auto accessor_ct = TensorAccessorArgs(*backing.mesh_buffer().get_device_buffer(e)).get_compile_time_args();
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
@@ -3090,7 +3090,7 @@ Program build_entry_relay_program(
         "semaphores for",
         e);
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*mesh);
     create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
     const auto accessor_ct = TensorAccessorArgs(*backing.mesh_buffer().get_device_buffer(e)).get_compile_time_args();
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;

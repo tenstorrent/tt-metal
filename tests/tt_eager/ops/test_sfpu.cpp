@@ -100,7 +100,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
 
         tt::tt_metal::CoreCoord core = {0, 0};
 
