@@ -10,7 +10,6 @@ import torch
 import ttnn
 from models.demos.blackhole.hy4_preview.tt import hy4_idx_score as IS
 from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
-from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
 from models.demos.blackhole.hy4_preview.tt.hy4_pool_decode import PoolCtx, select_global
 from models.demos.gpt_oss.config import mesh_1x8
 from models.demos.gpt_oss.tt.ccl import CCLManager
@@ -120,9 +119,7 @@ def main():
                     wp[0, 0, :S] = 1.0 / 32
                     w32 = rep(md, wp.bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
                     qfull = rep(md, torch.randn(1, 8, S, 576).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
-                    sink = upload(
-                        md, torch.full((1, S, 32, 8), -30.0).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT, shard_dim=3
-                    )
+                    sink = ctx.make_sink(torch.full((64,), -30.0))
                     ttnn.synchronize_device(md)
                     gids = select_global(ctx, qh, w32, kview)
                     idx8 = HP.id_filter(gids, ctx.colinfo, S, perrow=ctx.perrow)

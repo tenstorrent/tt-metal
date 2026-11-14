@@ -20,7 +20,6 @@ from dm_block import close_row, open_row
 
 import ttnn
 from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
-from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
 from models.demos.blackhole.hy4_preview.tt.hy4_pool_decode import PoolCtx, append_key_rows, select_global
 from models.demos.gpt_oss.config import mesh_1x8
 from models.demos.gpt_oss.tt.ccl import CCLManager
@@ -105,7 +104,17 @@ def run_case(md, mc, ccl, N, S, kind, xm):
         os.environ.get("NOATTN", "0") != "1"
     )  # NOATTN=1: indexer + key append only (1M context: no kv pool, no host dequantised pool)
     g = torch.Generator().manual_seed(11 + S)
-    ctx = PoolCtx(md, mc, ccl, pages, rows=1, S=S, mode="topk", bucket_tokens=N, xm=xm)
+    ctx = PoolCtx(
+        md,
+        mc,
+        ccl,
+        pages,
+        rows=1,
+        S=S,
+        mode="dense" if os.environ.get("DENSE", "0") == "1" else "topk",
+        bucket_tokens=N,
+        xm=xm,
+    )
     dp = ttnn.experimental.deepseek_prefill
     kvh, qh64 = DK.gen_data(kind, N if att else 4096, S, seed=5)  # [N,576], [64,S,576]
     ch = torch.exp(torch.randn(128, generator=g) * (0.8 if kind != "random" else 0.0))
@@ -211,13 +220,16 @@ def run_case(md, mc, ccl, N, S, kind, xm):
             qp[c] = q64[8 * c : 8 * c + 8]
         qfull = shard0(md, qp, ttnn.bfloat16, ttnn.TILE_LAYOUT)
         sl = torch.linspace(-2, 2, 64)
-        st = torch.zeros(1, S, 32, NC)
-        for c in range(NC):
-            st[0, :, :8, c] = sl[8 * c : 8 * c + 8][None, :]
-        sink = upload(md, st.to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, shard_dim=3)
+        sink = ctx.make_sink(sl)
     for call in range(2):
-        gids = select_global(ctx, qh_d, w_d, kview)
-        idx8 = HP.id_filter(gids, ctx.colinfo, S, perrow=ctx.perrow)
+        if (
+            os.environ.get("DENSE", "0") == "1"
+        ):  # dense mode (every row <= 2048 keys): host-built ids 0..pos+j per row, same id_filter
+            gids = None
+            idx8 = ctx.dense_ids8()
+        else:
+            gids = select_global(ctx, qh_d, w_d, kview)
+            idx8 = HP.id_filter(gids, ctx.colinfo, S, perrow=ctx.perrow)
         out = ctx.attend(qfull, kv, idx8, sink) if att else None
         ttnn.synchronize_device(md)
         dev_ids = idx8_to_global(md, idx8, S)
@@ -268,8 +280,9 @@ def run_case(md, mc, ccl, N, S, kind, xm):
             )
             ttnn.deallocate(out)
         emit(**r)
-        ttnn.deallocate(gids)
-        ttnn.deallocate(idx8)
+        if gids is not None:
+            ttnn.deallocate(gids)
+            ttnn.deallocate(idx8)
     for t in (kv, kp, qfull, sink, qh_d, w_d):
         if t is not None:
             ttnn.deallocate(t)

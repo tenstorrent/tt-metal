@@ -42,6 +42,37 @@ def free_xm(blk):
         blk.xm = None
 
 
+def cmp_run(md, blk, c, S):
+    """compact path (PoolCtx.attend compact=True): split kernel with the 4 users per tile row packing -> a2a -> A1 merge on TR tile rows. -> host heads [64,S,512]"""
+    import hy4_merge
+
+    TR = (S + 3) // 4
+    qg = blk.gather_q(c.q_dev)
+    idx8 = blk.idx_rows(c.idx_dev)
+    out = blk.mod.sparse_sdpa_split(
+        qg, c.kv_dev, idx8, 512, DM.SCALE, blk.kc, blk.G, blk.ckc, None, emit_stats=3, owner_s=S, compact=True
+    )
+    x = ttnn.experimental.all_to_all_async_generic(
+        out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+    )
+    sk = torch.zeros(8, TR, 32, 1)
+    for cc in range(8):
+        for b in range(4):
+            sk[cc, :, 8 * b : 8 * b + 8, 0] = c.sl[8 * cc : 8 * cc + 8][None, :]
+    skd = DM.to_mesh(md, sk, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    res = hy4_merge.merge_fused(x, skd, TR, full=S > 2)
+    r = (
+        DM.from_mesh(md, res).float().reshape(8, TR * 4, 32 // 4, 4, 512)
+        if False
+        else DM.from_mesh(md, res).float().reshape(8, TR, 32, 512)
+    )
+    heads = torch.zeros(8, 8, S, 512)
+    for s in range(S):
+        u, b = s // 4, s % 4
+        heads[:, :, s] = r[:, u, 8 * b : 8 * b + 8]
+    return heads.reshape(64, S, 512)
+
+
 def run_pcc(md):
     var = os.environ.get("VAR", "a1")
     SS = [int(x) for x in os.environ.get("SS", "1,2,3,4,5,6,7,8").split(",")]
@@ -55,6 +86,31 @@ def run_pcc(md):
             name = f"{tag}_S{S}_{var}"
             try:
                 c = DM.Case(md, kind, ctx, S, "scaled", seed=3, skew=skew)
+                if var == "cmp":
+                    blk = DM.mk_block(md, S, fuse=True, xchg=False)
+                    got = [cmp_run(md, blk, c, S) for _ in range(reps)]
+                    ps = [round(pcc(g, c.ref), 6) for g in got]
+                    rows = [round(min(pcc(g[:, s], c.ref[:, s]) for s in range(S)), 6) for g in got]
+                    emit(
+                        {
+                            "test": "vrows_pcc",
+                            "case": name,
+                            "G": blk.G,
+                            "kc": blk.kc,
+                            "pcc_per_call": ps,
+                            "min_row": rows,
+                            "finite": bool(all(torch.isfinite(g).all() for g in got)),
+                            "pass": bool(
+                                min(ps) >= DM.GATE
+                                and min(rows) >= DM.GATE
+                                and all(torch.isfinite(g).all() for g in got)
+                            ),
+                            "empty_col_rows": int((torch.from_numpy(c.cnt) == 0).sum()),
+                            "max_logit": c.max_logit,
+                        }
+                    )
+                    c.free()
+                    continue
                 if var == "stock":
                     blk = DM.mk_block(md, S, fuse=False, xchg=False)
                 elif var == "a1":

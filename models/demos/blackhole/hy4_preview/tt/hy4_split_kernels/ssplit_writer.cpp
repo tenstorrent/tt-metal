@@ -103,6 +103,11 @@ void kernel_main() {
     // premultiplied (scaled-logit domain), col V_DIM+2 = 1.0 (so the merge's weighted sum also yields the denominator).
     constexpr uint32_t owner_s = get_compile_time_arg_val(ssplit::writer_ct_arg::OWNER_S);
     constexpr uint32_t stat_scale_bits = get_compile_time_arg_val(ssplit::writer_ct_arg::STAT_SCALE_BITS);
+    // COMPACT (emit_stats 3 + owner_s only): the owner-layout TILE output [NC, TR = ceil(S_users / 4), 32, V_DIM + 64]
+    // packs the 8 real head rows of up to 4 users into the 32 rows of one tile (user s -> row band 8*(s%4) of tile row
+    // s/4): the cross-column all_to_all moves 4x fewer bytes. Every core writes ONLY its own 8-row band (two 256 B
+    // face-row runs per column tile), the other bands belong to other cores.
+    constexpr bool compact = get_compile_time_arg_val(ssplit::writer_ct_arg::COMPACT) != 0;
     constexpr uint32_t out_heads = owner_s ? 8 : H;
     constexpr bool emit_tile = get_compile_time_arg_val(ssplit::writer_ct_arg::EMIT_STATS) ==
                                3;  // owner-layout TILE output [NC, S_users, 8(32), V_DIM+32]: tile id = tok*(vDHt+3) +
@@ -409,7 +414,20 @@ void kernel_main() {
                     }
                 }
                 if constexpr (emit_tile) {
-                    if (xflag == 0) {
+                    if constexpr (compact) {
+                        const uint32_t cj = tok / owner_s, cs = tok % owner_s;
+                        constexpr uint32_t cTR = (owner_s + 3) / 4;
+                        const uint32_t tile_base = (cj * cTR + (cs >> 2)) * (vDHt + 2);
+                        const uint32_t band_off = ((cs & 3u) < 2 ? 0u : 1024u) + (cs & 1u) * 256u;
+                        for (uint32_t t = 0; t < 2; ++t) {
+                            noc.async_write(
+                                scr,
+                                stats,
+                                256,
+                                {.offset_bytes = t * 2048},
+                                {.page_id = tile_base + vDHt + t, .offset_bytes = band_off});
+                        }
+                    } else if (xflag == 0) {
                         for (uint32_t t = 0; t < 2; ++t) {
                             noc.async_write(
                                 scr, stats, 2048, {.offset_bytes = t * 2048}, {.page_id = tok * (vDHt + 2) + vDHt + t});
@@ -435,7 +453,23 @@ void kernel_main() {
             l_cb.pop_front(1);
         }
         if constexpr (emit_tile) {
-            if (xflag == 0) {
+            if constexpr (compact) {
+                const uint32_t cj = tok / owner_s, cs = tok % owner_s;
+                constexpr uint32_t cTR = (owner_s + 3) / 4;
+                const uint32_t tile_base = (cj * cTR + (cs >> 2)) * (vDHt + 2);
+                const uint32_t band_off = ((cs & 3u) < 2 ? 0u : 1024u) + (cs & 1u) * 256u;
+                for (uint32_t ct = 0; ct < vDHt; ++ct) {
+                    for (uint32_t f = 0; f < 2;
+                         ++f) {  // face 0 / 1 rows 0..7 of the source tile -> this user's band of the shared tile
+                        noc.async_write(
+                            out_cb,
+                            out,
+                            256,
+                            {.offset_bytes = ct * 2048 + f * 512},
+                            {.page_id = tile_base + ct, .offset_bytes = band_off + f * 512});
+                    }
+                }
+            } else if (xflag == 0) {
                 for (uint32_t ct = 0; ct < vDHt; ++ct) {
                     noc.async_write(out_cb, out, 2048, {.offset_bytes = ct * 2048}, {.page_id = tok * (vDHt + 2) + ct});
                 }
