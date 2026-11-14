@@ -961,7 +961,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_unpack_tilize": "perf_unpack_tilize"},
     },
     "perf_unpack_transpose": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "dest_acc",
             "formats.input_A",
@@ -971,8 +971,14 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
             "loop_factor",
             "marker",
+            "num_blocks",
+            "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
             "tile_cnt",
             "unpack_to_dest",
             "unpack_transpose_faces",
