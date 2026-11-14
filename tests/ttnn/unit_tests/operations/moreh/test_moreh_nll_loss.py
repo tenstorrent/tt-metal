@@ -149,3 +149,53 @@ def test_moreh_nll_loss_none_rejects_output_dtype_other_than_input(device, expec
     out = ttnn.from_torch(torch.zeros(1, 32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "must match the input dtype"):
         ttnn.moreh_nll_loss(x, y, "none", output_tensor=out)
+
+
+@pytest.mark.parametrize("shape", [[5, 10], [2, 10, 33]], ids=["rank_2", "rank_3"])
+@pytest.mark.parametrize("none_weight", [True, False], ids=["no_weight", "weighted"])
+def test_moreh_nll_loss_logical_channel_size_bounds(shape, none_weight, device):
+    torch.manual_seed(0)
+    C = shape[1]
+    target_shape = shape[:1] + shape[2:]
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_target = torch.randint(0, C, target_shape, dtype=torch.long)
+    # Place a target value in the tile-padded channel range [C, 32): step2 rejects it as >= C,
+    # and step1 / backward must likewise use logical C rather than padded_shape()[1] (32).
+    torch_target.view(-1)[0] = C + 2
+    torch_weight = None if none_weight else torch.rand(C, dtype=torch.float32)
+
+    valid_mask = (torch_target >= 0) & (torch_target < C)
+    safe_target = torch.where(valid_mask, torch_target, torch.zeros_like(torch_target))
+    unreduced = torch.nn.functional.nll_loss(torch_input, safe_target, weight=torch_weight, reduction="none")
+    unreduced = torch.where(valid_mask, unreduced, torch.zeros_like(unreduced))
+    if torch_weight is None:
+        expected_divisor = valid_mask.to(torch.float32).sum()
+    else:
+        expected_divisor = torch.where(valid_mask, torch_weight[safe_target], torch.zeros_like(unreduced)).sum()
+    expected_loss = (unreduced.sum() / expected_divisor).reshape([1])
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_target = ttnn.from_torch(
+        torch_target.to(torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_weight = (
+        None
+        if torch_weight is None
+        else ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    )
+    tt_divisor = ttnn.from_torch(torch.zeros([1, 1]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.from_torch(torch.zeros([1, 1]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_loss = ttnn.moreh_nll_loss(
+        tt_input,
+        tt_target,
+        "mean",
+        weight_tensor=tt_weight,
+        divisor_tensor=tt_divisor,
+        output_tensor=tt_output,
+        ignore_index=-100,
+    )
+    passing, output_pcc = comp_allclose_and_pcc(
+        expected_loss, to_torch(tt_loss, shape=[1]), pcc=0.999, rtol=0.05, atol=0.05
+    )
+    assert passing, output_pcc

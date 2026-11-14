@@ -81,8 +81,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_2d(
     // split work
 
     // input_grad: (N, C)
-    auto input_grad_shape = input_grad.padded_shape();
-    uint32_t channel_size = input_grad_shape[1];
+    uint32_t channel_size = input_grad.logical_shape()[1];
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
@@ -440,8 +439,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_backward_impl_3d(
     // split work
 
     // input_grad: (N, C, W)
-    auto input_grad_shape = input_grad.padded_shape();
-    uint32_t channel_size = input_grad_shape[1];
+    uint32_t channel_size = input_grad.logical_shape()[1];
 
     auto target_shape = target.padded_shape();
     uint32_t num_inner_tile = target_shape[-1] / tt::constants::TILE_WIDTH;
