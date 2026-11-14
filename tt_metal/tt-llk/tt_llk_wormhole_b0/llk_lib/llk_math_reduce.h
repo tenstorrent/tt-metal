@@ -21,11 +21,31 @@
 using namespace ckernel;
 
 // local function declarations
-template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, MathFidelity math_fidelity, bool col_whole_tile>
 inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape);
 
-template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, MathFidelity math_fidelity, bool col_whole_tile>
 inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
+
+/**
+ * @brief Check the whole-tile REDUCE_COL opt-in, which pools a whole tile per SrcA/SrcB handoff.
+ *
+ * Only for SUM/AVG REDUCE_COL fed by @ref _llk_unpack_AB_reduce_init_ with the same flag, which places data face f
+ * at SrcA row 16f and its scaler row at SrcB row 16f. One replayed GAPOOL sequence then runs fidelity phases
+ * outermost and faces innermost, so consecutive GAPOOLs accumulate into different Dst rows (left/right face column)
+ * instead of every phase of a face hitting the same Dst row back to back. Unpackers that hand faces over one at a
+ * time (tilizeA_B in pool2d, the per-face AB reduce) must keep the default.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam col_whole_tile: Requested whole-tile layout.
+ */
+template <PoolType type, ReduceDim dim, bool col_whole_tile>
+constexpr bool reduce_col_interleaved()
+{
+    static_assert(!col_whole_tile || ((dim == ReduceDim::REDUCE_COL) && (type != PoolType::MAX)), "col_whole_tile is only implemented for SUM/AVG REDUCE_COL");
+    return col_whole_tile;
+}
 
 /**
  * @brief Transpose the pooled row result through SrcB so a row reduction lands as a column in the destination register.
@@ -142,14 +162,16 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
 
 /**
  * @brief Configure the reduce MOP for all paths: REDUCE_ROW SUM/AVG records a dual replay-buffer
- *        MOP, high-fidelity COL/SCALAR programs a multi-phase GAPOOL loop, all other paths need no MOP.
+ *        MOP, whole-tile COL records one interleaved GAPOOL replay, high-fidelity COL/SCALAR programs a
+ *        multi-phase GAPOOL loop, all other paths need no MOP.
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam col_whole_tile: SUM/AVG REDUCE_COL only: whole-tile layout (see @ref reduce_col_interleaved).
  * @param tensor_shape: Tile shape determining face count and dest stride.
  */
-template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, MathFidelity math_fidelity, bool col_whole_tile>
 inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
@@ -215,6 +237,33 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
             tmp.program();
         }
     }
+    else if constexpr (reduce_col_interleaved<type, dim, col_whole_tile>())
+    {
+        // Phases outermost, faces innermost. Face f reads SrcA/SrcB rows 16f (ADDR_MOD_1 steps both by 16) and
+        // accumulates into Dst row 16 * (f % num_faces_c_dim), so GAPOOLs on the same Dst row are num_faces_c_dim
+        // apart. ADDR_MOD_2 rewinds SrcA/SrcB and steps the fidelity phase; ADDR_MOD_3 rewinds everything.
+        constexpr std::uint32_t num_phases = high_fidelity ? to_underlying(math_fidelity) : 1;
+        const std::uint32_t num_faces      = tensor_shape.total_num_faces();
+        const std::uint32_t num_faces_c    = tensor_shape.num_faces_c_dim;
+        const std::uint32_t replay_len     = num_phases * num_faces;
+        const std::uint32_t replay_start   = ckernel::math::replay_buf_offset;
+
+        lltt::record<lltt::NoExec>(replay_start, replay_len);
+        for (std::uint32_t phase = 0; phase < num_phases; phase++)
+        {
+            for (std::uint32_t face = 0; face < num_faces; face++)
+            {
+                const bool last_face           = face + 1 == num_faces;
+                const bool last                = last_face && phase + 1 == num_phases;
+                const std::uint32_t addr_mod   = !last_face ? ADDR_MOD_1 : (last ? ADDR_MOD_3 : ADDR_MOD_2);
+                const std::uint32_t clear_srcs = last ? p_setrwc::CLR_AB : p_setrwc::CLR_NONE;
+                const std::uint32_t dst_row    = FACE_R_DIM * (face % num_faces_c);
+                TT_GAPOOL(clear_srcs, p_gpool::DIM_16X16, addr_mod, p_gpool::INDEX_DIS, dst_row);
+            }
+        }
+        ckernel_template tmp(1, 1, lltt::replay_insn(replay_start, replay_len));
+        tmp.program();
+    }
     else if constexpr (high_fidelity)
     {
         constexpr int inner_loop_len = to_underlying(math_fidelity);
@@ -240,12 +289,13 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
+ * @tparam col_whole_tile: SUM/AVG REDUCE_COL only: pool the whole tile from one handoff (see @ref reduce_col_interleaved).
  * @param dst_index: Tile index into the destination register.
  * @param tensor_shape: Tensor shape describing tile dimensions.
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false, bool col_whole_tile = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
@@ -280,6 +330,12 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
             ckernel_template::run();
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
+    }
+    else if constexpr (reduce_col_interleaved<type, dim, col_whole_tile>())
+    {
+        // Whole tile in one SrcA/SrcB handoff; the replayed GAPOOL sequence clears both on its last instruction.
+        ckernel_template::run();
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AD);
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
@@ -352,9 +408,10 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam col_whole_tile: SUM/AVG REDUCE_COL only: whole-tile layout (see @ref reduce_col_interleaved).
  * @param tensor_shape: Tile shape determining dest stride for REDUCE_ROW.
  */
-template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, MathFidelity math_fidelity, bool col_whole_tile>
 inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
@@ -432,6 +489,27 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
             }
         }
     }
+    else if constexpr (reduce_col_interleaved<type, dim, col_whole_tile>())
+    {
+        // See reduce_configure_mop: next face, next fidelity phase, end of tile.
+        addr_mod_t {
+            .srca = {.incr = FACE_R_DIM},
+            .srcb = {.incr = FACE_R_DIM},
+        }
+            .set(ADDR_MOD_1);
+        addr_mod_t {
+            .srca     = {.clr = 1},
+            .srcb     = {.clr = 1},
+            .fidelity = {.incr = high_fidelity ? 1u : 0u},
+        }
+            .set(ADDR_MOD_2);
+        addr_mod_t {
+            .srca     = {.clr = 1},
+            .srcb     = {.clr = 1},
+            .fidelity = {.clr = 1},
+        }
+            .set(ADDR_MOD_3);
+    }
     else
     {
         addr_mod_t {
@@ -464,11 +542,12 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam col_whole_tile: SUM/AVG REDUCE_COL only: pool the whole tile from one handoff; the unpacker must agree.
  * @param tensor_shape: Tile shape describing tile dimensions.
  * @note Call @ref _llk_math_reduce_ with matching template args after this function,
  *       and @ref _llk_math_reduce_uninit_ after the last reduce to restore modified state.
  */
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool col_whole_tile = false>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 {
     // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum).
@@ -477,8 +556,8 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
 
-    reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape);
-    reduce_configure_mop<type, dim, math_fidelity>(tensor_shape);
+    reduce_configure_addrmod<type, dim, math_fidelity, col_whole_tile>(tensor_shape);
+    reduce_configure_mop<type, dim, math_fidelity, col_whole_tile>(tensor_shape);
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
