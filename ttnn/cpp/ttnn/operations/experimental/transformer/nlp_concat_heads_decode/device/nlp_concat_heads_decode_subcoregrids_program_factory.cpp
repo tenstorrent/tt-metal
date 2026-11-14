@@ -17,7 +17,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgramFactory::create_program_artifacts(
-    const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
+    const NlpConcatHeadsDecodeParams& operation_attributes,
     const NlpConcatHeadsDecodeInputs& tensor_args,
     Tensor& output) {
     const auto& input_tensor = tensor_args.input;
@@ -73,12 +73,14 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgram
     };
 
     // cores to read and write to output
-    const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
-    const auto& cores = corerange_to_cores(q_cores, num_cores, true);
+    const uint32_t num_cores = operation_attributes.num_heads;
+    const auto& cores = corerange_to_cores(q_cores, num_cores, q_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    const CoreRangeSet active_output_cores(cores);
 
     // cores for input
     const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
-    const auto& in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
+    const auto& in_cores_vec =
+        corerange_to_cores(in_cores, in_num_cores, in_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     // NoC coordinate tables for the input shard cores, x block then y block; these ride the
     // kernels' runtime varargs (the kernel indexes them with a data-driven cursor).
@@ -186,7 +188,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeSubcoregridsProgram
         .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {READER, WRITER},
-            .target_nodes = q_cores,
+            .target_nodes = active_output_cores,
         }},
     };
 

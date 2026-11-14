@@ -16,7 +16,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::create_program_artifacts(
-    const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
+    const NlpConcatHeadsDecodeParams& operation_attributes,
     const NlpConcatHeadsDecodeInputs& tensor_args,
     Tensor& output) {
     const auto& input_tensor = tensor_args.input;
@@ -63,10 +63,9 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
     };
 
     // cores to read and write to output
-    uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
-    auto core_grid = q_cores.bounding_box();
-    uint32_t num_cores_x = core_grid.end_coord.x + 1, num_cores_y = core_grid.end_coord.y + 1;
-    const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, true);
+    uint32_t num_cores = operation_attributes.num_heads;
+    const auto& cores = corerange_to_cores(q_cores, num_cores, q_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    const CoreRangeSet active_output_cores(cores);
 
     // cores for input
     auto in_core_grid = in_cores.bounding_box();
@@ -94,6 +93,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
         {"phases_to_read", 1},  // read the first phase
         {"num_x", in_num_cores_x},
         {"num_y", in_num_cores_y},
+        {"input_row_major", in_shard_spec.orientation == ShardOrientation::ROW_MAJOR},
     };
 
     KernelSpec::CompileTimeArgs writer_compile_time_args = reader_compile_time_args;
@@ -177,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
         .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {READER, WRITER},
-            .target_nodes = q_cores,
+            .target_nodes = active_output_cores,
         }},
     };
 

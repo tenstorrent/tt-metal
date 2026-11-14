@@ -28,6 +28,7 @@ void kernel_main() {
 
     constexpr uint32_t num_x = get_arg(args::num_x);
     constexpr uint32_t num_y = get_arg(args::num_y);
+    constexpr bool input_row_major = get_arg(args::input_row_major);
     // NoC coordinates of the input shard grid ride the runtime varargs:
     // x coordinates at vararg indices [0, num_x), y coordinates at [num_x, num_x + num_y).
 
@@ -84,15 +85,21 @@ void kernel_main() {
             num_tiles_read_cur_core++;
 
             if (num_tiles_read_cur_core == num_tiles_per_core) {
-                qkv_x++;
-                if (qkv_x == num_x) {
-                    qkv_x = 0;
+                if constexpr (input_row_major) {
+                    qkv_x++;
+                    if (qkv_x == num_x) {
+                        qkv_x = 0;
+                        qkv_y++;
+                    }
+                } else {
                     qkv_y++;
+                    if (qkv_y == num_y) {
+                        qkv_y = 0;
+                        qkv_x++;
+                    }
                 }
-                // After the last input core the cursor points one past the coordinate tables; the
-                // value would never be used, but the read itself is out of bounds (caught by the
-                // kernel runtime-arg assert / watcher), so only refetch while a core is left.
-                if (qkv_y < num_y) {
+                // Refetch coordinates only while the cursor remains inside the input grid.
+                if (qkv_x < num_x && qkv_y < num_y) {
                     qkv_noc_x = get_vararg(qkv_x);
                     qkv_noc_y = get_vararg(num_x + qkv_y);
                 }
