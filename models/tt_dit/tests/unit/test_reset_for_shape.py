@@ -210,7 +210,8 @@ class DramByCategory(unittest.TestCase):
 class PipelineResetForShape(unittest.TestCase):
     def test_releases_everything_before_freeing_ccl_and_warms_at_the_new_shape(self):
         log = []
-        names = ["_ccl_managers", "_shape_state_tensors", "_release_ccl", "release_shape_buffers", "reset_for_shape"]
+        names = ["_ccl_managers", "_shape_state_tensors", "_release_ccl", "_clear_program_caches", "release_shape_buffers",
+                 "reset_for_shape"]
         ttnn = SimpleNamespace(synchronize_device=lambda m: log.append("sync"))
         ns = _lift(
             "pipelines/ltx/pipeline_ltx.py",
@@ -234,11 +235,16 @@ class PipelineResetForShape(unittest.TestCase):
         for k in names:
             setattr(P, k, ns[k])
         p = P()
-        mgr = SimpleNamespace(release_shape_buffers=lambda: log.append("ccl") or (3, 300))
+        mesh = SimpleNamespace(
+            num_program_cache_entries=lambda: 7,
+            disable_and_clear_program_cache=lambda: log.append("clear_pc"),
+            enable_program_cache=lambda: log.append("enable_pc"),
+        )
+        mgr = SimpleNamespace(release_shape_buffers=lambda: log.append("ccl") or (3, 300), mesh_device=mesh)
         p.ccl_manager, p.vae_ccl_manager, p.audio_ccl_manager = mgr, SimpleNamespace(
-            release_shape_buffers=lambda: log.append("vae_ccl") or (1, 10)
+            release_shape_buffers=lambda: log.append("vae_ccl") or (1, 10), mesh_device=mesh
         ), mgr
-        p.mesh_device = "mesh"
+        p.mesh_device = mesh
         p._trace_state = {"s1": SimpleNamespace(_tt_x=FakeState(log, "x"), _euler_tail=None)}
         p._prompt_v, p._prompt_a = FakeState(log, "pv"), FakeState(log, "pa")
         p._t12_io = {"noise": FakeState(log, "noise"), "weights": None}
@@ -263,7 +269,11 @@ class PipelineResetForShape(unittest.TestCase):
         self.assertIn(("ups_nf", None, 241), log)
         order = [e if isinstance(e, str) else e[0] for e in log]
         self.assertLess(max(order.index("traced"), order.index("vae_nf")), order.index("ccl"))
-        self.assertLess(order.index("ccl"), order.index("warmup"))
+        self.assertLess(order.index("ccl"), order.index("clear_pc"))  # stale CCL addresses dropped
+        self.assertLess(order.index("clear_pc"), order.index("enable_pc"))
+        self.assertLess(order.index("enable_pc"), order.index("warmup"))
+        self.assertEqual(log.count("clear_pc"), 1)  # one mesh shared by every manager: cleared once
+        self.assertEqual(stats["program_cache_cleared"], 7)
         self.assertEqual(log.count("ccl"), 1)  # a manager shared by two roles is released once
         self.assertEqual(log[order.index("warmup")][1],
                          {"num_frames": 241, "height": 768, "width": 1344, "capture_all": True})

@@ -560,6 +560,19 @@ class LTXPipeline:
         counts = [m.release_shape_buffers() for m in self._ccl_managers()]
         return sum(c for c, _ in counts), sum(b for _, b in counts)
 
+    def _clear_program_caches(self) -> int:
+        """Clear and re-enable each distinct mesh's program cache; the entries dropped."""
+        meshes = []
+        for m in [self.mesh_device, *(c.mesh_device for c in self._ccl_managers())]:
+            if m is not None and all(m is not o for o in meshes):
+                meshes.append(m)
+        dropped = 0
+        for m in meshes:
+            dropped += int(m.num_program_cache_entries())
+            m.disable_and_clear_program_cache()
+            m.enable_program_cache()
+        return dropped
+
     def release_shape_buffers(self) -> int:
         """Free every CCL manager's shape-keyed buffers; the tensor count (ltx-server's hotswap.reshape
         reads it as ccl_freed). Only once no trace is live."""
@@ -606,10 +619,15 @@ class LTXPipeline:
         if left:
             logger.warning(f"reset_for_shape: {left} trace(s) outside the pipeline are still captured")
         ccl_tensors, ccl_bytes = self._release_ccl()
+        # Cached programs keep the addresses of the persistent CCL outputs and trace I/O freed above; an op
+        # whose shapes match the new warm shape would hit them and read freed DRAM (renders after a reset
+        # came out as noise or flat frames). Kernels stay on the disk cache, so this costs no compiles.
+        cleared = self._clear_program_caches()
         released = self.dram_by_category()
         t_release = clock()
         stats = {"release_s": round(t_release - t0, 3), "traces_released": traces, "ccl_freed": ccl_tensors,
-                 "ccl_freed_bytes": ccl_bytes, "traces_left": left, "dram_released": released}
+                 "ccl_freed_bytes": ccl_bytes, "traces_left": left, "program_cache_cleared": cleared,
+                 "dram_released": released}
         logger.info(format_dram_row("released", released))
         if warmup:
             self.warmup_buffers(num_frames=num_frames, height=height, width=width, capture_all=True)
