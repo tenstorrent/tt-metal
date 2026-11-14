@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 from typing import ClassVar
+import weakref
 
 import torch
 
@@ -326,7 +327,7 @@ class DistributedLayerNorm(Module):
 
     # The fused-op reciprocal LUT depends only on (device, width_per_device), so it is shared
     # across DistributedLayerNorm instances of the same shape instead of each allocating its own.
-    _fused_ln_recip_cache: ClassVar[dict[tuple[int, int], "ttnn.Tensor"]] = {}
+    _fused_ln_recip_cache: ClassVar["weakref.WeakKeyDictionary[object, dict[tuple[int, int], ttnn.Tensor]]"] = weakref.WeakKeyDictionary()
 
     def __init__(
         self,
@@ -399,8 +400,8 @@ class DistributedLayerNorm(Module):
         holding [1/1..1/width] (replicated per device). Cached per (device, width).
         """
         width = self.embedding_dim // self.mesh_width
-        key = (self.mesh_device.id(), width)
-        cached = DistributedLayerNorm._fused_ln_recip_cache.get(key)
+        device_cache = DistributedLayerNorm._fused_ln_recip_cache.setdefault(self.mesh_device, {})
+        cached = device_cache.get(width)
         if cached is not None:
             return cached
         recip = torch.tensor([1.0 / (i + 1) for i in range(width)], dtype=torch.float32).reshape(1, 1, 1, width)
@@ -411,7 +412,7 @@ class DistributedLayerNorm(Module):
             device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        DistributedLayerNorm._fused_ln_recip_cache[key] = tensor
+        device_cache[width] = tensor
         return tensor
 
     def forward(

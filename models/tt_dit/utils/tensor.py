@@ -7,6 +7,7 @@ from __future__ import annotations
 import itertools
 import math
 from typing import TYPE_CHECKING
+import weakref
 
 import torch
 from loguru import logger
@@ -973,8 +974,8 @@ def select_row_compile_once(x: ttnn.Tensor, index: int) -> ttnn.Tensor:
     return ttnn.embedding(rows, table, layout=ttnn.TILE_LAYOUT)
 
 
-_tril_cache: dict[tuple, ttnn.Tensor] = {}
-_triu_cache: dict[tuple, ttnn.Tensor] = {}
+_tril_cache: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_triu_cache: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def tril(
@@ -994,13 +995,14 @@ def tril(
 
     mask_shape = tuple(x.shape)[-2:]
 
-    cache_key = (mask_shape, device.id(), diagonal)
-    if cache_key in _tril_cache:
-        mask = _tril_cache[cache_key]
+    device_cache = _tril_cache.setdefault(device, {})
+    cache_key = (mask_shape, diagonal)
+    if cache_key in device_cache:
+        mask = device_cache[cache_key]
     else:
         mask = full(mask_shape, 1.0, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
         mask = ttnn.tril(mask, diagonal=diagonal)
-        _tril_cache[cache_key] = mask
+        device_cache[cache_key] = mask
 
     return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
 
@@ -1022,13 +1024,14 @@ def triu(
 
     mask_shape = tuple(x.shape)[-2:]
 
-    cache_key = (mask_shape, device.id(), diagonal)
-    if cache_key in _triu_cache:
-        mask = _triu_cache[cache_key]
+    device_cache = _triu_cache.setdefault(device, {})
+    cache_key = (mask_shape, diagonal)
+    if cache_key in device_cache:
+        mask = device_cache[cache_key]
     else:
         mask = full(mask_shape, 1.0, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
         mask = ttnn.triu(mask, diagonal=diagonal)
-        _triu_cache[cache_key] = mask
+        device_cache[cache_key] = mask
 
     return ttnn.mul(x, mask, memory_config=memory_config, output_tensor=output_tensor)
 
