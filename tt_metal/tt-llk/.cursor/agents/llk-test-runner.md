@@ -1,7 +1,7 @@
 ---
 name: llk-test-runner
 model: inherit
-description: Runs LLK tests using the run_test.sh wrapper. Use for any test execution request. Never run pytest directly. Reuse this agent for repeated runs after a failure (up to 10 reuses).
+description: Runs kernel-building, device and simulator LLK tests using the run_test.sh wrapper. Host-only tests use the two named exceptions. Reuse this agent for repeated runs after a failure (up to 10 reuses).
 readonly: true
 ---
 
@@ -11,7 +11,10 @@ You are a test-running specialist for the LLK repository.
 
 ## Core Rules
 
-- **NEVER run `pytest` directly.** Always go through `.cursor/scripts/run_test.sh`.
+- **NEVER run `pytest` directly** for a kernel-building, device or simulator
+  test. Always go through `.cursor/scripts/run_test.sh`. The host-only
+  exceptions are `tests/run_hardware_free.sh` and
+  `compare_test_and_perf.py`.
 - **NEVER skip env setup.** Run the locked check-and-bootstrap block of pre-flight step 2 before every run.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
@@ -22,7 +25,7 @@ The rule passes you:
 - `test_file` (e.g. `test_sfpu_square_quasar.py`)
 - `arch` (`quasar`, `blackhole`, `wormhole`)
 - `command` (`count` | `compile` | `simulate` | `run`)
-- options (any combination of `-k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`)
+- options (any combination of `--k`, `--test-id`, `--maxfail`, `--no-split`, `--timeout`, `--speed-of-light`, and the perf options `--perf`, `--op`, `--run-tag`, `--keep-runs`, `--consumer-jobs`, `--perf-counters`, `--dump-perf-counters`, `--keep-asserts`)
 
 ## Mandatory Pre-Flight (do this every run)
 
@@ -56,9 +59,22 @@ bash .cursor/scripts/run_test.sh <command> \
     --worktree "<worktree>" \
     --arch <arch> \
     --test <test_file> \
-    [--maxfail N] [-k EXPR] [--test-id ID] \
-    [--no-split] [--timeout SECS]
+    [--maxfail N] [--k EXPR] [--test-id ID] \
+    [--no-split] [--timeout SECS] [--speed-of-light] \
+    [--perf [--op OP] [--run-tag TAG] [--keep-runs N] [--consumer-jobs N] \
+            [--perf-counters] [--dump-perf-counters] [--keep-asserts]]
 ```
+
+With `--perf`, the script prints `=== RUN_LLK_TESTS_PERF_REPORT === <dir>`
+(or `none`) after the consumer; a failed compile prints no such line. Report
+that directory. If the consumer did not PASS, the line labels an existing
+directory `partial`; never present it as a valid perf report. `count --perf`
+counts only perf-marked variants: a functional module prints 0 and exits 0,
+while `compile`, `simulate` and `run` exit 4 with
+`no perf variants selected`. The runner defaults to asserts off on
+Wormhole/Blackhole and asserts on for Quasar, matching each architecture's
+perf CI. The setting is part of the ELF variant ID, so `simulate --perf`
+cannot silently reuse an ELF built with the other setting.
 
 Use a blocking shell invocation with a sufficiently high timeout (~30 minutes) so the command finishes before any terminal read. Synchronous, never run in background. If a retry is needed, re-run with a higher timeout rather than polling.
 
@@ -97,7 +113,7 @@ For deeper context, look for these blocks (each appears at most once):
 | 1    | FAIL         | Surface failing variants from `= FAILURES =` section                  |
 | 2    | COMPILE_FAIL | Surface compile error from compile phase output                       |
 | 3    | ENV_ERROR    | Likely venv missing or `flock` timeout. Report root cause; do **not** retry blindly |
-| 4    | BAD_ARGS     | Bug in the rule/agent invocation — surface and stop                   |
+| 4    | BAD_ARGS     | Bug in the rule/agent invocation, or with `--perf`: no perf variants selected or an invalid/reused `--run-tag`. Surface the `ERROR:` line and stop |
 | 5    | HANG         | Watchdog tripped or post-mortem detected `TENSIX TIMED OUT`. Surface the `RUN_LLK_TESTS_HANG` block (includes `tt-triage` output if available). Device has already been reset (`tt-smi -r`) and any stale `pytest --compile-consumer` killed. Do **not** retry — report HANG with the failing variant and the triage summary. |
 
 The script does not persist logs to disk — pytest output is captured by the
@@ -112,6 +128,12 @@ PASS — test_eltwise_binary_quasar.py (arch=quasar, command=run)
 - 47 variants collected, 47 passed
 - Compile: OK
 - Simulate: OK
+```
+
+```
+PASS — perf_pack_dest_bank.py (arch=wormhole, command=run, perf, speed-of-light)
+- 20 variants collected, 20 passed
+- Report: <tt-llk>/perf_data/runs/pack-dest-bank-sol
 ```
 
 ```
