@@ -67,3 +67,22 @@ class Hy4IHC(DSV41MHC):
     def __init__(self, device, fn8, base8, scale2, dim=6144, hc_eps=1e-6, norm_eps=1e-5, **kw):
         fn24, base24, scale3 = pad_hc_params(fn8, base8, scale2)
         super().__init__(device, fn24, base24, scale3, dim=dim, n=4, eps=hc_eps, norm_eps=norm_eps, **kw)
+
+
+def fused_enabled():
+    """HY4_IHC_FUSED=1 selects the fused decode kernels (hy4_ihc_fused.Hy4IHCFused); default OFF = the DSV4-kernel path above."""
+    import os
+
+    return os.environ.get("HY4_IHC_FUSED", "0") == "1"
+
+
+def make_ihc(device, fn8, base8, scale2, dim=6144, hc_eps=1e-6, norm_eps=1e-5):
+    """Factory used by the layer code. The two classes have DIFFERENT call contracts (see hy4_ihc_fused.py): Hy4IHC = mixes / collapse_norm / expand on
+    [T,1,4,D] streams (T % 4 == 0 for the packed projection plan, DSV4 fused variants unusable otherwise); Hy4IHCFused = one program per sub-block,
+    ``pre(x, w4, y=y_prev, pp_prev=pp_prev)`` on packed streams [1,1,4T,D] (any T = 1..16), the previous sub-block's expand folded in.
+    """
+    if fused_enabled():
+        from models.demos.blackhole.hy4_preview.tt.hy4_ihc_fused import Hy4IHCFused
+
+        return Hy4IHCFused(device, fn8, base8, scale2, dim=dim, hc_eps=hc_eps, norm_eps=norm_eps)
+    return Hy4IHC(device, fn8, base8, scale2, dim=dim, hc_eps=hc_eps, norm_eps=norm_eps)
