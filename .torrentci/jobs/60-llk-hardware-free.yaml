@@ -1,0 +1,42 @@
+---
+# PR Gate llk-hardware-free-tests (pr-gate.yaml -> llk-hardware-free-impl.yaml,
+# tests/pipeline_reorg/llk_hardware_free_tests.yaml, cpu_medium, 10 min
+# budget): host-only LLK tests, no card, no source build. From
+# tt_metal/tt-llk: tests/setup_testing_env.sh fetches SFPI, then
+# tests/run_hardware_free.sh runs the wormhole and blackhole passes.
+#
+# Differences from the GitHub job, all forced by the platform:
+# - The image is the public python:3.10-bookworm image pinned by digest, not
+#   llk-ci (the ci-build chain image does not import on prod today); the
+#   Python requirements go into a venv at job time, as llk-ci bakes them in.
+# - The JUnit reports are not published (artifact storage is tight).
+# No triggers: run it by hand.
+jobs:
+  - id: llk-hardware-free
+    description: Run PR Gate's host-only LLK hardware-free tests (no card)
+    timeout: 45m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 20Gi}
+          limits: {memory: 16Gi, ephemeral-storage: 30Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+    steps:
+      - id: setup
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME"
+            - python3 --version
+            - python3 -m venv /tmp/venv
+            - /tmp/venv/bin/pip install -q -r tt_metal/tt-llk/tests/requirements.txt
+            - . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
+      - id: hardware-free
+        kind: shell
+        shell:
+          run:
+            - . /tmp/venv/bin/activate && cd tt_metal/tt-llk && ./tests/run_hardware_free.sh
