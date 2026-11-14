@@ -564,6 +564,7 @@ class MotifCheckpoint:
             parallel_config=parallel_config,
             mesh_shape=tuple(device.shape),
             mesh_device=device,
+            revision="update_new_ckpt",
         )
         return model
 
