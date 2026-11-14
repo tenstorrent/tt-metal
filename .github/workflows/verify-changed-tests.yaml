@@ -134,11 +134,14 @@ env:
   # not found" -- a gate artefact, not a test failure. blackhole-e2e-tests.yaml itself
   # builds with `tracy: true` for the same reason. models_device_perf_tests.yaml is the
   # same case: every entry runs test_device_perf.py / run_device_profiler, i.e. tracy.
+  # fabric_cpu_only_unit_tests.yaml has a streaming profiler test, which needs a Tracy build; its own pipeline
+  # (tm-fabric-tests.yaml) builds with `tracy: true`.
   TRACY_BUILD_YAMLS: >-
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
     bh_lb_profiler_tests.yaml
+    fabric_cpu_only_unit_tests.yaml
     fabric_sanity_tests.yaml
     fabric_perf_tests.yaml
     runtime_perf_profiler_tests.yaml

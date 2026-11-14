@@ -13,6 +13,10 @@ test_streaming_profiler_fabric_overhead bounds the latency and bandwidth the pro
 microbenchmark, against a profiler-off run. test_streaming_profiler_fabric_sync_check bounds the sync error during that
 microbenchmark, and test_streaming_profiler_fabric_eth_zones checks that the routers' zones reach the zone CSV. These
 three need four or more Blackhole chips and take about 2 minutes warm, 5 cold.
+
+test_streaming_profiler_torus_routers_fit builds a Blackhole Galaxy's multi-mesh 2D-torus fabric routers, the largest
+the profiler adds to, and checks they fit their kernel config buffer. It runs on a mock cluster, so it needs no device,
+and takes about a minute.
 """
 
 from __future__ import annotations
@@ -74,10 +78,11 @@ CAPTURE_START = "[streaming profiler] active on"
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def run(args: list[str | Path], env_extra: dict[str, str], timeout: float) -> str:
+def run(args: list[str | Path], env_extra: dict[str, str], timeout: float, expect_capture: bool = True) -> str:
     """Run `args` with `env_extra` over the caller's environment minus its TT_METAL_STREAMING_PROFILER* variables, and
     return stdout then stderr. Skips the test if the profiler declined this system, and otherwise fails it on a timeout,
-    a nonzero exit, or if the profiler was asked for but never started."""
+    a nonzero exit, or if the profiler was asked for but never started (unless `expect_capture` is False: on a mock
+    cluster the profiler builds its kernels but starts nothing)."""
     env = {name: value for name, value in os.environ.items() if not name.startswith("TT_METAL_STREAMING_PROFILER")}
     env.update(env_extra)
     args = [str(arg) for arg in args]
@@ -95,7 +100,7 @@ def run(args: list[str | Path], env_extra: dict[str, str], timeout: float) -> st
     if declined := re.search(r"\[streaming profiler\] not capturing: (.*?)(?: \(\w+\.cpp:\d+\))?$", out, re.MULTILINE):
         pytest.skip(f"the streaming profiler does not capture here: {declined.group(1)}")
     assert proc.returncode == 0, f"{args[0]} exited {proc.returncode}:\n{out[-4000:]}"
-    if "TT_METAL_STREAMING_PROFILER" in env_extra:
+    if expect_capture and "TT_METAL_STREAMING_PROFILER" in env_extra:
         assert CAPTURE_START in out, f"the streaming profiler did not start:\n{out[-4000:]}"
     return out
 
@@ -364,4 +369,44 @@ def test_streaming_profiler_fabric_eth_zones(ubench_config, baseline, tmp_path):
         zone_file.readline()
         riscs = {row["RISC processor type"] for row in csv.DictReader(zone_file, skipinitialspace=True)}
     assert riscs & {"ERISC_0", "ERISC_1"}, f"no ERISC zone in the zone CSV, only {sorted(riscs)}"
+    check_log_clean(out)
+
+
+# tt-blaze's GLM-5 decode layout: one Galaxy split into four 4x2 TORUS_Y meshes, one tt-run rank each.
+TORUS_MGD = (
+    Path(TT_METAL_HOME)
+    / "tests/tt_metal/tt_fabric/custom_mesh_descriptors"
+    / "fabric_cpu_only_blitz_single_galaxy_4x2_ring_4stage_ring_mesh_graph_descriptor.textproto"
+)
+TORUS_MOCK_CLUSTER = (
+    Path(TT_METAL_HOME)
+    / "tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_subtorus_aisleD"
+    / "SC16_32x4_revC_subtorus_aisleD_cluster_desc"
+    / "SC16_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-110-d07u08_rank_13.yaml"
+)
+TORUS_OPEN = Path(__file__).with_name("streaming_profiler_torus_open.py")
+TORUS_RANKS = 4
+TORUS_TIMEOUT_S = 150
+# A mock cluster reports no firmware bundle, so without the DRAM-core override tt-metal builds the routers without the
+# link sync port, about 2.4 KB smaller than on silicon.
+TORUS_ENV = {
+    "TT_METAL_STREAMING_PROFILER": "1",
+    "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES": "1",
+    "TT_METAL_SLOW_DISPATCH_MODE": "1",
+    # The mock profiler line below is logged at info; the CPU-only lane runs at warn.
+    "TT_LOGGER_LEVEL": "info",
+}
+MOCK_PROFILER = "[streaming profiler] mock cluster"
+
+
+@pytest.mark.timeout(TORUS_TIMEOUT_S + 20)
+def test_streaming_profiler_torus_routers_fit():
+    """With the profiler on, every fabric router fits its kernel config buffer (MEM_ERISC_KERNEL_CONFIG_SIZE). The
+    routers are built on a mock cluster, which fails the same way as silicon when one overflows."""
+    mpi_args = "--allow-run-as-root --oversubscribe " + " ".join(f"-x {name}" for name in TORUS_ENV)
+    tt_run = ["tt-run", "-m", TORUS_MGD, "--mock-cluster-rank-binding", TORUS_MOCK_CLUSTER, "--mpi-args", mpi_args]
+    out = run([*tt_run, "--", sys.executable, TORUS_OPEN], TORUS_ENV, TORUS_TIMEOUT_S, expect_capture=False)
+    # tt-run can exit 0 when a rank fails, so every rank must also report that it opened its mesh.
+    assert out.count("TORUS_OPEN_OK") == TORUS_RANKS, f"not every rank opened its mesh:\n{out[-4000:]}"
+    assert MOCK_PROFILER in out, f"the routers were not built with the profiler:\n{out[-4000:]}"
     check_log_clean(out)
