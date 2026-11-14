@@ -638,8 +638,11 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
     uint32_t fast_tilize_cb_id = INVALID_CB_ID;
 
     constexpr uint32_t pack_untilize_face_r_dim = 1;
-    const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
-    const bool single_partial_fits_in_face = last_tile_is_partial && in_c <= tt::constants::FACE_WIDTH;
+    // Each core holds in_c_per_shard_ceil channels, not in_c; with width or block sharding those
+    // differ. Sizing the output tile from in_c makes each core's row 32 channels wide while the
+    // data (and the kernel) are 16, so the last row of every core writes 32 B past its shard.
+    const bool last_tile_is_partial = in_c_per_shard_ceil % tt::constants::TILE_WIDTH != 0;
+    const bool single_partial_fits_in_face = last_tile_is_partial && in_c_per_shard_ceil <= tt::constants::FACE_WIDTH;
     const uint32_t pack_untilize_num_faces = single_partial_fits_in_face ? 1u : 2u;
     const auto pack_untilize_face_geometry =
         FaceGeometry{.face_r_dim = pack_untilize_face_r_dim, .num_faces = pack_untilize_num_faces};
