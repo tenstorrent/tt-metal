@@ -46,7 +46,7 @@ _MAX_ROWS = 40
 _INF = float("inf")
 
 
-def _resolve(
+def resolve(
     table: Table, op: MathOperation, query: BudgetKey, only=lambda row: True
 ) -> Row | None:
     """The row of *op* the registry would resolve *query* to, among those *only*
@@ -191,7 +191,7 @@ def _held(
     full: bool,
     arch: ChipArchitecture,
 ) -> Held:
-    row = _resolve(table, op, query)
+    row = resolve(table, op, query)
     gated = (
         row is not None
         and row.contract.metric is Metric.ULP
@@ -200,7 +200,7 @@ def _held(
     declared = (
         None
         if gated
-        else _resolve(table, op, query, only=lambda r: r.contract.declares_tolerance)
+        else resolve(table, op, query, only=lambda r: r.contract.declares_tolerance)
     )
     return Held(row, gated, declared, full)
 
@@ -243,12 +243,29 @@ def _widened(was: Row | None, now: Row | None) -> bool:
     )
 
 
-def _classify(was: Held, now: Held) -> Kind | None:
-    """How the gate a plain-row variant resolves to has changed, or ``None``."""
+def _bound_replaces_default(was: Held, now: Held, enrolled: bool) -> bool:
+    """Whether the declared bounds a variant off a whole-cell gate is compared on may
+    have loosened. A variant nothing held before starts from its new row, unless its op
+    is *enrolled* in the base table: its functional driver then held it to the
+    per-format default, which a declared bound replaces and this tool cannot see."""
+    if was.gated or now.gated or (was.row is None and not enrolled):
+        return False
+    return _widened(was.declared, now.declared)
+
+
+def _classify(was: Held, now: Held, enrolled: bool) -> Kind | None:
+    """How the gate a plain-row variant resolves to has changed, or ``None``.
+    *enrolled*: the base table has rows for the op."""
     if was.gated and not now.gated:
         return Kind.REMOVED if now.row is None else Kind.UNGATED
     if not was.gated and now.gated:
         return Kind.GATED
+    if _bound_replaces_default(was, now, enrolled):
+        return Kind.TOLERANCE_WIDENED
+    if was.row is None:
+        # Nothing held the variant before, so a new row holds it to more, never less:
+        # its baseline and non-finite count are what it starts from.
+        return None if now.row is None else Kind.ADDED
     if was.gated and now.gated:
         before, after = was.row.contract.max_ulp, now.row.contract.max_ulp
         if after > before:
@@ -256,8 +273,6 @@ def _classify(was: Held, now: Held) -> Kind | None:
         if (now.row.near_zero_atol or 0) > (was.row.near_zero_atol or 0):
             return Kind.FLOOR_WIDENED
         return Kind.TIGHTENED if after < before else None
-    if _widened(was.declared, now.declared):
-        return Kind.TOLERANCE_WIDENED
     if (was.baseline is not None and now.baseline is None) or (
         was.nonfinite and now.row is None
     ):
@@ -268,7 +283,7 @@ def _classify(was: Held, now: Held) -> Kind | None:
         or now.nonfinite > was.nonfinite
     ):
         return Kind.BASELINE_RAISED
-    return Kind.ADDED if was.row is None and now.row is not None else None
+    return None
 
 
 def _spans(held: Held, query: BudgetKey, arch: ChipArchitecture) -> list[Span]:
@@ -354,7 +369,7 @@ class Change:
 
 
 def _segment_changes(
-    was: Held, now: Held, query: BudgetKey, arch: ChipArchitecture
+    was: Held, now: Held, query: BudgetKey, arch: ChipArchitecture, enrolled: bool
 ) -> list[tuple[Kind, tuple[float, float], str, str]]:
     """``(kind, segment, held_before, held_after)`` per run of the input over which the
     two rows' gates differ, over the union of both lists' edges, then the cell-wide
@@ -395,7 +410,7 @@ def _segment_changes(
         else:
             found.append([held, low, high])
     changes = [(kind, (low, high), t0, t1) for (kind, t0, t1), low, high in found]
-    if not was.gated and not now.gated and _widened(was.declared, now.declared):
+    if _bound_replaces_default(was, now, enrolled):
         # Off a whole-cell gate the functional drivers compare on the declared bounds.
         changes.append((Kind.TOLERANCE_WIDENED, None, was.describe(), now.describe()))
     if now.nonfinite > was.nonfinite:
@@ -413,6 +428,7 @@ def compare(
     arch = arch or measured_arch()
     grouped: dict[tuple, Change] = {}
     for op in sorted(set(base) | set(head), key=lambda o: o.name):
+        enrolled = bool(base.get(op))
         for query, full in _variants(base, head, op, arch):
             was = _held(base, op, query, full, arch)
             now = _held(head, op, query, full, arch)
@@ -422,9 +438,9 @@ def compare(
             if (was.row is not None and was.row.domains) or (
                 now.row is not None and now.row.domains
             ):
-                found = _segment_changes(was, now, query, arch)
+                found = _segment_changes(was, now, query, arch, enrolled)
             else:
-                kind = _classify(was, now)
+                kind = _classify(was, now, enrolled)
                 found = (
                     []
                     if kind is None
@@ -604,7 +620,7 @@ def judge(
         cells.items(), key=lambda item: (item[0][0].name, item[0][1].sort_key)
     ):
         op, key = cell
-        row = _resolve(table, op, key)
+        row = resolve(table, op, key)
         if row is None:
             out.uncovered += 1
             continue
@@ -734,6 +750,15 @@ def _check_records_arch(
         )
 
 
+def _load(side: str, path: Path) -> Table:
+    """*path*'s table, a refusal naming the *side* that failed: a change to the schema
+    can leave the base revision unreadable by the head's code."""
+    try:
+        return load_table(path)
+    except (ValueError, OSError) as refused:
+        raise ValueError(f"the {side} table {path}: {refused}") from refused
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -744,7 +769,7 @@ def main(argv: list[str] | None = None) -> int:
     headroom = sub.add_parser(
         "headroom", help="--ulp-measure records against the table"
     )
-    headroom.add_argument("--table", type=Path, required=True)
+    headroom.add_argument("--table", type=Path, help="default: CHIP_ARCH's table")
     headroom.add_argument("--measured", type=Path, required=True)
     for command in (diff, headroom):
         command.add_argument("--out", type=Path, help="also write the report here")
@@ -758,7 +783,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "diff":
             arch = _tables_arch(args.arch, args.head, args.base)
-            changes = compare(load_table(args.base), load_table(args.head), arch)
+            changes = compare(_load("base", args.base), _load("head", args.head), arch)
             report = render_budget_diff(changes)
             loosened = any(c.kind.loosens for c in changes)
             status = 1 if loosened and not args.allow_raises else 0
@@ -766,10 +791,11 @@ def main(argv: list[str] | None = None) -> int:
             # The reader takes a missing file as no records (a sweep that died before its
             # first cell); here it is an input that is not there, so it cannot load.
             args.measured.stat()
-            arch = _tables_arch(args.arch, args.table)
+            table = args.table or TABLE_PATHS[measured_arch()]
+            arch = _tables_arch(args.arch, table)
             records = read_measurements(args.measured)
             _check_records_arch(records, arch, args.measured)
-            headroom = judge(load_table(args.table), records, arch)
+            headroom = judge(load_table(table), records, arch)
             report = render_headroom(headroom)
             status = 1 if headroom.regressions else 0
     except (ValueError, OSError) as refused:

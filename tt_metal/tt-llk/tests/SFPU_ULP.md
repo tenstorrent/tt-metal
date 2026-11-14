@@ -178,6 +178,15 @@ fp16 subnormals the pack does not reproduce.
   re-emit in a change of its own; `python -m helpers.ulp_budget_diff diff --base <old>
   --head <new>` lists every cell a change loosens, judged under the architecture the
   `--head` file's name says (`--arch` to name it).
+- **CI.** PR Gate's `llk-sfpu-ulp-pr-check` sweeps the cells a change can move (its
+  kernel builds differently, or its row changed), on a Wormhole and a Blackhole card, and
+  fails one that measures worse than its row. It also fails a loosened budget unless the PR has the
+  `ulp-budget-raise-approved` label and changes only the tables and
+  `hardware_free/accuracy/test_sfpu_accuracy_budget.py` (its acknowledgement lists and
+  `ONLY_EVER_TOLERANCE`). A row for a new op is never a loosening; under an op already in
+  the table, a new variant's declared `atol`/`rtol` is, since it replaces the per-format
+  default. A change to the check itself sweeps every cell. Every cell, on both cards,
+  runs nightly (`llk-sfpu-ulp-sweep.yaml`).
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and
@@ -238,8 +247,8 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 
 - **Any host pytest run in `tests/` wipes `/tmp/tt-llk-build`**: chain
   `--compile-producer` and `--compile-consumer`, and run host suites afterwards.
-- **The sweep is marked `accuracy`**, which every LLK workflow deselects; run it by name
-  or `-m accuracy`.
+- **The sweep is marked `accuracy`**, which the general LLK workflows deselect; only the
+  `llk-sfpu-ulp-*` workflows run it. Locally, run it by name or `-m accuracy`.
 - **Both runs take the same op set**: every unary op with a block in the table, whatever
   its rows say. `--ulp-emit` changes what is written, not what is collected.
 - **A plain gate run does not judge tolerance cells**: it skips them with the measured
@@ -275,6 +284,7 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 | `python_tests/helpers/sfpu_accuracy_budget.py` | how a row is resolved |
 | `python_tests/helpers/ulp_domains.py` | the `domains` list and the rule that draws it; `Problem` and `TableError` |
 | `python_tests/helpers/ulp_budget_diff.py` | the PR guard and the headroom report |
+| `python_tests/helpers/ulp_affected.py` | the cells a change can move, for PR Gate's sweep |
 
 ## Notes on the table
 

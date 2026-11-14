@@ -26,16 +26,25 @@ jobs:
       pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar and not accuracy' }}
       coverage: false
 
+  # The SFPU ULP sweep (marked `accuracy`, deselected above), nightly only.
+  llk-sfpu-ulp-sweep:
+    name: "LLK SFPU ULP sweep"
+    if: ${{ github.event_name == 'schedule' }}
+    uses: ./.github/workflows/llk-sfpu-ulp-sweep.yaml
+    secrets: inherit
+
   llk-e2e-summary:
     name: "LLK e2e summary"
     if: always()
     needs:
       - llk-e2e-tests
+      - llk-sfpu-ulp-sweep
     runs-on: ubuntu-slim
     steps:
       - name: Check e2e test results
         uses: re-actors/alls-green@release/v1
         with:
+          allowed-skips: llk-sfpu-ulp-sweep
           jobs: ${{ toJSON(needs) }}
 
   report-status:

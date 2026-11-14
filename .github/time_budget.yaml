@@ -310,7 +310,7 @@ triage:
 llk:
   pr_gate:
     wh_n150_civ2: 40
-    bh_p150b_civ2_viommu: 45
+    bh_p150b_civ2_viommu: 50  # +5: the SFPU ULP PR check (llk_sfpu_ulp_pr_gate_tests.yaml)
     sim_quasar_xl: 30
     cpu_medium: 10
   sanity:
