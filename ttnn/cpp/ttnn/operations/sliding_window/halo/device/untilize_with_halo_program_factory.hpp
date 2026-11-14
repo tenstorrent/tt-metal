@@ -20,7 +20,7 @@ struct UntilizeWithHaloProgramFactory {
     // CBDescriptor entries that the reader kernels stream from.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const HaloParams& operation_attributes,
-        const Tensor& tensor_args,
+        const HaloInputs& tensor_args,
         Tensor& output_tensor,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };

@@ -24,6 +24,21 @@ struct HaloParams {
     // Required: caller must pass compute_kernel_config so the halo's untilize
     // compute kernel runs with the correct fp32_dest_acc_en (see issue #43229).
     DeviceComputeKernelConfig compute_kernel_config;
+    bool external_halo = false;
+    ttnn::operations::sliding_window::ExternalHaloWindow external_window{};
+};
+
+// Optional inputs of halo, each off when unset.
+// halo_boundary (height-sharded input only): padding sticks come from this ROW_MAJOR DRAM tensor instead of pad_val,
+// laid out as ExternalHaloSpec describes; external_window places the input inside the image the border belongs to.
+struct HaloOptionalInputs {
+    std::optional<Tensor> halo_boundary;
+    ttnn::operations::sliding_window::ExternalHaloWindow external_window{};
+};
+
+struct HaloInputs {
+    Tensor input;
+    std::optional<Tensor> halo_boundary;
 };
 
 }  // namespace ttnn::prim
