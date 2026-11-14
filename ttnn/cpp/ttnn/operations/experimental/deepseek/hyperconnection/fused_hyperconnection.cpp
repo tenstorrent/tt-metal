@@ -15,7 +15,7 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 
 std::vector<Tensor> fused_hyperconnection(
     const Tensor& hidden_streams,
-    const Tensor& fused_w,
+    const std::optional<Tensor>& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
     const Tensor& comb_bias,
@@ -26,7 +26,12 @@ std::vector<Tensor> fused_hyperconnection(
     float comb_scale,
     float eps,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& pre_mix) {
+    const std::optional<Tensor>& pre_mix,
+    std::optional<Layout> collapsed_layout,
+    const std::optional<Tensor>& fn_weight,
+    const std::optional<CoreRangeSet>& fn_core_grid,
+    uint32_t fn_reduce_fan_in,
+    std::optional<float> fn_rms_norm_epsilon) {
     const auto& shape = hidden_streams.logical_shape();
     const uint32_t b = static_cast<uint32_t>(shape[0]);
     const uint32_t s = static_cast<uint32_t>(shape[1]);
@@ -52,8 +57,21 @@ std::vector<Tensor> fused_hyperconnection(
             comb_scale,
             eps,
             memory_config,
-            pre_mix);
+            pre_mix,
+            collapsed_layout,
+            fn_weight,
+            fn_core_grid,
+            fn_reduce_fan_in,
+            fn_rms_norm_epsilon);
     }
+    TT_FATAL(
+        collapsed_layout.value_or(Layout::TILE) == Layout::TILE,
+        "fused_hyperconnection: a ROW_MAJOR collapsed output needs a single token, got {}",
+        num_tokens);
+    TT_FATAL(
+        fused_w.has_value() && !fn_weight.has_value(),
+        "fused_hyperconnection: {} tokens need fused_w; only a single token can take fn_weight",
+        num_tokens);
 
     // Fused stage over all T = B*S tokens:
     //   post      = 2 * sigmoid(post_w * post_scale + post_bias)            [1,T,H,1]
@@ -65,7 +83,7 @@ std::vector<Tensor> fused_hyperconnection(
     // are consumed in-place, comb_w is returned already in the grid layout the Sinkhorn stage
     // expects (no host-side reshape).
     std::vector<Tensor> stage = ttnn::prim::fused_hyperconnection_pre_post(
-        fused_w, pre_bias, post_bias, hidden_streams, hc, pre_scale, post_scale, eps, memory_config, pre_mix);
+        *fused_w, pre_bias, post_bias, hidden_streams, hc, pre_scale, post_scale, eps, memory_config, pre_mix);
     Tensor post = stage[0];
     Tensor collapsed = stage[1];
     const Tensor& comb_w_mat = stage[2];

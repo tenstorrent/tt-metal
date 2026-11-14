@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -24,6 +25,46 @@ inline uint32_t large_k_tree_num_levels(uint32_t num_cores, uint32_t fan_in) {
         ++levels;
     }
     return levels;
+}
+
+// One core's place in the reduction tree. Cores are numbered in A's row-major shard order, so
+// core i holds K-slice i. At level l (stride s = fan_in^l) every core whose index is a multiple of
+// s * fan_in collects the partials of cores i + j*s (j = 1 .. fan_in-1); everyone else at that
+// level sends its running sum to its parent and drops out. Core 0 is the root.
+struct LargeKTreeNode {
+    int parent = -1;
+    uint32_t parent_level = 0;
+    // Where this core's partial lands in the parent's receive CB, in partial-sized slots. Slots are
+    // numbered level-major, the order in which the parent consumes them.
+    uint32_t slot_in_parent = 0;
+    std::vector<uint32_t> children_per_level;
+    uint32_t num_children = 0;
+};
+
+inline std::vector<LargeKTreeNode> build_large_k_tree(uint32_t num_cores, uint32_t fan_in, uint32_t num_levels) {
+    std::vector<LargeKTreeNode> nodes(num_cores);
+    for (auto& node : nodes) {
+        node.children_per_level.assign(num_levels, 0);
+    }
+    uint64_t stride = 1;
+    for (uint32_t level = 0; level < num_levels; ++level, stride *= fan_in) {
+        const uint64_t group = stride * fan_in;
+        for (uint64_t i = 0; i < num_cores; i += group) {
+            for (uint32_t j = 1; j < fan_in; ++j) {
+                const uint64_t child = i + j * stride;
+                if (child >= num_cores) {
+                    break;
+                }
+                auto& parent = nodes[i];
+                nodes[child].parent = static_cast<int>(i);
+                nodes[child].parent_level = level;
+                nodes[child].slot_in_parent = parent.num_children;
+                parent.children_per_level[level]++;
+                parent.num_children++;
+            }
+        }
+    }
+    return nodes;
 }
 
 // Decode matmul for large K / small N. Core i of A's grid holds the i-th K-slice of both

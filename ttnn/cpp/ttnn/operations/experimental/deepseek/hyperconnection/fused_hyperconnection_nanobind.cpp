@@ -50,6 +50,18 @@ void bind_fused_hyperconnection(nb::module_& mod) {
             memory_config: Optional output memory config.
             pre_mix: Optional collapse weights [B, S, 1, H], BFLOAT16 TILE (one tile per token).
                 ``None`` collapses with the ``pre`` computed from ``fused_w``.
+            collapsed_layout: Optional layout of ``collapsed`` (default TILE). ROW_MAJOR needs a single
+                token with ROW_MAJOR ``hidden_streams`` and returns ``collapsed`` width-sharded as one
+                ``[1, D/8]`` row per collapse core.
+            fn_weight: In place of ``fused_w``, for a single token with ROW_MAJOR ``hidden_streams``: the
+                ``[1, 1, H*D, 32]`` TILE fn weight, K in the collapse cores' (core, stream, column) order.
+                The op then computes ``fused_w = rmsnorm(streams) @ fn_weight`` itself: each core of
+                ``fn_core_grid`` dots its K-slice, read straight out of the collapse cores' shards, with its
+                slab of ``fn_weight`` (DRAM interleaved, or HEIGHT_SHARDED in L1 on those cores), and the
+                partials are summed up a fan-in-``fn_reduce_fan_in`` tree.
+            fn_core_grid: The dot's cores, off cores (0..9, 0); defaults to an L1 ``fn_weight``'s shard grid.
+            fn_reduce_fan_in: Fan-in of the dot's reduction tree.
+            fn_rms_norm_epsilon: Fuses the unweighted RMSNorm of the streams over H*D ahead of the dot.
 
         Returns:
             List of [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus
@@ -58,7 +70,7 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         &ttnn::experimental::deepseek::hyperconnection::fused_hyperconnection,
         nb::arg("hidden_streams"),
         nb::kw_only(),
-        nb::arg("fused_w"),
+        nb::arg("fused_w") = std::nullopt,
         nb::arg("pre_bias"),
         nb::arg("post_bias"),
         nb::arg("comb_bias"),
@@ -69,7 +81,12 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         nb::arg("comb_scale"),
         nb::arg("eps"),
         nb::arg("memory_config") = std::nullopt,
-        nb::arg("pre_mix") = std::nullopt);
+        nb::arg("pre_mix") = std::nullopt,
+        nb::arg("collapsed_layout") = std::nullopt,
+        nb::arg("fn_weight") = std::nullopt,
+        nb::arg("fn_core_grid") = std::nullopt,
+        nb::arg("fn_reduce_fan_in") = 2,
+        nb::arg("fn_rms_norm_epsilon") = std::nullopt);
 
     ttnn::bind_function<"fused_hyperconnection_weights", "ttnn.experimental.deepseek.">(
         mod,

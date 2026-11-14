@@ -32,6 +32,9 @@ _HC_FN_CORES = DECODE_LAYOUTS["hc_fn"]["k_blocks"]
 # Cores the single-user fused program width-shards the collapse over (see
 # :meth:`DeepSeekV4HyperConnection.forward`).
 _HC_COLLAPSE_CORES = 8
+# K rows each core of the single-user program's fused fn dot takes: an even tile count (custom_mm) that
+# divides a collapse core's hc * D / 8 shard, so no slice straddles two shards.
+_HC_DOT_K_SLICE = 256
 
 
 class DeepSeekV4HyperConnection(DeepSeekV4Module):
@@ -63,6 +66,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
         row_major_streams: bool = False,
         bias_in_l1: bool = True,
+        fused_fn: bool = False,
+        fn_in_l1: bool = False,
     ):
         """Build the fused ``fn`` projection and split the ``base`` / ``scale`` parameters.
 
@@ -75,6 +80,13 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         ``bias_in_l1=False`` keeps the ``pre`` / ``post`` / ``comb`` bias tiles in DRAM even with
         ``row_major_streams``. Every L1 buffer takes its address range on every core, so each module's three
         tiles cost 6 KB of every core's L1, which adds up when one device holds many layers.
+
+        ``fused_fn`` (``row_major_streams`` only) folds ``fn`` into the single-user program for
+        ``T == 1``: ``hc * D / 256`` cores below the program's row of 10 each dot a 256-row K-slice,
+        read straight out of the collapse shards, with their slab of the weight, and the partials are
+        tree-reduced onto a root that pushes ``fused_w`` to the post / comb (and collapse) cores. The
+        weight is read from DRAM in the op, or with ``fn_in_l1`` kept resident in L1 on the dot cores
+        (``hc * D * 64`` bytes of BF16 spread over them, per module). ``T > 1`` still runs ``fn`` apart.
 
         ``weights`` holds the checkpoint's packed ``fn`` ``[(2+hc)*hc, hc*D]`` and ``base``
         ``[(2+hc)*hc]`` tensors plus ``scale``, three host scalars. ``fn`` becomes one
@@ -91,6 +103,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         self.eps = config.hc_eps
         self.norm_eps = config.rms_norm_eps
         self.row_major_streams = row_major_streams
+        self.fused_fn = fused_fn
         cache = _as_cache(cache)
 
         hc = self.hc
@@ -149,7 +162,29 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                 rms_norm_epsilon=self.norm_eps,
                 fold_rows=hc,
             )
+            if fused_fn:
+                # Rows 1.. of a 10- or 8-wide block; one tree level per row of cores.
+                num_dot_cores = k // _HC_DOT_K_SLICE
+                width = 10 if num_dot_cores % 10 == 0 else 8
+                assert num_dot_cores % width == 0, f"{num_dot_cores} dot cores don't fill rows of 10 or 8"
+                self.fn_core_grid = ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(width - 1, num_dot_cores // width))}
+                )
+                self.fn_reduce_fan_in = width
+                self.fn_dot_weight = self.fn.weight
+                if fn_in_l1:
+                    self.fn_dot_weight = ttnn.to_memory_config(
+                        self.fn.weight,
+                        ttnn.create_sharded_memory_config(
+                            (_HC_DOT_K_SLICE, n),
+                            core_grid=self.fn_core_grid,
+                            strategy=ttnn.ShardStrategy.HEIGHT,
+                            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                            use_height_and_width_as_shard_shape=True,
+                        ),
+                    )
         else:
+            assert not fused_fn, "the fused fn dot reads the ROW_MAJOR collapse shards"
             self.fn = LinearDecodeLargeK(
                 fn_weight,
                 device,
@@ -187,7 +222,12 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         )
         self.pre_scale, self.post_scale, self.comb_scale = (float(scale[0]), float(scale[1]), float(scale[2]))
 
-    def forward(self, hidden_streams: ttnn.Tensor, pre_mix: ttnn.Tensor | None = None):
+    def forward(
+        self,
+        hidden_streams: ttnn.Tensor,
+        pre_mix: ttnn.Tensor | None = None,
+        collapsed_layout: ttnn.Layout | None = None,
+    ):
         """``hidden_streams`` ``[B,S,hc,D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``.
 
         The streams are flattened to ``[1,1,T,hc*D]`` (``T = B*S``) and fed to ``fn``, which
@@ -200,12 +240,37 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         ``pre_mix`` ``[B,S,1,hc]`` (bf16 TILE) collapses the streams in place of the ``pre`` this
         call computes (V4.1, where each sublayer collapses with its predecessor's ``pre``); that
         ``pre`` is then returned fourth, in the layout ``pre_mix`` takes.
+
+        ``collapsed_layout=ttnn.ROW_MAJOR_LAYOUT`` (``row_major_streams`` with ``T == 1``) returns ``collapsed``
+        as ROW_MAJOR ``[1, D/8]`` rows on the 8 collapse cores instead of row 0 of their tiles.
         """
         b, s, hc, d = hidden_streams.shape
         t = b * s
+        assert collapsed_layout in (None, ttnn.TILE_LAYOUT) or (
+            self.row_major_streams and t == 1
+        ), "a ROW_MAJOR collapsed row needs one row of ROW_MAJOR streams"
 
         if self.row_major_streams:
             assert hidden_streams.layout == ttnn.ROW_MAJOR_LAYOUT, hidden_streams.layout
+            if self.fused_fn and t == 1:
+                return ttnn.experimental.deepseek.fused_hyperconnection(
+                    hidden_streams,
+                    pre_bias=self.pre_b,
+                    post_bias=self.post_b,
+                    comb_bias=self.comb_b,
+                    num_streams=hc,
+                    sinkhorn_iters=self.iters,
+                    pre_scale=self.pre_scale,
+                    post_scale=self.post_scale,
+                    comb_scale=self.comb_scale,
+                    eps=self.eps,
+                    pre_mix=pre_mix,
+                    collapsed_layout=collapsed_layout,
+                    fn_weight=self.fn_dot_weight,
+                    fn_core_grid=self.fn_core_grid,
+                    fn_reduce_fan_in=self.fn_reduce_fan_in,
+                    fn_rms_norm_epsilon=self.norm_eps,
+                )
             # fn reads each collapse core's [T*hc, D/8] shard as its slices of the T [1, hc*D] rows, and
             # the fused program gathers a row's shards into its collapse tiles.
             fused_w = self.fn(hidden_streams)
@@ -224,6 +289,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                     comb_scale=self.comb_scale,
                     eps=self.eps,
                     pre_mix=pre_mix,
+                    collapsed_layout=collapsed_layout,
                 )
             # Several rows (a DSpark verify block): the single-user program once per row, on the row's
             # [hc, D] slab and fused_w row resharded from DRAM into the layouts it takes.

@@ -129,6 +129,20 @@ KEY_SPLIT_CROSSOVER_KEYS = 45 * 1024
 CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS = 31 * 1024
 
 
+def _fold_input_gain(weight, gain):
+    """``weight`` ``[N, K]`` (or a thunk) with the RMSNorm gain ``gain`` ``[K]`` (or a thunk) folded into its
+    input dim, as a thunk: ``x @ fold.T == (x * gain) @ weight.T``. ``gain=None`` returns ``weight``."""
+    if gain is None:
+        return weight
+
+    def folded():
+        w = weight() if callable(weight) else weight
+        g = gain() if callable(gain) else gain
+        return w * g.reshape(1, -1).to(w.dtype)
+
+    return folded
+
+
 def _rope_tail(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, rot: ttnn.Tensor) -> ttnn.Tensor:
     """Interleaved RoPE on the trailing ``Rd`` columns of every row of ``x`` ``[1, 1, R, W]`` (TILE).
 
@@ -165,6 +179,10 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
     ``tokens_grid`` is where the decode all-gather replica of the tokens sits (the attention's
     :meth:`~DeepSeekV41Attention._decode_activation_grid`): ``weights_proj`` reads its one slab onto the
     first core of it, so it reads the replica in place. ``None`` keeps it on core (0, 0).
+
+    ``input_gain`` (the decoder's input RMSNorm gain) is folded into ``weights_proj``, which then reads the
+    tokens without it (see :class:`DeepSeekV41Attention`). The scores are linear in the head weights, so a
+    token's missing ``1 / rms`` scales its scores alike and leaves the top-k as it was.
     """
 
     def __init__(
@@ -178,6 +196,7 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         weight_dtype,
         tp_size: int = 1,
         tokens_grid: ttnn.CoreRangeSet | None = None,
+        input_gain=None,
     ):
         self.device = device
         self.tp_size = tp_size
@@ -219,9 +238,9 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         )
         first_token_core = None if tokens_grid is None else tokens_grid.bounding_box().start
         self.weights_proj = LinearDecode(
-            _scale_linear_weight(weights["indexer.weights_proj.weight"], folded),
+            _scale_linear_weight(_fold_input_gain(weights["indexer.weights_proj.weight"], input_gain), folded),
             device,
-            cache.file("indexer.weights_proj"),
+            cache.file("indexer.weights_proj" + (".gfold" if input_gain is not None else "")),
             dtype=ttnn.bfloat16,
             **DECODE_LAYOUTS["indexer.weights_proj"],
             rectangle_b_grid=True,
@@ -516,6 +535,13 @@ class DeepSeekV41Attention(DeepSeekV4Module):
     q / kv as ``attention_qkv_decode``, which takes q_a's, kv's and q_b's slabs off the
     :data:`~.decode_prefetch.FUSED_Q_A_RING` / :data:`~.decode_prefetch.FUSED_KV_RING` and shared rings when
     ``prefetch_buffers`` holds them, and its other steps read the three from DRAM.
+
+    ``input_gain`` (the decoder's input RMSNorm gain ``[D]``, or a thunk) is folded into every projection
+    of :meth:`decode`'s ``hidden`` (q_a, kv, the compressor's and the indexer's ``weights_proj``), so
+    ``hidden`` drops the gain: ``x / rms(x)`` (a unit-gain norm), or, unless :attr:`needs_normed_input`, the
+    un-normalized ``x`` itself. q_a and kv are RMS-normalized right after, which cancels the ``1 / rms``;
+    so is the ratio-1 compressor's latent, and the select's scores are linear in ``weights_proj``. Only a
+    ratio-2 compressor mixes two tokens' projections before its norm, so it needs the scale.
     """
 
     def __init__(
@@ -529,6 +555,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         tp_size: int = 1,
         use_prefetcher: bool = False,
         prefetch_buffers=None,
+        input_gain=None,
     ):
         cache = _as_cache(cache)
         sys_cfg = active_system_config()
@@ -551,6 +578,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         replicate = ttnn.ReplicateTensorToMesh(device) if tp_size > 1 else None
         self.qkv_tp_strategy = "replicated"
         tp_tag = f".tp{tp_size}.{self.qkv_tp_strategy}" if tp_size > 1 else ""
+        fold_tag = ".gfold" if input_gain is not None else ""
 
         # Only a scoring select (select and not dense) reads q_a. A one-row step without one runs q / kv as
         # attention_qkv_decode, taking q_a's, kv's and q_b's slabs off its own rings (or DRAM); their
@@ -567,9 +595,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         # q_a mcasts its normalized output onto q_b's 8x8 B grid. Under the prefetcher its B cores sit on
         # their ring's receivers beside that grid, and the writer unicasts into a staging buffer there first.
         self.q_a_proj = LinearDecode(
-            weights["q_a_proj.weight"],
+            _fold_input_gain(weights["q_a_proj.weight"], input_gain),
             device,
-            cache.file(f"q_a_proj{tp_tag}.full"),
+            cache.file(f"q_a_proj{tp_tag}.full{fold_tag}"),
             dtype=weight_dtype,
             mesh_mapper=replicate,
             **DECODE_LAYOUTS["q_a_proj"],
@@ -579,9 +607,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             dram_sharded_weight=True,
         )
         self.kv_proj = LinearDecode(
-            weights["kv_proj.weight"],
+            _fold_input_gain(weights["kv_proj.weight"], input_gain),
             device,
-            cache.file(f"kv_proj{tp_tag}.full"),
+            cache.file(f"kv_proj{tp_tag}.full{fold_tag}"),
             dtype=weight_dtype,
             mesh_mapper=replicate,
             **DECODE_LAYOUTS["kv_proj"],
@@ -713,28 +741,39 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         assert self.compress_ratio in (0, 1, 2), f"no compressor for ratio {self.compress_ratio}"
         self.is_kv_source = layer_idx in config.kv_source_layer_ids
         self.is_index_source = layer_idx in config.index_source_layer_ids
+        # A ratio-2 compressor pools two tokens' projections before its norm, so each needs its own 1 / rms.
+        self.needs_normed_input = self.is_kv_source and self.compress_ratio > 1
         # A source's new entry reaches the compressed KV through its own select.
         assert self.is_index_source or not self.is_kv_source
         if self.is_kv_source:
             # On kv's B cores (its ring's receivers under the prefetcher), which the decode
-            # all-gather replica of the tokens already covers.
+            # all-gather replica of the tokens already covers. Under TP both are row-parallel: the
+            # matmuls are DRAM-bandwidth bound, and a replicated weight has every rank read all of it.
+            comp_tp = f".tp{tp_size}" if tp_size > 1 else ""
+            comp_mapper = ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None
             self.comp_kv_proj = LinearDecode(
-                weights["compressor.wkv.weight"],
+                _fold_input_gain(weights["compressor.wkv.weight"], input_gain),
                 device,
-                cache.file("compressor.wkv"),
+                cache.file(f"compressor.wkv{comp_tp}{fold_tag}"),
                 dtype=ttnn.bfloat16,
-                **DECODE_LAYOUTS["compressor.wkv"],
+                K=DECODE_LAYOUTS["compressor.wkv"]["K"] // tp_size,
+                N=DECODE_LAYOUTS["compressor.wkv"]["N"],
+                n_blocks=DECODE_LAYOUTS["compressor.wkv"]["n_blocks"],
+                mesh_mapper=comp_mapper,
                 use_rm_hs=True,
                 dram_sharded_weight=True,
                 b_core_grid=self.kv_proj.b_core_grid(),
             )
             self.comp_gate_proj = (
                 LinearDecode(
-                    weights["compressor.wgate.weight"],
+                    _fold_input_gain(weights["compressor.wgate.weight"], input_gain),
                     device,
-                    cache.file("compressor.wgate"),
+                    cache.file(f"compressor.wgate{comp_tp}{fold_tag}"),
                     dtype=ttnn.bfloat16,
-                    **DECODE_LAYOUTS["compressor.wgate"],
+                    K=DECODE_LAYOUTS["compressor.wgate"]["K"] // tp_size,
+                    N=DECODE_LAYOUTS["compressor.wgate"]["N"],
+                    n_blocks=DECODE_LAYOUTS["compressor.wgate"]["n_blocks"],
+                    mesh_mapper=comp_mapper,
                     use_rm_hs=True,
                     dram_sharded_weight=True,
                     b_core_grid=self.kv_proj.b_core_grid(),
@@ -745,6 +784,33 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             self.comp_norm = DeepSeekV4RMSNorm(
                 weights["compressor.norm.weight"], self.eps, device, cache.file("compressor.norm"), sharded=True
             )
+            comp_norm = weights["compressor.norm.weight"]
+            self.comp_norm_weight = ttnn.from_torch(
+                (comp_norm() if callable(comp_norm) else comp_norm).reshape(1, 1, 1, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate,
+            )
+            # The pool's row vectors ``[1, -1, 0, ..]`` and ``[0, 1, 0, ..]`` (see :meth:`_latent`), by window
+            # depth: the ratio's own window, or a session's slot view of a shared one.
+            self.pool_rows = {}
+            if self.compress_ratio > 1:
+                for rows in (self.compress_ratio, ttnn.TILE_SIZE):
+                    vectors = torch.zeros(2, rows)
+                    vectors[0, :2] = torch.tensor([1.0, -1.0])
+                    vectors[1, 1] = 1.0
+                    self.pool_rows[rows] = tuple(
+                        ttnn.from_torch(
+                            v.reshape(1, 1, 1, rows),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=device,
+                            mesh_mapper=replicate,
+                        )
+                        for v in vectors
+                    )
             self.index_wk = Linear(weights["indexer.wk.weight"], device, cache.file("indexer.wk"))
             self.index_k_norm = DeepSeekV4RMSNorm(
                 weights["indexer.k_norm.weight"], self.eps, device, cache.file("indexer.k_norm"), sharded=True
@@ -760,6 +826,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 weight_dtype,
                 tp_size=tp_size,
                 tokens_grid=self._decode_activation_grid(),
+                input_gain=input_gain,
             )
 
     def prefetch_weights(self, *, one_row: bool = True, fused_qkv: bool | None = None):
@@ -975,19 +1042,78 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             out = reduced
         return out
 
-    def _compressor_rows(self, tokens):
+    def _compressor_rows(self, tokens, to_dram: bool = True):
         """The compressor's ``kv`` / ``gate`` projections of the packed tokens, DRAM ``[1, 1, M, Dh]``
-        each (``gate`` is ``None`` at ratio 1)."""
+        each (``gate`` is ``None`` at ratio 1). ``to_dram=False`` leaves them as the matmuls wrote them,
+        ROW_MAJOR width-sharded over kv's B cores."""
         m = _packed_users(tokens)
-        kv = ttnn.to_memory_config(
-            self.comp_kv_proj(_decode_activation(self.comp_kv_proj, tokens)), ttnn.DRAM_MEMORY_CONFIG
+        local = tokens
+        if self.tp_size > 1:
+            # Each rank keeps its K-slice of every replica row, in place on the replica's cores.
+            spec = tokens.memory_config().shard_spec
+            local = ttnn.mesh_partition(
+                tokens,
+                dim=-1,
+                cluster_axis=_tp_cluster_axis(self.device),
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(spec.grid, [spec.shape[0], spec.shape[1] // self.tp_size], spec.orientation),
+                ),
+            )
+        rows = [self.comp_kv_proj(_decode_activation(self.comp_kv_proj, local))]
+        if self.compress_ratio > 1:
+            rows.append(self.comp_gate_proj(_decode_activation(self.comp_gate_proj, local)))
+        if local is not tokens:
+            ttnn.deallocate(local)
+            rows = [self._tp_sum_rows(x, m) for x in rows]
+        if to_dram:
+            rows = [
+                ttnn.reshape(ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG), [1, 1, m, self.head_dim]) for x in rows
+            ]
+        return rows[0], rows[1] if len(rows) > 1 else None
+
+    def _tp_sum_rows(self, partial, m: int):
+        """Sum a row-parallel projection's ``[M, N]`` partials over the TP ranks, keeping ``partial``'s layout."""
+        if m == 1:
+            summed = ttnn.experimental.deepseek.width_sharded_all_reduce(
+                partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
+            )
+            ttnn.deallocate(partial)
+            return summed
+        # width_sharded_all_reduce keeps a scratch for as long as its program is cached, and a block's
+        # does not fit L1_SMALL (see Engram's wkv); several rows reduce as DRAM tiles instead.
+        rows_dram = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG)
+        tiles = ttnn.to_layout(rows_dram, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(rows_dram)
+        summed = ttnn.all_reduce(tiles, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY)
+        ttnn.deallocate(tiles)
+        summed_rows = ttnn.to_layout(summed, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(summed)
+        out = ttnn.to_memory_config(summed_rows, partial.memory_config())
+        ttnn.deallocate(summed_rows)
+        ttnn.deallocate(partial)
+        return out
+
+    def _pooled_latent(self, kv, gate, scache, win_slot, pool: bool, cos_win, sin_win):
+        """:meth:`_latent` of one row of one session as ``compress_pool_decode``, which also RoPEs the closed group:
+        ``(latent, row)``, the pre-RoPE latent (TILE DRAM ``[1, 1, 1, Dh]``) and its RoPE'd row (ROW_MAJOR DRAM),
+        else ``(None, None)``. ``kv`` / ``gate`` are :meth:`_compressor_rows` of the row, DRAM or sharded."""
+        windows = {}
+        if self.compress_ratio > 1:
+            assert (
+                scache.win_kv.shape[2] == self.compress_ratio
+            ), "a window deeper than the ratio pairs through win_prev"
+            windows = dict(gate=gate, win_kv=scache.win_kv, win_gate=scache.win_gate, win_slot=win_slot)
+        outs = ttnn.experimental.deepseek.compress_pool_decode(
+            kv,
+            self.comp_norm_weight,
+            epsilon=self.eps,
+            do_pool=pool,
+            **windows,
+            **(dict(cos=cos_win, sin=sin_win) if pool else {}),
         )
-        kv = ttnn.reshape(kv, [1, 1, m, self.head_dim])
-        if self.compress_ratio == 1:
-            return kv, None
-        gate = self.comp_gate_proj(_decode_activation(self.comp_gate_proj, tokens))
-        gate = ttnn.reshape(ttnn.to_memory_config(gate, ttnn.DRAM_MEMORY_CONFIG), [1, 1, m, self.head_dim])
-        return kv, gate
+        return (outs[0], outs[1]) if pool else (None, None)
 
     def _latent(self, kv, gate, scache, win_slot, pool: bool, win_prev=None, win_offset=None):
         """Pre-RoPE compressed latent ``[1, 1, 1, Dh]`` of the group this step closes, else ``None``.
@@ -1010,21 +1136,25 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 for view, win in zip((scache.win_view_kv, scache.win_view_gate), windows):
                     ttnn.fill_cache(view, win, 0, input_row_offset_tensor=win_offset, num_input_rows=rows)
                 windows = (scache.win_view_kv, scache.win_view_gate)
+            # softmax over a pair is sigmoid of the difference; a softmax over the 2-row
+            # window axis would run into its tile padding.
             if win_prev is not None:
                 # One-hot products are exact.
                 k0, g0 = (ttnn.matmul(win_prev, w, compute_kernel_config=_HIFI4) for w in windows)
                 k1, g1 = (ttnn.to_layout(x, ttnn.TILE_LAYOUT) for x in (kv, gate))
+                w0 = ttnn.sigmoid(ttnn.subtract(g0, g1))
+                kv = ttnn.add(k1, ttnn.multiply(w0, ttnn.subtract(k0, k1)))
             else:
                 assert (
                     win_offset is not None or scache.win_kv.shape[2] == self.compress_ratio
                 ), "a window deeper than the ratio pairs through win_prev"
-                k0, k1, g0, g1 = (
-                    ttnn.slice(t, [0, 0, j, 0], [1, 1, j + 1, self.head_dim]) for t in windows for j in (0, 1)
-                )
-            # softmax over a pair is sigmoid of the difference; a softmax over the 2-row
-            # window axis would run into its tile padding.
-            w0 = ttnn.sigmoid(ttnn.subtract(g0, g1))
-            kv = ttnn.add(k1, ttnn.multiply(w0, ttnn.subtract(k0, k1)))
+                # Row 1 of a tiled window would slice through untilize / tilize on one core; [1, -1] and
+                # [0, 1] products read rows 0 - 1 and row 1 in place, exact with fp32 accumulation.
+                diff, second = self.pool_rows[windows[0].shape[2]]
+                k_win, g_win = windows
+                w0 = ttnn.sigmoid(ttnn.matmul(diff, g_win, compute_kernel_config=_HIFI4))
+                k1 = ttnn.matmul(second, k_win, compute_kernel_config=_HIFI4)
+                kv = ttnn.add(k1, ttnn.multiply(w0, ttnn.matmul(diff, k_win, compute_kernel_config=_HIFI4)))
         return self.comp_norm(kv)
 
     def _latent_rows(self, kv, gate, scache, win_slot, pool_rows: tuple, win_prev=None):
@@ -1171,6 +1301,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         dense: bool = False,
         dense_entry: ttnn.Tensor | None = None,
         dense_offset: ttnn.Tensor | None = None,
+        dense_fill: bool = True,
     ) -> ttnn.Tensor:
         """One decode step: ``hidden`` ``[B, S, 1, D]`` -> the block's output, same shape.
 
@@ -1209,7 +1340,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         copied from the session's ``dense_kv`` rows (from row ``dense_offset``, INT32 ``[1]``; row 0 when ``None``)
         instead of scored. ``dense_entry`` (INT32, one per ``entry``, or per ``received_entry``) is the ``dense_kv``
         row of each entry this step writes: the slot's first row plus the entry, ``-1`` from ``index_topk`` on.
-        Without it no step writes ``dense_kv``.
+        Without it no step writes ``dense_kv``. ``dense_fill=False`` skips that copy, for an index source whose group
+        already had ``sel_tile`` refreshed this step by an earlier index source sharing it.
         """
         b, s, _, d = hidden.shape
         assert (
@@ -1258,15 +1390,19 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             assert (
                 scache.sel_tile_rows is not None and scache.sel_tile_rows.shape[2] == s * stride
             ), f"build_decode_caches(..., verify_rows={s}) holds this step's selections"
-        latent = None
+        latent = roped = None
         if self.is_kv_source:
             # V4 marks its CSA/HCA compressor's decode the same way; V4.1 inlines the compressor
             # into this method, so without this the whole compressed path is one ATTENTION blob.
             with _region("COMPRESSOR"):
-                kv, gate = self._compressor_rows(tokens)
-                if s == 1:
+                if s == 1 and win_prev is None and win_offset is None and self.device.arch() == ttnn.Arch.BLACKHOLE:
+                    kv, gate = self._compressor_rows(tokens, to_dram=False)
+                    latent, roped = self._pooled_latent(kv, gate, scache, win_slot, pool, cos_win, sin_win)
+                elif s == 1:
+                    kv, gate = self._compressor_rows(tokens)
                     latent = self._latent(kv, gate, scache, win_slot, pool, win_prev, win_offset=win_offset)
                 else:
+                    kv, gate = self._compressor_rows(tokens)
                     latent = self._latent_rows(kv, gate, scache, win_slot, pool_rows, win_prev)
         assert latent is None or select, "a closed group is written by the select that follows it"
         assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
@@ -1288,7 +1424,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             row = None
             if latent is not None:
                 self._write_index_key(latent, cos_win, sin_win, scache, entry, page_row, multi_row=s > 1)
-                row = _apply_rope(latent, cos_win, sin_win, self.rot, self.rope_dim)
+                row = roped if roped is not None else _apply_rope(latent, cos_win, sin_win, self.rot, self.rope_dim)
                 if scache.new_kv_row is not None:
                     if s == 1:
                         _stash_row(row, scache.new_kv_row)
@@ -1302,14 +1438,15 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 # The select op writes new_row into comp_kv itself.
                 self._write_entries(row, scache, entry, dense_entry, page_row, comp_kv=dense)
             if dense:
-                ttnn.fill_cache(
-                    scache.sel_tile,
-                    scache.dense_kv,
-                    0,
-                    update_idx=self.window,
-                    input_row_offset_tensor=dense_offset,
-                    num_input_rows=self.index_topk if dense_offset is not None else 0,
-                )
+                if dense_fill:
+                    ttnn.fill_cache(
+                        scache.sel_tile,
+                        scache.dense_kv,
+                        0,
+                        update_idx=self.window,
+                        input_row_offset_tensor=dense_offset,
+                        num_input_rows=self.index_topk if dense_offset is not None else 0,
+                    )
             else:
                 self.indexer.select_kv(
                     tokens,
