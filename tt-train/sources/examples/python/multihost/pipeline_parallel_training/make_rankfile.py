@@ -19,8 +19,9 @@ def _parse_host(hostname):
     """Parse hostname into (host_num, u_num) or None if unrecognised."""
     match = re.search(r"(\d+)u(\d{2})$", hostname)
     if not match:
-        logger.warning(
-            f"Hostname '{hostname}' does not match pattern '<digits>u<2 digits>'; placing last in canonical order"
+        print(
+            f"warning: hostname '{hostname}' does not match pattern '<digits>u<2 digits>'; placing last in canonical order",
+            file=sys.stderr,
         )
         return None
     return int(match.group(1)), int(match.group(2))
