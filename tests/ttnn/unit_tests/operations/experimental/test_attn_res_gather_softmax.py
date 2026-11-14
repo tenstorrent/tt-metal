@@ -456,7 +456,7 @@ def test_the_route_to_a_peer_contradicts_its_rank_once_the_tp_axis_wraps(mesh_de
         return ttnn.FabricNodeId(mesh_id, row * cols + col)
 
     def route(row, src, dst):
-        direction = ttnn.get_eth_forwarding_direction(node(row, src), node(row, dst))
+        direction = ttnn.get_eth_forwarding_direction(mesh_device, node(row, src), node(row, dst))
         assert direction is not None, f"no route on row {row} from column {src} to {dst}"
         return direction
 

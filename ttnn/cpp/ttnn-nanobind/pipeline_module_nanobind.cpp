@@ -14,6 +14,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "internal/blitz_decode_pipeline.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 
 namespace ttnn::pipeline_module {
@@ -163,6 +164,35 @@ void bind_pipeline_builder(nb::module_& mod) {
 
     mod.def(
         "get_forwarding_direction",
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const FabricNodeId& src,
+           const FabricNodeId& dst) -> std::optional<RoutingDirection> {
+            return tt::tt_fabric::pipeline_get_forwarding_direction(mesh_device, src, dst);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("src"),
+        nb::arg("dst"),
+        R"(
+            Return the direction in which data should be forwarded from *src* to reach *dst*.
+
+            Returns ``None`` if *dst* is not reachable from *src*.  When *src* and *dst* are
+            directly connected by a single ethernet cable, this is the direction of that cable.
+            For multi-hop paths the first-hop direction is returned; callers that need to verify
+            a *direct* (single-hop) connection should follow up with ``get_chip_neighbors``.
+
+            ``mesh_device`` selects the context the fabric is resolved in.
+
+            Args:
+                mesh_device: The mesh device whose fabric is queried.
+                src: FabricNodeId of the source chip.
+                dst: FabricNodeId of the destination chip.
+
+            Returns:
+                RoutingDirection or None.
+        )");
+
+    mod.def(
+        "get_forwarding_direction",
         [](const FabricNodeId& src, const FabricNodeId& dst) -> std::optional<RoutingDirection> {
             return tt::tt_fabric::pipeline_get_forwarding_direction(src, dst);
         },
@@ -170,6 +200,10 @@ void bind_pipeline_builder(nb::module_& mod) {
         nb::arg("dst"),
         R"(
             Return the direction in which data should be forwarded from *src* to reach *dst*.
+
+            .. deprecated::
+                Pass ``mesh_device`` as the first argument instead. This overload resolves the
+                default context and will be removed after 2026-12-31.
 
             Returns ``None`` if *dst* is not reachable from *src*.  When *src* and *dst* are
             directly connected by a single ethernet cable, this is the direction of that cable.
@@ -243,6 +277,46 @@ void bind_pipeline_builder(nb::module_& mod) {
 
     mod.def(
         "resolve_graph_layout",
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const std::vector<std::string>& nodes,
+           const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
+           const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips,
+           const std::map<std::string, uint32_t>& node_chip_counts,
+           const std::map<std::string, uint32_t>& node_pipeline_core_counts,
+           std::optional<uint32_t> pipeline_core_count) -> tt::tt_fabric::GraphLayoutResult {
+            return tt::tt_fabric::resolve_graph_layout(
+                mesh_device,
+                nodes,
+                edges,
+                submesh_chips,
+                node_chip_counts,
+                node_pipeline_core_counts,
+                pipeline_core_count);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("nodes") = std::vector<std::string>{},
+        nb::arg("edges"),
+        nb::arg("submesh_chips"),
+        nb::arg("node_chip_counts") = std::map<std::string, uint32_t>{},
+        nb::arg("node_pipeline_core_counts") = std::map<std::string, uint32_t>{},
+        nb::arg("pipeline_core_count") = nb::none(),
+        R"(
+            Auto-discover the physical layout of a pipeline graph, with the ethernet links
+            discovered in ``mesh_device``'s context.
+
+            Takes the same arguments as the overload without ``mesh_device``, which has the full
+            description.
+
+            Args:
+                mesh_device:   The mesh device whose fabric is used to discover the links.
+
+            Returns:
+                GraphLayoutResult with physical coordinates and
+                abstract core slots for every edge and H2D/D2H.
+        )");
+
+    mod.def(
+        "resolve_graph_layout",
         [](const std::vector<std::string>& nodes,
            const std::vector<tt::tt_fabric::EdgeInputTuple>& edges,
            const std::vector<std::vector<tt::tt_fabric::ChipTuple>>& submesh_chips,
@@ -260,6 +334,10 @@ void bind_pipeline_builder(nb::module_& mod) {
         nb::arg("pipeline_core_count") = nb::none(),
         R"(
             Auto-discover the physical layout of a pipeline graph.
+
+            .. deprecated::
+                Pass ``mesh_device`` as the first argument instead. This overload resolves the
+                default context and will be removed after 2026-12-31.
 
             Uses ``get_forwarding_direction`` and ``get_chip_neighbors`` to find the
             direct ethernet link for each logical edge in the graph, then performs a
@@ -299,6 +377,33 @@ void bind_pipeline_builder(nb::module_& mod) {
 
     mod.def(
         "get_chip_neighbors",
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const FabricNodeId& src,
+           RoutingDirection direction) -> std::map<uint32_t, std::vector<uint32_t>> {
+            return tt::tt_fabric::pipeline_get_chip_neighbors(mesh_device, src, direction);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("src"),
+        nb::arg("direction"),
+        R"(
+            Return the chips directly connected to *src* via an ethernet cable in *direction*,
+            in ``mesh_device``'s context.
+
+            Includes both intra-mesh and inter-mesh neighbors.  The result is a ``dict``
+            mapping ``mesh_id`` (int) to a list of ``chip_id`` (int) values for chips that
+            share a direct ethernet link with *src* in the given direction.
+
+            Args:
+                mesh_device: The mesh device whose fabric is queried.
+                src:       FabricNodeId of the chip to query.
+                direction: RoutingDirection to look in.
+
+            Returns:
+                dict[int, list[int]] — {mesh_id: [chip_id, ...]} of direct neighbors.
+        )");
+
+    mod.def(
+        "get_chip_neighbors",
         [](const FabricNodeId& src, RoutingDirection direction) -> std::map<uint32_t, std::vector<uint32_t>> {
             return tt::tt_fabric::pipeline_get_chip_neighbors(src, direction);
         },
@@ -306,6 +411,10 @@ void bind_pipeline_builder(nb::module_& mod) {
         nb::arg("direction"),
         R"(
             Return the chips directly connected to *src* via an ethernet cable in *direction*.
+
+            .. deprecated::
+                Pass ``mesh_device`` as the first argument instead. This overload resolves the
+                default context and will be removed after 2026-12-31.
 
             Includes both intra-mesh and inter-mesh neighbors.  The result is a ``dict``
             mapping ``mesh_id`` (int) to a list of ``chip_id`` (int) values for chips that

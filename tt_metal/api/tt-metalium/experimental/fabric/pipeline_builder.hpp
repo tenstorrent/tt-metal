@@ -22,23 +22,29 @@ class MeshDevice;
 
 namespace tt::tt_fabric {
 
+class ControlPlane;
+
 // ------------------------------------------------------------------
 // Low-level control-plane wrappers (exposed individually in nanobind)
 // ------------------------------------------------------------------
 
 /// Return the direction in which data should be forwarded from *src* to reach *dst*.
 /// Returns std::nullopt if *dst* is not reachable from *src*.
-std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId src, FabricNodeId dst);
-/// Same, in *mesh_device*'s context.
+/// Resolves in *mesh_device*'s context.
 std::optional<RoutingDirection> pipeline_get_forwarding_direction(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, FabricNodeId src, FabricNodeId dst);
+/// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
+std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId src, FabricNodeId dst);
 
 /// Return the chips directly connected to *src* via an ethernet cable in *direction*.
 /// Result maps mesh_id (uint32_t) -> list of chip_ids (uint32_t).
-std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNodeId src, RoutingDirection direction);
-/// Same, in *mesh_device*'s context.
+/// Resolves in *mesh_device*'s context.
 std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, FabricNodeId src, RoutingDirection direction);
+/// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
+std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNodeId src, RoutingDirection direction);
 
 // ------------------------------------------------------------------
 // Graph layout resolution
@@ -118,6 +124,29 @@ struct GraphLayoutResult {
 ///                      This describes available slots, not mandatory utilization.
 /// @returns             GraphLayoutResult with physical coords for every edge and
 ///                      H2D/D2H chip coords in stage-0's submesh, including core slots.
+///
+/// The links are discovered in *mesh_device*'s context.
+GraphLayoutResult resolve_graph_layout(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const std::vector<std::string>& nodes,
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts = {},
+    const std::map<std::string, uint32_t>& node_pipeline_core_counts = {},
+    std::optional<uint32_t> pipeline_core_count = std::nullopt);
+
+/// Same, in *control_plane*'s context. For metal code that has a control plane but no MeshDevice.
+GraphLayoutResult resolve_graph_layout(
+    const ControlPlane& control_plane,
+    const std::vector<std::string>& nodes,
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts = {},
+    const std::map<std::string, uint32_t>& node_pipeline_core_counts = {},
+    std::optional<uint32_t> pipeline_core_count = std::nullopt);
+
+/// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 GraphLayoutResult resolve_graph_layout(
     const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
@@ -145,8 +174,10 @@ struct LinkPair {
 using ConnectionKey = std::pair<size_t, size_t>;  // (submesh_i, submesh_j)
 using DirectLinks = std::map<ConnectionKey, std::vector<LinkPair>>;
 
-// CPU tests can supply discovered links; nullptr uses the control plane.
+// CPU tests can supply discovered links; nullptr discovers them from `control_plane`, which may only be
+// null when `direct_links` is given.
 GraphLayoutResult resolve_graph_layout_with_connections(
+    const ControlPlane* control_plane,
     const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,

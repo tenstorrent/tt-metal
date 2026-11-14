@@ -186,7 +186,7 @@ def tp_axis_is_wrapped(mesh_device) -> bool:
 
     def direction(src, dst):
         node = lambda col: ttnn.FabricNodeId(mesh_id, col)  # noqa: E731 -- row 0, so chip id is the column
-        value = ttnn.get_eth_forwarding_direction(node(src), node(dst))
+        value = ttnn.get_eth_forwarding_direction(mesh_device, node(src), node(dst))
         assert value is not None, f"no TP route from column {src} to {dst}"
         return value
 
