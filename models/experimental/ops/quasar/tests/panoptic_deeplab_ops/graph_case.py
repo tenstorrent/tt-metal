@@ -92,6 +92,19 @@ DTYPE = {
     "UINT8": ttnn.uint8,
 }
 
+# Quasar has no block-float formats (``is_supported_quasar`` in tt_backend_api_types.cpp), so a
+# captured bfloat8_b / bfloat4_b case is rejected before the op runs. With
+# ``TTNN_GRAPH_OPS_BF8_AS_BF16=1`` those tensors — and a ``DataType::BFLOAT8_B`` inside a
+# ``Conv2dConfig`` (``_CPP_ENUM_OVERRIDES``) — are materialized and checked as bfloat16 instead;
+# the PCC floor keeps the block-float allowance because ``_PCC_BY_DTYPE`` is keyed on the
+# capture string, not on the ttnn dtype. Same switch as the qwen3_vl / gpt_oss suites (#59575).
+BF8_AS_BF16 = os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False")
+_CPP_ENUM_OVERRIDES = {}
+if BF8_AS_BF16:
+    DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+    DTYPE["BFLOAT4_B"] = ttnn.bfloat16
+    _CPP_ENUM_OVERRIDES = {"DataType::BFLOAT8_B": ttnn.bfloat16, "DataType::BFLOAT4_B": ttnn.bfloat16}
+
 LAYOUT = {"TILE": ttnn.TILE_LAYOUT, "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT}
 
 MEM_LAYOUT = {
@@ -311,12 +324,16 @@ _BOOL_FIELDS = frozenset(
 )
 
 
-def build_program_config(spec):
-    """Rebuild a captured program config (e.g. SDPAProgramConfig(...))."""
+def build_program_config(spec, quasar_cls=None):
+    """Rebuild a captured program config (e.g. SDPAProgramConfig(...)).
+
+    ``quasar_cls`` is the quasar fork's copy of the class (see ``U.quasar_program_config_class``),
+    used instead of ``ttnn.<kind>`` when the op is routed to ``ttnn.experimental.quasar``.
+    """
     if spec is None:
         return None
     kind = spec["kind"]
-    cls = getattr(ttnn, kind, None)
+    cls = quasar_cls or getattr(ttnn, kind, None)
     if cls is None:
         pytest.skip(f"{kind} is not exposed on this ttnn build")
 
@@ -352,6 +369,11 @@ def build_program_config(spec):
     for name in _MUST_BE_EMPTY:
         if fields.get(name):
             pytest.skip(f"{kind}.{name}={fields[name]!r} is not reconstructible from the capture")
+
+    if quasar_cls is not None:
+        for name, default in U.QUASAR_CONFIG_DROPPED_FIELDS.get(kind, {}).items():
+            if kwargs.pop(name, default) != default:
+                pytest.skip(f"{kind}.{name}={fields[name]!r} has no equivalent in the quasar fork's config")
 
     try:
         return cls(**kwargs)
@@ -421,6 +443,8 @@ def _unary_with_param(spec):
 
 
 def _cpp_enum(kind, name, raw):
+    if str(raw) in _CPP_ENUM_OVERRIDES:
+        return _CPP_ENUM_OVERRIDES[str(raw)]
     namespace, _, value = str(raw).partition("::")
     enum = _CPP_ENUMS.get(namespace)
     member = getattr(enum, value, None) if enum is not None else None
@@ -654,8 +678,10 @@ def _build_value(spec, mesh_device, case, op_name, key, torch_sink):
     if kind == "mem":
         return build_memory_config(spec, mesh_device)
     if kind == "cfg":
-        builder = _OP_CONFIG_BUILDERS.get(spec["kind"], build_program_config)
-        return builder(spec)
+        builder = _OP_CONFIG_BUILDERS.get(spec["kind"])
+        if builder is not None:
+            return builder(spec)
+        return build_program_config(spec, quasar_cls=U.quasar_program_config_class(op_name, spec["kind"]))
     if kind == "dtype":
         return DTYPE[spec["v"]]
     if kind == "layout":
@@ -1224,21 +1250,22 @@ LOSSLESS = frozenset(
 
 # Dtypes each dtype converts into without rounding (block-float values are a 7- or 3-bit
 # mantissa under a shared exponent, which bfloat16 holds exactly).
+# Keyed on the ttnn dtypes actually built (``DTYPE``), so a ``TTNN_GRAPH_OPS_BF8_AS_BF16`` run
+# judges the bfloat16 it really ran.
 _EXACT_INTO = {
-    "BFLOAT4_B": {"BFLOAT4_B", "BFLOAT8_B", "BFLOAT16", "FLOAT32"},
-    "BFLOAT8_B": {"BFLOAT8_B", "BFLOAT16", "FLOAT32"},
-    "BFLOAT16": {"BFLOAT16", "FLOAT32"},
-    "FLOAT32": {"FLOAT32"},
+    ttnn.bfloat4_b: {ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32},
+    ttnn.bfloat8_b: {ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32},
+    ttnn.bfloat16: {ttnn.bfloat16, ttnn.float32},
+    ttnn.float32: {ttnn.float32},
 }
 
 
 def _holds_exactly(case, out):
     """Whether ``out``'s dtype can represent every value of every float input."""
-    want = next((name for name, dt in DTYPE.items() if dt == out.dtype), None)
     for spec in _tensor_specs(case):
         if spec["dtype"] in _INT_DTYPES:
             continue
-        if want not in _EXACT_INTO.get(spec["dtype"], ()):
+        if out.dtype not in _EXACT_INTO.get(DTYPE[spec["dtype"]], ()):
             return False
     return True
 
@@ -1559,6 +1586,9 @@ def _output_tensors(out):
     return []
 
 
+_POOL_OPS = frozenset({"ttnn.max_pool2d", "ttnn.avg_pool2d"})
+
+
 def _check_output(out, case, mesh_device, op_name):
     """Check every returned tensor against its captured spec, then its values.
 
@@ -1587,15 +1617,24 @@ def _check_output(out, case, mesh_device, op_name):
         if not spec:
             continue
 
+        pool_single_slice = False
         if "shape" in spec:
             want_shape = tuple(spec["shape"])
-            assert (
-                tuple(got.shape) == want_shape
-            ), f"{op_name}: output[{i}] shape {tuple(got.shape)} != {source} {want_shape}"
+            got_shape = tuple(got.shape)
+            if op_name in _POOL_OPS and len(want_shape) == 4 and want_shape[:2] != (1, 1):
+                # pool2d returns [N, H, W, C] in DRAM from its DRAM-sliced path but a flattened
+                # [1, 1, N*H*W, C] sharded L1 tensor when one slice fits (pool2d_DRAM -> pool2d_L1),
+                # and the slice count depends on the grid: the 20-core capture sliced, a 32-core
+                # Quasar grid may not. Accept that output; the golden check still runs.
+                flat = (1, 1, want_shape[0] * want_shape[1] * want_shape[2], want_shape[3])
+                if got_shape == flat:
+                    want_shape, pool_single_slice = flat, True
+            assert got_shape == want_shape, f"{op_name}: output[{i}] shape {got_shape} != {source} {want_shape}"
         if "dtype" in spec:
             want_dtype = DTYPE[spec["dtype"]]
             assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != {source} {want_dtype}"
-        _check_placement(got, spec, mesh_device, op_name, i, source)
+        if not pool_single_slice:
+            _check_placement(got, spec, mesh_device, op_name, i, source)
 
     for i, t in enumerate(tensors):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)
@@ -1657,6 +1696,7 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None):
             alias if alias is not None else _build_value(spec, mesh_device, case, op_name, name, torch_inputs)
         )
 
+    op = U.quasar_routed(op_name, op)
     for name, value in U.default_kwargs(op_name, mesh_device).items():
         kwargs.setdefault(name, value)
 

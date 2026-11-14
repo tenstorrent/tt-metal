@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from models.tt_cnn.tt.builder import TtConv2d
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import uses_20_core_path
 
 
 class TtBottleneck(LightweightModule):
@@ -42,8 +43,7 @@ class TtBottleneck(LightweightModule):
         self.has_shortcut = has_shortcut
         self.block_id = block_id
         self.model_configs = model_configs
-        compute_grid = device.compute_with_storage_grid_size()
-        self.is_20_core = compute_grid.x == 5 and compute_grid.y == 4
+        self.is_20_core = uses_20_core_path(device)  # also every grid without a tuned profile
 
         logger.debug(f"Initializing TtBottleneck {block_id} with TT CNN Builder API")
 
@@ -218,8 +218,13 @@ class TtBottleneck(LightweightModule):
         logger.debug(f"TtBottleneck {self.block_id} adding residual connection and applying final ReLU")
         # Reshard identity to match output memory config when shortcuts use BlockSharded strategy
         # This is needed for res3.0 and res4.0 where shortcut uses BlockSharded but conv3 outputs HeightSharded
+        # On grids without a tuned profile (AnyGridOptimiser) the convs choose their own layouts, so
+        # either side may be interleaved; to_memory_config handles any pair.
         if "res4.0" in self.block_id:
-            identity = ttnn.reshard(identity, out.memory_config())
+            if identity.is_sharded() and out.is_sharded():
+                identity = ttnn.reshard(identity, out.memory_config())
+            elif identity.memory_config() != out.memory_config():
+                identity = ttnn.to_memory_config(identity, out.memory_config())
         # Always add residual - shapes should match after reshape
         out = ttnn.add(out, identity, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
         if out.memory_config().buffer_type != ttnn.BufferType.DRAM:
