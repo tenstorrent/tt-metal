@@ -163,6 +163,18 @@ class LTXCausalConv3d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
+        # Opt-in (LTX_VAE_FOLD_TIME_PAD=1, default off): conv3d repeats the edge frames itself
+        # ("replicate" T pad), replacing the slice+concat copy of the whole activation. Replicate clamps
+        # every dim, so this is exact only with no internal H/W pad (both sharded: the halo exchange pads
+        # them). Symmetric T pad only, so causal calls keep the concat. See _folds_time_pad.
+        self.fold_time_pad = (
+            os.environ.get("LTX_VAE_FOLD_TIME_PAD", "0") == "1"
+            and self.time_pad > 0
+            and self.time_pad % 2 == 0
+            and self.internal_padding[1] == 0
+            and self.internal_padding[2] == 0
+        )
+
         dims_T, dims_H, dims_W = (conv_dims.T, conv_dims.H, conv_dims.W) if conv_dims is not None else (0, 0, 0)
         self.conv_config = get_conv3d_config(
             self.in_channels,
@@ -249,6 +261,22 @@ class LTXCausalConv3d(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
+    def _folds_time_pad(self, causal: bool) -> bool:
+        """Whether this call hands the symmetric T pad to conv3d instead of concatenating edge frames.
+
+        Only plain conv3d calls take it: conv3d's halo-buffer mode (the compact halo path, taken when
+        only one of H/W exchanges a halo or the persistent-padded path is off) accepts zeros only."""
+        if not self.fold_time_pad or causal:
+            return False
+        h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
+        w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
+        halo_buffer_mode = (
+            self._use_halo_conv
+            and (h_pad_needed or w_pad_needed)
+            and not (self._persist_pad and h_pad_needed and w_pad_needed)
+        )
+        return not halo_buffer_mode
+
     def forward(
         self,
         x_BTHWC: ttnn.Tensor,
@@ -263,8 +291,12 @@ class LTXCausalConv3d(Module):
         # cf_input_padded: x is already a padded [.,Hp,Wp,.] buffer
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
+        fold_time_pad = self._folds_time_pad(causal)
+        conv_t_pad = self.time_pad // 2 if fold_time_pad else self.internal_padding[0]
+        conv_padding_mode = "replicate" if fold_time_pad else "zeros"
+
         # Temporal padding (T is not sharded — local op on every device).
-        if self.time_pad > 0:
+        if self.time_pad > 0 and not fold_time_pad:
             first_frame = x_BTHWC[:, :1, :, :, :]
             if causal:
                 padding_frames = [first_frame] * self.time_pad
@@ -305,7 +337,7 @@ class LTXCausalConv3d(Module):
 
         # conv3d args set by the dispatch below (halo path fills halo_buffer + spatial conv_padding).
         halo_buffer = None
-        conv_padding = self.internal_padding
+        conv_padding = (conv_t_pad, *self.internal_padding[1:])
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
@@ -368,8 +400,8 @@ class LTXCausalConv3d(Module):
                     output_channels=self.out_channels,
                     kernel_size=self.kernel_size,
                     stride=self.stride,
-                    padding=(self.internal_padding[0], 0, 0),
-                    padding_mode="zeros",
+                    padding=(conv_t_pad, 0, 0),
+                    padding_mode=conv_padding_mode,
                     dtype=self.dtype,
                     compute_kernel_config=self.compute_kernel_config,
                     logical_h_mask=pp_logical_h,
@@ -416,7 +448,7 @@ class LTXCausalConv3d(Module):
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=conv_padding,
-            padding_mode="zeros",
+            padding_mode=conv_padding_mode,
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
             halo_buffer=halo_buffer,
@@ -726,8 +758,10 @@ def _compute_ltx_decoder_dims(
     if num_frames is None or height is None or width is None:
         return None
 
-    # H/W that don't divide the mesh factor are zero-padded up to the next multiple at
-    # runtime (conv_pad_height/width), per stage, so the per-device shard is ceil(full/factor).
+    # Per-device shard is ceil(full/factor) at every stage. That is the runtime shape with
+    # LTX_VAE_EXACT_SHARD=1. Without it the latent's mesh padding doubles at each upsample
+    # (1080p on 4x8: 18x16 per chip from s1 on, not 17x15), so the runtime shard is larger than
+    # these keys.
     spatial_compression = 32
     full_H = height // spatial_compression
     full_W = width // spatial_compression
@@ -759,6 +793,42 @@ def _compute_ltx_decoder_dims(
     return dims
 
 
+def _exact_shard_enabled() -> bool:
+    # Opt-in (default off): LTX_VAE_EXACT_SHARD=1 drops the doubled mesh padding after each upsample.
+    return os.environ.get("LTX_VAE_EXACT_SHARD", "0") == "1"
+
+
+def _reshard_exact_hw(
+    x_BTHWC: ttnn.Tensor,
+    logical_h: int,
+    logical_w: int,
+    parallel_config: VaeHWParallelConfig,
+    ccl_manager: CCLManager,
+) -> ttnn.Tensor:
+    """Drop the tail mesh padding from the H/W shards once the logical dims divide the mesh.
+
+    The latent's mesh padding doubles at each upsample (1080p on 4x8: 18x16 per chip holding 17x15),
+    so every later op works on the dead rows/cols. Per axis: all_gather, crop to the logical extent,
+    re-partition. Axes that are already exact or still do not divide are left alone.
+    """
+    B, T, _, _, C = x_BTHWC.shape
+    for axis_config, dim, logical in (
+        (parallel_config.height_parallel, 2, logical_h),
+        (parallel_config.width_parallel, 3, logical_w),
+    ):
+        factor = axis_config.factor
+        if factor == 1 or logical <= 0 or logical % factor or x_BTHWC.shape[dim] * factor == logical:
+            continue
+        H, W = x_BTHWC.shape[2], x_BTHWC.shape[3]
+        # all_gather takes rank 4: fold B*T.
+        x = ttnn.reshape(x_BTHWC, (B * T, H, W, C))
+        x = ccl_manager.all_gather(x, dim=dim - 1, mesh_axis=axis_config.mesh_axis, use_hyperparams=False)
+        x = x[:, :logical, :, :] if dim == 2 else x[:, :, :logical, :]
+        x = ttnn.mesh_partition(x, dim=dim - 1, cluster_axis=axis_config.mesh_axis)
+        x_BTHWC = ttnn.reshape(x, (B, T, x.shape[1], x.shape[2], C))
+    return x_BTHWC
+
+
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
 
@@ -788,6 +858,7 @@ class LTXVideoDecoder(Module):
         self.ccl_manager = ccl_manager
         # Set True by the pipeline after warmup so the first real decode captures a ttnn trace of decode_device
         self._vae_traced = False
+        self.exact_shard = _exact_shard_enabled()
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
         feature_channels = base_channels * 8  # 1024
@@ -939,6 +1010,11 @@ class LTXVideoDecoder(Module):
                 sample_tt, logical_h, logical_w = up_block(
                     sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w
                 )
+                if self.exact_shard:
+                    # Exact shards make the convs' logical-pad masks no-ops from here on.
+                    sample_tt = _reshard_exact_hw(
+                        sample_tt, logical_h, logical_w, self.parallel_config, self.ccl_manager
+                    )
             else:
                 sample_tt = up_block(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
 
