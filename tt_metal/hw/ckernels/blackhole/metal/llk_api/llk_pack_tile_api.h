@@ -22,6 +22,24 @@
  */
 inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
 
+// Opt-in byte-wise destination write of the default packs (_llk_pack_rmw_dest_init_): a kernel defines LLK_PACK_RMW_DEST. Off, the packs write
+// the destination as main does.
+#ifdef LLK_PACK_RMW_DEST
+inline constexpr bool llk_pack_rmw_dest = true;
+#else
+inline constexpr bool llk_pack_rmw_dest = false;
+#endif
+
+// The per-tile default pack writes the destination by bytes under full DEST sync, where the packer is the bound; under half sync the earlier pack
+// start costs the unpackers L1 bank grants in latency-bound kernels. LLK_PACK_RMW_DEST forces it on everywhere, LLK_PACK_RMW_DEST_OFF off.
+#if defined(LLK_PACK_RMW_DEST_OFF)
+inline constexpr bool llk_pack_rmw_gate = false;
+#else
+inline constexpr bool llk_pack_rmw_gate = (DST_SYNC_MODE == DstSync::SyncFull);
+#endif
+template <PackMode pack_mode>
+inline constexpr bool llk_pack_rmw_tile = llk_pack_rmw_dest || (llk_pack_rmw_gate && pack_mode == PackMode::Default);
+
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
 // already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
 // (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
@@ -50,11 +68,29 @@ inline void llk_pack_init_impl(
 
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
+    if constexpr (llk_pack_rmw_tile<pack_mode>) {
+        _llk_pack_rmw_dest_init_<DST_SYNC_MODE == DstSync::SyncFull>();
+    }
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr) {
-    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, llk_pack_rmw_tile<pack_mode>>(tile_index, pack_tile_addr);
+}
+
+// A Float32 output from a 16 bit DEST keeps main's destination write under full sync: the packer is long enough that
+// the stall the byte-wise write saves hides nothing, and its two extra config stores cost 0.1 cycle per tile. The
+// output is a compile-time constant in the kernels, so the test folds away.
+template <bool is_fp32_dest_acc_en, PackMode pack_mode>
+inline void llk_pack_tile_of_output(
+    std::uint32_t tile_index, std::uint32_t pack_tile_addr, const std::uint8_t output_id) {
+    if constexpr (llk_pack_rmw_tile<pack_mode> && !llk_pack_rmw_dest && !is_fp32_dest_acc_en) {
+        if (pack_dst_format[output_id] == static_cast<std::uint32_t>(DataFormat::Float32)) {
+            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, false>(tile_index, pack_tile_addr);
+            return;
+        }
+    }
+    llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
 
 template <
@@ -125,7 +161,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         StateDiscard<std::uint32_t>(tile_index),
         StateDiscard<std::uint32_t>(output_tile_index)));
 
-    llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+    llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr, output_id);
 }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
@@ -155,6 +191,260 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 
-        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+        llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr, output_id);
+    }
+}
+
+// Matmul output blocks take llk_pack_block where the tt-llk sweep reads it faster: DestSync full, and half sync at LoFi
+// with one K tile; a static math throttle of 4 or more at half sync keeps the per-tile pack (math bounds the block).
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, std::uint32_t output, int throttle_level = 0>
+constexpr bool llk_matmul_block_pack() {
+    if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1) {
+        return false;
+    } else if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        return true;
+    } else if constexpr (throttle_level >= 4) {
+        return false;
+    } else {
+        constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
+                                    pack_partial_face[output] != 0;
+        constexpr bool float32_out = static_cast<DataFormat>(pack_dst_format[output]) == DataFormat::Float32;
+#ifdef PACKER_L1_ACC
+        constexpr bool l1_acc = true;
+#else
+        constexpr bool l1_acc = false;
+#endif
+        // The packer's L1 accumulate of a Float32 output reads and writes 64 byte rows; a block run of it reads slower than per-tile packs.
+        return math_fidelity == MathFidelity::LoFi && !(small_tile && float32_out) && !(l1_acc && float32_out);
+    }
+}
+
+// What one pack run can write back to back: plain format, full 32x32 tiles, one tile per CB page.
+inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
+    const std::uint32_t dst_format = pack_dst_format[output_id];
+    if (IS_BFP_FORMAT(dst_format)) {
+        return false;
+    }
+    if (get_output_num_faces(output_id) != 4 || get_output_face_r_dim(output_id) != FACE_R_DIM ||
+        get_output_partial_face(output_id)) {
+        return false;
+    }
+    const std::uint32_t tile_words = (TILE_R_DIM * TILE_C_DIM * datum_size_in_bytes(dst_format)) >> 4;
+    return get_local_cb_interface(output_id).fifo_page_size == tile_words;
+}
+
+// Which outputs pack 4 byte datums: two constant masks, like llk_pack_dst_bfp_mask.
+constexpr std::uint32_t llk_pack_dst_wide_mask(const std::uint32_t first) {
+    std::uint32_t mask = 0;
+    for (std::uint32_t i = 0; i < 32; i++) {
+        if (!IS_BFP_FORMAT(pack_dst_format[first + i]) && datum_size_in_bytes(pack_dst_format[first + i]) == 4) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+inline bool llk_pack_dst_is_wide(const std::uint32_t output_id) {
+    constexpr std::uint32_t low = llk_pack_dst_wide_mask(0);
+    constexpr std::uint32_t high = llk_pack_dst_wide_mask(32);
+    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
+}
+
+// The largest page of a block pack, in 16 byte words: a 32x32 tile of 4 or 2 byte datums. Block floats and small tiles
+// are smaller. Then 64 wide or 127 narrow tiles stay inside the 256 KB reach of the channel-1 W offset
+// (_llk_pack_block_w_reach_), and a block of at most 16 tiles inside it too.
+constexpr std::uint32_t LLK_PACK_PAGE_WORDS_WIDE = 256;
+constexpr std::uint32_t LLK_PACK_PAGE_WORDS_NARROW = 128;
+static_assert(16 * LLK_PACK_PAGE_WORDS_WIDE <= PACK_W_REACH_WORDS);
+constexpr std::uint32_t LLK_PACK_W_MAX_TILES_WIDE = PACK_W_REACH_WORDS / LLK_PACK_PAGE_WORDS_WIDE;
+
+// The CB page must fit the packer's W stride and the W offset reach.
+inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
+    return get_local_cb_interface(output_id).fifo_page_size <=
+           (llk_pack_dst_is_wide(output_id) ? LLK_PACK_PAGE_WORDS_WIDE : LLK_PACK_PAGE_WORDS_NARROW);
+}
+
+#ifdef LLK_PACK_W_OFFSET
+// W offset block packs: program the output base and the tile stride once per output and move the output of each block
+// call with the packer W counter of channel 1. The base is programmed again when the output changes, the CB write
+// pointer does not continue the last block (wrap, other packs into the CB), another pack wrote L1_Dest_addr or the
+// channel-1 W stride in between (LLK_PACK_W_INVALIDATE), or the offset would pass LLK_PACK_W_MAX_TILES or the 256 KB
+// reach of the W offset.
+#ifndef LLK_PACK_W_MAX_TILES
+#define LLK_PACK_W_MAX_TILES 127
+#endif
+static_assert(LLK_PACK_W_MAX_TILES * LLK_PACK_PAGE_WORDS_NARROW <= PACK_W_REACH_WORDS);
+constexpr std::uint32_t LLK_PACK_W_MAX_TILES_W =
+    LLK_PACK_W_MAX_TILES < LLK_PACK_W_MAX_TILES_WIDE ? LLK_PACK_W_MAX_TILES : LLK_PACK_W_MAX_TILES_WIDE;
+// Returns whether this block takes the W offset path (out_tile is its tile offset). The first block of an output after another output packs as before: the base is
+// programmed from the second block in a row on, so an output that alternates with another (partials and out of a spilled matmul) never pays the programming.
+inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
+    if (pack_w_last != output_id) {
+        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+        pack_w_last = output_id;
+        return false;
+    }
+    const std::uint32_t max_tiles = llk_pack_dst_is_wide(output_id) ? LLK_PACK_W_MAX_TILES_W : LLK_PACK_W_MAX_TILES;
+    const bool cont = pack_w_valid && pack_w_out == output_id && pack_w_page == page && pack_w_next == addr &&
+                      pack_w_tiles + ntiles <= max_tiles;
+    if (!cont) {
+        _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+        program_packer_destination(addr);
+        const std::uint32_t stride = page << 4;
+        if (stride != pack_ch1_w_stride) {
+            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(stride);
+            pack_ch1_w_stride = stride;
+        }
+        pack_w_valid = true;
+        pack_w_out   = output_id;
+        pack_w_page  = page;
+        pack_w_next  = addr;
+        pack_w_tiles = 0;
+    }
+    out_tile = pack_w_tiles;
+    pack_w_tiles += ntiles;
+    pack_w_next += page * ntiles;
+    return true;
+}
+#endif
+
+// Small tiles: one to four faces of 1 to 16 rows, at most eight PACRs, full tile width.
+inline bool llk_pack_block_is_small(const std::uint32_t output_id) {
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    return get_output_tile_c_dim(output_id) == TILE_C_DIM && num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2) <= 8;
+}
+
+// Next to HiFi math the closed block-float pack makes the op read slower than per-tile packs, except for 4 and 8 tiles at HiFi4; HiFi2 never gained.
+template <MathFidelity math_fidelity>
+constexpr bool llk_pack_block_closed_pays(const bool block_float_out, const std::uint32_t ntiles) {
+    return math_fidelity == MathFidelity::LoFi || !block_float_out ||
+           (math_fidelity == MathFidelity::HiFi4 && (ntiles == 4 || ntiles == 8));
+}
+
+// Which outputs pack block float: two constant masks, so the per-call test is a shift, not a load and a format switch.
+constexpr std::uint32_t llk_pack_dst_bfp_mask(const std::uint32_t first) {
+    std::uint32_t mask = 0;
+    for (std::uint32_t i = 0; i < 32; i++) {
+        if (IS_BFP_FORMAT(pack_dst_format[first + i])) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+inline bool llk_pack_dst_is_bfp(const std::uint32_t output_id) {
+    constexpr std::uint32_t low = llk_pack_dst_bfp_mask(0);
+    constexpr std::uint32_t high = llk_pack_dst_bfp_mask(32);
+    return (((output_id < 32 ? low : high) >> (output_id & 31)) & 1) != 0;
+}
+
+#ifndef LLK_PACK_BLOCK_MIN_TILES
+#define LLK_PACK_BLOCK_MIN_TILES 4
+#endif
+
+// The per-tile packs of a block that takes none of the block forms: main's loop.
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_block_per_tile(const std::uint32_t start_tile_index, const std::uint8_t output_id, const std::uint32_t ntiles) {
+    _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+        llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr, output_id);
+    }
+}
+
+// guard_dest_straddle: for a caller whose start tile index is not a constant 0: two block-float tiles that straddle a four tile boundary of DEST (tiles 3 and 4)
+// read 6 cycles slower as a closed block than packed one by one, so they take the per-tile path. Off by default, the check costs instructions in the callers that pass 0.
+// Out of line, a short block pays the call and the descriptor checks (+0.7 % on a groupnorm).
+template <bool is_fp32_dest_acc_en, bool guard_dest_straddle = false>
+__attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+    std::uint8_t output_id = get_output_id(output);
+#ifndef LLK_PACK_W_OFFSET
+    _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+#endif
+    // Full tiles in blocks of fewer tiles read slower than the per-tile pack in the tt-llk sweep; tiny tiles read faster as a closed block from two tiles on.
+    const bool block_form = ntiles >= LLK_PACK_BLOCK_MIN_TILES || (ntiles >= 2 && llk_pack_block_is_small(output_id));
+
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+    LLK_ASSERT(
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
+
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::TileWidth>(get_output_tile_c_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(ntiles)));
+
+    // Block-float outputs that keep the per-tile pack (HiFi, see llk_pack_block_closed_pays) skip the layout checks of the block forms.
+    if (!block_form || (llk_pack_dst_is_bfp(output_id) && !llk_pack_block_closed_pays<MATH_FIDELITY>(true, ntiles))) {
+        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+        return;
+    }
+#ifdef LLK_PACK_W_OFFSET
+    // Right after an init the plain block is slower than the per-tile pack for 32 bit outputs (Float32, Int32, UInt32,
+    // Tf32) up to 8 tiles and for a 4 tile block-float block, and the closed block of two small tiles is slower than
+    // their per-tile packs: the first block of an output takes the per-tile pack there (the next one the W offset).
+    const bool first_block = pack_w_last != output_id;
+    if (first_block &&
+        ((ntiles <= 8 && datum_size_in_bytes(pack_dst_format[output_id]) == 4) ||
+         (ntiles == 4 && llk_pack_dst_is_bfp(output_id)) || (ntiles == 2 && llk_pack_block_is_small(output_id)))) {
+        if (pack_w_last != output_id) {
+            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+            pack_w_last = output_id;
+        }
+        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+        return;
+    }
+#endif
+    if (llk_pack_block_is_contiguous(output_id)) {
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
+            get_local_cb_interface(output_id).fifo_page_size * ntiles;
+#ifdef LLK_PACK_W_OFFSET
+        std::uint32_t out_tile = 0;
+        if (llk_pack_w_take(output_id, pack_tile_addr, get_local_cb_interface(output_id).fifo_page_size, ntiles, out_tile)) {
+            _llk_pack_block_w_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles);
+        } else {
+            _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_tile<PackMode::Default>>(start_tile_index, pack_tile_addr, ntiles);
+        }
+#else
+        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_tile<PackMode::Default>>(
+            start_tile_index, pack_tile_addr, ntiles);
+#endif
+    } else if (
+        llk_pack_block_is_closable(output_id) &&
+        !(guard_dest_straddle && IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3)) {
+        const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+#ifdef LLK_PACK_W_OFFSET
+        // Four Bfp8_b tiles from an fp32 DEST at half sync: the W block writes take L1 bank cycles from the unpacker's
+        // Float32 reads (+1 %), the closed block without W does not.
+        if (is_fp32_dest_acc_en && DST_SYNC_MODE == DstSync::SyncHalf && ntiles == 4 &&
+            pack_dst_format[output_id] == static_cast<std::uint32_t>(DataFormat::Bfp8_b)) {
+            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+            pack_w_valid = false;
+            _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>>(
+                start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+            return;
+        }
+        std::uint32_t out_tile = 0;
+        if (llk_pack_w_take(output_id, pack_tile_addr, page_size, ntiles, out_tile)) {
+            _llk_pack_block_closed_w_mop_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles, get_output_num_faces(output_id));
+        } else {
+            _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>>(
+                start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+        }
+#else
+        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_tile<PackMode::Default>>(
+            start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+#endif
+    } else {
+        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
     }
 }

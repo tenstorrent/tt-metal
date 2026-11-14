@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
@@ -1006,6 +1007,66 @@ class TILIZE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool tilize_en = {str(self.tilize.value).lower()};"
+
+
+@dataclass
+class PACK_BLOCK(TemplateParameter):
+    """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
+
+    pack_block: bool = (
+        False  # True and 2: the block calls llk_pack_block makes (W offset); 3 and 4 are library forms on purpose: 3 the W offset forms behind the fast init, 4 the fast forms of the matmul harness, 5 the plain and closed blocks that program the output (the first block of an output, LLK_PACK_W_OFFSET_OFF), 6 the calls of True with the W base programmed again before the W offset passes its 256 KB reach
+    )
+
+    def convert_to_cpp(self) -> str:
+        # negative: a block too short for llk_pack_block, which packs it one tile at a time as main does
+        en = bool(self.pack_block) and self.pack_block > 0
+        return (
+            f"constexpr bool pack_block_en = {str(en).lower()};\n"
+            f"constexpr bool pack_block_w = {str(en and self.pack_block == 3).lower()};\n"
+            f"constexpr bool pack_block_fast = {str(en and self.pack_block == 4).lower()};\n"
+            f"constexpr bool pack_block_plain = {str(en and self.pack_block == 5).lower()};\n"
+            f"constexpr bool pack_block_far = {str(en and self.pack_block == 6).lower()};"
+        )
+
+
+class PACK_RMW_DEST(TemplateParameter):
+    """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_; on when LLK_PACK_RMW=1."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define PACK_RMW_DEST" if os.environ.get("LLK_PACK_RMW") == "1" else ""
+
+
+class MATMUL_PACK_BLOCK(TemplateParameter):
+    """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
+    it adds no column: 0 per tile, 1 one block run, 2 the closed block."""
+
+    def __init__(self, pack_block: int = 0):
+        self.matmul_pack_block = int(pack_block)
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, MATMUL_PACK_BLOCK)
+            and other.matmul_pack_block == self.matmul_pack_block
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.matmul_pack_block)
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
+
+
+@dataclass
+class TINY_PACK_MODE(TemplateParameter):
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 4 closed block with the W offset."""
+
+    tiny_pack_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int tiny_pack_mode = {self.tiny_pack_mode};"
 
 
 @dataclass
@@ -2589,4 +2650,29 @@ class GATED_REDUCE_SCALARS(RuntimeParameter):
         return (
             "\n".join(f"std::uint32_t {name.upper()};" for name in vars(self)),
             "IIII",
+        )
+
+
+@dataclass
+class PACK_SRC_FROM_OUTPUT(TemplateParameter):
+    """The packer input of a block float input from a 16-bit DEST follows the output format family, as in production (data_format.cpp)."""
+
+    pack_src_from_output = True
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
+class PACK_BLOCK_ALT(TemplateParameter):
+    """pack_block_alt_test.cpp: pack_block_alt is "<alt format>/<l1 acc: a|n>/<form: h|m>": the second output's format, packer L1 accumulate on it, and head (llk_pack_block's form of the first block of an output) or main (every tile one by one)."""
+
+    pack_block_alt: str
+
+    def convert_to_cpp(self) -> str:
+        fmt, acc, form = self.pack_block_alt.split("/")
+        return (
+            f"constexpr DataFormat alt_pack_dst = DataFormat::{fmt};\n"
+            f"constexpr bool alt_l1_acc = {str(acc == 'a').lower()};\n"
+            f"constexpr bool alt_head_form = {str(form == 'h').lower()};"
         )

@@ -233,15 +233,12 @@ def _replay_records(words):
 
 
 # A runtime-length record (_llk_pack_block_contiguous_mop_config_) is not an inline .ttinsn word:
-# the compiler composes it as `lui rd, 0x4000` (REPLAY opcode), `addi rd, rd, 1` (load_mode), sw.
+# the compiler composes it as `lui rd, 0x4000 | start bits` (REPLAY opcode), `addi rd, rd, 1` (load_mode), sw.
 RISCV_OPCODE_LUI = 0x37
 RISCV_OPCODE_OP_IMM = 0x13
 RISCV_OPCODE_STORE = 0x23
 RISCV_OPCODE_JAL = 0x6F
 FUNCT3_SW = 0b010
-REPLAY_OPCODE_LUI_IMM = (
-    TT_OPCODE_REPLAY << 12
-)  # lui immediate placing 0x04 in bits 31:24
 RUNTIME_RECORD_COMPOSE_WORDS = 12
 RUNTIME_RECORD_DISABLE_WINDOW_WORDS = 32
 
@@ -250,7 +247,7 @@ def _runtime_replay_records(words):
     """(index of the instruction-buffer store, None) of every REPLAY record composed at runtime."""
     records = []
     for i, word in enumerate(words):
-        if word & 0x7F != RISCV_OPCODE_LUI or word >> 12 != REPLAY_OPCODE_LUI_IMM:
+        if word & 0x7F != RISCV_OPCODE_LUI or word >> 24 != TT_OPCODE_REPLAY:
             continue
         rd = (word >> 7) & 0x1F
         addi_rd_rd_1 = RISCV_OPCODE_OP_IMM | (rd << 7) | (rd << 15) | (1 << 20)
@@ -676,7 +673,13 @@ GATHERING_BUILD_VARIANTS = [
     (
         "pack block contiguous (runtime-length record)",
         "test_pack_tiny_tile_block.py::test_pack_tiny_tile_block[formats:Float16_b->Float16_b-dest_acc:No-"
-        "tile_dims:(1, 32)-num_tiles:1]",
+        "tile_dims:(1, 32)-num_tiles:1-pack_mode:0]",
+        "pack",
+    ),
+    (
+        "pack block fast init (W offset block pack)",
+        "test_pack.py::test_pack_block_w[formats:Float16_b->Float16_b-dest_acc:No-input_dimensions:[64, 64]-"
+        "relu_type:NoRelu-dest_sync:Half-dest_index:0]",
         "pack",
     ),
     (

@@ -191,6 +191,117 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
+// Opt-in byte-wise destination write of the default packs (PACK_RMW_DEST, see _llk_pack_rmw_dest_init_); off, the calls are main's
+#if defined(ARCH_BLACKHOLE) && defined(PACK_RMW_DEST)
+#define PACK_RMW_TAIL , false, true
+#define PACK_RMW_INIT _llk_pack_rmw_dest_init_();
+#else
+#define PACK_RMW_TAIL
+#define PACK_RMW_INIT
+#endif
+// The per-tile pack: on Blackhole a Float32 output from a 16 bit DEST keeps main's destination write (llk_pack, llk_pack_tile_api.h), unless PACK_RMW_DEST
+// forces it on
+#if defined(ARCH_BLACKHOLE) && !defined(PACK_RMW_DEST)
+#define PACK_TILE_CALL(tile, addr)                                                                                \
+    do                                                                                                            \
+    {                                                                                                             \
+        if (!is_fp32_dest_acc_en && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Float32))          \
+        {                                                                                                         \
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default, false, false>((tile), (addr)); \
+        }                                                                                                         \
+        else                                                                                                      \
+        {                                                                                                         \
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>((tile), (addr));               \
+        }                                                                                                         \
+    } while (0)
+#else
+#define PACK_TILE_CALL(tile, addr) _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default PACK_RMW_TAIL>((tile), (addr))
+#endif
+#line 201
+
+#if defined(ARCH_BLACKHOLE)
+// The W base and its tile index (pack_block 6): llk_pack_w_take programs the base again where the next block would pass the reach of the W offset.
+static std::uint32_t w_page_words = 0;
+static std::uint32_t w_base_tile  = 0;
+#line 203
+// The block pack of one block. Default (pack_block 1 and 2): the calls llk_pack_block makes with the W offset on (the plain block with the W offset, the closed
+// block with the W offset for block-float outputs), the output programmed once by _llk_pack_block_w_init_. pack_block_w (3) and pack_block_fast (4) are library
+// forms on purpose: the W offset forms behind _llk_pack_block_fast_init_, and the fast forms of the matmul harness.
+template <DstSync sync, bool fp32>
+inline void pack_block_call(
+    std::uint32_t dst_index,
+    std::uint32_t address,
+    std::uint32_t num_tiles,
+    std::uint32_t tile_stride,
+    bool bfp,
+    std::uint32_t out_tile = 0,
+    bool closed_no_w       = false)
+{
+    if constexpr (pack_block_far)
+    {
+        if (!closed_no_w)
+        {
+            if (out_tile < w_base_tile || !_llk_pack_block_w_reach_(out_tile - w_base_tile + num_tiles, w_page_words))
+            {
+                _llk_pack_block_w_init_(address, w_page_words << 4);
+                w_base_tile = out_tile;
+            }
+            out_tile -= w_base_tile;
+        }
+    }
+#line 216
+    if constexpr (pack_block_w)
+    {
+        if (bfp)
+        {
+            _llk_pack_block_closed_w_<sync, fp32>(dst_index, out_tile, num_tiles);
+        }
+        else
+        {
+            _llk_pack_block_w_<sync, fp32>(dst_index, out_tile, num_tiles);
+        }
+    }
+    else if constexpr (pack_block_plain)
+    {
+        // the blocks llk_pack_block makes when it programs the output: the first block of an output, W offset off
+        if (bfp)
+        {
+            _llk_pack_block_closed_<sync, fp32>(dst_index, address, num_tiles, tile_stride);
+        }
+        else
+        {
+            _llk_pack_block_<sync, fp32>(dst_index, address, num_tiles);
+        }
+    }
+    else if constexpr (pack_block_fast)
+    {
+        if (bfp)
+        {
+            _llk_pack_block_closed_fast_<sync, fp32>(dst_index, address, num_tiles, tile_stride);
+        }
+        else
+        {
+            _llk_pack_block_fast_<sync, fp32>(dst_index, address, num_tiles);
+        }
+    }
+    else
+    {
+        if (bfp && closed_no_w)
+        {
+            _llk_pack_block_closed_<sync, fp32>(dst_index, address, num_tiles, tile_stride);
+        }
+        else if (bfp)
+        {
+            _llk_pack_block_closed_w_mop_<sync, fp32>(dst_index, out_tile, num_tiles);
+        }
+        else
+        {
+            _llk_pack_block_w_<sync, fp32>(dst_index, out_tile, num_tiles);
+        }
+    }
+}
+#endif
+
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -206,6 +317,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG                  = params.RELU_CONFIG;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
+    // llk_pack_block takes the closed block without W here (llk_pack_tile_api.h), so the W base is not programmed
+    [[maybe_unused]] const bool closed_no_w_cell =
+        is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf && NUM_TILES_IN_BLOCK == 4 && formats.pack_dst == static_cast<std::uint32_t>(DataFormat::Bfp8_b);
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false, tilize_en>>(
@@ -219,7 +333,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
             false /* narrow_tile */,
             RELU_CONFIG /* relu_config */);
         _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
-        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>(); PACK_RMW_INIT
+#if defined(ARCH_BLACKHOLE)
+        if constexpr (pack_block_en)
+        {
+            if constexpr (pack_block_far)
+            {
+                w_page_words = L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0]);
+                w_base_tile  = 0;
+            }
+#line 303
+            if constexpr (pack_block_w || pack_block_fast)
+            {
+                _llk_pack_block_fast_init_<false>();
+            }
+            if (!pack_block_fast && !pack_block_plain && (pack_block_w || !closed_no_w_cell))
+            {
+                _llk_pack_block_w_init_(L1_ADDRESS(buffer_Res[0]), (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4);
+            }
+        }
+#endif
         PROFILER_SYNC();
     }
     {
@@ -236,10 +369,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         std::uint32_t res_tile_idx = block * NUM_TILES_IN_BLOCK + tile;
+#if defined(ARCH_BLACKHOLE)
+                        if constexpr (pack_block_en)
+                        {
+                            // Block-float blocks close every tile; one-tile blocks keep the per-tile pack.
+                            if (NUM_TILES_IN_BLOCK > 1 && IS_BFP_FORMAT(formats.pack_dst))
+                            {
+                                pack_block_call<dest_sync, is_fp32_dest_acc_en>(
+                                    DST_INDEX + tile,
+                                    L1_ADDRESS(buffer_Res[res_tile_idx]),
+                                    NUM_TILES_IN_BLOCK,
+                                    (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
+                                    true,
+                                    res_tile_idx,
+                                    closed_no_w_cell);
+                                break;
+                            }
+                            if (NUM_TILES_IN_BLOCK > 1)
+                            {
+                                LLK_ASSERT(
+                                    ((DST_INDEX + NUM_TILES_IN_BLOCK) <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                    "Block exceeds maximum destination tiles");
+                                pack_block_call<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]), NUM_TILES_IN_BLOCK, 0, false, res_tile_idx);
+                                break;
+                            }
+                        }
+#endif
                         LLK_ASSERT(
                             ((DST_INDEX + tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
+                        PACK_TILE_CALL(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
                 }
             }
@@ -254,10 +413,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
                     {
                         std::uint32_t res_tile_idx = block * NUM_TILES_IN_BLOCK + tile;
+#if defined(ARCH_BLACKHOLE)
+                        if constexpr (pack_block_en)
+                        {
+                            // Block-float blocks close every tile; one-tile blocks keep the per-tile pack.
+                            if (NUM_TILES_IN_BLOCK > 1 && IS_BFP_FORMAT(formats.pack_dst))
+                            {
+                                pack_block_call<dest_sync, is_fp32_dest_acc_en>(
+                                    DST_INDEX + tile,
+                                    L1_ADDRESS(buffer_Res[res_tile_idx]),
+                                    NUM_TILES_IN_BLOCK,
+                                    (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
+                                    true,
+                                    res_tile_idx,
+                                    closed_no_w_cell);
+                                break;
+                            }
+                            if (NUM_TILES_IN_BLOCK > 1)
+                            {
+                                LLK_ASSERT(
+                                    ((DST_INDEX + NUM_TILES_IN_BLOCK) <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                    "Block exceeds maximum destination tiles");
+                                pack_block_call<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]), NUM_TILES_IN_BLOCK, 0, false, res_tile_idx);
+                                break;
+                            }
+                        }
+#endif
                         LLK_ASSERT(
                             ((DST_INDEX + tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
+                        PACK_TILE_CALL(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]));
                     }
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }

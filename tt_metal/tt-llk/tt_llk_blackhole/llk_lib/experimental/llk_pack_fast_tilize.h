@@ -102,6 +102,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_load_replay_()
 
     // Address-update replay [16..19]: advance L1_Dest_addr for next tile.
     // Same pattern as BH pack-untilize (llk_pack_untilize.h:94-108).
+    LLK_PACK_W_INVALIDATE();
     ckernel::load_replay_buf(
         REPLAY_ADDR_UPDATE_OFFSET,
         REPLAY_ADDR_UPDATE_LEN,

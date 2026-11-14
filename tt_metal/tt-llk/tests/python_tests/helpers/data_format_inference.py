@@ -286,7 +286,12 @@ def infer_unpack_out(
     # BFP2/BFP4/BFP8 inputs keep matching InDataFormat/OutDataFormat values;
     # the unpacker internally normalizes the datum into the BF16 source-register
     # representation before math consumes it.
-    if input_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
+    if input_format in [
+        DataFormat.Bfp4_b,
+        DataFormat.Bfp2_b,
+        DataFormat.Bfp4,
+        DataFormat.Bfp2,
+    ]:
         return input_format
 
     if (
@@ -323,6 +328,7 @@ def infer_pack_in(
     unpacking_to_dest: bool = False,
     chip_arch: Optional[ChipArchitecture] = None,
     unpacking_to_srcs: bool = False,
+    pack_src_from_output: bool = False,
 ) -> DataFormat:
     """
     Infers the packer input format based on input/output formats and architecture.
@@ -334,6 +340,7 @@ def infer_pack_in(
         is_fp32_dest_acc_en: Flag indicating if FP32 accumulation is enabled
         unpacking_to_dest: Whether unpacking targets the destination register
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
+        pack_src_from_output: Blackhole only: take the packer input of a block float input from a 16-bit DEST from the output format family, as production does.
 
     Returns:
         The inferred packer input format
@@ -343,6 +350,10 @@ def infer_pack_in(
 
     is_wormhole = chip_arch == ChipArchitecture.WORMHOLE
     is_quasar = chip_arch == ChipArchitecture.QUASAR
+    # The production packer input is a Blackhole change; the other architectures keep their measured configurations.
+    pack_src_from_output = (
+        pack_src_from_output and chip_arch == ChipArchitecture.BLACKHOLE
+    )
 
     # Packer operates on register data, so use unpack_out (what's in registers) not input_format (what's in L1).
     # For MX formats, unpack_out is already Float16_b (handled in infer_unpack_out).
@@ -429,12 +440,35 @@ def infer_pack_in(
 
     # Sub-byte BFP formats cannot be used as pack_src (packer in_data_format).
     # The packer reads 16-bit (or 32-bit with dest_acc) data from dest and converts to BFP for L1.
+    if output_format in [DataFormat.Bfp4, DataFormat.Bfp2]:
+        return (
+            DataFormat.Float32
+            if is_fp32_dest_acc_en == DestAccumulation.Yes
+            else DataFormat.Float16
+        )
+
     if output_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
+        # production (data_format.cpp) packs block float output from a 32-bit DEST through Bfp8_b unless bfp8_pack_precise is set
+        if pack_src_from_output and is_fp32_dest_acc_en == DestAccumulation.Yes:
+            return DataFormat.Bfp8_b
         return (
             DataFormat.Float32
             if is_fp32_dest_acc_en == DestAccumulation.Yes
             else DataFormat.Float16_b
         )
+
+    # Block float 8-bit exponent input from a 16-bit DEST to a 16-bit or Float32 output: production takes the packer input from the output format
+    # family (the DEST format), not from the block float unpack format, which would make the packer convert 8 bit datums in two phases.
+    if (
+        pack_src_from_output
+        and is_fp32_dest_acc_en == DestAccumulation.No
+        and not unpacking_to_dest
+        and unpack_out in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+        and (
+            output_format == DataFormat.Float16_b or output_format == DataFormat.Float32
+        )
+    ):
+        return DataFormat.Float16_b
 
     # Default:
     # With float32 dest reg datums, packer gasket can do any conversion thus packer input can be the desired output format
@@ -447,6 +481,8 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
     # inference historically models the unpacked payload as BFP8_b.
     if unpack_out in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return DataFormat.Bfp8_b
+    if unpack_out in [DataFormat.Bfp4, DataFormat.Bfp2]:
+        return DataFormat.Bfp8
 
     # Map a 2x-packed SrcA/SrcB-only register format back to its paired non-2x family member,
     # used to derive a math/pack format (those fields cannot hold the 2x format itself).
@@ -497,6 +533,7 @@ def infer_data_formats(
     input_format_B: DataFormat = None,
     unpacking_to_srcs: bool = False,
     register_format_hint: Optional[DataFormat] = None,
+    pack_src_from_output: bool = False,
 ) -> FormatConfig:
     """
     Infers all data formats needed for unpacking, math, and packing stages in a pipeline.
@@ -601,6 +638,7 @@ def infer_data_formats(
         is_fp32_dest_acc_en,
         unpacking_to_dest,
         chip_arch,
+        pack_src_from_output=pack_src_from_output,
     )  # input to the packing stage, determines what gasket can convert from dest register
     # potentially different from unpack_out and pack_out depending on FP32 accumulation
 
@@ -696,6 +734,7 @@ def data_formats(
     input_format_B: DataFormat = None,
     unpacking_to_srcs: bool = False,
     register_format_hint: Optional[DataFormat] = None,
+    pack_src_from_output: bool = False,
 ) -> List[FormatConfig]:
     """
     Entry point for computing a list of FormatConfig objects.
@@ -825,6 +864,7 @@ def data_formats(
             input_format_B,
             unpacking_to_srcs,
             register_format_hint=register_format_hint,
+            pack_src_from_output=pack_src_from_output,
         )
     else:
         intermediate_config = None
@@ -838,6 +878,7 @@ def data_formats(
         input_format_B,
         unpacking_to_srcs,
         register_format_hint=register_format_hint,
+        pack_src_from_output=pack_src_from_output,
     )
 
     return build_data_formats(num_iterations, intermediate_config, final_config)

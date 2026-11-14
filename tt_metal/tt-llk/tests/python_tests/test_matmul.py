@@ -3,7 +3,9 @@
 
 from typing import List
 
+import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -11,6 +13,8 @@ from helpers.llk_params import (
     ALL_MATH_FIDELITIES,
     DEST_ACC_MODES,
     DestAccumulation,
+    DestSync,
+    MathFidelity,
     PerfRunType,
     Transpose,
     format_dict,
@@ -18,6 +22,7 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
+    matmul_pack_form,
 )
 from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -28,6 +33,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_PACK_BLOCK,
     NUM_FACES,
     PERF_RUN_TYPE,
     THROTTLE_LEVEL,
@@ -85,6 +91,8 @@ def test_matmul(
     math_fidelity,
     format_dest_acc_and_dims,
     boot_mode=BootMode.DEFAULT,
+    transpose=False,
+    dest_sync=DestSync.Half,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -106,10 +114,20 @@ def test_matmul(
     # Calculate all matmul dimensions using helper function
     matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
+    # with transpose the unpacker transposes every in1 tile (faces and within faces); the golden multiplies by that
+    golden_B = src_B
+    if transpose:
+        k_dim, n_dim = input_B_dimensions
+        golden_B = (
+            src_B.reshape(k_dim // 32, 32, n_dim // 32, 32)
+            .permute(0, 3, 2, 1)
+            .reshape(-1)
+        )
+
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
         src_A,
-        src_B,
+        golden_B,
         formats.output_format,
         math_fidelity,
         input_A_dimensions=input_A_dimensions,
@@ -138,15 +156,25 @@ def test_matmul(
         templates=[
             MATH_FIDELITY(math_fidelity),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
-            DEST_SYNC(),
+            DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    dest_sync,
+                    math_fidelity,
+                    matmul_dims.rt_dim,
+                    matmul_dims.ct_dim,
+                    matmul_dims.kt_dim,
+                )
+            ),
         ],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
             LOOP_FACTOR(1),
-            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_FACES(Transpose.Yes if transpose else Transpose.No),
         ],
         variant_stimuli=StimuliConfig(
             tilized_A.flatten(),
@@ -173,3 +201,40 @@ def test_matmul(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+# in1 transposed tile by tile (SDPA's Q K^T), with the per-tile MOP and with the row MOP.
+TRANSPOSE_DIMS_16 = [
+    ([32, 32], [32, 32]),  # 1x1, k 1
+    ([32, 64], [64, 256]),  # 1x8, k 2
+    ([64, 128], [128, 128]),  # 2x4, k 4
+    ([256, 64], [64, 32]),  # 8x1, k 2 (in0 streamed)
+    ([64, 32], [32, 64]),  # 2x2, k 1
+]
+TRANSPOSE_DIMS_32 = [
+    ([32, 32], [32, 32]),
+    ([32, 64], [64, 128]),  # 1x4, k 2
+    ([64, 128], [128, 64]),  # 2x2, k 4
+    ([128, 64], [64, 32]),  # 4x1, k 2
+]
+TRANSPOSE_COMBINATIONS = [
+    (fmt, acc, dims)
+    for fmt in input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32], same=True
+    )
+    for acc in DEST_ACC_MODES
+    if not (fmt.input_format == DataFormat.Float32 and acc == DestAccumulation.No)
+    for dims in (
+        TRANSPOSE_DIMS_32 if acc == DestAccumulation.Yes else TRANSPOSE_DIMS_16
+    )
+]
+
+
+@skip_for_wormhole
+@pytest.mark.nightly
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    format_dest_acc_and_dims=TRANSPOSE_COMBINATIONS,
+)
+def test_matmul_transpose(math_fidelity, format_dest_acc_and_dims):
+    test_matmul(math_fidelity, format_dest_acc_and_dims, transpose=True)
