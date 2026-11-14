@@ -165,6 +165,16 @@ The minimum, stated at the DRAM boundary: F, X, the coefficients, W, P and w eac
 
 Pick the minimum `est`. Ties go to the smaller R (fewer W reads, smaller combine fan-in).
 
+**As implemented (Refinement 1).**
+- With W, the per-core term is `rows·(ROW_NS_W + cols·UNIT_NS_W)`, fitted on device: the fused pass is compute-bound per core, not DRAM-fed.
+- Only splits whose column range fits one block pass (`cols ≤ MAX_BLOCK_COLS_W`) are candidates when any exists.
+- It still sees only (T, C, dtypes, has_W, |L|), so the stats-vs-collapse bit-identity holds.
+- Combine:
+  - root(t) = member `(t − t0) mod Q`, with its work deferred past the root's own rows;
+  - the level-1 fold is lagged one row;
+  - leader slot reuse is credited by a ready bitmask semaphore.
+- In the W path, a ragged pass runs the full-block chains on zero-filled filler units.
+
 **Note.** The score must use only `(T, C, X.dtype, F.dtype, has_W, |L|)`. It must not use collapse, norm or feed, because "stats bit-identical between stats and collapse" and "norm leaves stats columns ≠ 25 unchanged" need the same partial grouping. So `unit_bytes` always counts the y tile when `has_W`.
 
 Phase 0 (plain, `has_W = 0`) makes `total` independent of R, so the tie-break term (`max_core_bytes`) picks the balanced split. **X' bits never depend on the split**: every X' element is computed by the same op sequence on the same inputs.

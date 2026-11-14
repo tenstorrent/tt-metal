@@ -20,3 +20,60 @@ def test_mhc_post_perf_plain_fp32(device, T, C):
     for _ in range(2):
         mhc_post(f, x, post, comb)
     ttnn.synchronize_device(device)
+
+
+@pytest.mark.parametrize("mode", ["plain", "stats", "collapse"])
+@pytest.mark.parametrize("T,C", [(160, 5120), (1280, 5120)])
+def test_mhc_post_perf_ds41(device, T, C, mode):
+    """DeepSeek-V4.1's call forms: bf16 streams, packed mixes, HiFi2 (R2 fused-gather for stats / collapse)."""
+    from eval.golden_tests.mhc_post.feature_spec import _case
+    from eval.golden_tests.mhc_post.helpers import call_mhc_post, make_case
+
+    case = make_case(
+        _case((1, 1, T, N * C)), mode=mode, coef_source="packed", dtype=ttnn.bfloat16, sublayer_dtype=ttnn.bfloat16
+    )
+    for _ in range(2):
+        call_mhc_post(
+            case,
+            mode=mode,
+            coef_source="packed",
+            dtype=ttnn.bfloat16,
+            sublayer_dtype=ttnn.bfloat16,
+            device=device,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            op=mhc_post,
+        )
+    ttnn.synchronize_device(device)
+
+
+@pytest.mark.parametrize("iters", [1, 20])
+def test_mhc_post_perf_hc_iters(device, iters):
+    """Ablation: the hc step's Sinkhorn trip count (collapse, T160 C5120)."""
+    from eval.golden_tests.mhc_post.feature_spec import _case
+    from eval.golden_tests.mhc_post.helpers import call_mhc_post, make_case
+
+    case = make_case(
+        _case((1, 1, 160, N * 5120)),
+        mode="collapse",
+        coef_source="packed",
+        dtype=ttnn.bfloat16,
+        sublayer_dtype=ttnn.bfloat16,
+    )
+    case.hc["sinkhorn_iters"] = iters
+    for _ in range(2):
+        call_mhc_post(
+            case,
+            mode="collapse",
+            coef_source="packed",
+            dtype=ttnn.bfloat16,
+            sublayer_dtype=ttnn.bfloat16,
+            device=device,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            op=mhc_post,
+        )
+    ttnn.synchronize_device(device)
+
+
+def test_mhc_post_perf_collapse_t160(device):
+    """One parameter-free collapse call (T160 C5120) for zone profiling (MHC_ABLATE=zones)."""
+    test_mhc_post_perf_hc_iters(device, 20)

@@ -37,6 +37,31 @@ Schema: `.claude/references/l1-footprint-discipline.md`.
 | `cb_rstd_col` (norm) | `nr` | nr | {t: spans → nr rows, c: none (broadcast), s: none} | Float32 (UnpackToDestFp32) | reader (the root's unicast lands here) | compute | per row | Column-0 page, like the coefficients. Live alongside `cb_y_hold`. |
 | `cb_norm_w` (norm) | `core_c_tiles` | core_c_tiles (the whole w slice, resident) | {t: none (resident across t), c: spans → core_c_tiles, s: none} | Float32 (UnpackToDestFp32, Row bcast) | reader | compute | kernel | Resident means w crosses DRAM once per core (C·4 B in total). Bounded by `core_c_tiles` (symbol table). |
 
+## R2 as implemented (Refinement 1)
+
+These rows supersede the planned R2 rows above where they differ. `nc` = number of chunks = ceil(Q / fanin).
+`mr` = rows a core roots = ceil(rows_per_group / Q).
+
+| CB | Capacity (pages) | Page format | Producer | Consumer | Shares with / why not |
+|----|------------------|-------------|----------|----------|-----------------------|
+| `cb_coef_raw` | `2 · (2 \| 3)` (COEF_RAW_BUFS × raw tiles) | Float32 | reader | reader (private) | Double-buffered by row parity so that row t+1's tiles land while row t expands. Cannot alias `cb_coef_cols` (read while written). |
+| `cb_mixed_bf16` | `n·bc` | Float16_b | compute (mix pack) | compute (matmul in0, collapse) | Single consumer thread. It is the bf16 X' as written. Cannot be the writer's `cb_mixed_out_tiles` (two consumers). |
+| `cb_w_slice` | resident `passes·n·bc`, streamed `2·n·bc` | Float32 (not UnpackToDestFp32: FPU srcA) | reader | compute (matmul in1) | Layout per pass in K order j·bc+u. Filler rows of a ragged pass are zeroed. |
+| `cb_sumsq_acc` | 1 | Float32 (UnpackToDestFp32) | compute | compute | In-place reload accumulator, zeroed per row. Packer L1-acc is not used (fp32 DEST). Live across the whole row, so it cannot alias. |
+| `cb_proj_interm` | 1 | Float32 (UnpackToDestFp32) | compute | compute | Matmul spill across passes. Live during the row's K-loop. |
+| `cb_proj_out` / `cb_sumsq_col` | PARTIAL_DEPTH = 2 each | Float32 | compute | writer | Depth 2 lets compute produce row t+1's partial while the writer does the lagged leader duty of row t. |
+| `cb_leader_slots` | fanin (whole CB waited / popped) | Float32 (UnpackToDestFp32) | writer (remote writes land) | compute | The FIFO pointer stays on the base address the remote writers target. Reuse is credited by the ready bitmask. |
+| `cb_chunk_sum` | 1 | Float32 | compute | writer | The leader's fold goes to the root. |
+| `cb_root_slots` | `nc · mr` (one region per rooted row) | Float32 (UnpackToDestFp32) | writer | compute | Deferred root, so regions are never reused within a call. |
+| `cb_stats` | 1 | Float32 | compute | writer | |
+| `cb_hc_in` / `cb_hc_out` | 1 each | Float32 (in: UnpackToDestFp32) | writer / compute | compute / writer | Lane layout. |
+| `cb_hc_tile` | 1 | Float32 | writer (private) | writer | Row-layout landing of hc for the DRAM write. |
+| `cb_y_out` | Y_BLOCKS·bc | Float16_b | compute | writer | Filler y is dropped by the writer. |
+
+`cb_y_hold`, `cb_ysq_acc`, `cb_rstd_col` and `cb_norm_w` belong to Refinement 2 (norm) and are not allocated yet.
+L1 at T160 C5120 (R=2, Q=55, bc=3, W resident) is well under budget: the R2 additions are ≈ 24 + 48 + 16 + 44 +
+20 + 12·4 KB ≈ 200 KB.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
@@ -47,7 +72,8 @@ Schema: `.claude/references/l1-footprint-discipline.md`.
 | `core_c_tiles` | `ceil(tensor_c_tiles / Q)` | split chooser |
 | `W_RESIDENT_BUDGET` | host constant 256 KiB → `n·core_c_tiles ≤ 64` | regime predicate R2 vs R2-W-streamed |
 | `cb_norm_w` pages | `core_c_tiles ≤ 64` under the same predicate (norm implies R2). When it is exceeded, w streams with `bc` like W (same predicate). | R2 predicate |
-| `fanin` | ≤ 16 | host constant `COMBINE_FANIN` (Phase 0 of R2: the grid row width, 11 on an 11×10 grid) |
+| `fanin` | ≤ 16 | host constant `COMBINE_FANIN` = 11 (implemented) |
+| `bc` with W | ≤ `MAX_BLOCK_COLS_W` = 4 | kernel-config buffer (70 656 B): the fused program at bc = 5 measured 74 KB |
 | `ind`, `outd`, `cd`, `nr` | 2 each (Phase 0); `ind`/`outd` are counted in blocks of `bc` units (IN_BLOCKS / OUT_BLOCKS) | host constants |
 | `BLOCK_L1_BUDGET` | 384 KiB | host constant; total below stays < 1 MiB |
 
@@ -73,7 +99,7 @@ How each term scales:
 
 ## Data-movement budget
 
-Chosen split for stats/collapse: R = 1 when `tensor_c_tiles ≥ |L|`, else the chooser's R. Plain: the chooser's balanced R; the traffic is identical for every R.
+Chosen split for stats/collapse (as implemented): the W-path chooser (per-core compute model, single-pass splits) — R = 2 at T160 / T1280, C5120 on 110 cores, so W crosses DRAM twice (+2.6 MB, ≈ 5 µs of DRAM time; it measured 35 % faster at T1280 than R = 1). Plain: the chooser's balanced R; the traffic is identical for every R.
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|

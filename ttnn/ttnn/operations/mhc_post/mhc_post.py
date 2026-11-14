@@ -5,9 +5,11 @@
 
     X'_j = post_j * F + sum_i comb[i][j] * X_i     (comb applied transposed)
 
-Phase 0 builds regime R1 (plain mode, see op_design.md): one device program,
-work split over token-tile rows x C-column tiles, every coefficient product
-in fp32 SFPU lanes.
+Regime R1 (plain mode, see op_design.md): one device program, work split over
+token-tile rows x C-column tiles, every coefficient product in fp32 SFPU
+lanes. Regime R2 (stats / collapse): the same pass also projects the bf16 X'
+on W, combines the per-core partials across the row group (fixed 2-level
+tree), runs the next hc step on the row's root and collapses y.
 """
 
 from __future__ import annotations
@@ -55,7 +57,7 @@ SUPPORTED = {
     "sublayer_dtype": [ttnn.float32, ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True],
-    "mode": ["plain"],
+    "mode": ["plain", "stats", "collapse"],
     "coef_source": ["separate", "packed"],
     "alignment": ["tile_aligned", "h_non_aligned"],
     "norm": ["off"],
@@ -106,6 +108,9 @@ def _check_call(
     feed_output,
     feed_semaphores,
     output_tensor,
+    stats_output=None,
+    hc_output=None,
+    y_output=None,
 ):
     """Malformed calls (not support refusals): clear ValueErrors."""
     if collapse_pre is not None and stats_weight is None:
@@ -138,18 +143,39 @@ def _check_call(
             raise ValueError(f"mhc_post: {name}_col={col} must keep {width} values inside one tile row of {s}")
         if t.dtype != ttnn.float32 or t.layout != ttnn.TILE_LAYOUT:
             raise ValueError(f"mhc_post: {name} must be float32 TILE")
-    if output_tensor is not None:
+    if stats_weight is not None:
+        ws = tuple(stats_weight.shape)
+        if ws[-2:] != (x_shape[-1], 32) or any(d != 1 for d in ws[:-2]):
+            raise ValueError(f"mhc_post: stats_weight {ws} must be (1.., {x_shape[-1]}, 32)")
+        if stats_weight.dtype != ttnn.float32 or stats_weight.layout != ttnn.TILE_LAYOUT:
+            raise ValueError("mhc_post: stats_weight must be float32 TILE")
+    if collapse_pre is not None:
+        s = tuple(collapse_pre.shape)
+        if s[:-1] != f_shape[:-1] or s[-1] < N_STREAMS:
+            raise ValueError(f"mhc_post: collapse_pre {s} must be (..., T, >= {N_STREAMS}) for F {f_shape}")
+        if collapse_pre.dtype != ttnn.float32 or collapse_pre.layout != ttnn.TILE_LAYOUT:
+            raise ValueError("mhc_post: collapse_pre must be float32 TILE")
+    lead = f_shape[:-1]
+    inputs = (input_tensor, residual, post, comb, stats_weight, collapse_pre, norm_weight)
+    for name, t, shape, dtype in (
+        ("output_tensor", output_tensor, x_shape, residual.dtype),
+        ("stats_output", stats_output, lead + (32,), ttnn.float32),
+        ("hc_output", hc_output, lead + (NG,), ttnn.float32),
+        ("y_output", y_output, lead + (C,), ttnn.bfloat16),
+    ):
+        if t is None:
+            continue
         if (
-            tuple(output_tensor.shape) != x_shape
-            or output_tensor.dtype != residual.dtype
-            or output_tensor.layout != ttnn.TILE_LAYOUT
-            or output_tensor.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+            tuple(t.shape) != shape
+            or t.dtype != dtype
+            or t.layout != ttnn.TILE_LAYOUT
+            or t.memory_config() != ttnn.DRAM_MEMORY_CONFIG
         ):
-            raise ValueError("mhc_post: output_tensor must match X' (shape, dtype, TILE, DRAM interleaved)")
-        addr = output_tensor.buffer_address()
-        for t in (input_tensor, residual, post, comb, stats_weight, collapse_pre, norm_weight):
-            if t is not None and t.buffer_address() == addr:
-                raise ValueError("mhc_post: output_tensor aliases an input")
+            raise ValueError(f"mhc_post: {name} must be {shape} {dtype} TILE DRAM interleaved")
+        addr = t.buffer_address()
+        for i in inputs:
+            if i is not None and i.buffer_address() == addr:
+                raise ValueError(f"mhc_post: {name} aliases an input")
 
 
 def validate(
@@ -169,6 +195,9 @@ def validate(
     feed_output=None,
     feed_semaphores=None,
     output_tensor=None,
+    stats_output=None,
+    hc_output=None,
+    y_output=None,
 ):
     _check_call(
         input_tensor,
@@ -185,6 +214,9 @@ def validate(
         feed_output=feed_output,
         feed_semaphores=feed_semaphores,
         output_tensor=output_tensor,
+        stats_output=stats_output,
+        hc_output=hc_output,
+        y_output=y_output,
     )
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     if collapse_pre is not None:
@@ -271,17 +303,38 @@ def mhc_post(
         feed_output=feed_output,
         feed_semaphores=feed_semaphores,
         output_tensor=output_tensor,
+        stats_output=stats_output,
+        hc_output=hc_output,
+        y_output=y_output,
     )
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     device = residual.device()
+    mode = axes["mode"]
+    lead = list(input_tensor.shape)[:-1]
+    C = input_tensor.shape[-1]
+
+    def alloc(shape, dtype):
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
 
     if output_tensor is None:
-        output_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(list(residual.shape)),
-            residual.dtype,
-            ttnn.TILE_LAYOUT,
-            device,
-            ttnn.DRAM_MEMORY_CONFIG,
+        output_tensor = alloc(list(residual.shape), residual.dtype)
+    hc = None
+    if mode in ("stats", "collapse") and stats_output is None:
+        stats_output = alloc(lead + [32], ttnn.float32)
+    if mode == "collapse":
+        if hc_output is None:
+            hc_output = alloc(lead + [NG], ttnn.float32)
+        if y_output is None:
+            y_output = alloc(lead + [C], ttnn.bfloat16)
+        hc = dict(
+            scale=list(hc_scale),
+            base=list(hc_base),
+            norm_width=float(hc_norm_width) if hc_norm_width is not None else float(N_STREAMS * C),
+            norm_eps=hc_norm_eps,
+            hc_eps=hc_eps,
+            sinkhorn_iters=int(hc_sinkhorn_iters),
         )
 
     program_descriptor = create_program_descriptor(
@@ -296,7 +349,20 @@ def mhc_post(
         math_fidelity=cfg.math_fidelity,
         math_approx_mode=bool(cfg.math_approx_mode),
         max_grid=max_grid,
-        mode=axes["mode"],
+        mode=mode,
+        w_tensor=stats_weight,
+        pre_tensor=collapse_pre,
+        stats_tensor=stats_output,
+        hc_tensor=hc_output,
+        y_tensor=y_output,
+        hc=hc,
     )
+    io = [input_tensor, residual, post, comb]
+    io += [t for t in (stats_weight, collapse_pre, stats_output, hc_output, y_output) if t is not None]
     # Output tensor must be last.
-    return ttnn.generic_op([input_tensor, residual, post, comb, output_tensor], program_descriptor)
+    ttnn.generic_op(io + [output_tensor], program_descriptor)
+    if mode == "plain":
+        return output_tensor
+    if mode == "stats":
+        return output_tensor, stats_output
+    return output_tensor, stats_output, hc_output, y_output
