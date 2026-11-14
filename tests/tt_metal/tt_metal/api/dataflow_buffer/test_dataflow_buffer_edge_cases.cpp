@@ -1235,16 +1235,32 @@ uint32_t stale_client_l(const StalePair& p) {
     return (kRemapperNeo0Client + p.neo) | (30u << 3) | (1u << 8) | is_producer;
 }
 
-// Runs remapper_client_l_probe.cpp in `mode`; in read mode, returns every pair's ClientL config.
-std::vector<uint32_t> run_remapper_probe(distributed::MeshDevice& mesh_device, uint32_t mode) {
+// The register values remapper_client_l_probe.cpp plants in one pair.
+struct PlantedPair {
+    uint32_t pair;
+    uint32_t client_r;
+    uint32_t client_l;
+};
+
+std::array<PlantedPair, 3> planted_stale_pairs() {
+    std::array<PlantedPair, 3> planted{};
+    for (uint32_t i = 0; i < kStalePairs.size(); i++) {
+        planted[i] = {kStalePairs[i].pair, stale_client_r(kStalePairs[i]), stale_client_l(kStalePairs[i])};
+    }
+    return planted;
+}
+
+// Runs remapper_client_l_probe.cpp in `mode` on `planted`; in read mode, returns every pair's ClientL config.
+std::vector<uint32_t> run_remapper_probe(
+    distributed::MeshDevice& mesh_device, uint32_t mode, const std::array<PlantedPair, 3>& planted) {
     const m2::NodeCoord node{0, 0};
     const m2::KernelSpecName PROBE{"remapper_probe"};
     auto probe = make_dm_kernel(PROBE, "tests/tt_metal/tt_metal/test_kernels/dataflow/remapper_client_l_probe.cpp");
     probe.compile_time_args = {{"mode", mode}};
-    for (uint32_t i = 0; i < kStalePairs.size(); i++) {
-        probe.compile_time_args.emplace(fmt::format("pair{}", i), kStalePairs[i].pair);
-        probe.compile_time_args.emplace(fmt::format("client_r{}", i), stale_client_r(kStalePairs[i]));
-        probe.compile_time_args.emplace(fmt::format("client_l{}", i), stale_client_l(kStalePairs[i]));
+    for (uint32_t i = 0; i < planted.size(); i++) {
+        probe.compile_time_args.emplace(fmt::format("pair{}", i), planted[i].pair);
+        probe.compile_time_args.emplace(fmt::format("client_r{}", i), planted[i].client_r);
+        probe.compile_time_args.emplace(fmt::format("client_l{}", i), planted[i].client_l);
     }
     probe.runtime_arg_schema = {.runtime_arg_names = {"result_addr"}};
     m2::ProgramSpec spec{
@@ -1276,6 +1292,27 @@ std::vector<uint32_t> run_remapper_probe(distributed::MeshDevice& mesh_device, u
 // A counter holding nothing: no tiles available and all of its capacity free.
 bool tc_idle(const LiveTcSnapshot& snap, uint32_t tc) {
     return snap.tiles_available[tc] == 0 && snap.space_available[tc] == snap.capacity[tc];
+}
+
+// Reopens the unit meshes with one more command queue: the changed context parameters force a full re-initialization,
+// which resets the cores and boots the firmware again.
+void reboot_firmware(
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>>& id_to_device,
+    std::vector<std::shared_ptr<distributed::MeshDevice>>& devices,
+    size_t num_command_queues) {
+    std::vector<ChipId> ids;
+    ids.reserve(id_to_device.size());
+    for (const auto& [id, device] : id_to_device) {
+        ids.push_back(id);
+    }
+    id_to_device.clear();
+    devices.clear();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
+    id_to_device = distributed::MeshDevice::create_unit_meshes(
+        ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_command_queues + 1, dispatch_core_config);
+    for (const auto& [id, device] : id_to_device) {
+        devices.push_back(device);
+    }
 }
 
 }  // namespace
@@ -1399,28 +1436,14 @@ TEST_F(UnitMeshFixture, TileCountersAndRemapperIdleAfterFirmwareReboot) {
     }
 
     // Armed after the program above, whose own remapper teardown could otherwise clear them.
-    run_remapper_probe(this->device(), kRemapperProbePlant);
-    const std::vector<uint32_t> before = run_remapper_probe(this->device(), kRemapperProbeRead);
+    run_remapper_probe(this->device(), kRemapperProbePlant, planted_stale_pairs());
+    const std::vector<uint32_t> before = run_remapper_probe(this->device(), kRemapperProbeRead, planted_stale_pairs());
     ASSERT_EQ(before.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
     for (const StalePair& p : kStalePairs) {
         ASSERT_EQ(before[p.pair], stale_client_l(p)) << "setup did not leave pair " << p.pair << " armed";
     }
 
-    // Reopen with a different command-queue count: the changed context parameters force a full
-    // re-initialization, which resets the cores and boots the firmware again.
-    std::vector<ChipId> ids;
-    ids.reserve(id_to_device_.size());
-    for (const auto& [id, device] : id_to_device_) {
-        ids.push_back(id);
-    }
-    id_to_device_.clear();
-    devices_.clear();
-    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
-    id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-        ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_command_queues() + 1, dispatch_core_config);
-    for (const auto& [id, device] : id_to_device_) {
-        devices_.push_back(device);
-    }
+    reboot_firmware(id_to_device_, devices_, num_command_queues());
 
     for (uint32_t neo = 0; neo < num_neos; neo++) {
         const LiveTcSnapshot snap = read_live_tcs(this->device(), core, neo);
@@ -1431,7 +1454,7 @@ TEST_F(UnitMeshFixture, TileCountersAndRemapperIdleAfterFirmwareReboot) {
         }
     }
 
-    const std::vector<uint32_t> after = run_remapper_probe(this->device(), kRemapperProbeRead);
+    const std::vector<uint32_t> after = run_remapper_probe(this->device(), kRemapperProbeRead, planted_stale_pairs());
     ASSERT_EQ(after.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
     for (uint32_t pair = 0; pair < ::dfb::NUM_REMAPPER_PAIRINGS; pair++) {
         ASSERT_NE(after[pair], kRemapperProbeSentinel) << "probe kernel did not report pair " << pair;
@@ -1439,7 +1462,7 @@ TEST_F(UnitMeshFixture, TileCountersAndRemapperIdleAfterFirmwareReboot) {
     }
     if (HasFailure()) {
         // Do not leave the stale pairs armed for later tests.
-        run_remapper_probe(this->device(), kRemapperProbeClear);
+        run_remapper_probe(this->device(), kRemapperProbeClear, planted_stale_pairs());
         return;
     }
 
@@ -1450,6 +1473,62 @@ TEST_F(UnitMeshFixture, TileCountersAndRemapperIdleAfterFirmwareReboot) {
         this->device(),
         M2SingleDFBParams{
             M2PorCType::DM, M2PorCType::TENSIX, 1, num_neos, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::ALL});
+}
+
+namespace {
+
+constexpr uint32_t kClientLGroup = 1u << 13;
+constexpr uint32_t kRemapperDmClient0 = 0;  // overlay::DM_0
+constexpr uint32_t kRemapperDmClient1 = 1;  // overlay::DM_1
+
+constexpr uint32_t client_r_entry(uint32_t entry, uint32_t client, uint32_t tc) {
+    return (client | (tc << 3)) << (8 * entry);
+}
+
+// ClientL as DM1 programs it for a DM producer (DataflowBuffer's remapper slot blob).
+constexpr uint32_t dm_producer_client_l(uint32_t client, uint32_t tc, uint32_t valid) {
+    return client | (tc << 3) | (valid << 8) | kClientLIsProducer | kClientLGroup;
+}
+
+// One-to-many pairs as a DM->Tensix program killed before its remapper teardown would leave them: two with the
+// producer's ClientL on client 0, and a control on client 1.
+constexpr std::array<PlantedPair, 3> kStaleDmProducerPairs = {{
+    {2, client_r_entry(0, kRemapperNeo0Client + 1, 2), dm_producer_client_l(kRemapperDmClient0, 2, 0x1)},
+    {3,
+     client_r_entry(0, kRemapperNeo0Client + 1, 3) | client_r_entry(1, kRemapperNeo0Client + 2, 3),
+     dm_producer_client_l(kRemapperDmClient0, 3, 0x3)},
+    // Control: a DM5 producer, whose ClientL is on client 1.
+    {4, client_r_entry(0, kRemapperNeo0Client + 2, 4), dm_producer_client_l(kRemapperDmClient1, 4, 0x1)},
+}};
+
+}  // namespace
+
+// DM0's boot clear must disarm every one-to-many pair a killed DM->Tensix program left armed, by clearing only ClientL.
+// Zeroing ClientR first would point the pair's consumers at client 0.
+TEST_F(UnitMeshFixture, BootClearDisarmsStaleClient0ProducerPairs) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "The remapper is Quasar-only";
+    }
+
+    run_remapper_probe(this->device(), kRemapperProbePlant, kStaleDmProducerPairs);
+    const std::vector<uint32_t> before = run_remapper_probe(this->device(), kRemapperProbeRead, kStaleDmProducerPairs);
+    ASSERT_EQ(before.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
+    for (const PlantedPair& p : kStaleDmProducerPairs) {
+        ASSERT_EQ(before[p.pair], p.client_l) << "setup did not leave pair " << p.pair << " armed";
+    }
+
+    reboot_firmware(id_to_device_, devices_, num_command_queues());
+
+    const std::vector<uint32_t> after = run_remapper_probe(this->device(), kRemapperProbeRead, kStaleDmProducerPairs);
+    ASSERT_EQ(after.size(), ::dfb::NUM_REMAPPER_PAIRINGS);
+    for (uint32_t pair = 0; pair < ::dfb::NUM_REMAPPER_PAIRINGS; pair++) {
+        EXPECT_NE(after[pair], kRemapperProbeSentinel) << "probe kernel did not report pair " << pair;
+        EXPECT_EQ(after[pair] & kClientLValidMask, 0u) << "pair " << pair << " still armed after reboot";
+    }
+    if (HasFailure()) {
+        // Do not leave the stale pairs armed for later tests.
+        run_remapper_probe(this->device(), kRemapperProbeClear, kStaleDmProducerPairs);
+    }
 }
 
 }  // namespace tt::tt_metal

@@ -310,10 +310,11 @@ extern "C" uint32_t _start1() {
 
         // Reset all remapper pairs, in case they are in some invalid sticky state left from previous
         // program runs.
-        g_remapper_configurator.clear_all_pairs();
-        g_remapper_configurator.write_all_pairs();
-        // The writes are posted, read back the last pair so every clear has fully completed
-        (void)overlay::RemapperAPI::get_clientL_valid_hw(REMAP_NUM_PAIRS - 1);
+        for (uint32_t pair = 0; pair < REMAP_NUM_PAIRS; pair++) {
+            WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair), 0u);
+        }
+        // The writes are posted, read back the last one so every clear has fully completed.
+        (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(REMAP_NUM_PAIRS - 1));
 
         // Initialize wait for trisc FW
         for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
