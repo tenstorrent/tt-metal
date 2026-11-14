@@ -83,35 +83,36 @@ autograd::TensorPtr layernorm_moreh(
 
 autograd::TensorPtr layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, std::optional<autograd::TensorPtr> beta_opt) {
-    const auto& beta_val = beta_opt.has_value() ? beta_opt.value()->get_value() : core::zeros_like(gamma->get_value());
+    const autograd::TensorPtr beta = beta_opt.value_or(nullptr);
+    std::optional<ttnn::Tensor> zero_beta;
+    if (beta == nullptr) {
+        zero_beta = core::zeros_like(gamma->get_value());
+    }
+    const ttnn::Tensor& beta_val = (beta != nullptr) ? beta->get_value() : zero_beta.value();
 
-    auto tensor_shape = tensor->get_value().logical_shape();
-    auto mean = core::empty(
-        ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
-        &autograd::ctx().get_device(),
-        tensor->get_value().memory_config());
-    auto rstd = ttnn::empty_like(mean);
+    const bool grad_enabled = autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED;
+    const bool needs_grad = grad_enabled && autograd::any_requires_grad(tensor, gamma, beta);
 
-    auto out_tensors =
-        ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta_val, 1e-6F, /* return_mean_std */ true);
+    auto out_tensors = ttml::metal::layernorm_fw(
+        tensor->get_value(), gamma->get_value(), beta_val, 1e-6F, /* return_mean_rstd */ needs_grad);
 
     auto out = autograd::create_tensor(out_tensors[0].value());
-    mean = out_tensors[1].value();
-    rstd = out_tensors[2].value();
-    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta_opt]() {
+    if (!needs_grad) {
+        return out;
+    }
+
+    auto mean = out_tensors[1].value();
+    auto rstd = out_tensors[2].value();
+    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
         auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
-        if (beta_opt.has_value()) {
-            beta_opt.value()->add_grad(res[2].value());
+        if (beta != nullptr) {
+            beta->add_grad(res[2].value());
         }
     };
 
-    if (beta_opt.has_value()) {
-        out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma, beta_opt.value()));
-    } else {
-        out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
-    }
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma, beta));
 
     return out;
 }
