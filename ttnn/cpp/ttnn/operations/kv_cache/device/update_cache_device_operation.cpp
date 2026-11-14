@@ -77,6 +77,9 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
                 "Input tensor memory layout must not be WIDTH_SHARDED but got {}",
                 input_tensor.memory_config().memory_layout());
             TT_FATAL(
+                input_tensor.memory_config().shard_spec().has_value(),
+                "Update cache: sharded input must have shard_spec (ND_SHARDED not supported)");
+            TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1],
                 "Input tensor shard width ({}) must equal padded width ({})",
                 input_tensor.shard_spec().value().shape[1],
@@ -110,6 +113,9 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
                 "Input tensor memory layout must not be WIDTH_SHARDED but got {}",
                 input_tensor.memory_config().memory_layout());
+            TT_FATAL(
+                input_tensor.memory_config().shard_spec().has_value(),
+                "Update cache: sharded input must have shard_spec (ND_SHARDED not supported)");
             TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1],
                 "Input tensor shard width ({}) must equal padded width ({})",
