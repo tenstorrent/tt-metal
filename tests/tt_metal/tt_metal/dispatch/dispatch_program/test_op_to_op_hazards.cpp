@@ -47,6 +47,7 @@
 #include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "tt_metal/test_utils/launch_program.hpp"
 
 namespace tt::tt_metal {
 namespace {
