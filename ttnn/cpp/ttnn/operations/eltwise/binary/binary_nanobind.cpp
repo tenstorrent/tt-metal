@@ -94,17 +94,20 @@ constexpr auto kDivideDtypeFootnote =
 constexpr auto kAdditiveFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` (default) for bfloat16 datatype, the operation uses the FPU implementation for better performance, with a max error of 1 ULP.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses the SFPU with the result rounded to nearest even (RNE), which matches the golden exactly at a slight perf cost.
-        `False` is only accepted when the output dtype is BFLOAT16, since the accurate path exists to round the bfloat16 result; requesting it for any other output dtype raises an error. Leave the flag unset (or pass `True`) for those.)doc";
+        `False` is only accepted when the output dtype is BFLOAT16, since the accurate path exists to round the bfloat16 result; requesting it for any other output dtype raises an error. Leave the flag unset (or pass `True`) for those.
+        With one FLOAT32 operand and one BFLOAT16, BFLOAT8_B or BFLOAT4_B operand, the operation uses the SFPU implementation even when :attr:`fast_and_approximate_mode` is `True`.)doc";
 constexpr auto kMultiplyFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
-        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).)doc";
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        With one FLOAT32 operand and one BFLOAT16, BFLOAT8_B or BFLOAT4_B operand, the operation uses the SFPU implementation even when :attr:`fast_and_approximate_mode` is `True`.)doc";
 constexpr auto kBiasGeluFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, the gelu is computed with the fast lookup-table approximation.
         When it is `False` (default), the accurate gelu is used, matching the default of :attr:`ttnn.gelu`.)doc";
 constexpr auto kDivideFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero.
-        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.)doc";
+        When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
+        With one FLOAT32 operand and one BFLOAT16, BFLOAT8_B or BFLOAT4_B operand, the operation uses the SFPU implementation even when :attr:`fast_and_approximate_mode` is `True`.)doc";
 constexpr auto kDivFastApproxPostNote =
     R"doc(With INT32 tensor operands or an INT32 tensor and an integer scalar, rounding_mode `None` produces a FLOAT32 output and output datatype conversion is not supported, while `floor` and `trunc` produce an INT32 output.
         For these INT32 operands with rounding_mode `floor` or `trunc`, division by zero and INT32_MIN / -1 are undefined, regardless of :attr:`fast_and_approximate_mode`.
