@@ -17,7 +17,7 @@ import torch
 
 import ttnn
 
-from ...layers.conv2d import Conv2d, configure_conv2d
+from ...layers.conv2d import configure_conv2d
 from ...layers.normalization import GroupNorm
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
@@ -60,15 +60,6 @@ def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int]
                     table.setdefault((h // h_factor + 2, w, cin, cout), 0)
             h, w = (h - 2) // 2 + 1, (w - 2) // 2 + 1
     return table
-
-
-def _auto_conv_slicing(module, mesh_shape: tuple[int, ...]) -> None:
-    """ttnn picks the slicing of every conv of this instance (a reference can have any 16-px shape): an empty
-    per-instance table for this mesh instead of the shared defaults, which are tuned for other models' shapes."""
-    if isinstance(module, Conv2d):
-        module.slice_params = {**Conv2d.slice_params, mesh_shape: {}}
-    for _, child in module.named_children():
-        _auto_conv_slicing(child, mesh_shape)
 
 
 GROUP_NORM_MAX_BLOCK_ROWS = 64
@@ -175,7 +166,8 @@ class Flux3KleinVae:
 
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
         self._encoder = Flux2VaeEncoder(parallel_config=encoder_parallel, **common)
-        _auto_conv_slicing(self._encoder, mesh_shape)
+        # ttnn picks the encoder's conv slicing (a reference can have any 16-px shape), not the shared table
+        configure_conv2d(self._encoder, slice_params={mesh_shape: {}}, replace=True)
         _bounded_group_norm_blocks(self._encoder)
         load(self._encoder, encoder_parallel, "vae_encoder_main")
 
