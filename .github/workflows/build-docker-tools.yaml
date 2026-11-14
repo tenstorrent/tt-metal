@@ -101,7 +101,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.tool }}
-        uses: tenstorrent/.github/actions/docker-bake-publish@8e8393cc4f82ee6cf4c7c0a614896f52dd104188 # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-bake-publish@1b78e71e27cb55201854036d29ab89c6782c140e # nsexton/docker-sbom
         with:
           bake-file: dockerfile/docker-bake.hcl
           targets: ${{ matrix.tool }}
