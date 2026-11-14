@@ -58,13 +58,26 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             args.padded_slice_end[i]);
     }
     if (tensor_args.preallocated_output.has_value()) {
-        const auto output_shape_required = compute_output_specs(args, tensor_args).padded_shape();
+        const auto output_spec_required = compute_output_specs(args, tensor_args);
+        const auto& output_shape_required = output_spec_required.padded_shape();
         const auto& out_tensor = tensor_args.preallocated_output.value();
         TT_FATAL(
             out_tensor.padded_shape() == output_shape_required,
             "The input tensors need a shape of {}, however the output tensor is only {}",
             output_shape_required,
             out_tensor.padded_shape());
+        // The program factories size output sticks from the output tensor, so a different dtype or layout would be
+        // written with the wrong element size and silently produce wrong values.
+        TT_FATAL(
+            out_tensor.dtype() == output_spec_required.data_type(),
+            "Preallocated output tensor must have dtype {}, but got {}",
+            output_spec_required.data_type(),
+            out_tensor.dtype());
+        TT_FATAL(
+            out_tensor.layout() == output_spec_required.layout(),
+            "Preallocated output tensor must have layout {}, but got {}",
+            output_spec_required.layout(),
+            out_tensor.layout());
     }
 }
 
