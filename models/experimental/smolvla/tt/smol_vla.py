@@ -300,17 +300,20 @@ def extract_vision_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, 
 
 
 def load_vision_weights_strict(vision_model: nn.Module, state_dict: Dict[str, torch.Tensor]) -> None:
-    """Load the vision tower from a SmolVLA state dict, raising if any weight is not loaded.
+    """Load the vision tower from a SmolVLA state dict, raising if any parameter is not loaded.
 
     Raises KeyError when no vision keys are found (e.g. a different key prefix) and RuntimeError
     when the tower's parameters are missing from the checkpoint, instead of leaving them randomly initialised.
+    Missing buffers (e.g. position_ids, persistent in some transformers versions) are tolerated.
     """
     vision_weights = extract_vision_state_dict(state_dict)
     if not vision_weights:
         raise KeyError("SmolVLA state dict has no 'model.vlm_with_expert.vlm.model.vision_model.' keys")
     result = vision_model.load_state_dict(vision_weights, strict=False)
-    if result.missing_keys:
-        raise RuntimeError(f"SmolVLA vision weights missing from state dict: {result.missing_keys[:5]}")
+    parameter_names = {name for name, _ in vision_model.named_parameters()}
+    missing = [key for key in result.missing_keys if key in parameter_names]
+    if missing:
+        raise RuntimeError(f"SmolVLA vision weights missing from state dict: {missing[:5]}")
 
 
 def extract_connector_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
