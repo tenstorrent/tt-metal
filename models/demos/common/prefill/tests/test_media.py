@@ -104,12 +104,16 @@ def test_partials_sum_to_the_image_rows(chunks, refs):
     assert (lookup > 0).sum() == is_img.sum(), "every image position is assigned exactly once"
 
 
-def test_partials_balance_across_sp_rows():
+def test_partials_are_contiguous_blocks_per_sp_row():
+    """Each SP row's slots are 1..k with no holes, so filling it is one copy. A row taking a full block
+    bounds the table height; rows past the last block take none."""
     chunks, refs = [PrefillChunk(0, 0, C)], [ref(0, 0, SP * 4, 1)]
     embs = {refs[0].media_key: torch.randn(refs[0].num_tokens, HIDDEN).to(torch.bfloat16)}
     table, lookup, _ = build_media_partials(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
-    per_row = [(lookup[r] > 0).sum().item() for r in range(SP)]
-    assert max(per_row) - min(per_row) <= 1, per_row
+    for r in range(SP):
+        slots = sorted(lookup[r][lookup[r] > 0].tolist())
+        assert slots == list(range(1, len(slots) + 1)), (r, slots)
+    assert max((lookup[r] > 0).sum().item() for r in range(SP)) + 1 <= table.shape[1]
 
 
 def test_partials_text_only():

@@ -79,8 +79,8 @@ def build_media_partials(
     without refs. h is table_height(k + 1): a power of two, so a forward reuses one of a few shapes.
 
     For the 2D embedding's pre-reduce-scatter partials. Each image row is assigned to exactly one SP
-    row, round-robin, so the reduce-scatter that already runs sums it into place: adding zeros is exact
-    in bf16. Row 0 of every table is zeros and lookup 0 means "not this row's", so a row contributes
+    row, in contiguous blocks, so the reduce-scatter that already runs sums it into place: adding zeros
+    is exact in bf16. Row 0 of every table is zeros and lookup 0 means "not this row's", so a row contributes
     nothing where it was not assigned.
 
     ``lookup`` and ``is_img`` are indexed by the all-gathered token order (chip-major, _positions), not
@@ -102,10 +102,13 @@ def build_media_partials(
         row_in_ref.append(flat_pos[sel] - ref.start_pos)
     flats, ref_id, row_in_ref = torch.cat(flats), torch.cat(ref_id), torch.cat(row_in_ref)
 
-    # Round-robin: the n-th image row goes to SP row n % sp, at slot n // sp + 1. Slot 0 stays zero, so
-    # a row that was not assigned a position contributes nothing to the reduce-scatter's sum.
+    # Contiguous blocks: the n-th image row goes to SP row n // per_row, at slot n % per_row + 1, so a
+    # row's slots are one run and filling it is one copy rather than a strided scatter. Slot 0 stays
+    # zero, so a row that was not assigned a position contributes nothing to the reduce-scatter's sum.
+    # The tallest row still holds per_row slots, so the table is the same height round-robin gave.
     order = torch.arange(flats.numel())
-    sp_row, slot = order % sp, order // sp + 1
+    per_row = max(1, -(-flats.numel() // sp))
+    sp_row, slot = order // per_row, order % per_row + 1
 
     s_total = positions.numel()
     hidden = rows_of(refs[0]).shape[1]
