@@ -25,7 +25,6 @@ _PROMPTS_FILE = os.path.join(os.path.dirname(__file__), "sample_prompts.json")
 
 _MAX_NEW_TOKENS = 128
 _MAX_SEQ_LEN = 4096
-_TOP_P = {"temperature": 1.0, "top_p": 0.95, "top_k": 32}
 _MAX_CONTEXT = 131072
 _SAMPLE_PROMPTS = os.path.join(os.path.dirname(__file__), "..", "..", "..", "ttt_compat", "demo", "sample_prompts")
 # Same per-ISL inputs as the Gemma4 demo: nominal ISL -> tt_transformers sample prompt file.
@@ -43,13 +42,22 @@ _ISL_PROMPTS = {
 }
 
 
-def _isl_prompt(tokenizer, isl: int) -> list[int]:
-    """Chat-encoded Gemma4 demo input for ``isl``, clipped from the front of the book to fit the context."""
+def _isl_id(n: int) -> str:
+    return f"isl{n // 1024}k" if n >= 1024 else f"isl{n}"
+
+
+_DFLASH_ISLS = [128, 8192, 65536, 131072]  # subset of _ISL_PROMPTS
+_DFLASH_BLOCK = 16  # DFlash2 block size (drafter.cfg.block_size): rows the last verify round writes past the output
+
+
+def _isl_prompt(tokenizer, isl: int, reserve: int = _MAX_NEW_TOKENS) -> list[int]:
+    """Chat-encoded Gemma4 demo input for ``isl``, clipped from the front of the book so that prompt + ``reserve``
+    tokens fit the context."""
     from models.demos.gemma4.demo.text_demo_v2 import load_inputs
 
     text = load_inputs(os.path.join(_SAMPLE_PROMPTS, _ISL_PROMPTS[isl]), 1, instruct=True)[0]
     prompt = encode_chat(tokenizer, text)
-    excess = len(prompt) - (_MAX_CONTEXT - _MAX_NEW_TOKENS)
+    excess = len(prompt) - (_MAX_CONTEXT - reserve)
     if excess > 0:  # text is ```book```\n\nquestion: drop book tokens, keep the question
         body = tokenizer(text[3:], add_special_tokens=False).input_ids
         prompt = encode_chat(tokenizer, "```" + tokenizer.decode(body[excess + 32 :]))  # 32: retokenization slack
@@ -71,7 +79,7 @@ def _isl_prompt(tokenizer, isl: int) -> list[int]:
         (1, 8, 32, None),
         (8, 4, 32, None),
         (4, 8, 32, None),
-        (1, 4, 32, _TOP_P),
+        (1, 4, 32, "default"),
     ],
     ids=[
         "dp1-tp4-b1-greedy",
@@ -99,6 +107,9 @@ def test_muse_glimmer_demo(mesh_device, data_parallel, tp, batch_size_per_replic
         )
         models.append(MuseGlimmerModel(args, sm))
         logger.info(f"Replica {i + 1}/{len(submeshes)} loaded in {time.time() - t0:.1f}s")
+
+    if sampling == "default":
+        sampling = models[0].args.default_sampling
 
     gen = MuseGlimmerGenerator(models, enable_trace=True)
     gb = gen.global_batch_size
@@ -132,6 +143,30 @@ def test_muse_glimmer_demo(mesh_device, data_parallel, tp, batch_size_per_replic
     gen.release_traces()
 
 
+def _dflash_generator(sm, args, model, enable_trace=True):
+    """DFlash2 drafter + selector + generator for batch 1 on `model` (user 0 owns the arange page-table row)."""
+    import torch
+
+    import ttnn
+    from models.demos.muse_glimmer_30b.tt.dflash.drafter import TtDFlash2Drafter
+    from models.demos.muse_glimmer_30b.tt.dflash.generator import DFlash2Generator
+    from models.demos.muse_glimmer_30b.tt.dflash.selector import HostCandidateSelector
+
+    drafter = TtDFlash2Drafter(sm, args, model.ccl, model.rope)
+    selector = HostCandidateSelector.from_checkpoint()
+    nb = args.max_num_blocks_per_user
+    pt = torch.arange(nb, dtype=torch.int32).reshape(1, nb)
+    pt_tt = ttnn.from_torch(
+        pt,
+        device=sm,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(sm),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return DFlash2Generator(model, drafter, selector, pt, pt_tt, list(args.eos_token_ids), enable_trace=enable_trace)
+
+
 @pytest.mark.parametrize("device_params", [device_params()], indirect=True)
 @(
     pytest.mark.parametrize("mesh_device", [system_mesh_shape_from_env()], indirect=True)
@@ -139,10 +174,9 @@ def test_muse_glimmer_demo(mesh_device, data_parallel, tp, batch_size_per_replic
     else (lambda f: f)
 )
 @pytest.mark.parametrize("tp", [4, 8], ids=["tp4", "tp8"])
-@pytest.mark.parametrize(
-    "isl", list(_ISL_PROMPTS), ids=[f"isl{n // 1024}k" if n >= 1024 else f"isl{n}" for n in _ISL_PROMPTS]
-)
-def test_muse_glimmer_isl(mesh_device, tp, isl):
+@pytest.mark.parametrize("isl", list(_ISL_PROMPTS), ids=[_isl_id(n) for n in _ISL_PROMPTS])
+@pytest.mark.parametrize("sampling", [None, "default"], ids=["greedy", "sample"])
+def test_muse_glimmer_isl(mesh_device, tp, isl, sampling):
     n_dev = mesh_device.get_num_devices()
     if tp > n_dev:
         pytest.skip(f"tp={tp} needs more devices than the {n_dev} available")
@@ -156,16 +190,59 @@ def test_muse_glimmer_isl(mesh_device, tp, isl):
         ckpt, mesh_device=sm, max_batch_size=1, max_seq_len=max_seq_len, max_prefill_len=max_seq_len
     )
     model = MuseGlimmerModel(args, sm)
+    if sampling == "default":
+        sampling = args.default_sampling
 
     gen = MuseGlimmerGenerator([model], enable_trace=True)
-    result = gen.generate([prompt], _MAX_NEW_TOKENS, sampling=None, stop_token_ids=list(args.eos_token_ids), seed=0)
+    result = gen.generate([prompt], _MAX_NEW_TOKENS, sampling=sampling, stop_token_ids=list(args.eos_token_ids), seed=0)
 
     logger.info(f"prompt tokens: {len(prompt)}\n--- OUTPUT: {decode(tokenizer, result['tokens'][0])}")
     logger.info(
         f"SUMMARY: TTFT {result['ttft_s']:.2f}s | decode {result['tok_s_per_user']:.2f} tok/s/user | "
-        f"isl={len(prompt)} tp={tp}"
+        f"isl={len(prompt)} tp={tp} | sampling={sampling}"
     )
     gen.release_traces()
+
+
+@pytest.mark.parametrize("device_params", [device_params()], indirect=True)
+@(
+    pytest.mark.parametrize("mesh_device", [system_mesh_shape_from_env()], indirect=True)
+    if system_mesh_shape_from_env() is not None
+    else (lambda f: f)
+)
+@pytest.mark.parametrize("tp", [4], ids=["tp4"])
+@pytest.mark.parametrize("isl", _DFLASH_ISLS, ids=[_isl_id(n) for n in _DFLASH_ISLS])
+@pytest.mark.parametrize("sampling", [None, "default"], ids=["greedy", "sample"])
+def test_muse_glimmer_dflash(mesh_device, tp, isl, sampling):
+    n_dev = mesh_device.get_num_devices()
+    if tp > n_dev:
+        pytest.skip(f"tp={tp} needs more devices than the {n_dev} available")
+
+    sm = dp_submeshes(mesh_device, 1, tp)[0]
+    ckpt = checkpoint_dir()
+    tokenizer = load_tokenizer(ckpt)
+    prompt = _isl_prompt(tokenizer, isl, reserve=_MAX_NEW_TOKENS + _DFLASH_BLOCK)
+    max_seq_len = min(-(-(len(prompt) + _MAX_NEW_TOKENS + _DFLASH_BLOCK) // 256) * 256, _MAX_CONTEXT)
+    args = MuseGlimmerModelArgs.from_checkpoint(
+        ckpt, mesh_device=sm, max_batch_size=1, max_seq_len=max_seq_len, max_prefill_len=max_seq_len
+    )
+    model = MuseGlimmerModel(args, sm)
+    if sampling == "default":
+        sampling = args.default_sampling
+    gen = _dflash_generator(sm, args, model, enable_trace=True)
+    tokens, stats = gen.generate(prompt, _MAX_NEW_TOKENS, sampling=sampling, seed=0)
+
+    logger.info(f"prompt tokens: {len(prompt)}\n--- OUTPUT: {decode(tokenizer, tokens)}")
+    mm = stats["mean_ms"]
+    logger.info(
+        f"SUMMARY: TTFT {stats['ttft_s']:.2f}s | decode {stats['decode_tok_s']:.2f} tok/s/user | "
+        f"isl={len(prompt)} tp={tp} | dflash2 mean_accept={stats['mean_accept']:.2f} rounds={stats['rounds']} "
+        f"round_ms={mm['total']:.1f} (draft {mm['draft']:.1f} / select {mm['select']:.1f} / "
+        f"verify {mm['verify']:.1f} / accept {mm['accept']:.1f} / other {mm['other']:.1f}) | sampling={sampling}"
+    )
+    logger.info(f"dflash2 stats: {stats}")
+    gen.close()
+    assert len(tokens) >= 2 and stats["mean_accept"] >= (2.0 if stats["sampling"] is None else 1.5)
 
 
 @pytest.mark.parametrize("device_params", [device_params()], indirect=True)

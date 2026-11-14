@@ -39,6 +39,24 @@ def pack_qkvg(q_w, k_w, v_w, g_w, tp: int, head_dim: int = 128) -> torch.Tensor:
     return torch.cat(blocks, dim=-1).contiguous()
 
 
+def pack_qkv(q_w, k_w, v_w, tp: int, head_dim: int = 128) -> torch.Tensor:
+    """Pack q/k/v HF weights [out, in] into [H, tp * W_local], rank-major [Q_i | K_i | V_i] blocks.
+
+    W_local = (ql + 2*kvl) * head_dim; rank i gets the contiguous Q heads [i*ql, (i+1)*ql) and KV heads
+    [i*kvl, (i+1)*kvl). Requires n_q % tp == 0 and n_kv % tp == 0 (no KV replication).
+    """
+    n_q = q_w.shape[0] // head_dim
+    n_kv = k_w.shape[0] // head_dim
+    assert n_q % tp == 0 and n_kv % tp == 0 and v_w.shape == k_w.shape
+    ql, kvl = n_q // tp, n_kv // tp
+    blocks = []
+    for i in range(tp):
+        rows = slice(i * ql * head_dim, (i + 1) * ql * head_dim)
+        kv_rows = slice(i * kvl * head_dim, (i + 1) * kvl * head_dim)
+        blocks.append(torch.cat([q_w[rows].T, k_w[kv_rows].T, v_w[kv_rows].T], dim=-1))
+    return torch.cat(blocks, dim=-1).contiguous()
+
+
 def pack_o(o_w, tp: int) -> torch.Tensor:
     """o_w [H, nq*hd] -> o_w.T [nq*hd, H]. Row-parallel: shard on dim -2, rank i gets rows
     [i*ql*hd:(i+1)*ql*hd] (matching the head split of pack_qkvg). Partial outputs need all_reduce."""
