@@ -402,12 +402,45 @@ constexpr bool llk_pack_matmul_kernel()
     return llk_pack_matmul_api<dep * 0 + 1>::value || llk_pack_matmul_api<dep * 0 + 2>::value || llk_pack_matmul_api<dep * 0 + 3>::value;
 }
 
+// Marks the matmul API's plain inits set as the kernel is parsed (matmul.h): completing llk_pack_shape_set<N> makes
+// llk_pack_shape_used(llk_pack_shape_tag<N>) callable. 5: an init with a constant block that is not tall, 6: one with a
+// constant tall block (rt >= 4, ct <= 2); a run-time block sets none.
+#define LLK_PACK_SHAPE_MARKS 1
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnon-template-friend"
+template <int>
+struct llk_pack_shape_tag
+{
+    friend auto llk_pack_shape_used(llk_pack_shape_tag);
+};
+#pragma GCC diagnostic pop
+template <int N>
+struct llk_pack_shape_set
+{
+    friend auto llk_pack_shape_used(llk_pack_shape_tag<N>)
+    {
+        return true;
+    }
+};
+// the probe depends on dep, so it reads the marks of the whole kernel (at the end of the unit)
+template <int N, std::uint32_t dep, typename = decltype(llk_pack_shape_used(llk_pack_shape_tag<N + 0 * dep>{}))>
+constexpr bool llk_pack_shape_marked(int)
+{
+    return true;
+}
+template <int N, std::uint32_t dep>
+constexpr bool llk_pack_shape_marked(...)
+{
+    return false;
+}
+
 // A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST or at LoFi an earlier pack start
-// costs them L1 grants.
+// costs them L1 grants. Only tall blocks lose them; a kernel whose constant blocks are all not tall keeps the early start.
 template <std::uint32_t dep>
 constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
 {
-    return (is_fp32_dest_acc_en || MATH_FIDELITY == MathFidelity::LoFi) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value;
+    return (is_fp32_dest_acc_en || MATH_FIDELITY == MathFidelity::LoFi) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value &&
+           !(llk_pack_shape_marked<5, dep>(0) && !llk_pack_shape_marked<6, dep>(0));
 }
 
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h and seven eltwise_unary headers).

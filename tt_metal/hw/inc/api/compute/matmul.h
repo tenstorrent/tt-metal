@@ -1085,7 +1085,22 @@ ALWI void matmul_block_fe(
 // the unpack and pack calls key no ct or rt (MATMUL_FE_MARK, MATMUL_FE_SHAPE only)
 #define matmul_block_init(...) MATMUL_FE_CAT(MATMUL_FE_UINIT_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define MATMUL_FE_UINIT(a, b, ct, rt) \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt)>
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt)>
+#if defined(UCK_CHLKC_PACK)
+// a dim that is a constant expression, 0xFF otherwise (by value, as MATMUL_FE_SHAPE)
+#define MATMUL_FE_V(x)                                                                   \
+    (__builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(x))) ? ::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(x)) \
+                                                                                 : 0xFFu)
+// 0, marking the init's block for the pack (cpack_common.h llk_pack_shape_set): 5 constant and not tall, 6 constant and tall,
+// 7 (read by nothing) run time
+#define MATMUL_FE_PACK_SHAPE(ct, rt)                                                                   \
+    (0 * sizeof(::ckernel::packer::llk_pack_shape_set<                                                \
+             (MATMUL_FE_V(ct) == 0xFFu || MATMUL_FE_V(rt) == 0xFFu) ? 7                                \
+             : (MATMUL_FE_V(rt) >= 4 && MATMUL_FE_V(ct) <= 2)       ? 6                                \
+                                                                    : 5>))
+#else
+#define MATMUL_FE_PACK_SHAPE(ct, rt) 0
+#endif
 #define MATMUL_FE_UINIT_2(a, b) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b)
 #define MATMUL_FE_UINIT_3(a, b, tr) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b, tr)
 #define MATMUL_FE_UINIT_4(a, b, tr, ct) MATMUL_FE_UINIT(a, b, ct, 1)(__builtin_LINE(), a, b, tr, ct)
