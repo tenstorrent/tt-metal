@@ -339,6 +339,9 @@ void kernel_main() {
                         pack_reconfig_l1_acc(0);
                     } else {
                         // scores[q,sk]=ΣQ·K. in1=K, transpose=true (within-tile transpose => Kᵀ).
+                        // The previous group's PV left srcA/srcB in cb_qk_im's bf16 format; restore
+                        // srcA=cb_k_in, srcB=cb_q_in as the scaled branch does. No-op for bf16 Q/K.
+                        reconfig_data_format(cb_k_in, cb_q_in);
                         mm_no_mop_init_short(cb_q_in, cb_k_in, /*transpose=*/true, 1, qsb, DHt);
                         configure_row_pack_width(cb_qk_im, 1);
                         for (uint32_t kt = 0; kt < Skt; ++kt) {

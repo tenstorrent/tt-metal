@@ -172,6 +172,8 @@ void kernel_main() {
                 // Phase 1: Q@K^T -> scores and running row max.
                 {
                     // Use pack width 1 because Q tilize changes packer addrmods; wider packs need extra reinit.
+                    // The previous group's PV left srcA/srcB in cb_qk_im's bf16 format; restore K/Q for QK.
+                    reconfig_data_format(cb_k_src, cb_q_in);
                     mm_no_mop_init_short(cb_q_in, cb_k_src, /*transpose=*/true, 1, qsb, DHt);
                     configure_row_pack_width(cb_qk_im, 1);
                     for (uint32_t kt = 0; kt < Skt; ++kt) {
