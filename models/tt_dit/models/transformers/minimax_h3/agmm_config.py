@@ -25,6 +25,8 @@ import math
 import os
 from typing import NamedTuple
 
+from loguru import logger
+
 import ttnn
 
 from ....utils.matmul import agmm_worker_grid
@@ -137,6 +139,7 @@ def _parse_agmm_overrides(value: str) -> dict[tuple[int, int, int], tuple]:
 
 
 _AGMM_OVERRIDES = _parse_agmm_overrides(os.environ.get("MINIMAX_H3_AGMM_BLOCKS", ""))
+_LOGGED_OVERRIDES: set[tuple[int, int, int]] = set()  # shapes whose override was logged once
 
 
 # Blocking of the dynamic-length path per (K, N) layer and length class; to_qkv and to_out take one
@@ -215,4 +218,11 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     if not divisors:
         return None
     key = (k, n, max(divisors))
-    return _AGMM_OVERRIDES.get(key) or _AGMM_LEGACY_BLOCKS.get(key, AGMM_BLOCK_SIZES[key])
+    if key in _AGMM_OVERRIDES:
+        if (k, n, m) not in _LOGGED_OVERRIDES:
+            _LOGGED_OVERRIDES.add((k, n, m))
+            logger.info(
+                f"[agmm] blocking override for (K, N, M)=({k}, {n}, {m}): key {key}, blocks {_AGMM_OVERRIDES[key]}"
+            )
+        return _AGMM_OVERRIDES[key]
+    return _AGMM_LEGACY_BLOCKS.get(key, AGMM_BLOCK_SIZES[key])
