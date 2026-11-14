@@ -18,6 +18,62 @@
 namespace ckernel {
 namespace sfpu {
 
+// True when calculate_sfpu_binary_two_row can serve the call: a single-instruction op with no
+// software rounding after it, over an even row count. An odd ITERATIONS takes the one-row body
+// instead; every caller passes 8 rows per face.
+template <BinaryOp BINOP, bool software_rounding, int ITERATIONS>
+inline constexpr bool use_two_row_binary =
+    (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !software_rounding &&
+    ITERATIONS % 2 == 0;
+
+/**
+ * @brief ADD/SUB/MUL over two Dest rows per iteration.
+ *
+ * A row that takes no software rounding is load, load, op, store, and the SFPU stalls on the
+ * op -> store dependency on every row. Two rows per iteration, the pattern ckernel_sfpu_addcmul.h
+ * uses, let the second row's op fill that stall: SFPLOAD x4, op x2, SFPSTORE x2 and one TTINCRWC
+ * per two rows. Identical instructions on identical operands, only the issue order changes, so
+ * the results are bit-identical to the one-row body.
+ *
+ * @tparam BINOP: ADD, SUB or MUL
+ * @tparam ITERATIONS: number of sfpi rows to process (even)
+ * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
+ */
+template <BinaryOp BINOP, int ITERATIONS, trisc::DstTileShape TILE_SHAPE>
+inline void calculate_sfpu_binary_two_row(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(
+        use_two_row_binary<BINOP, false /*software_rounding*/, ITERATIONS>,
+        "two rows per iteration: ADD/SUB/MUL over an even row count");
+    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
+    const std::uint32_t off_in0 = dst_index_in0 * dst_tile_size_sfpi;
+    const std::uint32_t off_in1 = dst_index_in1 * dst_tile_size_sfpi;
+    const std::uint32_t off_out = dst_index_out * dst_tile_size_sfpi;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];
+        sfpi::vFloat a_in1 = sfpi::dst_reg[off_in1];
+        sfpi::vFloat b_in0 = sfpi::dst_reg[off_in0 + 1];
+        sfpi::vFloat b_in1 = sfpi::dst_reg[off_in1 + 1];
+        sfpi::vFloat a_res;
+        sfpi::vFloat b_res;
+        if constexpr (BINOP == BinaryOp::ADD) {
+            a_res = a_in0 + a_in1;
+            b_res = b_in0 + b_in1;
+        } else if constexpr (BINOP == BinaryOp::SUB) {
+            a_res = a_in0 - a_in1;
+            b_res = b_in0 - b_in1;
+        } else {
+            a_res = a_in0 * a_in1;
+            b_res = b_in0 * b_in1;
+        }
+        sfpi::dst_reg[off_out] = a_res;
+        sfpi::dst_reg[off_out + 1] = b_res;
+        sfpi::dst_reg += 2;
+    }
+}
+
 /**
  * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, MUL and DIV.
  *
@@ -49,13 +105,19 @@ inline void calculate_sfpu_binary(
     static_assert(
         dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB,
         "NearestEven rounding parameter is currently supported for ADD and SUB only");
+    // ADD/SUB round to bf16 in software only under NearestEven on a 16-bit Dest; MUL never does
+    // (no narrowing), DIV always does on a 16-bit Dest and is excluded by use_two_row_binary.
+    constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
+    if constexpr (use_two_row_binary<BINOP, round_to_bf16_rne, ITERATIONS>) {
+        calculate_sfpu_binary_two_row<BINOP, ITERATIONS, TILE_SHAPE>(dst_index_in0, dst_index_in1, dst_index_out);
+        return;
+    }
     constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         if constexpr (BINOP == BinaryOp::ADD) {
             using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
-            constexpr bool round_to_bf16 = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
-            using Output = SfpuOperand<SfpuReg::Dest, DestBf16RneFormat<round_to_bf16>>;
+            using Output = SfpuOperand<SfpuReg::Dest, DestBf16RneFormat<round_to_bf16_rne>>;
             calculate_binary_operands<AddFloatMath, 1 /*ITERATIONS*/>(
                 Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
                 Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
@@ -94,8 +156,7 @@ inline void calculate_sfpu_binary(
                 }
             }
 
-            if constexpr (
-                BINOP == BinaryOp::SUB && !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven) {
+            if constexpr (BINOP == BinaryOp::SUB && round_to_bf16_rne) {
                 result = float32_to_bf16_rne(result);
             }
 
