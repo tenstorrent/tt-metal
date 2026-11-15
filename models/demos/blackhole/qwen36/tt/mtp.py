@@ -595,7 +595,8 @@ class Qwen36MTP:
         token_ids     : [1,S] uint32 device — MTP input tokens for the prompt.
         page_table / chunk_page_table : the MTP layer's own paged KV page table.
         Returns the fractured decoder-block output [1,1,S,dim/tp] (raw, before mtp.norm — only the
-        KV write matters here; callers free it).
+        KV write matters here; callers free it). Under TP with a page table the layer stops after its paged KV fill
+        and this returns None (the K and V come from the same operations); a forward without a page table runs whole.
         """
         S = token_ids.shape[-1]
         tok_emb = self.embd(token_ids)  # [1,S,dim/tp]
@@ -612,6 +613,7 @@ class Qwen36MTP:
             chunk_page_table=chunk_page_table if chunk_page_table is not None else page_table,
             chunk_start_idx=chunk_start_idx,
             chunk_start_idx_tensor=chunk_start_idx_tensor,
+            kv_only=self.num_devices > 1 and page_table is not None,
         )
         ttnn.deallocate(fused)
         return out
