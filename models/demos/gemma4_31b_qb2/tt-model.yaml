@@ -1,12 +1,22 @@
 # tt-model.yaml — google/gemma-4-31B-it on a QuietBox 2 (P300x2: 2x P300 boards = 4 Blackhole chips, (1, 4) mesh, TP4)
-# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update1/{tt-model.yaml,card.md} by render_manifest_u1.py.
+# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update2/{tt-model.yaml,card.md} by
+# render_manifest_u2.py.
 #
 #   single-user          DEFAULT: one user on the resident persistent-kernel decode engine (resident_m3_2) with
 #                        DFlash2 speculative decoding (RedHatAI/gemma-4-31B-it-speculator.dflash2, block 8, R=8 verify),
-#                        262,144-token context. = stage-2 regression config D (M2 adapter + M2 delta).
+#                        262,144-token context. = stage-2 regression config D (M2 adapter + M2 delta), with update 2's
+#                        paged-bucket prefill (PB3: tt/generator_resident_spec_vllm_pb3.py; LEAD_DECISIONS_PKG P34, P37).
 #   batch                up to 32 users on the stock ttnn batched decode path with the E1-E4 env knobs.
-#                        = regression config B32 (bench/regression/session_B32).
+#                        = regression config B32 (bench/regression/session_B32), with the paged-bucket prefill
+#                        (B32-PB: tt/generator_vllm_pb.py; P36, P37).
 #   (multi-user resident profile: a later update, not in this package.)
+#
+# Update 2 (2026-11-15; LEAD_DECISIONS_PKG P36-P38): the paged-bucket prefill (tt/prefill_paged.py) on both profiles.
+# Prefill programs are keyed by a fixed bucket set built at boot, so serving many distinct prompt lengths no longer
+# pins device DRAM per novel exact length (update 1: ~0.24 MB per chip per novel length, no eviction). Its runtime
+# switches stay at the code defaults, as every PB gate ran them (GEMMA4_PB_* unset): GEMMA4_PB_GUARD=retire,
+# GEMMA4_PB_SDPA_FLEX=1, GEMMA4_PB_EMBED_ZERO=mul, GEMMA4_PREFILL_WARM_CONT=0 (lazy: a first-seen continuation key
+# builds its programs at first use; =1 pre-builds all of them at boot, ~8 min, see the card).
 #
 #   tt-model package --container models/demos/gemma4_31b_qb2/tt-model.yaml --out /home/ttuser/experiments/gemma4/tt-model-builds
 #   tt-model serve   <builds>/gemma4-31b-it-dflash/tt_kernel_manifest.json [--profile batch]
@@ -32,9 +42,10 @@ source:
   code:                                          # = the import closure traced from the adapters (no lazy-import gaps)
     - models/demos/gemma4_31b_qb2/__init__.py
     - models/demos/gemma4_31b_qb2/README.md
-    - models/demos/gemma4_31b_qb2/tt               # ttnn model (prefill + batch32 decode), adapters, drafters, taps
+    - models/demos/gemma4_31b_qb2/tt               # ttnn model (prefill + batch32 decode), adapters, drafters, taps, PB prefill
     - models/demos/gemma4_31b_qb2/resident_m3_2    # the engine stage-2 D validated (frozen SUMS 4677ca02)
-    - models/demos/gemma4_31b_qb2/vllm_models      # this package's EXTRA_MODELS_DIR (two bundles)
+    - models/demos/gemma4_31b_qb2/vllm_models      # this package's EXTRA_MODELS_DIR (four bundles; the profiles use qb2_pb
+                                                   # and resident_spec_pb3, update 1's qb2 and resident_spec stay)
     - models/demos/gemma4/__init__.py              # spec_policy (generator_resident_spec_vllm.py imports it)
     - models/demos/gemma4/tt/__init__.py
     - models/demos/gemma4/tt/spec_policy.py
@@ -85,7 +96,7 @@ serve:                             # common to both profiles; a profile's env/ad
 
 serve_profiles:
   - name: single-user
-    description: One user on the resident decode engine with DFlash2 speculative decoding, 262K context.
+    description: One user on the resident decode engine with DFlash2 speculative decoding, 262K context, paged-bucket prefill.
     max_num_seqs: 1
     capabilities:
       tool_parser: gemma4                             # = stage-2 D's argv (spec_qb2_resident_spec_262k_m3.json)
@@ -96,14 +107,16 @@ serve_profiles:
       # The resident engine's converted weights (raw BF4/BF8 blocks, 22 GB), in the /tensor-cache mount
       # (~/.cache/tt-model/gemma4-31b-it-dflash/tensors on the host). vllm_models/resident_spec names
       # tt/package_boot.py:Gemma4ResidentSpecPackaged, which converts them on the first start and checks them on every
-      # start (COMPLETE.json: weights revision, engine + converter hashes, precision, file manifest).
+      # start (COMPLETE.json: weights revision, engine + converter hashes, precision, file manifest). Update 2:
+      # vllm_models/resident_spec_pb3 names tt/package_boot_pb3.py:Gemma4ResidentSpecPB3Packaged, the same boot step
+      # (ensure_resident_cache) in front of PB3 (PB prefill + drafter-seed pre-warm + seed-path guard).
       GRES_CACHE: /tensor-cache/gemma4_resident_raw_bf4
       GEMMA4_RESIDENT_PRECISION: bf4                   # must match the converter's dtypes (refused otherwise)
       # The drafter (5.2 GB) is a second checkpoint the single `weights` pointer cannot carry: tt/dflash2.py resolves
       # RedHatAI/gemma-4-31B-it-speculator.dflash2 at its pinned commit b0cd01b4 from the /hf cache, offline
       # (snapshot_download local_files_only). The card's quickstart downloads it first.
     args:
-      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentSpecForCausalLM"]}']
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentSpecPB3ForCausalLM"]}']   # update 2: PB3
       - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--max-num-batched-tokens, "8192"]
@@ -117,7 +130,7 @@ serve_profiles:
       - --no-async-scheduling                         # the custom_class drafter requires sync scheduling
       - [--speculative-config, '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter","num_speculative_tokens":7}']
   - name: batch
-    description: Up to 32 concurrent users on the stock ttnn batched decode path (E1-E4 on), 262K context.
+    description: Up to 32 concurrent users on the stock ttnn batched decode path (E1-E4 on), 262K context, paged-bucket prefill.
     max_num_seqs: 32
     capabilities:
       reasoning_parser: gemma4                        # as B32 ran: no tool parser (lead: ship validated configs only)
@@ -132,7 +145,7 @@ serve_profiles:
       # device-sampled steps unchanged at 29.1 ms (bench/resident/m5b/session_B32omp8 vs session_B32mix).
       OMP_NUM_THREADS: "8"
     args:
-      - [--hf-overrides, '{"architectures":["TTGemma4QB2ForCausalLM"]}']
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2PBForCausalLM"]}']   # update 2: B32-PB (vllm_models/qb2_pb)
       - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--max-num-batched-tokens, "8192"]
@@ -148,7 +161,7 @@ default_profile: single-user          # lead 2026-11-11 (qwen v2 names); multi-u
 
 card:
   description: |
-    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on the stock ttnn decode path.
+    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on the stock ttnn decode path. Both profiles use a paged-bucket prefill: a fixed set of prefill programs built at start-up, so device memory no longer grows with the number of distinct prompt lengths served.
   quickstart: |
     ### At a glance
     - Weights: [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) @ `842da37`; drafter
@@ -166,6 +179,19 @@ card:
       `batch` serves logprobs.
     - Tool calling: `single-user` parses tool calls (vLLM's `gemma4` parser, `tool_choice: "auto"`). `batch` has no tool
       calling.
+
+    ### Update 2: paged-bucket prefill
+    - Both profiles now build their prefill programs for a fixed set of length buckets at start-up. Update 1 compiled a
+      new program set for every distinct prompt length and kept it for the life of the server, about 0.24 MB of device
+      memory per chip per new length. Update 2's program set is bounded by the fixed buckets.
+    - Decoding is unchanged. In the gating runs, update 2's outputs matched update 1's on the same prompts.
+    - Start-up cost, measured with the kernels already compiled: about 40 s more for `batch`; about 5 s more for
+      `single-user`, which also pre-builds the drafter's seed programs (about 6.5 MB per chip). The extra compile time on a
+      first start has not been measured yet.
+    - A prompt that continues past its first 8,192-token chunk at a new length class builds a few programs the first time
+      that class is seen (lazy, the default). To build all of them at start-up instead, set
+      `GEMMA4_PREFILL_WARM_CONT=1`: start-up takes about 8 min longer (485.7 s measured) and uses about 8.8 MB more per
+      chip.
 
     ### Which profile
     - One user: `single-user`.
@@ -186,6 +212,7 @@ card:
       (about 70 s: 22 GB from the 59 GB checkpoint) and compiles kernels once (about 9.5 min).
     - Later starts: about 2.5 min, including a sha256 check of the converted weights (seconds when they are in the page cache).
       `batch` then starts in about 2 min.
+    - These start times were measured on update 1. Update 2 adds its prefill warm-up (see above).
     - Disk: about 31 GB under `~/.cache/tt-model/gemma4-31b-it-dflash` (22 GB converted weights, 9 GB compiled kernels).
       A package update that changes the engine converts again.
 
@@ -215,8 +242,12 @@ card:
         (about 605 ms without it).
       - Greedy requests and the default device sampling are unaffected.
       - The full fix belongs in the vLLM TT plugin.
+    - **Update 2 evidence scope.** The paged-bucket prefill's runtime guard and its gating runs check program-cache growth
+      and outputs; they did not record device buffer addresses. The drafter seed pre-warm's first-start (cold kernel
+      cache) time is not measured.
 
     ### Results (tt-inference-server `--workflow benchmarks`)
+    Measured on update 1 (2026-11-11). Update 2 changes the prefill programs and start-up only.
 
     #### `single-user`
     | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
@@ -283,7 +314,11 @@ verify:
   - "from models.demos.gemma4_31b_qb2.tt.package_boot import Gemma4ResidentSpecPackaged, ensure_resident_cache; assert Gemma4ResidentSpecPackaged"
   # the first-boot converter's key resolves for the shipped engine and precision (no checkpoint needed for this)
   - "from models.demos.gemma4_31b_qb2.tt import package_boot as pb; import inspect, importlib; c = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.weights').convert; assert set(pb.CONVERT_ARGS) <= set(inspect.signature(c).parameters)"
-  - "from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM; assert Gemma4ForCausalLM"   # batch
+  - "from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM; assert Gemma4ForCausalLM"
+  # update 2: the classes the two profiles name (vllm_models/resident_spec_pb3, vllm_models/qb2_pb) and their PB base
+  - "from models.demos.gemma4_31b_qb2.tt.package_boot_pb3 import Gemma4ResidentSpecPB3Packaged as P; from models.demos.gemma4_31b_qb2.tt.generator_resident_spec_vllm_pb3 import Gemma4ResidentSpecPB3ForCausalLM as B; assert issubclass(P, B)"
+  - "from models.demos.gemma4_31b_qb2.tt.generator_vllm_pb import Gemma4ForCausalLMPB; from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM; assert issubclass(Gemma4ForCausalLMPB, Gemma4ForCausalLM)"
+  - "import json, os, models.demos.gemma4_31b_qb2 as q; d = os.path.join(os.path.dirname(q.__file__), 'vllm_models'); got = {json.load(open(os.path.join(d, b, 'vllm_metadata.json')))['arch'] for b in os.listdir(d)}; assert {'Gemma4QB2PBForCausalLM', 'Gemma4QB2ResidentSpecPB3ForCausalLM'} <= got, got"
   # the engine is imported lazily by package name: import it here, and check its kernel sources shipped beside it
   - "import os, importlib; e = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.engine'); importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.model'); from models.demos.gemma4_31b_qb2.resident_m3_2 import PKG_DIR; ks = ('streamer_reader.cpp', 'streamer_writer.cpp', 'streamer_compute.cpp', 'hub_dm.cpp', 'slice_dm.cpp', 'slice_mc.cpp', 'slice_compute.cpp', 'attn_reader.cpp', 'attn_writer.cpp', 'attn_compute.cpp'); missing = [k for k in ks if not os.path.isfile(os.path.join(PKG_DIR, 'kernels', k))]; assert not missing and e.ResidentEngine, missing"
   - "from models.demos.gemma4_31b_qb2.tt.dflash2 import DFlash2Drafter; assert DFlash2Drafter.REVISION == 'b0cd01b4918aae6b6388272950c4f9851734674b'"
