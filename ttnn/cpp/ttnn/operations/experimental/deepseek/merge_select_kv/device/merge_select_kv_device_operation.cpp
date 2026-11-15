@@ -37,11 +37,21 @@ void MergeSelectKvDeviceOperation::validate_on_program_cache_miss(
     const auto& cand_shape = candidates.logical_shape();
     TT_FATAL(
         cand_shape.rank() == 4 && cand_shape[0] == 1 && cand_shape[1] == 1 && cand_shape[-1] == cand_width,
-        "merge_select_kv: candidates must be [1, 1, num_parts, {}] for k = {} and {} candidate blocks, got {}",
+        "merge_select_kv: candidates must be [1, 1, num_parts * Sq, {}] for k = {} and {} candidate blocks, got {}",
         cand_width,
         args.k,
         args.candidate_topk_blocks,
         cand_shape);
+    TT_FATAL(
+        args.num_queries >= 1 && cand_shape[-2] % args.num_queries == 0,
+        "merge_select_kv: candidates' {} pages must be num_parts pages for each of the {} query rows",
+        cand_shape[-2],
+        args.num_queries);
+    TT_FATAL(
+        args.num_queries == 1 || args.output_row_stride >= args.k,
+        "merge_select_kv: output_row_stride {} must be at least k {} so query rows do not overlap",
+        args.output_row_stride,
+        args.k);
     TT_FATAL(
         is_candidate_source == tensor_args.candidate_blocks_output.has_value() &&
             is_candidate_source == tensor_args.pool_count_output.has_value(),
@@ -66,9 +76,9 @@ void MergeSelectKvDeviceOperation::validate_on_program_cache_miss(
         };
         require_int32_rm(
             tensor_args.candidate_blocks_output.value(),
-            ttnn::Shape({1, args.candidate_topk_blocks}),
+            ttnn::Shape({args.num_queries, args.candidate_topk_blocks}),
             "candidate_blocks_output");
-        require_int32_rm(tensor_args.pool_count_output.value(), ttnn::Shape({1}), "pool_count_output");
+        require_int32_rm(tensor_args.pool_count_output.value(), ttnn::Shape({args.num_queries}), "pool_count_output");
     }
 
     const auto& kv_cache = tensor_args.kv_cache;
@@ -101,9 +111,11 @@ void MergeSelectKvDeviceOperation::validate_on_program_cache_miss(
             kv_shape[-1],
             out_shape);
         TT_FATAL(
-            args.output_row_offset + args.k <= out_shape[-2],
-            "merge_select_kv: output_row_offset {} + k {} exceeds output_tensor rows {}",
+            args.output_row_offset + (args.num_queries - 1) * args.output_row_stride + args.k <= out_shape[-2],
+            "merge_select_kv: output_row_offset {} + (Sq - 1) * output_row_stride {} + k {} exceeds output_tensor rows "
+            "{}",
             args.output_row_offset,
+            args.output_row_stride,
             args.k,
             out_shape[-2]);
     } else {
@@ -121,7 +133,7 @@ MergeSelectKvDeviceOperation::spec_return_value_t MergeSelectKvDeviceOperation::
     }
     const auto& kv = tensor_args.kv_cache;
     return TensorSpec(
-        ttnn::Shape({1, 1, args.k, kv.logical_shape()[-1]}),
+        ttnn::Shape({1, 1, args.num_queries * args.k, kv.logical_shape()[-1]}),
         TensorLayout(kv.dtype(), PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
@@ -147,13 +159,17 @@ ttnn::Tensor merge_select_kv(
     uint32_t candidate_topk_blocks,
     uint32_t candidate_block_size,
     const std::optional<ttnn::Tensor>& candidate_blocks_output,
-    const std::optional<ttnn::Tensor>& pool_count_output) {
+    const std::optional<ttnn::Tensor>& pool_count_output,
+    uint32_t num_queries,
+    std::optional<uint32_t> output_row_stride) {
     using OperationType = ttnn::operations::experimental::deepseek::merge_select_kv::MergeSelectKvDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .k = k,
         .output_row_offset = output_row_offset,
         .candidate_topk_blocks = candidate_topk_blocks,
         .candidate_block_size = candidate_block_size,
+        .num_queries = num_queries,
+        .output_row_stride = output_row_stride.value_or(k),
         // SDPA reads the gathered rows next, so they stay in L1 by default.
         .output_mem_config = memory_config.value_or(
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1}),

@@ -46,13 +46,24 @@ ttnn::device_operation::ProgramArtifacts MergeSelectKvDeviceOperation::ProgramFa
     auto* device = tensor_args.kv_cache.device();
     const auto grid = device->compute_with_storage_grid_size();
     const bool is_candidate_source = args.candidate_topk_blocks > 0;
-    const uint32_t num_parts = tensor_args.candidates.logical_shape()[-2];
+    const uint32_t num_queries = args.num_queries;
+    const uint32_t num_parts = tensor_args.candidates.logical_shape()[-2] / num_queries;
     // Each part's page: {k rows, k order keys, 16 header words}, then in candidate source mode
     // {candidate_topk_blocks blocks, their order keys}.
     const uint32_t key_section_bytes = (2 * args.k + kHeaderWords) * static_cast<uint32_t>(sizeof(uint32_t));
-    const uint32_t num_key_cores = kKeyCores;
-    const uint32_t num_block_cores = is_candidate_source ? kBlockCores : 0;
-    const uint32_t num_cores = num_key_cores + num_block_cores;
+    // Every query row merges on cores of its own. Several rows halve the groups until all fit on the grid,
+    // the key group first while it is at least half the block group (which merges 4x the entries).
+    uint32_t num_key_cores = kKeyCores;
+    uint32_t num_block_cores = is_candidate_source ? kBlockCores : 0;
+    while (num_queries * (num_key_cores + num_block_cores) > grid.x * grid.y && num_key_cores > 1) {
+        if (2 * num_key_cores >= num_block_cores || num_block_cores == 1) {
+            num_key_cores /= 2;
+        } else {
+            num_block_cores /= 2;
+        }
+    }
+    const uint32_t cores_per_row = num_key_cores + num_block_cores;
+    const uint32_t num_cores = num_queries * cores_per_row;
     TT_FATAL(
         num_cores <= grid.x * grid.y, "merge_select_kv needs {} cores, the grid has {}", num_cores, grid.x * grid.y);
     const uint32_t key_slice_size = tt::round_up(tt::div_up(num_parts * args.k, num_key_cores), kAlignEntries);
@@ -146,8 +157,9 @@ ttnn::device_operation::ProgramArtifacts MergeSelectKvDeviceOperation::ProgramFa
         scratch_dfb(COMPACT_DFB, max_slice * word),
         scratch_dfb(TIES_DFB, max_group * (kTieHeaderWords + kMaxTies) * word),
         scratch_dfb(REMOTE_DFB, max_group * 2 * max_slice * word),
-        // pool_count 64 B past the longest block list
-        scratch_dfb(LIST_DFB, tt::round_up(max_list * word, 64u) + 64),
+        // pool_count 64 B past the longest block list; with several rows, the Sq counts and then every row's
+        // header
+        scratch_dfb(LIST_DFB, tt::round_up(max_list * word, 64u) + 64 + num_queries * kHeaderWords * word),
         DataflowBufferSpec{
             .unique_id = STAGE_DFB,
             .entry_size = tensor_args.kv_cache.buffer()->page_size(),
@@ -201,6 +213,9 @@ ttnn::device_operation::ProgramArtifacts MergeSelectKvDeviceOperation::ProgramFa
              {"blocks_per_core", blocks_per_core},
              {"kv_stage_rows", kKvStageRows},
              {"output_row_offset", args.output_row_offset},
+             {"num_queries", num_queries},
+             {"cores_per_row", cores_per_row},
+             {"output_row_stride", args.output_row_stride},
              {"candidate_topk_blocks", args.candidate_topk_blocks},
              {"candidate_block_size", args.candidate_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_index"}},

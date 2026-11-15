@@ -16,7 +16,9 @@ std::vector<Tensor> build_candidate_pool(
     uint32_t candidate_block_size,
     const std::optional<Tensor>& pool_keys_output,
     const std::optional<Tensor>& pool_rows_output,
-    const std::optional<Tensor>& page_table_row_tensor) {
+    const std::optional<Tensor>& page_table_row_tensor,
+    const std::optional<Tensor>& pool_masks_output,
+    const std::optional<Tensor>& pool_counts_output) {
     return ttnn::prim::build_candidate_pool(
         candidate_blocks,
         pool_count,
@@ -25,7 +27,9 @@ std::vector<Tensor> build_candidate_pool(
         candidate_block_size,
         pool_keys_output,
         pool_rows_output,
-        page_table_row_tensor);
+        page_table_row_tensor,
+        pool_masks_output,
+        pool_counts_output);
 }
 
 }  // namespace ttnn::experimental::deepseek

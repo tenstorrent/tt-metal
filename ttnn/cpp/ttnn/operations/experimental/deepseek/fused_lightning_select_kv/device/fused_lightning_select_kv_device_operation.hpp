@@ -71,10 +71,13 @@ struct FusedLightningSelectKvDeviceOperation {
         // ``[num_sessions, max_blocks]`` INT32 ``kv_cache`` page table that maps ``new_kv_row_index``
         // with a ``row_table`` (whose ``page_table_tensor`` maps the candidate pool, not ``kv_cache``).
         std::optional<Tensor> kv_page_table;
+        // ``[1, n]`` INT32 mask of the query rows that may select each group of ``max_keys / n`` keys (bit j:
+        // row j): a candidate pool several rows share, each seeing only its own blocks.
+        std::optional<Tensor> row_mask_table;
     };
 
-    // [0] selected kv rows, ``[Sq, Hkv, k, Dh]`` (with num_parts > 1: the local candidates,
-    // ``[1, 1, 1, 2k + 16]`` INT32: k kv_cache rows, their k order keys, then the number selected),
+    // [0] selected kv rows, ``[Sq, Hkv, k, Dh]`` (with num_parts > 1: the local candidates, one page per
+    // query row, ``[1, 1, Sq, 2k + 16 + 2 * candidate_topk_blocks]`` INT32),
     // [1] index scores ``[1, 1, Sq, max_keys]``; in candidate source mode also [2] candidate blocks,
     // [3] pool count.
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
@@ -124,6 +127,7 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<ttnn::Tensor>& part_index_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& row_table = std::nullopt,
     const std::optional<ttnn::Tensor>& page_table_row_tensor = std::nullopt,
-    const std::optional<ttnn::Tensor>& kv_page_table = std::nullopt);
+    const std::optional<ttnn::Tensor>& kv_page_table = std::nullopt,
+    const std::optional<ttnn::Tensor>& row_mask_table = std::nullopt);
 
 }  // namespace ttnn::prim
