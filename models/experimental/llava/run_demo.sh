@@ -1,13 +1,17 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # LLaVA Demo Runner — handles environment setup automatically
 #
 # Usage:
-#   bash models/demos/llava/run_demo.sh                              # Full demo (image → text)
-#   bash models/demos/llava/run_demo.sh --vision-only                 # Vision pipeline only
-#   bash models/demos/llava/run_demo.sh --image img.jpg --question "?" # Custom image + question
-#   bash models/demos/llava/run_demo.sh --mesh N150                   # Single chip
+#   bash models/experimental/llava/run_demo.sh                              # Full demo (image → text)
+#   bash models/experimental/llava/run_demo.sh --vision-only                 # Vision pipeline only
+#   bash models/experimental/llava/run_demo.sh --image img.jpg --question "?" # Custom image + question
+#   bash models/experimental/llava/run_demo.sh --mesh N150                   # Single chip
 
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TT_METAL_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -97,10 +101,12 @@ export MESH_DEVICE
 echo "Device: $MESH_DEVICE"
 echo ""
 
-# Reset device
-echo "Resetting device..."
-tt-smi -r --no_reinit 2>/dev/null || true
-sleep 2
+# Device reset is opt-in: it affects every process using the card.
+if [ "${LLAVA_RESET_DEVICE:-0}" = "1" ]; then
+    echo "Resetting device (LLAVA_RESET_DEVICE=1)..."
+    tt-smi -r --no_reinit 2>/dev/null || true
+    sleep 2
+fi
 
 # Run demo
 if [ "$DEMO_TYPE" = "vision" ]; then

@@ -22,8 +22,8 @@ Architecture:
     Phase 3 (LLM):     Load LLM (TP across chips) → chunked prefill → decode
 
 Reference:
-    - models/demos/llava/demo/demo_llava_full.py (original inline implementation)
-    - models/demos/llava/tt/llm_wrapper.py (LlavaLlmTransformer)
+    - models/experimental/llava/demo/demo_llava_full.py (original inline implementation)
+    - models/experimental/llava/tt/llm_wrapper.py (LlavaLlmTransformer)
     - models/demos/qwen25_vl/tt/model.py (multimodal LLM pattern)
 """
 
@@ -38,15 +38,18 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.demo.demo_utils import preprocess_image
-from models.demos.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
-from models.demos.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
+from models.experimental.llava.demo.demo_utils import preprocess_image
+from models.experimental.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+from models.experimental.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
 
 IMAGE_TOKEN_INDEX = -200
 NUM_PATCHES = 576
 PLACEHOLDER_ID = 0  # Token ID used for image placeholder positions (overwritten with image features)
+# Prefill runs in chunks of this many tokens. The shared attention's chunked prefill expects every
+# chunk (including the last) to be a full chunk, so the prompt is padded to a multiple of this.
+PREFILL_CHUNK_SIZE = 128
 
 
 def mesh_shape_from_env() -> Tuple[int, int]:
@@ -396,16 +399,18 @@ class LlavaModel(LightweightModule):
         """
         Phase 2: Prepare multimodal embeddings on host.
 
-        Tokenizes the prompt using LLaMA 3.1 chat template, replaces <image>
-        placeholder positions with projected vision features, and pads to
-        tile-aligned sequence length.
+        Tokenizes the prompt using the backbone's chat template, replaces each <image>
+        placeholder with that image's projected vision features (in order), and pads
+        to a multiple of PREFILL_CHUNK_SIZE.
 
         Args:
-            projected_features: [1, 576, 4096] vision features from Phase 1
+            projected_features: [num_images, 576, hidden] vision features from Phase 1,
+                one row per <image> placeholder in the templated prompt
             prompt: User question/instruction text
 
         Returns:
-            (input_embeds_padded, total_len, seq_len): Padded embeddings + lengths
+            (input_embeds_padded, total_len, seq_len): Padded embeddings, unpadded length
+            (used for logits / decode positions), padded length (used for prefill chunks)
         """
         logger.info("\n=== Phase 2: Prepare Multimodal Embeddings (host) ===")
 
@@ -420,29 +425,50 @@ class LlavaModel(LightweightModule):
 
         # Split around <image> and tokenize text parts
         text_parts = text.split("<image>")
-        ids_before = self.tokenizer(text_parts[0], return_tensors="pt", add_special_tokens=False).input_ids
-        ids_after = self.tokenizer(text_parts[1], return_tensors="pt", add_special_tokens=False).input_ids
+        num_images = len(text_parts) - 1
+        if projected_features.dim() == 2:
+            projected_features = projected_features.unsqueeze(0)
+        if num_images != projected_features.shape[0]:
+            raise ValueError(
+                f"Prompt has {num_images} <image> placeholder(s) but {projected_features.shape[0]} "
+                f"image feature block(s) were provided"
+            )
 
-        # Create 576 placeholder tokens for image positions
-        image_placeholders = torch.full((1, NUM_PATCHES), PLACEHOLDER_ID, dtype=torch.long)
-        input_ids = torch.cat([ids_before, image_placeholders, ids_after], dim=1)
+        # Build input_ids as text[0] + image[0] + text[1] + ... and remember where each image
+        # block starts. Image positions are tracked explicitly rather than by matching
+        # PLACEHOLDER_ID, which is also a real vocabulary token that can appear in the text.
+        id_segments = []
+        image_starts = []
+        offset = 0
+        for i, part in enumerate(text_parts):
+            ids = self.tokenizer(part, return_tensors="pt", add_special_tokens=False).input_ids
+            id_segments.append(ids)
+            offset += ids.shape[1]
+            if i < num_images:
+                image_starts.append(offset)
+                id_segments.append(torch.full((1, NUM_PATCHES), PLACEHOLDER_ID, dtype=torch.long))
+                offset += NUM_PATCHES
+        input_ids = torch.cat(id_segments, dim=1)
 
-        # Get text embeddings from CPU LLaMA embedding table
+        # Get text embeddings from CPU LLM embedding table
         cpu_llm = self._load_cpu_embed_model()
         with torch.no_grad():
             all_embeds = cpu_llm.model.embed_tokens(input_ids)
 
-        # Replace image placeholder positions with projected features
-        image_mask = input_ids[0] == PLACEHOLDER_ID
-        placeholder_indices = torch.where(image_mask)[0][:NUM_PATCHES]
+        # Overwrite each image block with that image's projected features
         input_embeds = all_embeds.clone()
-        input_embeds[0, placeholder_indices, :] = projected_features[0].to(input_embeds.dtype)
+        for img_idx, start in enumerate(image_starts):
+            input_embeds[0, start : start + NUM_PATCHES, :] = projected_features[img_idx].to(input_embeds.dtype)
 
         total_len = input_embeds.shape[1]
-        logger.info(f"  Multimodal embeds: {input_embeds.shape} ({total_len - NUM_PATCHES} text + {NUM_PATCHES} image)")
+        n_image_tokens = num_images * NUM_PATCHES
+        logger.info(
+            f"  Multimodal embeds: {input_embeds.shape} ({total_len - n_image_tokens} text + {n_image_tokens} image)"
+        )
 
-        # Pad to next multiple of 32 (tile size)
-        pad_to = ((total_len + 31) // 32) * 32
+        # Pad to the prefill chunk boundary so the final chunk is a full chunk. total_len stays
+        # the unpadded length and is what logits extraction and decode positions use.
+        pad_to = ((total_len + PREFILL_CHUNK_SIZE - 1) // PREFILL_CHUNK_SIZE) * PREFILL_CHUNK_SIZE
         pad_len = pad_to - total_len
         if pad_len > 0:
             pad_embeds = torch.zeros(1, pad_len, self.llm_hidden_size, dtype=input_embeds.dtype)
@@ -472,16 +498,16 @@ class LlavaModel(LightweightModule):
         Args:
             input_embeds: [1, seq_len, hidden] padded multimodal embeddings
             total_len: Actual (unpadded) sequence length
-            seq_len: Padded sequence length (multiple of 32)
+            seq_len: Padded sequence length (multiple of PREFILL_CHUNK_SIZE)
             max_new_tokens: Maximum tokens to generate
 
         Returns:
             str: Generated text
         """
         if self.llm_backbone == "qwen-moe":
-            from models.demos.llava.tt.llm_wrapper import create_qwen_moe_llm as create_llm
+            from models.experimental.llava.tt.llm_wrapper import create_qwen_moe_llm as create_llm
         else:
-            from models.demos.llava.tt.llm_wrapper import create_llava_llm as create_llm
+            from models.experimental.llava.tt.llm_wrapper import create_llava_llm as create_llm
 
         logger.info(f"\n=== Phase 3: LLM Inference ({self.llm_model_config} on device) ===")
 
@@ -501,7 +527,8 @@ class LlavaModel(LightweightModule):
 
         # === Chunked Prefill (128 tokens per chunk) ===
         logger.info("\n  --- Chunked Prefill ---")
-        chunk_size = 128
+        chunk_size = PREFILL_CHUNK_SIZE
+        assert seq_len % chunk_size == 0, f"seq_len {seq_len} must be padded to a multiple of {chunk_size}"
         last_token_idx = total_len - 1
         total_chunks = (seq_len + chunk_size - 1) // chunk_size
         logger.info(f"  seq_len={seq_len}, chunk_size={chunk_size}, chunks={total_chunks}, last_token={last_token_idx}")

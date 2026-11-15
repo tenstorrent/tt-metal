@@ -59,7 +59,8 @@ class StandardInterleaver(LightweightModule):
     Input:
         input_ids: torch.Tensor [B, seq_len] with IMAGE_TOKEN_INDEX at image positions
         text_embeds: torch.Tensor [B, seq_len, hidden_size] embeddings of all tokens
-        image_features: torch.Tensor [B, num_patches, hidden_size] projected vision features
+        image_features: torch.Tensor [num_images, num_patches, hidden_size] projected vision features,
+            consumed in order across batch rows (row 0 images first)
 
     Output (dict):
         input_embeds: ttnn.Tensor [B, new_seq_len, hidden_size] on device
@@ -105,13 +106,16 @@ class StandardInterleaver(LightweightModule):
             text_embeds = [text_embeds[i] for i in range(batch_size)]
             labels = [labels[i] for i in range(batch_size)] if labels is not None else None
 
-        # Handle image_features as [B, num_patches, hidden_size] → list per batch
+        # Handle image_features as [num_images, num_patches, hidden_size] → list per image.
+        # Images are consumed in order across ALL batch rows (LLaVA's cur_image_idx), so the
+        # leading dim is the total image count, not the batch size.
         if isinstance(image_features, torch.Tensor) and image_features.dim() == 3:
-            image_features_list = [image_features[i] for i in range(batch_size)]
+            image_features_list = [image_features[i] for i in range(image_features.shape[0])]
         elif isinstance(image_features, list):
             image_features_list = image_features
         else:
             image_features_list = [image_features]
+        cur_image_idx = 0
 
         # Store label dtype for creating IGNORE_INDEX tensors
         label_dtype = labels[0].dtype if labels is not None else torch.long
@@ -160,8 +164,13 @@ class StandardInterleaver(LightweightModule):
                         cur_new_labels.append(torch.empty(0, dtype=label_dtype))
 
                 if i < num_images:
-                    img_idx = min(i, len(image_features_list) - 1)
-                    img_feat = image_features_list[img_idx]
+                    if cur_image_idx >= len(image_features_list):
+                        raise ValueError(
+                            f"Found more image tokens than image features ({len(image_features_list)}) "
+                            f"at batch row {batch_idx}"
+                        )
+                    img_feat = image_features_list[cur_image_idx]
+                    cur_image_idx += 1
                     cur_new_embeds.append(img_feat)
                     if labels is not None:
                         cur_new_labels.append(
@@ -214,7 +223,7 @@ class StandardInterleaver(LightweightModule):
         Args:
             input_ids: [B, seq_len] token IDs with IMAGE_TOKEN_INDEX at image positions
             text_embeds: [B, seq_len, hidden_size] embeddings of all tokens
-            image_features: [B, num_patches, hidden_size] projected vision features
+            image_features: [num_images, num_patches, hidden_size] projected vision features (in batch-row order)
             labels: Optional [B, seq_len] labels
             attention_mask: Optional [B, seq_len] mask to strip padding before interleaving
                            (1 for real tokens, 0 for padding). If None, all tokens are processed.

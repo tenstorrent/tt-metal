@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # LLaVA Test Runner with Automatic Device Reset and Cache Clearing
 #
 # Usage:
@@ -6,7 +10,7 @@
 #   ./run_tests_with_reset.sh test_clip_pcc      # Run specific test
 #   ./run_tests_with_reset.sh --help             # Show help
 
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TT_METAL_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -49,23 +53,28 @@ echo "LLaVA Test Runner (with device reset)"
 echo "============================================"
 echo ""
 
-# Step 1: Reset device
-echo "Step 1/4: Resetting n300 device..."
-if tt-smi -r --no_reinit; then
-    echo "✅ Device reset complete"
+# Step 1: Reset device. This script exists to reset, so it is on by default here,
+# but can be skipped with LLAVA_RESET_DEVICE=0.
+if [ "${LLAVA_RESET_DEVICE:-1}" = "1" ]; then
+    echo "Step 1/4: Resetting device (set LLAVA_RESET_DEVICE=0 to skip)..."
+    if tt-smi -r --no_reinit; then
+        echo "✅ Device reset complete"
+    else
+        echo "⚠️  Device reset command failed, continuing anyway..."
+    fi
+    sleep 2
 else
-    echo "⚠️  Device reset command failed, continuing anyway..."
+    echo "Step 1/4: Device reset skipped (LLAVA_RESET_DEVICE=0)"
 fi
-sleep 2
 echo ""
 
-# Step 2: Clear cache for fresh JIT compilation
-echo "Step 2/4: Clearing kernel cache..."
-if [ -d ~/.cache/tt-metal-cache/ ]; then
-    rm -rf ~/.cache/tt-metal-cache/
+# Step 2: Clearing the kernel cache is opt-in (it forces every kernel to recompile).
+if [ "${LLAVA_CLEAR_KERNEL_CACHE:-0}" = "1" ] && [ -d "$HOME/.cache/tt-metal-cache" ]; then
+    echo "Step 2/4: Clearing kernel cache (LLAVA_CLEAR_KERNEL_CACHE=1)..."
+    rm -rf -- "$HOME/.cache/tt-metal-cache"
     echo "✅ Cache cleared"
 else
-    echo "ℹ️  Cache directory doesn't exist (fresh state)"
+    echo "Step 2/4: Kernel cache kept (set LLAVA_CLEAR_KERNEL_CACHE=1 to clear)"
 fi
 echo ""
 
@@ -112,15 +121,15 @@ echo ""
 echo "Step 4/4: Running tests..."
 cd "$TT_METAL_ROOT"
 
+# Capture the exit code without letting `set -e` abort before the summary below.
+EXIT_CODE=0
 if [ -z "$TEST_PATTERN" ]; then
     # Run all vision encoder tests
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_encoders.py -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_encoders.py -v || EXIT_CODE=$?
 else
     # Run specific test pattern
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_encoders.py -k "$TEST_PATTERN" -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_encoders.py -k "$TEST_PATTERN" -v || EXIT_CODE=$?
 fi
-
-EXIT_CODE=$?
 
 echo ""
 echo "============================================"

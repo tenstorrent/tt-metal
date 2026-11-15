@@ -24,7 +24,7 @@ Weight Loading:
 Reference:
     - LLaVA/llava/model/multimodal_projector/builder.py (build_vision_projector)
     - models/demos/qwen25_vl/tt/patch_merger.py (PatchMerger pattern)
-    - models/demos/llava/tt/vision_encoders/clip_encoder.py (weight loading pattern)
+    - models/experimental/llava/tt/vision_encoders/clip_encoder.py (weight loading pattern)
 """
 
 from pathlib import Path

@@ -16,7 +16,7 @@ PyTorch top-2 routing block that matches the eval-time math.
 All dumps are saved under ``./reference_cache/qwen_moe/`` by default.
 
 Usage:
-    python models/demos/llava/reference/qwen_moe_reference.py \\
+    python models/experimental/llava/reference/qwen_moe_reference.py \\
         --ckpt LanguageBind/MoE-LLaVA-Qwen-1.8B-4e \\
         --seq-len 32 --batch 1 --out-dir ./reference_cache/qwen_moe
 
@@ -28,11 +28,21 @@ Reference:
 """
 
 import argparse
+import contextlib
+import sys
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from loguru import logger
+
+# Runnable as a plain script (python models/experimental/llava/reference/qwen_moe_reference.py):
+# make the tt-metal root importable for the shared hub-revision pins.
+_TT_METAL_ROOT = Path(__file__).resolve().parents[4]
+if str(_TT_METAL_ROOT) not in sys.path:
+    sys.path.insert(0, str(_TT_METAL_ROOT))
+
+from models.experimental.llava.hub_revisions import checkpoint_kwargs, remote_code_kwargs  # noqa: E402
 
 
 def _stub_deepspeed_moe():
@@ -133,14 +143,40 @@ def _stub_deepspeed_moe():
             sys.modules["transformers_stream_generator"] = _StubStreamGeneratorModule("transformers_stream_generator")
 
 
-def load_model(ckpt_name: str, dtype: torch.dtype = torch.float32):
-    """Load MoE-LLaVA-Qwen-1.8B-4e on CPU with DeepSpeed stubbed out."""
-    _stub_deepspeed_moe()
+_STUBBED_MODULES = ("deepspeed", "deepspeed.moe", "deepspeed.moe.layer", "transformers_stream_generator")
 
+
+@contextlib.contextmanager
+def _stubbed_remote_code_imports():
+    """Install the DeepSpeed / stream-generator stubs only while the remote code is imported.
+
+    The stubs replace entries in sys.modules process-wide; restore whatever was there before
+    (a real deepspeed install, or nothing) so other code in the same process (e.g. other tests
+    in one pytest session) never sees the fakes.
+    """
+    saved = {name: sys.modules.get(name) for name in _STUBBED_MODULES}
+    try:
+        _stub_deepspeed_moe()
+        yield
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
+def load_model(ckpt_name: str, dtype: torch.dtype = torch.float32):
+    """Load MoE-LLaVA-Qwen-1.8B-4e on CPU with DeepSpeed stubbed out during loading."""
+    with _stubbed_remote_code_imports():
+        return _load_model(ckpt_name, dtype)
+
+
+def _load_model(ckpt_name: str, dtype: torch.dtype):
     from transformers import AutoConfig, AutoModelForCausalLM
 
     logger.info(f"Loading MoE-LLaVA-Qwen config: {ckpt_name}")
-    config = AutoConfig.from_pretrained(ckpt_name, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(ckpt_name, **remote_code_kwargs())
 
     logger.info(f"Loading MoE-LLaVA-Qwen weights: {ckpt_name}")
     try:
@@ -150,16 +186,16 @@ def load_model(ckpt_name: str, dtype: torch.dtype = torch.float32):
             ckpt_name,
             config=config,
             dtype=dtype,
-            trust_remote_code=True,
             low_cpu_mem_usage=True,
+            **remote_code_kwargs(),
         )
     except TypeError:
         model = AutoModelForCausalLM.from_pretrained(
             ckpt_name,
             config=config,
             torch_dtype=dtype,
-            trust_remote_code=True,
             low_cpu_mem_usage=True,
+            **remote_code_kwargs(),
         )
     model.eval()
     # Belt-and-suspenders: some load paths keep the checkpoint dtype (fp16)
@@ -238,7 +274,7 @@ def _install_checkpoint_moe(model, ckpt_name: str, moe_layer_ids, dtype):
 
     from transformers import AutoConfig as _AutoConfig
 
-    ckpt_config = _AutoConfig.from_pretrained(ckpt_name, trust_remote_code=True)
+    ckpt_config = _AutoConfig.from_pretrained(ckpt_name, **remote_code_kwargs())
     hidden = ckpt_config.hidden_size
     inter = ckpt_config.intermediate_size // 2  # QWenMLP halves the config value
     num_experts = ckpt_config.moe.get("num_experts", [4])
@@ -258,7 +294,8 @@ def _install_checkpoint_moe(model, ckpt_name: str, moe_layer_ids, dtype):
     for f in sorted(
         _glob.glob(
             _os.path.join(
-                hf_hub_download(ckpt_name, "pytorch_model.bin.index.json").rsplit("/", 1)[0], "pytorch_model*.bin"
+                hf_hub_download(ckpt_name, "pytorch_model.bin.index.json", **checkpoint_kwargs()).rsplit("/", 1)[0],
+                "pytorch_model*.bin",
             )
         )
     ):

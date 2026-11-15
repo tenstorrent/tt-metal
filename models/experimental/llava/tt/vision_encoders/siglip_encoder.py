@@ -27,7 +27,7 @@ Key differences from CLIP (`clip_encoder.py`):
 Reference:
     - LLaVA-MORE/src/llava/model/multimodal_encoder/siglip_encoder.py
     - transformers.SiglipVisionModel
-    - models/demos/llava/tt/vision_encoders/clip_encoder.py (template)
+    - models/experimental/llava/tt/vision_encoders/clip_encoder.py (template)
 """
 
 from pathlib import Path
@@ -38,7 +38,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from models.demos.llava.tt.vision_encoders.base_encoder import BaseVisionEncoder
+from models.experimental.llava.tt.vision_encoders.base_encoder import BaseVisionEncoder
 
 
 class SigLIPVisionTransformerBlock(torch.nn.Module):

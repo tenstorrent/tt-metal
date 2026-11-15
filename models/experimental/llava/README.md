@@ -11,8 +11,8 @@ pipeline and the MoE-LLaVA-Qwen-1.8B-4e NPU path.
 | SigLIP SO400M encoder | Validated on n150 and n300, PCC 0.934 |
 | Projector and token interleaver | Validated, PCC 0.9999 / deterministic |
 | Qwen1-MoE checkpoint conversion and integration | Complete |
-| Qwen1-MoE device PCC gates | Passing on n150 and n300 |
-| Full MoE-LLaVA image-to-text demo on n150 | Passing and logged |
+| Qwen1-MoE device PCC gates | Pending re-validation with the LLaVA-local MoE FFN (`tt/qwen_moe_ffn.py`) |
+| Full MoE-LLaVA image-to-text demo on n150 | Pending re-validation with the LLaVA-local MoE FFN |
 | Full MoE-LLaVA image-to-text demo on n300 | Pending a usable checkpoint in this environment |
 | LLaMA 3.1 TTNN tensor parallel path | Deprecated; CPU path remains available |
 
@@ -47,7 +47,7 @@ the demo and MoE tests do this automatically.
 3. Install the demo dependencies:
 
    ```bash
-   pip install -r models/demos/llava/requirements.txt
+   pip install -r models/experimental/llava/requirements.txt
    ```
 
 4. Authenticate with Hugging Face if the model is not already cached:
@@ -62,14 +62,14 @@ Use an absolute image path when running the demo directly:
 
 ```bash
 # n150, single chip
-MESH_DEVICE=N150 python models/demos/llava/demo/demo_llava_full.py \
+MESH_DEVICE=N150 python models/experimental/llava/demo/demo_llava_full.py \
   --llm-backbone qwen-moe --use-ttnn-llm \
   --image /path/to/image.jpg \
   --question "Describe this image in one sentence." \
   --max-tokens 24
 
 # n300, two chips
-MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
+MESH_DEVICE=N300 python models/experimental/llava/demo/demo_llava_full.py \
   --llm-backbone qwen-moe --use-ttnn-llm \
   --image /path/to/image.jpg \
   --question "Describe this image in one sentence." \
@@ -79,7 +79,7 @@ MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
 The wrapper can configure the environment automatically:
 
 ```bash
-bash models/demos/llava/run_demo.sh \
+bash models/experimental/llava/run_demo.sh \
   --image /path/to/image.jpg \
   --question "What is in this image?"
 ```
@@ -93,7 +93,7 @@ To run the TTNN vision path with a CPU Qwen reference LLM, omit
 `--use-ttnn-llm`:
 
 ```bash
-MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
+MESH_DEVICE=N300 python models/experimental/llava/demo/demo_llava_full.py \
   --llm-backbone qwen-moe \
   --image /path/to/image.jpg
 ```
@@ -101,14 +101,14 @@ MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
 The legacy LLaVA-MORE LLaMA 3.1 path also remains CPU-only:
 
 ```bash
-MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py \
+MESH_DEVICE=N300 python models/experimental/llava/demo/demo_llava_full.py \
   --image /path/to/image.jpg
 ```
 
 ### Vision-Only Demo
 
 ```bash
-MESH_DEVICE=N300 python models/demos/llava/demo/demo_vision_pipeline.py
+MESH_DEVICE=N300 python models/experimental/llava/demo/demo_vision_pipeline.py
 ```
 
 This runs CLIP, the LLaVA-MORE-sized projector, and token interleaving without
@@ -148,7 +148,7 @@ therefore:
 Run the regression sweep from the repository root:
 
 ```bash
-bash models/demos/llava/run_regression_sweep.sh
+bash models/experimental/llava/run_regression_sweep.sh
 ```
 
 The sweep covers CLIP, SigLIP, projector, token interleaver, vision pipeline,
@@ -157,15 +157,32 @@ checkpoint conversion, CPU integration, and MoE device PCC tests.
 The component runner is also available:
 
 ```bash
-bash models/demos/llava/RUN_ALL_TESTS.sh
-SKIP_E2E=1 bash models/demos/llava/RUN_ALL_TESTS.sh
-bash models/demos/llava/RUN_VISION_TESTS.sh
+bash models/experimental/llava/RUN_ALL_TESTS.sh
+SKIP_E2E=1 bash models/experimental/llava/RUN_ALL_TESTS.sh
+bash models/experimental/llava/RUN_VISION_TESTS.sh
 ```
+
+The runners do not reset the board or delete the kernel cache unless asked,
+because both affect every process on the machine:
+
+```bash
+LLAVA_RESET_DEVICE=1 bash models/experimental/llava/RUN_ALL_TESTS.sh        # tt-smi -r first
+LLAVA_CLEAR_KERNEL_CACHE=1 bash models/experimental/llava/RUN_VISION_TESTS.sh  # rm ~/.cache/tt-metal-cache
+```
+
+`run_tests_with_reset.sh` resets by default (that is its purpose); set
+`LLAVA_RESET_DEVICE=0` to skip it.
+
+The MoE device PCC tests load an fp32 CPU reference (~12 GB host RAM) and skip
+when less than 16 GB is free.
+
+Hub downloads that execute remote code (`trust_remote_code`) are pinned in
+`hub_revisions.py`; override with `MOE_LLAVA_REVISION` / `QWEN_CODE_REVISION`.
 
 For CPU-only MoE integration checks that avoid device PCC tests:
 
 ```bash
-pytest -q models/demos/llava/tests/test_moe_llava.py \
+pytest -q models/experimental/llava/tests/test_moe_llava.py \
   -k 'not tokenizer and not pcc'
 ```
 
@@ -176,9 +193,12 @@ pytest -q models/demos/llava/tests/test_moe_llava.py \
 | CLIP encoder | 0.88 | 0.984 |
 | SigLIP encoder | 0.92 | 0.934 |
 | MLP projector | 0.99 | 0.9999 |
-| Qwen1-MoE two-layer block | 0.98 | 0.9995 |
-| Qwen1-MoE 24-layer prefill | 0.91 | 0.9979 |
-| Qwen1-MoE decode | 0.99 | 0.9984 |
+| Qwen1-MoE two-layer block | 0.98 | pending |
+| Qwen1-MoE 24-layer prefill | 0.91 | pending |
+| Qwen1-MoE decode | 0.99 | pending |
+
+The earlier Qwen1-MoE results depended on local tt_transformers changes that are not
+part of this PR. They will be re-measured with `tt/qwen_moe_ffn.py`.
 
 The LLaMA 3.1 TTNN decode PCC test is intentionally skipped because that
 backbone is deprecated. The Qwen1-MoE tests are the authoritative NPU LLM

@@ -15,13 +15,13 @@ Test Strategy:
 
 Usage:
     # Run all vision encoder tests
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_encoders.py -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_encoders.py -v
 
     # Run only CLIP tests
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc -v
 
     # With device config
-    MESH_DEVICE=N300 scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_encoders.py -v
+    MESH_DEVICE=N300 scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_encoders.py -v
 
 Reference:
     - models/demos/qwen25_vl/tests/test_vision_encoder.py
@@ -37,11 +37,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
-from models.demos.llava.reference.llava_reference import create_siglip_encoder as create_siglip_encoder_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
-from models.demos.llava.tt.vision_encoders.siglip_encoder import create_siglip_encoder as create_siglip_encoder_ttnn
+from models.experimental.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
+from models.experimental.llava.reference.llava_reference import create_siglip_encoder as create_siglip_encoder_pytorch
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
+from models.experimental.llava.tt.vision_encoders.siglip_encoder import (
+    create_siglip_encoder as create_siglip_encoder_ttnn,
+)
 
 
 @pytest.mark.parametrize(
@@ -506,8 +508,8 @@ if __name__ == "__main__":
     Direct execution for debugging
 
     Usage:
-        python models/demos/llava/tests/test_vision_encoders.py
+        python models/experimental/llava/tests/test_vision_encoders.py
     """
     logger.info("Vision Encoder Tests - Direct execution mode")
     logger.info("For proper testing, use pytest:")
-    logger.info("  scripts/run_safe_pytest.sh models/demos/llava/tests/test_vision_encoders.py -v")
+    logger.info("  scripts/run_safe_pytest.sh models/experimental/llava/tests/test_vision_encoders.py -v")

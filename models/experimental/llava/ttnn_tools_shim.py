@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Compatibility shim: provide ttnn.tools.trace_allocation_tracker on ttnn
 builds that predate it. Both hooks are only active when
 TT_METAL_TRACE_ALLOC_TRACKING=1; without it they are no-ops, so stubbing
