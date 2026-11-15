@@ -33,7 +33,7 @@ VLLM_CMD="python -m vllm.entrypoints.openai.api_server \
   --hf-overrides '{\"architectures\":[\"TTHYV4ForCausalLM\"]}' \
   --block-size 128 --max-model-len $MAXLEN --max-num-seqs $NSEQ --max-num-batched-tokens $((MAXLEN*NSEQ)) --seed 9472 --max-log-len 32 \
   --no-enable-prefix-caching --chat-template-content-format openai \
-  --additional-config '{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": $TRACE}}' \
+  --additional-config '{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": $TRACE, \"sample_on_device_mode\": \"all\"}}' \
   --enable-auto-tool-choice --tool-call-parser hy_v4 --reasoning-parser hy_v4 --enable-prompt-tokens-details \
   --default-chat-template-kwargs '{\"reasoning_effort\": \"high\"}' $SPECARG --host 0.0.0.0 --port 8000"
 docker run --name hy4prod_$TAG --network host --ipc host --user $(id -u):$(id -g) --ulimit memlock=-1 --ulimit core=0 \

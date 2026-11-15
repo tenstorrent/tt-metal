@@ -64,6 +64,9 @@ def configured_spec_k():
 
 _SPEC_K = configured_spec_k()
 _SAMPLED = os.environ.get("HY4_SPEC_SAMPLED", "1") == "1"
+_SPEC_CAP = int(
+    os.environ.get("HY4_SPEC_CAP", "99")
+)  # max drafts OFFERED per row (0 = the non-speculative stream through the same verify-shape path: the lossless gate reference)
 
 
 class _Slots:
@@ -365,7 +368,7 @@ class HYV4ForCausalLM:
                 continue
             j = max(int(cn[i]), 1) - 1
             if int(ct[i][j]) == eng.pend[ph] and int(cp[i][j]) == eng.pos[ph]:
-                k = min(K, int(num_drafts))
+                k = min(K, int(num_drafts), _SPEC_CAP)
                 ids[i, :k] = torch.tensor([max(int(x), 0) for x in eng.drafts[ph][:k]], dtype=torch.int32)
                 nv[i] = k
             else:
