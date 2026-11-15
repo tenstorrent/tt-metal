@@ -120,6 +120,11 @@ def test_pad_clips_to_the_logical_extent_and_reports_padding(expect_error):
     with expect_error(LayoutError, "not the declared padded"):
         pad.canonical_shape((1, 1, 160, 64))
     assert isinstance(padded_extent(2, 64, 64), Identity)
+    # Zeros is the only fill a load implements, so another is refused where the transform is built or read.
+    with expect_error(LayoutError, "pad: fill 'ones' is not one of"):
+        Pad(2, 130, 192, "ones")
+    with expect_error(LayoutError, "pad: fill 'ones' is not one of"):
+        transform_from_json({"kind": "pad", "dim": 2, "logical": 130, "padded": 192, "fill": "ones"})
 
 
 def test_compose_pad_then_segments_round_trips(expect_error):

@@ -40,6 +40,9 @@ class Side(IntEnum):
 
 _LENGTH = 2  # index of the length in a (device_start, canonical_start, length) triple
 
+# How a load fills padding rows that have no canonical source. Zeros is the only fill the loader implements.
+PAD_FILLS = ("zeros",)
+
 
 @dataclass(frozen=True)
 class Identity:
@@ -89,6 +92,8 @@ class Pad:
     def __post_init__(self) -> None:
         if not 0 <= self.logical <= self.padded:
             raise LayoutError(f"pad: logical extent {self.logical} must be within [0, padded={self.padded}]")
+        if self.fill not in PAD_FILLS:
+            raise LayoutError(f"pad: fill {self.fill!r} is not one of {list(PAD_FILLS)}")
 
     def to_canonical(self, box: Box) -> list[Piece]:
         lo = box.offsets[self.dim]
