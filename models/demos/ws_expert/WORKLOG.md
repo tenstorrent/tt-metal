@@ -382,3 +382,17 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
 - Table spacing (async replay of one torus ring, 128 experts, hop latency L in packet times): tables built with
   D 3 / 4 / 5 / 6 / 8 run at 76.8 / 78.4 / 80.8 / 80.7 / 78.0% for L 2 and 63.4 / 73.1 / 75.5 / 73.7 / 68.9% for L 3:
   sparser tables (D 5) absorb hop latency better than the synchronous model suggests.
+- Third in-core weight slot (test_ws_slot3, single chip of hold 213684, c10u20: group program with injector-L1
+  weights, P 2, G 4, M 586, 32 experts, 20 warm-up + 5 measured; GCfg.spare_slot reserves the 207 KB slot):
+| token-row ring (bfp8) | weight slots | util tile median (min-max) | x wait a core (cycles) |
+|---|---|---|---|
+| BK 24, NX 15 (current) | 2 | 78.7% (78.1-79.9) | 10K |
+| BK 24, NX 15 | 3 | does not fit | |
+| BK 20, NX 9, LOOK 18 | 3 | 76.0% (75.2-76.1) | 96K |
+| BK 12, NX 15, LOOK 30 | 3 | 74.0% (73.1-74.5) | 107K |
+| BK 24, NX 7, LOOK 14 | 3 | 67.9% (67.7-68.2) | 216K |
+| BK 12, NX 20 / 24 | 3 | does not fit beside this test's injector staging (no injectors on a fabric chip) | |
+  PCC 0.99994 throughout. Down outputs from the NCRISC on NOC1 (GCfg.y_noc1): 79.5% vs 77.7% from the BRISC on NOC0.
+- ws_sf_f1, 640 experts torus, one lane a group, D 5, CRB 6, arr_noflush, down outputs on NOC1: first measured launch
+  35.5-36.4% a chip (warm-up 20 done), then launch 22 hung (device timeout at 21:59:39) and host MMIO reads to device
+  27 timed out at 22:01:27; the watcher cancelled the step and the node stopped answering new job steps.
