@@ -65,3 +65,38 @@ def test_perf_decode(device, inputs, token_dtype):
     ):
         pcc, rel_rms = _rel_metrics(got, ref)
         assert pcc >= pcc_min and rel_rms <= rms_max, f"{label}: PCC {pcc:.6f}, rel RMS {rel_rms:.6f}"
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 1, 2560), (1, 12, 128, 128)), id="perf_decode_b1"),
+        pytest.param(((1, 16, 2560), (16, 12, 128, 128)), id="model_decode_b16"),
+    ],
+)
+def test_perf_in_place(device, inputs):
+    """Refinement 10: the same calls updating conv_state / recurrent_state in place (first call checked)."""
+    torch.manual_seed(0)
+    tensors = make_inputs(inputs)
+    for name in ORDER:
+        if name != "recurrent_state":
+            tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
+    expected = reference(*(tensors[name] for name in ORDER))
+    device_inputs = _to_device(tensors, device, ttnn.bfloat16)
+    conv_state, recurrent_state = (
+        device_inputs[ORDER.index("conv_state")],
+        device_inputs[ORDER.index("recurrent_state")],
+    )
+    for launch in range(LAUNCHES):
+        out, _, _ = gated_delta_net(
+            *device_inputs,
+            compute_kernel_config=compute_config(),
+            conv_state_out=conv_state,
+            recurrent_state_out=recurrent_state,
+        )
+        if launch == 0:
+            out_t, cs_t, rs_t = (ttnn.to_torch(t).to(torch.float32) for t in (out, conv_state, recurrent_state))
+            assert torch.equal(cs_t, expected[1]), "conv_state not bit-exact"
+            for got, ref, label in ((out_t, expected[0], "output"), (rs_t, expected[2], "recurrent_state")):
+                pcc, rel_rms = _rel_metrics(got, ref)
+                assert pcc >= 0.995 and rel_rms <= 0.04, f"{label}: PCC {pcc:.6f}, rel RMS {rel_rms:.6f}"

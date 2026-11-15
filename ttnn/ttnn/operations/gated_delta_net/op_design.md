@@ -29,6 +29,7 @@ Symbols used throughout: `B` sequences, `T` tokens per sequence in this call, `N
 | norm_weight | ttnn.Tensor (V) | yes | same dtype | - | tensor |
 | epsilon | float | no (kw-only) | > 0 | 1e-6 | RT (float bits) |
 | compute_kernel_config | ttnn.ComputeConfigDescriptor | no (kw-only) | fp32_dest_acc_en must be True; fidelity / approx not gated | `default_compute_kernel_config()` | passed as-is as `config=` |
+| conv_state_out, recurrent_state_out | ttnn.Tensor | no (kw-only) | same shape / dtype / layout / memory config as conv_state / recurrent_state; may be that input itself (in place); no other input | None (allocated) | tensor |
 | T, B, pair range, tile-row geometry | derived ints | - | - | - | RT |
 | Kt, Vt, Hv, Hk, r, Gt | derived ints | - | - | - | CT (geometry; one compile per head geometry) |
 
@@ -40,6 +41,15 @@ accepted it. The only field the program descriptor writes on that object is
 `unpack_to_dest_mode` (the per-CB `UnpackToDestFp32` list of Circular Buffers, required by the
 precision contract); `fp32_dest_acc_en`, `math_fidelity`, `math_approx_mode` and every other field
 are left exactly as the caller set them.
+
+In place (Refinement 10): recurrent_state needs no ordering, since each core reads its whole S0 slice before compute
+and writes back only that slice. conv_state is read and written by different cores, so when conv_state_out is
+conv_state every reader core signals the writer of the rows / columns it read (`CS_READ_SEM_ID`) once its reads have
+landed, and the writer waits for those signals before overwriting them: R-QKCORE pair cores signal their key head's q
+and k cores, which write whole tiles of that key head's columns only; elsewhere each unit reading a (sequence, key head)'s
+q / k history rows on another core signals the core that copies those columns. R-PREP needs no signal (a state core
+copies after its group's prepped tile rows have landed). Default calls compile none of it. The op writes no tensor the
+caller did not pass as an output.
 
 ### Registry contract (op file)
 
