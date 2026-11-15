@@ -30,6 +30,8 @@
 //     helper accumulates FPU binaries into DEST. fp32 tokens keep the SFPU path (srcA/srcB are 19-bit);
 //   - the state update accumulates the increment matmul onto an SFPU-decayed fp32 state already in
 //     DEST; matmul_block owns DEST acquire/pack and cannot seed DEST with it.
+//   - token_vector_band / decay_tiles: one sfpi pass per tile band (decode token vector) or per DEST batch (state
+//     decay), because each eltwise call pays an SFPU start / done and an init that dominate one-band work.
 // DEST discipline in the raw windows: every unpack-to-DEST load of a window is issued before its
 // first SFPU op (an unpack-to-DEST load may run ahead of SFPU work on the math thread), and the
 // math thread waits for the SFPU before the FPU accumulates onto SFPU results.
@@ -495,6 +497,79 @@ ALWI void bcast_row_scoped(uint32_t data, uint32_t row, RowScope scope) {
     }
 }
 
+// Decode token vector of one column tile in one SFPU pass over the token's band (custom block op: it replaces ~14
+// scalar, binary and broadcast SFPU calls, most with their own init; 0.6 -> 0.15 us per tile at B=8). DEST in: 0 rk,
+// 1 v, 2 ro, 3 row selector (1 on row p, 0 on the band's other rows, every column: the writer fills the band). Out:
+// 1 u' = ik beta sel (v - ik alpha rk), 2 o = iq alpha sel ro + iq d u', 0 o^2 when SQUARE. Its multiply-adds round
+// once (SFPMAD), the per-op chain's twice.
+template <bool SQUARE>
+ALWI void token_vector_band(
+    uint32_t alpha_bits, uint32_t beta_bits, uint32_t d_bits, uint32_t ik_bits, uint32_t iq_bits, RowScope scope) {
+    binop_with_scalar_tile_init();  // ADDR_MOD_7
+#ifdef TRISC_MATH
+    sfpu_band(0, scope, [=] {
+        using sfpi::dst_reg;
+        using sfpi::vFloat;
+        constexpr uint32_t TS = 32;  // DEST tile size in sfpi rows
+        const vFloat ik = ckernel::sfpu::Converter::as_float(ik_bits);
+        const vFloat iq = ckernel::sfpu::Converter::as_float(iq_bits);
+        const vFloat alpha = ckernel::sfpu::Converter::as_float(alpha_bits);
+        const vFloat ak = alpha * ik;
+        const vFloat aq = alpha * iq;
+        const vFloat bk = ckernel::sfpu::Converter::as_float(beta_bits) * ik;
+        const vFloat dq = ckernel::sfpu::Converter::as_float(d_bits) * iq;
+#pragma GCC unroll 2
+        for (int d = 0; d < 2; ++d) {
+            const vFloat sel = dst_reg[3 * TS];
+            const vFloat u = (dst_reg[TS] - dst_reg[0] * ak) * sel * bk;
+            const vFloat o = dst_reg[2 * TS] * sel * aq + u * dq;
+            dst_reg[TS] = u;
+            dst_reg[2 * TS] = o;
+            if constexpr (SQUARE) {
+                dst_reg[0] = o * o;
+            }
+            dst_reg++;
+        }
+    });
+#endif
+}
+
+// DEST[0 .. N) *= decay (fp32), whole tiles, in one SFPU pass (custom block op: one start / done and the N
+// multiplies of a row interleaved, instead of one mul_unary_tile per tile). Needs binop_with_scalar_tile_init.
+template <uint32_t N>
+ALWI void decay_tiles_body(uint32_t decay_bits) {
+#ifdef TRISC_MATH
+    using sfpi::dst_reg;
+    using sfpi::vFloat;
+    constexpr uint32_t TS = 32;
+    const vFloat decay = ckernel::sfpu::Converter::as_float(decay_bits);
+#pragma GCC unroll 1
+    for (uint32_t row = 0; row < TS; ++row) {
+#pragma GCC unroll 8
+        for (uint32_t t = 0; t < N; ++t) {
+            dst_reg[t * TS] = dst_reg[t * TS] * decay;
+        }
+        dst_reg++;
+    }
+#endif
+}
+
+// One pass when every batch is full (n_state a multiple of the batch), so a build holds one of the two variants.
+template <uint32_t N>
+ALWI void decay_tiles(uint32_t count, uint32_t decay_bits) {
+    if constexpr (GDN_DECAY_ONE_PASS && n_state % N == 0) {
+#ifdef TRISC_MATH
+        _llk_math_eltwise_sfpu_start_(0);
+        decay_tiles_body<N>(decay_bits);
+        _llk_math_eltwise_sfpu_done_();
+#endif
+    } else {
+        for (uint32_t t = 0; t < count; ++t) {
+            mul_unary_tile(t, decay_bits);
+        }
+    }
+}
+
 struct Buffers {
     DataflowBuffer state_in_mm{cb_state_in_mm};
     DataflowBuffer state_mm{cb_state_mm};
@@ -940,9 +1015,7 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
             load(src, run_tile(i), i);
         }
         binop_with_scalar_tile_init();
-        for (uint32_t i = 0; i < count; ++i) {
-            mul_unary_tile(i, decay_bits);
-        }
+        decay_tiles<UPDATE_BATCH>(count, decay_bits);
         wait_sfpu_before_fpu();
         reconfig_data_format(u_cb, knT_cb);
         matmul_init(knT_cb, u_cb);

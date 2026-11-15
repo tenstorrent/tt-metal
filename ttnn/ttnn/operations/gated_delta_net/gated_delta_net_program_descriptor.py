@@ -212,6 +212,13 @@ STATE_SPLIT = 0
 # R-QKCORE pair cores running several units: the reader writes the final states of all but the last unit, as compute
 # packs them (the writer would issue them only at the next unit's store point), the writer the last unit's.
 STATE_READER_EARLY_UNITS = False
+# Decode token step (shared q / k builds): the token vector of a column tile in one SFPU pass over the token's band
+# instead of ~14 scalar / binary / broadcast SFPU calls with their inits (2.0 -> 0.6 us per unit at Vb = 4). "auto":
+# on for R-VSPLIT pieces (decode B=1: 12.5 -> 12.0 us), off for whole-V units (B=8 / B=16 are DRAM-bound there:
+# the earlier state writes push back the late cores' S0 reads, 39.3 -> 40.1 / 69.1 -> 69.6 us).
+TOKEN_VECTOR_FUSED = "auto"
+# Token step state update: the decay of a DEST batch of state tiles in one SFPU pass instead of one call per tile.
+DECAY_ONE_PASS = True
 # R-BCAST: a kernel group per qk role instead of one for all its cores. Smaller reader / writer binaries (the q / k
 # role compiled in), but the injector group stays the largest and decode B=1 host time per call rises 112 -> 166 us.
 SPLIT_BCAST_GROUPS = False
@@ -1617,6 +1624,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_S0_WRITER_AFTER_INPUTS", str(int(S0_WRITER_AFTER_INPUTS))),
             ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
             ("GDN_PROFILE_ZONES", str(0 if _noc_tracing() else int(PROFILE_ZONES))),
+            ("GDN_TOKEN_VECTOR_FUSED", str(int(pieces > 1 if TOKEN_VECTOR_FUSED == "auto" else TOKEN_VECTOR_FUSED))),
+            ("GDN_DECAY_ONE_PASS", str(int(DECAY_ONE_PASS))),
         ]
     )
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).

@@ -57,36 +57,44 @@ ALWI void token_step(
             load(cb_v, vt, 1);           // v
             load(cb_reads, Vb + vt, 2);  // ro
             load(cb_tok_coef, COEF_SEL, 3);
-            binop_with_scalar_tile_init();
-            binop_scalar_scoped<MUL_UNARY>(0, alpha_bits, scope);
-            binop_scalar_scoped<MUL_UNARY>(2, alpha_bits, scope);
-            if constexpr (QK_RAW) {
-                binop_scalar_scoped<MUL_UNARY>(0, ik_bits, scope);
-                binop_scalar_scoped<MUL_UNARY>(2, iq_bits, scope);
-            }
-            // w in the v slot: off the scope's rows u keeps v's zeros (rk there may hold other sequences' rows).
-            sub_binary_tile_init();
-            binary_scoped<ckernel::BinaryOp::SUB>(1, 0, 1, scope);
-            sfpu_bcast_col_init();
-            mul_bcast_col_scoped(1, 3, scope);
-            mul_bcast_col_scoped(2, 3, scope);
-            binop_with_scalar_tile_init();
-            binop_scalar_scoped<MUL_UNARY>(1, beta_bits, scope);  // u
-            if constexpr (QK_RAW) {
-                binop_scalar_scoped<MUL_UNARY>(1, ik_bits, scope);  // u'
-            }
-            copy_dest_values_init();
-            copy_dest_values<DataFormat::Float32>(1, 0);
-            binop_with_scalar_tile_init();
-            binop_scalar_scoped<MUL_UNARY>(0, d_bits, scope);
-            if constexpr (QK_RAW) {
-                binop_scalar_scoped<MUL_UNARY>(0, iq_bits, scope);
-            }
-            add_binary_tile_init();
-            binary_scoped<ckernel::BinaryOp::ADD>(2, 0, 2, scope);  // o
-            if (square_o) {
-                mul_binary_tile_init();
-                binary_scoped<ckernel::BinaryOp::MUL>(2, 2, 0, scope);
+            if constexpr (GDN_TOKEN_VECTOR_FUSED) {
+                if (square_o) {
+                    token_vector_band<true>(alpha_bits, beta_bits, d_bits, ik_bits, iq_bits, scope);
+                } else {
+                    token_vector_band<false>(alpha_bits, beta_bits, d_bits, ik_bits, iq_bits, scope);
+                }
+            } else {
+                binop_with_scalar_tile_init();
+                binop_scalar_scoped<MUL_UNARY>(0, alpha_bits, scope);
+                binop_scalar_scoped<MUL_UNARY>(2, alpha_bits, scope);
+                if constexpr (QK_RAW) {
+                    binop_scalar_scoped<MUL_UNARY>(0, ik_bits, scope);
+                    binop_scalar_scoped<MUL_UNARY>(2, iq_bits, scope);
+                }
+                // w in the v slot: off the scope's rows u keeps v's zeros (rk there may hold other sequences' rows).
+                sub_binary_tile_init();
+                binary_scoped<ckernel::BinaryOp::SUB>(1, 0, 1, scope);
+                sfpu_bcast_col_init();
+                mul_bcast_col_scoped(1, 3, scope);
+                mul_bcast_col_scoped(2, 3, scope);
+                binop_with_scalar_tile_init();
+                binop_scalar_scoped<MUL_UNARY>(1, beta_bits, scope);  // u
+                if constexpr (QK_RAW) {
+                    binop_scalar_scoped<MUL_UNARY>(1, ik_bits, scope);  // u'
+                }
+                copy_dest_values_init();
+                copy_dest_values<DataFormat::Float32>(1, 0);
+                binop_with_scalar_tile_init();
+                binop_scalar_scoped<MUL_UNARY>(0, d_bits, scope);
+                if constexpr (QK_RAW) {
+                    binop_scalar_scoped<MUL_UNARY>(0, iq_bits, scope);
+                }
+                add_binary_tile_init();
+                binary_scoped<ckernel::BinaryOp::ADD>(2, 0, 2, scope);  // o
+                if (square_o) {
+                    mul_binary_tile_init();
+                    binary_scoped<ckernel::BinaryOp::MUL>(2, 2, 0, scope);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();

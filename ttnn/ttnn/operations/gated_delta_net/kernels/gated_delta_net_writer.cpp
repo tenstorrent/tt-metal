@@ -718,6 +718,13 @@ void kernel_main() {
                         coef[TILE_WORDS + e] = at_p ? beta : 0u;
                         coef[2 * TILE_WORDS + e] = at_p ? ONE_BITS : 0u;  // row-p selector
                     }
+                    // TOKEN_VECTOR_FUSED reads the selector elementwise on p's 4-row band: every column there (~1.5 us
+                    // of this RISC at decode B=1, off its critical path there).
+                    for (uint32_t r = p & ~3u; r < (p & ~3u) + 4 && GDN_TOKEN_VECTOR_FUSED; ++r) {
+                        for (uint32_t c = 1; c < TILE_ROWS; ++c) {
+                            coef[2 * TILE_WORDS + elem_index(r, c)] = r == p ? ONE_BITS : 0u;
+                        }
+                    }
                     cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
                 }
                 cb_pop_front(cb_gates, 2);

@@ -857,7 +857,7 @@ binds; golden green, no regression on the guard set.
 
 **Outcome**: device kernel us (median of launches 2..12, before -> after): model_decode_b8 39.27 -> 39.06, model_decode_b16 69.77 -> 69.26 (both within noise; targets 35 / 64 not met), in-place b16 69.75, perf_decode_b1 12.63 -> 12.44, decode_b1_f32 20.5 -> 19.8; guard set unchanged (prefill_t96 54.3, batched_b2_t40 125.2, model_prefill_4096 910.3). Landed: two-stage raw hand-off on the B > 1 plan, q / k cores placed after their key head's pair cores (`QK_CORES_AFTER_GROUP`), window slots zeroed while the staging reads fly. Timeline before -> after (GDN_PROFILE_ZONES=2, us). B=8: y landed 12.3-14.9 -> 8.1-10.5 (median 13.4 -> 9.4), inverse norms 10.0-11.9, first / last S0 landed 6.1 / 19.6 -> 5.7 / 19.0, first / last update done 23.8 / 29.7 -> 20.3 / 29.9, first state write issued at the first update, last write done 39.4 -> 38.1. B=16: y 16-19 -> 11.5-14.8, inverse norms 12.9-16.2, last-unit S0 15-38, updates done 38-49, writes done 46-69 (unchanged). What binds: on every core the S0 reads (6 MB / 12 MB, last landing at ~19 / ~38 us) and then ~10 us of state compute per unit (token vector 4.4 us and update 4.4 us at Vb = 4, RMS 4 us), then the 64 KB state write-back queued at the DRAM banks behind other cores' traffic; the earliest-S0 cores (S0 at 6-8 us at B=8) still wait 2-3 us for y but finish at ~26 us, off the wall. Early write-back rechecked: STATE_READER_EARLY_UNITS 84.6 us, STATE_SPLIT=4 80.0 us at B=16 (early writes still push the late S0 reads back). Not done: more q / k cores (6 idle cores of 110 at B=8 / B=16, not one per key head and role), y_k^T from the k core and sequence ordering (the hand-off is off the critical path, nothing to gain); per-column gather is NoC-issue bound (~24 one-packet local reads in 0.7 us per RISC), q reader share 70 / 85 % measured worse. Next: the state cores' token vector and update (one DEST window over Vb tiles instead of per-tile init chains), which is now the per-unit term after S0.
 
-### [ ] Refinement 22 — Decode: state-core compute per unit (token vector, update, RMS)
+### [x] Refinement 22 — Decode: state-core compute per unit (token vector, update, RMS)
 
 **Type**: perf
 
@@ -893,3 +893,15 @@ next-program test green; traced builds under the kernel text limit.
 us, model_decode_b8 below 37 us and model_decode_b16 below 66 us (median of 11 after launch 1), or
 the timeline shows which LLK step cannot be shortened and why; golden green, no regression on the
 guard set.
+
+**Outcome**: perf_decode_b1 12.47 -> 11.87 us, decode_b1_f32 19.79 -> 19.33, model_decode_b8 39.05 -> 39.12 and
+model_decode_b16 68.9 -> 69.2-69.6 (both noise; median of launches 2..12, knobs off -> on, interleaved pairs); targets
+11 / 37 / 66 not met. Per unit, pack thread: token vector 4.44 -> 2.57 us at B=8 (`TOKEN_VECTOR_FUSED`, one sfpi pass over
+the band instead of 14 calls and 7 inits per tile) and 1.57 -> 1.04 at B=1; update 5.37 -> 4.91 (`DECAY_ONE_PASS`). The
+token-vector lever is "auto" (on for R-VSPLIT pieces) because forced on at B=8 / B=16 it costs +0.8 / +0.45 us. What
+cannot be shortened, and why: the update is 2.8 us of 16 fp32 state tiles unpacked to DEST and packed, serial with its
+1.5 us decay because unpack-to-DEST holds the math thread, plus a 0.6 us matmul; the decay must stay an fp32 SFPU
+multiply (srcA / srcB carry 19 bits). At B=8 / B=16 the wall is not compute: cores done at 19-23 us complete their state
+writes at 24-37 us, and shorter compute only moves their writes earlier into the late cores' S0 reads. Next: order the
+DRAM traffic (hold the write-back until the late rows' S0 has landed); not done, it is a cross-core scheme change beyond
+this heading.

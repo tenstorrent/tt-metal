@@ -60,6 +60,9 @@ def test_shared_matches_own(device, monkeypatch, inputs, token_dtype, poison):
     # q / k cores (QK_CORES_VSPLIT, where the rectangles fit; normalized hand-off), R-BCAST injectors, every core its
     # own q / k.
     monkeypatch.setattr(gdn_pd, "QK_RAW_HANDOFF", False)
+    # The fused token vector rounds its multiply-adds once (SFPMAD), the unshared path twice; test_fused_token_vector
+    # checks it against the reference.
+    monkeypatch.setattr(gdn_pd, "TOKEN_VECTOR_FUSED", False)
     for qk_cores, share in ((True, True), (False, True), (False, False)):
         monkeypatch.setattr(gdn_pd, "QK_CORES_VSPLIT", qk_cores)
         monkeypatch.setattr(gdn_pd, "SHARE_QK_PREP", share)
@@ -103,3 +106,38 @@ def test_raw_handoff_accuracy(device, monkeypatch, inputs, token_dtype):
     for label, (normalized, raw) in zip(("output", "recurrent_state_out"), zip(*errors)):
         assert raw[0] >= normalized[0] - 1e-6, f"{label}: PCC {raw[0]} vs {normalized[0]} normalized"
         assert raw[1] <= 1.25 * normalized[1], f"{label}: relative RMS {raw[1]} vs {normalized[1]} normalized"
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 1, 2560), (1, 12, 128, 128)), id="chip_b1"),
+        pytest.param(((1, 3, 512), (3, 4, 32, 64)), id="small_r1"),
+        pytest.param(((1, 8, 2560), (8, 12, 128, 128)), id="chip_b8"),
+    ],
+)
+@pytest.mark.parametrize("token_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])
+def test_fused_token_vector(device, monkeypatch, inputs, token_dtype):
+    """Refinement 22: the token vector in one SFPU pass (TOKEN_VECTOR_FUSED) is as close to the reference as the
+    per-op chain (fused multiply-adds round once, so not bit-identical); conv_state_out exact."""
+    torch.manual_seed(2)
+    tensors = make_inputs(inputs)
+    if token_dtype == ttnn.bfloat16:
+        for name in ORDER:
+            if name != "recurrent_state":
+                tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
+    expected = reference(*(tensors[name] for name in ORDER))
+    errors = []
+    for fused in (False, True):
+        monkeypatch.setattr(gdn_pd, "TOKEN_VECTOR_FUSED", fused)
+        gdn_pd.clear_program_cache()
+        outs = gated_delta_net(*_to_device(tensors, device, None, token_dtype), compute_kernel_config=compute_config())
+        out, conv_state_out, state = (ttnn.to_torch(t).to(torch.float32) for t in outs)
+        assert torch.equal(conv_state_out, expected[1]), "conv_state_out not bit-exact"
+        errors.append([_rel_metrics(out, expected[0]), _rel_metrics(state, expected[2])])
+    for label, (chain, fused) in zip(("output", "recurrent_state_out"), zip(*errors)):
+        assert fused[0] >= chain[0] - 1e-6, f"{label}: PCC {fused[0]} vs {chain[0]} per-op chain"
+        assert fused[1] <= 1.1 * chain[1], f"{label}: relative RMS {fused[1]} vs {chain[1]} per-op chain"
+        print(
+            f"{label}: chain PCC {chain[0]:.8f} rel RMS {chain[1]:.3e}, fused PCC {fused[0]:.8f} rel RMS {fused[1]:.3e}"
+        )
