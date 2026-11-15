@@ -67,11 +67,11 @@ def test_fully_replicated_label_is_one_group():
 def test_owner_is_deterministic_and_spread():
     label = world([R(), S(2)], (4, 8))
     groups = replica_groups(chunk_boxes(label, (1, 1, 32, 64)))
-    group = groups[(3,)]
-    assert owner("model/x", group) == owner("model/x", list(reversed(group)))
+    holders = [(0, c.mesh_coord) for c in groups[(3,)]]  # one process: rank 0 holds every coordinate
+    assert owner("model/x", holders) == owner("model/x", list(reversed(holders)))
     counts = {}
     for i in range(400):
-        c = owner(f"model/blocks/{i}/weight", group).mesh_coord
+        _, c = owner(f"model/blocks/{i}/weight", holders)
         counts[c] = counts.get(c, 0) + 1
     assert set(counts) == {(0, 3), (1, 3), (2, 3), (3, 3)}
     assert min(counts.values()) >= 60, counts

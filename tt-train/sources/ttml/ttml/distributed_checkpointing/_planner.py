@@ -49,7 +49,6 @@ from ._topology import (
     Label,
     chunk_boxes,
     global_shape as label_global_shape,
-    owner as elect_owner,
     replica_groups,
 )
 
@@ -206,13 +205,13 @@ def _by_key(infos: Iterable[TensorInfo], verb: str) -> dict[str, TensorInfo]:
 def create_save_plan(
     infos: Iterable[TensorInfo],
     file_for_coord: Callable[[tuple[int, ...]], str],
+    owner_of: Callable[[str, list[Chunk]], Chunk | None],
     file_metadata: Callable[[tuple[int, ...]], dict] | None = None,
-    owner_of: Callable[[str, list[Chunk]], Chunk | None] | None = None,
 ) -> SavePlan:
     """One file per mesh coordinate that writes something; each key's unique boxes assigned to their elected owners.
 
-    ``owner_of(key, replica group)`` overrides the election: it returns the group's chunk this process writes, or
-    ``None`` when another rank of a multi-rank world writes it. The default elects among the group's coordinates.
+    ``owner_of(key, replica group)`` returns the group's chunk this process writes, or ``None`` when another rank
+    writes it: the coordinator's election (``Election.owner_of``), which a single process runs too.
     """
     infos = _by_key(infos, "saved")
     owned: dict[str, list[Chunk]] = {}
@@ -220,7 +219,7 @@ def create_save_plan(
         info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
         chosen: list[Chunk] = []
         for group in _checked_groups(info).values():
-            own = elect_owner(key, group) if owner_of is None else owner_of(key, group)
+            own = owner_of(key, group)
             if own is not None:
                 chosen.append(own)
         owned[key] = chosen

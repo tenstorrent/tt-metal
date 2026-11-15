@@ -69,7 +69,7 @@ from ._errors import (
 from ._index import Entry, FileRecord, Index, _entry_from_json, _entry_to_json
 from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
-from ._topology import Chunk, Label, crc31
+from ._topology import Chunk, Label, crc31, owner
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
 # other user of ttnn's point-to-point calls (tag 0 by default; tt-train's GRPO rollout uses 22010-22013 and
@@ -453,10 +453,8 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     transform), and the ranks' scheduler and dataloader states must agree, since the checkpoint stores one copy that
     every rank restores. A key's label splits it into boxes (its replica groups); each box is held by one or more
     (rank, mesh coordinate) pairs, at least one of which must exist. The box's owner, the one pair that writes it, is
-    picked by the key's CRC32 among those pairs sorted by (rank, coordinate), so different keys pick different pairs
-    and the writes of replicated tensors spread over the ranks and devices. On one process every pair is
-    (0, coordinate), so the pick is the device ``_topology.owner`` picks and a single-process checkpoint keeps its
-    layout.
+    picked by ``_topology.owner``, a hash of the key over the pairs in order, so different keys pick different pairs
+    and the writes of replicated tensors spread over the ranks and devices.
     """
     parts = sorted(parts, key=lambda p: p.record.rank)
     differing = [p.record.rank for p in parts if p.train_state_hash != parts[0].train_state_hash]
@@ -489,7 +487,6 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     for key, info in infos.items():
         groups, _ = _groups_of(info)
         chosen: dict[tuple[int, ...], Owner] = {}
-        spread = crc31(key)
         for group_key in groups:
             holders = sorted(members[key].get(group_key, []))
             if not holders:
@@ -497,7 +494,7 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
                     f"{key}: no rank holds the box of replica group {group_key}; the ranks' local coordinates do not "
                     f"cover the label's mesh coordinates"
                 )
-            chosen[group_key] = holders[spread % len(holders)]
+            chosen[group_key] = owner(key, holders)
         owners[key] = chosen
     return Election(owners, len(infos))
 

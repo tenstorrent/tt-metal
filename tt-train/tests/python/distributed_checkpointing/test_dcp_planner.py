@@ -22,6 +22,7 @@ from dcp_oracle import (
     assert_shards_equal,
     device_global,
     expected_shards,
+    one_process_owner,
     per_shard_fused,
     world,
 )
@@ -228,7 +229,7 @@ def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
         )
         for i in range(64)
     ]
-    plan = create_save_plan(infos, lambda c: data_file_name(0, 0, c))
+    plan = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
     assert len(plan.files) == 32 and all(f.items for f in plan.files), "every device file gets some chunks"
     assert plan.bytes_written == 64 * 8 * 32 * 64 * 2
     for fplan in plan.files:
@@ -245,7 +246,7 @@ def test_two_live_tensors_under_one_key_are_refused(expect_error):
     # A dict by key would keep one of them and silently not save or not load the other.
     info = TensorInfo("w", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",))
     with expect_error(CheckpointError, "w: two live tensors have this key; only one of them would be saved"):
-        create_save_plan([info, info], lambda c: data_file_name(0, 0, c))
+        create_save_plan([info, info], lambda c: data_file_name(0, 0, c), one_process_owner)
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (arange((1, 1, 64, 32)), SINGLE, Identity())})
     with expect_error(CheckpointError, "only one of them would be loaded"):
@@ -374,7 +375,7 @@ def test_a_label_sharding_a_dim_the_tensor_lacks_is_refused_at_save(expect_error
         label = Label((Placement.replicate(), Placement.shard(dim)), (1, 2), tuple(dist_coords((1, 2))))
         info = TensorInfo("model/w", "param", "BF16", "TILE", label, (1, 1, 4, 4), Identity(), ("model/w",))
         with expect_error(TopologyError, "model/w: distribution axis 1 shards dim"):
-            create_save_plan([info], lambda c: data_file_name(0, 0, c))
+            create_save_plan([info], lambda c: data_file_name(0, 0, c), one_process_owner)
 
 
 def test_saved_chunks_that_overlap_or_leave_a_gap_are_refused_at_load(expect_error):
@@ -416,8 +417,8 @@ def test_save_planning_is_cached_per_label_and_shape(expect_error):
         for i in range(16)
     ]
     _replica_layout.cache_clear()
-    first = create_save_plan(infos, lambda c: data_file_name(0, 0, c))
-    second = create_save_plan(infos, lambda c: data_file_name(0, 0, c))
+    first = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
+    second = create_save_plan(infos, lambda c: data_file_name(0, 0, c), one_process_owner)
     stats = _replica_layout.cache_info()
     assert stats.misses == 1 and stats.hits == 31, "one grouping for 16 keys of one label, reused by the next save"
     assert [f.items[0].key for f in first.files] == [f.items[0].key for f in second.files]
@@ -431,7 +432,7 @@ def test_save_planning_is_cached_per_label_and_shape(expect_error):
     for key in ("model/a", "model/b"):
         info = TensorInfo(key, "param", "BF16", "TILE", bad, (1, 1, 4, 4), Identity(), (key,))
         with expect_error(TopologyError, f"{key}: distribution axis 1 shards dim 5"):
-            create_save_plan([info], lambda c: data_file_name(0, 0, c))
+            create_save_plan([info], lambda c: data_file_name(0, 0, c), one_process_owner)
     after = _replica_layout.cache_info()
     assert (
         after.misses - before.misses == 1 and after.hits - before.hits == 1

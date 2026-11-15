@@ -167,7 +167,10 @@ def crc31(text: str) -> int:
     return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
 
 
-def owner(key: str, group: Sequence[Chunk]) -> Chunk:
-    """The replica that writes the group's box: a stable hash of the key spreads owners over every device."""
-    ordered = sorted(group, key=lambda c: c.mesh_coord)
+def owner(key: str, holders: Sequence[tuple]) -> tuple:
+    """Which holder of a replicated box writes it: a stable hash of the key picks one of the holders in sorted order,
+    so the writes of replicated tensors spread over the devices and the ranks. The holders are ``(rank, mesh
+    coordinate)`` pairs (``_coordinator.merge_plan_parts``); on one process the rank is 0 throughout, so the pick is
+    the same coordinate a list of bare coordinates gives."""
+    ordered = sorted(holders)
     return ordered[crc31(key) % len(ordered)]
