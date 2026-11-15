@@ -3278,6 +3278,11 @@ void write_program_command_sequence(
             return;
         }
         const auto* chunk = static_cast<const uint8_t*>(data);
+        if (!one_shot) {
+            // Reserve first: it may wrap the issue queue, which moves the write pointer. (Only trace capture reads
+            // the recorded offsets today, and its bypass reserve never wraps.)
+            manager.issue_queue_reserve(size_bytes, command_queue_id);
+        }
         const uint32_t write_ptr = one_shot ? one_shot_write_ptr : manager.get_issue_queue_write_ptr(command_queue_id);
         // Copy the chunk and patch it if it holds any patch.
         const void* out = data;
@@ -3300,8 +3305,7 @@ void write_program_command_sequence(
             manager.cq_write(out, size_bytes, one_shot_write_ptr);
             one_shot_write_ptr += size_bytes;
         } else {
-            manager.issue_queue_reserve(size_bytes, command_queue_id);
-            manager.cq_write(out, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
+            manager.cq_write(out, size_bytes, write_ptr);
             manager.issue_queue_push_back(size_bytes, command_queue_id);
             manager.fetch_queue_reserve_back(command_queue_id);
             manager.fetch_queue_write(size_bytes, command_queue_id);

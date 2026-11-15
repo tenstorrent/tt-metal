@@ -9,6 +9,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <map>
 #include <iterator>
@@ -17,6 +19,7 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -25,6 +28,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -66,7 +70,9 @@ protected:
             {"NUM_RUNTIME_ARGS", std::to_string(kNumArgs)},
             {"COMMON_RUNTIME_ARGS", "1"},
             {"NUM_COMMON_RUNTIME_ARGS", std::to_string(kNumCommonArgs)}};
-        defines.insert(extra_defines.begin(), extra_defines.end());
+        for (auto& [name, value] : extra_defines) {
+            defines.insert_or_assign(name, std::move(value));  // extra defines override the defaults
+        }
         return CreateKernel(
             program,
             kKernel,
@@ -96,6 +102,7 @@ protected:
     void rejects_invalid_fields();
     void program_on_sub_range();
     void trace_node_in_several_partitions();
+    void command_sequence_beyond_one_fetch();
 };
 
 class MeshPerDeviceRuntimeArgsTest : public MeshDeviceFixtureBase, public PerDeviceRuntimeArgsChecks {
@@ -656,6 +663,127 @@ void PerDeviceRuntimeArgsChecks::trace_node_in_several_partitions() {
     EXPECT_EQ(read_words(*full.begin(), other_core, results, kNumArgs), default_args(other_core));
 }
 
+// A program whose command sequence is larger than one prefetch command, so the patched writer goes through its
+// multi-fetch path: two kernels with many args on every worker core, fields on cores spread across the sequence.
+void PerDeviceRuntimeArgsChecks::command_sequence_beyond_one_fetch() {
+    const MeshCoordinateRange range(mesh_device_->shape());
+    const CoreCoord grid = mesh_device_->compute_with_storage_grid_size();
+    const CoreRangeSet all_cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
+    constexpr uint32_t kManyArgs = 300;  // under max_runtime_args (341); beyond one prefetch command on an 8x8 grid too
+    const uint32_t max_cmd_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    if (2 * cores.size() * kManyArgs * sizeof(uint32_t) <= max_cmd_size) {
+        GTEST_SKIP() << "Runtime args fit in one prefetch command (" << max_cmd_size << " bytes)";
+    }
+
+    // Results per processor; each kernel also writes its common args 1024 words above its results.
+    const std::array<uint32_t, 2> results{
+        results_addr(), results_addr() + 4 * kCommonSeparationWords * sizeof(uint32_t)};
+    const std::array<DataMovementProcessor, 2> processors{
+        DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1};
+    auto default_value = [](uint32_t k, uint32_t core_idx, uint32_t word) {
+        return (k << 28) | (core_idx << 12) | word;
+    };
+
+    Program program = CreateProgram();
+    std::array<KernelHandle, 2> kernels{};
+    for (uint32_t k = 0; k < 2; k++) {
+        kernels[k] = create_kernel(
+            program, all_cores, results[k], processors[k], {{"NUM_RUNTIME_ARGS", std::to_string(kManyArgs)}});
+        for (uint32_t c = 0; c < cores.size(); c++) {
+            std::vector<uint32_t> args(kManyArgs);
+            for (uint32_t w = 0; w < kManyArgs; w++) {
+                args[w] = default_value(k, c, w);
+            }
+            SetRuntimeArgs(program, kernels[k], cores[c], args);
+        }
+        SetCommonRuntimeArgs(program, kernels[k], default_common_args());
+    }
+    MeshWorkload workload;
+    workload.add_program(range, std::move(program));
+
+    // Fields on the first, middle and last core of each kernel (first and last words), and one common word.
+    const std::vector<uint32_t> field_cores{
+        0, static_cast<uint32_t>(cores.size() / 2), static_cast<uint32_t>(cores.size() - 1)};
+    const std::vector<uint32_t> field_words{0, kManyArgs - 1};
+    auto field_value = [](uint32_t round, uint32_t idx, uint32_t k, uint32_t c, uint32_t w) {
+        return 0x80000000u | (round << 27) | (idx << 19) | (k << 18) | (c << 9) | w;  // w < 512, c < 512, idx < 256
+    };
+    // Distinct across rounds while idx < 100.
+    auto common_value = [](uint32_t round, uint32_t idx, uint32_t k) { return 70000 + 1000 * round + 10 * idx + k; };
+    auto set_fields = [&](uint32_t round) {
+        uint32_t idx = 0;
+        for (const auto& coord : range) {
+            for (uint32_t k = 0; k < 2; k++) {
+                for (const auto c : field_cores) {
+                    for (const auto w : field_words) {
+                        tt::tt_metal::experimental::SetRuntimeArgs(
+                            workload,
+                            range,
+                            coord,
+                            kernels[k],
+                            cores[c],
+                            w,
+                            std::vector<uint32_t>{field_value(round, idx, k, c, w)});
+                    }
+                }
+                tt::tt_metal::experimental::SetCommonRuntimeArgs(
+                    workload, range, coord, kernels[k], 2, std::vector<uint32_t>{common_value(round, idx, k)});
+            }
+            idx++;
+        }
+    };
+    auto check = [&](uint32_t round) {
+        uint32_t idx = 0;
+        for (const auto& coord : range) {
+            for (uint32_t k = 0; k < 2; k++) {
+                for (uint32_t c = 0; c < cores.size(); c++) {
+                    std::vector<uint32_t> expected(kManyArgs);
+                    for (uint32_t w = 0; w < kManyArgs; w++) {
+                        expected[w] = default_value(k, c, w);
+                    }
+                    if (std::find(field_cores.begin(), field_cores.end(), c) != field_cores.end()) {
+                        for (const auto w : field_words) {
+                            expected[w] = field_value(round, idx, k, c, w);
+                        }
+                    }
+                    ASSERT_EQ(read_words(coord, cores[c], results[k], kManyArgs), expected)
+                        << "device " << coord << " kernel " << k << " core " << cores[c].str();
+                }
+                auto expected_common = default_common_args();
+                expected_common[2] = common_value(round, idx, k);
+                EXPECT_EQ(
+                    read_words(
+                        coord, cores.back(), results[k] + kCommonSeparationWords * sizeof(uint32_t), kNumCommonArgs),
+                    expected_common)
+                    << "device " << coord << " kernel " << k;
+            }
+            idx++;
+        }
+    };
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    set_fields(1);
+    EnqueueMeshWorkload(cq, workload, false);
+    Finish(cq);
+    ASSERT_NO_FATAL_FAILURE(check(1));
+
+    set_fields(2);  // cache hit: the cached commands are written again, patched with the new per-device values
+    EnqueueMeshWorkload(cq, workload, false);
+    Finish(cq);
+    ASSERT_NO_FATAL_FAILURE(check(2));
+
+    set_fields(3);
+    const auto trace_id = mesh_device_->begin_mesh_trace(cq.id());
+    EnqueueMeshWorkload(cq, workload, false);
+    mesh_device_->end_mesh_trace(cq.id(), trace_id);
+    set_fields(4);
+    mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
+    Finish(cq);
+    ASSERT_NO_FATAL_FAILURE(check(3));
+    mesh_device_->release_mesh_trace(trace_id);
+}
+
 TEST_F(MeshPerDeviceRuntimeArgsTest, UniqueAndCommonFieldsEager) { unique_and_common_fields_eager(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, ProgramOnSubRange) { program_on_sub_range(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, TraceNodeInSeveralPartitions) { trace_node_in_several_partitions(); }
@@ -666,6 +794,7 @@ TEST_F(MeshPerDeviceRuntimeArgsTest, OwnArgsChangeBetweenEnqueues) { own_args_ch
 TEST_F(MeshPerDeviceRuntimeArgsTest, TraceReplaysCaptureTimeValues) { trace_replays_capture_time_values(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, FieldAfterKernelWithoutArgsOnCore) { field_after_kernel_without_args_on_core(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, RejectsInvalidFields) { rejects_invalid_fields(); }
+TEST_F(MeshPerDeviceRuntimeArgsTest, CommandSequenceBeyondOneFetch) { command_sequence_beyond_one_fetch(); }
 
 // Slow dispatch writes runtime args per device from the kernels' own storage. Mesh fixtures run in fast dispatch only,
 // so this opens a 1x2 mesh itself when TT_METAL_SLOW_DISPATCH_MODE is set.
