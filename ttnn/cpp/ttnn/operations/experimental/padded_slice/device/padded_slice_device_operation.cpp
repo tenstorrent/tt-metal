@@ -69,6 +69,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             "padded_slice prologue needs both prologue_scale and prologue_shift");
         TT_FATAL(
             args.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                args.output_mem_config.shard_spec().has_value() &&
                 args.output_mem_config.shard_spec()->shape[1] == channels && args.padded_slice_start[-1] == 0 &&
                 args.padded_slice_end[-1] == channels,
             "padded_slice prologue needs a height-sharded output whose shard holds all {} input channels: every core "
@@ -76,12 +77,15 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             channels);
         for (const Tensor& t : {tensor_args.prologue_scale.value(), tensor_args.prologue_shift.value()}) {
             TT_FATAL(
-                t.layout() == Layout::TILE && t.dtype() == DataType::BFLOAT16 && t.padded_shape()[-1] == channels &&
+                t.storage_type() == StorageType::DEVICE && t.layout() == Layout::TILE &&
+                    t.dtype() == DataType::BFLOAT16 && t.padded_shape()[-1] == channels &&
                     t.physical_volume() == channels * tt::constants::TILE_HEIGHT,
-                "padded_slice prologue_scale / prologue_shift must be [1, {}] BFLOAT16 TILE tensors, got {} {}",
+                "padded_slice prologue_scale / prologue_shift must be [1, {}] BFLOAT16 TILE device tensors, got {} {} "
+                "{}",
                 channels,
                 t.padded_shape(),
-                t.dtype());
+                t.dtype(),
+                t.storage_type());
         }
     }
     if (tensor_args.preallocated_output.has_value()) {
