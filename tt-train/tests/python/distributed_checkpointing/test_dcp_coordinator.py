@@ -295,7 +295,7 @@ def test_a_failing_rank_stops_every_rank_and_names_itself():
     results, errors = _run_ranks(3, body)
     assert set(errors) == {0, 1, 2}
     assert all(isinstance(e, CheckpointError) and "rank(s) [1]" in str(e) for e in errors.values())
-    assert "disk full" in str(errors[1]) and "disk full" not in str(errors[0])
+    assert all("rank 1: ValueError: disk full" in str(e) for e in errors.values()), "every rank sees the cause"
 
 
 def test_a_failing_collective_is_fatal_and_ends_the_exchanges(expect_error):
@@ -395,7 +395,11 @@ def test_disagreeing_ranks_are_refused():
         group.agree("the checkpoint directory", group.rank)
 
     _, errors = _run_ranks(2, body)
-    assert all("disagree" in str(e) for e in errors.values()) and set(errors) == {0, 1}
+    assert set(errors) == {0, 1}
+    assert all(
+        f"disagree on the checkpoint directory: rank {r} has {r} (all ranks: [0, 1])" in str(e)
+        for r, e in errors.items()
+    )
 
 
 def test_every_rank_raises_the_class_the_failing_rank_raised():
@@ -409,7 +413,8 @@ def test_every_rank_raises_the_class_the_failing_rank_raised():
     _, errors = _run_ranks(3, body)
     assert set(errors) == {0, 1, 2}
     assert all(type(e) is IncompleteCheckpointError and "rank(s) [1]" in str(e) for e in errors.values())
-    assert "no index.json" in str(errors[1]) and "IncompleteCheckpointError on rank 1" in str(errors[0])
+    # Every rank sees the failing rank's own message, not only its class.
+    assert all("rank 1: IncompleteCheckpointError: no index.json" in str(e) for e in errors.values())
 
 
 def test_an_interrupt_on_one_rank_is_exchanged_before_it_propagates():
@@ -443,7 +448,7 @@ def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
 
     _, errors = _run_ranks(2, body)
     assert set(errors) == {0, 1} and all("serializing failed on rank(s) [1]" in str(e) for e in errors.values())
-    assert "more than a transfer can carry" in str(errors[1]), "the failing rank names the cause; the others name it"
+    assert all("more than a transfer can carry" in str(e) for e in errors.values()), "every rank names the cause"
 
 
 def test_ranks_with_different_scheduler_or_dataloader_state_are_refused(expect_error):

@@ -43,7 +43,6 @@ and placing the shards, restoring the scalars and the train state.
 from __future__ import annotations
 
 import json
-import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -64,6 +63,8 @@ DCP_TAG = 0x7DC0
 # The largest payload one transfer can carry: its length travels through distributed_context_allgather_int, a C int,
 # and MPI_Send / MPI_Recv take an int count (ttnn's MPI context throws past INT_MAX).
 MAX_PAYLOAD = (1 << 31) - 1
+# How much of a failing rank's message reaches the other ranks.
+MESSAGE_LIMIT = 4096
 
 # The error classes a phase carries across the ranks: status 0 is success, status k the class at index k - 1. They
 # are every class _errors defines, in definition order, so a new error is carried without being listed here; all but
@@ -209,17 +210,20 @@ class Group:
             result = fn()
         except BaseException as caught:  # noqa: BLE001
             status, err, result = error_status(caught), caught, None
-            traceback.print_exc()
         statuses = self.allgather(status)
         if err is not None and not isinstance(err, Exception):
             raise err
         failed = [r for r, s in enumerate(statuses) if s]
         if failed:
-            # Every rank raises the class the first failing rank reported, so callers can catch the typed error.
+            # Every rank raises the class the first failing rank reported, so callers can catch the typed error, with
+            # the failing ranks' own messages: one gather and one broadcast, on the failure path only.
             code = statuses[failed[0]]
             cls = ERROR_CLASSES[code - 1] if 0 < code <= len(ERROR_CLASSES) else CheckpointError
-            detail = f": {err}" if err is not None else f" ({cls.__name__} on rank {failed[0]})"
-            raise cls(f"{name} failed on rank(s) {failed} of {self.size}{detail}") from err
+            mine = f"rank {self.rank}: {type(err).__name__}: {err}" if err is not None else ""
+            parts = self.gather(mine.encode("utf-8")[:MESSAGE_LIMIT])
+            joined = b"\n".join(part for part in parts if part) if self.is_coordinator else None
+            messages = self.broadcast(joined).decode("utf-8", errors="replace")
+            raise cls(f"{name} failed on rank(s) {failed} of {self.size}: {messages}") from err
         return result
 
     def gather(self, payload: bytes) -> list[bytes] | None:
@@ -246,11 +250,13 @@ class Group:
         except Exception as err:  # noqa: BLE001
             raise self._fatal(f"point-to-point transfer failed ({err})") from err
 
-    def agree(self, name: str, value: int) -> list[int]:
-        """Every rank's ``value``; raises when they differ."""
+    def agree(self, name: str, value: int, shown: Any = None) -> list[int]:
+        """Every rank's ``value``; raises when they differ, naming what this rank has: ``shown``, the thing ``value``
+        hashes when it is a hash, else ``value`` itself."""
         values = self.allgather(value)
         if any(v != values[0] for v in values):
-            raise CheckpointError(f"the ranks disagree on {name}: {values}")
+            mine = value if shown is None else shown
+            raise CheckpointError(f"the ranks disagree on {name}: rank {self.rank} has {mine!r} (all ranks: {values})")
         return values
 
 

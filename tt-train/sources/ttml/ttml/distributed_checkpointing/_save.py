@@ -282,7 +282,7 @@ def save(
         shared_state = {k: v for k, v in train_state.items() if k != "rng"}
         record = RankRecord.from_json(rank_record(rank, world_rank))
         part = PlanPart(record, [lt.info for lt in live], state_hash(shared_state)).to_bytes()
-        progress = state_hash({k: v for k, v in scalars.items() if not is_structural_scalar(k)})
+        progress = {k: v for k, v in scalars.items() if not is_structural_scalar(k)}
         payload = checked_payload(part, "this rank's plan part")
         return target, live, scalars, progress, user_header, train_state, record, payload
 
@@ -294,13 +294,13 @@ def save(
     name = os.path.basename(ckpt_dir)
     by_key = {lt.key: lt for lt in live}
     stats["collect_s"] = time.perf_counter() - t0
-    group.agree("the checkpoint directory", crc31(ckpt_dir))
-    group.agree("overwrite", int(bool(overwrite)))
+    group.agree("the checkpoint directory", crc31(ckpt_dir), shown=ckpt_dir)
+    group.agree("overwrite", int(bool(overwrite)), shown=bool(overwrite))
     # The index holds one copy of the optimizer's scalars, rank 0's; a rank whose optimizer differs (or that has none)
     # would load rank 0's steps and learning rates without a word. A param group's member list is per rank (a rank of
     # a multi-mesh world holds its own parameters) and is merged instead.
-    group.agree("whether an optimizer is saved", int(optimizer is not None))
-    group.agree("the optimizer's scalars (steps, learning rates, ...)", progress)
+    group.agree("whether an optimizer is saved", int(optimizer is not None), shown=optimizer is not None)
+    group.agree("the optimizer's scalars (steps, learning rates, ...)", state_hash(progress), shown=progress)
     nonce = group.allgather(secrets.randbits(31))[0]
     staging = staging_dir(ckpt_dir, nonce)
 

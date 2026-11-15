@@ -265,8 +265,12 @@ def load(
     ckpt_dir = group.phase("checking the arguments", check_arguments)
     # Ranks that resolved different directories (a stale NFS listing behind find_latest) or asked for different
     # things would restore different checkpoints, or wait for each other in different collectives.
-    group.agree("the checkpoint directory", crc31(ckpt_dir))
-    group.agree("strict and whether an optimizer is loaded", int(bool(strict)) + 2 * int(optimizer is not None))
+    group.agree("the checkpoint directory", crc31(ckpt_dir), shown=ckpt_dir)
+    group.agree(
+        "strict and whether an optimizer is loaded",
+        int(bool(strict)) + 2 * int(optimizer is not None),
+        shown=f"strict={bool(strict)}, optimizer={'passed' if optimizer is not None else 'none'}",
+    )
 
     def open_and_collect():
         if not is_complete(ckpt_dir):
