@@ -182,7 +182,11 @@ CB_V_PREP = 49
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
-QK_MCAST_FIRST_SEM_ID = 1  # R-BCAST channel semaphores follow
+# In-place conv_state (conv_state_out is conv_state): reader cores whose conv_state reads have landed (cumulative), on
+# the core that writes those rows / columns of conv_state_out.
+CS_READ_SEM_ID = 1
+MAX_CS_SIGNAL_TARGETS = 4  # writer cores a reader core signals, at most (the reader kernel's array bound)
+QK_MCAST_FIRST_SEM_ID = 2  # R-BCAST / R-QKCORE channel semaphores follow
 # R-PREP (chunked, never with R-BCAST): per inbox slot, the prepped tile rows that have landed on a state core
 # (cumulative); then, on a prep core, the inbox slots its state cores have granted, then the o tiles that have landed
 # (both cumulative).
@@ -237,6 +241,8 @@ def _kernel_defines():
         "ROLE_STATE",
         "ROLE_QK",
         "EARLY_S0",
+        "CS_READ_SEM_ID",
+        "MAX_CS_SIGNAL_TARGETS",
     ]
     return [(f"GDN_{n}", str(globals()[n])) for n in names]
 
@@ -538,6 +544,52 @@ def _qk_core_units(batch, tokens, value_heads, key_heads, Kt, Vt, pieces, num_co
         if key_heads * ratio * -(-batch // per_core) <= pair_cores:
             return per_core
     return None
+
+
+def _cs_read_signals(device, assignment, qk_cores, pieces, value_heads, ratio, qk_role):
+    """In-place conv_state: every core that reads conv_state rows / columns which another core writes to
+    conv_state_out signals that core once its reads have landed. Returns (x, y) -> (index of the core's unit after
+    whose first tile row it signals, NoC x, y of each target) and (x, y) -> signals the core waits for before writing.
+    R-QKCORE: a q / k core writes whole conv_state_out tiles of its key head's columns, read by the key head's pair
+    cores. Otherwise: one unit per (sequence, key head) writes the q / k history rows, which every unit of the group
+    reading q / k columns has read."""
+    signals, waits = {}, {}
+
+    def noc_xy(core):
+        noc_core = device.worker_core_from_logical_core(core)
+        return [noc_core.x, noc_core.y]
+
+    if qk_cores:
+        writers = {(hk, role): core for core, hk, role in qk_cores}
+        for core, first_unit, count, _ in assignment:
+            hk = (first_unit % value_heads) // ratio
+            targets = [writers[hk, QK_Q_INJECTOR], writers[hk, QK_K_INJECTOR]]
+            signals[core.x, core.y] = (count - 1, [xy for c in targets for xy in noc_xy(c)])
+            for target in targets:
+                waits[target.x, target.y] = waits.get((target.x, target.y), 0) + 1
+        return signals, waits
+    core_of = {}
+    for core, first_unit, count, stride in assignment:
+        for idx in range(count):
+            core_of[first_unit + idx * stride] = (core, idx)
+    targets_of = {}  # (x, y) -> (last signalling unit index, writer cores)
+    for unit, (core, idx) in core_of.items():
+        if qk_role(unit) == QK_RECEIVER:
+            continue
+        pair = unit // pieces
+        writer_unit = (pair - pair % value_heads + (pair % value_heads) // ratio * ratio) * pieces
+        writer = core_of[writer_unit][0]
+        if (writer.x, writer.y) == (core.x, core.y):
+            continue
+        last, cores = targets_of.get((core.x, core.y), (0, {}))
+        cores[writer.x, writer.y] = writer
+        targets_of[core.x, core.y] = (max(last, idx), cores)
+    for key, (last, cores) in targets_of.items():
+        assert len(cores) <= MAX_CS_SIGNAL_TARGETS
+        signals[key] = (last, [xy for c in cores.values() for xy in noc_xy(c)])
+        for target in cores:
+            waits[target] = waits.get(target, 0) + 1
+    return signals, waits
 
 
 def _core_ranges(cores):
@@ -902,6 +954,20 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         return reader_ct, writer_ct, compute_ct
 
     v_eps_bits = _float_bits(value_dim * epsilon)
+    # In-place conv_state: its reads must land before any core overwrites the same rows / columns. R-PREP needs no
+    # signal: a state core copies conv_state_out after every tile row of its group has landed from the prep cores,
+    # which read the history rows for the first one.
+    cs_in_place = prep is None and conv_state_out.buffer_address() == conv_state.buffer_address()
+    cs_signals, cs_waits = {}, {}
+    if cs_in_place:
+        cs_signals, cs_waits = _cs_read_signals(device, assignment, qk_cores, pieces, value_heads, ratio, qk_role)
+
+    def cs_args(core):
+        if not cs_in_place:
+            return []
+        last, targets = cs_signals.get((core.x, core.y), (0, []))
+        return [last, len(targets) // 2, *targets, cs_waits.get((core.x, core.y), 0)]
+
     roles = {}  # role -> (cores, reader rt, writer rt, compute rt), rt: (x, y) -> args
     state_role = ROLE_LOCAL if prep is None else ROLE_STATE
     rts = ({}, {}, {})  # (x, y) -> args, per kernel
@@ -913,7 +979,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         if prep is not None:
             group_first = first_unit - first_unit % (ratio * pieces)
             producers = [len(group_producers[group_first]) // 2] + group_producers[group_first]
-        rts[0][core.x, core.y] = reader_addrs + [first_unit, count, tokens, role, zero_slots] + rows + producers
+        rts[0][core.x, core.y] = (
+            reader_addrs + [first_unit, count, tokens, role, zero_slots] + rows + producers + cs_args(core)
+        )
         # R-VSPLIT: NoC coordinates of the pair's piece cores, in piece order.
         group_first = first_unit - first_unit % pieces
         peers = [c for s in range(pieces) for c in unit_noc[group_first + s]] if pieces > 1 else []
@@ -935,7 +1003,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             for j in range(ratio):
                 first = group_first + j * pieces
                 consumers += _mcast_rects(device, unit_cores[first : first + pieces])
-            rts[0][core.x, core.y] = reader_addrs + [group_first, 1, tokens, QK_OWN, zero_slots] + rows
+            rts[0][core.x, core.y] = reader_addrs + [group_first, 1, tokens, QK_OWN, zero_slots] + rows + cs_args(core)
             rts[1][core.x, core.y] = (
                 writer_addrs + [group_first, 1, tokens, QK_OWN, zero_slots, zero_slot_bytes] + rows + consumers
             )
@@ -945,11 +1013,15 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         # A q / k core's "unit" is its key head; its count the sequences (token rows 0..B-1 of the decode tile row).
         rts = ({}, {}, {})  # (x, y) -> args, per kernel
         zero_slots, zero_slot_bytes = 0, 0  # the writer zeroes each column's slot itself (with its history rows)
-        # conv_state_out: Ct column tiles over the 2 Hk q / k cores.
-        cs_per_core = -(-Ct // len(qk_cores))
-        for idx, (core, hk, role) in enumerate(qk_cores):
+        # conv_state_out, whole tiles of the key head's columns (the ones only it and its pair cores read): a q / k core
+        # writes its own Kt columns, then half of the key head's ratio * Vt v columns.
+        v_half = -(-ratio * Vt // 2)
+        for core, hk, role in qk_cores:
             rows = [0, 1, 1]
-            cs_cols = [min(Ct, idx * cs_per_core), min(Ct, (idx + 1) * cs_per_core)]
+            own_lo = (hk if role == QK_Q_INJECTOR else key_heads + hk) * Kt
+            v_lo = 2 * key_heads * Kt + hk * ratio * Vt + (0 if role == QK_Q_INJECTOR else v_half)
+            v_hi = 2 * key_heads * Kt + hk * ratio * Vt + (v_half if role == QK_Q_INJECTOR else ratio * Vt)
+            cs_cols = [own_lo, own_lo + Kt, v_lo, v_hi, cs_waits.get((core.x, core.y), 0)]
             rts[0][core.x, core.y] = reader_addrs + [hk, batch, tokens, role, zero_slots] + rows + cs_cols
             rts[1][core.x, core.y] = writer_addrs + [hk, batch, tokens, role, zero_slots, zero_slot_bytes] + rows
             rts[2][core.x, core.y] = [hk, batch, tokens, v_eps_bits, role] + rows
@@ -969,6 +1041,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
         ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
         ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
+        ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
     ]
     kernels = []
     writers = []
@@ -1048,6 +1121,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         # Landed counters per inbox slot (state cores), then the grant and o-landed counters (prep cores).
         for sem in range(LANDED_FIRST_SEM_ID, LANDED_FIRST_SEM_ID + inbox + 2):
             semaphores.append(ttnn.SemaphoreDescriptor(id=sem, core_ranges=all_cores, initial_value=0))
+    if cs_in_place:
+        semaphores.append(ttnn.SemaphoreDescriptor(id=CS_READ_SEM_ID, core_ranges=all_cores, initial_value=0))
     descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
     # The writer carries the q and k multicast channels (absent outside R-BCAST, so one kernel source).
     next_sem = QK_MCAST_FIRST_SEM_ID

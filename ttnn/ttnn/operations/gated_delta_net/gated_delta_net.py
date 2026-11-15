@@ -121,6 +121,22 @@ def _check_shapes(mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, 
     return key_dim, value_dim
 
 
+def _check_state_out(name, out, state, inputs):
+    """A caller-provided state output: the state input itself (updated in place) or a distinct tensor of its form."""
+    if out is None:
+        return
+    if (
+        _shape(out) != _shape(state)
+        or out.dtype != state.dtype
+        or out.layout != state.layout
+        or out.memory_config() != state.memory_config()
+    ):
+        raise ValueError(f"gated_delta_net: {name} must match the shape, dtype, layout and memory config of its input")
+    address = out.buffer_address()
+    if address != state.buffer_address() and any(t.buffer_address() == address for t in inputs):
+        raise ValueError(f"gated_delta_net: {name} must be its own state input or a tensor no other input uses")
+
+
 def validate(
     mixed_qkv,
     z,
@@ -135,10 +151,15 @@ def validate(
     *,
     epsilon=1e-6,
     compute_kernel_config=None,
+    conv_state_out=None,
+    recurrent_state_out=None,
 ):
     key_dim, value_dim = _check_shapes(
         mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight, epsilon
     )
+    tensors = (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
+    _check_state_out("conv_state_out", conv_state_out, conv_state, tensors)
+    _check_state_out("recurrent_state_out", recurrent_state_out, recurrent_state, tensors)
     config = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     axes = {
         "dtype": mixed_qkv.dtype,
@@ -156,7 +177,6 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"gated_delta_net: unsupported combination (refinement candidate): {exc}")
 
-    tensors = (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
     if any(t.layout != ttnn.TILE_LAYOUT for t in tensors):
         raise UnsupportedAxisValue("gated_delta_net: every tensor must be TILE_LAYOUT")
 
@@ -185,7 +205,16 @@ def gated_delta_net(
     *,
     epsilon: float = 1e-6,
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
+    conv_state_out: ttnn.Tensor = None,
+    recurrent_state_out: ttnn.Tensor = None,
 ):
+    """Returns (output, conv_state_out, recurrent_state_out).
+
+    conv_state_out / recurrent_state_out: optional caller-provided state outputs, each either a tensor of the same
+    shape, dtype, layout and memory config as its state input, or that input itself (the state is then updated in
+    place; every byte of it is read before any core overwrites it). None allocates a new tensor. No other input is
+    written.
+    """
     config = validate(
         mixed_qkv,
         z,
@@ -199,6 +228,8 @@ def gated_delta_net(
         norm_weight,
         epsilon=epsilon,
         compute_kernel_config=compute_kernel_config,
+        conv_state_out=conv_state_out,
+        recurrent_state_out=recurrent_state_out,
     )
     device = mixed_qkv.device()
     batch, value_heads, key_dim, value_dim = _shape(recurrent_state)
@@ -211,20 +242,22 @@ def gated_delta_net(
         device,
         mixed_qkv.memory_config(),
     )
-    conv_state_out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, HISTORY * batch, channels]),
-        conv_state.dtype,
-        ttnn.TILE_LAYOUT,
-        device,
-        conv_state.memory_config(),
-    )
-    recurrent_state_out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([batch, value_heads, key_dim, value_dim]),
-        ttnn.float32,
-        ttnn.TILE_LAYOUT,
-        device,
-        recurrent_state.memory_config(),
-    )
+    if conv_state_out is None:
+        conv_state_out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, HISTORY * batch, channels]),
+            conv_state.dtype,
+            ttnn.TILE_LAYOUT,
+            device,
+            conv_state.memory_config(),
+        )
+    if recurrent_state_out is None:
+        recurrent_state_out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([batch, value_heads, key_dim, value_dim]),
+            ttnn.float32,
+            ttnn.TILE_LAYOUT,
+            device,
+            recurrent_state.memory_config(),
+        )
 
     inputs = (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
     outputs = (output, conv_state_out, recurrent_state_out)

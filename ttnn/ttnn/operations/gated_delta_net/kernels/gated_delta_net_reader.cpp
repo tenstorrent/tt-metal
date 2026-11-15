@@ -80,6 +80,9 @@ constexpr uint32_t WINDOW_TRID = 1;
 constexpr uint32_t INPUTS_TRID = 2;
 constexpr uint32_t S0_TRID = 3;  // decode: a unit's S0, issued with its window rows, awaited where compute needs it
 constexpr bool EARLY_S0 = GDN_EARLY_S0 != 0;
+// conv_state_out is conv_state: a core overwrites conv_state rows / columns other cores read only after their reads
+// have landed (each reader signals the writer's GDN_CS_READ_SEM_ID).
+constexpr bool CS_IN_PLACE = GDN_CS_IN_PLACE != 0;
 static_assert((STAGE_SLOTS == 0) == (SEG_BYTES % READ_ALIGN == 0), "row staging iff a face row is sub-alignment");
 
 // Byte offset of the left half of tile row p (faces 0/2); the right half is FACE_BYTES further.
@@ -397,16 +400,24 @@ void kernel_main() {
             cb_push_back(cb_window, GDN_CONV_TAPS);
         }
 
-        // ---- conv_state_out of column tiles [cs_lo, cs_hi), whole tiles (the writer's copies are done: every slot
-        // token has been taken, so the staging is free): rows 3b + n = conv_state rows 3b + n + 1 for n < 2, row
-        // 3b + 2 = x[b]. Staging: the x tile, the conv_state tiles, then the output tiles.
-        const uint32_t cs_lo = get_arg_val<uint32_t>(arg++);
-        const uint32_t cs_hi = get_arg_val<uint32_t>(arg++);
+        // ---- conv_state_out of the key head's columns, whole tiles (the writer's copies are done: every slot token
+        // has been taken, so the staging is free): rows 3b + n = conv_state rows 3b + n + 1 for n < 2, row 3b + 2 =
+        // x[b]. Staging: the x tile, the conv_state tiles, then the output tiles. First this core's own columns, then
+        // its share of the v columns, which in place wait until the key head's pair cores have read their history rows.
+        const uint32_t own_lo = get_arg_val<uint32_t>(arg++);
+        const uint32_t own_hi = get_arg_val<uint32_t>(arg++);
+        const uint32_t v_lo = get_arg_val<uint32_t>(arg++);
+        const uint32_t v_hi = get_arg_val<uint32_t>(arg++);
+        const uint32_t cs_reads = get_arg_val<uint32_t>(arg++);
         const uint32_t x_tile = hist_stage;
         const uint32_t cs_in = x_tile + TILE_BYTES;
         const uint32_t cs_out = cs_in + cs_tiles * TILE_BYTES;
         const uint32_t out_rows = GDN_HISTORY * batch;
-        for (uint32_t ct = cs_lo; ct < cs_hi; ++ct) {
+        for (uint32_t idx = own_lo; idx < own_hi + (v_hi - v_lo); ++idx) {
+            if (CS_IN_PLACE && idx == own_hi) {
+                Semaphore<>(GDN_CS_READ_SEM_ID).wait_min(cs_reads);
+            }
+            const uint32_t ct = idx < own_hi ? idx : v_lo + (idx - own_hi);
             noc_async_read(mixed.get_noc_addr(ct), x_tile, TILE_BYTES);
             for (uint32_t i = 0; i < cs_tiles; ++i) {
                 noc_async_read(conv_state.get_noc_addr(i * Ct + ct), cs_in + i * TILE_BYTES, TILE_BYTES);
@@ -440,12 +451,32 @@ void kernel_main() {
     // gate tiles from the previous unit's slots instead of reading them from DRAM again, where page 0 of every small
     // tensor sits in one bank. The previous slots are intact: a buffer is reused two units later at the earliest (or,
     // at depth 1, is the same slot).
+    // In place: after its unit cs_signal_unit's first tile row this core signals the writers of the q / k columns it
+    // read (cs_targets), and before its conv_state_out copies it waits for its own readers (cs_reads).
+    uint32_t cs_signal_unit = 0xffffffffu;
+    uint32_t cs_targets = 0;
+    uint32_t cs_target_x[GDN_MAX_CS_SIGNAL_TARGETS];
+    uint32_t cs_target_y[GDN_MAX_CS_SIGNAL_TARGETS];
+    uint32_t cs_reads = 0;
+    if constexpr (CS_IN_PLACE) {
+        cs_signal_unit = get_arg_val<uint32_t>(arg++);
+        cs_targets = get_arg_val<uint32_t>(arg++);
+        for (uint32_t t = 0; t < cs_targets; ++t) {
+            cs_target_x[t] = get_arg_val<uint32_t>(arg++);
+            cs_target_y[t] = get_arg_val<uint32_t>(arg++);
+        }
+        cs_reads = get_arg_val<uint32_t>(arg++);
+    }
+
     uint32_t prev_head = 0xffffffffu;
     uint32_t prev_norm_w = 0;
     uint32_t prev_conv_w = 0;
     uint32_t prev_gate_w = 0;
     uint32_t prev_gate_in = 0;
     for (uint32_t pass = 0; pass < 2; ++pass) {
+        if (CS_IN_PLACE && pass == 1) {
+            Semaphore<>(GDN_CS_READ_SEM_ID).wait_min(cs_reads);
+        }
         for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
             const uint32_t unit = first_unit + unit_idx * unit_stride;
             const uint32_t pair = unit / PIECES;
@@ -785,6 +816,14 @@ void kernel_main() {
                                 noc_async_read_barrier();
                             }
                             cb_push_back(cb_window, group_tiles);
+                        }
+                        // History rows are read in the sequence's first tile row only.
+                        if (CS_IN_PLACE && tr == first_tr && unit_idx == cs_signal_unit) {
+                            noc_async_read_barrier();
+                            Semaphore<> cs_read(GDN_CS_READ_SEM_ID);
+                            for (uint32_t t = 0; t < cs_targets; ++t) {
+                                cs_read.up(noc, cs_target_x[t], cs_target_y[t], 1);
+                            }
                         }
                     }
                     // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs

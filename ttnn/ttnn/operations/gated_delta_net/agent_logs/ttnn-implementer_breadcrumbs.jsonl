@@ -22,3 +22,4 @@
 {"event":"test_run","status":"pass","test":"unit dir 165/165, golden -k loose or decode 34/34, regression 36/36","note":"R8 final: perf_decode_b1 26.32 -> 22.59 us median of 10","ts":"2026-11-15T06:00:09+00:00"}
 {"event":"test_run","status":"pass","test":"unit dir 165/165, golden -k loose or decode 34/34, perf file 7/7","note":"R9 final: B=8 48.8 -> 40.2 us, B=16 86.0 -> 73.5 us","ts":"2026-11-15T06:26:15+00:00"}
 {"event":"finding","note":"R9: NOC0 read responses to top grid rows wrap the torus; weights barrier 25-31 us vs 4-5 us; swap 3 rows wins, bank-0 hypothesis refuted by ablation","ts":"2026-11-15T06:26:15+00:00"}
+{"event":"test_run","status":"pass","test":"test_gated_delta_net_in_place.py (19), perf+qkcore+bcast (27)","note":"in-place conv_state sync: reader->writer semaphore; without it decode_b16 differs at call 0","ts":"2026-11-15T06:52:05+00:00"}
