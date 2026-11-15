@@ -11,7 +11,7 @@ core on R, which forwards each count over the fabric to the sender core's credit
 Target cores are dealt round-robin over the connections (core c = g * GC + j -> connection c % nconn).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -196,33 +196,47 @@ def build_fab(mesh, cfg: GCfg, fc: FCfg, x_t, idx_t, counts_t, ws_t, out_t):
 
 # ---------------------------------------------------------------------------------------------------------------
 # Step 2: every chip runs the groups on its own tokens; expert e is owned by chip e % NCHIP, which lands its slices on
-# every chip: one core a fabric branch (E-only, W-only, N/S with E/W teeth: 2D multicast) plus a local lander (NoC).
-# Each chip's relay forwards freed slots (link 1 of each neighbour) to the owner-side senders that cover the chip.
+# every chip: one core a fabric branch (E-only, W-only, N and S trunks with E/W teeth: 2D multicast) plus a local
+# lander (NoC). Each chip's relay forwards freed slots to the owner-side senders that cover the chip.
 # ---------------------------------------------------------------------------------------------------------------
 @dataclass
 class ACfg:
     CHT: int = 24
     SCB: int = 8
     RD: int = 4
-    NQ: int = 1024  # credit queue entries a branch sender (no wrap in these runs: <= NC * experts a group)
+    NQ: int = 0  # credit queue entries a link-0 branch sender; 0: room for every credit a chip sends (no wrap)
     relay: tuple = (10, 9)
     local: tuple = (9, 9)  # local lander
-    branch: tuple = (((10, 8), (10, 7)), ((9, 8), (9, 7)), ((10, 6), (9, 6)))  # E, W, N/S-with-teeth: link 0, 1 cores
+    branch: dict = field(  # branch -> (link 0 core, link 1 core)
+        default_factory=lambda: {"E": ((10, 8), (10, 7)), "W": ((9, 8), (9, 7)), "N": ((10, 6), (9, 6)), "S": ((10, 5), (9, 5))}
+    )
+    torus: bool = False  # both axes wrap (FABRIC_2D_TORUS_XY): the branches use the wrap links
+    own_slices: bool = False  # ws_t holds only this chip's experts (e % NCHIP == chip), in expert order
 
 
-def branches(mesh_shape, rc):
-    """[(name, first-hop neighbour, (e, w, n, s), covered chips)] of chip rc's multicast branches (2-row mesh)."""
+def branches(mesh_shape, rc, torus=False):
+    """[(name, first-hop neighbour, (e, w, n, s), covered chips)] of chip rc's multicast branches: E-only and W-only
+    along its row, N and S trunks with E/W teeth on every row they reach. On a torus the extents follow the fabric's
+    shortest routes, whose tie (the half-way chip of an even ring) goes forward (E, S): E covers C // 2 columns,
+    W (C - 1) // 2, S R // 2 rows, N (R - 1) // 2; a multicast range must match those routes."""
     R, Cn = mesh_shape
     r, c = rc
-    assert R == 2
+    if torus:
+        e, w, n, s = Cn // 2, (Cn - 1) // 2, (R - 1) // 2, R // 2
+    else:
+        e, w, n, s = Cn - 1 - c, c, r, R - 1 - r
+    col = lambda k: (c + k) % Cn
+    row = lambda k: (r + k) % R
+    cols = [col(k) for k in range(-w, e + 1)]
     out = []
-    if c < Cn - 1:
-        out.append(("E", (r, c + 1), (Cn - 1 - c, 0, 0, 0), [(r, cc) for cc in range(c + 1, Cn)]))
-    if c > 0:
-        out.append(("W", (r, c - 1), (0, c, 0, 0), [(r, cc) for cc in range(c)]))
-    r2 = 1 - r
-    ns = (Cn - 1 - c, c, 1, 0) if r2 < r else (Cn - 1 - c, c, 0, 1)  # N toward row 0, S toward row + 1
-    out.append(("NS", (r2, c), ns, [(r2, cc) for cc in range(Cn)]))
+    if e:
+        out.append(("E", (r, col(1)), (e, 0, 0, 0), [(r, col(k)) for k in range(1, e + 1)]))
+    if w:
+        out.append(("W", (r, col(-1)), (0, w, 0, 0), [(r, col(-k)) for k in range(1, w + 1)]))
+    if n:
+        out.append(("N", (row(-1), c), (e, w, n, 0), [(row(-k), cc) for k in range(1, n + 1) for cc in cols]))
+    if s:
+        out.append(("S", (row(1), c), (e, w, 0, s), [(row(k), cc) for k in range(1, s + 1) for cc in cols]))
     return out
 
 
@@ -231,12 +245,15 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
     NCHIP = R * Cn
     NC = cfg.G * cfg.GC
     chip = lambda rc: rc[0] * Cn + rc[1]
-    bcore = dict(zip(("E", "W", "NS"), ac.branch))  # name -> (link 0 core, link 1 core)
-    all_b = [x for pair in ac.branch for x in pair]
+    rc_of = lambda o: (o // Cn, o % Cn)
+    bcore = ac.branch  # name -> (link 0 core, link 1 core)
+    all_b = [x for pair in bcore.values() for x in pair]
     send_cores = [ac.local] + all_b
+    # every freed slot of a remote owner's expert is one queue entry: at most NC cores x (experts a group)
+    NQ = ac.NQ or NC * -(-cfg.nexp // cfg.G) + 8
     icred = sharded_l1(mesh, [ac.relay] + send_cores, [NCHIP * NC, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     sst = sharded_l1(mesh, send_cores, [1, 16], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
-    cq = sharded_l1(mesh, [b[0] for b in ac.branch], [ac.NQ, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    cq = sharded_l1(mesh, [b[0] for b in bcore.values()], [NQ, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     from models.demos.ws_expert.ws_group import group_cores
 
     gcores = [c for g in range(cfg.G) for c in group_cores(cfg, g)]
@@ -257,21 +274,17 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
     for r in range(R):
         for c in range(Cn):
             rc, me = (r, c), chip((r, c))
-            brs = branches((R, Cn), rc)
+            brs = branches((R, Cn), rc, ac.torus)
             # relay: link-0 branch core a direction, local lander, then per owner chip and link the covering core
             qxy = [0, 0, 0, 0]
             for name, nb, rng, _ in brs:
-                d = name if name != "NS" else ("N" if rng[2] else "S")
-                qxy[DIR[d]] = xy(bcore[name][0])
+                qxy[DIR[name]] = xy(bcore[name][0])
             owner_map = []
             for o in range(NCHIP):
-                orc = (o // Cn, o % Cn)
                 if o == me:
                     pair = (ac.local, ac.local)
-                elif orc[0] == r:
-                    pair = bcore["E"] if orc[1] < c else bcore["W"]
                 else:
-                    pair = bcore["NS"]
+                    pair = bcore[next(nm for nm, _, _, cov in branches((R, Cn), rc_of(o), ac.torus) if rc in cov)]
                 owner_map += [xy(pair[0]), xy(pair[1])]
             rrt = ttnn.RuntimeArgs()
             rrt[ac.relay[0]][ac.relay[1]] = [me] + qxy + [xy(ac.local)] + owner_map
@@ -279,7 +292,7 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
                 kernel_source=kpath("wf_relay_all.cpp"),
                 core_ranges=crs([ac.relay]),
                 compile_time_args=[NC, cfg.GC, cfg.G, cfg.nexp, icred.buffer_address(), NCHIP, mesh_id]
-                + [cq.buffer_address(), ac.NQ],
+                + [cq.buffer_address(), NQ],
                 runtime_args=rrt,
                 defines=FAB_DEFS,
                 config=dm(0),
@@ -309,7 +322,9 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
                     compile_time_args=[cfg.nexp, KT, KTD, DC, cfg.PAIRS, cfg.HT, ac.CHT, cfg.G, cfg.GC]
                     + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args()),
                     runtime_args=rd_rt,
-                    defines=[("RD_DEPTH", str(ac.RD)), ("SCB_CHUNKS", str(ac.SCB)), ("NOWN", str(NCHIP))] + sdefs,
+                    defines=[("RD_DEPTH", str(ac.RD)), ("SCB_CHUNKS", str(ac.SCB)), ("NOWN", str(NCHIP))]
+                    + ([("WS_OWN_SLICES", "1")] if ac.own_slices else [])
+                    + sdefs,
                     config=dm(0),
                 ),
                 ttnn.KernelDescriptor(
@@ -325,7 +340,7 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
                     core_ranges=crs(bc[0]),
                     compile_time_args=ct_send,
                     runtime_args=b0_rt,
-                    defines=FAB_DEFS + sdefs + [("WF_CREDQ", str(cq.buffer_address())), ("WF_NQ", str(ac.NQ))],
+                    defines=FAB_DEFS + sdefs + [("WF_CREDQ", str(cq.buffer_address())), ("WF_NQ", str(NQ))],
                     config=dm(1),
                 ),
                 ttnn.KernelDescriptor(
