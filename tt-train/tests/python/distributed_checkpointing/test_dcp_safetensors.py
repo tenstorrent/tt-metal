@@ -38,6 +38,29 @@ def test_header_fixes_offsets_and_aligns_the_data_section(expect_error):
         build_header([("x", "BF16", (1, 1, 32, 64), 100)])
     with expect_error(ValueError, "twice"):
         build_header([("x", "BF16", (1, 1, 1, 2), 4), ("x", "BF16", (1, 1, 1, 2), 4)])
+    with expect_error(ValueError, "unsupported dtype 'F8'"):
+        build_header([("x", "F8", (1, 1, 1, 2), 2)])
+
+
+def test_short_and_truncated_files_are_refused(tmp_path, expect_error):
+    header, _, data_bytes = build_header([("x", "F32", (1, 1, 1, 4), 16)])
+    path = str(tmp_path / "w000_m0_d0.safetensors")
+    with open(path, "wb") as f:
+        f.write(header[:5])
+    with expect_error(ValueError, "too short for a header"):
+        read_file_header(path)
+    with open(path, "wb") as f:
+        f.write(header[:-3])
+    with expect_error(ValueError, "truncated inside its header"):
+        read_file_header(path)
+    data_start = create_file(path, header, data_bytes)
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        assert len(pread_all(fd, data_bytes, data_start)) == data_bytes
+        with expect_error(EOFError, f"read past the end of the file at offset {data_start + data_bytes}"):
+            pread_all(fd, data_bytes + 4, data_start)
+    finally:
+        os.close(fd)
 
 
 def test_file_written_at_fixed_offsets_opens_with_the_safetensors_package(tmp_path):

@@ -89,6 +89,8 @@ def test_pad_clips_to_the_logical_extent_and_reports_padding(expect_error):
         pad.from_canonical(Box((0, 0, 0, 0), (1, 1, 131, 64)))
     with expect_error(LayoutError, "not the declared padded"):
         pad.canonical_shape((1, 1, 160, 64))
+    with expect_error(LayoutError, "logical extent 200 must be within"):
+        Pad(2, logical=200, padded=192)
     assert isinstance(padded_extent(2, 64, 64), Identity)
     # Zeros is the only fill a load implements, so another is refused where the transform is built or read.
     with expect_error(LayoutError, "pad: fill 'ones' is not one of"):
@@ -131,6 +133,19 @@ def test_compose_drops_identities():
 )
 def test_transforms_round_trip_through_json(transform):
     assert transform_from_json(transform.to_json()) == transform
+
+
+def test_an_unknown_transform_kind_is_refused(expect_error):
+    with expect_error(LayoutError, "unknown transform kind 'rotate'"):
+        transform_from_json({"kind": "rotate", "dim": 2})
+
+
+def test_segments_refuse_boxes_and_shapes_past_their_extent(expect_error):
+    seg = fused_segments(2, (4, 2, 2), 2)
+    with expect_error(LayoutError, "reaches past the extent 8 on dim 2"):
+        seg.to_canonical(Box((0, 0, 4, 0), (1, 1, 6, 4)))
+    with expect_error(LayoutError, "global extent 16 on dim 2 is not the map's 8"):
+        seg.canonical_shape((1, 1, 16, 4))
 
 
 def test_declared_transform_from_declarations(expect_error):
