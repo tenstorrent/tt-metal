@@ -93,6 +93,7 @@ def _index() -> Index:
                 ChunkRecord(Box((0, 0, 0, 0), (1, 1, 32, 16)), 0, 3072, 2048),
                 ChunkRecord(Box((0, 0, 32, 0), (1, 1, 32, 16)), 1, 0, 2048),
             ],
+            tp_split=(1, 1, 2, 1),
         ),
     }
     files = [FileRecord(data_file_name(0, 0, c), 8192, 0, 0, c) for c in dist_coords((2, 2))]
@@ -122,6 +123,17 @@ def test_index_round_trips_through_json_with_columnar_chunks():
     assert decoded.files == index.files
     assert decoded.scalars == index.scalars and type(decoded.scalars["optimizer/amsgrad"]) is bool
     assert decoded.live_key_map()["model/Llama/tok_emb/weight"] == "model/Llama/fc/weight"
+    qkv = "model/Llama/blocks/0/attention/qkv_linear/weight"
+    assert encoded["state"][qkv]["tp_split"] == [1, 1, 2, 1] and decoded.entries[qkv].tp_split == (1, 1, 2, 1)
+    assert "tp_split" not in encoded["state"]["model/Llama/fc/weight"], "an entry without it, as an older writer's"
+    assert decoded.entries["model/Llama/fc/weight"].tp_split is None
+
+
+def test_a_malformed_tp_split_is_refused(expect_error):
+    encoded = json.loads(json.dumps(_index().to_json()))
+    encoded["state"]["model/Llama/blocks/0/attention/qkv_linear/weight"]["tp_split"] = [1, 2, 1]
+    with expect_error(CheckpointError, r"qkv_linear/weight': malformed tp_split \[1, 2, 1\]"):
+        Index.from_json(encoded)
 
 
 def test_index_rejects_newer_versions_and_foreign_formats(expect_error):

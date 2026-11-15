@@ -312,7 +312,7 @@ def load(
                 f"{len(plan.missing)} live tensor(s) have no entry in the checkpoint: {plan.missing[:5]}"
             )
         for key, kplan in plan.keys.items():
-            check_undeclared_fusion(by_key[key], kplan.entry.label)
+            check_undeclared_fusion(by_key[key], kplan.entry)
         if optimizer is not None:
             check_param_groups(optimizer, index.scalars, strict)  # before anything is placed
         return plan
