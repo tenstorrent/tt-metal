@@ -575,7 +575,11 @@ def test_constructor_cold_capture_cleanup(contract, constructor_native, error):
 @pytest.mark.parametrize("dynamic_load", [False, True])
 @pytest.mark.parametrize(
     "recipe",
-    [None, pytest.param("ltx25-ic-6s-iclora", id="served_traced"), pytest.param("ltx25-ic-10s-iclora", id="served_eager")],
+    [
+        None,
+        pytest.param("ltx25-ic-6s-iclora", id="served_traced"),
+        pytest.param("ltx25-ic-10s-iclora", id="served_eager"),
+    ],
 )
 def test_native_collector_warms_reference_once(
     contract, constructor_native, monkeypatch, tmp_path, cold, dynamic_load, recipe
