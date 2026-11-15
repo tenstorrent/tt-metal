@@ -183,7 +183,8 @@ SPLIT_BCAST_GROUPS = False
 # Per-block device profiler zones (GDN_ZONE in the kernels: compute blocks, reader / writer units and rows), on with
 # env GDN_PROFILE_ZONES=1, for --profile runs (never compiled under NoC tracing). Each zone execution spends 2 of a
 # RISC's ~250 markers per launch.
-PROFILE_ZONES = os.environ.get("GDN_PROFILE_ZONES", "0") not in ("", "0")
+# Level 2 also compiles the point marks (GDN_MARK) of each block's end, for chain timelines (zone_timeline.py).
+PROFILE_ZONES = int(os.environ.get("GDN_PROFILE_ZONES", "0") or 0)
 CONV_ACC_DEPTH = 1  # partial tap sum: compute-to-compute, one compute thread, so depth 1
 
 HISTORY = 3  # spec constant: conv_state rows per sequence
@@ -1506,7 +1507,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
         ("GDN_STATE_SPLIT", str(int(state_split))),
         ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
-        ("GDN_PROFILE_ZONES", str(int(PROFILE_ZONES and not _noc_tracing()))),
+        ("GDN_PROFILE_ZONES", str(0 if _noc_tracing() else int(PROFILE_ZONES))),
     ]
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).
     remote = {}

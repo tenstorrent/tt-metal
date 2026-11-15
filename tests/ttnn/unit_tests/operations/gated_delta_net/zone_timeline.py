@@ -3,7 +3,7 @@
 
 """Per-core zone timeline of one gated_delta_net launch from the device profiler log (not a test).
 
-Run a `--profile` test with GDN_PROFILE_ZONES=1, then:
+Run a `--profile` test with GDN_PROFILE_ZONES=1 (block zones) or 2 (also the point marks m_*), then:
 
     python3 tests/ttnn/unit_tests/operations/gated_delta_net/zone_timeline.py [--run N] [--group 12]
 

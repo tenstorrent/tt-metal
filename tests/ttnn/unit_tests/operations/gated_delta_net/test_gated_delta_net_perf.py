@@ -22,7 +22,7 @@ from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net impor
 )
 from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_bf16 import _rel_metrics
 
-LAUNCHES = 3
+LAUNCHES = int(os.environ.get("GDN_LAUNCHES", "3"))  # e.g. 12: the median of launches 2..12
 # Knob overrides for A/B measurement, e.g. GDN_KNOBS="STATE_SPLIT=0".
 EXPERIMENT = {
     name: ast.literal_eval(value)

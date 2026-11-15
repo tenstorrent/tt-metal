@@ -85,11 +85,15 @@
 #else
 #define GDN_ZONE(name)
 #endif
-// A point in time: an empty zone.
+// A point in time (an empty zone), at GDN_PROFILE_ZONES level 2.
+#if GDN_PROFILE_ZONES >= 2
 #define GDN_MARK(name)  \
     do {                \
         GDN_ZONE(name); \
     } while (0)
+#else
+#define GDN_MARK(name)
+#endif
 
 namespace ckl = compute_kernel_lib;
 
