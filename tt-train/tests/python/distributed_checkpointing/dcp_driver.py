@@ -43,7 +43,7 @@ from ttml.distributed_checkpointing._train_state import capture_process_rng, res
 from ttml.modules import LoraConfig, LoraModel, Parameter
 from ttml.sharding import Sharding
 
-from dcp_oracle import Loader
+from dcp_oracle import Loader, advance_generators
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 # head_dim = hidden_size / num_attention_heads must be a multiple of 32 (RoPE); the head counts must be multiples of
@@ -182,6 +182,7 @@ def train(model, params, optimizer, scheduler, loader, config, steps: int, seed:
     ctx = ttml.autograd.AutoContext.get_instance()
     if start == 0:
         set_seed(seed)
+        advance_generators()  # a checkpoint then holds the generators mid-stream, not as seeding left them
     mesh = ttml.mesh()
     needs_sync = any(mesh.axis_size(name) > 1 for name in mesh.axis_names if name != "tp")
     for step in range(start, start + steps):

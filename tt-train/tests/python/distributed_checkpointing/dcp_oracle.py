@@ -11,6 +11,9 @@ numpy. The oracle for every case is plain array slicing through the transforms, 
 
 from __future__ import annotations
 
+import random
+import sys
+
 import numpy as np
 
 from ttml.distributed_checkpointing._boxes import Box
@@ -137,6 +140,20 @@ def assert_shards_equal(actual: dict[tuple, np.ndarray], expected: dict[tuple, n
     assert actual.keys() == expected.keys(), (sorted(actual), sorted(expected))
     for group in expected:
         np.testing.assert_array_equal(actual[group], expected[group], err_msg=f"group {group}")
+
+
+def advance_generators() -> None:
+    """Draw from every host generator once, so a state captured next is mid-stream: python's cached Gaussian, numpy's
+    cached Gaussian and position and the half-used 32-bit word of ttml.init's PCG64 are then set, all of which a state
+    captured right after seeding leaves at their defaults, where a decoder that dropped them would still pass."""
+    import ttml.init  # here: the format tests import this module without ttml's runtime
+
+    random.gauss(0.0, 1.0)
+    np.random.standard_normal()
+    ttml.init._rng.integers(0, 2**32, dtype=np.uint32)
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        torch.randn(1)
 
 
 class Loader:

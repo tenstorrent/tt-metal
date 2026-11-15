@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 import torch
 
-from dcp_oracle import Loader
+from dcp_oracle import Loader, advance_generators
 
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler
@@ -58,11 +58,15 @@ def test_every_generator_comes_back_exactly():
     np.random.seed(13)
     torch.manual_seed(14)
     ttml.init.manual_seed(15)
+    advance_generators()
     state = capture_rng(world_rank=0)
     assert json.loads(json.dumps(state)) == state, "plain JSON, nothing numpy leaks into it"
     assert set(state) == {"format", "ranks"} and list(state["ranks"]) == ["0"]
     own = state["ranks"]["0"]
     assert set(own) == {"ttml", "python", "numpy", "ttml_init", "torch"}
+    # Mid-stream, so the parts of each state that seeding leaves at their defaults must come back too.
+    assert own["python"]["gauss_next"] is not None and own["numpy"]["has_gauss"] == 1 and own["numpy"]["pos"] != 624
+    assert own["ttml_init"]["has_uint32"] == 1
     assert len(own["python"]["state"]) == 625 * 8 and len(own["numpy"]["state"]) == 624 * 8  # hex of u32
     expected = (
         random.random(),

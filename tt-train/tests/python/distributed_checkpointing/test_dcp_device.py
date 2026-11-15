@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import torch
 import ttnn
-from dcp_oracle import Loader
+from dcp_oracle import Loader, advance_generators
 from tp_block import TPBlock, device_slices, fresh_tp, make_adamw, train_step
 
 import ttml
@@ -433,6 +433,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
     random.seed(4)
     np.random.seed(5)
     torch.manual_seed(6)
+    advance_generators()  # the generators are saved mid-stream, not as seeding left them
     for _ in range(3):
         train_step(model, opt, DIM)
         sched.step()
