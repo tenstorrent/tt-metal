@@ -36,7 +36,6 @@ OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_pa
 }
 
 void OptimizerBase::clear_gradients() {
-    m_cleared_gradients.clear();
     for (auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
             tensor_ptr->set_grad(ttnn::Tensor());
@@ -52,6 +51,7 @@ void OptimizerBase::restore_cleared_gradients_as_zeros() {
             tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
         }
     }
+    m_cleared_gradients.clear();
 }
 
 namespace {
