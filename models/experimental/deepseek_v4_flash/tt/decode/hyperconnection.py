@@ -246,6 +246,44 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         page = sublayer_out.memory_config().shard_spec.shape[1] if sublayer_out.is_sharded() else self.hidden
         return page % ttnn.TILE_SIZE == 0 and self.hidden % page == 0
 
+    def _forward_block(self, hidden_streams, pre_mix, mix, norm, replica_grid):
+        """A DSpark block of ``rows`` rows (2, 4 or 8) in one single-user program, picked by :meth:`forward` from
+        ``hidden_streams``' ``(rows, 32)`` tiles (see ``hc_block_rows`` in the op's fused_single_user_types.hpp for
+        every layout): ``hidden_streams`` ``[1, 1, hc * rows, D]`` stream-major, width-sharded ``[hc * rows, D / 8]``
+        on the collapse cores; ``pre_mix`` ``[1, rows, 1, hc]``; ``mix`` ``(post [1, rows, hc, 1], comb
+        [1, rows, hc, hc], sublayer_out)`` with ``sublayer_out`` a ``(rows, 32)`` block ``[1, 1, rows, D]`` (or
+        ROW_MAJOR ``[1, 1, 1, rows * D]`` in ``tile_rows`` order); ``norm`` ``(weight, eps[, sharded])`` with ``weight``
+        the gain repeated per row, a ``(rows, 32)`` block. Returns ``(post, comb, collapsed, pre[, mixed streams]
+        [, replica])``, one tile per row for the first and fourth, ``(rows, 32)`` blocks for the rest."""
+        assert self.fused_fn and pre_mix is not None, "a block needs the fused fn dot and pre_mix"
+        kwargs = {}
+        if mix is not None:
+            kwargs.update(mix_post=mix[0], mix_comb=mix[1], mix_sublayer_out=mix[2])
+        if norm is not None:
+            kwargs.update(collapsed_norm_weight=norm[0], collapsed_norm_epsilon=float(norm[1]))
+            if len(norm) > 2 and norm[2]:
+                kwargs["collapsed_norm_sharded"] = True
+        if replica_grid is not None:
+            kwargs["collapsed_replica_grid"] = replica_grid
+        return ttnn.experimental.deepseek.fused_hyperconnection(
+            hidden_streams,
+            pre_bias=self.pre_b,
+            post_bias=self.post_b,
+            comb_bias=self.comb_b,
+            num_streams=self.hc,
+            sinkhorn_iters=self.iters,
+            pre_scale=self.pre_scale,
+            post_scale=self.post_scale,
+            comb_scale=self.comb_scale,
+            eps=self.eps,
+            pre_mix=pre_mix,
+            fn_weight=self.fn_dot_weight,
+            fn_core_grid=self.fn_core_grid,
+            fn_reduce_fan_in=self.fn_reduce_fan_in,
+            fn_rms_norm_epsilon=self.norm_eps,
+            **kwargs,
+        )
+
     def forward(
         self,
         hidden_streams: ttnn.Tensor,
@@ -284,6 +322,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         ``replica_grid`` (one row, the fused ``fn``, a ROW_MAJOR ``collapsed``): the collapse cores also multicast
         ``collapsed`` onto that rectangle, returned last as ``all_gather_for_matmul(collapsed, replica_grid)``.
         """
+        if hidden_streams.layout == ttnn.TILE_LAYOUT and hidden_streams.tile.tile_shape[0] in (2, 4, 8):
+            return self._forward_block(hidden_streams, pre_mix, mix, norm, replica_grid)
         b, s, hc, d = hidden_streams.shape
         t = b * s
         assert collapsed_layout in (None, ttnn.TILE_LAYOUT) or (

@@ -19,6 +19,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "hc_single_user_sfpu.h"
+#include "hc_rows_sfpu.h"
 
 namespace {
 
@@ -157,6 +158,142 @@ ALWI void collapsed_rmsnorm(
     cb_pop_front(cb_x, num_chunks);
 }
 
+// collapsed_rmsnorm for a block of ROWS rows (see hc_rows_sfpu.h): cb_x / cb_gamma / cb_out hold num_chunks virtual
+// tiles, cb_stat / cb_gather / cb_scale / cb_carry (max(ROWS, 4) x 32) fp32 stat tiles whose row lr holds the sum of
+// block row lr % ROWS (or 4 g + lr) in every column.
+template <uint32_t ROWS, uint32_t HV, uint32_t first, uint32_t n>
+// A format switch alone keeps the unpacker's face stride, which with the same tile shape (Hv = 4 chunks next to the
+// (4 x 32) fp32 stat tiles) is then the old datum size's: every switch below also reprograms the tile shape.
+ALWI void rows_sumsq_batch(uint32_t cb_x, uint32_t cb_carry, uint32_t cb_target) {
+    constexpr uint32_t out_slot = 6;
+    constexpr uint32_t carry_slot = 7;
+    constexpr bool carry = first > 0;
+    if constexpr (carry) {
+        cb_wait_front(cb_carry, 1);
+    }
+    cb_reserve_back(cb_target, 1);
+    tile_regs_acquire();
+    reconfig_data_format_srca(cb_x);
+    reconfig_tile_shape_srca(cb_x);
+    copy_init(cb_x);
+    for (uint32_t t = 0; t < n; ++t) {
+        copy_tile(cb_x, first + t, t);
+    }
+    if constexpr (carry) {
+        reconfig_data_format_srca(cb_carry);
+        reconfig_tile_shape_srca(cb_carry);
+        copy_init(cb_carry);
+        copy_tile(cb_carry, 0, carry_slot);
+    }
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
+    MATH((ckernel::sfpu::hc_rows_virtual_sumsq<ROWS, HV, n, out_slot, carry, carry_slot>()));
+    tile_regs_commit();
+    tile_regs_wait();
+    // The packer's MOP follows the tile shape: the stat tiles are (max(ROWS, 4) x 32), the chunks before them taller.
+    pack_reconfig_data_format(cb_target);
+    pack_init(cb_target);
+    pack_tile(out_slot, cb_target);
+    tile_regs_release();
+    cb_push_back(cb_target, 1);
+    if constexpr (carry) {
+        cb_pop_front(cb_carry, 1);
+    }
+}
+
+template <uint32_t ROWS, uint32_t HV, uint32_t num_chunks, uint32_t first = 0>
+ALWI void rows_sumsq(uint32_t cb_x, uint32_t cb_carry, uint32_t cb_stat) {
+    constexpr uint32_t n = num_chunks - first < 6 ? num_chunks - first : 6;
+    constexpr bool last = first + n == num_chunks;
+    rows_sumsq_batch<ROWS, HV, first, n>(cb_x, cb_carry, last ? cb_stat : cb_carry);
+    if constexpr (!last) {
+        rows_sumsq<ROWS, HV, num_chunks, first + n>(cb_x, cb_carry, cb_stat);
+    }
+}
+
+template <uint32_t ROWS, uint32_t num_chunks, uint32_t first = 0>
+ALWI void rows_scale_gamma(uint32_t cb_x, uint32_t cb_gamma, uint32_t cb_scale, uint32_t cb_out) {
+    constexpr uint32_t n = num_chunks - first < 3 ? num_chunks - first : 3;
+    constexpr uint32_t gamma_slot = 3;
+    constexpr uint32_t scale_slot = 7;
+    tile_regs_acquire();
+    reconfig_data_format_srca(cb_scale);
+    reconfig_tile_shape_srca(cb_scale);
+    copy_init(cb_scale);
+    copy_tile(cb_scale, 0, scale_slot);
+    reconfig_data_format_srca(cb_x);
+    reconfig_tile_shape_srca(cb_x);
+    copy_init(cb_x);
+    for (uint32_t t = 0; t < n; ++t) {
+        copy_tile(cb_x, first + t, t);
+    }
+    reconfig_tile_shape_srca(cb_gamma);
+    copy_init(cb_gamma);
+    for (uint32_t t = 0; t < n; ++t) {
+        copy_tile(cb_gamma, first + t, gamma_slot + t);
+    }
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
+    MATH((ckernel::sfpu::hc_rows_scale_gamma<ROWS, n, gamma_slot, scale_slot>()));
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t t = 0; t < n; ++t) {
+        pack_tile<true>(t, cb_out, first + t);
+    }
+    tile_regs_release();
+    if constexpr (first + n < num_chunks) {
+        rows_scale_gamma<ROWS, num_chunks, first + n>(cb_x, cb_gamma, cb_scale, cb_out);
+    }
+}
+
+template <uint32_t ROWS, uint32_t HV, uint32_t num_chunks, uint32_t num_cores, uint32_t inv_d_bits, uint32_t eps_bits>
+ALWI void collapsed_rmsnorm_rows(
+    uint32_t cb_x,
+    uint32_t cb_gamma,
+    uint32_t cb_stat,
+    uint32_t cb_gather,
+    uint32_t cb_scale,
+    uint32_t cb_out,
+    uint32_t cb_carry) {
+    // 1. sum(x^2) per row into cb_stat, at most six chunks per Dst (carried through cb_carry).
+    cb_wait_front(cb_x, num_chunks);
+    rows_sumsq<ROWS, HV, num_chunks>(cb_x, cb_carry, cb_stat);
+
+    // 2. Every collapse core's stat tile, summed in fp32, then rsqrt(sum * (1/D) + eps), elementwise.
+    cb_wait_front(cb_gather, num_cores);
+    cb_reserve_back(cb_scale, 1);
+    reconfig_data_format(cb_gather, cb_gather);
+    reconfig_tile_shape_srca(cb_gather);
+    pack_reconfig_data_format(cb_scale);
+    tile_regs_acquire();
+    copy_init(cb_gather);
+    copy_tile(cb_gather, 0, 0);
+    for (uint32_t c = 1; c < num_cores; ++c) {
+        copy_init(cb_gather);
+        copy_tile(cb_gather, c, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+    }
+    add_rsqrt_tile_init();
+    add_rsqrt_tile<false, VectorMode::RC, 8, false, inv_d_bits>(0, eps_bits);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_scale);
+    tile_regs_release();
+    cb_push_back(cb_scale, 1);
+    cb_pop_front(cb_gather, num_cores);
+
+    // 3. x * scale(row) * gamma, three chunks per Dst.
+    cb_wait_front(cb_scale, 1);
+    cb_wait_front(cb_gamma, num_chunks);
+    cb_reserve_back(cb_out, num_chunks);
+    pack_reconfig_data_format(cb_out);
+    pack_init(cb_out);
+    rows_scale_gamma<ROWS, num_chunks>(cb_x, cb_gamma, cb_scale, cb_out);
+    cb_push_back(cb_out, num_chunks);
+    cb_pop_front(cb_scale, 1);
+    cb_pop_front(cb_gamma, num_chunks);
+    cb_pop_front(cb_x, num_chunks);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -194,8 +331,79 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t norm_inv_d_bits = get_compile_time_arg_val(27);
     [[maybe_unused]] constexpr uint32_t norm_eps_bits = get_compile_time_arg_val(28);
     [[maybe_unused]] constexpr uint32_t norm_num_cores = get_compile_time_arg_val(29);
+    // A block of rows > 1 rows (see hc_rows_sfpu.h): the per-row weights are cb_mix_w's num_w_tiles 32x32 tiles, and
+    // the fused norm carries its partial sums through cb_norm_carry.
+    constexpr uint32_t rows = get_compile_time_arg_val(30);
+    [[maybe_unused]] constexpr uint32_t num_w_tiles = get_compile_time_arg_val(31);
+    [[maybe_unused]] constexpr uint32_t cb_norm_carry = get_compile_time_arg_val(32);
+    // The height of the virtual tiles the block's rows are read as.
+    [[maybe_unused]] constexpr uint32_t row_tile_h = get_compile_time_arg_val(33);
 
-    if constexpr (role == 0) {
+    if constexpr (role == 0 && rows > 1) {
+        static_assert(
+            rows == 1 || (use_pre_mix && hidden_row_major),
+            "a block of rows collapses its (rows x 32) streams with pre_mix");
+        compute_kernel_hw_startup(cb_hidden, cb_collapsed);
+        // Dst: the streams in slots 0..H-1, the sublayer output in slot H (mix), the weight tiles after them.
+        constexpr uint32_t w_slot = use_mix ? num_streams + 1 : num_streams;
+        cb_wait_front(cb_mix_w, num_w_tiles);
+        cb_wait_front(cb_hidden, num_streams * collapse_tiles);
+        if constexpr (use_mix) {
+            cb_wait_front(cb_mix_sub, collapse_tiles);
+            cb_reserve_back(cb_mixed, num_streams * collapse_tiles);
+        }
+        pack_reconfig_data_format(cb_collapsed);
+        for (uint32_t j = 0; j < collapse_tiles; ++j) {
+            tile_regs_acquire();
+            // The unpacker's face height follows the operand only through a tile-shape reconfig: the streams' are
+            // Hv rows, the weight tiles' 16.
+            reconfig_tile_shape_srca(cb_hidden);
+            copy_init(cb_hidden);
+            for (uint32_t k = 0; k < num_streams; ++k) {
+                copy_tile(cb_hidden, k * collapse_tiles + j, k);
+            }
+            if constexpr (use_mix) {
+                copy_init(cb_mix_sub);
+                copy_tile(cb_mix_sub, j, num_streams);
+            }
+            reconfig_tile_shape_srca(cb_mix_w);
+            copy_init(cb_mix_w);
+            for (uint32_t t = 0; t < num_w_tiles; ++t) {
+                copy_tile(cb_mix_w, t, w_slot + t);
+            }
+            MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
+            if constexpr (use_mix) {
+                MATH((ckernel::sfpu::hc_mix_collapse_streams_rows<num_streams, rows, w_slot>()));
+            } else {
+                MATH((ckernel::sfpu::hc_collapse_streams_rows<num_streams, rows, w_slot>()));
+            }
+            tile_regs_commit();
+
+            cb_reserve_back(cb_collapsed, 1);
+            tile_regs_wait();
+            if constexpr (use_mix) {
+                for (uint32_t k = 0; k < num_streams; ++k) {
+                    pack_tile<true>(k, cb_mixed, k * collapse_tiles + j);
+                }
+                pack_tile(num_streams, cb_collapsed);
+            } else {
+                pack_tile(0, cb_collapsed);
+            }
+            tile_regs_release();
+            cb_push_back(cb_collapsed, 1);
+        }
+        if constexpr (use_mix) {
+            // The reader raises the fn dot cores' semaphore on this; the program ends with it unpopped.
+            cb_push_back(cb_mixed, num_streams * collapse_tiles);
+            cb_pop_front(cb_mix_sub, collapse_tiles);
+        }
+        cb_pop_front(cb_hidden, num_streams * collapse_tiles);
+        cb_pop_front(cb_mix_w, num_w_tiles);
+        if constexpr (fuse_norm) {
+            collapsed_rmsnorm_rows<rows, row_tile_h, collapse_tiles, norm_num_cores, norm_inv_d_bits, norm_eps_bits>(
+                cb_collapsed, cb_norm_gamma, cb_norm_stat, cb_norm_gather, cb_norm_scale, cb_norm_out, cb_norm_carry);
+        }
+    } else if constexpr (role == 0) {
         // Every tile the row-major collapse handles (parameters, pre, hidden, collapsed row) is h x 32.
         compute_kernel_hw_startup(cb_hidden, cb_collapsed);
         if constexpr (!use_pre_mix) {
@@ -303,6 +511,17 @@ void kernel_main() {
             collapsed_rmsnorm<collapse_tiles, norm_num_cores, norm_inv_d_bits, norm_eps_bits>(
                 cb_collapsed, cb_norm_gamma, cb_norm_stat, cb_norm_gather, cb_norm_scale, cb_norm_out);
         }
+    } else if constexpr (role == 1 && rows > 1) {
+        // post and pre of every row in one tile (see hc_post_pre_rows); the writer spreads them into one tile per row.
+        compute_kernel_hw_startup(cb_params, cb_post_out);
+        load_params(cb_params);
+        MATH((ckernel::sfpu::hc_post_pre_rows<num_streams, post_scale_bits, pre_scale_bits, eps_bits>()));
+        pack_params_outputs(cb_params, 1, cb_post_out);
+    } else if constexpr (role == 2 && rows > 1) {
+        compute_kernel_hw_startup(cb_params, cb_comb_out);
+        load_params(cb_params);
+        MATH((ckernel::sfpu::hc_comb_sinkhorn_rows<num_streams, rows, sinkhorn_iters, eps_bits, comb_scale_bits>()));
+        pack_params_outputs(cb_params, 0, cb_comb_out);
     } else if constexpr (role == 1) {
         compute_kernel_hw_startup(cb_params, cb_post_out);
         load_params(cb_params);

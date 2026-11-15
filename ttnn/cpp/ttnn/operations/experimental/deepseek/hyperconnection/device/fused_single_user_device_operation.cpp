@@ -51,9 +51,11 @@ void validate_fn_dot(const FusedSingleUserParams& attributes, const FusedSingleU
     TT_FATAL(
         hidden_streams.device()->arch() == tt::ARCH::BLACKHOLE,
         "the fused fn dot uses Blackhole-only LLKs (custom_mm and the fused RMSNorm)");
+    const uint32_t rows = hc_block_rows(hidden_streams);
     TT_FATAL(
-        hidden_streams.layout() == Layout::ROW_MAJOR,
-        "the fused fn dot reads each collapse core's [H, D/8] ROW_MAJOR shard as its K-slices, got {}",
+        hidden_streams.layout() == Layout::ROW_MAJOR || rows > 1,
+        "the fused fn dot reads each collapse core's [H, D/8] ROW_MAJOR shard (or a block's (rows x 32)-tiled one) as "
+        "its K-slices, got {}",
         hidden_streams.layout());
     TT_FATAL(
         hidden_streams.dtype() == DataType::BFLOAT16,
@@ -115,6 +117,13 @@ void validate_fn_dot(const FusedSingleUserParams& attributes, const FusedSingleU
         kc,
         k / kCollapseCores);
     TT_FATAL(kc / tt::constants::TILE_WIDTH <= 256, "a dot core's K-slice holds at most 256 tiles, got {}", kc / 32);
+    if (rows > 1) {
+        const uint32_t kc_tiles = kc / tt::constants::TILE_WIDTH;
+        TT_FATAL(
+            kc_tiles % 2 == 0 && (kc_tiles <= 8 || !attributes.rms_norm_epsilon.has_value()),
+            "a block's fn dot runs custom_mm on an even K-slice of at most 8 tiles with the fused RMSNorm, got {}",
+            kc_tiles);
+    }
     if (w.buffer()->buffer_type() == tt::tt_metal::BufferType::L1) {
         TT_FATAL(
             w.shard_spec()->shape[0] == kc && w.shard_spec()->shape[1] == tt::constants::TILE_WIDTH,
@@ -196,12 +205,41 @@ void validate_mix(const FusedSingleUserParams& attributes, const FusedSingleUser
             tensor->layout(),
             tensor->memory_config());
     }
+    const uint32_t rows = hc_block_rows(hidden_streams);
     TT_FATAL(
-        post.logical_shape() == ttnn::Shape({1, 1, hc, 1}), "mix_post must be [1,1,H,1], got {}", post.logical_shape());
+        post.logical_shape() == ttnn::Shape({1, rows, hc, 1}),
+        "mix_post must be [1,rows,H,1] = [1,{},{},1], got {}",
+        rows,
+        hc,
+        post.logical_shape());
     TT_FATAL(
-        comb.logical_shape() == ttnn::Shape({1, 1, hc, hc}),
-        "mix_comb must be [1,1,H,H], got {}",
+        comb.logical_shape() == ttnn::Shape({1, rows, hc, hc}),
+        "mix_comb must be [1,rows,H,H] = [1,{},{},{}], got {}",
+        rows,
+        hc,
+        hc,
         comb.logical_shape());
+    if (rows > 1) {
+        const bool block_tile = sub.layout() == Layout::TILE && sub.tensor_spec().tile().get_height() == rows &&
+                                sub.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH &&
+                                sub.logical_shape() == ttnn::Shape({1, 1, rows, d});
+        const bool block_row =
+            sub.layout() == Layout::ROW_MAJOR && sub.logical_shape() == ttnn::Shape({1, 1, 1, rows * d});
+        TT_FATAL(
+            block_tile || block_row,
+            "a block's mix_sublayer_out must be TILE ({}, 32) [1,1,{},{}] or ROW_MAJOR [1,1,1,{}], got {} {}",
+            rows,
+            rows,
+            d,
+            rows * d,
+            sub.layout(),
+            sub.logical_shape());
+        TT_FATAL(
+            sub.buffer()->page_size() % 64 == 0 && sub.buffer()->aligned_page_size() == sub.buffer()->page_size(),
+            "a block's mix_sublayer_out pages must be unpadded multiples of 64 B, got {}",
+            sub.buffer()->page_size());
+        return;
+    }
     TT_FATAL(
         sub.logical_shape() == ttnn::Shape({1, 1, 1, d}),
         "mix_sublayer_out must be [1,1,1,D] = [1,1,1,{}], got {}",
@@ -216,6 +254,106 @@ void validate_mix(const FusedSingleUserParams& attributes, const FusedSingleUser
         "mix_sublayer_out's {}-wide pages must be a multiple of 32 wide, divide D = {} and carry no padding",
         page_elems,
         d);
+}
+
+// A block of rows (see hc_block_rows): the layouts FusedSingleUserInputs documents for it.
+void validate_block(const FusedSingleUserParams& attributes, const FusedSingleUserInputs& tensor_args, uint32_t rows) {
+    const auto& hidden_streams = tensor_args.hidden_streams;
+    const uint32_t hc = attributes.num_streams;
+    TT_FATAL(rows == 2 || rows == 4 || rows == 8, "a block takes 2, 4 or 8 rows (pad up to one), got {}", rows);
+    TT_FATAL(hc >= 1 && hc <= 4, "a block holds at most four streams in Dst, got {}", hc);
+    TT_FATAL(hidden_streams.device()->arch() == tt::ARCH::BLACKHOLE, "a block uses Blackhole-only LLKs (custom_mm)");
+    TT_FATAL(
+        tensor_args.fn_weight.has_value() && tensor_args.pre_mix.has_value(),
+        "a block of rows needs fn_weight (the fn dot in this program) and pre_mix");
+    TT_FATAL(
+        hidden_streams.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+        "a block's streams must use ({}, 32) tiles",
+        rows);
+    const auto& hidden_shape = hidden_streams.logical_shape();
+    TT_FATAL(
+        hidden_shape.rank() == 4 && hidden_shape[0] == 1 && hidden_shape[1] == 1 && hidden_shape[2] == hc * rows,
+        "a block's streams must be [1,1,H*rows,D] = [1,1,{},D], got {}",
+        hc * rows,
+        hidden_shape);
+    const uint32_t d = static_cast<uint32_t>(hidden_shape[3]);
+    TT_FATAL(d % (kCollapseCores * 32) == 0, "hidden size D must be divisible by {}", kCollapseCores * 32);
+    validate_width_shard(hidden_streams, kCollapseCores, d, "hidden_streams");
+    TT_FATAL(
+        hidden_streams.buffer()->buffer_type() == tt::tt_metal::BufferType::L1 &&
+            hidden_streams.shard_spec()->shape[0] == hc * rows,
+        "a block's streams must be L1 with shard height H * rows = {}, got {}",
+        hc * rows,
+        hidden_streams.memory_config());
+
+    const auto& pre_mix = *tensor_args.pre_mix;
+    TT_FATAL(
+        pre_mix.storage_type() == StorageType::DEVICE && pre_mix.dtype() == DataType::BFLOAT16 &&
+            pre_mix.layout() == Layout::TILE &&
+            pre_mix.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+            pre_mix.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "a block's pre_mix must be BFLOAT16 32x32 TILE interleaved");
+    TT_FATAL(
+        pre_mix.logical_shape() == ttnn::Shape({1, rows, 1, hc}),
+        "a block's pre_mix must be [1,rows,1,H] = [1,{},1,{}], got {}",
+        rows,
+        hc,
+        pre_mix.logical_shape());
+
+    const bool fuse_norm = tensor_args.collapsed_norm_weight.has_value();
+    const auto& out_mem = attributes.collapsed_output_mem_config;
+    const bool own_shard = out_mem.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                           out_mem.buffer_type() == tt::tt_metal::BufferType::L1 && out_mem.shard_spec().has_value() &&
+                           out_mem.shard_spec()->grid == hidden_streams.shard_spec()->grid &&
+                           out_mem.shard_spec()->shape[0] == rows &&
+                           out_mem.shard_spec()->shape[1] == d / kCollapseCores;
+    if (fuse_norm) {
+        const auto& gamma = *tensor_args.collapsed_norm_weight;
+        TT_FATAL(gamma.storage_type() == StorageType::DEVICE, "collapsed_norm_weight must be on device");
+        const bool gamma_tile = gamma.layout() == Layout::TILE && gamma.tensor_spec().tile().get_height() == rows &&
+                                gamma.logical_shape() == ttnn::Shape({1, 1, rows, d});
+        const bool gamma_row =
+            gamma.layout() == Layout::ROW_MAJOR && gamma.logical_shape() == ttnn::Shape({1, 1, 1, rows * d});
+        TT_FATAL(
+            gamma.dtype() == DataType::BFLOAT16 && (gamma_tile || gamma_row) &&
+                gamma.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                gamma.buffer()->page_size() % 64 == 0,
+            "a block's collapsed_norm_weight must be BFLOAT16 interleaved, TILE ({}, 32) [1,1,{},{}] or ROW_MAJOR "
+            "[1,1,1,{}] (the gain repeated per row), got {} {} {}",
+            rows,
+            rows,
+            d,
+            rows * d,
+            gamma.logical_shape(),
+            gamma.layout(),
+            gamma.memory_config());
+        TT_FATAL(
+            attributes.collapsed_norm_epsilon >= 0.0F,
+            "collapsed_norm_epsilon must be non-negative, got {}",
+            attributes.collapsed_norm_epsilon);
+        const bool dram = out_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                          out_mem.buffer_type() == tt::tt_metal::BufferType::DRAM;
+        TT_FATAL(
+            dram || own_shard,
+            "a block's normed collapsed must be DRAM interleaved or L1 WIDTH_SHARDED [{}, {}] on the streams' cores, "
+            "got {}",
+            rows,
+            d / kCollapseCores,
+            out_mem);
+    } else {
+        TT_FATAL(
+            own_shard,
+            "a block's collapsed must be L1 WIDTH_SHARDED [{}, {}] on the streams' cores, got {}",
+            rows,
+            d / kCollapseCores,
+            out_mem);
+    }
+    if (attributes.collapsed_replica_grid.has_value()) {
+        TT_FATAL(
+            attributes.collapsed_replica_grid->ranges().size() == 1,
+            "collapsed_replica_grid must be one rectangle of cores, got {}",
+            *attributes.collapsed_replica_grid);
+    }
 }
 
 void validate_single_user_tensors(const FusedSingleUserParams& attributes, const FusedSingleUserInputs& tensor_args) {
@@ -274,6 +412,24 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
             "fused_w padded width must be tile-aligned, got {}",
             fused_w.padded_shape()[-1]);
         validate_width_shard(fused_w, 1, static_cast<uint32_t>(fused_w.padded_shape()[-1]), "fused_w");
+    }
+    const uint32_t rows = hc_block_rows(hidden_streams);
+    if (rows > 1) {
+        TT_FATAL(
+            pre_bias.logical_shape() == ttnn::Shape({1, 1, 1, hc}) &&
+                post_bias.logical_shape() == ttnn::Shape({1, 1, 1, hc}) &&
+                (comb_bias.logical_shape() == ttnn::Shape({1, 1, hc, hc}) ||
+                 comb_bias.logical_shape() == ttnn::Shape({1, 1, 1, hc * hc})),
+            "pre_bias / post_bias must be [1,1,1,H] and comb_bias [1,1,H,H] or [1,1,1,H*H]");
+        validate_block(attributes, tensor_args, rows);
+        const auto device_grid = hidden_streams.device()->compute_with_storage_grid_size();
+        TT_FATAL(
+            device_grid.x >= kTotalCores,
+            "single-user hyperconnection requires {} cores in the first row",
+            kTotalCores);
+        validate_fn_dot(attributes, tensor_args);
+        validate_mix(attributes, tensor_args);
+        return;
     }
     TT_FATAL(hidden_shape.rank() == 4, "hidden_streams must be rank-4, got {}", hidden_shape.rank());
     TT_FATAL(
@@ -430,6 +586,48 @@ FusedSingleUserDeviceOperation::spec_return_value_t FusedSingleUserDeviceOperati
     };
     const auto& hidden_shape = tensor_args.hidden_streams.logical_shape();
     const uint32_t d = static_cast<uint32_t>(hidden_shape[3]);
+    const uint32_t rows = hc_block_rows(tensor_args.hidden_streams);
+    if (rows > 1) {
+        // One 32x32 tile per row for post / comb / pre; collapsed and its replica as (rows x 32) blocks.
+        const uint32_t hc = attributes.num_streams;
+        const tt::tt_metal::Tile block_tile({rows, tt::constants::TILE_WIDTH});
+        const auto dtype = tensor_args.hidden_streams.dtype();
+        const bool dram_row = tensor_args.collapsed_norm_weight.has_value() &&
+                              attributes.collapsed_output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM;
+        spec_return_value_t specs = {
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape({1, rows, hc, 1}), make_layout(attributes.post_comb_output_mem_config)),
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape({1, rows, hc, hc}), make_layout(attributes.post_comb_output_mem_config)),
+            dram_row
+                ? tt::tt_metal::TensorSpec(
+                      ttnn::Shape({1, 1, 1, rows * d}),
+                      tt::tt_metal::TensorLayout(
+                          dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), attributes.collapsed_output_mem_config))
+                : tt::tt_metal::TensorSpec(
+                      ttnn::Shape({1, 1, rows, d}),
+                      tt::tt_metal::TensorLayout(
+                          dtype,
+                          tt::tt_metal::PageConfig(Layout::TILE, block_tile),
+                          attributes.collapsed_output_mem_config)),
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape({1, rows, 1, hc}), make_layout(attributes.post_comb_output_mem_config))};
+        // The mixed streams sit where the streams did, with or without the mix (always with pre_mix).
+        if (tensor_args.mix_post.has_value()) {
+            specs.push_back(tensor_args.hidden_streams.tensor_spec());
+        }
+        if (attributes.collapsed_replica_grid.has_value()) {
+            const auto& grid = *attributes.collapsed_replica_grid;
+            const tt::tt_metal::ShardSpec shard(grid, {rows, d}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+            specs.emplace_back(
+                ttnn::Shape({1, 1, grid.num_cores() * rows, d}),
+                tt::tt_metal::TensorLayout(
+                    dtype,
+                    tt::tt_metal::PageConfig(Layout::TILE, block_tile),
+                    MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard)));
+        }
+        return specs;
+    }
     spec_return_value_t specs = {
         tt::tt_metal::TensorSpec(
             ttnn::Shape({1, 1, attributes.num_streams, 1}), make_layout(attributes.post_comb_output_mem_config)),
@@ -509,9 +707,14 @@ std::vector<Tensor> fused_hyperconnection_single_user(
     const Layout resolved_collapsed_layout = collapsed_layout.value_or(Layout::TILE);
     // collapsed keeps the input's grid and shard width, with a tile-high shard (TILE) or a one-row one.
     MemoryConfig collapsed_output_mem_config = hidden_streams.memory_config();
-    if (hidden_streams.layout() == Layout::ROW_MAJOR && hidden_streams.shard_spec().has_value()) {
+    const uint32_t block_rows =
+        ttnn::operations::experimental::deepseek::hyperconnection::hc_block_rows(hidden_streams);
+    if ((hidden_streams.layout() == Layout::ROW_MAJOR || block_rows > 1) && hidden_streams.shard_spec().has_value()) {
         auto shard_spec = hidden_streams.shard_spec().value();
-        shard_spec.shape[0] = resolved_collapsed_layout == Layout::ROW_MAJOR ? 1u : tt::constants::TILE_HEIGHT;
+        // A block's collapsed is its (rows x 32)-tiled [rows, D / 8] per core.
+        shard_spec.shape[0] = block_rows > 1                                   ? block_rows
+                              : resolved_collapsed_layout == Layout::ROW_MAJOR ? 1u
+                                                                               : tt::constants::TILE_HEIGHT;
         collapsed_output_mem_config = MemoryConfig(
             hidden_streams.memory_config().memory_layout(), hidden_streams.memory_config().buffer_type(), shard_spec);
     }

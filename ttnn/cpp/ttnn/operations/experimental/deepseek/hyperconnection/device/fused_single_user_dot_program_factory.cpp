@@ -42,6 +42,9 @@ constexpr char kDotWriterKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/writer_hc_dot.cpp";
 constexpr char kDotComputeKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/compute_large_k_tree_reduce.cpp";
+// A block of rows: the same tree with a (rows x 32) in0 tile (see the kernel).
+constexpr char kDotRowsComputeKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/compute/compute_hc_dot_rows.cpp";
 
 }  // namespace fused_single_user_dot_detail
 
@@ -73,8 +76,11 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
     const uint32_t k = num_streams * d;
     const uint32_t n = static_cast<uint32_t>(w.logical_shape()[-1]);
     const uint32_t kc = k / num_dot_cores;
-    // One logical row of A, each partial and fused_w are 1x32 tiles: a row-major [1, W] row is W / 32 of them.
+    // One logical row of A, each partial and fused_w are 1x32 tiles: a row-major [1, W] row is W / 32 of them. A
+    // block's are (rows x 32) tiles: its [rows, W] slice is W / 32 of them, contiguous in the collapse core's shard.
     constexpr uint32_t M_tiles = 1;
+    const uint32_t rows = hc_block_rows(hidden_streams);
+    const bool block = rows > 1;
     const uint32_t Kc_tiles = kc / constants::TILE_WIDTH;
     const uint32_t N_tiles = n / constants::TILE_WIDTH;
     const bool rms_norm = operation_attributes.rms_norm_epsilon.has_value();
@@ -82,12 +88,13 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
     // The streams, every partial and fused_w are BFLOAT16.
     const DataFormat out_format = datatype_to_dataformat_converter(hidden_streams.dtype());
     const DataFormat in1_format = datatype_to_dataformat_converter(w.dtype());
-    const tt::tt_metal::Tile row_tile({1, constants::TILE_WIDTH});
+    const tt::tt_metal::Tile row_tile({rows, constants::TILE_WIDTH});
     const tt::tt_metal::Tile& in1_tile = w.tensor_spec().tile();
     const uint32_t in1_tile_size = in1_tile.get_tile_size(in1_format);
     const uint32_t out_tile_size = row_tile.get_tile_size(out_format);
     const uint32_t out_num_tiles = M_tiles * N_tiles;
-    // With rms_norm every partial carries one extra 1x32 tile per row holding that row's sum(A^2).
+    // With rms_norm every partial carries one extra 1x32 tile per row holding that row's sum(A^2) (a block: one
+    // (rows x 32) tile, row j holding row j's in every column).
     const uint32_t block_num_tiles = out_num_tiles + (rms_norm ? M_tiles : 0);
     const uint32_t block_bytes = block_num_tiles * out_tile_size;
 
@@ -103,6 +110,7 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
     constexpr uint32_t dst_num_tiles = 8;
     const bool use_custom_mm =
         matmul_decode::is_custom_mm_kt_dim(Kc_tiles) && matmul_decode::is_custom_mm_ct_dim(N_tiles);
+    TT_FATAL(!block || use_custom_mm, "a block's fn dot needs custom_mm (an even K-slice of 2..256 tiles, N <= 16)");
     if (!use_custom_mm) {
         log_warning(
             tt::LogOp,
@@ -160,7 +168,7 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
     if (rms_norm || !non_root_cores.empty()) {
         make_row_cb(kDotCbSend, block_num_tiles, rms_norm ? dot_grid : CoreRangeSet(non_root_cores));
     }
-    if (rms_norm) {
+    if (rms_norm && !block) {
         make_row_cb(kDotCbRmsScale, M_tiles, root_core);
     }
     // A whole tile, as the readers' own fused_w CB is.
@@ -198,7 +206,7 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
         Kc_tiles * N_tiles,
         block_num_tiles,
         num_levels,
-        kc * static_cast<uint32_t>(sizeof(uint16_t)),
+        rows * kc * static_cast<uint32_t>(sizeof(uint16_t)),
         b_in_l1 ? 0u : 1u,
         use_mix ? 1u : 0u,
         mixed_readers.semaphore_id,
@@ -223,7 +231,12 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
         .math_fidelity = use_custom_mm ? MathFidelity::LoFi : MathFidelity::HiFi4,
         .fp32_dest_acc_en = false,
         .math_approx_mode = false,
-        .compile_args = {
+        .compile_args = block ? std::vector<uint32_t>{
+            Kc_tiles,
+            rows,
+            dst_num_tiles,
+            std::bit_cast<uint32_t>(1.0F / static_cast<float>(k)),
+            std::bit_cast<uint32_t>(operation_attributes.rms_norm_epsilon.value_or(0.0F))} : std::vector<uint32_t>{
             M_tiles,
             Kc_tiles,
             N_tiles,
@@ -247,7 +260,8 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
     if (rms_norm) {
         compute_config.defines["FUSE_RMS_NORM"] = "1";
     }
-    const KernelHandle compute_kernel_id = CreateKernel(program, kDotComputeKernelPath, dot_grid, compute_config);
+    const KernelHandle compute_kernel_id =
+        CreateKernel(program, block ? kDotRowsComputeKernelPath : kDotComputeKernelPath, dot_grid, compute_config);
 
     FusedSingleUserDotSharedVariables shared;
     shared.dot_reader_kernel_id = reader_kernel_id;
@@ -269,7 +283,7 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
         const LargeKTreeNode& node = tree[i];
         const uint32_t first_k = i * kc;
         const CoreCoord a_core = device->worker_core_from_logical_core(collapse_cores[first_k / shard_k]);
-        const uint32_t a_offset = (first_k % shard_k) * static_cast<uint32_t>(sizeof(uint16_t));
+        const uint32_t a_offset = rows * (first_k % shard_k) * static_cast<uint32_t>(sizeof(uint16_t));
         shared.a_offsets.push_back(a_offset);
 
         std::vector<uint32_t> reader_args = {
