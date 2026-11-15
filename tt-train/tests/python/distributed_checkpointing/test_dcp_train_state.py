@@ -30,6 +30,7 @@ from ttml.distributed_checkpointing._train_state import (
     missing_train_state,
     restore_rng,
     restore_train_state,
+    this_world_rank,
 )
 
 
@@ -103,6 +104,12 @@ def test_a_generator_without_stored_state_keeps_its_state_with_a_warning(monkeyp
     with pytest.warns(UserWarning, match="holds torch's generator state, but torch is not imported: not restored"):
         restored = restore_rng(block, world_rank=0)
     assert restored == ["rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init"]
+
+
+def test_capture_and_restore_default_to_this_process_world_rank():
+    state = capture_rng()  # one process: world rank 0
+    assert list(state["ranks"]) == [str(this_world_rank())] == ["0"]
+    assert restore_rng(state)[0] == "rng.ttml"
 
 
 def test_a_rank_restores_only_its_own_entry():

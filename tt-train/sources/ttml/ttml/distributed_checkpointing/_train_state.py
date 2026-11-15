@@ -30,6 +30,7 @@ import warnings
 from typing import Any
 
 import numpy as np
+import ttnn
 
 import ttml
 
@@ -56,10 +57,19 @@ def _u32_from_hex(text: str) -> np.ndarray:
     return np.frombuffer(bytes.fromhex(text), dtype="<u4")
 
 
-def capture_rng(world_rank: int = 0) -> dict:
-    """The state of every generator this process draws from, as JSON, under ``world_rank``'s entry: ttml, python,
-    numpy and torch when it is imported. A multi-rank save merges every rank's entry into one block."""
-    return {"format": RNG_FORMAT, "ranks": {str(int(world_rank)): capture_process_rng()}}
+def this_world_rank() -> int:
+    """This process's rank in the MPI world; 0 when no distributed context is initialized."""
+    if ttnn.distributed_context_is_initialized():
+        return int(ttnn.distributed_context_world_rank())
+    return 0
+
+
+def capture_rng(world_rank: int | None = None) -> dict:
+    """The state of every generator this process draws from, as JSON, under ``world_rank``'s entry (by default this
+    process's world rank): ttml, python, numpy, ttml.init and torch when it is imported. A multi-rank save merges every
+    rank's entry into one block."""
+    rank = this_world_rank() if world_rank is None else int(world_rank)
+    return {"format": RNG_FORMAT, "ranks": {str(rank): capture_process_rng()}}
 
 
 def capture_process_rng() -> dict:
@@ -119,10 +129,11 @@ def _check_rng_format(state: dict) -> None:
         raise VersionError(f"RNG state format {version} is newer than this reader ({RNG_FORMAT})")
 
 
-def restore_rng(state: dict, world_rank: int = 0) -> list[str]:
-    """Restore the generators ``capture_rng`` recorded for ``world_rank``; returns the names restored (``rng.ttml``,
-    ``rng.python``, ``rng.numpy``, ``rng.ttml_init``, ``rng.torch``). A rank without an entry keeps its generators,
-    with a warning; torch's is restored only when torch is imported."""
+def restore_rng(state: dict, world_rank: int | None = None) -> list[str]:
+    """Restore the generators ``capture_rng`` recorded for ``world_rank`` (by default this process's world rank);
+    returns the names restored (``rng.ttml``, ``rng.python``, ``rng.numpy``, ``rng.ttml_init``, ``rng.torch``). A rank
+    without an entry keeps its generators, with a warning; torch's is restored only when torch is imported."""
+    world_rank = this_world_rank() if world_rank is None else int(world_rank)
     _check_rng_format(state)
     ranks = state["ranks"]
     own = ranks.get(str(int(world_rank)))
