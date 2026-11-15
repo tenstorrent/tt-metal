@@ -219,8 +219,6 @@ class Group:
         except BaseException as caught:  # noqa: BLE001
             status, err, result = error_status(caught), caught, None
         statuses = self.allgather(status)
-        if err is not None and not isinstance(err, Exception):
-            raise err
         failed = [r for r, s in enumerate(statuses) if s]
         if failed:
             # Every rank raises the class the first failing rank reported, so callers can catch the typed error, with
@@ -231,6 +229,8 @@ class Group:
             parts = self.gather(mine.encode("utf-8")[:MESSAGE_LIMIT])
             joined = b"\n".join(part for part in parts if part) if self.is_coordinator else None
             messages = self.broadcast(joined).decode("utf-8", errors="replace")
+            if err is not None and not isinstance(err, Exception):
+                raise err  # an interrupt, as it was, once the other ranks have its message too
             raise cls(f"{name} failed on rank(s) {failed} of {self.size}: {messages}") from err
         return result
 
