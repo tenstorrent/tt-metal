@@ -288,6 +288,7 @@ CB_S0_GO = 53  # S0_WRITER_AFTER_INPUTS: reader-to-writer token, the first unit'
 # A_log, dt_bias, b, a (each the gate column tile of the key head), then norm_weight's Vt.
 CB_SMALL_IN = 54
 SMALL_IN_GATE_PAGES = 4
+SMALL_MCAST_NAMES = ("CB_SMALL_IN", "SMALL_IN_GATE_PAGES")
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
@@ -344,7 +345,7 @@ TOKEN_CBS = (
 
 def _kernel_defines():
     """CB indices and spec constants for all three kernels (as GDN_<name>): defined here once, never restated."""
-    names = [n for n in globals() if n.startswith("CB_")] + [
+    names = [n for n in globals() if n.startswith("CB_") and n not in SMALL_MCAST_NAMES] + [
         "HISTORY",
         "CONV_TAPS",
         "TOK_COEF_PAGES",
@@ -360,7 +361,6 @@ def _kernel_defines():
         "IN_MAT_PAGES",
         "IN_VEC_PAGES",
         "LANDED_FIRST_SEM_ID",
-        "SMALL_IN_GATE_PAGES",
         "O_IN_DEPTH",
         "MAX_PREP_CORES_PER_GROUP",
         "ROLE_LOCAL",
@@ -944,13 +944,19 @@ def reader_addresses(inputs, outputs):
     return [t.buffer_address() for t in inputs] + [outputs[1].buffer_address(), outputs[2].buffer_address()]
 
 
-WRITER_INPUTS = (5, 7, 8, 2, 3, 9)  # recurrent_state, A_log, dt_bias, b, a, norm_weight
+# Inputs the writer reads: recurrent_state (S0_WRITER), then only in SMALL_INPUTS_MCAST programs A_log, dt_bias, b, a and
+# norm_weight (other programs keep the shorter argument lists: host time per call grows with them).
+WRITER_INPUTS = (5,)
+SMALL_WRITER_INPUTS = (7, 8, 2, 3, 9)
 
 
-def writer_addresses(inputs, outputs):
-    # recurrent_state: read by the writer under S0_WRITER; then A_log, dt_bias, b, a, norm_weight (SMALL_INPUTS_MCAST).
+def writer_inputs(small_mcast):
+    return WRITER_INPUTS + (SMALL_WRITER_INPUTS if small_mcast else ())
+
+
+def writer_addresses(inputs, outputs, small_mcast):
     return [outputs[0].buffer_address(), outputs[2].buffer_address()] + [
-        inputs[i].buffer_address() for i in WRITER_INPUTS
+        inputs[i].buffer_address() for i in writer_inputs(small_mcast)
     ]
 
 
@@ -1419,7 +1425,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     reader_accessor_ct = [arg for t in reader_tensors for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
     writer_accessor_ct = [
         arg
-        for t in (output, recurrent_state_out, *(inputs[i] for i in WRITER_INPUTS))
+        for t in (output, recurrent_state_out, *(inputs[i] for i in writer_inputs(small_mcast)))
         for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()
     ]
 
@@ -1581,18 +1587,23 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if DST_FULL_SYNC:
         compute_kernel_config.dst_full_sync_en = True
 
-    defines = _kernel_defines() + [
-        ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
-        ("GDN_QK_RAW", str(int(qk_raw))),
-        ("GDN_SMALL_MCAST", str(int(small_mcast))),
-        ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
-        ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
-        ("GDN_STATE_SPLIT", str(int(state_split))),
-        ("GDN_S0_WRITER", str(int(s0_writer_any))),
-        ("GDN_S0_WRITER_AFTER_INPUTS", str(int(S0_WRITER_AFTER_INPUTS))),
-        ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
-        ("GDN_PROFILE_ZONES", str(0 if _noc_tracing() else int(PROFILE_ZONES))),
-    ]
+    # SMALL_INPUTS_MCAST's defines only where it runs (gated_delta_net_qk_rows.hpp defaults them off).
+    small_defines = [("GDN_SMALL_MCAST", "1")] + [(f"GDN_{n}", str(globals()[n])) for n in SMALL_MCAST_NAMES]
+    defines = (
+        _kernel_defines()
+        + (small_defines if small_mcast else [])
+        + [
+            ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
+            ("GDN_QK_RAW", str(int(qk_raw))),
+            ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
+            ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
+            ("GDN_STATE_SPLIT", str(int(state_split))),
+            ("GDN_S0_WRITER", str(int(s0_writer_any))),
+            ("GDN_S0_WRITER_AFTER_INPUTS", str(int(S0_WRITER_AFTER_INPUTS))),
+            ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
+            ("GDN_PROFILE_ZONES", str(0 if _noc_tracing() else int(PROFILE_ZONES))),
+        ]
+    )
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).
     remote = {}
     if prep is not None:
@@ -1683,7 +1694,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             core_ranges=ranges,
             compile_time_args=writer_ct,
             runtime_args=writer_rt,
-            common_runtime_args=writer_addresses(inputs, outputs),
+            common_runtime_args=writer_addresses(inputs, outputs, small_mcast),
             named_compile_time_args=role_label,
             defines=group_defines,
             config=writer_config,
@@ -1740,9 +1751,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if small_channel is not None:
         small_channel.attach(descriptor, "qks", small_kernels, next_sem)
         next_sem = small_channel.next_semaphore_id()
-    for kernel in readers + writers:
-        if small_channel is None or all(kernel is not k for k in small_kernels):
-            ttnn.attach_absent_mcast(kernel, "qks")
+        for kernel in readers + writers:
+            if all(kernel is not k for k in small_kernels):
+                ttnn.attach_absent_mcast(kernel, "qks")
     descriptor.kernels = kernels
     return descriptor
 
@@ -1782,14 +1793,15 @@ def cached_program_descriptor(key, inputs, outputs, *, epsilon, compute_kernel_c
         # The structural hash leaves out per-core argument values and counts; the key covers them.
         descriptor.custom_program_hash = hash((ttnn.compute_program_descriptor_hash(descriptor), key)) % (1 << 64)
         kernels = descriptor.kernels  # references into the descriptor: reader, writer, compute per core group
-        entry = (descriptor, kernels[0::3], kernels[1::3])
+        small_mcast = len(kernels[1].common_runtime_args) > 2 + len(WRITER_INPUTS)
+        entry = (descriptor, kernels[0::3], kernels[1::3], small_mcast)
         _program_cache[key] = entry
         while len(_program_cache) > PROGRAM_CACHE_SIZE:
             _program_cache.popitem(last=False)
         return descriptor
     _program_cache.move_to_end(key)
-    descriptor, readers, writers = entry
-    reader_args, writer_args = reader_addresses(inputs, outputs), writer_addresses(inputs, outputs)
+    descriptor, readers, writers, small_mcast = entry
+    reader_args, writer_args = reader_addresses(inputs, outputs), writer_addresses(inputs, outputs, small_mcast)
     for kernel in readers:
         kernel.common_runtime_args = reader_args
     for kernel in writers:

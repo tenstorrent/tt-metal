@@ -29,6 +29,14 @@
 #define GDN_MARK(name)
 #endif
 
+// SMALL_INPUTS_MCAST's defines are emitted only by the programs that use it (host time per call grows with the
+// defines).
+#ifndef GDN_SMALL_MCAST
+#define GDN_SMALL_MCAST 0
+#define GDN_CB_SMALL_IN 0
+#define GDN_SMALL_IN_GATE_PAGES 0
+#endif
+
 namespace gdn {
 
 // Declared first in kernel_main so every return drains the kernel's NoC. Semaphore::up(noc, x, y) is a non-posted

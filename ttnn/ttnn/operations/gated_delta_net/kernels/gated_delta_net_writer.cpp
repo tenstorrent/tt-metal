@@ -412,14 +412,16 @@ void kernel_main() {
     constexpr auto state_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto state_in_args =
         TensorAccessorArgs<state_out_args.next_compile_time_args_offset()>();
-    // SMALL_MCAST: the small inputs a q core reads for its key head's state cores.
-    [[maybe_unused]] constexpr auto a_log_args = TensorAccessorArgs<state_in_args.next_compile_time_args_offset()>();
-    [[maybe_unused]] constexpr auto dt_bias_args = TensorAccessorArgs<a_log_args.next_compile_time_args_offset()>();
-    [[maybe_unused]] constexpr auto b_args = TensorAccessorArgs<dt_bias_args.next_compile_time_args_offset()>();
-    [[maybe_unused]] constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
-    [[maybe_unused]] constexpr auto norm_w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
+#if GDN_SMALL_MCAST  // the small inputs' accessors and channel exist only in SMALL_MCAST programs
+    // The small inputs a q core reads for its key head's state cores (common args 3..7).
+    constexpr auto a_log_args = TensorAccessorArgs<state_in_args.next_compile_time_args_offset()>();
+    constexpr auto dt_bias_args = TensorAccessorArgs<a_log_args.next_compile_time_args_offset()>();
+    constexpr auto b_args = TensorAccessorArgs<dt_bias_args.next_compile_time_args_offset()>();
+    constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
+    constexpr auto norm_w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto small_channel = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("qks_ct_offset"), get_named_compile_time_arg_val("qks_rt_offset")>();
+#endif
 
     // Buffer addresses are common runtime args (see the reader).
     const auto out_acc = TensorAccessor(out_args, get_common_arg_val<uint32_t>(0), OUT_TILE_BYTES);
@@ -464,6 +466,37 @@ void kernel_main() {
     const uint32_t reader_units = split_args ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t reader_share = split_args ? get_arg_val<uint32_t>(arg++) : 0;
     const bool reader_writes = reader_units != 0 || reader_share != 0;
+
+    // SMALL_MCAST (q core): the key head's gate column tile of A_log, dt_bias, b and a, then norm_weight, read first
+    // (before the state cores' S0 reads queue at the banks) under their own transaction id, so that the q / k window
+    // gather never waits for them, and multicast to the key head's state cores once landed.
+    constexpr uint32_t SMALL_TRID = 1;
+    constexpr uint32_t QK_WINDOW_TRID = 2;
+    const bool small_sender = QK_CORE && GDN_SMALL_MCAST && qk_role == GDN_QK_Q_INJECTOR;
+    const uint32_t small_base = GDN_SMALL_MCAST ? get_write_ptr(GDN_CB_SMALL_IN) : 0;
+#if GDN_SMALL_MCAST
+    if constexpr (QK_CORE) {
+        if (small_sender) {
+            const uint32_t gate_page = first_unit * RATIO / TILE_ROWS;  // decode: tile row 0
+            const uint64_t gate_srcs[GDN_SMALL_IN_GATE_PAGES] = {
+                TensorAccessor(a_log_args, get_common_arg_val<uint32_t>(3), OUT_TILE_BYTES).get_noc_addr(gate_page),
+                TensorAccessor(dt_bias_args, get_common_arg_val<uint32_t>(4), OUT_TILE_BYTES).get_noc_addr(gate_page),
+                TensorAccessor(b_args, get_common_arg_val<uint32_t>(5), OUT_TILE_BYTES).get_noc_addr(gate_page),
+                TensorAccessor(a_args, get_common_arg_val<uint32_t>(6), OUT_TILE_BYTES).get_noc_addr(gate_page)};
+            noc_async_read_set_trid(SMALL_TRID);
+            uint32_t dst = small_base;
+            for (const uint64_t src : gate_srcs) {
+                noc_async_read(src, dst, OUT_TILE_BYTES);
+                dst += OUT_TILE_BYTES;
+            }
+            const auto norm_w = TensorAccessor(norm_w_args, get_common_arg_val<uint32_t>(7), OUT_TILE_BYTES);
+            for (uint32_t vt = 0; vt < Vt; ++vt, dst += OUT_TILE_BYTES) {
+                noc_async_read(norm_w.get_noc_addr(vt), dst, OUT_TILE_BYTES);
+            }
+            noc_async_read_set_trid(QK_WINDOW_TRID);
+        }
+    }
+#endif
 
     // Zero the window groups the reader will use once (it keeps rows outside the token rows zero from then
     // on), one slot at a time with a token per slot so the reader starts on slot 0 without waiting for
@@ -539,51 +572,38 @@ void kernel_main() {
         // Window: per column, zero its slot, copy the history rows from history_split(B) on, hand it to the reader.
         GDN_ZONE("gdn_wr_qk");
         Noc noc;
-        // SMALL_MCAST (q core): the key head's gate column tile of A_log, dt_bias, b and a, then norm_weight, read now
-        // (before the state cores' S0 reads queue at the banks) and multicast once landed.
-        const bool small_sender = GDN_SMALL_MCAST && qk_role == GDN_QK_Q_INJECTOR;
-        const uint32_t small_base = GDN_SMALL_MCAST ? get_write_ptr(GDN_CB_SMALL_IN) : 0;
-        constexpr uint32_t small_bytes = (GDN_SMALL_IN_GATE_PAGES + Vt) * OUT_TILE_BYTES;
-        if constexpr (GDN_SMALL_MCAST) {
-            if (small_sender) {
-                const uint32_t gate_page = first_unit * RATIO / TILE_ROWS;  // decode: tile row 0
-                const uint64_t gate_srcs[GDN_SMALL_IN_GATE_PAGES] = {
-                    TensorAccessor(a_log_args, get_common_arg_val<uint32_t>(3), OUT_TILE_BYTES).get_noc_addr(gate_page),
-                    TensorAccessor(dt_bias_args, get_common_arg_val<uint32_t>(4), OUT_TILE_BYTES)
-                        .get_noc_addr(gate_page),
-                    TensorAccessor(b_args, get_common_arg_val<uint32_t>(5), OUT_TILE_BYTES).get_noc_addr(gate_page),
-                    TensorAccessor(a_args, get_common_arg_val<uint32_t>(6), OUT_TILE_BYTES).get_noc_addr(gate_page)};
-                uint32_t dst = small_base;
-                for (const uint64_t src : gate_srcs) {
-                    noc_async_read(src, dst, OUT_TILE_BYTES);
-                    dst += OUT_TILE_BYTES;
-                }
-                const auto norm_w = TensorAccessor(norm_w_args, get_common_arg_val<uint32_t>(7), OUT_TILE_BYTES);
-                for (uint32_t vt = 0; vt < Vt; ++vt, dst += OUT_TILE_BYTES) {
-                    noc_async_read(norm_w.get_noc_addr(vt), dst, OUT_TILE_BYTES);
-                }
-            }
-        }
         CircularBuffer window_buf(cb_window);
         const uint32_t batch = num_units;
         const uint32_t cs_tiles = (GDN_HISTORY * batch + TILE_ROWS - 1) / TILE_ROWS;
         const uint32_t cs_stage = get_write_ptr(cb_hist_stage) + Kt * OUT_TILE_BYTES;
         const uint32_t win = get_write_ptr(cb_window);
         constexpr uint32_t slot_bytes = GDN_CONV_TAPS * OUT_TILE_BYTES;
-        if (small_sender) {
-            noc_async_read_barrier();
-            small_channel.optional_sender(noc)->send(small_base, small_base, small_bytes);
-            GDN_MARK("m_wr_small_sent");
-        }
+        constexpr uint32_t small_bytes = (GDN_SMALL_IN_GATE_PAGES + Vt) * OUT_TILE_BYTES;
+        bool small_pending = small_sender;
         cb_wait_front(cb_scratch, 1);  // staging landed
         for (uint32_t col = 0; col < Kt; ++col) {
             noc.async_write_zeros(window_buf, slot_bytes, {.offset_bytes = col * slot_bytes});
             noc.write_zeros_l1_barrier();
             gdn::copy_history_rows<OUT_TILE_BYTES, GDN_HISTORY>(
                 cs_stage + col * cs_tiles * OUT_TILE_BYTES, win + col * slot_bytes, gdn::history_split(batch), batch);
-            noc_async_read_barrier();
+            if (small_sender) {
+                noc_async_read_barrier_with_trid(QK_WINDOW_TRID);
+            } else {
+                noc_async_read_barrier();
+            }
             cb_reserve_back(cb_window_zeroed, 1);
             cb_push_back(cb_window_zeroed, 1);
+            // The small inputs as soon as a column hand-off finds them landed, at the latest after the last column.
+            if (small_pending &&
+                (col + 1 == Kt || ncrisc_noc_read_with_transaction_id_flushed(noc_index, SMALL_TRID))) {
+                noc_async_read_barrier_with_trid(SMALL_TRID);
+                noc_async_read_set_trid(0);
+#if GDN_SMALL_MCAST
+                small_channel.optional_sender(noc)->send(small_base, small_base, small_bytes);
+#endif
+                small_pending = false;
+                GDN_MARK("m_wr_small_sent");
+            }
         }
         cb_pop_front(cb_scratch, 1);
         // qn lands in cb_kq_rows tiles [Kt, 2Kt) of the key head's pair cores, kn in [0, Kt): their untouched base.

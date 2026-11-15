@@ -769,7 +769,7 @@ dt_bias and the b / a gate rows once per call on the q / k cores, multicast with
 B=1), or hold every core's S0 until all cores' small reads have landed (one cross-core gate); not tried here, both are
 scheme changes beyond this heading.
 
-### [ ] Refinement 20 — Decode: small inputs read once per call and multicast, off the hot DRAM bank
+### [x] Refinement 20 — Decode: small inputs read once per call and multicast, off the hot DRAM bank
 
 **Type**: perf
 
@@ -804,3 +804,18 @@ device time decides, but prefill's untraced host time must not rise).
 **Done when**: model_decode_b16 is below 68 us and model_decode_b8 below 37 us (median of 11 after
 launch 1), model_decode_b1 not worse than 13.0 us, or the timeline shows the small reads are no longer
 on the critical path and names what is; golden green, no regression on the guard set.
+
+**Outcome**: SMALL_INPUTS_MCAST (on): each key head's q core reads A_log, dt_bias, the b / a gate tile and norm_weight
+once (own transaction id, issued at kernel start) and multicasts them to its state cores, which copy them from L1; no
+state core reads a small tensor from DRAM any more. Device us (median of launches 2..12, knob off -> on, same session):
+model_decode_b1 13.05 -> 12.63, model_decode_b8 40.83 -> 39.07, model_decode_b16 73.31 -> 69.70, decode_b1_f32
+23.5 -> 20.5; guard set unchanged (prefill_t96 54.2, model_prefill_4096 910, batched_b2_t40 125-127). Bit-identical to
+the DRAM reads. Targets (68 / 37) not met; the timeline shows the small inputs land at 3.4-6.6 us on every state core
+(before: 15-30 us on the late rows) and names what binds now: at B=8 / B=16 the DRAM traffic (S0 lands at 6-19 / 5-42
+us, then every core's state write-back crowds into the last 12-20 us) with the early-S0 cores held by qn / kn, which the
+q / k cores send at 12-15 / 16-19 us (window gather ~1.2-1.5 us per column, L2 norm ~4.5 us, send ~1.5 us); at B=1
+the q / k chain (y at 5.3, inverse norms at 6.8 us) and the state cores' serial compute after it (6 us). Gates once
+per call on the q core: not built, because at B=1 the state cores finish their gates (4.4-4.8 us) before y lands
+(5.3 us), so it would not move the wall. Lever (2), a cross-core S0 gate, is moot: no small read is left on the state
+cores. Next: shorten the q / k chain (one conv window of the Kt columns instead of per-column row gathers, y_k^T from
+the k core) so the early-S0 cores start computing, and writing, while the late rows still read.

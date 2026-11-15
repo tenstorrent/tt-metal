@@ -488,9 +488,12 @@ void kernel_main() {
 
     // SMALL_MCAST: A_log, dt_bias, b, a and norm_weight land from the key head's q core (host SMALL_INPUTS_MCAST) and
     // are copied from there into the unit's slots, under INPUTS_TRID before the inputs flush.
+    // The channel's named args exist only in SMALL_MCAST programs.
     constexpr bool SMALL_MCAST = GDN_SMALL_MCAST != 0;
+#if GDN_SMALL_MCAST
     constexpr auto small_channel = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("qks_ct_offset"), get_named_compile_time_arg_val("qks_rt_offset")>();
+#endif
     const uint32_t small_base = SMALL_MCAST ? get_write_ptr(GDN_CB_SMALL_IN) : 0;
     bool small_landed = false;
     uint32_t kq_rows_landed = 0;  // PREP_SHARE_QK prep core: tile rows of qn / kn handed to compute
@@ -845,11 +848,13 @@ void kernel_main() {
                             }
                             if (split_flush) {
                                 if (SMALL_MCAST && (small_norm_w_dst | small_gate_w_dst | small_gate_in_dst) != 0) {
+#if GDN_SMALL_MCAST
                                     if (!small_landed) {
                                         small_channel.optional_receiver(noc)->receive();
                                         small_landed = true;
                                         GDN_MARK("m_rd_small");
                                     }
+#endif
                                     noc_async_read_set_trid(INPUTS_TRID);
                                     if (small_gate_w_dst != 0) {  // A_log, dt_bias
                                         noc_async_read(get_noc_addr(small_base), small_gate_w_dst, 2 * TILE_BYTES);
