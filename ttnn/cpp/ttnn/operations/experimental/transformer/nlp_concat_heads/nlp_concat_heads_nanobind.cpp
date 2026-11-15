@@ -20,6 +20,9 @@ void bind_nlp_concat_heads(nb::module_& mod) {
         R"doc(
             Shuffles [B, num_heads, S, head_dim] tensor into tensor with shape [B, 1, S, num_heads * head_dim].
 
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+
             Keyword Args:
                 memory_config: Memory Config of the output tensor, if `None` then it gets set to input_tensor.memory_config(). Defaults to `None`.
                 runtime_rows (bool): interleaved input and output only: one program serves every S, so a change in S is a program cache hit. Defaults to `False`.
