@@ -358,3 +358,27 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
 | store-and-forward, tray | 33.3% (34.1% arr_noflush) | 77.9% (78.3%) |
 | tree multicast, torus 640 experts | 28.7% | - |
 | store-and-forward, torus 128 experts | 34.4% | 78.2% (one cold launch) |
+- 640 experts (hold 213581, c10u14 after its reboot; T 31250, M 586, 8 x 4 torus XY, per-slice owners, arr_noflush;
+  the local lander's 400-slice list moved into the order table's last page, tables 24912 entries a ring):
+  ws_sf_d1 hang 4 at warm-up launch 4: device 19's group-2 column-0 writers (4,0) and (4,7) in noc_async_writes_flushed
+  after an x multicast, 3 multicast writes issued but not sent (60 acks missing) - hang 2's signature again. The
+  landers' NoC atomics into the group cores (warr increments) are suspects (on this architecture an atomic or inline
+  write to a core whose memory ports are back-pressured can hang; inline writes are emulated, atomics are not), so
+  the landers now write the slot's absolute arrival count instead (9c93c1bafdc). Reset exit 0.
+  ws_sf_d2 (no lander atomics): 640 experts 20 + 5 PASS, util tile median 34.6% (33.4-35.9), PCC 0.99994 on all 32
+  chips; multicast tree on the same Galaxy and shape: 28.5%. Weights into a chip ~70 GB/s; each of the 8 rings
+  8.6-8.7 GB/s. Chip 0 ring 0+ (50 M cycles): NCRISC arrival wait 38%, send 40% (847 cycles a packet), downstream
+  credit 7.5%, relays 16.9 K for 23.4 K packets; BRISC arrival wait 47%, land 29% (627 cycles a packet), group slot
+  wait 10%. Group cores: own weight wait 9% but h wait 47% - a group starts an expert only when all 20 slices are in,
+  so the spread of arrival times across rings shows up as h waits.
+  ws_sf_d3 (forwarder variants at 640 experts): CRB 6 hang 5 at warm-up launch 11 - the same NoC0 wedge (device 23,
+  group 3's column-0 leaders (7,1) and (7,4) in noc_async_writes_flushed after an h / x multicast, 3 multicast writes
+  issued but not sent): removing the lander atomics did not stop it. Reset exit 0. The next step (S 16) lost the
+  chips at warm-up launch 11: completion queue error, then host MMIO reads timing out (4 B load 220 ms against a 2 ms
+  budget), and the node rebooted (hold 213581 gone at ~20:52). The earlier unexplained reboot (~19:58, hold 213479)
+  had the same sequence during ws_sf_c4 (M 2048, launch 20, MMIO per-op timeout on device 5). Likely chain: the
+  intermittent NoC0 wedge in a group's multicast stalls the chip's NoC, host MMIO through it times out, the host
+  goes down. Hang rate at 640 experts: 3 of 4 runs (launches 4, 11, 11), 1 clean 25-launch run.
+- Table spacing (async replay of one torus ring, 128 experts, hop latency L in packet times): tables built with
+  D 3 / 4 / 5 / 6 / 8 run at 76.8 / 78.4 / 80.8 / 80.7 / 78.0% for L 2 and 63.4 / 73.1 / 75.5 / 73.7 / 68.9% for L 3:
+  sparser tables (D 5) absorb hop latency better than the synchronous model suggests.
