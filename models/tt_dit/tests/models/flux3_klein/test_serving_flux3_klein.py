@@ -4,12 +4,12 @@
 
 """FLUX 3 Klein serving: after ``warmup`` a request compiles nothing, at every warmed size, for prompts whose attended
 text lengths differ from warmup's and from each other (160 rows up to the full 4096-row sequence), without and with a
-reference.
+reference of every served reference size.
 
 The attended text length reaches ring SDPA as a device tensor of the request's plan, and the text encoder runs one of
 the ENCODER_ROWS row counts that warmup compiled for every text bucket.
 
-Env: FLUX3_KLEIN_SERVE_SIZES (default 1024, comma-separated), FLUX3_KLEIN_SERVE_OUT (image dir).
+Env: FLUX3_KLEIN_SERVE_SIZES (default 1024, comma-separated sides or WxH), FLUX3_KLEIN_SERVE_OUT (image dir).
 """
 
 import os
@@ -23,7 +23,7 @@ from PIL import Image
 import ttnn
 
 from ....pipelines.flux3_klein.packing import MAX_TEXT_LENGTH
-from ....pipelines.flux3_klein.pipeline_flux3_klein import Flux3KleinPipeline, Flux3KleinRequest
+from ....pipelines.flux3_klein.pipeline_flux3_klein import REFERENCE_SIZES, Flux3KleinPipeline, Flux3KleinRequest
 from ....utils.test import ring_params_8k
 
 FILLER = (
@@ -55,7 +55,10 @@ def _reference(width: int, height: int) -> Image.Image:
 @pytest.mark.parametrize("device_params", [{**ring_params_8k, "l1_small_size": 65536}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_serving(*, mesh_device: ttnn.MeshDevice) -> None:
-    sizes = tuple(int(s) for s in os.environ.get("FLUX3_KLEIN_SERVE_SIZES", "1024").split(","))
+    sizes = tuple(
+        tuple(map(int, s.split("x"))) if "x" in s else (int(s), int(s))
+        for s in os.environ.get("FLUX3_KLEIN_SERVE_SIZES", "1024").split(",")
+    )
     out = Path(os.environ.get("FLUX3_KLEIN_SERVE_OUT", "flux3_klein_serving"))
     out.mkdir(parents=True, exist_ok=True)
 
@@ -73,19 +76,22 @@ def test_serving(*, mesh_device: ttnn.MeshDevice) -> None:
 
     pipeline.warmup(sizes=sizes)
     failures = []
-    for ref_name, images in (("none", ()), ("1024", (_reference(1024, 1024),))):
-        for size in sizes:
+    for width, height in sizes:
+        for side in (0, *REFERENCE_SIZES[(width, height)]):
+            images = (_reference(side, side),) if side else ()
             for name, prompt in prompts.items():
                 ttnn.synchronize_device(mesh_device)
                 programs = mesh_device.num_program_cache_entries()
                 result = pipeline.generate(
-                    Flux3KleinRequest(prompt, model="distilled", width=size, height=size, seed=0, images=images)
+                    Flux3KleinRequest(
+                        prompt, width=width, height=height, seed=0, images=images, reference_size=side or None
+                    )
                 )
                 ttnn.synchronize_device(mesh_device)
                 new_programs = mesh_device.num_program_cache_entries() - programs
-                tag = f"{size} ref {ref_name} {name} prompt"
+                tag = f"{width}x{height} ref {side or 'none'} {name} prompt"
                 logger.info(f"SERVE {tag}: new programs {new_programs}, {result.timings}")
-                result.image.save(out / f"{size}_ref{ref_name}_{name}.png")
+                result.image.save(out / f"{width}x{height}_ref{side or 'none'}_{name}.png")
                 if new_programs:
                     failures.append(f"{tag}: {new_programs} new programs")
                 if float(np.asarray(result.image, dtype=np.float32).std()) < 10:

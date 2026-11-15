@@ -49,12 +49,13 @@ from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import checkpoint_id, resolve_weights_dir
 
 # The first release serves fixed shapes (width, height), all warmed up at startup, and at most one reference image,
-# center-cropped and resized to 1 MP as in BFL's multi-reference sizing.
+# center-cropped and resized to 1 MP as in BFL's multi-reference sizing, or to 4 MP at the 4096 shapes.
 SIZES = (1024, 2048, 4096)
 SHAPES = (*((size, size) for size in SIZES), (4096, 2304), (2304, 4096))
 DEFAULT_SIZE = 2048
 MAX_REFERENCES = 1
 REFERENCE_SIZE = 1024
+REFERENCE_SIZES = {shape: (REFERENCE_SIZE, 2048) if 4096 in shape else (REFERENCE_SIZE,) for shape in SHAPES}
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class Flux3KleinRequest:
     steps: int | None = None
     guidance: float | None = None
     images: tuple = ()
+    reference_size: int | None = None  # the reference's square side, one of REFERENCE_SIZES; None: REFERENCE_SIZE
     cache: DBCacheConfig | None = None
     return_final_tokens: bool = False
 
@@ -79,6 +81,11 @@ class Flux3KleinResult:
     timings: dict[str, float]
     cached_steps: int = 0
     final_tokens: torch.Tensor | None = None
+
+
+def layout_buckets(buckets: tuple[int, ...], width: int, height: int, references: int) -> tuple[int, ...]:
+    """The text buckets a request of this layout picks from: TEXT_BUCKETS narrowed per layout."""
+    return TEXT_BUCKETS_BY_LAYOUT.get(((width, height), references), buckets) if buckets is TEXT_BUCKETS else buckets
 
 
 def make_noise(seed: int, h: int, w: int) -> torch.Tensor:
@@ -228,9 +235,12 @@ class Flux3KleinPipeline:
     def create(cls, mesh_device: ttnn.MeshDevice, *, models: tuple[str, ...] = ("distilled",), **kwargs):
         return cls(mesh_device, snapshots={model: resolve_weights_dir(model) for model in models}, **kwargs)
 
-    def warmup(self, sizes: tuple[int | tuple[int, int], ...] = SHAPES) -> None:
+    def warmup(
+        self, sizes: tuple[int | tuple[int, int], ...] = SHAPES, reference_sizes: tuple[int, ...] | None = None
+    ) -> None:
         """Compile every program of ``sizes`` (square sides or (width, height); every served shape by default): each
-        size with and without a reference, at every text bucket (a long prompt reaches the larger buckets)."""
+        size without a reference and with one of each served reference size (or those of ``reference_sizes``), at
+        every text bucket that layout picks from (a long prompt reaches the larger buckets)."""
         buckets = set(self._text_buckets or (self._text_length,))
         if self._text_buckets is TEXT_BUCKETS:
             buckets.update(b for layout in TEXT_BUCKETS_BY_LAYOUT.values() for b in layout)
@@ -238,12 +248,12 @@ class Flux3KleinPipeline:
             self._prompt_encoder.warmup(bucket)
         saved = self._text_buckets
         try:
-            for bucket in self._text_buckets or (None,):
-                self._text_buckets = (bucket,) if bucket else None
-                for model in self._transformers:
-                    for width, height in map(output_shape, sizes):
-                        for references in range(MAX_REFERENCES + 1):
-                            image = Image.new("RGB", (REFERENCE_SIZE, REFERENCE_SIZE))
+            for model in self._transformers:
+                for width, height in map(output_shape, sizes):
+                    served = REFERENCE_SIZES.get((width, height), ())
+                    for side in (0, *(s for s in served if reference_sizes is None or s in reference_sizes)):
+                        for bucket in layout_buckets(saved, width, height, int(side > 0)) if saved else (None,):
+                            self._text_buckets = (bucket,) if bucket else None
                             self.generate(
                                 Flux3KleinRequest(
                                     "warmup",
@@ -251,7 +261,8 @@ class Flux3KleinPipeline:
                                     width=width,
                                     height=height,
                                     seed=0,
-                                    images=(image,) * references,
+                                    images=(Image.new("RGB", (side, side)),) if side else (),
+                                    reference_size=side or None,
                                 )
                             )
         finally:
@@ -265,6 +276,11 @@ class Flux3KleinPipeline:
             raise ValueError(f"{width}x{height} is not one of the served shapes {SHAPES} (width, height)")
         if len(request.images) > MAX_REFERENCES:
             raise ValueError(f"at most {MAX_REFERENCES} reference image")
+        reference_size = request.reference_size or REFERENCE_SIZE
+        if request.images and reference_size not in REFERENCE_SIZES[(width, height)]:
+            raise ValueError(
+                f"{width}x{height} takes references of {REFERENCE_SIZES[(width, height)]} px, not {reference_size}"
+            )
         steps = request.steps or STEPS[request.model]
         guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
         if request.model == "distilled" and guidance not in (None, 1.0):
@@ -275,7 +291,7 @@ class Flux3KleinPipeline:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
-            reference = prepare_reference(reference, REFERENCE_SIZE)
+            reference = prepare_reference(reference, reference_size)
         timings = {}
 
         prompt = request.prompt
@@ -288,9 +304,7 @@ class Flux3KleinPipeline:
         t0 = time.time()
         text_rows = self._text_length
         if self._text_buckets:
-            buckets = self._text_buckets
-            if buckets is TEXT_BUCKETS:
-                buckets = TEXT_BUCKETS_BY_LAYOUT.get(((width, height), len(request.images)), buckets)
+            buckets = layout_buckets(self._text_buckets, width, height, len(request.images))
             text_rows = text_bucket(self._prompt_encoder.tokenize(prompt, self._text_length)[2], buckets)
         text = self._prompt_encoder.encode(prompt, text_rows)
         timings["encode"] = time.time() - t0
