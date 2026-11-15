@@ -43,6 +43,7 @@ from ._state_dict import (
     LiveTensor,
     check_label_unchanged,
     collect_model,
+    check_threads,
     collect_optimizer,
     fsdp_gate,
     world_record,
@@ -62,7 +63,7 @@ class _ByteBudget:
     """Blocks the producer while more than ``limit`` bytes of host buffers are waiting to be written."""
 
     def __init__(self, limit: int) -> None:
-        self.limit = max(int(limit), 1)
+        self.limit = int(limit)
         self.used = 0
         self.cv = threading.Condition()
 
@@ -121,11 +122,14 @@ def save(
     ``reshard_fsdp`` (default) they are resharded first.
     """
     if model is None and optimizer is None:
-        raise CheckpointError("save needs a model and/or an optimizer")
+        raise TypeError("save needs a model and/or an optimizer")
     if optimizer is not None and model is None:
-        raise CheckpointError("optimizer state is keyed by the model's parameters; pass model= as well")
+        raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
     if header is not None and not isinstance(header, dict):
-        raise CheckpointError(f"header must be a dict, not {type(header).__name__}")
+        raise TypeError(f"header must be a dict, not {type(header).__name__}")
+    check_threads(threads)
+    if int(max_inflight_bytes) <= 0:
+        raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
     header = check_json("header", header or {})  # before any device read or file write
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
@@ -169,14 +173,14 @@ def save(
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 data_start[fplan.index] = create_file(path, fplan.header, fplan.data_bytes)
                 fds[fplan.index] = os.open(path, os.O_RDWR)
-            workers = len(plan.files) if threads is None else threads
+            workers = max(1, len(plan.files)) if threads is None else threads
             failed: list[BaseException] = []  # the first failed write stops the readback of the keys after it
 
             def record_failure(future) -> None:
                 if not future.cancelled() and future.exception() is not None:
                     failed.append(future.exception())
 
-            with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = []
                 order = sorted(plan.items, key=lambda k: (-plan.infos[k].local_nbytes * len(plan.items[k]), k))
                 for key in order:

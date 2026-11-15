@@ -33,6 +33,7 @@ from ._state_dict import (
     LiveTensor,
     check_label_unchanged,
     check_param_groups,
+    check_threads,
     check_undeclared_fusion,
     collect_model,
     collect_optimizer,
@@ -165,9 +166,10 @@ def load(
     threads (default 32; a read is one contiguous byte range of one file). Returns the header passed to ``save``.
     """
     if model is None and optimizer is None:
-        raise CheckpointError("load needs a model and/or an optimizer")
+        raise TypeError("load needs a model and/or an optimizer")
     if optimizer is not None and model is None:
-        raise CheckpointError("optimizer state is keyed by the model's parameters; pass model= as well")
+        raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
+    check_threads(threads)
     t0 = time.perf_counter()
     ckpt_dir = os.path.abspath(ckpt_dir)
     if not is_complete(ckpt_dir):
@@ -218,7 +220,7 @@ def load(
         workers = 32 if threads is None else threads
         read_s = place_s = 0.0
         reads = 0
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
 
             def submit(kplan: KeyPlan):
                 """Allocate a key's destination shards and submit its reads; returns (arrays, futures)."""

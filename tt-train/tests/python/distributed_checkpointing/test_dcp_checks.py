@@ -5,9 +5,12 @@
 """The guards save and load run before touching a device or a file: JSON state, host shard sizes, optimizer param
 groups, the fused-name lint and the module walk. Device-free."""
 
+import os
 import warnings
 
 import numpy as np
+
+import ttml.distributed_checkpointing as dcp
 
 from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError, MissingKeyError
 from ttml.distributed_checkpointing._index import check_json
@@ -203,3 +206,20 @@ def test_an_unknown_layout_declaration_is_refused(expect_error):
     # A misspelt key used to leave the weight undeclared: an identity layout that scrambles a cross-TP load.
     with expect_error(LayoutError, r"Root/w: checkpoint_layout declares \['fused_segments'\]"):
         _python_parameters(_Declaring({"fused_segments": (2, (64, 32, 32))}), {"Root/w": 0})
+
+
+def test_argument_errors_are_type_and_value_errors_raised_before_anything_is_touched(tmp_path, expect_error):
+    path = str(tmp_path / "step_0000001")
+    with expect_error(TypeError, "save needs a model and/or an optimizer"):
+        dcp.save(path)
+    with expect_error(TypeError, "pass model= as well"):
+        dcp.load(path, optimizer=object())
+    with expect_error(TypeError, "header must be a dict, not list"):
+        dcp.save(path, model=object(), header=[1])
+    with expect_error(ValueError, "threads must be at least 1, got 0"):
+        dcp.save(path, model=object(), threads=0)
+    with expect_error(ValueError, "max_inflight_bytes must be positive, got 0"):
+        dcp.save(path, model=object(), max_inflight_bytes=0)
+    with expect_error(ValueError, "threads must be at least 1, got -1"):
+        dcp.load(path, model=object(), threads=-1)
+    assert os.listdir(tmp_path) == []

@@ -387,6 +387,11 @@ def fsdp_gate(model, reshard: bool) -> list[Any]:
     return states
 
 
+def check_threads(threads: int | None) -> None:
+    if threads is not None and int(threads) < 1:
+        raise ValueError(f"threads must be at least 1, got {threads}")
+
+
 def mesh_device():
     return ttml.autograd.AutoContext.get_instance().get_device()
 
