@@ -78,6 +78,7 @@ std::vector<Tensor> fused_hyperconnection_single_user(
     const std::optional<Tensor>& mix_sublayer_out = std::nullopt,
     const std::optional<Tensor>& collapsed_norm_weight = std::nullopt,
     float collapsed_norm_epsilon = 0.0F,
-    bool collapsed_norm_sharded = false);
+    bool collapsed_norm_sharded = false,
+    const std::optional<CoreRangeSet>& collapsed_replica_grid = std::nullopt);
 
 }  // namespace ttnn::prim

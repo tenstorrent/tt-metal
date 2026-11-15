@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstdlib>
 #include <initializer_list>
+#include <optional>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -64,6 +65,9 @@ constexpr char kFsWriterKernelPath[] =
 constexpr char kFsNormWriterKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
     "writer_hc_collapse_norm.cpp";
+constexpr char kFsReplicaWriterKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
+    "writer_hc_collapse_replica.cpp";
 
 CoreRangeSet single_core_set(const CoreCoord& core) { return CoreRangeSet({CoreRange(core, core)}); }
 
@@ -119,9 +123,33 @@ FusedSingleUserSharedVariables build_single_user_hc(
     const Buffer* mix_post_buffer = use_mix ? tensor_args.mix_post->buffer() : nullptr;
     const Buffer* mix_comb_buffer = use_mix ? tensor_args.mix_comb->buffer() : nullptr;
     const Buffer* mix_sub_buffer = use_mix ? tensor_args.mix_sublayer_out->buffer() : nullptr;
-    Buffer* mixed_buffer = use_mix ? tensor_return_value.back().buffer() : nullptr;
+    Buffer* mixed_buffer = use_mix ? tensor_return_value[kMixedOutputIndex].buffer() : nullptr;
+    auto* device = hidden_streams.device();
     const bool fuse_norm = tensor_args.collapsed_norm_weight.has_value();
     const Buffer* norm_gamma_buffer = fuse_norm ? tensor_args.collapsed_norm_weight->buffer() : nullptr;
+    // collapsed's replica (returned last): each collapse core multicasts its slice of the row to the rectangle.
+    const bool has_replica = operation_attributes.collapsed_replica_grid.has_value();
+    std::vector<uint32_t> replica_mcast_args;  // has_replica, NoC start x, y, end x, y, cores
+    std::optional<CoreRange> replica_rect;
+    if (has_replica) {
+        replica_rect = *operation_attributes.collapsed_replica_grid->ranges().begin();
+        const CoreCoord start = device->worker_core_from_logical_core(replica_rect->start_coord);
+        const CoreCoord end = device->worker_core_from_logical_core(replica_rect->end_coord);
+        replica_mcast_args = {
+            1u,
+            static_cast<uint32_t>(start.x),
+            static_cast<uint32_t>(start.y),
+            static_cast<uint32_t>(end.x),
+            static_cast<uint32_t>(end.y),
+            static_cast<uint32_t>(replica_rect->size())};
+    } else {
+        replica_mcast_args = {0u, 0u, 0u, 0u, 0u, 0u};
+    }
+    // The hub (collapse core 0) gathers the slices and multicasts the row from inside the rectangle.
+    const CoreCoord replica_hub{0, 0};
+    TT_FATAL(!has_replica || replica_rect->contains(replica_hub), "collapsed_replica_grid must contain core (0, 0)");
+    const CoreCoord replica_hub_noc = device->worker_core_from_logical_core(replica_hub);
+    const uint32_t replica_addr = has_replica ? tensor_return_value.back().buffer()->address() : 0u;
 
     const CoreRangeSet collapse_cores = contiguous_cores(0, kCollapseCoreCount);
     const CoreCoord post_core{8, 0};
@@ -148,7 +176,6 @@ FusedSingleUserSharedVariables build_single_user_hc(
     const uint32_t hidden_pages = hidden_row_major ? num_streams * row_chunks : d_tiles_per_core;
     const uint32_t collapse_tiles = hidden_row_major ? row_chunks : d_tiles_per_core;
 
-    auto* device = hidden_streams.device();
     const auto fused_w_noc = device->worker_core_from_logical_core(CoreCoord{0, 0});
 
     auto make_cb = [&](uint32_t index, const CoreRangeSet& cores) {
@@ -288,6 +315,7 @@ FusedSingleUserSharedVariables build_single_user_hc(
         }
         norm_sem = CreateSemaphore(program, collapse_cores, 0);
     }
+    const uint32_t replica_sem = has_replica ? CreateSemaphore(program, collapse_cores, 0) : 0u;
 
     const uint32_t pre_scale_bits = std::bit_cast<uint32_t>(operation_attributes.pre_scale);
     const uint32_t post_scale_bits = std::bit_cast<uint32_t>(operation_attributes.post_scale);
@@ -392,8 +420,12 @@ FusedSingleUserSharedVariables build_single_user_hc(
     shared.collapse_cores = corerange_to_cores(collapse_cores, collapse_cores.num_cores(), true);
     shared.post_core = post_core;
     shared.comb_core = comb_core;
-    shared.has_collapse_writer = (hidden_row_major && !collapsed_row_major) || fuse_norm;
+    shared.has_collapse_writer = (hidden_row_major && !collapsed_row_major) || fuse_norm || has_replica;
+    TT_FATAL(
+        !has_replica || fuse_norm || (hidden_row_major && collapsed_row_major),
+        "collapsed_replica_grid needs a ROW_MAJOR collapsed row");
     shared.fuse_norm = fuse_norm;
+    shared.has_replica = has_replica;
     shared.hidden_cb = hidden_cb;
     shared.collapsed_output_cb = collapsed_output_cb;
     shared.has_mix = use_mix;
@@ -437,9 +469,18 @@ FusedSingleUserSharedVariables build_single_user_hc(
             norm_sem,
             collapsed_out.is_sharded() ? 1u : 0u,
         };
+        args.insert(args.end(), replica_mcast_args.begin(), replica_mcast_args.end());
+        args.push_back(replica_sem);
         TensorAccessorArgs(collapsed_out.is_sharded() ? norm_gamma_buffer : collapsed_out.buffer()).append_to(args);
         shared.collapse_writer_kernel_id =
             CreateKernel(program, kFsNormWriterKernelPath, collapse_cores, WriterDataMovementConfig(args));
+    } else if (has_replica) {
+        std::vector<uint32_t> args = {kFsCbCollapsedRow, row_chunks, norm_row_bytes};
+        args.insert(args.end(), replica_mcast_args.begin() + 1, replica_mcast_args.end());
+        args.push_back(kCollapseCoreCount);
+        args.push_back(replica_sem);
+        shared.collapse_writer_kernel_id =
+            CreateKernel(program, kFsReplicaWriterKernelPath, collapse_cores, WriterDataMovementConfig(args));
     } else if (shared.has_collapse_writer) {
         shared.collapse_writer_kernel_id = CreateKernel(
             program,
@@ -491,7 +532,22 @@ FusedSingleUserSharedVariables build_single_user_hc(
         if (fuse_norm) {
             std::vector<uint32_t> writer_args = {collapsed_out.buffer()->address(), c};
             writer_args.insert(writer_args.end(), collapse_nocs.begin(), collapse_nocs.end());
+            shared.replica_arg_index = writer_args.size();
+            writer_args.push_back(replica_addr);
+            writer_args.push_back(static_cast<uint32_t>(replica_hub_noc.x));
+            writer_args.push_back(static_cast<uint32_t>(replica_hub_noc.y));
             SetRuntimeArgs(program, shared.collapse_writer_kernel_id, core, writer_args);
+        } else if (has_replica) {
+            shared.replica_arg_index = 2;
+            SetRuntimeArgs(
+                program,
+                shared.collapse_writer_kernel_id,
+                core,
+                {collapsed_out.buffer()->address(),
+                 c,
+                 replica_addr,
+                 static_cast<uint32_t>(replica_hub_noc.x),
+                 static_cast<uint32_t>(replica_hub_noc.y)});
         } else if (shared.has_collapse_writer) {
             SetRuntimeArgs(program, shared.collapse_writer_kernel_id, core, {collapsed_out.buffer()->address(), 0u});
         }
@@ -526,7 +582,8 @@ void override_single_user_hc(
     }
     const uint32_t norm_gamma_addr = shared.fuse_norm ? tensor_args.collapsed_norm_weight->buffer()->address() : 0u;
     if (shared.has_mix) {
-        UpdateDynamicCircularBufferAddress(program, shared.mixed_streams_cb, *tensor_return_value.back().buffer());
+        UpdateDynamicCircularBufferAddress(
+            program, shared.mixed_streams_cb, *tensor_return_value[kMixedOutputIndex].buffer());
     }
 
     auto set_reader_args = [&](auto& args) {
@@ -552,6 +609,10 @@ void override_single_user_hc(
         auto& collapse_writer_args = GetRuntimeArgs(program, shared.collapse_writer_kernel_id);
         for (const auto& core : shared.collapse_cores) {
             collapse_writer_args[core.x][core.y][0] = collapsed_addr;
+            if (shared.has_replica) {
+                collapse_writer_args[core.x][core.y][shared.replica_arg_index] =
+                    tensor_return_value.back().buffer()->address();
+            }
         }
     }
     set_reader_args(GetRuntimeArgs(program, shared.post_reader_kernel_id)[shared.post_core.x][shared.post_core.y]);

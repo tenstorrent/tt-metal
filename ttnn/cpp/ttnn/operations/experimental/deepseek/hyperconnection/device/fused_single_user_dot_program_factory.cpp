@@ -258,7 +258,7 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
     // A collapse core's shard is its k / 8 K-elements, so dot core i's slice is at byte offset (i * kc) % (k / 8)
     // of collapse core (i * kc) / (k / 8) -- in the mixed streams, which share the streams' shards, given the mix.
     const uint32_t a_base =
-        use_mix ? tensor_return_value.back().buffer()->address() : hidden_streams.buffer()->address();
+        use_mix ? tensor_return_value[kMixedOutputIndex].buffer()->address() : hidden_streams.buffer()->address();
     std::vector<uint32_t> reader_dests;
     for (const auto& core : fused_w_readers) {
         const CoreCoord phys = device->worker_core_from_logical_core(core);
@@ -338,7 +338,7 @@ void FusedSingleUserDotProgramFactory::override_runtime_arguments(
     if (shared.b_in_l1) {
         UpdateDynamicCircularBufferAddress(program, shared.in1_cb, *w.buffer());
     }
-    const uint32_t a_base = shared.hc.has_mix ? tensor_return_value.back().buffer()->address()
+    const uint32_t a_base = shared.hc.has_mix ? tensor_return_value[kMixedOutputIndex].buffer()->address()
                                               : tensor_args.hidden_streams.buffer()->address();
     const uint32_t w_addr = w.buffer()->address();
     auto& reader_args = GetRuntimeArgs(program, shared.dot_reader_kernel_id);
