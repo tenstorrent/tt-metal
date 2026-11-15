@@ -21,8 +21,11 @@ void kernel_main() {
     constexpr uint32_t BLKS = get_compile_time_arg_val(9);
     constexpr uint32_t NBLK = get_compile_time_arg_val(10);
     constexpr uint32_t SPLIT = get_compile_time_arg_val(11);
+    constexpr uint32_t ROWMODE =
+        get_compile_time_arg_val(12);  // 1: read the whole score row (N bf16) into L1 once and index it locally (no
+                                       // per-id 64 B random DRAM reads: 59 -> ~10 us at S=1, 1M); 0: per-id reads
     constexpr uint32_t KP = K / SPLIT;
-    constexpr auto sc_args = TensorAccessorArgs<12>();
+    constexpr auto sc_args = TensorAccessorArgs<13>();
     constexpr auto ids_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
     constexpr auto col_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
     constexpr auto val_args = TensorAccessorArgs<col_args.next_compile_time_args_offset()>();
@@ -64,17 +67,26 @@ void kernel_main() {
         const uint32_t row = t / SPLIT;
         const uint32_t part = t % SPLIT;
         noc.async_read(ids_acc, cbi, KP * 4, {.page_id = row, .offset_bytes = part * KP * 4}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        for (uint32_t i = 0; i < KP; ++i) {
-            const uint32_t id = ids[i];
-            const uint32_t off = (id < N) ? ((id * 2u) & ~63u) : 0u;
-            noc.async_read(sc_acc, cbs, 64, {.page_id = row, .offset_bytes = off}, {.offset_bytes = i * 64});
+        if constexpr (ROWMODE) {
+            noc.async_read(sc_acc, cbs, N * 2, {.page_id = row, .offset_bytes = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+        } else {
+            noc.async_read_barrier();
+            for (uint32_t i = 0; i < KP; ++i) {
+                const uint32_t id = ids[i];
+                const uint32_t off = (id < N) ? ((id * 2u) & ~63u) : 0u;
+                noc.async_read(sc_acc, cbs, 64, {.page_id = row, .offset_bytes = off}, {.offset_bytes = i * 64});
+            }
+            noc.async_read_barrier();
         }
-        noc.async_read_barrier();
         for (uint32_t i = 0; i < KP; ++i) {
             const uint32_t id = ids[i];
             if (id < N) {
-                vals[i] = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + i * 64 + ((id * 2u) & 63u));
+                if constexpr (ROWMODE) {
+                    vals[i] = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + id * 2u);
+                } else {
+                    vals[i] = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + i * 64 + ((id * 2u) & 63u));
+                }
                 uint32_t slot = id;
                 if constexpr (BLKS > 0) {
                     slot = (row % NBLK) * BLKS + id;

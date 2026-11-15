@@ -1,0 +1,22 @@
+{
+  "architectures": ["HYV4ForCausalLM"],
+  "model_type": "llama",
+  "_comment": "Serving shim candidate for vLLM (serving-probe 2026-11-13). Only needed if vLLM's own hy_v4 config path (vllm.transformers_utils.configs.hy_v4) is not used: AutoConfig in the image (transformers 5.12.1) does not know hy_v4. Llama-shaped, dims from /mnt/tt-data/Hy4-Preview/config.json. num_key_value_heads=1/head_dim=576 (kv_lora_rank 512 + qk_rope_head_dim 64) is accounting only (U): the TT model owns its KV pool. Tokenizer and chat template come from the checkpoint (--tokenizer). No quantization_config.",
+  "vocab_size": 120832,
+  "hidden_size": 6144,
+  "intermediate_size": 18432,
+  "num_hidden_layers": 78,
+  "num_attention_heads": 64,
+  "num_key_value_heads": 1,
+  "head_dim": 576,
+  "hidden_act": "silu",
+  "max_position_embeddings": 1048576,
+  "rms_norm_eps": 1e-05,
+  "rope_theta": 10000000,
+  "tie_word_embeddings": false,
+  "attention_bias": false,
+  "bos_token_id": 120000,
+  "eos_token_id": 120025,
+  "pad_token_id": 120002,
+  "torch_dtype": "bfloat16"
+}

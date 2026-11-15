@@ -196,6 +196,10 @@ class Hy4ChainLayer:
                     sd["post_attention_layernorm.weight"].float(),
                 )
         if (
+            os.environ.get("HY4_POOL", "0") == "1" and os.environ.get("HY4_POOL_PF", "0") == "1"
+        ):  # pool-prefill: DIRECT-TO-POOL chunked prefill (no replicated cache, no hand-off); needs the pool (Hy4PoolDecoder) before the first prefill
+            from models.demos.blackhole.hy4_preview.tt.hy4_pf_attention import Hy4AttentionPF as _Attn
+        elif (
             os.environ.get("HY4_POOL", "0") == "1"
         ):  # integrated long-context decode: Hy4AttentionPool (superset of Hy4AttentionOpt / Hy4Attention; prefill unchanged)
             from models.demos.blackhole.hy4_preview.tt.hy4_pool_decode import Hy4AttentionPool as _Attn
@@ -224,6 +228,19 @@ class Hy4ChainLayer:
             self.dense = D.make_dense(
                 md, t("mlp.gate_proj.weight"), t("mlp.up_proj.weight"), t("mlp.down_proj.weight"), decode=False
             )
+        elif os.environ.get("HY4_MTP_HOSTMOE", "0") == "1" and self.mtp:
+            # mtp-device 1-slot tests: the MoE decode block needs the 4-row mesh (cluster_axis dim 4); on a 1x8 slot only the shared expert is built, the routed part runs on the host oracle
+            from models.demos.blackhole.hy4_preview.tt.hy4_moe_weights import load_moe_layer
+
+            W = load_moe_layer(L, W=ch.W, prefix="mtp.0.", load_experts=False)
+            sw = [W[k][256] for k in ("shared_w0", "shared_w1", "shared_w2")]
+            self.shared = D.make_shared(md, *sw, limit=D.NO_CLAMP, decode=False)
+            self.shared_dec = None
+            self.router_w = (W["gate_weight"], W["gate_bias"])
+            self.blk = None
+            del W
+        elif os.environ.get("HY4_NO_MOE", "0") == "1":
+            pass  # 1-slot (1x8) wiring tests only: the MoE block needs the 4x8 mesh; _mlp_prefill returns a scaled copy of its input (identical stand-in on every path under test)
         else:
             from models.demos.blackhole.hy4_preview.tt.hy4_moe import Hy4MoEBlock
             from models.demos.blackhole.hy4_preview.tt.hy4_moe_weights import load_moe_layer
@@ -330,6 +347,8 @@ class Hy4ChainLayer:
         ch = self.ch
         if self.spec.mlp == DENSE:
             return D.allreduce_cols(self.dense.forward(h))
+        if os.environ.get("HY4_NO_MOE", "0") == "1":
+            return ttnn.multiply(h, 0.05)
         from models.demos.blackhole.hy4_preview.tt.hy4_prefill_moe import COLS, moe_cols
 
         assert (
@@ -482,7 +501,13 @@ class Hy4Chain:
     def embed_ids(self, ids):
         """ids torch [4, n] int (one prompt per mesh row) -> x4 [1,4,n,D] fp32."""
         n = ids.shape[1]
-        t = upload(self.md, ids.reshape(4, 1, n).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
+        t = upload(
+            self.md,
+            ids.reshape(ids.shape[0], 1, n).to(torch.int32),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            row_dim=0 if int(self.md.shape[0]) > 1 else None,
+        )
         t = ttnn.reshape(t, [1, n])
         e = ttnn.embedding(t, self.embed, layout=ttnn.TILE_LAYOUT)  # [1,n,768]
         e = ttnn.reshape(e, [1, 1, n, HID // 8])
@@ -511,7 +536,13 @@ class Hy4Chain:
             hn = ttnn.rms_norm(
                 hb, weight=self.final_norm, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=self.ckc_norm
             )
-        logits = ttnn.linear(hn, self.lm_head, compute_kernel_config=self.ckc_head)
+        # HY4_HEAD_FP32=1 (device loop, D12-1): fp32 logits out of the lm_head (bf16 weights, fp32 accumulation), as the checkpoint's enable_lm_head_fp32
+        logits = ttnn.linear(
+            hn,
+            self.lm_head,
+            compute_kernel_config=self.ckc_head,
+            dtype=ttnn.float32 if os.environ.get("HY4_HEAD_FP32", "0") == "1" else None,
+        )
         return hn, logits
 
     # --- prefill

@@ -66,7 +66,7 @@ def row_write(src, ids, dst, n=1, page=ROWB):
     return ttnn.generic_op([src, ids, dst], prog)
 
 
-def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32):
+def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32, kernel="slice_copy.cpp"):
     """natural-order ``src`` pages -> this column's slices in ``dst`` (see slice_copy.cpp). units = 64 (rows) or 8 (key tiles); page = bytes per page (704 rows, 1088 bfp8 tiles, 2048 bf16 tiles).
     npages = number of 512-token pool pages to copy, written at pool page ``dst_page0``."""
     md = dst.device()
@@ -79,7 +79,7 @@ def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32):
         rt[x][y] = [i]
     ct = [units, page, nc, 0] + _acc(src) + _acc(dst) + _acc(colid)
     k = ttnn.KernelDescriptor(
-        kernel_source=f"{KDIR}/slice_copy.cpp",
+        kernel_source=f"{KDIR}/{kernel}",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cs,
         compile_time_args=ct,
@@ -88,12 +88,12 @@ def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32):
         config=ttnn.ReaderConfigDescriptor(),
     )
     prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cb(cs, units * page + 64)])
-    prog.custom_program_hash = _hash(0x9B2, units, page, nc, tuple(ct))
+    prog.custom_program_hash = _hash(0x9B2, units, page, nc, tuple(ct), kernel)
     return ttnn.generic_op([src, dst, colid], prog)
 
 
-def id_filter(gids, colinfo, S, owners=COLS, out=None):
-    """gids uint32 RM [S,1,1,K] global ids (colinfo: per-device uint32 page, element 0 = column, element 1 = valid token count n: ids >= n are dropped; sentinel 0xFFFFFFFF is >= n) -> idx8 uint32 RM [1,1,owners*S,K] local rows of THIS column (sentinel tail), rows (j, s) = j*S + s."""
+def id_filter(gids, colinfo, S, owners=COLS, out=None, perrow=False):
+    """gids uint32 RM [S,1,1,K] global ids (colinfo: per-device uint32 page, element 0 = column, element 1 = valid token count n: ids >= n are dropped; sentinel 0xFFFFFFFF is >= n; perrow: element 2+s = n of row s, verify rows) -> idx8 uint32 RM [1,1,owners*S,K] local rows of THIS column (sentinel tail), rows (j, s) = j*S + s."""
     md = gids.device()
     K = int(gids.shape[-1])
     if out is None:
@@ -106,7 +106,7 @@ def id_filter(gids, colinfo, S, owners=COLS, out=None):
     rt = ttnn.RuntimeArgs()
     for i, (x, y) in enumerate(cores):
         rt[x][y] = [i]
-    ct = [K, S, owners, 0] + _acc(gids) + _acc(colinfo) + _acc(out)
+    ct = [K, S, owners, 0, int(perrow)] + _acc(gids) + _acc(colinfo) + _acc(out)
     k = ttnn.KernelDescriptor(
         kernel_source=f"{KDIR}/id_filter.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
@@ -129,29 +129,46 @@ def locate(t):
     return t // CHUNK, (t % CHUNK) // SLICE, (t // CHUNK) * SLICE + t % SLICE
 
 
-def write_rows(pos, rows=4):
-    """pos [rows] -> int32 [rows, COLS, 1, 16]: element 0 = local row of the appended token on its owner column, -1 (0xFFFFFFFF) elsewhere."""
+def write_rows(pos, rows=4, S=1):
+    """pos [rows] -> int32 [rows, COLS, 1, 16]: element i (i < S verify rows, token pos+i) = local row of the appended token on its owner column, -1 (0xFFFFFFFF) elsewhere."""
     out = torch.full((rows, COLS, 1, 16), -1, dtype=torch.int32)
     for r, p in enumerate(pos):
-        _, c, loc = locate(int(p))
-        out[r, int(c), 0, 0] = int(loc)
+        for i in range(S):
+            _, c, loc = locate(int(p) + i)
+            out[r, int(c), 0, i] = int(loc)
     return out
 
 
-def key_counts(pos, rows=4):
-    """valid local keys per column AFTER appending the token at ``pos``: int32 [rows, COLS, 1, 16] (element 0)."""
+def key_counts(pos, rows=4, S=1):
+    """valid local keys per column AFTER appending the token at ``pos``: int32 [rows, COLS, 1, 16] (element 0). S verify rows: element j = the count for the query row at pos+j (it sees the tokens up to pos+j)."""
     out = torch.zeros((rows, COLS, 1, 16), dtype=torch.int32)
     for r, p in enumerate(pos):
-        n = int(p) + 1
-        full, rem = divmod(n, CHUNK)
-        for c in range(COLS):
-            out[r, c, 0, 0] = full * SLICE + min(max(rem - SLICE * c, 0), SLICE)
+        for j in range(S):
+            n = int(p) + j + 1
+            full, rem = divmod(n, CHUNK)
+            for c in range(COLS):
+                out[r, c, 0, j] = full * SLICE + min(max(rem - SLICE * c, 0), SLICE)
     return out
 
 
-def colid_host(rows=4, nvalid=None):
-    """[rows, COLS, 1, 16] int32: element 0 = column id, element 1 = valid token count of the row's user (``nvalid`` [rows], default 2**30)."""
+def colid_host(rows=4, nvalid=None, S=1):
+    """[rows, COLS, 1, 16] int32: element 0 = column id, element 1 = valid token count of the row's user (``nvalid`` [rows], default 2**30); S > 1 verify rows: element 2+j = nvalid + j (row j sees the tokens up to its own position)."""
     c = torch.zeros(rows, COLS, 1, 16, dtype=torch.int32)
     c[:, :, 0, 0] = torch.arange(COLS)[None, :]
-    c[:, :, 0, 1] = 1 << 30 if nvalid is None else torch.as_tensor(nvalid, dtype=torch.int32)[:, None]
+    nv = (
+        torch.full((rows,), 1 << 30, dtype=torch.int32)
+        if nvalid is None
+        else torch.as_tensor(nvalid, dtype=torch.int32)
+    )
+    c[:, :, 0, 1] = nv[:, None]
+    for j in range(S if S > 1 else 0):
+        c[:, :, 0, 2 + j] = (nv + j)[:, None] if nvalid is not None else (1 << 30)
+    return c
+
+
+def colid_masked_host(skip_rows, rows=4):
+    """colid page with element 2 = 1 on the mesh rows in ``skip_rows`` (slice_copy_masked.cpp copies nothing there)."""
+    c = colid_host(rows)
+    for r in skip_rows:
+        c[int(r), :, 0, 2] = 1
     return c

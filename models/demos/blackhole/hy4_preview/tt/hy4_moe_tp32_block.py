@@ -28,7 +28,9 @@ class Hy4MoeTp32Block:
         """gate: Hy4Gate; tpe: Tp32Experts on the 4x8 mesh (chip rank = mesh_row * 8 + col); T = tokens per mesh row (T * 4 <= 8)."""
         self.md, self.ccl, self.gate, self.tpe, self.T = md, ccl, gate, tpe, T
         self.rows, self.cols = tuple(md.shape)
-        assert T * self.rows <= 8, "v0 kernel: <= 8 tokens on the mesh"
+        assert T * self.rows <= (
+            16 if type(tpe).__name__ == "Tp24Experts" else 8
+        ), "TP32 kernel: v0 <= 8 tokens on the mesh, tp24 <= 16"
         # mask[r] = [Tt, T] with ones at (r*T + i, i): places a row's own [T, HID] fold into the Tt-token layout (zeros for the other rows)
         Tt = T * self.rows
         m = torch.zeros(self.rows, 1, Tt, T)

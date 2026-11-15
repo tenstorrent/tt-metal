@@ -324,13 +324,15 @@ def decoder_layers_multi(ck, layer, x4s, convs, idx_states, taps=None):
     return x4s
 
 
-def mtp_forward(ck, h_last, tok_next, conv, g=None, embed=None):
+def mtp_forward(ck, h_last, tok_next, conv, g=None, embed=None, zero_pos0=False):
     """MTP layer (model.mtp_layers.0): predicts token t+2 from h_t and token t+1.
     h_last [B,S,D] (main-model hidden per conv.mtp_h_source), tok_next [B,S] ids of tokens t+1.
     The layer has no iHC tensors: plain residual stream. Returns hidden after final_layernorm [B,S,D]."""
     cfg = ck.cfg
     sd = ck.layer_state(-1)
     emb = embed[tok_next].float()
+    if zero_pos0:  # vLLM mtp.py: inputs_embeds zeroed where positions == 0 (position 0 = row 0 of the sequence)
+        emb[:, 0] = 0
     e, hh = rms_norm(emb, sd["enorm.weight"], cfg.norm_eps), rms_norm(h_last, sd["hnorm.weight"], cfg.norm_eps)
     x = F.linear(torch.cat([e, hh] if conv.mtp_cat == "e_h" else [hh, e], -1), sd["eh_proj.weight"])
     S = x.shape[1]

@@ -158,6 +158,7 @@ enum : uint32_t {
     CB_STAT_SCR,
     OWNER_S,
     STAT_SCALE_BITS,
+    COMPACT,
     END,
 };
 }  // namespace writer_ct_arg

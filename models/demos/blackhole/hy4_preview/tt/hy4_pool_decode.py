@@ -63,14 +63,23 @@ class PoolCtx:
             md, t, dt, ttnn.ROW_MAJOR_LAYOUT, shard_dim=shard_dim, row_dim=row_dim
         )
         self.colid = up(HP.colid_host(rows), ttnn.uint32)
-        self.colinfo = up(HP.colid_host(rows, [1 << 20] * rows), ttnn.uint32)
-        self.wr = up(HP.write_rows([0] * rows, rows), ttnn.int32)
-        self.upd = upload(
-            md, torch.zeros(rows, NC, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, shard_dim=1, row_dim=0
-        )
-        self.kvcnt = up(HP.key_counts([0] * rows, rows), ttnn.uint32)
+        self.colinfo = up(HP.colid_host(rows, [1 << 20] * rows, S), ttnn.uint32)
+        self.TR = (S + 3) // 4
+        self.perrow = S > 1  # verify rows: per-row causal limits in the score kernel (kvcnt) and in id_filter (colinfo)
+        self.wr = up(HP.write_rows([0] * rows, rows, S), ttnn.int32)
+        # verify rows (S = k+1 query rows per user, positions pos..pos+S-1): one key-append index tensor per row (the S appends run one after the other: two rows of the same key tile must not race)
+        self.upd_rows = [
+            upload(
+                md, torch.zeros(rows, NC, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, shard_dim=1, row_dim=0
+            )
+            for _ in range(S)
+        ]
+        self.upd = self.upd_rows[0]
+        self.kvcnt = up(
+            HP.key_counts([0] * rows, rows, S), ttnn.uint32
+        )  # element j = valid local keys of verify row j (causal)
         self.ids_g = upload(
-            md, torch.full((rows, 1, 1, K), -1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0
+            md, torch.full((rows * S, 1, 1, K), -1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0
         )
         self.pt = upload(
             md, torch.arange(pages, dtype=torch.int32).reshape(1, pages), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
@@ -93,14 +102,21 @@ class PoolCtx:
             packer_l1_acc=False,
         )
         R = NC * S
-        self.G, self.kc = (8, 128) if R * 8 <= 120 else (4, 256)
+        self.G, self.kc = hy4_split.pick_split(S)
+        if "HY4_VR_G" in os.environ:  # probe override: split G / k_chunk
+            self.G, self.kc = int(os.environ["HY4_VR_G"]), int(os.environ.get("HY4_VR_KC", self.kc))
         self.xm = xm  # an existing XMerge (tests that rebuild the ctx per bucket must share the ONE per-process object)
+        if self.xchg and xm is None and S > int(os.environ.get("HY4_XM_MAXS", "1")):
+            # verify rows (S > 1): ONE XMerge per process (the S=1 decode context owns it) and the exchange is slower than the compact a2a + A1 merge at S >= 2 (verify-rows lat: +12..+60 us): A1 merge here
+            self.xchg = False
         if self.xchg and xm is None:
             from models.demos.blackhole.hy4_preview.tt import hy4_xmerge
 
             self.xm = hy4_xmerge.XMerge(
                 md, S, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "2"))
             )  # ONE per process, before the first trace capture
+        # compact attend (HY4_VR_COMPACT: 1 on, 0 off, default on for S >= 2): the split kernel packs the 8 real head rows of up to 4 users into one 32-row tile (all_to_all payload 4x smaller), the A1 merge works on TR = ceil(S/4) tile rows
+        self.compact = (os.environ.get("HY4_VR_COMPACT", "1") == "1") and S > 1 and not self.xchg
         self.ids8 = {}  # index-source layer -> idx8 tensor of the current step
         self.ids8_dense = None
         self.step_pos = None
@@ -126,15 +142,18 @@ class PoolCtx:
             tgt,
         )
         pos = [int(p) for p in pos]
-        wr = HP.write_rows(pos, self.rows)
+        S = self.S
+        wr = HP.write_rows(pos, self.rows, S)
         up(wr, ttnn.int32, self.wr)
-        up(wr[:, :, 0, 0], ttnn.int32, self.upd)  # [rows, 8]
-        up(HP.key_counts(pos, self.rows), ttnn.uint32, self.kvcnt)
-        up(HP.colid_host(self.rows, [p + 1 for p in pos]), ttnn.uint32, self.colinfo)
-        ids = torch.full((self.rows, 1, 1, K), -1, dtype=torch.int32)
+        for j in range(S):
+            up(wr[:, :, 0, j], ttnn.int32, self.upd_rows[j])  # [rows, 8]
+        up(HP.key_counts(pos, self.rows, S), ttnn.uint32, self.kvcnt)
+        up(HP.colid_host(self.rows, [p + 1 for p in pos], S), ttnn.uint32, self.colinfo)
+        ids = torch.full((self.rows * S, 1, 1, K), -1, dtype=torch.int32)
         for r, p in enumerate(pos):
-            n = min(p + 1, K)
-            ids[r, 0, 0, :n] = torch.arange(n, dtype=torch.int32)
+            for j in range(S):  # verify row j sees the tokens 0..p+j
+                n = min(p + j + 1, K)
+                ids[r * S + j, 0, 0, :n] = torch.arange(n, dtype=torch.int32)
         up(ids, ttnn.uint32, self.ids_g, shard_dim=None, row_dim=0)
         self.step_pos = pos
 
@@ -169,8 +188,21 @@ class PoolCtx:
         """host-built global ids -> local per-column ids of every user (dense mode: shared by all layers of the step)."""
         if self.ids8_dense is None:  # persistent output (no allocation inside traces)
             self.ids8_dense = self.new_idx8()
-        HP.id_filter(self.ids_g, self.colinfo, self.S, out=self.ids8_dense)
+        HP.id_filter(self.ids_g, self.colinfo, self.S, out=self.ids8_dense, perrow=self.perrow)
         return self.ids8_dense
+
+    def make_sink(self, sink8):
+        """sink8 [64] = sink logit (scaled domain) per head -> the sink tensor of ``attend``: per-user layout [1,S,32,8] (shard dim 3: column c holds its 8 heads in rows 0..7 of every user tile), or the compact layout [1,TR,32,8]
+        (user s = 4u+b: rows 8b..8b+7 of tile row u)."""
+        n = self.TR if self.compact else self.S
+        t = torch.zeros(1, n, 32, NC)
+        for c in range(NC):
+            if self.compact:
+                for b in range(4):
+                    t[0, :, 8 * b : 8 * b + 8, c] = sink8[8 * c : 8 * c + 8][None, :]
+            else:
+                t[0, :, :8, c] = sink8[8 * c : 8 * c + 8][None, :]
+        return upload(self.md, t.to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, shard_dim=3)
 
     def new_idx8(self):
         return ttnn.allocate_tensor_on_device(
@@ -184,9 +216,35 @@ class PoolCtx:
         qg = self.gather_q(q_rm)  # [1,8,8S,576]
         ttnn.deallocate(q_rm)
         out = self.mod.sparse_sdpa_split(
-            qg, kv_pool, idx8, 512, SCALE, self.kc, self.G, self.ckc, None, emit_stats=3, owner_s=S
+            qg,
+            kv_pool,
+            idx8,
+            512,
+            SCALE,
+            self.kc,
+            self.G,
+            self.ckc,
+            None,
+            emit_stats=3,
+            owner_s=S,
+            compact=self.compact and self.xm is None,
         )
         ttnn.deallocate(qg)
+        if self.compact and self.xm is None:
+            from models.demos.blackhole.hy4_preview.tt import hy4_merge
+
+            TR = self.TR
+            x = ttnn.experimental.all_to_all_async_generic(
+                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+            )
+            res = hy4_merge.merge_fused(x, sink, TR, full=S > 2)  # [1,TR,32,512]: rows 8*(s%4)+h of tile row s//4
+            r = ttnn.to_layout(res, ttnn.ROW_MAJOR_LAYOUT)
+            r = ttnn.reshape(r, [TR * 4, 8, 512])
+            if TR * 4 != S:
+                r = ttnn.slice(r, [0, 0, 0], [S, 8, 512])
+            r = ttnn.permute(r, (1, 0, 2))  # [8,S,512]
+            r = ttnn.reshape(r, [1, 8, S, 512])
+            return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
         if self.xm is not None:
             res = self.xm(out, sink)
         elif self.fuse_sparse:
@@ -208,6 +266,17 @@ class PoolCtx:
         return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
 
+def append_key_rows(ctx, key_pool4, k):
+    """k [1,1,S,128] TILE (S verify rows of the step, already norm + rope) -> the key pool at the S positions of ``ctx.upd_rows``: one ``paged_update_cache`` per row, in order (two rows of the same bfp8 tile must not race)."""
+    for j in range(ctx.S):
+        kj = k if ctx.S == 1 else ttnn.slice(k, [0, 0, j, 0], [1, 1, j + 1, 128])
+        kd = ttnn.to_memory_config(kj, ctx.kcfg_key)
+        ttnn.experimental.paged_update_cache(key_pool4, kd, update_idxs_tensor=ctx.upd_rows[j], page_table=ctx.pt)
+        ttnn.deallocate(kd)
+        if kj is not k:
+            ttnn.deallocate(kj)
+
+
 def select_global(ctx, qh, w32, key_view):
     """decode indexer chain on the key pool: score kernel (kv_len per column from ctx.kvcnt) -> select_v2 -> global top-2048 ids uint32 [S,1,1,2048] (identical on all columns).
     qh [S,1,32,128] TILE (heads = tile rows), w32 [1,1,32,32] TILE (row = query row, col = head), key_view [1,1,pages*64,128] bfp8 TILE.
@@ -216,7 +285,7 @@ def select_global(ctx, qh, w32, key_view):
     from models.demos.blackhole.hy4_preview.tt.hy4_idx_select import select_v2
 
     S, n = ctx.S, ctx.n_local
-    score = IS.idx_score(qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n)  # [1,1,S,n]
+    score = IS.idx_score(qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n, kvt_rows=ctx.perrow)  # [1,1,S,n]
     sel = ctx.sel
     B = max(1, min(sel["B"], n // sel["kb"]))
     kb, kloc = min(sel["kb"], n // B), min(sel["kloc"], n)
@@ -249,10 +318,7 @@ class Hy4AttentionPool(Hy4AttentionOpt):
         )  # this layer's local ids (persistent; shared layers of this source read it)
         self.key_view = ttnn.reshape(key_pool4, [1, 1, ctx.pages * 64, 128]) if key_pool4 is not None else None
         so = self.host_w["sink_over_scale"].tensor.reshape(-1).float()  # [64] sink / scale per head
-        t = torch.zeros(1, S, 32, NC)
-        for c in range(NC):
-            t[0, :, :8, c] = (so[8 * c : 8 * c + 8] * SCALE)[None, :]
-        self.sink_pool = upload(self.md, t.to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT, shard_dim=3)
+        self.sink_pool = ctx.make_sink(so * SCALE)
 
     # ------------------------------------------------------------------ pieces
     def pool_append_kv(self, lat, k_pe):
@@ -273,9 +339,7 @@ class Hy4AttentionPool(Hy4AttentionOpt):
         cos, sin, icos, isin, c128, s128 = tabs
         k = ttnn.layer_norm(ik, weight=ix.k_norm_w, bias=ix.k_norm_b, epsilon=ix.ln_eps)
         k = self._idx_rot(o, k, icos, isin, c128, s128)
-        kd = ttnn.to_memory_config(k, ctx.kcfg_key)
-        ttnn.experimental.paged_update_cache(self.key_pool4, kd, update_idxs_tensor=ctx.upd, page_table=ctx.pt)
-        ttnn.deallocate(kd)
+        append_key_rows(ctx, self.key_pool4, k)
         ttnn.deallocate(k)
 
     def pool_select(self, d, o, tabs):
@@ -304,7 +368,7 @@ class Hy4AttentionPool(Hy4AttentionOpt):
                 idx8 = dense_ids8
             else:
                 gids = self.pool_select(d, o, tabs)
-                idx8 = HP.id_filter(gids, ctx.colinfo, ctx.S, out=self.idx8_buf)
+                idx8 = HP.id_filter(gids, ctx.colinfo, ctx.S, out=self.idx8_buf, perrow=ctx.perrow)
                 ttnn.deallocate(gids)
             ctx.ids8[self.layer] = idx8
         else:

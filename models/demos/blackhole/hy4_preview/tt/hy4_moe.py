@@ -52,6 +52,19 @@ class Hy4MoEBlock(DSV41MoEBlock):
             self._build_decode(mesh_device, decode_cfg, weights, shared_in_moe, buffers)
         self.decode._mesh = mesh_device
 
+    def for_batch(self, batch_per_device, buffers=None):
+        """as the base, plus: the skinny router's fused select writes the dispatch inputs in place, whose memory configs depend on batch_per_device (the shared copy kept the batch-1 shard specs: TT_FATAL at 2 tokens per device)."""
+        import copy
+
+        nb = super().for_batch(batch_per_device, buffers=buffers)
+        sk = getattr(self.gate, "_sk", None)
+        if sk is not None:
+            nb.gate = copy.copy(self.gate)
+            nb.gate._sk = copy.copy(sk)
+            cfg = nb.decode_config
+            nb.gate._sk.out_mcs = (cfg.dispatch_input_expert_scores_memory_config, cfg.dispatch_input_memory_config)
+        return nb
+
     @staticmethod
     def _configs(mesh_device, batch_per_device, topology, shared_in_moe):
         text = CONFIG_PATH.read_text()

@@ -11,6 +11,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.hy4_preview.config import DENSE
+from models.demos.blackhole.hy4_preview.tt import hy4_dense as D
 from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
 from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Opt
 from models.demos.blackhole.hy4_preview.tt.hy4_chain import HID, NSTREAM
@@ -21,8 +22,10 @@ from models.demos.blackhole.hy4_preview.tt.hy4_rope import rope_tables
 
 
 class Hy4PoolDecoder(Hy4Decoder):
-    def __init__(self, ch, pages, mode="topk", bucket_tokens=None, opt=None, key_dtype=ttnn.bfloat8_b):
+    def __init__(self, ch, pages, mode="topk", bucket_tokens=None, opt=None, key_dtype=ttnn.bfloat8_b, S=1, tok=None):
+        """S > 1 (task mtp-device, verify rows): S query rows per user per step; ``tok`` = an existing persistent uint32 [ROWS, S] token tensor (the MTPRoundTail's) or None. S == 1: unchanged."""
         self.ch, self.md = ch, ch.md
+        self.S = S
         md = self.md
         r, c = int(md.shape[0]), int(md.shape[1])
         assert r == ROWS
@@ -30,12 +33,19 @@ class Hy4PoolDecoder(Hy4Decoder):
         self.opt = opt if opt is not None else Opt.from_env()
         self.mapper = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(r, c))
         z = lambda *shape, dt=torch.float32: torch.zeros(*shape, dtype=dt)
-        self.tok = upload(md, z(ROWS, 1, 1, dt=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
-        self.cos = upload(md, z(ROWS, 1, 1, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
-        self.sin = upload(md, z(ROWS, 1, 1, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
-        self.c128 = upload(md, z(ROWS, 1, 1, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
-        self.s128 = upload(md, z(ROWS, 1, 1, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
-        self.ctx = PoolCtx(md, ch.mc, ch.ccl, pages, rows=ROWS, S=1, mode=mode, bucket_tokens=bucket_tokens)
+        if S == 1:
+            self.tok = upload(md, z(ROWS, 1, 1, dt=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
+        else:
+            self.tok = (
+                tok
+                if tok is not None
+                else upload(md, z(ROWS, S, dt=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
+            )
+        self.cos = upload(md, z(ROWS, 1, S, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        self.sin = upload(md, z(ROWS, 1, S, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        self.c128 = upload(md, z(ROWS, 1, S, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        self.s128 = upload(md, z(ROWS, 1, S, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        self.ctx = PoolCtx(md, ch.mc, ch.ccl, pages, rows=ROWS, S=S, mode=mode, bucket_tokens=bucket_tokens)
         self.kc = [None] * len(ch.layers)
         self.mlp = []
         for ly in ch.layers:
@@ -253,3 +263,105 @@ class Hy4PoolDecoder(Hy4Decoder):
         ttnn.deallocate(hn)
         ttnn.deallocate(x4)
         return logits
+
+    # ------------------------------------------------------------------ verify rows (task mtp-device): S = k + 1 query rows per user, fused iHC path only
+    def attach_derive(self, sd):
+        """use the rope tables / write rows of a SpecDerive (device-derived from the resident position) instead of host set_inputs."""
+        self.cos, self.sin, self.c128, self.s128 = sd.cos, sd.sin, sd.c128, sd.s128
+
+    def step_verify(self):
+        """one verify step on S rows per user (tokens self.tok [1,S] per device; positions P..P+S-1 via ctx / tabs filled by SpecDerive.derive) -> (hn bf16 [1,1,S,D] post model.norm rows, logits [1,1,S,V/8])."""
+        assert (
+            os.environ.get("HY4_IHC_FUSED", "0") == "1"
+        ), "verify rows need the fused-iHC path (packed streams, T <= 16)"
+        ch, S = self.ch, self.S
+        self._dense8 = self.ctx.dense_ids8() if self.mode == "dense" else None
+        e = ttnn.embedding(self.tok, ch.embed, layout=ttnn.TILE_LAYOUT)  # [1,S,D/8]
+        e = ttnn.reshape(e, [1, 1, S, HID // 8])
+        e = ch.mc.allgather(e, ch.ccl, axis=1, dim=3)
+        e32 = ttnn.typecast(e, ttnn.float32)
+        ttnn.deallocate(e)
+        e_rm = ttnn.reshape(ttnn.to_layout(e32, ttnn.ROW_MAJOR_LAYOUT), [1, S, 1, HID])
+        ttnn.deallocate(e32)
+        x = ttnn.to_layout(
+            ttnn.reshape(ttnn.concat([e_rm] * NSTREAM, dim=2), [1, 1, NSTREAM * S, HID]), ttnn.TILE_LAYOUT
+        )  # packed: row 4t + i = stream i of token t
+        ttnn.deallocate(e_rm)
+        y = pp_m = None
+        for i, ly in enumerate(ch.layers):
+            wa, wm = ly.ihcf_a.norm_weight(ly.hw_in, S), ly.ihcf_m.norm_weight(ly.hw_post, S)
+            if y is None:
+                h, _, pp_a = ly.ihcf_a.pre(x, wa)
+            else:
+                h, _, pp_a, x = ly.ihcf_a.pre(x, wa, y=y, pp_prev=pp_m, x_out=x)
+                ttnn.deallocate(y)
+            a = self._attn(ly, None, h)
+            ttnn.deallocate(h)
+            h2, _, pp_m, x = ly.ihcf_m.pre(x, wm, y=a, pp_prev=pp_a, x_out=x)
+            ttnn.deallocate(a)
+            y = self._mlp_rows(i, ly, h2)
+            ttnn.deallocate(h2)
+        last = ch.layers[-1]
+        _, _, _, x = last.ihcf_m.pre(x, last.ihcf_m.norm_weight(last.hw_post, S), y=y, pp_prev=pp_m, x_out=x)
+        ttnn.deallocate(y)
+        x4 = ttnn.to_layout(
+            ttnn.permute(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, S, NSTREAM, HID]), (0, 2, 1, 3)),
+            ttnn.TILE_LAYOUT,
+        )  # [1,4,S,D]
+        ttnn.deallocate(x)
+        hn, logits = ch.head(x4)
+        ttnn.deallocate(x4)
+        return hn, logits
+
+    def _mlp_rows(self, i, ly, h):
+        """MLP of S rows per user: dense layer 0 as in the decoder, MoE blocks built (``for_batch``) at batch_per_device = S."""
+        ch, S = self.ch, self.S
+        if ly.spec.mlp == DENSE:
+            return D.allreduce_cols(self.mlp[i].forward(h))
+        part = self.mlp[i].forward(h)
+        if (
+            os.environ.get("HY4_VERIFY_MOE_SPLIT", "0") == "1"
+        ):  # diagnostic: S separate T=1-shaped MoE calls (the plain decode shape) instead of one T=S call
+            outs = []
+            for j in range(S):
+                hj = ttnn.slice(h, [0, 0, j, 0], [1, 1, j + 1, HID])
+                pj = ttnn.slice(part, [0, 0, j, 0], [1, 1, j + 1, HID])
+                tj = ttnn.reshape(ttnn.to_layout(hj, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, HID])
+                oj = ttnn.to_memory_config(ly.blk.forward(hj, tj, fold=pj), ttnn.DRAM_MEMORY_CONFIG)
+                outs.append(ttnn.to_layout(oj, ttnn.ROW_MAJOR_LAYOUT))
+            out = ttnn.to_layout(ttnn.concat(outs, dim=2), ttnn.TILE_LAYOUT)
+            ttnn.deallocate(part)
+            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+            y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
+            ttnn.deallocate(out)
+            return y
+        tok = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [S, 1, 1, HID])
+        blk = self._blks[i]
+        out = blk.forward(h, tok, fold=part)
+        ttnn.deallocate(part)
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
+        ttnn.deallocate(out)
+        return y
+
+    def prepare_blocks(self):
+        """per-layer MoE blocks at batch_per_device = S (weights shared with the S = 1 blocks: ``for_batch``); call BEFORE any trace capture."""
+        self._blks, self.blk_buffers = [], None
+        for ly in self.ch.layers:
+            if ly.spec.mlp == DENSE:
+                self._blks.append(None)
+                continue
+            nb = ly.blk.for_batch(
+                self.S, buffers=self.blk_buffers
+            )  # ONE dispatch / combine scratch set at the new size shared by all layers (``for_batch`` allocates a new set when ``buffers`` is None)
+            if self.blk_buffers is None:
+                self.blk_buffers = nb.decode.buffers
+            if getattr(ly, "blk_tp", None) is not None:
+                # HY4_MOE_TP32=1 (+ HY4_TP32_CACHE_DIR): TP32 (tp24 kernel) routed experts for the S verify rows too: same expert copy as the S = 1 block, a block at T = S tokens per mesh row
+                # (tp24: T * 4 <= 16 tokens on the mesh), the router of the batch-S block. Untested at S > 1 on the model path (product-integ): default OFF with the flag.
+                from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_block import Hy4MoeTp32Block
+
+                assert self.S * int(self.md.shape[0]) <= 16, "TP32 verify block: S * 4 <= 16 tokens"
+                self._blks.append(Hy4MoeTp32Block(self.md, self.ch.ccl, nb.gate, ly.blk_tp.tpe, self.S))
+                continue
+            self._blks.append(nb)
