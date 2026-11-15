@@ -260,6 +260,40 @@ def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_pa
     assert os.listdir(tmp_path) == [], "the staging directory is removed"
 
 
+def test_a_load_that_fails_after_placing_says_the_model_is_partly_restored(
+    tp_mesh, tmp_path, monkeypatch, expect_error
+):
+    from ttml.distributed_checkpointing import _load
+
+    model, params, opt = fresh_tp(DIM)
+    path = str(tmp_path / "step_0000001")
+    dcp.save(path, model=model, optimizer=opt)
+    real_place = _load._place
+    calls = []
+
+    def place_then_fail(live, arrays, device):
+        calls.append(live.key)
+        if len(calls) == 2:
+            raise RuntimeError("simulated device out of memory")
+        real_place(live, arrays, device)
+
+    model2, _, opt2 = fresh_tp(DIM)
+    monkeypatch.setattr(_load, "_place", place_then_fail)
+    with expect_error(
+        dcp.CheckpointError,
+        r"load failed at .* \(RuntimeError: simulated device out of memory\) after 1 of \d+ tensors were placed",
+    ):
+        dcp.load(path, model=model2, optimizer=opt2)
+
+    def fail(live, arrays, device):
+        raise RuntimeError("simulated device out of memory")
+
+    monkeypatch.setattr(_load, "_place", fail)
+    with expect_error(RuntimeError, "simulated device out of memory") as raised:
+        dcp.load(path, model=model2, optimizer=opt2)
+    assert type(raised.value) is RuntimeError, "nothing was placed: the error as it was raised"
+
+
 def test_a_truncated_data_file_is_refused_before_anything_is_placed(tp_mesh, tmp_path, expect_error):
     import glob
     import os

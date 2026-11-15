@@ -148,6 +148,17 @@ def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device) -> None:
     check_label_unchanged(live, "after set_value")
 
 
+def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: int) -> None:
+    """Re-raise ``err``, as a ``CheckpointError`` that says the live state is partly restored once a tensor was
+    placed."""
+    if not placed:
+        raise err
+    raise CheckpointError(
+        f"load failed at {at} ({type(err).__name__}: {err}) after {len(placed)} of {total} tensors were placed (the "
+        f"first: {placed[0]}); the model and optimizer are partly restored: load again or discard them"
+    ) from err
+
+
 def load(
     ckpt_dir: str,
     *,
@@ -164,6 +175,11 @@ def load(
     when ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result.
     Optimizer scalars (steps, learning rates) are restored through ``set_state_dict``. ``threads`` caps the reader
     threads (default 32; a read is one contiguous byte range of one file). Returns the header passed to ``save``.
+
+    Everything that can be checked without reading tensor data is checked before the first tensor is placed: keys,
+    shapes, dtypes, layouts, param groups and the sizes of the data files. A failure after that (a read error, the
+    device out of memory) leaves the model and optimizer partly restored; the ``CheckpointError`` raised then says how
+    many tensors were placed, and the model should be loaded again or discarded.
     """
     if model is None and optimizer is None:
         raise TypeError("load needs a model and/or an optimizer")
@@ -199,6 +215,7 @@ def load(
 
     fds: dict[int, int] = {}
     data_start: dict[int, int] = {}
+    placed: list[str] = []
     device = mesh_device()
     bytes_read = 0
     t1 = time.perf_counter()
@@ -250,13 +267,17 @@ def load(
             keys = list(plan.keys.items())
             pending = submit(keys[0][1]) if keys else None
             for position, (key, kplan) in enumerate(keys):
-                arrays, futures = pending
-                t_key = time.perf_counter()
-                for future in futures:
-                    bytes_read += future.result()
-                t_read_done = time.perf_counter()
-                pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
-                _place(by_key[key], arrays, device)
+                try:
+                    arrays, futures = pending
+                    t_key = time.perf_counter()
+                    for future in futures:
+                        bytes_read += future.result()
+                    t_read_done = time.perf_counter()
+                    pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
+                    _place(by_key[key], arrays, device)
+                except Exception as err:
+                    _raise_partly_restored(err, key, placed, len(keys))
+                placed.append(key)
                 read_s += t_read_done - t_key
                 place_s += time.perf_counter() - t_read_done
                 reads += len(futures)
@@ -271,7 +292,10 @@ def load(
 
     applied: list[str] = []
     if optimizer is not None:
-        applied = restore_scalars(optimizer, index.scalars)
+        try:
+            applied = restore_scalars(optimizer, index.scalars)
+        except Exception as err:
+            _raise_partly_restored(err, "the optimizer scalars", placed, len(placed))
     stats["total_s"] = time.perf_counter() - t0
     return LoadResult(
         ckpt_dir,
