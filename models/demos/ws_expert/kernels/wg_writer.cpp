@@ -165,18 +165,25 @@ void kernel_main() {
         return true;
     };
     // ---- Q4: down outputs
-    uint32_t drained = 0, d_n = 0, d_r = 0;
+    uint32_t drained = 0, d_n = 0, d_r = 0, d_cum = 0;  // (d_cum: rows of the group's experts before d_n)
     auto q4 = [&]() -> bool {
         if (drained >= total_rows || !cb_pages_available_at_front(y_cb, DCOLS)) {
             return false;
         }
         while (d_r >= rows_of(d_n)) {
+            d_cum += rows_of(d_n);
             ++d_n;
             d_r = 0;
         }
-        if (d_n + 1 == nexp_g) {
+#ifdef WG_OUT_ALL
+        {  // every expert's rows, one after another in the group's region (RMAX row tiles a group)
+            uint32_t l1 = get_read_ptr(y_cb);
+            const uint32_t row = g * RMAX + d_cum + d_r;
+#else
+        if (d_n + 1 == nexp_g) {  // the group's last expert only
             uint32_t l1 = get_read_ptr(y_cb);
             const uint32_t row = g * RMAX + d_r;
+#endif
             for (uint32_t t = 0; t < DCOLS; ++t, l1 += obytes) {
                 noc_async_write_page(row * HT + J * DCOLS + t, os, l1);
             }

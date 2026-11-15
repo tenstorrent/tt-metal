@@ -266,8 +266,14 @@ def test_ws_fab_glx_dynm(mesh_device):
     0 and M = T, every chip its own counts and token lists; checks each group's last expert on a few chips."""
     nchip = mesh_device.get_num_devices()
     T = 31250
-    cfg, ac = GCfg(nexp=128, G=4, T=T, MMAX=T), ACfg(wrap=GLX_FABRIC[1], own_slices=True)
-    Ms = dyn_counts(cfg.nexp, nchip, T, seed=int(os.environ.get("WSD_SEED", "3")))
+    Ms = dyn_counts(128, nchip, T, seed=int(os.environ.get("WSD_SEED", "3")))
+    out_all = os.environ.get("WSD_ALL", "0") == "1"  # every expert's rows in its group's region (WG_OUT_ALL)
+    if out_all:  # a group's region holds all of its experts' row tiles, on the chip with the most
+        cum = max(sum((int(Ms[c, e]) + 31) // 32 for e in range(g, 128, 4)) for c in range(nchip) for g in range(4))
+        cfg = GCfg(nexp=128, G=4, T=T, MMAX=32 * max(cum, (T + 31) // 32), wdefs=("WG_OUT_ALL",))
+    else:
+        cfg = GCfg(nexp=128, G=4, T=T, MMAX=T)
+    ac = ACfg(wrap=GLX_FABRIC[1], own_slices=True)
     torch.manual_seed(0)
     x = torch.randn(T + 1, cfg.H)
     x[T] = 0
@@ -312,6 +318,35 @@ def test_ws_fab_glx_dynm(mesh_device):
         logger.info(f"WSD launch {launch} done")
     outs = ttnn.get_device_tensors(out_t)
     worst = 1.0
+    ref_of = lambda c, e, M: quantize(
+        torch.nn.functional.silu(
+            quantize(x[idx[c, e, :M].long()].to(torch.bfloat16).float(), cfg.x_dt)
+            @ quantize(interleave_gu(wg[e].float(), wu[e].float()), cfg.w_dt).reshape(cfg.H, -1, 2, 32)[:, :, 0].reshape(cfg.H, cfg.I)
+        )
+        * (
+            quantize(x[idx[c, e, :M].long()].to(torch.bfloat16).float(), cfg.x_dt)
+            @ quantize(interleave_gu(wg[e].float(), wu[e].float()), cfg.w_dt).reshape(cfg.H, -1, 2, 32)[:, :, 1].reshape(cfg.H, cfg.I)
+        ),
+        cfg.h_dt,
+    ) @ quantize(wd[e].float(), cfg.w_dt)
+    if out_all:
+        for c in (1, 0):
+            out = ttnn.to_torch(outs[c]).float()
+            for g in range(cfg.G):
+                seq = [(e, int(Ms[c, e])) for e in range(g, cfg.nexp, cfg.G)]
+                logger.info(f"WSD chip {c} group {g} M sequence {[m for _, m in seq]}")
+                base, bad = g * cfg.RMAX * 32, []
+                for k, (e, M) in enumerate(seq):
+                    if M:
+                        p = pcc(out[base : base + M], ref_of(c, e, M))
+                        worst = min(worst, p)
+                        if p < 0.999:
+                            bad.append((k, e, M, round(p, 5)))
+                    base += 32 * ((M + 31) // 32)
+                logger.info(f"WSD chip {c} group {g}: experts below 0.999 (index, expert, M, pcc) {bad}")
+        logger.info(f"WSD SUMMARY: every expert on chips 1, 0, min pcc {worst:.5f}")
+        assert worst > 0.999
+        return
     for c in (0, 1, 2, 13, 31):
         out = ttnn.to_torch(outs[c]).float()
         for g in range(cfg.G):
