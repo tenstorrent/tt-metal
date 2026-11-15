@@ -517,6 +517,7 @@ void kernel_main() {
             k_channel.optional_sender(noc)->send(get_read_ptr(cb_qk_stage), kn_dst, part_bytes);
         }
         cb_pop_front(cb_qk_stage, Kt);
+        GDN_MARK("m_wr_sent");
         return;
     }
 

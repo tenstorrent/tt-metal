@@ -144,6 +144,8 @@ STATE_IN_DEPTH = 2
 # R-QKCORE: pair cores in logical rows [0, SWAP_NOC_ROWS) read on NOC 1 and write on NOC 0 (0: none). NOC 0 brings the
 # top rows' read responses around the torus (their weights / gate rows landed at 25-31 us vs 4-5 us on the lower rows).
 # Decode B=8 / B=16: 0 rows 48.8 / 86 us, 2 rows 42.3 / 73.9, 3 rows 42.6 / 74.1, 4 rows 51.6 / 78, 5 rows 56 / 90.
+# Decode B=1 (QK_CORES_VSPLIT state cores): 0 rows 15.3-15.4, 1 row 15.0-15.2, 2 rows 14.7-14.9, 3 rows 14.6-14.8,
+# 4 rows 15.2-15.4 us.
 SWAP_NOC_ROWS = 3
 # S0 tiles per DRAM read barrier on a core (None: the whole slice at once). Bounds the bulk a core queues at the banks
 # ahead of other cores' small window reads.
@@ -1514,7 +1516,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 (role, [c for c in cores if (c.x, c.y) in q_cores], True),
                 (role, [c for c in cores if (c.x, c.y) not in q_cores], False),
             ]
-        elif role == ROLE_LOCAL and qk_cores and SWAP_NOC_ROWS and pieces == 1:
+        elif role == ROLE_LOCAL and qk_cores and SWAP_NOC_ROWS:
             # Decode R-QKCORE: every pair core reads its S0 at once. NOC 0 brings read responses south, around the
             # torus for the top rows, which then lose to the lower rows' traffic; NOC 1 brings them north. The pair
             # cores in the top SWAP_NOC_ROWS rows read on NOC 1 and write on NOC 0.

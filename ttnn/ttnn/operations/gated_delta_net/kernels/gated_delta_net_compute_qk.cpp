@@ -42,8 +42,10 @@ void kernel_main() {
                 conv_block(scope, cols, 0, Kt);
             }
         }
+        GDN_MARK("m_conv");
         GDN_ZONE("gdn_qk_norm");
         qk_part_block(bufs, is_q, scope);
+        GDN_MARK("m_qk_norm");
     }
     cb_pop_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);
 }

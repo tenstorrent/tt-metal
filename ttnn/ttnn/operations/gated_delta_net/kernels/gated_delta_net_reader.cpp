@@ -400,6 +400,7 @@ void kernel_main() {
             }
         }
         rows.finish();
+        GDN_MARK("m_rd_inputs");
         cb_reserve_back(cb_scratch, 1);
         cb_push_back(cb_scratch, 1);
         cb_push_back(cb_conv_w, w_pages);
