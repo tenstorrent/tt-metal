@@ -157,7 +157,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/.github/actions/cachew-checkout@7831e94481138d903fdabeb739a7552e064c234a # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@79635adabbfe239ef095ad1e5777f0ad87011958 # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0
