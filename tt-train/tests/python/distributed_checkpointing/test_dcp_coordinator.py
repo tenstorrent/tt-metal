@@ -96,7 +96,11 @@ def test_each_rank_plans_only_its_owned_chunks_and_files():
     # A key another rank writes entirely has no entry in this rank's part.
     bias_writer = election.owners["model/b"][()][0]
     other = 1 - bias_writer
-    assert "model/b" not in plans[other].entries() and "model/b" in plans[bias_writer].entries()
+
+    def entries(plan):
+        return plan.entries({(it.key, it.file): 0 for its in plan.items.values() for it in its})
+
+    assert "model/b" not in entries(plans[other]) and "model/b" in entries(plans[bias_writer])
 
 
 def test_the_ranks_must_cover_the_label_and_agree_on_its_description(expect_error):
