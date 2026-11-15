@@ -72,9 +72,6 @@ std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
         {"SE_RPS", std::to_string(p.mt * 32)},
         {"SE_MAX_E", std::to_string(se_max_e)},
         {"SE_GU_NREG", std::to_string(p.ring_g / p.nk_gu)}};
-    if (cfg.fx_spare) {  // (P.55c: every role builds the schedule with the replica last)
-        d.emplace_back("SE_FX_SPARE", std::to_string(cfg.fx_spare - 1));
-    }
     if (cfg.pin) {
         d.emplace_back("SE_PIN_MIN", std::to_string(cfg.pin));
         // pin only a dominant expert (se_dyn_pin); layout.pin_ratio (0: always pin)
@@ -457,13 +454,6 @@ FlatProgramHandles add_flat_routed_expert_program(
             {"SE_GU_DATA_SEM", std::to_string(DATA)},
             {"SE_DYN_HALF", dyn_def.at("SE_DYN_HALF")}};
         gu_reader_def.insert(gu_def.begin(), gu_def.end());
-        // P.55c: the x forwarder's 11 args (6 + SE_GU_RT_ARGS), then fx_wait.hpp's
-        constexpr uint32_t kGuFxRt = 6 + 5;
-        Defines gu_fwd_def = gu_def;
-        if (cfg.fx_spare) {
-            gu_fwd_def["SE_FX_SPARE"] = std::to_string(cfg.fx_spare - 1);
-            gu_fwd_def["SE_FX_RT"] = std::to_string(kGuFxRt);
-        }
         if (p.nu) {  // 16-column units: the h run from K-tile cg NU / 2, half tiles at the ends
             gu_reader_def["SE_HG_NU"] = std::to_string(p.nu);
             gu_reader_def["SE_HPC"] = std::to_string(p.hpc);
@@ -484,7 +474,7 @@ FlatProgramHandles add_flat_routed_expert_program(
                DataMovementProcessor::RISCV_1,
                NOC::NOC_0,
                {p.x_slots, x_bytes, x_pieces, XARR, SFREE, 2, 3, X_FWD_DEPTH, p.nsb * p.sbt / kKBlk, MT},
-               gu_fwd_def);
+               gu_def);
         const bool gu_rp = p.gu_rp && !p.gu_full_sync;
         Defines cdef = with(
             dyn_def,
@@ -534,12 +524,6 @@ FlatProgramHandles add_flat_routed_expert_program(
                     .lit(pk(p.relays[p.rect_of(gc)]))
                     .a(FlatAddr::Words, 0);
                 f.cat(gw);
-                if (cfg.fx_spare) {
-                    TT_FATAL(
-                        f.v.size() == kGuFxRt, "flat_routed_expert: x forwarder args {} != {}", f.v.size(), kGuFxRt);
-                    sv.fx_readers.emplace_back(k_x_forwarder, gc, kGuFxRt);
-                    f.lits(std::vector<uint32_t>(kFlatFxArgs, 0u));
-                }
                 add_rt(k_x_forwarder, gc, f);
                 SetRuntimeArgs(program, kc, gc, std::vector<uint32_t>{(cg_ * p.nu) & 1u});
             }
@@ -575,11 +559,6 @@ FlatProgramHandles add_flat_routed_expert_program(
                {2,    p.h_tiles, kBf8Tile, H_PIECES, 16, out, V,  S,    ngu,   ND,    HARR, HSFREE,
                 GATH, DONE,      GO,       p.hbuf,   MT, pw,  Ht, GATH, GATH1, GATH2, E},
                plus(yrm_def(dyn_def, pw), ync));
-        // P.55c: the down reader's args (3 + the schedule's, y's 2, the combine overlap's report / hand-off ones),
-        // then fx_wait.hpp's
-        const uint32_t dn_fx_rt = (y_nc && cfg.cmb_rt) ? cfg.cmb_rt + 4 + (cfg.y_l1 ? kFlatYL1Args : 0)
-                                                       : 3 + static_cast<uint32_t>(dyn.v.size()) + (y_nc ? 2u : 0u);
-        Defines dn_fx = cfg.fx_spare ? Defines{{"SE_FX_RT", std::to_string(dn_fx_rt)}} : Defines{};
         const auto kw =
             dm("down_weight_reader.cpp",
                cores,
@@ -588,11 +567,9 @@ FlatProgramHandles add_flat_routed_expert_program(
                {1, slot, w_tile, E * nblk, DW_BATCH, E, MT, pw, Ht},
                plus(
                    plus(
-                       plus(
-                           y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
-                           Defines{{"SE_DW_ROT", std::to_string(banks)}}),
-                       Defines{{"SE_DW_RING", std::to_string(ring)}}),
-                   dn_fx));
+                       y_nc ? plus(plus(yrm_def(dyn_def, pw), ync), cmb_def) : dyn_def,
+                       Defines{{"SE_DW_ROT", std::to_string(banks)}}),
+                   Defines{{"SE_DW_RING", std::to_string(ring)}}));
         const auto kc =
             cp("down_compute.cpp",
                cores,
@@ -623,14 +600,7 @@ FlatProgramHandles add_flat_routed_expert_program(
             if (y_nc) {
                 w.a(FlatAddr::Y).lit(p.col0s[d]);
             }
-            Args wf = y_nc ? add_writer_rt(kw, dc, w) : w;
-            if (cfg.fx_spare) {
-                TT_FATAL(
-                    wf.v.size() == dn_fx_rt, "flat_routed_expert: down reader args {} != {}", wf.v.size(), dn_fx_rt);
-                sv.fx_readers.emplace_back(kw, dc, dn_fx_rt);
-                wf.lits(std::vector<uint32_t>(kFlatFxArgs, 0u));
-            }
-            add_rt(kw, dc, wf);
+            add_rt(kw, dc, y_nc ? add_writer_rt(kw, dc, w) : w);
             SetRuntimeArgs(program, kc, dc, std::vector<uint32_t>{0});
         }
     }

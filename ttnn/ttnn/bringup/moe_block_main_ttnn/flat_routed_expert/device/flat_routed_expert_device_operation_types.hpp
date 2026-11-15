@@ -73,10 +73,6 @@ struct FlatRoutedExpertParams {
     uint32_t cmb_rt = 0;
     // combine overlap: the y writers' L1 hand-off args after the report args (SE_Y_L1)
     bool y_l1 = false;
-    // MOE_REPLICAS=exact (P.55c, inside routed_experts_combine with the exact copy): 1 + the local expert whose weights
-    // the call copies in (the spare slot) - scheduled last, never pinned, its weights read once the copy has landed
-    // (the weight readers' fx_wait.hpp args, FlatProgramHandles::fx_readers); 0: off. No effect on the plan
-    uint32_t fx_spare = 0;
     FlatLayoutOptions layout;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -95,7 +91,6 @@ struct FlatRoutedExpertParams {
         "math_fidelity",
         "cmb_rt",
         "y_l1",
-        "fx_spare",
         "layout");
     auto attribute_values() const {
         return std::make_tuple(
@@ -114,7 +109,6 @@ struct FlatRoutedExpertParams {
             math_fidelity,
             cmb_rt,
             y_l1,
-            fx_spare,
             layout);
     }
 };

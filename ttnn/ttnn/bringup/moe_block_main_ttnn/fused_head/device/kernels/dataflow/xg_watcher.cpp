@@ -15,12 +15,6 @@ using namespace tt::tt_fabric;
 #include "../ra_send.hpp"
 
 #endif
-#ifdef W_PREV
-// MOE_PLANNER=folded (DeepSeek-V4.1 P.62b): the expert replica planner of the previous MoE call as this kernel's tail
-#define PP_CT0 W_PREV_CT
-#include "../prev_planner.hpp"
-static_assert(pp::RINGPG != 0, "the folded planner takes one job ring (MOE_PREV_HOST=device)");
-#endif
 // chunk m's shard of rank k (k = 1 .. G - 1 in the engine's order) is in once each stream carrying it counted it
 // (a stream counts every shard it sends: m entries + its index + 1): then XREADY + 1 on every engine core
 // (XREADY = m (G - 1) + k). args: chunks, the XREADY id, ranks G - 1, engine cores nc, counters ncnt; (counter address,
@@ -64,35 +58,6 @@ void kernel_main() {
             conn.close();
         }
         noc_async_atomic_barrier();
-    }
-#endif
-#ifdef W_PREV
-    {  // (the previous MoE call's replica plan, after the watch: args the pending layer's descriptor (DRAM, one 64 B
-       // page: its state, router bias, gate/up, down, then the landing rows, global state, directions, the arrival
-       // counter's address on this core, the job ring), the planner's L1 (the arena past the head's bytes), my chip)
-        const uint32_t desc = get_arg_val<uint32_t>(W_PREV_A), l1 = get_arg_val<uint32_t>(W_PREV_A + 1);
-        const uint32_t me = get_arg_val<uint32_t>(W_PREV_A + 2);
-        pp::read_page(desc, 64, 0, l1, 64);
-        noc_async_read_barrier();
-        invalidate_l1_cache();
-        const volatile tt_l1_ptr uint32_t* d = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(l1);
-        const pp::Io io{
-            .cnt = 0,
-            .land = d[4],
-            .gst = d[5],
-            .sta = d[0],
-            .rb = d[1],
-            .gu = d[2],
-            .dw = d[3],
-            .cst = d[6],
-            .me = me,
-            .sem = d[7],
-            .ring = d[8],
-            .ring_arg0 = 0,
-            .base = l1 + 64};
-        if (d[15] == 0x50364232u) {  // ('P62B': a descriptor; anything else - nothing pending ever, no read past it)
-            (void)pp::plan(io);
-        }
     }
 #endif
 }

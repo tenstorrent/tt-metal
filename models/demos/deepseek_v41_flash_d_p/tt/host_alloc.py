@@ -88,8 +88,8 @@ def reserve_sites(model) -> None:
     ccl.reserve(mesh, "attn.kv_tp", [1, 1, rows, 512], bf16, tile)
     _reserve_attention(model)
     # LEAN_PY=on (P.66): the block MoE's output on the chip's own rows (OWN_ROWS; tt/moe_block_main_adapter._own_rows),
-    # read by the layer's ffn_residual only (not under MOE_TRACE: the traced half keeps its own outputs)
-    if lean_on() and getattr(model, "own", False) and settings.get("MOE_TRACE") == "off":
+    # read by the layer's ffn_residual only
+    if lean_on() and getattr(model, "own", False):
         if any(getattr(b, "moe_block", None) is not None for b in model.blocks.values()):
             ccl.reserve(mesh, "moe.out", [1, 1, model.rows, model.cfg.dim], bf16, tile)
 

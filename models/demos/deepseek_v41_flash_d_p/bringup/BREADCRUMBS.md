@@ -2120,3 +2120,48 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
 - Step 3: both defaults back to on.
 - Cost of legacy vs on (test_moe_prev_replicas, chunks 1..10 mean, shipped prev lean path, host / wall / device ms):
   see the table below (legacy: env DS41_ATTN_FUSE=legacy DS41_CHEAP_CCL=legacy; on: the gate's unit, same code).
+
+## FIX.33 (overseer fix, attempt 3): model_bringup without expert replication (owner 2026-11-15)
+- Attempt 2 left no change in the tree (checked `git diff`); this attempt starts from HEAD `6777771a502`.
+- Method: replica code taken out by rebuilding, not by hand-deleting. Fork `moe_block_main_ttnn` and INDEX.md = their
+  pre-replica state (`6bdf324e716`, the replica branch's base; model_bringup never changed the fork after it) +
+  `git apply --3way` of P.59 (`fd96a8d0456`) and P.63 (`a39123e5c25`) only. tt/moe_block_main_adapter.py, model.py,
+  residual.py = pre-P.67 model_bringup (`ce1b9047afd`: has FIX.28/29) + P.59, P.63, P.66 (`b9a45fb0b80`). Every
+  conflict was a replica field beside a kept one (HeadTail / tail next to cached_slots; fill / fill_exact next to
+  cached_slots; the block key's spc; P.61's hc_out / output_tensor in residual._collapse); kept side only.
+- KEEP (P.67 file / hunk): attention.py, window_send.py (P.64 ATTN_FUSE), snapshot_send.py (P.65 CHEAP_CCL + FIX.32's
+  geometry key), lean.py, host_alloc.py (P.66), settings ATTN_FUSE / CHEAP_CCL / LEAN_PY / MESH_PROGRAMS (P.63) /
+  EXPERT_X_PIECES (P.59), the adapter's x_min_piece_bytes / cached_slots / _lean_out, model.py's _lean_overrides,
+  residual.py's dead_row_site; fork x_min_piece_bytes and cached_slots; tests test_attn_launch_census,
+  test_window_write_fused, test_snapshot_send, test_mesh_program_probe, test_expert_x_pieces (its P.59 test),
+  test_lean_py, test_snapshot_race_loop, test_snapshot_send_geometry; orchestrator.py (894ffd47779, framework).
+- REMOVE: settings MOE_REPLICAS, MOE_PREV_HOST, MOE_PREV_HOST2, MOE_PLANNER, MOE_TRACE, MOE_PREV_FIXED / MIN / SLACK /
+  NEW, MOE_EXACT_BLOCK / FANOUT / CAP / LIMIT_MS, MOE_FILL / _PIECES / _CAP, MOE_REPLICA_DEMO, MOE_COUNTS / _DIR / _TAG
+  (P.45 counts: the replica study's); tt/expert_prev.py, expert_exact.py, expert_fill.py, expert_slots.py, moe_trace.py,
+  kernels/moe_prev_planner.cpp; the adapter's replica parts (~770 lines: slots, set_replicas, exact / prev / fill,
+  counts, _MAIN_LAYERS); model.py's seg / _segment / counts / replica_demo / prev_reset; residual.py's trace outputs;
+  host_alloc's MOE_TRACE condition; testing/profiler.py's trace_replay / remap_replays (P.61's only caller);
+  tests moe_exact_model, moe_tp_model, test_expert_slot_copy, test_host_bound (P.57, prev on), test_moe_counts,
+  test_moe_exact_bound / _copy / _replicas, test_moe_fill_piggyback, test_moe_prev_host_probe, test_moe_prev_replicas,
+  test_moe_replicas, test_moe_tp4_check, test_moe_trace, test_prev_host_account, and test_expert_x_pieces_layouts
+  (P.58's TP study on P.55a counts); fork expert_slot_copy/, prev_planner.hpp, fx_wait.hpp, REC_FILL / REC_FX /
+  prev counts in combine_port_writer.cpp, the head's HeadTail, the router's slot map, SE_FX_SPARE, RouterSpec slot
+  fields, the resources' fill words, their CHANGELOG / README / INDEX text (one FIX.33 CHANGELOG entry records it).
+- Orthogonal wins that leaned on replica code: (1) test_lean_py / test_mesh_program_probe / test_attn_launch_census
+  took prompt ids / maxdiff from the replica tests -> tests/workloads.py (`prompt_ids`, `maxdiff`); test_lean_py's
+  sides are LEAN_PY legacy / on only (was glue x prev/off). (2) test_mesh_program_probe toggled cached_slots through
+  the replica list `_MAIN_LAYERS` -> the model's own blocks (`b.moe_block`). (3) LEAN_PY's moe.out buffer was gated on
+  MOE_TRACE=off -> unconditional (OWN_ROWS). (4) P.63 / P.59 fork hunks sat next to replica fields; nothing of theirs
+  used them. No orthogonal behaviour changed.
+- Rebuilt (`./build_metal.sh`, rc 0; `ttnn.bringup.moe_block_main` has no expert_slot_copy / fill / tail entry).
+- Gate (FIX.33 --check, all 7 units PASS): ladder rung last: all 303 err_* metrics equal FIX.32's (replicas prev on)
+  to the last digit, err_final_hidden 0.13211 (limit 0.24219), top5 1.0; determinism 0.0 (full and DECODER_SKIP=decode);
+  decoder_skip_decode, contract, adapter acks pass (served_bytes_differ 0, acks_early 0).
+- Numbers (gate profile, 8x4, chunk 5120): chunk_wall_ms 170.4 (spread 4.6; profiled 171.4), device_ms_total 159.37
+  (experts 84.87, attention 43.47), host overhead 11.0 ms, profiled timeline host dispatch 148.6 ms. vs P.67 A/B: off
+  pre-P.67 182.8, replicas on 157.9 (FIX.32's gate: 159.8 wall, 143.29 device, experts 70.46): replicas-off is +10.6 ms
+  wall, +16.1 device (all in experts) vs FIX.32, as expected (~10 ms); -12.4 ms vs pre-P.67 from P.59 / P.63-P.66.
+- Grep (tt/, tests/, hooks.py, the fork, testing/): no MOE_REPLICAS / expert_prev; `prev_` only in pre-existing
+  unrelated names (prev_end, prev_hi) and one docstring of tests/workloads.py naming the deleted file it came from.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.33 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`

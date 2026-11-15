@@ -79,16 +79,13 @@ struct FusedHeadOutputs {
 struct FusedHeadWeights {
     Tensor w;             // the engine's per-core W regions, bank-sharded (DRAM)
     Tensor w_router;      // W_r^T [E, H / TP] a chip, bf16 TILE
-    Tensor router_bias;   // [E, 32] fp32 TILE (replica slots: [E + 32, 32], the slot map's tile last)
+    Tensor router_bias;   // [E, 32] fp32 TILE
     Tensor router_index;  // [E, 32] uint16 TILE
 };
 
 // The weights in the head's layouts, from host tensors (float32 or bf16, row-major, any rank with these trailing
 // dims): gate / up [Is, H] (the shared expert's), down [H, Is], latent_down [Hr, H] (a latent model), router_weight
 // [E, H] (E the router's candidates), router_bias [E]. Every chip gets its TP slice (the plan's positions).
-// slot_map (replica slots, RouterSpec.candidates; required there, refused otherwise): the layer's slot map, a float32
-// host tensor of 1024 integer-valued words (router_rows.hpp slot_of: [0, E) each candidate's own slot, [E, 2 E) its
-// copies n | first << 6, then the copies' slots); it rides as one more tile of router_bias ([E + 32, 32]).
 FusedHeadWeights prepare_fused_head_weights(
     const Tensor& gate,
     const Tensor& up,
@@ -99,8 +96,7 @@ FusedHeadWeights prepare_fused_head_weights(
     MoEBlockResources& resources,
     const MoEDtypes& dtypes,
     uint32_t accumulators,
-    std::optional<int64_t> l1_free = std::nullopt,
-    const std::optional<Tensor>& slot_map = std::nullopt);
+    std::optional<int64_t> l1_free = std::nullopt);
 
 // The head's planned layout, programs' host model and persistent words on the block's resources (made once; a call
 // only reads them). l1_free: the free L1 a core the head plans on (default: measured on the mesh now, as
@@ -115,8 +111,6 @@ struct FusedHeadSetup {
     // a token loop's programs (one each: the loop's offsets are args), unpadded / padded (actual_start / end)
     std::vector<std::shared_ptr<HeadPatchStore>> patches;
     std::vector<std::shared_ptr<HeadPatchStore>> patches_padded;
-    // P.62b: the programs with a HeadTail (their watcher has more address args: their own patch store)
-    std::vector<std::shared_ptr<HeadPatchStore>> patches_tail;
     mutable std::optional<Tensor> arena;  // the default arena (made on first use)
 };
 const FusedHeadSetup& setup_fused_head(
@@ -151,16 +145,6 @@ FusedHeadOutputs fused_head(
     const std::optional<Tensor>& actual_end = std::nullopt,
     uint32_t loop = 0,
     const std::optional<Tensor>& xq = std::nullopt,
-    const std::optional<HeadTail>& tail = std::nullopt,
-    const std::optional<Tensor>& tail_desc = std::nullopt,
     bool cached_slots = false);
-
-// P.62b: the watcher core a HeadTail runs on (logical; the same cell on every chip) and the tail's L1 offset in the
-// arena (the head's own bytes a core, 64 B aligned) for the head a fused_head call with these arguments runs.
-std::pair<tt::tt_metal::CoreCoord, uint32_t> fused_head_tail_core(
-    MoEBlockResources& resources,
-    const MoEDtypes& dtypes,
-    uint32_t accumulators,
-    std::optional<int64_t> l1_free = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

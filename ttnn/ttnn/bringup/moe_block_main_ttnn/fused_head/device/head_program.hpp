@@ -105,24 +105,10 @@ enum HeadSrc : uint16_t {
     SRC_START,  // a padded chunk's actual_start (main's chunk metadata scalar: one uint32, DRAM; absent: all real)
     SRC_END,    // its actual_end
     SRC_XQ,  // x in the shared expert's activation format (MoEDtypes.shared_activations bf8): the engine's / gather's x
-    SRC_TAIL,   // HeadTail's descriptor (a DRAM page the watcher's tail reads; absent: no tail)
     SRC_WORD0,  // the persistent words, in head_words order
 };
 
 inline constexpr size_t kHeadMaxSrc = 40;  // SRC_WORD0 + the persistent words, at most
-
-// P.62b (DeepSeek-V4.1 MOE_PLANNER=folded): a tail on the watcher core's kernel (its NCRISC, after the x gather's watch
-// and the second Y direction's routing send) - the expert replica planner of the previous MoE call
-// (kernels/prev_planner.hpp; no launch of its own: the head's cores are all taken at the 110-core cap). ct: its compile
-// args (PP_CT0 order); l1: the bytes it uses past the head's own arena bytes on the watcher core (the block's arena
-// must hold them). Its runtime args: the descriptor's address (SRC_TAIL, a DRAM page the caller writes: the pending
-// layer's buffers and the planner's state), the L1 base, the chip's position.
-struct HeadTail {
-    std::vector<uint32_t> ct;
-    uint32_t l1 = 0;
-
-    bool operator==(const HeadTail&) const = default;
-};
 
 struct HeadBuffers {
     // per HeadSrc (SRC_WORD0 + i: head_words' i-th): the buffer (nullptr for the words, an absent tensor) and its
@@ -131,7 +117,6 @@ struct HeadBuffers {
     std::array<uint32_t, kHeadMaxSrc> addresses{};
     // token loops (MoEBlockConfig.token_loops k): k, this call's loop of its split, its split (chunk_splits)
     uint32_t loops = 1, loop = 0, split = 0;
-    const HeadTail* tail = nullptr;  // (P.62b: the watcher's tail, or none)
     tt::tt_metal::Buffer* operator[](HeadSrc s) const { return buffers[s]; }
 };
 
@@ -206,13 +191,7 @@ HeadDeviceWeights prepare_head_weights(
     const std::vector<float>& down,
     const std::vector<float>& latent_down,
     const std::vector<float>& router_w,
-    const std::vector<float>& router_b,
-    const std::vector<float>& slot_map = {});
-
-// P.62b: the core whose kernel takes a HeadTail (the watcher) and the arena bytes the head uses a core (a tail's L1
-// starts at the arena's base + these, 64 B aligned).
-CoreCoord head_tail_core(const HeadModel& model);
-uint32_t head_tail_l1_offset(const HeadModel& model);
+    const std::vector<float>& router_b);
 
 // The cores the arena spans (the matmul cores, the router cores, the ports, the watcher) and its bytes a core.
 CoreRangeSet head_arena_cores(const HeadModel& model);
