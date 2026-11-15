@@ -1479,6 +1479,48 @@ tasks:
     details: 'OWNER 2026-11-15 (supersedes this task''s earlier text): P.67 merged the WHOLE moe_replication branch; the owner asked only for the wins orthogonal to expert replication. model_bringup must hold the latest and greatest WITHOUT expert replication; the replica branch will be rebuilt on top of it afterwards (not this task). KEEP (and keep on by default where they are now): P.59 expert x pieces (EXPERT_X_PIECES), P.63 cached argument slots, P.64 ATTN_FUSE, P.65 CHEAP_CCL with FIX.32''s geometry-keyed program cache, P.66 LEAN_PY, FIX.31/FIX.32 framework and test work, the race tests (test_snapshot_race_loop, test_snapshot_send_geometry). REMOVE everything that exists only for expert replication: MOE_REPLICAS and all its modes (off/runtime/exact/prev; the code behaves as off does today), MOE_PREV_HOST, MOE_PREV_HOST2, MOE_PLANNER, MOE_PREV_FIXED and every other replica setting, tt/expert_prev.py and the replica parts of the adapter / moe_trace (P.61 MoE-half trace is replica-branch work: remove it too), the replica tests (test_moe_prev_replicas, test_moe_prev_host_probe, test_prev_host_account and the replica parts of any other), and the replica options in the forks (ttnn/ttnn/bringup/moe_block_main_ttnn: prev_counts, the fused head''s planner tail / prev_planner.hpp, the replica fill ports, the expert schedule''s replica paths) with their CHANGELOG entry. Reference for what is replica vs not: git diff ce1b9047afd b57de503eed (P.67) and the replica branch''s commits P.45-P.62b vs P.59/P.63-P.66 (bringup/deepseek_v41_flash_d_p/moe_replication). FIRST, before editing: list each P.67 file/hunk as KEEP or REMOVE, and name every place an orthogonal win depends on replica code (if one does, keep the orthogonal behaviour with replicas off and say how). Rebuild (./build_metal.sh) after the fork change. PROOF: outputs bit-identical to today''s MOE_REPLICAS=off path (test_determinism, test_decoder_skip_decode, ladder rung last within limits); chunk_wall_ms of the gate''s profile vs P.67''s A/B (off, pre-P.67: 182.8 ms; on, with replicas: 157.9 ms; replicas-off share of it expected ~10 ms slower than on); host / device ms a chunk reported. No new switches; no dead modes; grep proves no MOE_REPLICAS / expert_prev / prev_ name is left on model_bringup. Report plainly, short.'
     gate_tasks:
     - P.67
+- id: FIX.34
+  title: 'OWNER 2026-11-15: the realistic prefill perf measurement (no model change)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - X.3
+  gate:
+    cmd: DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      steady_wall_ms_p51200: '> 0'
+      steady_device_ms_p51200: '> 0'
+      resumed_wall_ms_p51200: '> 0'
+      steady_tok_s_p51200: '> 0'
+      resumed_tok_s_p51200: '> 0'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  brief:
+    details: 'OWNER 2026-11-15: the realistic prefill perf measurement (no model change). Write models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      and run it. Setting: DECODER_SKIP=decode (P.51, Kartik''s cut: layers 0-19 in full, layer 20 only its KV / index head,
+      layers 21-39 never), the shipped defaults otherwise. Points: 51200, 128000, 256000, 512000, 768000, 1024000 (each a
+      chunk start, chunk 5120). At each point measure TWO chunks: (1) STEADY: a chunk not the request''s last (begin_chunk(..,
+      last=False), no replay, write_start = chunk start), its windows carried from the chunk before; (2) RESUMED: the first
+      chunk of a request that resumes from a cached prefix: begin_chunk(.., last=False, write_start=g) with g = p + 128, so
+      its first 128 rows are encoder replay (layers 0-19, windows truncated at the chunk start, no history row below g written)
+      and 4992 rows are new. For each: device ms per chunk (the slowest chip; per-section split as test_profile gives), warm
+      clean wall ms (first host call to the sync, >= 10 warm runs, median and spread, as test_profile''s chunk_wall), tok/s
+      = tokens / wall (5120 for steady, 4992 new for resumed). The chunk timed must be preceded by a DIFFERENT chunk (the
+      real previous chunk''s tokens, p - 5120) on every timed iteration, never the same chunk again, so that state learned
+      from the previous chunk (the replica branch''s MoE replicas) is realistic; say how. Long-range caches at the point:
+      as test_profile fills them for BRINGUP_POS (reuse its mechanism; no 1M-token prefill). FIRST check that 768000 and 1024000
+      fit in device memory with the shipped allocation (test_dram / the plan''s memory check); a point that does not fit is
+      reported with the reason, not skipped silently. Metrics per point: steady_device_ms_p<p>, steady_wall_ms_p<p>, steady_tok_s_p<p>,
+      resumed_device_ms_p<p>, resumed_wall_ms_p<p>, resumed_tok_s_p<p>, and the per-section device split. Output also a markdown
+      table. Change no model code; if the model lacks a hook the test needs, stop and report. The same test must later run
+      unchanged on the replica branch. One process for all points (load the model once). Report plainly, short. Gate: DS41_DECODER_SKIP=decode
+      test_skip_positions.py (the settings'' env name); every point''s metrics are recorded, not only p51200''s.'
+    gate_tasks:
+    - X.3
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix

@@ -1037,6 +1037,33 @@ fixes:
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   placed: '2026-11-15T06:10:26'
+- id: FIX.34
+  title: 'OWNER 2026-11-15: the realistic prefill perf measurement (no model change)'
+  gate:
+  - X.3
+  status: placed
+  t: '2026-11-15T09:12:52'
+  text: 'OWNER 2026-11-15: the realistic prefill perf measurement (no model change). Write models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    and run it. Setting: DECODER_SKIP=decode (P.51, Kartik''s cut: layers 0-19 in full, layer 20 only its KV / index head,
+    layers 21-39 never), the shipped defaults otherwise. Points: 51200, 128000, 256000, 512000, 768000, 1024000 (each a
+    chunk start, chunk 5120). At each point measure TWO chunks: (1) STEADY: a chunk not the request''s last (begin_chunk(..,
+    last=False), no replay, write_start = chunk start), its windows carried from the chunk before; (2) RESUMED: the first
+    chunk of a request that resumes from a cached prefix: begin_chunk(.., last=False, write_start=g) with g = p + 128, so
+    its first 128 rows are encoder replay (layers 0-19, windows truncated at the chunk start, no history row below g written)
+    and 4992 rows are new. For each: device ms per chunk (the slowest chip; per-section split as test_profile gives), warm
+    clean wall ms (first host call to the sync, >= 10 warm runs, median and spread, as test_profile''s chunk_wall), tok/s
+    = tokens / wall (5120 for steady, 4992 new for resumed). The chunk timed must be preceded by a DIFFERENT chunk (the
+    real previous chunk''s tokens, p - 5120) on every timed iteration, never the same chunk again, so that state learned
+    from the previous chunk (the replica branch''s MoE replicas) is realistic; say how. Long-range caches at the point:
+    as test_profile fills them for BRINGUP_POS (reuse its mechanism; no 1M-token prefill). FIRST check that 768000 and 1024000
+    fit in device memory with the shipped allocation (test_dram / the plan''s memory check); a point that does not fit is
+    reported with the reason, not skipped silently. Metrics per point: steady_device_ms_p<p>, steady_wall_ms_p<p>, steady_tok_s_p<p>,
+    resumed_device_ms_p<p>, resumed_wall_ms_p<p>, resumed_tok_s_p<p>, and the per-section device split. Output also a markdown
+    table. Change no model code; if the model lacks a hook the test needs, stop and report. The same test must later run
+    unchanged on the replica branch. One process for all points (load the model once). Report plainly, short.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-11-15T09:13:35'
 classified:
   L.smoke:
     kind: framework
