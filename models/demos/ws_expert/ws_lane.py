@@ -48,6 +48,7 @@ class LCfg:
     D: int = 4  # own-expert chunk reads in flight
     keep: int = 1  # schedule: slots an owner leaves free when it injects
     out_all: bool = False  # every expert's down rows to DRAM (WL_OUT_ALL), not only each group's last
+    wpoll: int = 1  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
 
 
 def lane_cores(g):
@@ -307,7 +308,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         + client_ct
                         + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args()),
                         runtime_args=rd_rt,
-                        defines=ydefs + FAB_DEFS,
+                        defines=ydefs + FAB_DEFS + [("WL_WPOLL", str(lc.wpoll))],
                         config=dm(1),
                     )
                 )

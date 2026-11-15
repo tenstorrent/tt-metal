@@ -40,6 +40,9 @@ constexpr uint32_t hr_cb = tt::CBIndex::c_2;
 constexpr uint32_t wd_cb = tt::CBIndex::c_3;
 constexpr uint32_t xst_cb = tt::CBIndex::c_8;
 constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
+#ifndef WL_WPOLL
+#define WL_WPOLL 1
+#endif
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
@@ -461,12 +464,16 @@ void kernel_main() {
     const uint32_t drained = total_rows;
     auto qy = []() -> bool { return false; };
 #endif
+    uint32_t iter = 0;
     while (true) {
         const uint32_t t0 = wall();
         const bool y = qy();
         const bool l = ql();
-        invalidate_l1_cache();
-        const bool a = qw() | qf() | qr();
+        bool a = false;
+        if (++iter % WL_WPOLL == 0) {  // (the weight queues every WL_WPOLL turns: the x / h queues pace compute)
+            invalidate_l1_cache();
+            a = qw() | qf() | qr();
+        }
         const uint32_t t1 = wall();
         const bool b = qa();
         const uint32_t t2 = wall();
