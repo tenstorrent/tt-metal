@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t KTD = get_compile_time_arg_val(2);
     constexpr uint32_t DCOLS = get_compile_time_arg_val(3);
     constexpr uint32_t GC = get_compile_time_arg_val(4);
-    constexpr uint32_t G = get_compile_time_arg_val(5);
+    [[maybe_unused]] constexpr uint32_t G = get_compile_time_arg_val(5);
     constexpr uint32_t NS = get_compile_time_arg_val(6);
     constexpr uint32_t hring = get_compile_time_arg_val(7);
     constexpr uint32_t hflags = get_compile_time_arg_val(8);
