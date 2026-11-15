@@ -101,11 +101,13 @@ constexpr bool CONV_ON_FPU = get_compile_time_arg_val(6) != 0;
 constexpr uint32_t conv_w_pages = CONV_ON_FPU ? (2 * Kt + Vt) : GDN_CONV_TAPS * (2 * Kt + Vt);
 constexpr uint32_t n_state = Kt * Vt;
 constexpr uint32_t pair_cols = 2 * Kt + Vt;
-// fp32 half-sync DEST: state tiles per update batch, one slot kept for the alpha column.
-constexpr uint32_t UPDATE_BATCH = (ckl::DEST_AUTO_LIMIT - 1) < n_state ? (ckl::DEST_AUTO_LIMIT - 1) : n_state;
+// State tiles per update batch: every DEST slot of a window.
+constexpr uint32_t UPDATE_BATCH = ckl::DEST_AUTO_LIMIT < n_state ? ckl::DEST_AUTO_LIMIT : n_state;
 static_assert(ckl::DEST_AUTO_LIMIT >= 4, "raw windows use 4 DEST slots");
 static_assert(Vt % MM_SUBBLOCK_W == 0, "read-matmul subblock must divide Vt");
 
+// Unpack setup for a run of copy_tile loads: issued once per run of CBs that share a data format and
+// unpack-to-DEST mode (descriptor TOKEN_CBS / U2D_CBS), not per CB.
 ALWI void begin_loads(uint32_t cb) {
     reconfig_data_format_srca(cb);
     copy_init(cb);
@@ -169,6 +171,68 @@ ALWI void silu_scoped(uint32_t dst, RowScope scope) {
     }
 }
 
+// fp32 SFPU binary (DEST[d0] op DEST[d1] -> DEST[out]) on the scope's rows.
+template <ckernel::BinaryOp OP>
+ALWI void binary_scoped(uint32_t d0, uint32_t d1, uint32_t out, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        if constexpr (OP == ckernel::BinaryOp::ADD) {
+            add_binary_tile(d0, d1, out);
+        } else if constexpr (OP == ckernel::BinaryOp::SUB) {
+            sub_binary_tile(d0, d1, out);
+        } else {
+            mul_binary_tile(d0, d1, out);
+        }
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(
+            0, scope.band, [=] { ckernel::sfpu::calculate_sfpu_binary<APPROX, OP, 2, DST_ACCUM_MODE>(d0, d1, out); });
+#endif
+    }
+}
+
+// DEST[data] *= column 0 of DEST[col] (broadcast along the row), on the scope's rows.
+// Band path: the LLK's own per-band body of sfpu_mul_bcast_col (needs sfpu_bcast_col_init).
+ALWI void mul_bcast_col_scoped(uint32_t data, uint32_t col, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        sfpu_mul_bcast_col(data, col);
+    } else {
+#ifdef TRISC_MATH
+        using namespace ckernel::sfpu;
+        _llk_math_eltwise_sfpu_start_(0);
+        const uint32_t left = (scope.band >= 4 ? FACE2_BASE : FACE0_BASE) + (scope.band & 3) * ROW_BAND_STRIDE;
+        const uint32_t right = left + (FACE1_BASE - FACE0_BASE);
+        _process_col_bcast_row_band_<ckernel::BinaryOp::MUL>(
+            col * DEST_TILE_SIZE_RAW + left, left, right, data * DEST_TILE_SIZE_RAW, data * DEST_TILE_SIZE_RAW);
+        _llk_math_eltwise_sfpu_done_();
+#endif
+    }
+}
+
+// DEST[data] *= row 0 of DEST[row] (broadcast down the column), on the scope's rows.
+// Band path: the LLK's own per-band body of sfpu_mul_bcast_row (needs sfpu_bcast_row_init).
+ALWI void mul_bcast_row_scoped(uint32_t data, uint32_t row, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        sfpu_mul_bcast_row(data, row);
+    } else {
+#ifdef TRISC_MATH
+        using namespace ckernel::sfpu;
+        constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+        _llk_math_eltwise_sfpu_start_(0);
+        const uint32_t row0 = row * DEST_TILE_SIZE_RAW + FACE0_BASE;
+        TT_SFPLOAD(p_sfpu::LREG4, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[0]);
+        TT_SFPLOAD(p_sfpu::LREG5, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[1]);
+        TT_SFPLOAD(p_sfpu::LREG6, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[2]);
+        TT_SFPLOAD(p_sfpu::LREG7, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[3]);
+        _process_row_bcast_data_band_<ckernel::BinaryOp::MUL>(
+            data * DEST_TILE_SIZE_RAW,
+            data * DEST_TILE_SIZE_RAW,
+            scope.band >= 4 ? FACE2_BASE : FACE0_BASE,
+            (scope.band & 3) * ROW_BAND_STRIDE);
+        _llk_math_eltwise_sfpu_done_();
+#endif
+    }
+}
+
 struct Buffers {
     DataflowBuffer state_in_mm{cb_state_in_mm};
     DataflowBuffer state_mm{cb_state_mm};
@@ -192,7 +256,6 @@ ALWI void gates_block() {
     begin_loads(cb_gate_in);
     load(cb_gate_in, 1, 0);  // a
     load(cb_gate_in, 0, 3);  // b
-    begin_loads(cb_gate_w);
     load(cb_gate_w, 1, 1);  // dt_bias (row 0)
     load(cb_gate_w, 0, 2);  // A_log (row 0)
     sfpu_bcast_row_init();
@@ -229,7 +292,6 @@ ALWI void conv_two_taps(uint32_t col, uint32_t tap0) {
     begin_loads(cb_window);
     load(cb_window, tap0, 0);
     load(cb_window, tap0 + 1, 2);
-    begin_loads(cb_conv_w);
     load(cb_conv_w, GDN_CONV_TAPS * col + tap0, 1);
     load(cb_conv_w, GDN_CONV_TAPS * col + tap0 + 1, 3);
     sfpu_bcast_row_init();
@@ -379,7 +441,7 @@ ALWI void l2_inverse_norm(Buffers& bufs, uint32_t base, uint32_t post_mul_bits) 
 // ---------------------------------------------------------------- l2norm_block
 // rinv_q = K^-1/2 rsqrt(sum q^2 + 1e-6), rinv_k = rsqrt(sum k^2 + 1e-6);
 // kn -> cb_kq_rows[0, Kt), qn -> cb_kq_rows[Kt, 2Kt), d = rowsum(qn * kn) -> cb_d, kn^T -> cb_knT.
-ALWI void l2norm_block(Buffers& bufs) {
+ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
     // q then k: one loop body keeps a single expansion of the square chain and the reduce.
 #pragma GCC unroll 1
     for (uint32_t part = 0; part < 2; ++part) {
@@ -394,14 +456,13 @@ ALWI void l2norm_block(Buffers& bufs) {
         begin_loads(cb_y_qk);
         load(cb_y_qk, kt, 0);       // q
         load(cb_y_qk, Kt + kt, 2);  // k
-        begin_loads(cb_rinv);
         load(cb_rinv, 0, 1);
         load(cb_rinv, 1, 3);
         sfpu_bcast_col_init();
-        sfpu_mul_bcast_col(0, 1);  // qn
-        sfpu_mul_bcast_col(2, 3);  // kn
+        mul_bcast_col_scoped(0, 1, scope);  // qn
+        mul_bcast_col_scoped(2, 3, scope);  // kn
         mul_binary_tile_init();
-        mul_binary_tile(0, 2, 1);  // qn * kn
+        binary_scoped<ckernel::BinaryOp::MUL>(0, 2, 1, scope);  // qn * kn
         tile_regs_commit();
         tile_regs_wait();
         pack_first(2, cb_kq_rows, kt);
@@ -435,85 +496,88 @@ ALWI void l2norm_block(Buffers& bufs) {
 }
 
 // ---------------------------------------------------------------- one token step
-ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool first_in_row) {
+ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool first_in_row, RowScope scope) {
     const uint32_t src = first_in_pair ? cb_state_in : cb_state;
     const uint32_t src_mm = first_in_pair ? cb_state_in_mm : cb_state_mm;
     const uint32_t dst = last_in_pair ? cb_state_out : cb_state;
     DataflowBuffer& src_mm_buf = first_in_pair ? bufs.state_in_mm : bufs.state_mm;
 
     // read (5a): [rk; ro] = [kn; qn] x S_{t-1}
-    cb_wait_front(src, n_state);
-    cb_wait_front(src_mm, n_state);
-    ckl::matmul_block<
-        false,
-        false,
-        ckl::LastBlockTarget::Out,
-        ckl::OutputCBLayout::TileRowMajor,
-        ckl::matmul_config::InitMode::Short,
-        ckl::InputPolicy::WaitAndRetainOnLastBlock,
-        ckl::InputPolicy::NoWaitNoPop>(
-        bufs.kq_rows,
-        src_mm_buf,
-        bufs.reads,
-        bufs.reads,
-        ckl::MatmulBlockShape::of(2, Vt / MM_SUBBLOCK_W, 1, MM_SUBBLOCK_W, Kt, 1));
-
-    // token vector (5b): u = beta_sel (*)col (v - alpha (*)col rk); o = alpha_sel (*)col ro + d (*)col u
-    cb_wait_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
-    cb_wait_front(cb_reads, 2 * Vt);
-    cb_reserve_back(cb_u, Vt);
-    cb_reserve_back(cb_u_f32, Vt);
-    for (uint32_t vt = 0; vt < Vt; ++vt) {
-        tile_regs_acquire();
-        begin_loads(cb_reads);
-        load(cb_reads, vt, 0);
-        begin_loads(cb_tok_coef);
-        load(cb_tok_coef, COEF_ALPHA, 1);
-        load(cb_tok_coef, COEF_BETA_SEL, 3);
-        begin_loads(cb_v);
-        load(cb_v, vt, 2);
-        sfpu_bcast_col_init();
-        sfpu_mul_bcast_col(0, 1);
-        sub_binary_tile_init();
-        sub_binary_tile(2, 0, 2);
-        sfpu_bcast_col_init();
-        sfpu_mul_bcast_col(2, 3);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_first(2, cb_u, vt);
-        tile_regs_release();
+    {
+        DeviceZoneScopedN("Z_MM");
+        cb_wait_front(src, n_state);
+        cb_wait_front(src_mm, n_state);
+        ckl::matmul_block<
+            false,
+            false,
+            ckl::LastBlockTarget::Out,
+            ckl::OutputCBLayout::TileRowMajor,
+            ckl::matmul_config::InitMode::Short,
+            ckl::InputPolicy::WaitAndRetainOnLastBlock,
+            ckl::InputPolicy::NoWaitNoPop>(
+            bufs.kq_rows,
+            src_mm_buf,
+            bufs.reads,
+            bufs.reads,
+            ckl::MatmulBlockShape::of(2, Vt / MM_SUBBLOCK_W, 1, MM_SUBBLOCK_W, Kt, 1));
     }
-    cb_push_back(cb_u, Vt);
-    cb_push_back(cb_u_f32, Vt);
-    cb_wait_front(cb_u, Vt);
-    cb_wait_front(cb_u_f32, Vt);
-    for (uint32_t vt = 0; vt < Vt; ++vt) {
-        tile_regs_acquire();
-        begin_loads(cb_reads);
-        load(cb_reads, Vt + vt, 0);
-        begin_loads(cb_tok_coef);
-        load(cb_tok_coef, COEF_ALPHA_SEL, 1);
-        begin_loads(cb_u_f32);
-        load(cb_u_f32, vt, 2);
-        begin_loads(cb_d);
-        load(cb_d, 0, 3);
-        sfpu_bcast_col_init();
-        sfpu_mul_bcast_col(0, 1);
-        sfpu_mul_bcast_col(2, 3);
-        add_binary_tile_init();
-        add_binary_tile(0, 2, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        if (!first_in_row) {
-            pack_reconfig_l1_acc(1);
+    {
+        DeviceZoneScopedN("Z_UO");
+        // token vector (5b): u = beta_sel (*)col (v - alpha (*)col rk); o = alpha_sel (*)col ro + d (*)col u
+        cb_wait_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
+        cb_wait_front(cb_reads, 2 * Vt);
+        cb_reserve_back(cb_u, Vt);
+        cb_reserve_back(cb_u_f32, Vt);
+        for (uint32_t vt = 0; vt < Vt; ++vt) {
+            tile_regs_acquire();
+            begin_loads(cb_reads);
+            load(cb_reads, vt, 0);
+            load(cb_tok_coef, COEF_ALPHA, 1);
+            load(cb_tok_coef, COEF_BETA_SEL, 3);
+            load(cb_v, vt, 2);
+            sfpu_bcast_col_init();
+            mul_bcast_col_scoped(0, 1, scope);
+            sub_binary_tile_init();
+            binary_scoped<ckernel::BinaryOp::SUB>(2, 0, 2, scope);
+            sfpu_bcast_col_init();
+            mul_bcast_col_scoped(2, 3, scope);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(2, cb_u, vt);
+            tile_regs_release();
         }
-        pack_first(0, cb_o_acc, vt);
-        pack_reconfig_l1_acc(0);
-        tile_regs_release();
+        cb_push_back(cb_u, Vt);
+        cb_push_back(cb_u_f32, Vt);
+        cb_wait_front(cb_u, Vt);
+        cb_wait_front(cb_u_f32, Vt);
+        for (uint32_t vt = 0; vt < Vt; ++vt) {
+            tile_regs_acquire();
+            begin_loads(cb_reads);
+            load(cb_reads, Vt + vt, 0);
+            load(cb_tok_coef, COEF_ALPHA_SEL, 1);
+            load(cb_u_f32, vt, 2);
+            load(cb_d, 0, 3);
+            sfpu_bcast_col_init();
+            mul_bcast_col_scoped(0, 1, scope);
+            mul_bcast_col_scoped(2, 3, scope);
+            add_binary_tile_init();
+            binary_scoped<ckernel::BinaryOp::ADD>(0, 2, 0, scope);
+            tile_regs_commit();
+            tile_regs_wait();
+            if (!first_in_row) {
+                pack_reconfig_l1_acc(1);
+            }
+            pack_first(0, cb_o_acc, vt);
+            pack_reconfig_l1_acc(0);
+            tile_regs_release();
+        }
+        cb_pop_front(cb_reads, 2 * Vt);
     }
-    cb_pop_front(cb_reads, 2 * Vt);
-
+    DeviceZoneScopedN("Z_UPD");
     // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
+    // alpha is one scalar per token (element (0, 0) of the alpha page): an fp32 scalar SFPU multiply,
+    // with no broadcast tile in DEST.
+    const uint32_t alpha_bits = read_tile_value(cb_tok_coef, COEF_ALPHA, 0);
     const bool in_place = (src == dst);
     if (in_place) {
         // One allocation of exactly n_state pages: after the pop the read pointer wraps back onto
@@ -528,15 +592,13 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
     for (uint32_t first = 0; first < n_state; first += UPDATE_BATCH) {
         const uint32_t count = (n_state - first) < UPDATE_BATCH ? (n_state - first) : UPDATE_BATCH;
         tile_regs_acquire();
-        begin_loads(cb_tok_coef);
-        load(cb_tok_coef, COEF_ALPHA, UPDATE_BATCH);
         begin_loads(src);
         for (uint32_t i = 0; i < count; ++i) {
             load(src, first + i, i);
         }
-        sfpu_bcast_col_init();
+        binop_with_scalar_tile_init();
         for (uint32_t i = 0; i < count; ++i) {
-            sfpu_mul_bcast_col(i, UPDATE_BATCH);
+            mul_unary_tile(i, alpha_bits);
         }
         wait_sfpu_before_fpu();
         reconfig_data_format(cb_u, cb_knT);
@@ -582,16 +644,15 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope)
         load(cb_rinv_o, 0, 1);
         begin_loads(cb_norm_w);
         load(cb_norm_w, vt, 2);
-        begin_loads(cb_z);
         load(cb_z, vt, 3);
         sfpu_bcast_col_init();
-        sfpu_mul_bcast_col(0, 1);
+        mul_bcast_col_scoped(0, 1, scope);
         sfpu_bcast_row_init();
-        sfpu_mul_bcast_row(0, 2);
+        mul_bcast_row_scoped(0, 2, scope);
         silu_tile_init();
         silu_scoped(3, scope);
         mul_binary_tile_init();
-        mul_binary_tile(0, 3, 0);
+        binary_scoped<ckernel::BinaryOp::MUL>(0, 3, 0, scope);
         tile_regs_commit();
         tile_regs_wait();
         pack_first(0, cb_out_rows, vt);
@@ -644,13 +705,13 @@ void kernel_main() {
             }
             {
                 DeviceZoneScopedN("Z_L2N");
-                l2norm_block(bufs);
+                l2norm_block(bufs, scope);
             }
 
             cb_reserve_back(cb_o_acc, Vt);
             for (uint32_t row = lo; row < hi; ++row, ++token) {
                 DeviceZoneScopedN("Z_STEP");
-                token_step(bufs, token == 0, token == T - 1, row == lo);
+                token_step(bufs, token == 0, token == T - 1, row == lo, scope);
             }
             cb_push_back(cb_o_acc, Vt);
             cb_pop_front(cb_kq_rows, 2 * Kt);

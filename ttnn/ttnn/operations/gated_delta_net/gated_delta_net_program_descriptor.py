@@ -8,6 +8,7 @@ ttnn.split_work_to_cores(row_wise=True); each core walks a contiguous pair range
 state resident at a time, token rows in blocks of one tile row, one token per recurrence step.
 """
 
+import math
 import struct
 from pathlib import Path
 
@@ -26,9 +27,12 @@ MAX_CORES = None  # optional grid cap; None = full compute grid
 # Conv taps on the FPU (row-broadcast ELWMUL accumulated in DEST) instead of the SFPU. Exact only for
 # bf16 token operands (srcA/srcB hold 19 bits), so "auto" enables it for bf16 tokens only.
 CONV_ON_FPU = "auto"
+# Full-sync DEST (8 fp32 tiles per window, state update batches of 7). Measured slower on
+# perf_decode_b1 (54.5 vs 53.2 us: it loses math/pack overlap), so off; the kernels adapt to either.
+DST_FULL_SYNC = False
 
 # ---- Buffer-depth knobs ----
-WINDOW_DEPTH = 2  # channel groups of tap tiles in flight
+WINDOW_DEPTH = 2  # window groups of tap tiles in flight
 TOK_COEF_DEPTH = 2  # tokens of coefficient pages in flight
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 STATE_IN_DEPTH = 1  # pair states (S0) in flight
@@ -97,7 +101,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False):
         ((CB_STATE, CB_STATE_MM), n_state),
         ((CB_STATE_OUT,), n_state * STATE_OUT_DEPTH),
         ((CB_CONV_W,), (1 if conv_on_fpu else CONV_TAPS) * (2 * Kt + Vt)),
-        ((CB_WINDOW,), CONV_TAPS * max(Kt, Vt) * WINDOW_DEPTH),
+        ((CB_WINDOW,), CONV_TAPS * _window_group_cols(Kt, Vt) * WINDOW_DEPTH),
         ((CB_CONV_ACC,), 0 if conv_on_fpu else CONV_ACC_DEPTH),
         ((CB_Y_QK,), 2 * Kt * trb),
         ((CB_V,), Vt * trb),
@@ -146,6 +150,11 @@ U2D_CBS = (
     CB_Z,
     CB_NORM_W,
 )
+
+
+def _window_group_cols(Kt, Vt):
+    """Column tiles per conv-window hand-off: the largest size that tiles q, k and v groups evenly."""
+    return math.gcd(Kt, Vt)
 
 
 def _conv_on_fpu(dtype):
@@ -274,6 +283,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
     reader_ct.append(ROW_STAGE_SLOTS if row_stage_bytes else 0)
     reader_ct.append(int(conv_on_fpu))
+    reader_ct.append(_window_group_cols(Kt, Vt))
     for t in reader_tensors:
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     reader_addrs = [t.buffer_address() for t in reader_tensors]
@@ -308,6 +318,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         fp32_cb = idx not in TOKEN_CBS or token_dtype == ttnn.float32
         modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32 if fp32_cb else ttnn.UnpackToDestMode.Default
     compute_kernel_config.unpack_to_dest_mode = modes
+    if DST_FULL_SYNC:
+        compute_kernel_config.dst_full_sync_en = True
 
     defines = _kernel_defines()
     kernels = [

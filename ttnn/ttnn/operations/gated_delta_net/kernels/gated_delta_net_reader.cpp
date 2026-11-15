@@ -42,6 +42,7 @@ constexpr uint32_t STATE_TILE_BYTES = get_compile_time_arg_val(7);  // fp32 stat
 constexpr uint32_t READ_ALIGN = get_compile_time_arg_val(8);        // DRAM read alignment
 constexpr uint32_t STAGE_SLOTS = get_compile_time_arg_val(9);       // 0: face rows are read directly
 constexpr bool CONV_W_RAW = get_compile_time_arg_val(10) != 0;      // raw conv_weight tiles (FPU conv)
+constexpr uint32_t WINDOW_GROUP_COLS = get_compile_time_arg_val(11);  // column tiles per window hand-off
 constexpr uint32_t FACE_BYTES = TILE_BYTES / 4;                     // one 16x16 face
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;                     // one face row
 constexpr uint32_t CS_COLS_PER_FLUSH = TILE_ROWS / GDN_HISTORY;     // conv_state_out columns per scratch tile
@@ -154,7 +155,7 @@ void kernel_main() {
     constexpr uint32_t pair_cols = 2 * Kt + Vt;
     constexpr uint32_t conv_w_pages = CONV_W_RAW ? pair_cols : GDN_CONV_TAPS * pair_cols;
 
-    constexpr auto mixed_args = TensorAccessorArgs<11>();
+    constexpr auto mixed_args = TensorAccessorArgs<12>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
@@ -251,12 +252,13 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_gate_in, 2);
 
-            // ---- conv window: X_j[p] = xx[row(p) + j - 3], one channel group (q, k or v) per hand-off ----
+            // ---- conv window: X_j[p] = xx[row(p) + j - 3], WINDOW_GROUP_COLS column tiles per hand-off ----
             // Per group: one zero fill, one flush of every DRAM row read (current rows + history rows),
-            // then one flush of the L1 row shifts that source the current-row tiles.
-            for (uint32_t group_first = 0; group_first < pair_cols;) {
-                const uint32_t group_cols = group_first < 2 * Kt ? Kt : Vt;
-                const uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
+            // then one flush of the L1 row shifts that source the current-row tiles. A uniform group
+            // size keeps every reservation contiguous in cb_window (its size is a multiple of a group).
+            constexpr uint32_t group_cols = WINDOW_GROUP_COLS;
+            constexpr uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
+            for (uint32_t group_first = 0; group_first < pair_cols; group_first += group_cols) {
                 cb_reserve_back(cb_window, group_tiles);
                 const uint32_t win = get_write_ptr(cb_window);
                 if (!owned) {
@@ -302,7 +304,6 @@ void kernel_main() {
                     noc_async_read_barrier();
                 }
                 cb_push_back(cb_window, group_tiles);
-                group_first += group_cols;
             }
 
             // ---- S0 of the pair, after the first tile row's prep inputs ----
