@@ -70,6 +70,14 @@ void bind_compress_pool_decode(::nanobind::module_& mod) {
                 - ``[latent]`` (``[1, 1, 1, Dh]`` bfloat16 32x32 TILE DRAM) if ``cos``/``sin`` omitted.
                 - ``[latent, roped_row]`` where ``roped_row`` is ``[1, 1, 1, Dh]`` bfloat16 ROW_MAJOR DRAM
                   if ``cos`` and ``sin`` are provided.
+
+        Block of R = 2 or 4 rows (DSpark verify; positions p .. p + R - 1 of one session), equal to R one-row calls:
+            kv / gate: bfloat16 TILE ``[1, 1, R, W]`` with ``ttnn.Tile((R, 32))`` (``kv_gate_interleave`` as above).
+            win_slot: int32 ``[R]``, the window slot of each row; prev_slot: ``[1]``, the slot of p - 1.
+            start_odd (bool): p is odd. At ratio 2 the rows at odd positions close a group (G = R / 2); at
+                ratio 1 every row does (G = R).
+            cos / sin: TILE ``[1, 1, >=G, rope_dim]``, row g for closed group g; entry / dense_entry: int32 ``[G]``;
+                key_row: ``[1, 1, G, Dk]``. Outputs are ``[1, 1, G, Dh]``.
         )doc",
         &ttnn::experimental::deepseek::compress_pool_decode,
         nb::arg("kv"),
@@ -93,7 +101,8 @@ void bind_compress_pool_decode(::nanobind::module_& mod) {
         nb::arg("dense_kv") = std::nullopt,
         nb::arg("dense_entry") = std::nullopt,
         nb::arg("key_row") = std::nullopt,
-        nb::arg("kv_gate_interleave") = 0);
+        nb::arg("kv_gate_interleave") = 0,
+        nb::arg("start_odd") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

@@ -34,6 +34,253 @@ inline void patch_tile_row(uint32_t dst_tile_addr, uint32_t src_row_addr, uint32
     copy_l1_words(dst_tile_addr + row_offset + face_bytes, src_row_addr + face_row_bytes, face_row_bytes);
 }
 
+// Row j of an (R x 32) tile (two R x 16 faces) -> a 1 x 32 row.
+template <uint32_t R>
+inline void extract_block_row(uint32_t dst_row_addr, uint32_t src_tile_addr, uint32_t j) {
+    constexpr uint32_t face_row_bytes = 16 * 2;
+    copy_l1_words(dst_row_addr, src_tile_addr + j * face_row_bytes, face_row_bytes);
+    copy_l1_words(dst_row_addr + face_row_bytes, src_tile_addr + (R + j) * face_row_bytes, face_row_bytes);
+}
+
+// Key core key_idx: its tile of index_norm_weight, and column tile key_idx of index_wk ([Dh, Dk],
+// tile (k, n) at k * key_tiles + n) streamed down K in key_w_chunk-tile pages.
+template <
+    uint32_t has_index_key,
+    uint32_t index_norm_weight_is_tile,
+    uint32_t head_tiles,
+    uint32_t row_tile_bytes,
+    uint32_t cache_tile_bytes,
+    uint32_t key_tiles,
+    uint32_t key_w_chunk,
+    uint32_t cb_key_w_id,
+    uint32_t cb_key_gamma_id,
+    uint32_t cb_raw_scratch_id,
+    typename WkAcc,
+    typename NormAcc>
+inline void read_index_weights(bool is_key_core, uint32_t key_idx, const WkAcc& wk_acc, const NormAcc& key_norm_acc) {
+    constexpr uint32_t face_bytes = 16 * 16 * 2;
+    constexpr uint32_t face_row_bytes = 16 * 2;
+    if constexpr (has_index_key != 0) {
+        if (is_key_core) {
+            const uint32_t raw_l1 = CircularBuffer(cb_raw_scratch_id).get_write_ptr();
+            CircularBuffer key_gamma_cb(cb_key_gamma_id);
+            CircularBuffer key_w_cb(cb_key_w_id);
+            key_gamma_cb.reserve_back(1);
+            const uint32_t key_gamma_l1 = key_gamma_cb.get_write_ptr();
+            if constexpr (index_norm_weight_is_tile != 0) {
+                noc_async_read(key_norm_acc.get_noc_addr(key_idx, 0), raw_l1, 64u);
+                noc_async_read(key_norm_acc.get_noc_addr(key_idx, face_bytes), raw_l1 + 64u, 64u);
+            } else {
+                noc_async_read(key_norm_acc.get_noc_addr(0, key_idx * row_tile_bytes), key_gamma_l1, row_tile_bytes);
+            }
+            for (uint32_t k0 = 0; k0 < head_tiles; k0 += key_w_chunk) {
+                key_w_cb.reserve_back(key_w_chunk);
+                uint32_t w_l1 = key_w_cb.get_write_ptr();
+                for (uint32_t k = k0; k < k0 + key_w_chunk; ++k) {
+                    noc_async_read(wk_acc.get_noc_addr(k * key_tiles + key_idx), w_l1, cache_tile_bytes);
+                    w_l1 += cache_tile_bytes;
+                }
+                noc_async_read_barrier();
+                if (k0 == 0) {
+                    if constexpr (index_norm_weight_is_tile != 0) {
+                        copy_l1_words(key_gamma_l1, raw_l1, face_row_bytes);
+                        copy_l1_words(key_gamma_l1 + face_row_bytes, raw_l1 + 64u, face_row_bytes);
+                    }
+                    key_gamma_cb.push_back(1);
+                }
+                key_w_cb.push_back(key_w_chunk);
+            }
+        }
+    }
+}
+
+// A block of R rows (positions p .. p + R - 1) closing G groups: core t's column tile of kv is one (R x 32) tile.
+// At ratio 1 (no window) every row closes its group: kv gets the R rows. At ratio 2 group g closes at row
+// c = first + 2 g (first = 0 when p is odd): kv gets row c and k0 the row before it, row c - 1 or, for c = 0,
+// the window's row at prev_slot (the slot of p - 1); then the R rows go into the window at their slots, in
+// order, as R one-row steps leave it. cos / sin row g of the cos / sin tiles is group g's.
+template <
+    uint32_t has_window,
+    uint32_t has_prev_slot,
+    uint32_t has_rope,
+    uint32_t kv_sharded,
+    uint32_t norm_weight_is_tile,
+    uint32_t head_tiles,
+    uint32_t row_tile_bytes,
+    uint32_t cache_tile_bytes,
+    uint32_t win_slot_page_bytes,
+    uint32_t prev_slot_page_bytes,
+    uint32_t pos_slot_bytes,
+    uint32_t cb_kv_id,
+    uint32_t cb_k0_id,
+    uint32_t cb_gamma_id,
+    uint32_t cb_cs_id,
+    uint32_t cb_win_kv_tile_id,
+    uint32_t cb_kv_scratch_id,
+    uint32_t cb_pos_id,
+    uint32_t cb_raw_scratch_id,
+    uint32_t has_index_key,
+    uint32_t R,
+    uint32_t G,
+    uint32_t start_odd,
+    uint32_t cb_block_id,
+    uint32_t cs_face1_bytes,
+    typename WinAcc,
+    typename SlotAcc,
+    typename PrevAcc,
+    typename NormAcc,
+    typename CosAcc,
+    typename SinAcc>
+inline void read_block(
+    uint32_t t,
+    uint64_t kv_noc,
+    const WinAcc& win_kv_acc,
+    const SlotAcc& win_slot_acc,
+    const PrevAcc& prev_slot_acc,
+    const NormAcc& norm_acc,
+    const CosAcc& cos_acc,
+    const SinAcc& sin_acc,
+    bool do_rope,
+    uint32_t rope_tile_idx) {
+    constexpr uint32_t tile_rows = 32;
+    constexpr uint32_t face_bytes = 16 * 16 * 2;
+    constexpr uint32_t face_row_bytes = 16 * 2;
+    constexpr uint32_t block_bytes = R * row_tile_bytes;
+    // G cos / sin rows of a face, in whole 64 B reads.
+    constexpr uint32_t cs_bytes = ((G * face_row_bytes + 63u) / 64u) * 64u;
+    constexpr uint32_t cs_pages = (has_index_key != 0 ? 4u : 2u) * G;
+    constexpr uint32_t first = start_odd != 0 ? 0u : 1u;
+
+    CircularBuffer kv_cb(cb_kv_id);
+    CircularBuffer gamma_cb(cb_gamma_id);
+    CircularBuffer raw_cb(cb_raw_scratch_id);
+    CircularBuffer block_cb(cb_block_id);
+    kv_cb.reserve_back(R);
+    gamma_cb.reserve_back(1);
+    raw_cb.reserve_back(10);
+    block_cb.reserve_back(1);
+    const uint32_t kv_l1 = kv_cb.get_write_ptr();
+    const uint32_t gamma_l1 = gamma_cb.get_write_ptr();
+    const uint32_t raw_l1 = raw_cb.get_write_ptr();
+    const uint32_t block_l1 = block_cb.get_write_ptr();
+
+    noc_async_read(kv_noc, block_l1, block_bytes);
+    if constexpr (norm_weight_is_tile != 0) {
+        noc_async_read(norm_acc.get_noc_addr(t, 0), raw_l1, 64u);
+        noc_async_read(norm_acc.get_noc_addr(t, face_bytes), raw_l1 + 64u, 64u);
+    } else {
+        noc_async_read(norm_acc.get_noc_addr(0, t * row_tile_bytes), gamma_l1, row_tile_bytes);
+    }
+    uint32_t cs_l1 = 0;
+    if constexpr (has_rope != 0) {
+        if (do_rope) {
+            CircularBuffer cs_cb(cb_cs_id);
+            cs_cb.reserve_back(cs_pages);
+            cs_l1 = cs_cb.get_write_ptr();
+            noc_async_read(cos_acc.get_noc_addr(rope_tile_idx, 0), raw_l1 + 128u, cs_bytes);
+            noc_async_read(cos_acc.get_noc_addr(rope_tile_idx, cs_face1_bytes), raw_l1 + 256u, cs_bytes);
+            noc_async_read(sin_acc.get_noc_addr(rope_tile_idx, 0), raw_l1 + 384u, cs_bytes);
+            noc_async_read(sin_acc.get_noc_addr(rope_tile_idx, cs_face1_bytes), raw_l1 + 512u, cs_bytes);
+        }
+    }
+    uint32_t pos_l1 = 0;
+    uint32_t rows_l1 = 0;
+    if constexpr (has_window != 0) {
+        CircularBuffer pos_cb(cb_pos_id);
+        CircularBuffer rows_cb(cb_kv_scratch_id);
+        pos_cb.reserve_back(2);
+        rows_cb.reserve_back(1);
+        pos_l1 = pos_cb.get_write_ptr();
+        rows_l1 = rows_cb.get_write_ptr();
+        noc_async_read(win_slot_acc.get_noc_addr(0), pos_l1, win_slot_page_bytes);
+        if constexpr (has_prev_slot != 0) {
+            noc_async_read(prev_slot_acc.get_noc_addr(0), pos_l1 + pos_slot_bytes, prev_slot_page_bytes);
+        }
+    }
+    noc_async_read_barrier();
+
+    if constexpr (norm_weight_is_tile != 0) {
+        copy_l1_words(gamma_l1, raw_l1, face_row_bytes);
+        copy_l1_words(gamma_l1 + face_row_bytes, raw_l1 + 64u, face_row_bytes);
+    }
+    gamma_cb.push_back(1);
+
+    if constexpr (has_rope != 0) {
+        if (do_rope) {
+            // Pages (cos_g, sin_g) per group, twice on a key core (the key's RoPE after the latent's).
+            for (uint32_t g = 0; g < G; ++g) {
+                const uint32_t dst = cs_l1 + 2u * g * row_tile_bytes;
+                copy_l1_words(dst, raw_l1 + 128u + g * face_row_bytes, face_row_bytes);
+                copy_l1_words(dst + face_row_bytes, raw_l1 + 256u + g * face_row_bytes, face_row_bytes);
+                copy_l1_words(dst + row_tile_bytes, raw_l1 + 384u + g * face_row_bytes, face_row_bytes);
+                copy_l1_words(
+                    dst + row_tile_bytes + face_row_bytes, raw_l1 + 512u + g * face_row_bytes, face_row_bytes);
+            }
+            if constexpr (has_index_key != 0) {
+                copy_l1_words(cs_l1 + 2u * G * row_tile_bytes, cs_l1, 2u * G * row_tile_bytes);
+            }
+            CircularBuffer(cb_cs_id).push_back(cs_pages);
+        }
+    }
+
+    if constexpr (has_window == 0) {
+        for (uint32_t j = 0; j < R; ++j) {
+            extract_block_row<R>(kv_l1 + j * row_tile_bytes, block_l1, j);
+        }
+        kv_cb.push_back(R);
+        return;
+    } else {
+        for (uint32_t j = 0; j < R; ++j) {
+            extract_block_row<R>(rows_l1 + j * row_tile_bytes, block_l1, j);
+        }
+        invalidate_l1_cache();
+        volatile tt_l1_ptr uint32_t* slots = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1);
+        uint32_t prev_slot_idx = 1u - slots[0];
+        if constexpr (has_prev_slot != 0) {
+            prev_slot_idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1 + pos_slot_bytes)[0];
+        }
+
+        CircularBuffer k0_cb(cb_k0_id);
+        CircularBuffer win_kv_tile_cb(cb_win_kv_tile_id);
+        k0_cb.reserve_back(G);
+        win_kv_tile_cb.reserve_back(1);
+        const uint32_t k0_l1 = k0_cb.get_write_ptr();
+        const uint32_t tile_l1 = win_kv_tile_cb.get_write_ptr();
+
+        // The window's row at prev_slot is read before any of the block's rows overwrite it.
+        uint32_t tile_row = prev_slot_idx / tile_rows;
+        uint64_t tile_noc = win_kv_acc.get_noc_addr(tile_row * head_tiles + t);
+        noc_async_read(tile_noc, tile_l1, cache_tile_bytes);
+        noc_async_read_barrier();
+        for (uint32_t g = 0; g < G; ++g) {
+            const uint32_t c = first + 2u * g;
+            copy_l1_words(kv_l1 + g * row_tile_bytes, rows_l1 + c * row_tile_bytes, row_tile_bytes);
+            if (c == 0) {
+                extract_tile_row(k0_l1 + g * row_tile_bytes, tile_l1, prev_slot_idx % tile_rows);
+            } else {
+                copy_l1_words(k0_l1 + g * row_tile_bytes, rows_l1 + (c - 1u) * row_tile_bytes, row_tile_bytes);
+            }
+        }
+        kv_cb.push_back(G);
+        k0_cb.push_back(G);
+
+        for (uint32_t j = 0; j < R; ++j) {
+            const uint32_t slot = slots[j];
+            if (slot / tile_rows != tile_row) {
+                noc_async_write(tile_l1, tile_noc, cache_tile_bytes);
+                noc_async_write_barrier();
+                tile_row = slot / tile_rows;
+                tile_noc = win_kv_acc.get_noc_addr(tile_row * head_tiles + t);
+                noc_async_read(tile_noc, tile_l1, cache_tile_bytes);
+                noc_async_read_barrier();
+            }
+            patch_tile_row(tile_l1, rows_l1 + j * row_tile_bytes, slot % tile_rows);
+        }
+        noc_async_write(tile_l1, tile_noc, cache_tile_bytes);
+        noc_async_write_barrier();
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -65,7 +312,13 @@ void kernel_main() {
     constexpr uint32_t cb_key_w_id = get_compile_time_arg_val(24);
     constexpr uint32_t cb_key_gamma_id = get_compile_time_arg_val(25);
 
-    constexpr auto kv_args = TensorAccessorArgs<26>();
+    constexpr uint32_t block_rows = get_compile_time_arg_val(26);
+    constexpr uint32_t groups = get_compile_time_arg_val(27);
+    constexpr uint32_t start_odd = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_block_id = get_compile_time_arg_val(29);
+    constexpr uint32_t cs_face1_bytes = get_compile_time_arg_val(30);
+
+    constexpr auto kv_args = TensorAccessorArgs<31>();
     constexpr auto win_kv_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto win_slot_args = TensorAccessorArgs<win_kv_args.next_compile_time_args_offset()>();
     constexpr auto prev_slot_args = TensorAccessorArgs<win_slot_args.next_compile_time_args_offset()>();
@@ -136,6 +389,62 @@ void kernel_main() {
         patch_tile_row(tile_l1, kv_scratch_l1, win_slot_idx % tile_rows);
         noc_async_write(tile_l1, tile_noc, cache_tile_bytes);
         noc_async_write_barrier();
+        return;
+    }
+
+    if constexpr (block_rows > 1) {
+        read_block<
+            has_window,
+            has_prev_slot,
+            has_rope,
+            kv_sharded,
+            norm_weight_is_tile,
+            head_tiles,
+            row_tile_bytes,
+            cache_tile_bytes,
+            win_slot_page_bytes,
+            prev_slot_page_bytes,
+            pos_slot_bytes,
+            cb_kv_id,
+            cb_k0_id,
+            cb_gamma_id,
+            cb_cs_id,
+            cb_win_kv_tile_id,
+            cb_kv_scratch_id,
+            cb_pos_id,
+            cb_raw_scratch_id,
+            has_index_key,
+            block_rows,
+            groups,
+            start_odd,
+            cb_block_id,
+            cs_face1_bytes>(
+            t,
+            kv_sharded != 0 ? get_noc_addr(kv_noc_x, kv_noc_y, kv_addr + kv_offset_bytes)
+                            : TensorAccessor(kv_args, kv_addr).get_noc_addr(kv_offset_bytes),
+            TensorAccessor(win_kv_args, win_kv_addr),
+            TensorAccessor(win_slot_args, win_slot_addr),
+            TensorAccessor(prev_slot_args, prev_slot_addr),
+            TensorAccessor(norm_weight_args, norm_weight_addr),
+            TensorAccessor(cos_args, cos_addr),
+            TensorAccessor(sin_args, sin_addr),
+            do_rope,
+            rope_tile_idx);
+        read_index_weights<
+            has_index_key,
+            index_norm_weight_is_tile,
+            head_tiles,
+            row_tile_bytes,
+            cache_tile_bytes,
+            key_tiles,
+            key_w_chunk,
+            cb_key_w_id,
+            cb_key_gamma_id,
+            cb_raw_scratch_id>(
+            is_key_core,
+            key_idx,
+            TensorAccessor(index_wk_args, index_wk_addr),
+            TensorAccessor(index_norm_weight_args, index_norm_weight_addr));
         return;
     }
 

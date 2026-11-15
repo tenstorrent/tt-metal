@@ -41,6 +41,14 @@ struct CompressPoolDecodeParams {
     // kv is the TP-gathered row [rank r: r's kv_gate_interleave kv columns | its gate columns], and gate is the
     // same tensor: each core reads its 32 kv (and gate) columns from their rank's block. 0: separate rows.
     uint32_t kv_gate_interleave = 0;
+    // Block of ``rows`` consecutive positions p .. p + rows - 1 of one session (1: the one-row step). kv / gate
+    // are then (rows x 32)-tiled [1, 1, rows, W]; ``groups`` of the rows close a group (all of them at ratio 1;
+    // at ratio 2 the rows at odd positions, given by ``start_odd``: p is odd).
+    uint32_t rows = 1;
+    uint32_t groups = 1;
+    bool start_odd = false;
+    // Byte offset of face 1 in a cos / sin tile (rows > 1 reads several rows of it).
+    uint32_t cs_face1_bytes = 512;
 };
 
 struct CompressPoolDecodeInputs {
@@ -104,6 +112,7 @@ std::vector<ttnn::Tensor> compress_pool_decode(
     const std::optional<ttnn::Tensor>& dense_kv,
     const std::optional<ttnn::Tensor>& dense_entry,
     const std::optional<ttnn::Tensor>& key_row,
-    uint32_t kv_gate_interleave = 0);
+    uint32_t kv_gate_interleave = 0,
+    bool start_odd = false);
 
 }  // namespace ttnn::prim

@@ -5,6 +5,7 @@
 #include "compress_pool_decode_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <vector>
@@ -64,6 +65,9 @@ constexpr uint32_t kCpdCbKeyOut = tt::CBIndex::c_26;
 constexpr uint32_t kCpdCbKeyTile = tt::CBIndex::c_27;
 constexpr uint32_t kCpdCbDenseTile = tt::CBIndex::c_28;
 constexpr uint32_t kCpdCbIdx = tt::CBIndex::c_29;
+// A block's (rows x 32) kv / gate tile, as read (reader / writer).
+constexpr uint32_t kCpdCbKvBlock = tt::CBIndex::c_30;
+constexpr uint32_t kCpdCbGateBlock = tt::CBIndex::c_31;
 
 constexpr uint32_t kCpdArriveSemaphoreId = 0;
 constexpr uint32_t kCpdReadySemaphoreId = 1;
@@ -88,6 +92,9 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
     const bool has_window = args.has_window;
     const bool has_prev_slot = args.has_prev_slot;
     const bool has_rope = args.has_rope;
+    // A block of R rows closes G groups; every per-row / per-group buffer holds R / G pages (1 / 1: one row).
+    const uint32_t R = args.rows;
+    const uint32_t G = args.groups;
 
     // Choose W_t cores: align directly with kv's (or gate's) L1 WIDTH_SHARDED grid when it has W_t cores.
     CoreRangeSet all_cores;
@@ -154,6 +161,7 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
     const uint32_t page_row_page_bytes = args.has_page_row ? t.page_row->buffer()->aligned_page_size() : 0u;
     const uint32_t dense_entry_page_bytes = has_dense ? t.dense_entry->buffer()->aligned_page_size() : 0u;
     const uint32_t page_table_chunk_bytes = dram_alignment;
+    const uint32_t block_tile_bytes = R * row_tile_bytes;  // one (R x 32) tile
     const uint32_t idx_slot_bytes = tt::round_up(
         std::max<uint32_t>(
             {entry_page_bytes, page_row_page_bytes, dense_entry_page_bytes, page_table_chunk_bytes, 64u}),
@@ -178,50 +186,59 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         };
 
     if (do_pool) {
-        make_row_cb(all_cores, kCpdCbKv, 1);
+        make_row_cb(all_cores, kCpdCbKv, R);
         make_row_cb(all_cores, kCpdCbGamma, 1);
         make_row_cb(all_cores, kCpdCbTmp, 1);
-        make_row_cb(all_cores, kCpdCbLocalStat, 1);
-        make_row_cb(all_cores, kCpdCbGatherStats, W_t);
-        make_row_cb(all_cores, kCpdCbScaleHub, 1);
-        make_row_cb(all_cores, kCpdCbScale, 1);
-        make_row_cb(all_cores, kCpdCbOutLatent, 1);
-        make_bytes_cb(all_cores, kCpdCbRawScratch, 64u, 6u, bf16_df);
+        make_row_cb(all_cores, kCpdCbLocalStat, G);
+        make_row_cb(all_cores, kCpdCbGatherStats, G * W_t);
+        make_row_cb(all_cores, kCpdCbScaleHub, G);
+        make_row_cb(all_cores, kCpdCbScale, G);
+        make_row_cb(all_cores, kCpdCbOutLatent, G);
+        // gamma (2 x 64 B), then cos / sin faces (64 B each for one row, 128 B each for a block's rows).
+        make_bytes_cb(all_cores, kCpdCbRawScratch, 64u, R > 1 ? 10u : 6u, bf16_df);
         make_bytes_cb(all_cores, kCpdCbOutTileScratch, cache_tile_bytes, 1u, bf16_df);
         if (has_window) {
-            make_row_cb(all_cores, kCpdCbK0, 1);
-            make_row_cb(all_cores, kCpdCbGate, 1);
-            make_row_cb(all_cores, kCpdCbG0, 1);
-            make_row_cb(all_cores, kCpdCbPooled, 1);
+            make_row_cb(all_cores, kCpdCbK0, G);
+            make_row_cb(all_cores, kCpdCbGate, G);
+            make_row_cb(all_cores, kCpdCbG0, G);
+            make_row_cb(all_cores, kCpdCbPooled, G);
         }
         if (has_rope) {
             // A key RoPE core rotates the latent's tile and then the key's with the same cos / sin pair.
-            make_row_cb(all_cores, kCpdCbCs, has_index_key ? 4 : 2);
-            make_row_cb(all_cores, kCpdCbOutRope, 1);
+            make_row_cb(all_cores, kCpdCbCs, (has_index_key ? 4 : 2) * G);
+            make_row_cb(all_cores, kCpdCbOutRope, G);
+        }
+        if (R > 1) {
+            make_bytes_cb(all_cores, kCpdCbKvBlock, block_tile_bytes, 1u, bf16_df);
+            if (has_window) {
+                make_bytes_cb(all_cores, kCpdCbGateBlock, block_tile_bytes, 1u, bf16_df);
+            }
         }
     }
     if (has_window) {
         make_bytes_cb(all_cores, kCpdCbWinKvTile, cache_tile_bytes, 1u, bf16_df);
         make_bytes_cb(all_cores, kCpdCbWinGateTile, cache_tile_bytes, 1u, bf16_df);
-        make_bytes_cb(all_cores, kCpdCbKvScratch, row_tile_bytes, 1u, bf16_df);
-        make_bytes_cb(all_cores, kCpdCbGateScratch, row_tile_bytes, 1u, bf16_df);
+        make_bytes_cb(all_cores, kCpdCbKvScratch, R * row_tile_bytes, 1u, bf16_df);
+        make_bytes_cb(all_cores, kCpdCbGateScratch, R * row_tile_bytes, 1u, bf16_df);
         make_bytes_cb(all_cores, kCpdCbPosReader, pos_slot_bytes, 2u, tt::DataFormat::Int32);
         make_bytes_cb(all_cores, kCpdCbPosWriter, pos_slot_bytes, 2u, tt::DataFormat::Int32);
     }
     if (has_index_key) {
         // Every core writes its latent tile into key_in at the same address on each key core.
-        make_row_cb(all_cores, kCpdCbKeyIn, W_t);
-        make_bytes_cb(key_cores, kCpdCbKeyW, cache_tile_bytes, 2u * key_w_chunk, bf16_df);
-        make_row_cb(key_cores, kCpdCbKeyMm, 1);
+        make_row_cb(all_cores, kCpdCbKeyIn, G * W_t);
+        // One row streams index_wk through two pages; a block's groups keep all of it (W_t tiles) resident.
+        make_bytes_cb(key_cores, kCpdCbKeyW, cache_tile_bytes, G > 1 ? W_t : 2u * key_w_chunk, bf16_df);
+        make_row_cb(key_cores, kCpdCbKeyMm, G);
         make_row_cb(key_cores, kCpdCbKeyGamma, 1);
-        make_row_cb(key_cores, kCpdCbKeyOut, 1);
+        make_row_cb(key_cores, kCpdCbKeyOut, G);
         make_bytes_cb(key_cores, kCpdCbKeyTile, cache_tile_bytes, 1u, bf16_df);
     }
     if (has_dense) {
         make_bytes_cb(all_cores, kCpdCbDenseTile, cache_tile_bytes, 1u, bf16_df);
     }
     if (reads_entry || has_dense) {
-        make_bytes_cb(all_cores, kCpdCbIdx, 4u * idx_slot_bytes, 1u, tt::DataFormat::Int32);
+        // entry, page_row, dense_entry, then one page-table piece per group.
+        make_bytes_cb(all_cores, kCpdCbIdx, (3u + G) * idx_slot_bytes, 1u, tt::DataFormat::Int32);
     }
 
     CreateSemaphore(program, all_cores, 0);  // kCpdArriveSemaphoreId = 0
@@ -281,6 +298,11 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         key_w_chunk,
         kCpdCbKeyW,
         kCpdCbKeyGamma,
+        R,
+        G,
+        static_cast<uint32_t>(args.start_odd),
+        kCpdCbKvBlock,
+        args.cs_face1_bytes,
     };
     TensorAccessorArgs(kv_buf).append_to(reader_ct_args);
     TensorAccessorArgs(win_kv_buf).append_to(reader_ct_args);
@@ -338,6 +360,10 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         kCpdCbKeyTile,
         kCpdCbDenseTile,
         kCpdCbIdx,
+        R,
+        G,
+        static_cast<uint32_t>(args.start_odd),
+        kCpdCbGateBlock,
     };
     TensorAccessorArgs(gate_buf).append_to(writer_ct_args);
     TensorAccessorArgs(win_gate_buf).append_to(writer_ct_args);
@@ -388,6 +414,7 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         kCpdCbKeyMm,
         kCpdCbKeyGamma,
         kCpdCbKeyOut,
+        G,
     };
 
     const KernelHandle reader_kernel_id =
@@ -444,11 +471,38 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         const uint32_t rope_tile_idx = is_rope_core ? (i + rope_tiles - W_t) : 0u;
         const bool is_key_core = has_index_key && i >= first_key_core;
         const uint32_t key_idx = is_key_core ? i - first_key_core : 0u;
+        std::array<uint32_t, 3> block_gate = {0u, 0u, 0u};
 
         uint32_t kv_noc_x = 0;
         uint32_t kv_noc_y = 0;
         uint32_t kv_offset_bytes = i * row_tile_bytes;
-        if (args.kv_sharded) {
+        if (R > 1) {
+            // A block: column tile c / 32 of kv (and gate) is one (R x 32) tile: its page in an interleaved
+            // tensor, its byte offset in a shard.
+            uint32_t kv_c = i * constants::TILE_WIDTH;
+            uint32_t gate_c = kv_c;
+            if (const uint32_t r = args.kv_gate_interleave; r != 0) {
+                kv_c = (kv_c / r) * 2 * r + kv_c % r;
+                gate_c = kv_c + r;
+            }
+            uint32_t gate_noc_x = 0;
+            uint32_t gate_noc_y = 0;
+            uint32_t gate_offset = gate_c / constants::TILE_WIDTH;
+            kv_offset_bytes = kv_c / constants::TILE_WIDTH;
+            if (args.kv_sharded) {
+                const auto phys = device->worker_core_from_logical_core(kv_shard_cores[kv_c / kv_shard_w]);
+                kv_noc_x = static_cast<uint32_t>(phys.x);
+                kv_noc_y = static_cast<uint32_t>(phys.y);
+                kv_offset_bytes = ((kv_c % kv_shard_w) / constants::TILE_WIDTH) * block_tile_bytes;
+            }
+            if (args.gate_sharded) {
+                const auto phys = device->worker_core_from_logical_core(gate_shard_cores[gate_c / gate_shard_w]);
+                gate_noc_x = static_cast<uint32_t>(phys.x);
+                gate_noc_y = static_cast<uint32_t>(phys.y);
+                gate_offset = ((gate_c % gate_shard_w) / constants::TILE_WIDTH) * block_tile_bytes;
+            }
+            block_gate = {gate_noc_x, gate_noc_y, gate_offset};
+        } else if (args.kv_sharded) {
             const uint32_t shard_idx = (i * constants::TILE_WIDTH) / kv_shard_w;
             kv_offset_bytes = ((i * constants::TILE_WIDTH) % kv_shard_w) * elem_bytes;
             const auto phys = device->worker_core_from_logical_core(kv_shard_cores[shard_idx]);
@@ -459,13 +513,17 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         uint32_t gate_noc_x = 0;
         uint32_t gate_noc_y = 0;
         uint32_t gate_offset_bytes = i * row_tile_bytes;
-        if (const uint32_t r = args.kv_gate_interleave; r != 0) {
+        if (R > 1) {
+            gate_noc_x = block_gate[0];
+            gate_noc_y = block_gate[1];
+            gate_offset_bytes = block_gate[2];
+        } else if (const uint32_t r = args.kv_gate_interleave; r != 0) {
             // Column c of kv sits in block c / r of the gathered row, gate's r columns after it.
             const uint32_t c = i * constants::TILE_WIDTH;
             kv_offset_bytes = ((c / r) * 2 * r + c % r) * elem_bytes;
             gate_offset_bytes = kv_offset_bytes + r * elem_bytes;
         }
-        if (args.gate_sharded) {
+        if (args.gate_sharded && R == 1) {
             const uint32_t shard_idx = (i * constants::TILE_WIDTH) / gate_shard_w;
             gate_offset_bytes = ((i * constants::TILE_WIDTH) % gate_shard_w) * elem_bytes;
             const auto phys = device->worker_core_from_logical_core(gate_shard_cores[shard_idx]);
