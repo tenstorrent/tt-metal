@@ -180,6 +180,38 @@ def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
     check_train_state({"rng": block}, rng=False)  # not asked for: nothing to check
 
 
+def _shorten_hex(text: str, nbytes: int) -> str:
+    return text[: -2 * nbytes]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(
+            lambda own: own["numpy"].update(state=_shorten_hex(own["numpy"]["state"], 4)), id="numpy_623_words"
+        ),
+        pytest.param(
+            lambda own: own["python"].update(state=_shorten_hex(own["python"]["state"], 4)), id="python_624_words"
+        ),
+        pytest.param(lambda own: own.update(torch=_shorten_hex(own["torch"], 1)), id="torch_one_byte_short"),
+        pytest.param(lambda own: own.update(ttml=" ".join(own["ttml"].split()[:600])), id="ttml_600_tokens"),
+    ],
+)
+def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error):
+    # Valid JSON and hex, the wrong length: what each setter, not the decoder, used to find out, after the generators
+    # before it in the restore order were already set.
+    ctx = ttml.autograd.AutoContext.get_instance()
+    block = capture_rng(world_rank=0)
+    broken = json.loads(json.dumps(block))
+    damage(broken["ranks"]["0"])
+    before = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1].copy(), torch.get_rng_state())
+    with expect_error(CheckpointError, "the stored RNG state is malformed"):
+        restore_rng(broken, world_rank=0)
+    after = (ctx.get_generator_state(), random.getstate(), np.random.get_state()[1], torch.get_rng_state())
+    assert after[0] == before[0] and after[1] == before[1], "ttml and python untouched"
+    assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
+
+
 class _IntKeyLoader(Loader):
     def get_state_dict(self) -> dict:
         return {"per_shard": {0: 7}}

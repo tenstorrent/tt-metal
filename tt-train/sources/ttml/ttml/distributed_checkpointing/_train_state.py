@@ -38,6 +38,8 @@ from ._index import check_json, read_header_json
 
 TRAIN_STATE_KEY = "train_state"
 RNG_FORMAT = 1
+# The text of a std::mt19937 (get_generator_state): its 624 state words and its position.
+_MT19937_TOKENS = 625
 
 
 def _json(name: str, value: Any) -> Any:
@@ -126,15 +128,26 @@ def restore_rng(state: dict, world_rank: int = 0) -> list[str]:
 
 def _decode_process_rng(state: dict) -> dict[str, Any]:
     """A ``capture_process_rng`` block decoded into what each generator's setter takes, or a ``CheckpointError``:
-    every generator is decoded before any is set, so a malformed block changes nothing."""
+    every generator is decoded, and set on a throwaway generator of its kind, before any live one is set, so a
+    malformed block changes nothing."""
     decoded: dict[str, Any] = {}
     try:
         if state.get("ttml") is not None:
-            decoded["ttml"] = str(state["ttml"])
+            text = str(state["ttml"])
+            tokens = text.split()
+            # The C++ setter would read a short text partway and leave the generator in neither state, so it is
+            # checked here: no throwaway ttml generator exists to try it on.
+            if len(tokens) != _MT19937_TOKENS or not all(token.isdigit() for token in tokens):
+                raise ValueError(
+                    f"the ttml generator state is {len(tokens)} tokens, not the {_MT19937_TOKENS} integers of an "
+                    "mt19937"
+                )
+            decoded["ttml"] = text
         python_state = state.get("python")
         if python_state is not None:
             words = tuple(int(w) for w in _u32_from_hex(python_state["state"]))
             decoded["python"] = (int(python_state["version"]), words, python_state["gauss_next"])
+            random.Random().setstate(decoded["python"])
         numpy_state = state.get("numpy")
         if numpy_state is not None:
             decoded["numpy"] = (
@@ -144,6 +157,7 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
                 int(numpy_state["has_gauss"]),
                 float(numpy_state["cached_gaussian"]),
             )
+            np.random.RandomState().set_state(decoded["numpy"])
         init_state = state.get("ttml_init")
         if init_state is not None:
             bit_generator = np.random.PCG64()
@@ -156,7 +170,10 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
             decoded["ttml_init"] = np.random.Generator(bit_generator)
         if state.get("torch") is not None:
             decoded["torch"] = np.frombuffer(bytes.fromhex(state["torch"]), dtype=np.uint8).copy()
-    except (KeyError, TypeError, ValueError) as err:
+            torch = sys.modules.get("torch")
+            if torch is not None:
+                torch.Generator().set_state(torch.from_numpy(decoded["torch"]))
+    except (KeyError, TypeError, ValueError, IndexError, RuntimeError) as err:
         raise CheckpointError(f"the stored RNG state is malformed ({type(err).__name__}: {err})") from err
     return decoded
 
