@@ -101,10 +101,11 @@ model builds them in, so existing configs don't change.
 Data-parallel training averages each gradient across the devices after backward. By default the sum runs in the
 gradient's dtype, bf16, so every hop of the reduction rounds its running total to bf16.
 `training_config.precision.reduce_dtype: float32` sums in fp32 instead: a bf16 gradient is cast to fp32, summed and
-averaged in fp32, and the mean is written back in bf16; an fp32 gradient, such as one accumulated over micro-batches
-(see [fp32 gradient accumulation](#fp32-gradient-accumulation)), is summed and written in fp32. Unset keeps the bf16
-sum. A sum runs in `reduce_dtype` or in the gradient's own dtype, whichever is wider, so `bfloat16` never narrows an
-fp32 gradient.
+averaged in fp32, and the DDP sync writes the mean back in bf16, while FSDP keeps its mean shard in fp32; an fp32
+gradient, such as one accumulated over micro-batches (see
+[fp32 gradient accumulation](#fp32-gradient-accumulation)), is summed and written in fp32. Unset keeps the bf16 sum. A
+sum runs in `reduce_dtype` or in the gradient's own dtype, whichever is wider, so `bfloat16` never narrows an fp32
+gradient.
 
 - **DDP.** `core::apply_precision_config()` stores the value in `AutoContext` (`set_gradient_reduce_dtype()`) every
   time it runs: a config without the key stores none, so nothing carries over from a config applied earlier in the
@@ -187,8 +188,7 @@ a tied embedding and LM head.
   fp32 is always summed in fp32.
 - **When.** `Tensor::add_grad()` stores the first gradient as it comes, so a parameter added to once, the usual case
   with one micro-batch, costs nothing extra. From the second add on, the stored gradient and the new one are both cast
-  to fp32 and added in fp32. Both are cast because ttnn adds two fp32 tensors on the SFPU, in IEEE fp32, while an add
-  of an fp32 and a bf16 tensor runs on the FPU, which reads the fp32 operand with 10 fraction bits.
+  to fp32 and added as two fp32 tensors, which gives the IEEE fp32 sum.
 - **zero_grad.** Every optimizer's `zero_grad()` drops the gradients, so the first gradient of a step is stored as it
   comes. `SGD`, `SGDComposite` and `MuonComposite`, which used to install zeros there, install bf16 zeros in `step()`
   instead, for a parameter that had a gradient before `zero_grad()` and got none since, so their updates don't change.
@@ -212,6 +212,9 @@ a tied embedding and LM head.
   micro-batch, whose stored gradient is still bf16, 24 bytes in three: about 30 to 46 ms per micro-batch for every
   billion gradient elements a chip holds, counted at the gathered size under FSDP. A fused op that adds a bf16 gradient
   into the fp32 one in place would move about 10 bytes in one dispatch; it is a follow-up of #56513.
+
+Why both operands are cast, with the measurements behind these rules, is in
+[a comment on #56513](https://github.com/tenstorrent/tt-metal/issues/56513#issuecomment-6886483685).
 
 ## Loading values into a tensor
 
