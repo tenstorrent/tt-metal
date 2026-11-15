@@ -2,21 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// ws_expert lane design, group NCRISC (NOC1): the group reader of ws_group (wg_reader.cpp) with the weights in 3 slots
+// ws_expert lane design, group NCRISC (NOC1): the group reader of ws_group (wg_reader.cpp) with the weights in K slots
 // in this chip's static order (ws_lane_sched) and forwarded by this core itself, packet by packet, to the same core of
 // the next chip through the group's mux core of each direction. A non-blocking loop over:
 //   QW weights: compute order entry n (expert, slot s): once slot s's current occupant is that expert, push its gate/up
 //      to compute (CB 1) when its first GU_PK packets have arrived and its down (CB 3) when all PK have.
 //   QF forward: the occupant of each slot that goes on in direction d sends packet u once it has arrived (the slot's
 //      arrival count, fabric atomic incs, reaches PK k + u + 1), the first one only once the next chip's slot s' has
-//      freed its previous occupant (credit word d 3 + s' >= k'); a fused write + atomic inc of its arrival word.
+//      freed its previous occupant (credit word d K + s' >= k'); a fused write + atomic inc of its arrival word.
 //   QR release: a slot frees once compute popped its expert and every forward was sent; the next occupant's sender is
 //      told: the BRISC through the local word FREEW + 16 s (own expert, read from DRAM), or the core of the chip it
 //      comes from through a fabric inline write of k + 1 into its credit word (through the other direction's mux).
 //   QA / QB / QH / QL / QY: x multicasts (column 1), x ring, h ring, h leader multicasts (column 1), down outputs.
 // Every wait of QW / QF / QR / the BRISC's own reads is on an event earlier in the schedule's model time, and the
 // fabric never blocks for long (every packet's landing slot is free before it is sent), so the lanes cannot deadlock.
-// Slot tables (L1, loaded by the BRISC): word 0 order length, 1-3 occupants a slot, 4-6 slot table offsets (words),
+// Slot tables (L1, loaded by the BRISC): word 0 order length, 1..K occupants a slot, K+1..2K slot table offsets,
 // order from word 16 (e | s << 16); occupant k of slot s: 4 words at offset_s + 4 k: e | kind << 16 | fwd << 18 |
 // next kind << 20 (kind: 1 own, 2 from direction 0, 3 from direction 1), s'0 | k'0 << 2, s'1 | k'1 << 2, own index.
 // RT: 0 j, 1 g, 2 order length, 3 col x NOC (c 0), 4 col x NOC (c 1), 5 row 0 y NOC, 6 stamps, 7 out addr, 8 mesh id,
@@ -24,8 +24,8 @@
 //     of direction 0 and of direction 1
 // CT: 0 KT, 1 BK, 2 KTD, 3 DCOLS, 4 GC, 5 G, 6 NS, 7 NX, 8 hflags, 9 xring, 10 xflags, 11 xprog, 12-15 group rect
 //     for NOC1, 16 x tile bytes, 17 counts L1, 18 table L1, 19 hring, 20 h tile bytes, 21 warr (arrivals a slot,
-//     16 B apart), 22 ORMAX (output tile rows a group), 23 HT, 24 wgu ring, 25 wd ring, 26 cred (6 words), 27 FREEW
-//     (3 words), 28 CHT, 29 W tile bytes, 30-34 mux client CT args (buffers, buffer bytes, status, termination
+//     16 B apart), 22 ORMAX (output tile rows a group), 23 HT, 24 wgu ring, 25 wd ring, 26 cred (2K words), 27 FREEW
+//     (K words), 28 CHT, 29 W tile bytes, 30-34 mux client CT args (buffers, buffer bytes, status, termination
 //     signal, clients), then TensorAccessorArgs(out)
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -43,6 +43,11 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 #ifndef WL_WPOLL
 #define WL_WPOLL 1
 #endif
+#ifndef WL_K
+#define WL_K 3
+#endif
+constexpr uint32_t K = WL_K;  // weight slots a core
+static_assert(K >= 1 && K <= 4);  // (2-bit slot fields in the tables)
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
@@ -137,14 +142,13 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(warr_addr);
     volatile tt_l1_ptr uint32_t* cred = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cred_addr);
     volatile tt_l1_ptr uint32_t* freew = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freew_addr);
-    uint32_t occ[3] = {0, 0, 0}, sent[3][2] = {{0, 0}, {0, 0}, {0, 0}};
-    uint32_t cur_e[3], cur_fwd[3], cur_nk[3], cur_dst[3][2], base[3];
-    bool live[3], done_c[3] = {false, false, false};
+    uint32_t occ[K] = {}, sent[K][2] = {}, cur_e[K], cur_fwd[K], cur_nk[K], cur_dst[K][2], base[K];
+    bool live[K], done_c[K] = {};
     auto load = [&](uint32_t s) {
         live[s] = occ[s] < tab[1 + s];
         base[s] = PK * occ[s];
         if (live[s]) {
-            volatile tt_l1_ptr uint32_t* en = tab + tab[4 + s] + 4 * occ[s];
+            volatile tt_l1_ptr uint32_t* en = tab + tab[1 + K + s] + 4 * occ[s];
             const uint32_t w0 = en[0];
             cur_e[s] = w0 & 0xFFFF;
             cur_fwd[s] = (w0 >> 18) & 3;
@@ -156,7 +160,7 @@ void kernel_main() {
             cur_fwd[s] = cur_nk[s] = 0;
         }
     };
-    for (uint32_t s = 0; s < 3; ++s) {
+    for (uint32_t s = 0; s < K; ++s) {
         load(s);
     }
     auto slot_addr = [&](uint32_t s, uint32_t u) {  // packet u of slot s in this core's L1 (same on every chip)
@@ -207,8 +211,8 @@ void kernel_main() {
     // ---- QF: forward the slots' occupants, a packet a call; QR: release finished slots
     uint32_t rr = 0, n_fwd = 0, n_credit = 0;
     auto qf = [&]() -> bool {
-        for (uint32_t t = 0; t < 6; ++t) {
-            const uint32_t s = (rr + t) % 3, d = ((rr + t) / 3) % 2;
+        for (uint32_t t = 0; t < 2 * K; ++t) {
+            const uint32_t s = (rr + t) % K, d = ((rr + t) / K) % 2;
             if (!((cur_fwd[s] >> d) & 1) || sent[s][d] >= PK) {
                 continue;
             }
@@ -217,7 +221,7 @@ void kernel_main() {
                 continue;
             }
             const uint32_t s2 = cur_dst[s][d] & 3, k2 = cur_dst[s][d] >> 2;
-            if (u == 0 && cred[(d * 3 + s2) * 4] < k2) {
+            if (u == 0 && cred[(d * K + s2) * 4] < k2) {
                 continue;
             }
             if (!mux[d].edm_has_space_for_packet()) {  // (never block this RISC: its x / h queues feed the group)
@@ -244,7 +248,7 @@ void kernel_main() {
     };
     auto qr = [&]() -> bool {
         bool did = false;
-        for (uint32_t s = 0; s < 3; ++s) {
+        for (uint32_t s = 0; s < K; ++s) {
             if (!live[s] || !done_c[s]) {
                 continue;
             }
@@ -268,7 +272,7 @@ void kernel_main() {
                     nchip[1 - d],
                     my_mesh,
                     tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
-                        get_noc_addr(mex, mey, cred_addr + (d * 3 + s) * 16), next});
+                        get_noc_addr(mex, mey, cred_addr + (d * K + s) * 16), next});
                 ++n_credit;
             }
             occ[s] = next;
@@ -279,7 +283,14 @@ void kernel_main() {
         }
         return did;
     };
-    auto slots_done = [&]() { return occ[0] >= tab[1] && occ[1] >= tab[2] && occ[2] >= tab[3]; };
+    auto slots_done = [&]() {
+        for (uint32_t s = 0; s < K; ++s) {
+            if (live[s]) {
+                return false;
+            }
+        }
+        return true;
+    };
 
     // x stream helpers: block s -> (expert, index in it); walked forward only
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };

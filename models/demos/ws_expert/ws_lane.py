@@ -4,9 +4,10 @@
 """ws_expert lane design: every chip runs the G groups on its own tokens; the weights of group g's experts travel lane
 g (one Hamiltonian cycle and link, both directions), forwarded by the group cores themselves. Core j of a group sends
 its slice of an expert one hop, packet by packet, into the same core of the next chip through the group's mux core of
-that direction (fabric_mux: one full-size channel a core), straight into a weight slot. Every group core has 3 weight
-slots at the same address on every chip: slot 0 takes experts arriving on direction 0, slot 1 on direction 1, slot 2
-any, including the chip's own experts, which the core's BRISC reads from DRAM. An expert's down projection is drained
+that direction (fabric_mux: one full-size channel a core), straight into a weight slot. Every group core has K weight
+slots at the same address on every chip, each typed (LCfg.slots): by default slot 0 takes experts arriving on
+direction 0, slot 1 on direction 1, slot 2 any, including the chip's own experts, which the core's BRISC reads from
+DRAM. An expert's down projection is drained
 before the next expert starts, so a slot frees once its expert is computed and forwarded on.
 
 The order of everything comes from a static schedule (ws_lane_sched.lane_sched, the same on all lanes): per chip and
@@ -29,7 +30,7 @@ from models.demos.ws_expert.bench_util import TILE_BYTES, cb, crs, kpath, stamps
 from models.demos.ws_expert.ws_expert import noc, noc_rects, sharded_l1
 from models.demos.ws_expert.ws_fab import FAB_DEFS, node
 from models.demos.ws_expert.ws_group import GCfg
-from models.demos.ws_expert.ws_lane_sched import lane_sched
+from models.demos.ws_expert.ws_lane_sched import lane_sched, slot_types
 from models.demos.ws_expert.ws_sf import snake
 
 LANE_PAIRS = [(1, 2), (4, 5), (7, 8), (10, 11)]
@@ -46,6 +47,7 @@ class LCfg:
     cycles: tuple = None  # Hamiltonian cycles (mesh coordinates in order); default: the row snake
     nbuf: int = 2  # mux buffers a channel
     D: int = 4  # own-expert chunk reads in flight
+    slots: str = "d0,d1,any"  # weight slots a core and the experts each takes (ws_lane_sched.slot_types)
     keep: int = 1  # schedule: slots an owner leaves free when it injects
     out_all: bool = False  # every expert's down rows to DRAM (WL_OUT_ALL), not only each group's last
     wpoll: int = 2  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
@@ -80,7 +82,7 @@ def slot_packets(cfg: GCfg, lc: LCfg):
 
 def schedule(N, E, cfg: GCfg, lc: LCfg):
     GU, P = slot_packets(cfg, lc)
-    return lane_sched(N, E, P=P, GU=GU, keep=lc.keep)
+    return lane_sched(N, E, P=P, GU=GU, keep=lc.keep, types=slot_types(lc.slots))
 
 
 def make_tables(shape, cfg: GCfg, lc: LCfg):
@@ -93,6 +95,8 @@ def make_tables(shape, cfg: GCfg, lc: LCfg):
     assert cfg.nexp % G == 0
     E = cfg.nexp // G
     sch = schedule(N, E, cfg, lc)
+    K = len(slot_types(lc.slots))
+    assert K <= 4 and 1 + 2 * K <= 16, "2-bit slot fields, header below word 16"
     owners, kf = sch["owners"], sch["kf"]
     TLW = -(-(16 + 5 * E) // 16) * 16  # words a table (64 B multiple)
     tabs = torch.zeros(N, G, TLW, dtype=torch.int64)
@@ -133,10 +137,10 @@ def make_tables(shape, cfg: GCfg, lc: LCfg):
             t = tabs[X, g]
             t[0] = E
             off = 16 + E
-            for s in range(3):
+            for s in range(K):
                 lst = sch["held"][(pos, s)]
                 t[1 + s] = len(lst)
-                t[4 + s] = off
+                t[1 + K + s] = off
                 for k, i in enumerate(lst):
                     kind, dirs = arrives(i, pos)
                     nxt = 0
@@ -158,7 +162,7 @@ def make_tables(shape, cfg: GCfg, lc: LCfg):
             for n, i in enumerate(order):
                 t[16 + n] = (i * G + g) | where[(pos, i)][0] << 16
             meta[(X, g)] = dict(pos=pos, order=[i * G + g for i in order])
-    return dict(tabs=tabs, TLW=TLW, own=[[i * G + g for g, i in o] for o in own], meta=meta, sch=sch, E=E)
+    return dict(tabs=tabs, TLW=TLW, own=[[i * G + g for g, i in o] for o in own], meta=meta, sch=sch, E=E, K=K)
 
 
 def tables_tensor(mesh, tabs):
@@ -191,14 +195,14 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     DB = 3
     WGU, WDN = KT * 2, KTD * DC
     wtile, htile, xtile = TILE_BYTES[cfg.w_dt], TILE_BYTES[cfg.h_dt], TILE_BYTES[cfg.x_dt]
-    E, TLW = T["E"], T["TLW"]
+    E, TLW, K = T["E"], T["TLW"], T["K"]
     # L1 tensors (same address on every core and chip); the weight slots first, at the top of L1: the BRISC reads
     # whole chunks from DRAM straight into them (64 B aligned)
-    wgu_ring = sharded_l1(mesh, C, [3 * WGU * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
-    wd_ring = sharded_l1(mesh, C, [3 * WDN * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
+    wgu_ring = sharded_l1(mesh, C, [K * WGU * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
+    wd_ring = sharded_l1(mesh, C, [K * WDN * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
     assert wgu_ring.buffer_address() % 64 == 0 and wd_ring.buffer_address() % 64 == 0, "weight slots 64 B aligned"
     w16 = lambda n: sharded_l1(mesh, C, [n, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
-    warr, cred, freew = w16(3), w16(6), w16(3)
+    warr, cred, freew = w16(K), w16(2 * K), w16(K)
     hring = sharded_l1(mesh, C, [NS * KTD * 32, 32], cfg.h_dt, ttnn.TILE_LAYOUT)
     hflags = w16(NS * 2)
     xring = sharded_l1(mesh, C, [NX * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT)
@@ -237,7 +241,8 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         ("EXPERT_ACTIVATION_LIMIT", "7.0f"),
         ("EXPERT_ACTIVATION_ALPHA", "1.702f"),
     ]
-    ydefs = [("WG_XORDER", str(cfg.xorder)), ("WG_Y_NCRISC", "1")] + ([("WL_OUT_ALL", "1")] if lc.out_all else [])
+    ydefs = [("WG_XORDER", str(cfg.xorder)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
+    ydefs += [("WL_OUT_ALL", "1")] if lc.out_all else []
     XST = -(-cfg.LOOK // GC) + 4
     mpd = ttnn.MeshProgramDescriptor()
     for r in range(R):

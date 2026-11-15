@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // ws_expert lane design, group compute (TRISC): the group compute of ws_group (wg_compute.cpp) with experts taken in
-// this chip's compute order (a host table, ws_lane_sched) from 3 weight slots out of order, and each expert finished on
+// this chip's compute order (a host table, ws_lane_sched) from K weight slots out of order, and each expert finished on
 // its own. Order entry n: expert e | weight slot s << 16 (table at CT 10, loaded by the BRISC before the counts' ready
 // word). Before expert n the UNPACK thread points CB 1 (gate/up) and CB 3 (down) at slot s; the down rows of an expert
 // lag DN_LAG rows behind its gate/up rows and are drained at its end, so its slot frees without the next expert.
@@ -59,7 +59,7 @@ volatile uint32_t* counts = reinterpret_cast<volatile uint32_t*>(counts_l1);
 uint32_t g_, nexp_g;
 volatile uint32_t* order = reinterpret_cast<volatile uint32_t*>(order_l1);
 FORCE_INLINE uint32_t rows_of(uint32_t n) { return (counts[16 + (order[n] & 0xFFFF)] + 31) / 32; }
-// point a weight CB's read side at slot s (CB of 3 slots x `tiles` tiles; read pointers in 16-byte units)
+// point a weight CB's read side at slot s (CB of K slots x `tiles` tiles; read pointers in 16-byte units)
 FORCE_INLINE void use_slot(uint32_t cb, uint32_t s, uint32_t tiles) {
     UNPACK({
         auto& c = get_local_cb_interface(cb);

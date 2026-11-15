@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Static schedules for the lane design (ws_lane): one group's experts travel its own lane (one Hamiltonian cycle and
 link, both directions), owned whole, forwarded cut-through by the group cores themselves into a weight slot of the next
-chip's same core. Every group core has 3 weight slots (the same index on all 20 cores of a group): slot 0 takes experts
-arriving on direction 0, slot 1 those arriving on direction 1, slot 2 any (and the chip's own experts). Each expert's
-down projection is drained before the next expert starts, so a slot frees once its expert is computed and forwarded.
+chip's same core. Every group core has K typed weight slots (the same index on all 20 cores of a group), by default 3:
+slot 0 takes experts arriving on direction 0, slot 1 those arriving on direction 1, slot 2 any (and the chip's own
+experts). Each expert's down projection is drained before the next expert starts, so a slot frees once its expert is
+computed and forwarded.
 
 lane_sched() runs a lock-step model of one lane (packet steps: the 20 cores move one packet each over the link per
 step; P packets a slice, compute C steps, starting after the first GU packets) with a greedy policy - passing experts
@@ -21,6 +22,13 @@ from collections import deque
 
 ANY = frozenset({"d0", "d1", "own"})
 TYPES = (frozenset({"d0"}), frozenset({"d1"}), ANY)
+
+
+def slot_types(spec):
+    """Slot types from a spec such as "d0,d1,d0d1,any": per slot the experts it takes (arriving on direction 0 /
+    direction 1 / either, or any including the chip's own)."""
+    names = {"d0": frozenset({"d0"}), "d1": frozenset({"d1"}), "d0d1": frozenset({"d0", "d1"}), "any": ANY}
+    return tuple(names[x] for x in spec.split(","))
 
 
 def lane_plan(N, E, spread=7):
@@ -90,7 +98,9 @@ class Lane:
                     continue
                 if self.sched is not None:
                     exp = {self.nexp_for(y, s) for s in range(K) if self.slot[(y, s)] is None}
-                    exp |= {self.slot[(y, s)]["i"] for s in range(K) if self.slot[(y, s)] and self.slot[(y, s)]["arr"] < P}
+                    exp |= {
+                        self.slot[(y, s)]["i"] for s in range(K) if self.slot[(y, s)] and self.slot[(y, s)]["arr"] < P
+                    }
                     cand = [c for c in cand if c["i"] in exp]
                     if not cand:
                         continue

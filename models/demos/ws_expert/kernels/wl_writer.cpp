@@ -26,6 +26,10 @@ constexpr uint32_t h_cb = tt::CBIndex::c_16;
 constexpr uint32_t y_cb = tt::CBIndex::c_17;
 constexpr uint32_t xst_cb = tt::CBIndex::c_8;
 constexpr uint32_t SEM_HARR = 1, SEM_SCR = 2, SEM_SCRX = 4;
+#ifndef WL_K
+#define WL_K 3
+#endif
+constexpr uint32_t K = WL_K;  // weight slots a core
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
@@ -141,13 +145,13 @@ void kernel_main() {
     // ---- QO: own experts' weights from DRAM into their slots (chunk reads with transaction ids 1..D, in order)
     volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(warr_addr);
     volatile tt_l1_ptr uint32_t* freew = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freew_addr);
-    auto entry = [&](uint32_t s, uint32_t k) { return tab + tab[4 + s] + 4 * k; };
-    uint32_t o_s = 0, o_k[3] = {0, 0, 0}, o_issued = 0, o_landed = 0, n_own = 0;
+    auto entry = [&](uint32_t s, uint32_t k) { return tab + tab[1 + K + s] + 4 * k; };
+    uint32_t o_s = 0, o_k[K] = {}, o_issued = 0, o_landed = 0, n_own = 0;
     bool o_busy = false;
     auto next_own = [&]() {  // a slot whose next own occupant may be read now (its previous one freed), slots in turn
         invalidate_l1_cache();
-        for (uint32_t t = 0; t < 3; ++t) {
-            const uint32_t s = (o_s + t) % 3;
+        for (uint32_t t = 0; t < K; ++t) {
+            const uint32_t s = (o_s + t) % K;
             while (o_k[s] < tab[1 + s] && ((entry(s, o_k[s])[0] >> 16) & 3) != 1) {
                 ++o_k[s];
             }
@@ -191,11 +195,18 @@ void kernel_main() {
             o_busy = false;
             ++o_k[s];
             ++n_own;
-            o_s = (s + 1) % 3;
+            o_s = (s + 1) % K;
         }
         return did;
     };
-    auto qo_done = [&]() { return !o_busy && o_k[0] >= tab[1] && o_k[1] >= tab[2] && o_k[2] >= tab[3]; };
+    auto qo_done = [&]() {
+        for (uint32_t s = 0; s < K; ++s) {
+            if (o_k[s] < tab[1 + s]) {
+                return false;
+            }
+        }
+        return !o_busy;
+    };
     // ---- Q2: h tile -> column leader
     uint32_t sent = 0;
     const uint32_t harr = get_semaphore(SEM_HARR);

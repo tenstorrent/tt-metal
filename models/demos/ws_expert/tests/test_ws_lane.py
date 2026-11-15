@@ -23,7 +23,7 @@ from models.demos.ws_expert.ws_expert import interleave_gu
 from models.demos.ws_expert.ws_fab import slice_layout
 from models.demos.ws_expert.ws_group import GCfg
 from models.demos.ws_expert.ws_lane import LCfg, build_lane, make_tables, slot_packets, tables_tensor
-from models.demos.ws_expert.ws_lane_sched import replay
+from models.demos.ws_expert.ws_lane_sched import replay, slot_types
 from models.demos.ws_expert.ws_sf import torus_cycles
 
 WARM = int(os.environ.get("WS_WARM", "20"))
@@ -35,16 +35,16 @@ def table_replay(T, N, GU, P, seed=0, prob=0.5, delay=6):
     in-order fabric delays. True if every chip computes every expert; asserts that a packet only lands in a slot whose
     current occupant is its expert and that own reads only start once their slot is free."""
     rng = random.Random(seed)
-    E = T["E"]
+    E, K = T["E"], T["K"]
     tabs = [T["tabs"][X, 0].tolist() for X in range(N)]
     pos_of = {T["meta"][(X, 0)]["pos"]: X for X in range(N)}
     chip_next = lambda X, d: pos_of[(T["meta"][(X, 0)]["pos"] + (1 if d == 0 else -1)) % N]
-    ent = lambda X, s, k: tabs[X][tabs[X][4 + s] + 4 * k : tabs[X][4 + s] + 4 * k + 4]
+    ent = lambda X, s, k: tabs[X][tabs[X][1 + K + s] + 4 * k : tabs[X][1 + K + s] + 4 * k + 4]
     L = lambda X, s: tabs[X][1 + s]
     order = lambda X, n: tabs[X][16 + n]
     st = [
-        dict(occ=[0] * 3, sent=[[0, 0] for _ in range(3)], done=[False] * 3, warr=[0] * 3, cred=[0] * 6,
-             freew=[0] * 3, w_n=0, w_dn=0, freed=0, comp=0, cstep=0, ok=[0] * 3, obusy=None, olanded=0)
+        dict(occ=[0] * K, sent=[[0, 0] for _ in range(K)], done=[False] * K, warr=[0] * K, cred=[0] * (2 * K),
+             freew=[0] * K, w_n=0, w_dn=0, freed=0, comp=0, cstep=0, ok=[0] * K, obusy=None, olanded=0)
         for _ in range(N)
     ]
     flight = {(X, d): [] for X in range(N) for d in range(2)}  # in-order fabric queues: [ready step, fn]
@@ -66,7 +66,7 @@ def table_replay(T, N, GU, P, seed=0, prob=0.5, delay=6):
         moved = False
         # QO (BRISC): one chunk of the next own occupant
         if u["obusy"] is None and go():
-            for s in range(3):
+            for s in range(K):
                 while u["ok"][s] < L(X, s) and (ent(X, s, u["ok"][s])[0] >> 16) & 3 != 1:
                     u["ok"][s] += 1
                 if u["ok"][s] < L(X, s) and u["freew"][s] >= u["ok"][s]:
@@ -87,7 +87,7 @@ def table_replay(T, N, GU, P, seed=0, prob=0.5, delay=6):
         ) == order(X, n) & 0xFFFF
         if u["w_n"] < E and cur(u["w_n"]) and go():
             s = order(X, u["w_n"]) >> 16
-            if u["warr"][s] >= P * u["occ"][s] + GU and u["w_n"] - u["freed"] < 3:
+            if u["warr"][s] >= P * u["occ"][s] + GU and u["w_n"] - u["freed"] < K:
                 u["w_n"] += 1
                 moved = True
         if u["w_dn"] < u["w_n"] and cur(u["w_dn"]) and go():
@@ -111,7 +111,7 @@ def table_replay(T, N, GU, P, seed=0, prob=0.5, delay=6):
                 u["cstep"] = 0
                 moved = True
         # QF
-        for s in range(3):
+        for s in range(K):
             for d in range(2):
                 if u["occ"][s] >= L(X, s) or not go():
                     continue
@@ -122,14 +122,14 @@ def table_replay(T, N, GU, P, seed=0, prob=0.5, delay=6):
                 if u["warr"][s] < P * u["occ"][s] + k + 1:
                     continue
                 s2, k2 = w[1 + d] & 3, w[1 + d] >> 2
-                if k == 0 and u["cred"][d * 3 + s2] < k2:
+                if k == 0 and u["cred"][d * K + s2] < k2:
                     continue
                 Y, e = chip_next(X, d), w[0] & 0xFFFF
                 flight[(X, d)].append([t + rng.randint(1, delay), lambda Y=Y, s2=s2, k2=k2, e=e: land(Y, s2, k2, e)])
                 u["sent"][s][d] += 1
                 moved = True
         # QR
-        for s in range(3):
+        for s in range(K):
             if u["occ"][s] >= L(X, s) or not u["done"][s]:
                 continue
             w = ent(X, s, u["occ"][s])
@@ -144,7 +144,7 @@ def table_replay(T, N, GU, P, seed=0, prob=0.5, delay=6):
                 Xp = chip_next(X, 1 - d)  # the chip it comes from (one hop back on direction d)
                 assert chip_next(Xp, d) == X
                 flight[(X, 1 - d)].append(
-                    [t + rng.randint(1, delay), lambda Xp=Xp, i=d * 3 + s, v=nxt: setcred(Xp, i, v)]
+                    [t + rng.randint(1, delay), lambda Xp=Xp, i=d * K + s, v=nxt: setcred(Xp, i, v)]
                 )
             u["occ"][s] = nxt
             u["sent"][s] = [0, 0]
@@ -165,21 +165,25 @@ def table_replay(T, N, GU, P, seed=0, prob=0.5, delay=6):
         idle = 0 if moved or any(flight.values()) else idle + 1
         if idle > 2000:
             return False
-    assert all(st[X]["occ"][s] == L(X, s) for X in range(N) for s in range(3))
+    assert all(st[X]["occ"][s] == L(X, s) for X in range(N) for s in range(K))
     return True
 
 
+@pytest.mark.parametrize("slots,keep", [("d0,d1,any", 1), ("d0,d1,d0d1,any", 2)], ids=["k3", "k4"])
 @pytest.mark.parametrize("shape,nexp,G", [((2, 4), 32, 2), ((2, 4), 64, 2), ((8, 4), 640, 4)])
-def test_lane_tables(shape, nexp, G):
+def test_lane_tables(shape, nexp, G, slots, keep):
     """The schedule completes under random timing, and the tables drive the device-queue model to completion."""
     cfg = GCfg(nexp=nexp, G=G)
-    lc = LCfg(cycles=torus_cycles(*shape)) if shape[0] > 2 else LCfg()
+    kw = dict(slots=slots, keep=keep)
+    lc = LCfg(cycles=torus_cycles(*shape), **kw) if shape[0] > 2 else LCfg(**kw)
     GU, P = slot_packets(cfg, lc)
     T = make_tables(shape, cfg, lc)
     N = shape[0] * shape[1]
-    ok, u = replay(N, T["E"], T["sch"], seed=0, P=P, GU=GU)
+    ok, u = replay(N, T["E"], T["sch"], seed=0, P=P, GU=GU, keep=keep, types=slot_types(slots))
     assert ok
-    logger.info(f"lane {shape} E {T['E']}: model util {T['sch']['util']:.3f}, random-timing {u:.3f}")
+    logger.info(
+        f"lane {shape} E {T['E']} slots {slots} keep {keep}: model util {T['sch']['util']:.3f}, random-timing {u:.3f}"
+    )
     for seed in range(3):
         assert table_replay(T, N, GU, P, seed=seed), f"tables stuck (seed {seed})"
     own = [len(o) for o in T["own"]]
@@ -346,10 +350,10 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
 
 
 def lcfg_from_env(**kw):
-    """LCfg with overrides from WS_LANE (e.g. "nbuf=3,D=4,out_all=1")."""
-    for item in filter(None, os.environ.get("WS_LANE", "").split(",")):
+    """LCfg with overrides from WS_LANE (e.g. "nbuf=3;D=4;out_all=1;slots=d0,d1,d0d1,any")."""
+    for item in filter(None, os.environ.get("WS_LANE", "").split(";")):
         k, v = item.split("=")
-        kw[k] = bool(int(v)) if k == "out_all" else int(v)
+        kw[k] = bool(int(v)) if k == "out_all" else (v if k == "slots" else int(v))
     return LCfg(**kw)
 
 
