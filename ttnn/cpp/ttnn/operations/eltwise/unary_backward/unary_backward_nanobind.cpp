@@ -36,13 +36,13 @@ void bind_unary_backward_two_float(
         {2}
 
         .. math::
-            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i, \verb|threshold|, \verb|value|)
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i, \verb|min|, \verb|max|)
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
-            threshold (float): the input threshold value.
-            value (float): the input value.
+            min (float): the input threshold value.
+            max (float): the input value.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
