@@ -130,3 +130,28 @@ def test_sampling_wrapper_forwards_common_arguments(monkeypatch, grammar_on, fee
     assert sampler._run_sampling(logits, **arguments) is sample.return_value
     sample.assert_called_once_with(logits, **arguments)
     assert sampler.format_public_tokens.call_count == int(feedback)
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+def test_prefill_passes_empty_slots_to_configure_sampling(adapter, monkeypatch, resumed):
+    recorded = []
+    original_configure = adapter.generator.configure_sampling
+
+    def configure(params, **kwargs):
+        recorded.append(kwargs)
+        return original_configure(params, **kwargs)
+
+    monkeypatch.setattr(adapter.generator, "configure_sampling", configure)
+    adapter.generator.sampler.reset_output_state = Mock()
+    adapter.prefill_forward(
+        torch.ones(1, 8, dtype=torch.int64),
+        None,
+        object(),
+        [8],
+        empty_slots=[7],
+        page_tables_per_layer=[torch.zeros(1, 64, dtype=torch.int32)],
+        sampling_params=params([42]),
+        output_token_counts=[2] if resumed else None,
+    )
+    assert len(recorded) == 1
+    assert recorded[0]["slots"] == [7]

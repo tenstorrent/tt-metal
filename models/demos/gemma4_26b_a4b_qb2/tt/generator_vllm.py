@@ -307,6 +307,7 @@ class Gemma4ForCausalLM:
                 gen.configure_sampling(
                     sampling_params,
                     prompt_tokens=prompt_tokens,
+                    slots=empty_slots,
                     seed_offsets=prompt_lengths.flatten() - 1,
                     _reuse_trace=reuse_request,
                 )
@@ -318,6 +319,7 @@ class Gemma4ForCausalLM:
                 gen.configure_sampling(
                     sampling_params,
                     prompt_tokens=prompt_tokens,
+                    slots=empty_slots,
                     seed_offsets=prompt_lengths.flatten() - 1,
                     _reuse_trace=reuse_request,
                 )

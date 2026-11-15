@@ -1638,7 +1638,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     assert sampling_module is not None
                     assert sampling_batch is not None
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
-                    combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
+                    combined_prompt_tokens = torch.full((sampling_batch, max_prompt_len), -1, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
                         plen = int(prompt_lens[local_idx])
                         combined_prompt_tokens[slot, :plen] = prefill_ids[batch_user_ids[local_idx], :plen]

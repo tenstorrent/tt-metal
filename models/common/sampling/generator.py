@@ -282,8 +282,8 @@ class SamplingGenerator:
         self.seed_manager.reset_seed(seed, empty_slots)
         self.seed_manager.get_new_values(empty_slots, replicate_seeds=replicate_seeds)
         if prompt_tokens is not None:
-            self.reset_prompt_tokens(prompt_tokens)
-        self.reset_output_state()
+            self.reset_prompt_tokens(prompt_tokens, slots=empty_slots)
+        self.reset_output_state(slots=empty_slots)
 
     def apply_decode_state(
         self,
