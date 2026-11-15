@@ -29,6 +29,8 @@ K = 2048
 
 def q_headrows(q, S):
     """stock-layout q [1,32,S,128] -> [S,1,32,128] TILE (tile row = head)."""
+    if os.environ.get("HY4_IDX_QFAST", "0") == "1":  # one TILE permute instead of to_layout + permute + to_layout
+        return ttnn.permute(q, (2, 0, 1, 3))
     x = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.permute(x, (2, 0, 1, 3))
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
@@ -362,7 +364,9 @@ class Hy4AttentionPool(Hy4AttentionOpt):
         q = self.idx_q(o, d, tabs)  # [1,32,S,128]
         qh = q_headrows(q, S)
         ttnn.deallocate(q)
-        w32 = _pad_rows(d["iw"], 32)
+        w32 = (
+            d["iw"] if os.environ.get("HY4_IDX_QFAST", "0") == "1" else _pad_rows(d["iw"], 32)
+        )  # QFAST: the score kernel reads tile pages and only rows r < S; the tile padding rows are never used
         gids = select_global(ctx, qh, w32, self.key_view)
         for t in (qh, w32):
             ttnn.deallocate(t)
