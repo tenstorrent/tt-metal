@@ -36,11 +36,28 @@ def q_roundtrip(t):
 md = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), l1_small_size=16384, trace_region_size=100_000_000)
 res = {"v": {}}
 try:
-    W = load_moe_layer(1, load_experts=True)
-    w0, w1, w2 = [W[k].reshape(W[k].shape[-3], W[k].shape[-2], W[k].shape[-1]) for k in ("w0", "w1", "w2")]
-    p("weights", tuple(w0.shape), tuple(w2.shape))
     IMPL = Tp24Experts if os.environ.get("TP_IMPL", "32") == "24" else Tp32Experts
-    tp = IMPL(md, w0, w1, w2, chip0=CHIP0)
+    FROM_CACHE = (
+        os.environ.get("TP_FROM_CACHE", "0") == "1"
+    )  # weights + reference tiles ONLY from the HY4_TP32_CACHE_DIR dump (no checkpoint read)
+    if FROM_CACHE:
+        tp = IMPL(md, layer=1, chip0=CHIP0)
+        assert tp.from_cache, "TP_FROM_CACHE=1 but no cache for layer 1"
+        from models.demos.blackhole.hy4_preview.tt import hy4_tp32_cache as TC
+
+        _d = TC.check_layer(TC.cache_root(), 1)
+        _h01, _h2 = TC.load_host_chips(_d, [CHIP0 + i for i in range(8)])
+        _unt = (
+            lambda h, n: ttnn.to_torch(h).reshape(n, 32, 8, 32).permute(2, 0, 1, 3).float()
+        )  # [8 banks, n, 32, 32] dequantised
+        tp.t01 = [_unt(h, TC.T01) for h in _h01]
+        tp.t2 = [_unt(h, TC.T2) for h in _h2]
+        p("weights from cache", _d)
+    else:
+        W = load_moe_layer(1, load_experts=True)
+        w0, w1, w2 = [W[k].reshape(W[k].shape[-3], W[k].shape[-2], W[k].shape[-1]) for k in ("w0", "w1", "w2")]
+        p("weights", tuple(w0.shape), tuple(w2.shape))
+        tp = IMPL(md, w0, w1, w2, chip0=CHIP0)
     p(
         "cores",
         [(c.x, c.y) for c in tp.cores],
@@ -51,8 +68,11 @@ try:
     )
     ref_ok = os.environ.get("TP_REF", "1") == "1"
     if ref_ok:
-        q01 = [torch.stack([q_roundtrip(tp.t01[k, b]) for b in range(8)]) for k in range(8)]
-        q2 = [torch.stack([q_roundtrip(tp.t2[k, b]) for b in range(8)]) for k in range(8)]
+        if FROM_CACHE:
+            q01, q2 = tp.t01, tp.t2
+        else:
+            q01 = [torch.stack([q_roundtrip(tp.t01[k, b]) for b in range(8)]) for k in range(8)]
+            q2 = [torch.stack([q_roundtrip(tp.t2[k, b]) for b in range(8)]) for k in range(8)]
         p("reference tiles quantised")
     comp = ttnn.ConcatMeshToTensor(md, dim=0)
     for T in TS:
