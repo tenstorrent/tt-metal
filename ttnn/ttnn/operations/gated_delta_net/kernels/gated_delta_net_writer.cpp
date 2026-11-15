@@ -139,8 +139,8 @@ FORCE_INLINE void push_chunk_coefs(
 }
 
 // R-PREP prep core. Unit = (sequence, key head); tile rows i = offset, offset + stride, ... of the sequence. The row's
-// prepped tiles arrive in cb_prep_send as one block per value head j, [kq (2 Kt) | knT (Kt) | M, QD | exp(c) | v (Vt)]
-// (descriptor IN_MAT_PAGES), and go to the head's state cores (unit order: head j, piece p) at inbox slot
+// prepped tiles arrive in cb_prep_send as one block per value head j, [exp(c) | QD, M | kq (2 Kt) | knT (Kt) | v (Vt)]
+// (descriptor IN_MAT_PAGES), part by part, and go to the head's state cores (unit order: head j, piece p) at inbox slot
 // i % INBOX_SLOTS of cb_in_kq, cb_in_knt, cb_in_mat, cb_in_vec (multicast to the head's pieces) and cb_in_v (the
 // piece's Vb columns). Every core has the same CB layout, so this core's base addresses of those buffers are the
 // state cores'. The state cores write the row's o
@@ -152,7 +152,8 @@ void prep_writer(
     constexpr uint32_t Vb = Vt / PIECES;
     constexpr uint32_t GROUP = RATIO * PIECES;
     constexpr uint32_t T_BYTES = STATE_TILE_BYTES;
-    constexpr uint32_t HEAD_PAGES = 3 * Kt + GDN_IN_MAT_PAGES + GDN_IN_VEC_PAGES + Vt;
+    constexpr uint32_t VEC_PAGES = GDN_IN_VEC_PAGES;
+    constexpr uint32_t HEAD_PAGES = VEC_PAGES + GDN_IN_MAT_PAGES + 3 * Kt + Vt;
     uint32_t cons_x[GROUP];
     uint32_t cons_y[GROUP];
     for (uint32_t c = 0; c < GROUP; ++c) {
@@ -221,19 +222,22 @@ void prep_writer(
         // The row's o slot is free (compute has normalized the row that used it), so the row may be sent.
         cb_reserve_back(cb_o_in, O_PAGES);
         const uint32_t slot = (tr - first_tr) % INBOX_SLOTS;
-        // One head block at a time, as compute packs it (the send buffer holds a tile row of them at most).
+        // One head block at a time, each part sent as compute pushes it (pack order: exp(c) | QD, M | kq | knT | v).
         for (uint32_t j = 0; j < RATIO; ++j) {
-            cb_wait_front(cb_prep_send, HEAD_PAGES);
-            const uint32_t head_src = get_read_ptr(cb_prep_send);
-            const uint32_t mat_src = head_src + 3 * Kt * T_BYTES;
-            const uint32_t vec_src = mat_src + GDN_IN_MAT_PAGES * T_BYTES;
-            const uint32_t v_src = vec_src + GDN_IN_VEC_PAGES * T_BYTES;
-            mcast_rects(head_rects[j], head_src, kq_base + slot * 2 * Kt * T_BYTES, 2 * Kt * T_BYTES);
-            mcast_rects(head_rects[j], head_src + 2 * Kt * T_BYTES, knT_base + slot * Kt * T_BYTES, Kt * T_BYTES);
+            cb_wait_front(cb_prep_send, VEC_PAGES + GDN_IN_MAT_PAGES);
+            const uint32_t vec_src = get_read_ptr(cb_prep_send);
+            const uint32_t mat_src = vec_src + VEC_PAGES * T_BYTES;
+            const uint32_t kq_src = mat_src + GDN_IN_MAT_PAGES * T_BYTES;
+            const uint32_t knT_src = kq_src + 2 * Kt * T_BYTES;
+            const uint32_t v_src = knT_src + Kt * T_BYTES;
+            mcast_rects(head_rects[j], vec_src, vec_base + slot * VEC_PAGES * T_BYTES, VEC_PAGES * T_BYTES);
             mcast_rects(
                 head_rects[j], mat_src, mat_base + slot * GDN_IN_MAT_PAGES * T_BYTES, GDN_IN_MAT_PAGES * T_BYTES);
-            mcast_rects(
-                head_rects[j], vec_src, vec_base + slot * GDN_IN_VEC_PAGES * T_BYTES, GDN_IN_VEC_PAGES * T_BYTES);
+            cb_wait_front(cb_prep_send, VEC_PAGES + GDN_IN_MAT_PAGES + 2 * Kt);
+            mcast_rects(head_rects[j], kq_src, kq_base + slot * 2 * Kt * T_BYTES, 2 * Kt * T_BYTES);
+            cb_wait_front(cb_prep_send, HEAD_PAGES - Vt);
+            mcast_rects(head_rects[j], knT_src, knT_base + slot * Kt * T_BYTES, Kt * T_BYTES);
+            cb_wait_front(cb_prep_send, HEAD_PAGES);
             for (uint32_t p = 0; p < PIECES; ++p) {
                 const uint32_t c = j * PIECES + p;
                 noc_async_write(

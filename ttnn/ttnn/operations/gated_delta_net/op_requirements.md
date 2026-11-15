@@ -431,7 +431,7 @@ no regression on the perf guard set.
 
 **Outcome**: in place is bit-identical to the default chain on every listed shape, both dtypes (test_gated_delta_net_in_place.py). Device kernel time, default vs in place: perf_decode_b1 22.0 vs 22.0 us, model_decode_b16 median 73.7 vs 73.3 us. recurrent_state needed no change; conv_state reads now signal their writer core before it overwrites them (in-place builds only).
 
-### [ ] Refinement 11 — Short and medium prefill (T = 32 to 512): faster than a chain of ops
+### [x] Refinement 11 — Short and medium prefill (T = 32 to 512): faster than a chain of ops
 
 **Type**: perf
 
@@ -458,3 +458,5 @@ build of decode B=16 is 1,920 B over): if this needs code, first move roles into
 **Done when**: measured device-ns at T=128 improves by a large factor (aim under 80 us), T=32 / 64 /
 256 / 512 are measured and none is slower than today, the golden suite is green, no regression on the
 guard set.
+
+**Outcome**: device kernel time (model geometry, bf16, one fresh run of 3 launches each, same session), before -> after: T=32 67.5 -> 63.6 us (local chunk step kept: one tile row), T=64 118 -> 72.7, T=96 168.5 -> 77.6, T=128 188 -> 82.0 (2.3x, 96 cores; aim 80 not reached), T=256 220-239 -> 134, T=512 282-325 -> 196, T=1024 ~390 -> 298, model_prefill_4096 1.09 -> 0.91 ms; batched B=2 T=40 224 -> 126; decode guards unchanged (B=1 22.0, B=8 40.0, B=16 73.3). Landed: R-PREP from 2 tile rows on; prep groups of `PREP_HEADS` value heads (1 for short calls: one tile row's prep spread over 3x the cores) and the piece count (4 up to 5 tile rows, else 2) picked by a fitted cost model; each group's state cores placed among its prep cores with a per-core send NoC (also what moved T=4096); head blocks unicast and streamed part by part as compute packs them; norm_weight (*) silu(z) made before o lands; the triangular mask built on the writer; state cores read S0 before their first row lands. Measured worse and parked off: one window group per prep tile row (87.8 vs 82.7 us). What binds at T=128 now: the prep core's serial compute after its inputs land (~7 us): conv 17.6 (12 fp32 silu tiles), L2 norm 10, head prep 7.4, head block 9.8 us, then 4 state steps of 3.1 us and a ~6 us RMS + store tail. Next: share the q / k part per key head across cores (a q core and a k core per tile row feeding the value heads' prep cores, as R-QKCORE does for decode): about 22 of the prep core's 45 us is q / k work redone by every value head's prep core; not done here because it needs a new cross-core hand-off between prep cores. The compute kernel was not split per role: every addition compiles only into chunked (R-PREP) builds, so the decode builds near the kernel-config limit are unchanged.

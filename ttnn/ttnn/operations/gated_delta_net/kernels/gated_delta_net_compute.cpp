@@ -179,15 +179,20 @@ constexpr uint32_t STATE_STAGGER = GDN_STATE_STAGGER;
 static_assert(CHUNKED || ROLE == GDN_ROLE_LOCAL || QK_CORE, "R-PREP is a chunked regime");
 // A prep core's conv output v is scaled by beta per head (head_prep) before it is sent.
 constexpr uint32_t cb_v_out = PREP ? cb_v_prep : cb_v;
-// R-PREP head block (descriptor IN_MAT_PAGES): [beta exp(c) (*) kn, exp(c) (*) qn | kn^T (*) exp(c_last - c)^T | M, QD
-// | exp(c) | beta (*) v]; the state core's inboxes hold these parts.
-constexpr uint32_t HB_KNT = 2 * Kt;
-constexpr uint32_t HB_M = 3 * Kt;
-constexpr uint32_t HB_QD = HB_M + 1;
-constexpr uint32_t HB_EC = HB_M + GDN_IN_MAT_PAGES;
-constexpr uint32_t HB_V = HB_EC + GDN_IN_VEC_PAGES;
+// R-PREP head block (descriptor IN_MAT_PAGES), in pack order: [exp(c) | QD, M | beta exp(c) (*) kn, exp(c) (*) qn |
+// kn^T (*) exp(c_last - c)^T | beta (*) v]; the state core's inboxes hold these parts. Each part is pushed as it is
+// packed, so the writer sends it while compute packs the next.
+constexpr uint32_t HB_EC = 0;
+constexpr uint32_t HB_QD = HB_EC + GDN_IN_VEC_PAGES;
+constexpr uint32_t HB_M = HB_QD + 1;
+constexpr uint32_t HB_KQ = HB_QD + GDN_IN_MAT_PAGES;
+constexpr uint32_t HB_KNT = HB_KQ + 2 * Kt;
+constexpr uint32_t HB_V = HB_KNT + Kt;
 constexpr uint32_t HEAD_V_TILES = PREP ? Vb / RATIO : 1;  // a prep core's Vt columns of one value head
 constexpr uint32_t HEAD_BLOCK = HB_V + HEAD_V_TILES;
+// State core inbox cb_in_mat pages (the head block's QD, M).
+constexpr uint32_t IN_MAT_QD = 0;
+constexpr uint32_t IN_MAT_M = HB_M - HB_QD;
 
 constexpr uint32_t largest_divisor_at_most(uint32_t n, uint32_t cap) {
     uint32_t best = 1;
@@ -1131,7 +1136,7 @@ ALWI void head_prep(uint32_t row_last) {
     pack_at(1, cb_chunk_vec, CV_W - 2);
     pack_at(3, cb_chunk_vec, CV_BEC - 2);
     if constexpr (PREP) {
-        cb_reserve_back(cb_prep_send, HEAD_BLOCK);
+        cb_reserve_back(cb_prep_send, HB_M);  // exp(c), QD
         pack_at(0, cb_prep_send, HB_EC);
     }
     tile_regs_release();
@@ -1155,6 +1160,7 @@ ALWI void head_prep(uint32_t row_last) {
     pack_first(0, cb_chunk_mat, CM_L);
     if constexpr (PREP) {
         pack_at(1, cb_prep_send, HB_QD);
+        cb_push_back(cb_prep_send, HB_M);
     } else {
         pack_at(1, cb_chunk_mat, CM_QD);
     }
@@ -1183,11 +1189,15 @@ ALWI void head_block(uint32_t head) {
     transpose_dest<true>(2);
     tile_regs_commit();
     tile_regs_wait();
-    pack_first(1, cb_prep_send, HB_M);
+    cb_reserve_back(cb_prep_send, 1);
+    pack_first(1, cb_prep_send, 0);  // HB_M (pack indices count from the reservation)
     pack_at(2, cb_chunk_vec, 0);  // pack indices count from the reservation
     tile_regs_release();
     cb_pop_front(cb_chunk_mat, 1);
     cb_push_back(cb_chunk_vec, 1);
+    cb_push_back(cb_prep_send, 1);
+
+    cb_reserve_back(cb_prep_send, 2 * Kt);
 
     // [beta exp(c) (*) kn, exp(c) (*) qn], one key column tile of each per window. kn, qn, kn^T load through srcA
     // (19-bit, as every matmul reads them); the scalings stay fp32.
@@ -1208,6 +1218,8 @@ ALWI void head_block(uint32_t head) {
         pack_at(2, cb_prep_send, Kt + kt);
         tile_regs_release();
     }
+    cb_push_back(cb_prep_send, 2 * Kt);
+    cb_reserve_back(cb_prep_send, Kt);
     cb_wait_front(cb_chunk_vec, CV_WT + 1);
     constexpr uint32_t BATCH = ckl::DEST_AUTO_LIMIT - 1;  // data tiles per window beside the scaling tile
     for (uint32_t kt0 = 0; kt0 < Kt; kt0 += BATCH) {
@@ -1225,12 +1237,14 @@ ALWI void head_block(uint32_t head) {
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_first(0, cb_prep_send, HB_KNT + kt0);
+        pack_first(0, cb_prep_send, kt0);
         for (uint32_t i = 1; i < n; ++i) {
-            pack_at(i, cb_prep_send, HB_KNT + kt0 + i);
+            pack_at(i, cb_prep_send, kt0 + i);
         }
         tile_regs_release();
     }
+    cb_push_back(cb_prep_send, Kt);
+    cb_reserve_back(cb_prep_send, HEAD_V_TILES);
     for (uint32_t vt0 = 0; vt0 < HEAD_V_TILES; vt0 += BATCH) {
         const uint32_t n = (HEAD_V_TILES - vt0) < BATCH ? (HEAD_V_TILES - vt0) : BATCH;
         tile_regs_acquire();
@@ -1245,13 +1259,13 @@ ALWI void head_block(uint32_t head) {
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_first(0, cb_prep_send, HB_V + vt0);
+        pack_first(0, cb_prep_send, vt0);
         for (uint32_t i = 1; i < n; ++i) {
-            pack_at(i, cb_prep_send, HB_V + vt0 + i);
+            pack_at(i, cb_prep_send, vt0 + i);
         }
         tile_regs_release();
     }
-    cb_push_back(cb_prep_send, HEAD_BLOCK);
+    cb_push_back(cb_prep_send, HEAD_V_TILES);
     cb_pop_front(cb_chunk_vec, CV_WT + 1);
     cb_pop_front(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
 }
@@ -1391,7 +1405,7 @@ ALWI void chunk_state_prepped(Buffers& bufs, bool first_in_pair, bool last_in_pa
         reconfig_data_format(cb_uw, cb_in_mat);
         matmul_init(cb_in_mat, cb_uw);
         for (uint32_t i = 0; i < n; ++i) {
-            matmul_tiles(cb_in_mat, cb_uw, 0, vt0 + i, i);  // M x rhs
+            matmul_tiles(cb_in_mat, cb_uw, IN_MAT_M, vt0 + i, i);  // M x rhs
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -1415,7 +1429,7 @@ ALWI void chunk_state_prepped(Buffers& bufs, bool first_in_pair, bool last_in_pa
         reconfig_data_format(cb_u, cb_in_mat);
         matmul_init(cb_in_mat, cb_u);
         for (uint32_t i = 0; i < n; ++i) {
-            matmul_tiles(cb_in_mat, cb_u, 1, vt0 + i, i);  // + QD x U onto exp(c) Rq
+            matmul_tiles(cb_in_mat, cb_u, IN_MAT_QD, vt0 + i, i);  // + QD x U onto exp(c) Rq
         }
         tile_regs_commit();
         tile_regs_wait();

@@ -75,9 +75,10 @@ PREP_CLUSTER = True
 # R-PREP prep writer NoC (the reader takes the other): 1, 0, or "auto" (per core, the shorter paths to its state cores).
 PREP_SEND_NOC = "auto"
 NOC_GRID = (17, 12)  # Blackhole NoC torus (x, y), in NOC 0 coordinates (R-PREP is Blackhole-only)
-# Pieces per pair under R-PREP, at most. Fewer pieces leave more prep cores and halve the fan-out of a prepped row;
-# model_prefill_4096: 4 pieces 1.34 ms (prep-bound, sends late), 2 pieces 1.18 ms (same run).
-PREP_MAX_PIECES = 2
+# Pieces per pair under R-PREP, at most; _prep_estimate picks among them. Fewer pieces leave more prep cores and halve
+# the fan-out of a prepped row, more shorten the state step: T=128 4 pieces 87 us, 2 pieces 92; T=512 255 vs 199;
+# model_prefill_4096 4 pieces 1.34 ms (prep-bound), 2 pieces 1.18 ms (R6).
+PREP_MAX_PIECES = 4
 # R-PREP fills its pipeline once (one prep core's tile row) and then runs a tile row per state step; below this many tile
 # rows per sequence the local chunk step is faster (model geometry, one value head per prep group: T=32 67 us local,
 # 73 us R-PREP; T=64 118 vs 80 us).
@@ -87,16 +88,22 @@ PREP_MIN_TILE_ROWS = 2
 # prep over more cores (short calls, whose time is the pipeline fill), all r share the q / k prep (long calls, where
 # prep throughput binds). None: auto (_prep_heads).
 PREP_HEADS = None
-# _prep_heads cost model, device us at the model geometry (Kt = Vt = 4, bf16): a prep core's tile row is the q / k part
-# plus one part per value head, the state step one tile row. Fits T = 128..4096: h = 1 wins to 16 tile rows per
-# sequence (T=512 199 vs 214 us), h = 3 from 32 (T=1024 335 vs 302 us).
+# _prep_estimate cost model, device us at the model geometry (Kt = Vt = 4, bf16): a prep core's tile row is the q / k
+# part plus one part per value head, the state step one tile row (a base plus one part per state column tile of the
+# piece). Fits T = 64..4096: h = 1 wins to 16 tile rows per sequence (T=512 199 vs 214 us), h = 3 from 32 (T=1024
+# 335 vs 302 us); 4 pieces while every row has its own prep core (T=128 87 vs 92 us).
 PREP_QK_ROW_US = 27.0
 PREP_HEAD_ROW_US = 30.0
-STATE_STEP_US = 5.3
+STATE_STEP_US = 2.9
+STATE_STEP_COL_US = 1.2
 
 # ---- Buffer-depth knobs ----
 WINDOW_DEPTH = 2  # window groups of tap tiles in flight
 WINDOW_GROUP_MAX_COLS = 4  # column tiles per window hand-off (one DRAM flush each), upper bound
+# R-PREP prep cores with at most this many columns read a tile row's window as one group. Measured slower (T=128 82.7
+# vs 87.8 us at 12): building the taps is bound by this RISC's issue of row copies, not DRAM round trips, and conv then
+# waits for every column. 0: off.
+PREP_WINDOW_MAX_COLS = 0
 TOK_COEF_DEPTH = 2  # tokens of coefficient pages in flight
 INBOX_DEPTH = 12  # R-PREP: prepped tile rows in flight per state core (slots of its inbox buffers), at most
 O_IN_DEPTH = 2  # R-PREP: a prep core's tile rows of chunk outputs o in flight (slot k % O_IN_DEPTH for its k-th row)
@@ -138,10 +145,11 @@ D_PAGES = 2  # token step: [kn; qn] x kn^T, d = qn . kn of row p at (p, p) of th
 CHUNK_COEF_PAGES = 2  # R-CHUNK, per tile row: g and beta of the pair in column 0, 0 on rows that are no token
 CHUNK_VEC_PAGES = 5  # R-CHUNK: D, c, exp(c), exp(c_last - c), beta exp(c)
 CHUNK_MAT_PAGES = 2  # R-CHUNK: L (solve operand), (Qn Kn^T) * D (matmul operand)
-# R-PREP head block, per value head and tile row, prescaled so the state core broadcasts nothing:
-# [beta exp(c) (*) kn, exp(c) (*) qn] (2 Kt, its cb_in_kq slot), kn^T (*) exp(c_last - c)^T (Kt, cb_in_knt),
-# M = (I + L)^-1 and QD (cb_in_mat), exp(c) (cb_in_vec: the chunk decay exp(c_last) is its last token row), then
-# beta (*) v of the head's Vt columns (each piece's Vb of them go to its cb_in_v slot).
+# R-PREP head block, per value head and tile row, prescaled so the state core broadcasts nothing, in pack order (each
+# part is sent as compute pushes it): exp(c) (cb_in_vec: the chunk decay exp(c_last) is its last token row), QD and
+# M = (I + L)^-1 (cb_in_mat), [beta exp(c) (*) kn, exp(c) (*) qn] (2 Kt, its cb_in_kq slot),
+# kn^T (*) exp(c_last - c)^T (Kt, cb_in_knt), then beta (*) v of the head's Vt columns (each piece's Vb of them go to
+# its cb_in_v slot).
 IN_MAT_PAGES = 2
 IN_VEC_PAGES = 1
 L1_BUDGET = 1460288  # usable L1 per Blackhole worker core (risks.md R11)
@@ -269,7 +277,7 @@ def _kernel_defines():
 
 # Pages per CB; each entry is (index list sharing one allocation, pages). Vt here is the piece's column
 # block (v_block_tiles); pieces > 1 adds the partial-sum combine buffers, chunked the R-CHUNK buffers.
-def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_depth=1):
+def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_depth=1, prep=False):
     n_state = Kt * Vt
     trb = TOKEN_TILE_ROWS_PER_BLOCK
     return [
@@ -277,7 +285,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_
         ((CB_STATE, CB_STATE_MM), n_state),
         ((CB_STATE_OUT,), n_state * min(STATE_OUT_DEPTH, unit_depth)),
         ((CB_CONV_W,), (1 if conv_on_fpu else CONV_TAPS) * (2 * Kt + Vt) * unit_depth),
-        ((CB_WINDOW,), CONV_TAPS * _window_group_cols(Kt, Vt, pieces) * WINDOW_DEPTH),
+        ((CB_WINDOW,), CONV_TAPS * _window_group_cols(Kt, Vt, pieces, prep) * WINDOW_DEPTH),
         ((CB_CONV_ACC,), 0 if conv_on_fpu else CONV_ACC_DEPTH),
         ((CB_Y_QK,), 2 * Kt * trb),
         ((CB_V,), Vt * trb),
@@ -304,7 +312,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_
         ((CB_SCRATCH,), 1),
         # conv_state history rows, then single token rows, of one window group: one aligned span per column each
         # (reader-local staging).
-        ((CB_HIST_STAGE,), 2 * _window_group_cols(Kt, Vt, pieces)),
+        ((CB_HIST_STAGE,), 2 * _window_group_cols(Kt, Vt, pieces, prep)),
         # Own partial sum o^2 (compute -> writer); gathered partials of every piece, two tile rows in
         # flight so a peer one tile row ahead never lands on a slot still being summed.
         ((CB_OSUM_PART,), trb if pieces > 1 else 0),
@@ -393,7 +401,7 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox):
     i % inbox), then each role's own buffers."""
     Vb = Vt // pieces
     state = {idx[0]: pages for idx, pages in _cb_plan(Kt, Vb, conv_on_fpu, pieces, True)}
-    prep = {idx[0]: pages for idx, pages in _cb_plan(Kt, heads * Vt, conv_on_fpu, 1, True)}
+    prep = {idx[0]: pages for idx, pages in _cb_plan(Kt, heads * Vt, conv_on_fpu, 1, True, prep=True)}
     for idx in PREP_ONLY_CBS:
         state[idx] = 0
     for idx in STATE_ONLY_CBS:
@@ -463,13 +471,15 @@ U2D_CBS = (
 )
 
 
-def _window_group_cols(Kt, Vt, pieces):
+def _window_group_cols(Kt, Vt, pieces, prep=False):
     """Column tiles per conv-window hand-off: a divisor of the unit's 2Kt + Vt columns, so every
     reservation stays contiguous in cb_window (compute consumes per column, so a group may straddle the
-    q / k / v boundaries). R-STEP: the largest one up to WINDOW_GROUP_MAX_COLS. R-VSPLIT: all of them,
-    since a piece's reader is bound by serial DRAM round trips and its state slice leaves L1 room."""
+    q / k / v boundaries). R-STEP: the largest one up to WINDOW_GROUP_MAX_COLS. R-VSPLIT and an R-PREP prep core of
+    at most PREP_WINDOW_MAX_COLS columns: all of them, since such a reader is bound by serial DRAM round trips."""
     cols = 2 * Kt + Vt
-    return cols if pieces > 1 else _largest_divisor_at_most(cols, WINDOW_GROUP_MAX_COLS)
+    if pieces > 1 or (prep and cols <= PREP_WINDOW_MAX_COLS):
+        return cols
+    return _largest_divisor_at_most(cols, WINDOW_GROUP_MAX_COLS)
 
 
 def _conv_on_fpu(dtype):
@@ -528,25 +538,30 @@ def _seq_tile_rows(seq, tokens):
     return (seq * tokens + tokens - 1) // TILE - (seq * tokens) // TILE + 1
 
 
-def _prep_heads(batch, value_heads, key_heads, tokens, spare_cores):
-    """Value heads per R-PREP group (PREP_HEADS, or auto)."""
+def _prep_estimate(batch, value_heads, key_heads, tokens, Vb, heads, spare_cores):
+    """Modelled R-PREP time (us): the pipeline fill (one prep row), then per tile row the state step, or the group's
+    prep rate when its cores take several rows each."""
+    ratio = value_heads // key_heads
+    rows = max(_seq_tile_rows(seq, tokens) for seq in range(batch))
+    per_group = min(spare_cores // (batch * key_heads * (ratio // heads)), MAX_PREP_CORES_PER_GROUP)
+    if per_group < 1:
+        return float("inf")
+    prep_row = PREP_QK_ROW_US + heads * PREP_HEAD_ROW_US
+    state_step = STATE_STEP_US + Vb * STATE_STEP_COL_US
+    rate = state_step if per_group >= rows else max(state_step, prep_row / per_group)
+    return prep_row + rows * rate
+
+
+def _prep_heads(batch, value_heads, key_heads, tokens, Vb, spare_cores):
+    """Value heads per R-PREP group (PREP_HEADS, or the modelled fastest)."""
     ratio = value_heads // key_heads
     if PREP_HEADS is not None:
         assert ratio % PREP_HEADS == 0, "PREP_HEADS must divide the value heads per key head"
         return PREP_HEADS
-    rows = max(_seq_tile_rows(seq, tokens) for seq in range(batch))
-
-    def estimate(heads):
-        # Pipeline fill (one prep row), then per tile row the state step, or the group's prep rate when its cores
-        # take several rows each.
-        per_group = min(spare_cores // (batch * key_heads * (ratio // heads)), MAX_PREP_CORES_PER_GROUP)
-        if per_group < 1:
-            return float("inf")
-        prep_row = PREP_QK_ROW_US + heads * PREP_HEAD_ROW_US
-        rate = STATE_STEP_US if per_group >= rows else max(STATE_STEP_US, prep_row / per_group)
-        return prep_row + rows * rate
-
-    return min((h for h in range(1, ratio + 1) if ratio % h == 0), key=lambda h: (estimate(h), -h))
+    return min(
+        (h for h in range(1, ratio + 1) if ratio % h == 0),
+        key=lambda h: (_prep_estimate(batch, value_heads, key_heads, tokens, Vb, h, spare_cores), -h),
+    )
 
 
 def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, dtype, spare_cores):
@@ -561,7 +576,7 @@ def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked,
         return None
     if min(_seq_tile_rows(seq, tokens) for seq in range(batch)) < PREP_MIN_TILE_ROWS:
         return None
-    heads = _prep_heads(batch, value_heads, key_heads, tokens, spare_cores)
+    heads = _prep_heads(batch, value_heads, key_heads, tokens, Vt // pieces, spare_cores)
     per_group = min(spare_cores // (batch * key_heads * (ratio // heads)), MAX_PREP_CORES_PER_GROUP)
     if per_group < 1:
         return None
@@ -682,21 +697,20 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     num_grid_cores = grid.x * grid.y
     pieces = _value_pieces(num_pairs, Vt, num_grid_cores)
     chunked = _chunked(tokens, device)
-    if V_BLOCK_TILES is None and pieces > PREP_MAX_PIECES:
-        capped = _largest_divisor_at_most(Vt, PREP_MAX_PIECES)
-        if capped > 1 and _prep_layout(
-            batch,
-            value_heads,
-            key_heads,
-            tokens,
-            Kt,
-            Vt,
-            capped,
-            chunked,
-            mixed_qkv.dtype,
-            num_grid_cores - num_pairs * capped,
-        ):
-            pieces = capped
+    if V_BLOCK_TILES is None and pieces > 1:
+        # R-PREP: the modelled fastest of the piece counts it can run (else R-VSPLIT keeps its pieces).
+        best = None
+        for option in range(2, min(pieces, PREP_MAX_PIECES) + 1):
+            spare_cores = num_grid_cores - num_pairs * option
+            plan = Vt % option == 0 and _prep_layout(
+                batch, value_heads, key_heads, tokens, Kt, Vt, option, chunked, mixed_qkv.dtype, spare_cores
+            )
+            if plan:
+                cost = _prep_estimate(batch, value_heads, key_heads, tokens, Vt // option, plan[2], spare_cores)
+                if best is None or cost < best[0]:
+                    best = (cost, option)
+        if best is not None:
+            pieces = best[1]
     v_block_tiles = Vt // pieces
     num_units = num_pairs * pieces
     units_per_block = PAIRS_PER_BLOCK if pieces == 1 else 1  # R-VSPLIT: one unit per core
@@ -991,7 +1005,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     def role_ct(role):
         unit_v = heads * Vt if role == ROLE_PREP else v_block_tiles
         role_pieces = 1 if role == ROLE_PREP else pieces
-        group_cols = _window_group_cols(Kt, unit_v, role_pieces)
+        group_cols = _window_group_cols(Kt, unit_v, role_pieces, role == ROLE_PREP)
         if qk_cores:
             group_cols = 1 if role == ROLE_QK else v_block_tiles  # q / k core: per column; pair core: per unit
         reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
@@ -1063,7 +1077,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         for core, group_first, q, stride in prep_units:
             seq = group_first // pieces // value_heads
             my_rows = len(range(q, _seq_tile_rows(seq, tokens), stride))
-            group_cols = _window_group_cols(Kt, heads * Vt, 1)
+            group_cols = _window_group_cols(Kt, heads * Vt, 1, True)
             zero_slots, zero_slot_bytes = window_zeroing(2 * Kt + heads * Vt, group_cols, my_rows)
             rows = [q, stride, 1]
             consumers = [c for u in range(heads * pieces) for c in unit_noc[group_first + u]]

@@ -173,8 +173,10 @@ Two roles with their own buffers (`_prep_cb_plan` returns shared, state and prep
 cores (`REMOTE_CBS`) are allocated first and on every core, so each has one L1 address everywhere (the writers
 take it from their own allocation); every other buffer exists only on the role that uses it (the merged
 all-on-every-core plan first used carried about 700 KB of prep buffers on every state core and capped the inbox
-at 6 slots). D = inbox slots (`INBOX_DEPTH` = 12 at most, the deepest that fits; 8 at model_prefill_4096 bf16).
-Vb = the piece's v columns (2 at the model geometry under `PREP_MAX_PIECES` = 2); r = value heads per key head.
+at 6 slots). D = inbox slots (`INBOX_DEPTH` = 12 at most, the deepest that fits; 7 at model_prefill_4096 bf16).
+Vb = the piece's v columns; r = value heads per prep group (Refinement 11: `PREP_HEADS`, picked with the piece count
+by `_prep_estimate`: model_prefill_4096 r = 3, 2 pieces, Vb = 2; T = 64..160 r = 1, 4 pieces, Vb = 1; T = 192..512
+r = 1, 2 pieces).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
@@ -186,22 +188,27 @@ Vb = the piece's v columns (2 at the model geometry under `PREP_MAX_PIECES` = 2)
 | cb_o_in (shared) | `O_IN_DEPTH*r*Vt` | o of one tile row of the r heads (head-major) | {t: 2 of the prep core's rows, V: spans r Vt} | Float32 (U2D) | state writers (NoC writes into slot k % 2) + prep writer (push after the landed count) | prep compute (RMS norm) | landing -> RMS norm one row later | two of the prep core's rows: the next row's o may land while the RMS norm of the previous one runs |
 | cb_o_acc (state) | `O_ACC_DEPTH*Vb` | o of the piece | {t: 2 tile rows, V: Vb} | Float32 | state compute | state writer | tile row | double buffered so the next chunk step overlaps the o send |
 | cb_uw (state) | `Vb` | rhs = beta V - beta exp(c) Rk, then (local) Uw | {t: 1 tile row, V: Vb} | Float32 (std, matmul in1) | state compute | state compute | rhs -> M x rhs | reused as the rhs scratch: dead before U is produced |
-| cb_prep_send (prep) | `r*(3*Kt + 3 + Vt)` (`PREP_SEND_HEADS` head blocks, default one tile row's) | head blocks of one tile row | {t: 1 tile row, heads: r} | Float32 | prep compute | prep writer | head block packed -> sent | one tile row of head blocks: compute packs the next row's head j once the writer has sent this row's head j (the writer sends block by block); two rows (456 KB) did not fit with D = 6 |
+| cb_prep_send (prep) | `r*(3*Kt + 3 + Vt)` (`PREP_SEND_HEADS` head blocks, default one tile row's) | head blocks of one tile row, in pack order [exp(c) \| QD, M \| kq \| knT \| v] | {t: 1 tile row, heads: r} | Float32 | prep compute (pushes each part as packed) | prep writer (sends each part as pushed) | part packed -> sent | one tile row of head blocks: compute packs the next row's head j once the writer has sent this row's head j (the writer sends block by block); two rows (456 KB) did not fit with D = 6 |
 | cb_v_prep (prep) | `r*Vt` | conv'd v of the r heads | {t: 1 tile row, V: r Vt} | Float32 (U2D) | prep compute (conv) | prep compute (beta scaling) | conv -> head blocks | not packed into cb_prep_send directly: each head's v is scaled by its beta after the gates of that head |
 | cb_chunk_vec (prep) | `CHUNK_VEC_PAGES + 1` | D, c, exp(c), exp(c_last - c), beta exp(c), exp(c_last - c)^T | {t: 1 tile row, one value head} | Float32 (U2D) | prep compute | prep compute | one head's block | the transposed decay vector stays fp32 (U2D) for the knT scaling |
 | cb_chunk_mat (prep) | 1 | L | {t: 1 tile row, one head} | Float32 (std; the solve reads L1) | prep compute | prep compute (solve) | L -> M | QD goes straight into the head block |
-| cb_tri_mask | 2 (chunked) | lower-triangular mask, identity | constant | Float32 (U2D) | reader (once) | compute | kernel | the identity is the right-hand side of the M solve |
+| cb_tri_mask | 2 (chunked) | lower-triangular mask, identity | constant | Float32 (U2D) | writer (once, after the window zeroing: off the reader's first DRAM reads) | compute | kernel | the identity is the right-hand side of the M solve |
+| cb_zw (prep) | `2*r*Vt` | norm_weight (*)row silu(z) of a row's r heads | {t: 2 of the prep core's rows, V: r Vt} | Float32 (U2D) | prep compute (after the row's head blocks) | prep compute (RMS norm) | head blocks -> RMS norm one row later | takes silu(z) off the tail after o lands (T=128: RMS output loop 8.9 -> 3.3 us); not cb_z (bf16 token buffer); two rows: row k's is made before row k - 1's norm reads its own |
 | prep: cb_z, cb_norm_w (Vt), cb_out_rows, cb_sq_o, cb_rinv_o (r) | `r*Vt*ROW_DEPTH`, `Vt`, `r*Vt*ROW_DEPTH`, `r*Vt`, `r` | the RMS norm of the r heads of a row | {t: tile row, V: r Vt} | as the local rows | reader / compute | compute / writer | tile row | the RMS norm moved to the prep core with the output store; the state core keeps none of them (no o^2 all-gather: the prep core sees every piece) |
 
-Footprint at model_prefill_4096 (bf16, Kt = Vt = 4, r = 3, 2 pieces, D = 8): state core 809 KB, prep core
-1421 KB (budget 1460 KB). fp32 tokens at this geometry do not fit any D (prep core 1.65 MB at D = 2: SFPU conv
+Footprint at model_prefill_4096 (bf16, Kt = Vt = 4, r = 3, 2 pieces, D = 7): state core 722 KB, prep core
+1416 KB (budget 1460 KB; cb_zw cost one inbox slot, 8 -> 7, measured no slower). T = 128 (r = 1, 4 pieces, D = 4):
+state core 366 KB, prep core 764 KB. fp32 tokens at this geometry do not fit any D (prep core 1.65 MB at D = 2: SFPU conv
 weights 320 KB), so they keep the local regime.
 
 R-PREP data movement (model_prefill_4096, bf16): DRAM as R-VSPLIT for the state, z and output; mixed_qkv,
 conv_state, conv_weight read once per (key head, tile row) by its prep core (q/k columns 1 crossing per key
-head, v 1). NoC per tile row and key head: r head blocks of 15 fp32 tiles (60 KB) multicast to the head's 2
-pieces (one row run, two runs when a head straddles a virtual-column gap or a row), r Vt unicast v tiles (48 KB),
-r Vt o tiles back (48 KB), 2 r pieces grant / landed semaphore increments.
+head, v 1; with r below the key head's value heads, each of its ratio / r groups reads the q / k columns again).
+NoC per tile row and key head: r head blocks of 15 fp32 tiles (60 KB) unicast to each of the head's pieces
+(`PREP_MCAST` off since Refinement 11; on, one multicast per row run of pieces), r Vt unicast v tiles (48 KB),
+r Vt o tiles back (48 KB), 2 r pieces grant / landed semaphore increments. Since Refinement 11 each group's state
+cores sit among its own prep cores (`PREP_CLUSTER`) and each prep core sends on the NoC with the shorter paths to
+them (`PREP_SEND_NOC` "auto").
 
 ## R-QKCORE (Refinement 7)
 

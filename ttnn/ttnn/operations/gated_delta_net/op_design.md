@@ -181,6 +181,15 @@ Regime selection (Refinement 6): R-PREP on top of chunked R-VSPLIT when `_prep_l
 pieces are capped at `PREP_MAX_PIECES` = 2 when that plan exists (4 pieces measured slower: more state cores, fewer
 prep cores, twice the fan-out per prepped row). Calls with fewer than `PREP_MIN_TILE_ROWS` tile rows per sequence,
 fp32 tokens at the chip geometry (the prep core's buffers do not fit L1) and decode keep the local regimes.
+Refinement 11 (short calls): R-PREP from `PREP_MIN_TILE_ROWS` = 2 tile rows. A prep group is (sequence, key head,
+`PREP_HEADS` of its value heads); the value heads per group and the piece count (up to `PREP_MAX_PIECES` = 4) are
+picked by `_prep_estimate`, a cost model fitted on device (fill = one prep row, then per tile row the state step or
+the group's prep rate): one value head per group up to 16 tile rows (each prep core redoes the key head's q / k part,
+so a short call's fill is one head's prep), all of them from 32; 4 pieces while every row has its own prep core.
+Each group's state cores are placed among its own prep cores (`PREP_CLUSTER`), each prep core sends on the NoC with
+the shorter paths to them (`PREP_SEND_NOC`), head blocks are unicast (`PREP_MCAST` off) and streamed part by part in
+pack order [exp(c) | QD, M | kq | knT | v]; the prep core makes norm_weight (*) silu(z) before o returns.
+model_prefill_4096 0.91 ms, T=128 82 us (was 188).
 Regime-pinned tests: `test_gated_delta_net_prep.py` (predicate; forced R-PREP vs local on one-tile-row, partial,
 batched and long calls, clean and inf padding; state carried over two R-PREP calls and a decode call).
 
