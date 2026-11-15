@@ -153,3 +153,18 @@ def test_a_rank_failing_mid_save_stops_every_rank_and_leaves_no_checkpoint(two_r
     ttnn.distributed_context_barrier()
     assert not os.path.exists(path) and not any(n.startswith("refused.partial-") for n in os.listdir(root))
     ttnn.distributed_context_barrier()
+
+
+def test_a_rank_called_with_a_bad_argument_stops_every_rank(two_ranks, expect_error):
+    """A rank whose find_latest saw no checkpoint passes None. The arguments are checked inside the first phase, so
+    every rank raises, where the other rank used to wait in the first collective forever."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "bad_argument") if rank == 0 else None
+    with expect_error(dcp.CheckpointError, r"collecting the live tensors failed on rank\(s\) \[1\] of 2"):
+        dcp.save(path, model=model)
+    with expect_error(dcp.CheckpointError, r"checking the arguments failed on rank\(s\) \[1\] of 2"):
+        dcp.load(path, model=model)
+    ttnn.distributed_context_barrier()
+    assert not os.path.exists(os.path.join(root, "bad_argument"))
+    ttnn.distributed_context_barrier()

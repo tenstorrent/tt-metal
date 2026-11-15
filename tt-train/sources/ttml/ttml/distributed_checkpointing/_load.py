@@ -218,15 +218,21 @@ def load(
     load is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``) on the world communicator while it runs:
     the ranks' metadata travels under it. A single process is the group of one and takes the same path.
     """
-    if model is None and optimizer is None:
-        raise TypeError("load needs a model and/or an optimizer")
-    if optimizer is not None and model is None:
-        raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
-    check_threads(threads)
     t0 = time.perf_counter()
-    ckpt_dir = os.path.abspath(ckpt_dir)
     group = current_group()
     world_rank = group.world_rank
+
+    def check_arguments() -> str:
+        if model is None and optimizer is None:
+            raise TypeError("load needs a model and/or an optimizer")
+        if optimizer is not None and model is None:
+            raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
+        check_threads(threads)
+        return os.path.abspath(ckpt_dir)
+
+    # In a phase of its own: a rank called with a bad argument (a None directory from a find_latest that saw no
+    # checkpoint) then stops every rank instead of leaving them waiting in the first collective.
+    ckpt_dir = group.phase("checking the arguments", check_arguments)
     # Ranks that resolved different directories (a stale NFS listing behind find_latest) or asked for different
     # things would restore different checkpoints, or wait for each other in different collectives.
     group.agree("the checkpoint directory", name_hash(ckpt_dir))

@@ -249,23 +249,24 @@ def save(
     communicator while it runs: the ranks' metadata travels under it. The result on each rank lists that rank's files
     and bytes; ``keys`` counts the whole checkpoint. A single process is the group of one and takes the same path.
     """
-    if model is None and optimizer is None:
-        raise TypeError("save needs a model and/or an optimizer")
-    if optimizer is not None and model is None:
-        raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
-    if header is not None and not isinstance(header, dict):
-        raise TypeError(f"header must be a dict, not {type(header).__name__}")
-    check_threads(threads)
-    if int(max_inflight_bytes) <= 0:
-        raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
     group = current_group()
     rank, world_rank = group.rank, group.world_rank
-    ckpt_dir = os.path.abspath(ckpt_dir)
-    name = os.path.basename(ckpt_dir)
 
     def collect():
+        # The arguments are checked here, inside the first phase: a rank called with a bad one (a None directory from
+        # a find_latest that saw no checkpoint) then stops every rank instead of leaving them in the first collective.
+        if model is None and optimizer is None:
+            raise TypeError("save needs a model and/or an optimizer")
+        if optimizer is not None and model is None:
+            raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
+        if header is not None and not isinstance(header, dict):
+            raise TypeError(f"header must be a dict, not {type(header).__name__}")
+        check_threads(threads)
+        if int(max_inflight_bytes) <= 0:
+            raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
+        target = os.path.abspath(ckpt_dir)
         # The JSON state is checked before any device read (fsdp_gate may reshard) or file write.
         user_header = check_json("header", header or {})
         train_state = capture_train_state(scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
@@ -278,11 +279,14 @@ def save(
         shared_state = {k: v for k, v in train_state.items() if k != "rng"}
         record = RankRecord.from_json(rank_record(rank, world_rank))
         part = PlanPart(record, [lt.info for lt in live], state_hash(shared_state)).to_bytes()
-        return live, scalars, user_header, train_state, record, checked_payload(part, "this rank's plan part")
+        return target, live, scalars, user_header, train_state, record, checked_payload(part, "this rank's plan part")
 
     # Even the local work runs inside a phase: on a multi-rank world a rank that fails here stops every rank instead
     # of leaving the others waiting in the first collective. On a single process the phase just runs it.
-    live, scalars, user_header, train_state, record, part = group.phase("collecting the live tensors", collect)
+    ckpt_dir, live, scalars, user_header, train_state, record, part = group.phase(
+        "collecting the live tensors", collect
+    )
+    name = os.path.basename(ckpt_dir)
     by_key = {lt.key: lt for lt in live}
     stats["collect_s"] = time.perf_counter() - t0
     group.agree("the checkpoint directory", name_hash(ckpt_dir))

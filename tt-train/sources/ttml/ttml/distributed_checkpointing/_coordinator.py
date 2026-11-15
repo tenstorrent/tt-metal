@@ -35,9 +35,9 @@ every data file's size through the shared filesystem, and finalizes the director
 tensors, checking the target directory, merging the plan parts, writing the shards, merging the index and finalizing.
 
 Load. Every rank reads the index and restores the shards of the coordinates it holds. ``strict`` is judged over the
-union of the ranks' live tensors, since on a multi-mesh world no single rank holds every key. Its phases: reading the
-index and collecting the live tensors, planning the load, judging the unexpected entries, reading and placing the
-shards, restoring the scalars and the train state.
+union of the ranks' live tensors, since on a multi-mesh world no single rank holds every key. Its phases: checking the
+arguments, reading the index and collecting the live tensors, planning the load, judging the unexpected entries, reading
+and placing the shards, restoring the scalars and the train state.
 """
 
 from __future__ import annotations
