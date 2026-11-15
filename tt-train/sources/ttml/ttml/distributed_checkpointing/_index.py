@@ -48,7 +48,7 @@ class ChunkRecord:
     file: int  # index into Index.files
     data_offset: int  # within the file's data section
     nbytes: int
-    crc32: int | None = None
+    crc32: int  # zlib.crc32 of the chunk's bytes
 
 
 @dataclass
@@ -170,9 +170,8 @@ def _entry_to_json(entry: Entry) -> dict:
         "file": [c.file for c in chunks],
         "data_offset": [c.data_offset for c in chunks],
         "nbytes": _broadcast([c.nbytes for c in chunks]),
+        "crc32": [f"{c.crc32:08x}" for c in chunks],
     }
-    if any(c.crc32 is not None for c in chunks):
-        table["crc32"] = [None if c.crc32 is None else f"{c.crc32:08x}" for c in chunks]
     value = {
         "role": entry.role,
         "dtype": entry.dtype,
@@ -199,13 +198,11 @@ def _entry_from_json(key: str, value: dict) -> Entry:
     files = table["file"]
     data_offsets = table["data_offset"]
     nbytes = _expand(table["nbytes"], n)
-    crcs = table.get("crc32")
-    if not (len(offsets) == len(sizes) == len(files) == len(data_offsets) == len(nbytes) == n) or (
-        crcs is not None and len(crcs) != n
-    ):
+    crcs = table["crc32"]
+    if not (len(offsets) == len(sizes) == len(files) == len(data_offsets) == len(nbytes) == len(crcs) == n):
         raise CheckpointError(f"index entry {key!r}: chunk table columns disagree with n={n}")
     try:
-        crc_values = [None if c is None else int(c, 16) for c in crcs] if crcs is not None else [None] * n
+        crc_values = [int(c, 16) for c in crcs]
     except (TypeError, ValueError):
         raise CheckpointError(f"index entry {key!r}: malformed crc32 column") from None
     chunks = [

@@ -118,8 +118,9 @@ class SavePlan:
     def bytes_written(self) -> int:
         return sum(f.data_bytes for f in self.files)
 
-    def entries(self, crc32: dict[tuple[str, int], int] | None = None) -> dict[str, Entry]:
-        """The index entries this plan produces; ``crc32[(key, file)]`` adds checksums when known."""
+    def entries(self, crc32: dict[tuple[str, int], int]) -> dict[str, Entry]:
+        """The index entries this plan produces; ``crc32[(key, file)]`` is the checksum of the chunk of ``key`` written
+        to file ``file``."""
         entries: dict[str, Entry] = {}
         for key, info in self.infos.items():
             chunks = [
@@ -128,7 +129,7 @@ class SavePlan:
                     file=item.file,
                     data_offset=item.data_offset,
                     nbytes=item.nbytes,
-                    crc32=None if crc32 is None else crc32.get((key, item.file)),
+                    crc32=crc32[(key, item.file)],
                 )
                 for item in self.items[key]
             ]
