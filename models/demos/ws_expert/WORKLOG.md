@@ -316,3 +316,45 @@ Runs (hold 213192, bh-glx-120-b06u02, tray = chips 0-7, sub_2x4 descriptor, FABR
   bench) stopped before its reset ran; no further Galaxy runs.
 Next: on a healthy Galaxy, ws_sf_a5 (cmds/ws_sf_a5.sh without its pre-reset): the WS_DIAG bench to pin down hang 2,
 then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean.
+- Hang 2, second look: the triage device ids are not mesh positions (on that tray device d was mesh chip (d + 4) % 8);
+  mapped right, the CB counters are consistent everywhere (no slice missing that a lander claims to have landed).
+  The stall is a NOC0 wedge on one chip, inside group 3 (logical columns 7-8): check_noc_status shows the column-7
+  writers with x multicasts issued but not sent (3 writes, 60 acks missing) and further cores with a write / atomic
+  ack missing; their BRISCs sit in noc_async_writes_flushed / noc_async_write_barrier, the group's TRISCs wait for an
+  h row, and everything else waits on that group's slot credits. Hang 1 had no worker NoC mismatch (a logical
+  deadlock, as the replay shows). Candidates: the forwarders' NOC0 landing writes (from columns 9-10, wrapping round
+  the row) crossing the group's linked NOC0 multicasts. RCfg.swap_noc moves the landing writes to NOC1 for an A/B.
+- ws_sf_c2 (hold 213479, bh-glx-110-c10u14, compute grid 12 x 10; tray = chips 0-7): five variants, each 20 warm-up
+  + 5 measured launches a case, all PASS (250 launches, no hang), PCC 0.99994 everywhere:
+| variant | M 586 util tile median (min-max) | M 2048 |
+|---|---|---|
+| plain | 33.3% (32.7-34.0) | 77.9% (75.9-79.1) |
+| WS_DEFER | 33.2% (32.7-33.9) | 78.0% (76.3-79.2) |
+| WS_DIAG | 28.7% (28.2-29.2) | 78.2% (76.7-79.7) |
+| WS_DIAG + swap_noc | 28.3% (27.7-28.7) | 78.9% (77.8-79.9) |
+| WS_DEFER + swap_noc | 32.0% (31.5-32.8) | 78.8% (77.8-80.3) |
+  M 586 weights in 68 GB/s a chip, every ring 14.0-14.6 GB/s over its send span in all variants. WS_DEFER cuts the
+  NCRISC send time (1.49 M -> ~1.0 M cycles a ring) but the arrival wait grows by the same amount: the forwarder RISC
+  is not the limit. Suspect: every packet is a fused write + atomic increment with flush, so the downstream router
+  waits for each write's ack before the increment (step 1 fused only a slice's last packet and reached ~26 GB/s a
+  connection). RCfg.arr_noflush drops that wait (ordering then rests on the router's write and increment reaching the
+  same core in order; PCC guards it).
+- ws_sf_c3: tray arr_noflush 20 + 5: M 586 34.1% (33.4-35.0), M 2048 78.3% (77.1-79.4), PCC 0.99994, rings 14.7
+  GB/s: the router's ack wait is not the limit either. Every tray variant lands at ~14.5 GB/s a ring direction with
+  the forwarder RISCs partly idle, so the limit looks like the fabric link / router carrying a ring each way (one
+  direction alone reached ~26 GB/s a connection in step 1).
+  Stage B (8 x 4 torus XY, 128 experts, T 8192, per-slice owners, 8 rings, fabric slots 6), one cold launch with
+  WS_DIAG: M 586 34.0% (33.3-35.2), M 2048 78.2% (77.2-79.0), PCC 0.99994 on all 32 chips.
+  Hang 3 (stage B 20 + 5, M 586, launch 18): everything polling except one group core (0,7) on triage device 25,
+  whose writer sits in noc_async_read_barrier on its first DRAM read of the launch (the counts page); check_noc_status:
+  one NOC0 read response missing there, DRAM health clean. Reset exit 0, 32 boards re-initialised.
+- ws_sf_c4: stage B 20 + 5 a case: M 586 PASS, util tile median 34.4% (33.4-35.3) over 32 chips x 5 launches, PCC
+  0.99994, weights in ~70 GB/s a chip, rings 8.1-8.3 GB/s each (8 rings: the same ~70 GB/s into a chip as the tray's
+  4 rings; the window-latency model gives 77% for these tables). M 2048 stopped at warm-up launch 20 of 25 when hold
+  213479 ended (completion queue error, no device timeout); no measured M 2048 launch.
+| | M 586 (20 + 5) | M 2048 |
+|---|---|---|
+| tree multicast, tray (ws_lb) | 30.6% | 77.6% |
+| store-and-forward, tray | 33.3% (34.1% arr_noflush) | 77.9% (78.3%) |
+| tree multicast, torus 640 experts | 28.7% | - |
+| store-and-forward, torus 128 experts | 34.4% | 78.2% (one cold launch) |
