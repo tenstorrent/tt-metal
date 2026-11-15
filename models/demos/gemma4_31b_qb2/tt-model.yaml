@@ -16,7 +16,8 @@
 # pins device DRAM per novel exact length (update 1: ~0.24 MB per chip per novel length, no eviction). Its runtime
 # switches stay at the code defaults, as every PB gate ran them (GEMMA4_PB_* unset): GEMMA4_PB_GUARD=retire,
 # GEMMA4_PB_SDPA_FLEX=1, GEMMA4_PB_EMBED_ZERO=mul, GEMMA4_PREFILL_WARM_CONT=0 (lazy: a first-seen continuation key
-# builds its programs at first use; =1 pre-builds all of them at boot, ~8 min, see the card).
+# builds its programs at first use; =1 pre-builds all of them at boot on `batch` only (generator_vllm_pb.py), ~8 min,
+# see the card; single-user does not read it).
 #
 #   tt-model package --container models/demos/gemma4_31b_qb2/tt-model.yaml --out /home/ttuser/experiments/gemma4/tt-model-builds
 #   tt-model serve   <builds>/gemma4-31b-it-dflash/tt_kernel_manifest.json [--profile batch]
@@ -188,10 +189,11 @@ card:
     - Start-up cost, measured with the kernels already compiled: about 40 s more for `batch`; about 5 s more for
       `single-user`, which also pre-builds the drafter's seed programs (about 6.5 MB per chip). The extra compile time on a
       first start has not been measured yet.
-    - A prompt that continues past its first 8,192-token chunk at a new length class builds a few programs the first time
-      that class is seen (lazy, the default). To build all of them at start-up instead, set
-      `GEMMA4_PREFILL_WARM_CONT=1`: start-up takes about 8 min longer (485.7 s measured) and uses about 8.8 MB more per
-      chip.
+    - A prompt longer than one 8,192-token chunk builds a few programs the first time a new continuation length class is
+      seen (lazy, the default on both profiles). On `batch` only, `GEMMA4_PREFILL_WARM_CONT=1` builds all of them at
+      start-up instead: start-up takes about 8 min longer (485.7 s measured) and uses about 8.8 MB more per chip.
+      `single-user` ignores the variable: its continuation programs are always built on first use, and its drafter seed
+      pre-warm is always on.
 
     ### Which profile
     - One user: `single-user`.
