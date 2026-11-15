@@ -154,8 +154,9 @@ def train(model, params, optimizer, config, steps: int, seed: int, start: int = 
 
 
 def gather(tensor) -> np.ndarray:
-    """A tensor's global device-layout array as float32, through the composer."""
-    return np.asarray(Sharding.from_tensor(tensor).gather(tensor)).astype(np.float32)
+    """A tensor's global device-layout array as float32, through the composer. Its replicas must agree: the reference
+    reads one copy, as save does, so replicas that drifted apart would otherwise go unseen."""
+    return np.asarray(Sharding.from_tensor(tensor).gather(tensor, verify_replicas=True)).astype(np.float32)
 
 
 def full_logits(tensor, config: LlamaConfig) -> np.ndarray:

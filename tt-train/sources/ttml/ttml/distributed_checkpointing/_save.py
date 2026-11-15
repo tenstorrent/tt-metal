@@ -120,6 +120,11 @@ def save(
     to be written. An existing
     ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules must be in their sharded state; with
     ``reshard_fsdp`` (default) they are resharded first.
+
+    A replicated shard is written once, from one device of its replica group. Save does not check that the replicas
+    hold the same values, as ``ttml.checkpointing.save_checkpoint`` does by default (``verify_replicas=True``):
+    replicas that drifted apart, say through a gradient that was not all-reduced, load back as that one copy on every
+    device. ``ttml.Sharding.from_tensor(t).gather(t, verify_replicas=True)`` checks a tensor when in doubt.
     """
     if model is None and optimizer is None:
         raise TypeError("save needs a model and/or an optimizer")
