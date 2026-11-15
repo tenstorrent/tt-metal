@@ -1471,9 +1471,9 @@ class Qwen36Model:
         return logits, feed
 
     def _spec_tail_ids(self, x, shard_ids):
-        """_spec_tail, and ``shard_ids(shard)`` run on this device's vocab shard of the logits before the vocab all-gather
-        (vocab-sharded head only). Returns (logits, feed, ids): ids is shard_ids' result, or None without a sharded
-        head or ``shard_ids``.
+        """_spec_tail, and ``shard_ids(shard)`` run on this device's vocab shard of the logits (vocab-sharded head only).
+        Returns (logits, feed, ids): ids is shard_ids' result, or None without a sharded head or ``shard_ids``. With
+        ids, logits is the vocab shard that shard_ids read, not all-gathered (_lm_head_ids).
 
         A full-width x is the replicated decode residual: the final norm is its local norm and the feed is this
         device's dim/tp span of its output (mesh_partition, as Qwen36MTP.forward_decode re-fractures)."""
@@ -1495,13 +1495,21 @@ class Qwen36Model:
         return logits, feed, ids
 
     def _lm_head_ids(self, normed, shard_ids):
-        """(logits, ids) of the full-width ``normed`` rows: ``shard_ids`` runs on this device's vocab shard before the
-        all-gather (vocab-sharded head only); ids is None without it."""
+        """(logits, ids) of the full-width ``normed`` rows: ``shard_ids`` runs on this device's vocab shard (vocab-sharded
+        head only). When it returns ids, logits is that shard [1,1,R,vocab/tp]: a caller that needs the full row
+        all-gathers it (_verify_logits). Otherwise logits is the replicated [1,1,R,vocab] row and ids None."""
         if shard_ids is None or not self._lmhead_vocab_sharded:
             return self._lm_head(normed), None
         shard = ttnn.linear(normed, self.lm_head_weight)
         ids = shard_ids(shard)
-        return self._gather_vocab(shard), ids
+        if ids is None:
+            return self._gather_vocab(shard), None
+        return shard, ids
+
+    def _verify_logits(self, shard):
+        """The verify's replicated logits [1,1,R,vocab] bf16 TILE: the vocab all-gather of a copy of ``shard``, the vocab
+        shard the verify trace keeps. The copy is needed because tt_all_gather frees its input."""
+        return self._gather_vocab(ttnn.clone(shard, memory_config=ttnn.DRAM_MEMORY_CONFIG))
 
     def _forward_verify_bucket_tp(self, n_users):
         """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
@@ -1510,8 +1518,10 @@ class Qwen36Model:
         GDN stays on seq-dim recurrent verify per user (batch dim is not a valid recurrence axis) and
         takes its per-user starting state through the two shared selectors. The rows' tokens, KV positions and RoPE
         table rows come from the step buffer _vfy_step_buf (spec_step), cos and sin from rope_lookup. Returns (logits,
-        rows, ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
-        ``logits_rm`` is the ROW_MAJOR bf16 copy the in-trace argmax needs, kept for the sampling path.
+        rows, ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows). With the fused
+        per-shard argmax, ``logits`` is this device's vocab shard [1,1,B*T,vocab/tp] and ``logits_rm`` None; without
+        it, ``logits`` is replicated [1,1,B*T,vocab] and ``logits_rm`` the ROW_MAJOR bf16 copy the argmax needs, kept
+        for the logits readback.
         """
         T = self._vfy_T
         rows = n_users * T
@@ -1574,17 +1584,19 @@ class Qwen36Model:
             ttnn.deallocate(t)
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x vocab floats. The fused per-shard argmax (tt/spec_argmax_fused.py) takes the ids
-        # from each device's vocab shard before the all-gather: [1,1,1,32] uint32 ROW_MAJOR, lane r = row r.
-        logits, rows_out, ids = self._spec_tail_ids(x, self._vfy_shard_ids)  # [1,1,B*T,vocab] replicated, feed
-        # The logits readback of a logits-mode verify reads the ROW_MAJOR copy. Without a fused shard argmax, ttnn.argmax
-        # needs ROW_MAJOR input too (a TILE tensor takes a single-core internal untilize that is hopeless at this vocab
-        # width). No 32-row pad: the multicore argmax is correct below a full tile of rows, and padding would multiply
-        # the bytes untilize and argmax touch (see mtp.argmax_last).
+        # from each device's vocab shard: [1,1,1,32] uint32 ROW_MAJOR, lane r = row r. A greedy step reads nothing
+        # else, so the trace ends at the shard; the logits traces (record_verify_trace) all-gather and untilize it only
+        # for a step that samples or reads the logits.
+        logits, rows_out, ids = self._spec_tail_ids(x, self._vfy_shard_ids)
+        if ids is not None:
+            return logits, rows_out, ids, None
+        # Without a fused shard argmax, ttnn.argmax needs ROW_MAJOR input (a TILE tensor takes a single-core internal
+        # untilize that is hopeless at this vocab width). No 32-row pad: the multicore argmax is correct below a full
+        # tile of rows, and padding would multiply the bytes untilize and argmax touch (see mtp.argmax_last).
         u = ttnn.untilize(logits, use_multicore=True)
-        if ids is None:
-            ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
-        # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The sampling path
-        # reads THAT back instead of the TILE `logits`, which costs an untilize on host.
+        ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B*T] uint32 ROW_MAJOR
+        # `u` is NOT deallocated: it is handed back as the ROW_MAJOR logits copy. The logits readback
+        # reads THAT instead of the TILE `logits`, which costs an untilize on host.
         return logits, rows_out, ids, u
 
     def _vfy_shard_ids(self, shard):
@@ -1645,12 +1657,10 @@ class Qwen36Model:
         _verify_win_buf, all of which allocate_kv_caches + prepare_spec_verify re-allocate, so it
         must never outlive them: free_kv_caches calls this, and so does a re-capture.
         """
-        if getattr(self, "_vfy_trace_id", None) is not None:
-            ttnn.release_trace(self.mesh_device, self._vfy_trace_id)
-            self._vfy_trace_id = None
-        if getattr(self, "_vfy_sample_trace_id", None) is not None:
-            ttnn.release_trace(self.mesh_device, self._vfy_sample_trace_id)
-            self._vfy_sample_trace_id = None
+        for name in ("_vfy_trace_id", "_vfy_gather_trace_id", "_vfy_rm_trace_id", "_vfy_sample_trace_id"):
+            if getattr(self, name, None) is not None:
+                ttnn.release_trace(self.mesh_device, getattr(self, name))
+                setattr(self, name, None)
 
     @staticmethod
     def _fit_spec_page_table(pt, nb):
@@ -1825,9 +1835,10 @@ class Qwen36Model:
         self._vfy_prepared_key = key
 
     def _warm_verify_body(self, B):
-        """One eager pass of the verify body, and of the device sampler over its logits, only to compile their
-        programs before any capture; the outputs are dropped. Notes whether the ids come out as the fused argmax's
-        [1, 1, 1, 32] uint32 lanes, the input the one-enqueue step's acceptance is compiled for."""
+        """One eager pass of the verify body, of the logits traces' bodies when the verify ends at the vocab shard, and of
+        the device sampler over the logits, only to compile their programs before any capture; the outputs are dropped.
+        Notes whether the ids come out as the fused argmax's [1, 1, 1, 32] uint32 lanes, the input the one-enqueue
+        step's acceptance is compiled for."""
         outs = self._forward_verify_bucket_tp(n_users=B)
         ids = outs[2]
         self._vfy_ids_lanes = (
@@ -1835,14 +1846,19 @@ class Qwen36Model:
             and ids.dtype == ttnn.uint32
             and ids.layout == ttnn.ROW_MAJOR_LAYOUT
         )
+        logits, extra = outs[0], []
+        if outs[3] is None:
+            logits = self._verify_logits(outs[0])
+            extra = [logits, ttnn.untilize(logits, use_multicore=True)]
         if self._vfy_sampler is not None:
-            self._vfy_sampler.body(outs[0])  # writes the sampler's own persistent draws buffer
-        for t in outs:
-            ttnn.deallocate(t)
+            self._vfy_sampler.body(logits)  # writes the sampler's own persistent draws buffer
+        for t in (*outs, *extra):
+            if t is not None:
+                ttnn.deallocate(t)
 
     def record_verify_trace(self):
         """Capture the verify trace over the buffers prepare_verify_trace allocated (warmup phase 2).
-        With ``sample`` prepared, also the sampler trace, which reads the verify trace's logits.
+        With ``sample`` prepared, also the sampler trace, which reads the verify's replicated logits (_vfy_logits_out).
         Idempotent: a live trace is kept."""
         assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
         if getattr(self, "_vfy_trace_id", None) is not None:
@@ -1855,13 +1871,21 @@ class Qwen36Model:
         _kv_grouped = self._vfy_kv_grouped
 
         self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
-        (
-            self._vfy_logits_out,
-            self._vfy_rows_out,
-            self._vfy_ids_out,
-            self._vfy_logits_rm_out,
-        ) = self._forward_verify_bucket_tp(n_users=B)
+        logits, self._vfy_rows_out, self._vfy_ids_out, logits_rm = self._forward_verify_bucket_tp(n_users=B)
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
+        self._vfy_shard_out = self._vfy_gather_trace_id = self._vfy_rm_trace_id = None
+        if logits_rm is None:
+            # The verify trace ends at the vocab shard. Two traces of their own build the logits from it, replayed by
+            # verify_enqueue right after the verify trace and only for a step that needs them: the all-gather (a
+            # device-sampled or logits step) and the ROW_MAJOR copy (a logits step).
+            self._vfy_shard_out = logits
+            self._vfy_gather_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+            logits = self._verify_logits(self._vfy_shard_out)
+            ttnn.end_trace_capture(dev, self._vfy_gather_trace_id, cq_id=0)
+            self._vfy_rm_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+            logits_rm = ttnn.untilize(logits, use_multicore=True)
+            ttnn.end_trace_capture(dev, self._vfy_rm_trace_id, cq_id=0)
+        self._vfy_logits_out, self._vfy_logits_rm_out = logits, logits_rm
         if self._vfy_sampler is not None:
             # A trace of its own, replayed only by a verify of a device-sampled step with a sampled row.
             self._vfy_sample_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
@@ -1911,7 +1935,7 @@ class Qwen36Model:
 
         Returns (ids: B*T host ints, feed_rows: the trace's persistent [1,1,B*T,dim/tp] drafter feed,
         logits: torch [B*T, vocab] or None). ``read_logits`` pulls the full logits to host (for the
-        sampler; greedy needs only the in-trace argmax ids). It reads the trace's ROW_MAJOR copy
+        sampler; greedy needs only the in-trace argmax ids). It reads the ROW_MAJOR copy
         (_vfy_logits_rm_out) with no cast, which avoids a host untilize; the sampler converts to
         float32 lazily per row.
 
@@ -1943,6 +1967,7 @@ class Qwen36Model:
             inactive=inactive,
             rope_deltas=rope_deltas,
             sample_plan=sample_plan,
+            read_logits=read_logits,
         )
         T, B = self._vfy_T, self._vfy_B
         rows = B * T
@@ -1971,13 +1996,16 @@ class Qwen36Model:
         sample_plan=None,
         accept_rows=None,
         step_staged=False,
+        read_logits=False,
     ):
-        """verify_traced's staging and replays (the verify trace, and the sampler trace with ``sample_plan``), enqueued
-        without waiting; the caller enqueues what follows and reads the outputs (_vfy_ids_out, the sampler's draws,
-        _vfy_rows_out). ``accept_rows``: {spec_step STEP_* row: B ints}, the rows of the step buffer that only the device
-        acceptance reads (spec_accept.StepAccept), staged in the same copy; None stages zeros. ``step_staged``: a chain
-        program (spec_chain.ChainInputs) enqueued before wrote the step buffer, so ``tokens`` and ``positions`` are not
-        staged, and the caller checked the grouped KV write over every position the rows can take."""
+        """verify_traced's staging and replays (the verify trace; with ``sample_plan`` or ``read_logits`` the logits
+        traces record_verify_trace captured; with ``sample_plan`` the sampler trace), enqueued without waiting; the
+        caller enqueues what follows and reads the outputs (_vfy_ids_out, the sampler's draws, _vfy_rows_out, with
+        ``read_logits`` _vfy_logits_rm_out). ``accept_rows``: {spec_step STEP_* row: B ints}, the rows of the step
+        buffer that only the device acceptance reads (spec_accept.StepAccept), staged in the same copy; None stages
+        zeros. ``step_staged``: a chain program (spec_chain.ChainInputs) enqueued before wrote the step buffer, so
+        ``tokens`` and ``positions`` are not staged, and the caller checked the grouped KV write over every position
+        the rows can take."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
         if sample_plan is not None and self._vfy_sampler is None:
@@ -2028,6 +2056,10 @@ class Qwen36Model:
             self._vfy_sampler.stage(sample_plan)
 
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
+        if (sample_plan is not None or read_logits) and self._vfy_gather_trace_id is not None:
+            ttnn.execute_trace(dev, self._vfy_gather_trace_id, cq_id=0, blocking=False)
+        if read_logits and self._vfy_rm_trace_id is not None:
+            ttnn.execute_trace(dev, self._vfy_rm_trace_id, cq_id=0, blocking=False)
         if sample_plan is not None:
             ttnn.execute_trace(dev, self._vfy_sample_trace_id, cq_id=0, blocking=False)
 

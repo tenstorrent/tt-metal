@@ -249,11 +249,13 @@ def test_a_moved_row_keeps_its_requests_delta_and_sampling(engine):
 
 def test_a_mixed_verify_reads_shard_argmax_ids_and_device_draws(monkeypatch):
     """The verify trace's ids are the fused per-shard argmax lanes ([1,1,1,32] uint32, lane r = row r, zeros past the
-    B * T rows), and the sampler trace draws from the gathered logits. In a step with a greedy and a sampled row, the
-    greedy row keeps its argmax ids and the sampled row gets its draws; both traces replay."""
+    B * T rows), and the sampler trace draws from the logits the gather trace all-gathers. In a step with a greedy and
+    a sampled row, the greedy row keeps its argmax ids and the sampled row gets its draws; the verify, gather and
+    sampler traces replay, and a greedy step replays the verify trace only."""
     B, T = 2, 4
     m = Qwen36Model.__new__(Qwen36Model)
     m._vfy_trace_id, m._vfy_sample_trace_id, m._vfy_T, m._vfy_B, m._vfy_kv_grouped = "verify", "sample", T, B, False
+    m._vfy_gather_trace_id, m._vfy_rm_trace_id = "gather", "rm"
     m._vfy_pt_host, m.gdn_blocks, m.device, m.vocab_size = torch.zeros(B, 4, dtype=torch.int32), object(), None, 64
     for name in ("_vfy_step_buf", "_vfy_rows_out"):
         setattr(m, name, MagicMock())
@@ -270,7 +272,7 @@ def test_a_mixed_verify_reads_shard_argmax_ids_and_device_draws(monkeypatch):
     plan = sampling_plan(_params(temperature=[0.0, 1.0], top_k=[1, 20]), [10, 20], T, fresh_seed=lambda: 7)
     ids, _, _ = m.verify_traced([[1] * T] * B, [10, 20], [0] * B, sample_plan=plan)
     assert ids == [100, 101, 102, 103, 504, 505, 506, 507]
-    assert replays == ["verify", "sample"] and staged == [plan]
+    assert replays == ["verify", "gather", "sample"] and staged == [plan]
     replays.clear()
     ids, _, _ = m.verify_traced([[1] * T] * B, [10, 20], [0] * B)
     assert ids == list(range(100, 108)) and replays == ["verify"]

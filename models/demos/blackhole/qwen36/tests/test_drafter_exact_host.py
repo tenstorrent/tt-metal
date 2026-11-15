@@ -8,7 +8,8 @@
   equal, +0 / -0 maxima, -inf, 1-ulp pairs, quantized rows) it returns torch.argmax over the full row, the lowest id
   among the maxima, which is also the tie rule of ttnn.argmax that the replaced tails use.
 * Where the ids are taken: draft_argmax takes the fused path for a shard it supports and _argmax_sharded otherwise;
-  the verify tail runs the fused argmax on the vocab shard before the all-gather.
+  the verify tail runs the fused argmax on the vocab shard and returns that shard, all-gathering only when the fused
+  argmax cannot take it.
 * KV-only maintenance: a need_logits=False drafter forward under TP stops the MTP layer after its paged KV write
   (the attention gets kv_only, the layer returns before the residual and MLP), and the engine's callers free a None
   hidden.
@@ -143,7 +144,7 @@ def test_draft_argmax_takes_the_fused_path_for_a_supported_shard(supported):
     assert fused.calls == ([ROWS] if supported else [])
 
 
-def test_the_verify_takes_its_ids_from_the_shard_before_the_gather(monkeypatch):
+def test_the_verify_takes_its_ids_from_the_shard_and_keeps_the_shard(monkeypatch):
     import ttnn
 
     log = []
@@ -159,7 +160,11 @@ def test_the_verify_takes_its_ids_from_the_shard_before_the_gather(monkeypatch):
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
     monkeypatch.setattr(ttnn, "linear", lambda x, w: log.append(("linear", x, w)) or "shard")
     ids = lambda shard: log.append(("ids", shard)) or "ids"
-    assert model._spec_tail_ids("x", ids) == ("logits", "feed", "ids")
+    assert model._spec_tail_ids("x", ids) == ("shard", "feed", "ids")
+    assert log == [("linear", "normed", "w"), ("ids", "shard")]
+    log.clear()
+    no_ids = lambda shard: log.append(("ids", shard)) or None
+    assert model._spec_tail_ids("x", no_ids) == ("logits", "feed", None)
     assert log == [("linear", "normed", "w"), ("ids", "shard"), ("gather", "shard")]
     log.clear()
     assert model._spec_tail("x") == ("logits", "feed")
@@ -173,8 +178,8 @@ def test_the_verify_takes_its_ids_from_the_shard_before_the_gather(monkeypatch):
 
 def test_the_verify_on_the_replicated_residual_takes_its_ids_from_the_shard(monkeypatch):
     """On the replicated decode residual (decode_allreduce.py: a full-width x), the verify tail takes the final norm
-    locally, runs the per-shard argmax on this device's vocab shard before the gather, and hands the drafter this
-    device's span of the norm; without shard_ids it takes the plain LM head."""
+    locally, runs the per-shard argmax on this device's vocab shard and returns that shard without a gather, and hands
+    the drafter this device's span of the norm; without shard_ids it takes the plain LM head."""
     import ttnn
 
     log = []
@@ -191,12 +196,11 @@ def test_the_verify_on_the_replicated_residual_takes_its_ids_from_the_shard(monk
     monkeypatch.setattr(ttnn, "mesh_partition", lambda t, **kw: log.append(("partition", t, kw["dim"])) or "feed")
     x = SimpleNamespace(shape=(1, 1, 32, 64), name="x")
     ids = lambda shard: log.append(("ids", shard)) or "ids"
-    assert model._spec_tail_ids(x, ids) == ("logits", "feed", "ids")
+    assert model._spec_tail_ids(x, ids) == ("shard", "feed", "ids")
     assert log == [
         ("final norm", "x"),
         ("linear", "normed", "w"),
         ("ids", "shard"),
-        ("gather", "shard"),
         ("partition", "normed", 3),
     ]
     log.clear()
