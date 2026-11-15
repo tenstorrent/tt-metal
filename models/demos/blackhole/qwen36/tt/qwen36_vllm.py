@@ -8,9 +8,11 @@ only. Both classes keep the GDN state of each request in vLLM-owned KV cache blo
 tt/gdn_block_state.py); Qwen36MTPContractForCausalLM adds speculative decoding with the MTP drafter head.
 """
 
+import functools
 import math
 import os
 from collections import defaultdict
+from collections.abc import Mapping as MappingABC
 from typing import Mapping, Optional
 
 import torch
@@ -24,6 +26,7 @@ from vllm.model_executor.models.qwen3_5 import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import warmup_decode_buckets
 from models.demos.blackhole.qwen36.tt.spec_sample import SAMPLER_TOP_K, enables_logprobs, sampled_token_logprobs
@@ -36,6 +39,36 @@ _SPEC_STEP_CORES = 110
 _VISION_BUCKET = 2048
 # Patches the vision warmup covers when vLLM's --mm-processor-kwargs sets no max_pixels: about a 2 MP image.
 _VISION_WARMUP_PATCHES = 8191
+# Fabric packet payload of the MTP class's mesh on Blackhole. Fewer, larger packets cut the per-packet cost of the decode
+# and verify all-reduces: TP=8 decode is faster at 8192 B than at the fabric default (4352 B) and at the Blackhole
+# maximum (15232 B).
+_FABRIC_PACKET_PAYLOAD_BYTES = 8192
+
+
+@functools.lru_cache(maxsize=None)
+def _fabric_router_config():
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = _FABRIC_PACKET_PAYLOAD_BYTES
+    return router
+
+
+class _BlackholeFabricConfig(MappingABC):
+    """The MTP class's model_capabilities["fabric_config"]: {"router_config": the 8192-byte payload} on Blackhole, empty
+    on any other architecture (8192 B is above the Wormhole maximum of 7616 B, which the fabric refuses). The
+    architecture is looked up when vllm-tt-plugin reads the entries, right before it opens the mesh, so importing the
+    class touches no device."""
+
+    def _entries(self):
+        return {"router_config": _fabric_router_config()} if is_blackhole() else {}
+
+    def __getitem__(self, key):
+        return self._entries()[key]
+
+    def __iter__(self):
+        return iter(self._entries())
+
+    def __len__(self):
+        return len(self._entries())
 
 
 class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
@@ -606,6 +639,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # The verify sampler applies no penalties and no grammar mask: such a step is sampled on the host.
         "supports_device_penalties": False,
         "supports_device_grammar": False,
+        # vllm-tt-plugin adds these to its ttnn.set_fabric_config arguments before it opens the mesh. No "config" key:
+        # the fabric type stays the plugin's hardware default or the launch's override_tt_config fabric_config.
+        "fabric_config": _BlackholeFabricConfig(),
     }
 
     @classmethod
