@@ -46,6 +46,11 @@ Per point and kind (steady / resumed):
                                and the embedding (before test_profile's first section) are the section chunk_input
     <kind>_tok_s_p<p>          tokens / wall: 5120 steady, 4992 (the new rows) resumed
     <kind>_host_ms_p<p>        wall - device (slowest chip)
+    <kind>_replicas_<k>_p<p>   P.69 (replica branch, MOE_REPLICAS=prev): the replica guard's counters over the
+                               profiled run's previous chunk (prev_*) and timed chunk (k = calls, ready, off, ...;
+                               tt/moe_block_main_adapter.prev_stats), and the device global state's cumulative new
+                               copies / pieces / dropped (words 2..4) added by each; read on the host between the
+                               chunks, outside every timed region (the walls are unchanged)
 and skip_positions_table: the markdown table of every point (also printed).
 
     PYTHONPATH=$PWD DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile \\
@@ -95,6 +100,33 @@ def _dram(mesh):
     except Exception as e:  # noqa: BLE001
         print(f"DRAM view unavailable: {e}")
         return None
+
+
+def _replica_snap(mesh) -> dict:
+    """P.69 (replica branch): MOE_REPLICAS=prev's host guard counters (calls, ready, off, off_copies, plans) and the
+    device global state's cumulative new copies / pieces / dropped (G words 2..4, chip 0; every chip plans the same),
+    summed over the mesh's blocks. Empty with replicas off. Host reads only, called outside the timed regions."""
+    from models.demos.deepseek_v41_flash_d_p.tt import moe_block_main_adapter as A
+
+    if not A.prev_on():
+        return {}
+    out = dict(A.prev_stats(mesh))
+    from models.demos.deepseek_v41_flash_d_p.tt.expert_prev import _read
+
+    for k in ("copies", "pieces", "dropped"):
+        out[k] = 0
+    for _, pr in A._PREV.values():
+        if pr.mesh is mesh:
+            g = _read(pr.G)
+            out["copies"] += int(g[2])
+            out["pieces"] += int(g[3])
+            out["dropped"] += int(g[4])
+    return out
+
+
+def _delta(a: dict, b: dict) -> dict:
+    """b - a; a device counter that went down was emptied by a request's reset (a resumed chunk's replay): b then."""
+    return {k: (b[k] - a.get(k, 0)) if b[k] >= a.get(k, 0) else b[k] for k in b}
 
 
 def _device_split(prof: dict) -> dict:
@@ -240,8 +272,10 @@ def _point(model, mesh, layers, p: int, chunk: int, dram) -> dict:
             kept = sorted(walls)
             wall = kept[len(kept) // 2]
 
+            r0 = _replica_snap(mesh)  # (P.69: outside every timed region)
             run(prev_t, p - chunk)
             model.sync()
+            r1 = _replica_snap(mesh)
             n0 = cache_entries(mesh)
             profiler.enable(mesh, rt=True)
             try:
@@ -253,6 +287,9 @@ def _point(model, mesh, layers, p: int, chunk: int, dram) -> dict:
             finally:
                 profiler.disable()
             n1 = cache_entries(mesh)
+            model.sync()
+            r2 = _replica_snap(mesh)
+            rep = {"prev": _delta(r0, r1), "timed": _delta(r1, r2)}
             new_programs = -1 if n0 is None or n1 is None else n1 - n0
 
             pre = f"{kind}_"
@@ -272,6 +309,14 @@ def _point(model, mesh, layers, p: int, chunk: int, dram) -> dict:
                 metrics.record(f"{pre}device_ms_{sec}_p{p}", round(ms, 2))
             metrics.record(f"{pre}tok_s_p{p}", round(new / (wall / 1e3), 1))
             metrics.record(f"{pre}host_ms_p{p}", round(wall - dev["slowest"], 1))
+            for side, d in rep.items():
+                for k, v in d.items():
+                    metrics.record(f"{pre}replicas_{'prev_' if side == 'prev' else ''}{k}_p{p}", v)
+            if rep["timed"]:
+                print(
+                    f"REPLICAS p{p} {kind}: previous chunk {rep['prev']}; timed chunk {rep['timed']}",
+                    flush=True,
+                )
             out[kind] = {"wall": wall, "spread": round(kept[-1] - kept[0], 1), "tok_s": new / (wall / 1e3), **dev}
             print(
                 f"POINT p{p} {kind}: wall {wall} ms (runs {walls}, spread {kept[-1] - kept[0]:.1f}, warm-up "

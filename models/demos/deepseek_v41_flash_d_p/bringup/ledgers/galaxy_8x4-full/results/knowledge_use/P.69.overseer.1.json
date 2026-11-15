@@ -1,0 +1,63 @@
+{
+ "used": [
+  {
+   "id": "DS41-254",
+   "how": "MOE_REPLICAS=prev learns from the previous chunk: checked that the test runs the real previous chunk (no replay, so no prev_reset), and recorded the guard's ready/off counters per point",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "random-id points cannot measure a routing-dependent change: reported the 128k experts +3.7 ms as run/routing noise, not a replica effect",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "DECODER_SKIP=decode with MOE_REPLICAS=prev: NCALL counts every main MoE layer built (40), so with decode (20 calls a chunk) the guard never opens; added as DS41-280",
+  "known_issues ids clash across branches (model_bringup has DS41-278/279 that this branch's checker reports as free); used DS41-280"
+ ],
+ "overseer": [
+  {
+   "id": "P.69",
+   "answer": "done",
+   "evidence": "merge commit 31e02f1e042 (-s ours of dnijemcevic/model_bringup, test_skip_positions.py from 81eb0ffce32 verbatim + FIX.34 BREADCRUMBS). Only test edit: replica counters recorded outside timed regions. Gate P.69 --check PASS (788 s); table vs FIX.34 in BREADCRUMBS P.69. Replicas ready 0/20 at every point (DS41-280)."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or padding change; test-only"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suites run; only the gate's two model-level units"
+  }
+ ],
+ "cited_only": [
+  "DS41-280"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.69",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-15T10:00:02",
+  "head": "31e02f1e042",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.69.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.69.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py"
+  ]
+ }
+}

@@ -2193,3 +2193,44 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py` (via devjob: ~11 min with the load), or the gate:
   `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.34 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
+
+## P.69 (overseer, OWNER 2026-11-15): FIX.34's realistic prefill measurement on the replica branch (no model change)
+
+- Step 1: `git merge -s ours --no-commit dnijemcevic/model_bringup`, `git checkout 81eb0ffce32 --
+  tests/test_skip_positions.py`, FIX.34's BREADCRUMBS section appended above, committed as the merge (31e02f1e042, the
+  owner asked for the commit; the orchestrator's commit preflight refuses an open MERGE_HEAD). Code and ledgers of this
+  branch unchanged. FIX.34's known_issues line (DS41-279 on model_bringup) not brought over; this branch's new entry is
+  DS41-280, skipping 278 / 279, which model_bringup already uses.
+- Previous chunk: confirmed. Every warm-up, timed and profiled iteration runs the REAL previous chunk
+  (tokens[p-5120:p] at p-5120, last=False, not a replay, so no prev_reset) before the timed chunk.
+- Only test edit (replica-only): `_replica_snap` / `_delta` record the guard counters (prev_stats: calls, ready, off,
+  off_copies, plans) and the device global state's cumulative new copies / pieces / dropped (G words 2..4), around the
+  profiled run's previous chunk and timed chunk. Metrics `<kind>_replicas[_prev]_<k>_p<p>`, print `REPLICAS p<p> <kind>`.
+  These are host reads after a sync, outside every timed region. Points, warm-up, WALL_RUNS, timing and table are
+  unchanged.
+- Finding (DS41-280): **replicas never used under DECODER_SKIP=decode.** ready 0 of 20 calls on every chunk, at every
+  point and kind. NCALL = 40 (every main MoE layer built: the load builds 21-39 too); decode calls layers 0-19, so a
+  layer's next call is 20 ordinals later, and the guard needs >= 40. The planner still plans 20 times a chunk and the
+  combine still carries the copies. Steady: 1-3 new copies a chunk (the plan is stable, most receivers kept). Resumed:
+  the replay resets, so 85-89 copies and 17-33 dropped in the timed chunk. So this table measures replicas OFF plus the
+  prev machinery's overhead. It matches FIX.34 within run noise (the experts section is the same, 46-50 ms).
+- Results (8x4, chunk 5120, P.69.check.log). P.69 / FIX.34 (difference):
+
+| point | kind | wall ms | device ms | tok/s | replicas ready/calls; new copies (prev chunk; timed) |
+|---|---|---|---|---|---|
+| 51200 | steady | 106.8 / 106.7 (+0.1) | 81.3 / 81.6 (-0.3) | 47940 / 47985 (-45) | 0/20; 1; 1 |
+| 51200 | resumed | 109.2 / 107.2 (+2.0) | 82.0 / 81.4 (+0.6) | 45714 / 46567 (-853) | 0/20; 22; 89 |
+| 128000 | steady | 109.2 / 107.6 (+1.6) | 86.2 / 82.4 (+3.8) | 46886 / 47584 (-698) | 0/20; 3; 3 |
+| 128000 | resumed | 109.0 / 109.4 (-0.4) | 86.7 / 82.8 (+3.9) | 45798 / 45631 (+167) | 0/20; 21; 85 |
+| 256000 | steady | 110.8 / 106.4 (+4.4) | 85.0 / 85.7 (-0.6) | 46209 / 48120 (-1911) | 0/20; 2; 2 |
+| 256000 | resumed | 112.2 / 112.9 (-0.7) | 85.4 / 85.0 (+0.4) | 44492 / 44216 (+276) | 0/20; 21; 85 |
+| 512000 | steady | 111.8 / 112.5 (-0.7) | 90.5 / 88.5 (+2.0) | 45796 / 45511 (+285) | 0/20; 3; 3 |
+| 512000 | resumed | 114.8 / 114.3 (+0.5) | 89.8 / 89.5 (+0.3) | 43484 / 43674 (-190) | 0/20; 15; 89 |
+| 768000 | steady | 116.6 / 115.7 (+0.9) | 93.3 / 93.0 (+0.4) | 43911 / 44252 (-341) | 0/20; 2; 2 |
+| 768000 | resumed | 117.9 / 120.3 (-2.4) | 94.4 / 95.3 (-0.9) | 42341 / 41496 (+845) | 0/20; 16; 86 |
+| 1024000 | steady | 120.9 / 120.4 (+0.5) | 97.7 / 99.1 (-1.4) | 42349 / 42525 (-176) | 0/20; 1; 1 |
+| 1024000 | resumed | 125.5 / 125.5 (+0.0) | 98.2 / 98.0 (+0.2) | 39777 / 39777 (+0) | 0/20; 23; 88 |
+
+  The largest deltas (128k device +3.8 / +3.9, all in experts 49.9 / 48.6 vs 46.2 / 46.0) are single profiled runs on
+  random ids. Determinism 0.0.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.69 --spec <spec> --check` (devjob, ~13 min).
