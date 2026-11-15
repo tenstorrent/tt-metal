@@ -113,9 +113,10 @@ private:
 };
 
 // Rows [row_lo, row_hi) of a tensor page into the same rows of an L1 tile, for buffers whose other rows
-// are never consumed (weights read by row index, gate tiles read per token row): each face-row span is
-// widened to DRAM read alignment and read in place, so no staging copy is needed. Whole tile when every
-// row is wanted. Completed by the next barrier / RowReader::finish().
+// are never consumed (weights read by row index, gate tiles read per token row): per 16-row band, one read
+// from the band's rows in the left face through its rows in the right face, widened to DRAM read alignment
+// and landed in place (one request instead of one per face, so no staging copy). Whole tile when every row
+// is wanted. Completed by the next barrier / RowReader::finish().
 template <typename Accessor>
 __attribute__((noinline)) void read_row_span(
     const Accessor& acc, uint32_t page, uint32_t row_lo, uint32_t row_hi, uint32_t dst) {
@@ -131,11 +132,8 @@ __attribute__((noinline)) void read_row_span(
             continue;
         }
         const uint32_t begin = row_offset(lo) & ~(READ_ALIGN - 1);
-        const uint32_t end = align_power_of_2(row_offset(hi - 1) + SEG_BYTES, READ_ALIGN);
-        for (uint32_t half = 0; half < 2; ++half) {
-            const uint32_t off = begin + half * FACE_BYTES;
-            noc_async_read(acc.get_noc_addr(page, off), dst + off, end - begin);
-        }
+        const uint32_t end = align_power_of_2(row_offset(hi - 1) + SEG_BYTES, READ_ALIGN) + FACE_BYTES;
+        noc_async_read(acc.get_noc_addr(page, begin), dst + begin, end - begin);
     }
 }
 
@@ -262,6 +260,7 @@ void kernel_main() {
     uint32_t window_slot = 0;
     uint32_t zero_tokens = zero_slots;  // the writer zeroes slot k and then sends token k
     const uint32_t hist_stage = get_write_ptr(cb_hist_stage);
+    const uint32_t cur_stage = hist_stage + group_cols * TILE_BYTES;  // single token rows, staged per column
     RowReader rows(STAGE_SLOTS == 0 ? 0 : get_write_ptr(cb_row_stage));
 
     dataflow_kernel_lib::
@@ -386,11 +385,18 @@ void kernel_main() {
                 // staging tile, then copied out as row runs.
                 const uint32_t prev_row0 = lo - GDN_HISTORY;
                 const bool prev_staged = !hist_needed && prev_row0 / TILE_ROWS == (lo - 1) / TILE_ROWS;
+                // A single token row (decode): one request per column into staging, then copied into the tap tile,
+                // whose other rows must stay zero.
+                const bool cur_staged = hi - lo == 1;
                 for (uint32_t col = 0; col < group_cols; ++col) {
                     const uint32_t ct = pair_col(unit_col(group_first + col));
                     const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
-                    read_tile_rows(
-                        rows, mixed, tr * Ct + ct, base_row, lo, hi, col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
+                    if (cur_staged) {
+                        read_row_span(mixed, tr * Ct + ct, lo - base_row, hi - base_row, cur_stage + col * TILE_BYTES);
+                    } else {
+                        read_tile_rows(
+                            rows, mixed, tr * Ct + ct, base_row, lo, hi, col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
+                    }
                     if (hist_staged) {
                         const uint32_t r0 = hist_row0 % TILE_ROWS;
                         read_row_span(
@@ -429,10 +435,18 @@ void kernel_main() {
                     DeviceZoneScopedN("R-FLUSH");
                     rows.finish();
                 }
-                if (hist_staged || prev_staged) {
+                if (hist_staged || prev_staged || cur_staged) {
                     for (uint32_t col = 0; col < group_cols; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
-                        for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
+                        if (cur_staged) {
+                            copy_local_rows(
+                                cur_stage + col * TILE_BYTES,
+                                lo - base_row,
+                                col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES,
+                                lo - base_row,
+                                1);
+                        }
+                        for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1 && (hist_staged || prev_staged); ++tap) {
                             const uint32_t shift = GDN_HISTORY - tap;
                             uint32_t end = hi < lo + shift ? hi : lo + shift;
                             uint32_t src = (prev_row0 + tap) % TILE_ROWS;  // row lo - shift
@@ -462,7 +476,7 @@ void kernel_main() {
                     gates_pending = false;
                 }
                 DeviceZoneScopedN("R-COPIES");
-                if (hi - lo > 1 || hist_staged || prev_staged) {
+                if (hi - lo > 1 || hist_staged || prev_staged || cur_staged) {
                     for (uint32_t col = 0; col < group_cols && hi - lo > 1; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
                         const uint32_t cur_tap = col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES;

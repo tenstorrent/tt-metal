@@ -183,8 +183,9 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0):
         ((CB_NORM_W,), Vt),
         ((CB_OUT_ROWS,), Vt * ROW_DEPTH),
         ((CB_SCRATCH,), 1),
-        # conv_state history rows of one window group, read as one aligned span per column (reader-local).
-        ((CB_HIST_STAGE,), _window_group_cols(Kt, Vt, pieces)),
+        # conv_state history rows, then single token rows, of one window group: one aligned span per column each
+        # (reader-local staging).
+        ((CB_HIST_STAGE,), 2 * _window_group_cols(Kt, Vt, pieces)),
         # Own partial sum o^2 (compute -> writer); gathered partials of every piece, two tile rows in
         # flight so a peer one tile row ahead never lands on a slot still being summed.
         ((CB_OSUM_PART,), trb if pieces > 1 else 0),

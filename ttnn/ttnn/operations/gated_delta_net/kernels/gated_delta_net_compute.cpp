@@ -1151,8 +1151,10 @@ void kernel_main() {
     const uint32_t v_eps_bits = get_arg_val<uint32_t>(3);  // V * epsilon
     const uint32_t qk_role = get_arg_val<uint32_t>(4);
     constexpr bool qk_shared = QK_SHARED;  // every core of an R-BCAST program has a shared role
-    const UnitCols cols{
-        qk_role == GDN_QK_K_INJECTOR ? Kt : 0, qk_role == GDN_QK_OWN ? 2 * Kt : (qk_role == GDN_QK_RECEIVER ? 0 : Kt)};
+    // Compile-time outside R-BCAST (every q/k column), so those builds fold the column mapping away.
+    const UnitCols cols = !QK_SHARED
+                              ? UnitCols{0, 2 * Kt}
+                              : UnitCols{qk_role == GDN_QK_K_INJECTOR ? Kt : 0, qk_role == GDN_QK_RECEIVER ? 0 : Kt};
     // FPU conv reads raw conv_weight tiles (tap j at row j); the SFPU conv one row-0 tile per tap.
     const uint32_t conv_w_pages = (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * cols.count();
 
@@ -1182,6 +1184,7 @@ void kernel_main() {
                 gates_block(scope);
             }
             {
+                DeviceZoneScopedN("C-PART");
                 if constexpr (CONV_ON_FPU) {
                     conv_block_fpu(scope, cols);
                 } else {
@@ -1191,6 +1194,7 @@ void kernel_main() {
                     if (cols.qk_cols != 0) {
                         qk_part_block(bufs, qk_role == GDN_QK_Q_INJECTOR, scope);
                     }
+                    DeviceZoneScopedN("C-FIN");
                     qk_finish_block(bufs, scope);
                 } else {
                     l2norm_block(bufs, scope);
