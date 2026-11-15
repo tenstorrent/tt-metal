@@ -392,3 +392,67 @@ no write into an input.
 golden suite is green, no regression on `perf_decode_b1` and `model_prefill_4096`.
 
 **Outcome**: model_decode_b8 48.8 -> 40.2 us, model_decode_b16 86.0 -> 73.5 us (device kernel, launches 2..3 of two fresh runs, same session; goals 29.3 / 57.5). Landed: pair cores in the top 3 grid rows read on NOC 1 / write on NOC 0 (SWAP_NOC_ROWS = 3, now also at B=8: their weights / gate-row reads had landed at 25-31 us vs 4-5 us on lower rows; alone 48.8 / 86 -> 42.6 / 74.1); the final state streamed to the writer per update batch; final-state tiles updated, written and read starting at tile (pair * 3) mod 16 (STATE_STAGGER: cores starting together no longer all hit the bank of tile 0; 42.0 -> 40.0 at B=8); multi-unit cores compute kn^T and d once (SHARE_QK_FINISH) and normalize unit k after unit k+1's token step (UNIT_LAG): compute ends ~48 us instead of ~59 at B=16. Measured null or worse, kept as a knob at off: EARLY_S0 (S0 issued with the window rows: 44.7 / 75 vs 42.8 / 74.4 with the swap). Swapping rows 3-4 too, or by x, was slower (51-56 / 78-93 us). Guard set at parity (same-session A/B against HEAD): perf_decode_b1 22.4 vs 22.1, decode_b1_f32 30.2 vs 30.3, prefill_t96 168.5, batched_b2_t40 224, model_prefill_4096 1.06-1.17 ms. What binds now (B=16 zones): the state writes, 12.6 MB starting when the first units' states are final (~30 us) and issued by one RISC per core on one NoC (16 us to issue a 64 KB state under back-pressure), ending 48-72 us with an x gradient per NoC (NOC 1 writes slowest at high x, NOC 0 at low x); and the pair cores in grid rows y = 5-6, whose S0 lands at 28-38 us on either NoC, so their compute ends 60-68 us. Next: split each core's state write across both RISCs / NoCs (the reader is idle after ~35 us), pick each core's NoC pair by its path to the banks rather than by row, and shorten the per-unit token step (10.3 us: update 4.3, token vector 4.5 for one valid row). Not done here: the split writer needs a second consumer protocol for cb_state_out and the per-core NoC choice a path model; each is its own measured pass.
+
+### [ ] Refinement 10 — Caller-provided state outputs that may be the state inputs (update in place)
+
+**Goal**: add two keyword-only parameters, `conv_state_out: ttnn.Tensor = None` and
+`recurrent_state_out: ttnn.Tensor = None`. When given, the op writes that output into the caller's tensor
+(same shape, dtype, layout and memory configuration as the corresponding input; validate() refuses
+anything else) instead of allocating one, and returns it. The caller may pass the SAME tensor object as
+the input (`recurrent_state_out=recurrent_state`, `conv_state_out=conv_state`): the state is then updated
+in place and no second copy of it exists. Default `None` keeps today's behaviour (new tensors) and every
+golden cell unchanged. Why (operator, measured in the model this op is for, at 5e03ed5): the model decodes
+by trace replay, where the persistent state tensors keep their addresses, so the caller has to copy the
+op's new state back into them after every call: one extra device program that moves the whole state over
+DRAM a second time. Measured per call on one chip: 68.9 us at B=16 (the op itself: 74.1 us), 32.9 us at
+B=8, 4.7 us at B=1, plus 1.3 to 2.2 us for the conv history. Passing the input tensors as outputs to the
+op as it stands gives wrong results at B=16 (output PCC falls from 0.997 to 0.943 over 4 decode steps)
+while B=1 and prefill pass: so the kernels today read some input region after another core has written
+the same region of the output. In-place must be made correct by construction: every byte of
+recurrent_state and conv_state that any core reads is read before any core writes that region (note the
+rotated start tile of the streamed state write-back, the top grid rows that swap NoCs, cores that hold
+two pairs, conv_state tile rows shared by several sequences, and the M3 rule that conv_state_out rows
+come from conv_state when T < 3), with no extra pass of the state over DRAM and no slowdown of the
+default path.
+
+**Implementation skill**: /memory-layouts
+
+**Verifier notes**: extend the op's unit tests (tests/ttnn/unit_tests/operations/gated_delta_net): for
+decode B=1, B=8, B=16, B=40, prefill T=33, T=96, T=4096 and batched prefill, in-place calls over at
+least 8 consecutive calls must give the same outputs and states as the default path to the bit (same
+kernels, same arithmetic), on both dtypes; a provided output that is neither the input nor a distinct
+tensor of the right form is refused. The spec sentence "the op MUST NOT write into an input tensor"
+now holds for every tensor the caller did not pass as an output. Record the in-place timing of
+`model_decode_b16` and `perf_decode_b1` against the default path: it must not be slower.
+
+**Done when**: the new parameters exist and are documented in the op file; in-place results are
+bit-identical to the default path on the shapes above; the golden suite is green with 0 loud categories;
+no regression on the perf guard set.
+
+### [ ] Refinement 11 — Short and medium prefill (T = 32 to 512): faster than a chain of ops
+
+**Type**: perf
+
+**Goal**: prefill calls of one sequence with T between 32 and 512 tokens (the model ingests a short
+prompt in one such call; time to first token is 48 such calls). Measured in the model this op is for
+(operator, one chip, device kernel duration, median of 11 calls, at 5e03ed5): T=128 (mixed_qkv
+(1,128,2560) bf16, state (1,12,128,128)) takes 188.8 us on 40 cores, where the chain of existing ops it
+replaces takes 158.1 us for the same work: the model's time to first token got 8.7% worse with this op
+(51.6 -> 56.1 ms at 128 tokens). T=4096 is fine (1.09 ms on 108 cores, R-PREP). So the regime chosen
+for short calls leaves most of the grid idle and runs the local chunk step: 4 tile rows cost about 47
+us each. Find by measurement the regime boundary and the form for short calls: R-PREP style
+preparation cores from the first tile row on (the fill of the pipeline is what a short call consists
+of, so spread the preparation of all its tile rows over the idle cores at once: with T=128 there are
+4 tile rows and 110 cores), the ordered state step alone on the state cores, the q/k preparation
+shared per key head. Aim: T=128 under 80 us, T=32 and T=64 not slower than today, a smooth hand-over to
+the long-call regime, no slowdown at T=4096. No SUPPORTED change.
+
+**Verifier notes**: guard set: `perf_decode_b1` (22.0 us), `model_decode_b8` (39.3), `model_decode_b16`
+(73.5), `model_prefill_4096` (1.09 ms), prefill T=96, batched B=2 T=40. State precision as before
+(state-carry cases at 0.002). The compute kernel is at its kernel-config size limit (a NoC-traced
+build of decode B=16 is 1,920 B over): if this needs code, first move roles into kernels of their own
+(separate source files per role: preparation, state, injector, piece) so that each fits with room.
+
+**Done when**: measured device-ns at T=128 improves by a large factor (aim under 80 us), T=32 / 64 /
+256 / 512 are measured and none is slower than today, the golden suite is green, no regression on the
+guard set.
