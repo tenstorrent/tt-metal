@@ -235,7 +235,7 @@ def fused_sample_block(recs: list, r, B: int, W: int, pad: int) -> tuple:
 # ordinary decode) and prefill_forward of the adapter is timed, and the gap between the adapter's consecutive calls
 # (= vLLM's scheduler + the plugin's accept walk / output processing / input build, i.e. everything outside the model)
 # is charged to the call that follows it; the fused step is split into the backend's submit (replay enqueue + record
-# copy) and collect (device wait + record parse). Every 256 decode calls: "GLM53 stack spec timing: ..." per-step means,
+# copy) and collect (device wait + record parse). Every 256 (GLM53_STACK_SPEC_TIMING_EVERY) decode calls: "GLM53 stack spec timing: ..." per-step means,
 # then "GLM53 stack prefill phases: ..." -- each prefill call's pieces (F28): the scheduler's hit confirmation (in the
 # outside), the attach plan (prefix keys + entry pick), the host-tier restore, the page-table rows, the MTP-fill arm,
 # the TP chunk = [attach copy (the snapshot's DSA pools into the slot), inputs, MTP-fill inputs, launch, snapshot copy,
@@ -244,6 +244,9 @@ def fused_sample_block(recs: list, r, B: int, W: int, pad: int) -> tuple:
 # synchronized (its device time, not only its enqueue; one extra device sync per attached row).
 SPEC_TIMING = os.environ.get("GLM53_STACK_SPEC_TIMING", "0") in ("1", "2")
 SPEC_TIMING_SYNC = os.environ.get("GLM53_STACK_SPEC_TIMING", "0") == "2"
+# GLM53_STACK_SPEC_TIMING_EVERY (default 256): decode calls per "GLM53 stack spec timing" window (a short window splits a
+# served bench by its legs: each window line carries its wall-clock timestamp)
+SPEC_TIMING_EVERY = max(1, int(os.environ.get("GLM53_STACK_SPEC_TIMING_EVERY", "256") or 256))
 
 
 class _SpecTiming:
@@ -474,7 +477,7 @@ def _install_spec_timing(cls):
             t.n["fused" if fused else "fallback"] += 1
             t.sum["adapter"] += (t1 - t0) - (t.sum["submit"] - s0) - (t.sum["collect"] - c0)
             t.last_exit, t.confirm_since = t1, 0.0
-            if t.n["decode"] >= 256:
+            if t.n["decode"] >= SPEC_TIMING_EVERY:
                 t.report(dict(self.spec_stats))
 
     def prefill_forward(self, *a, **k):
