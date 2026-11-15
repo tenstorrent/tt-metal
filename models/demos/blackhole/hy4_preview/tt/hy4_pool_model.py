@@ -70,6 +70,7 @@ class Hy4PoolDecoder(Hy4Decoder):
         self.trace = None
         self.out = None
         self.far = None
+        self.rp = None
         from models.demos.blackhole.hy4_preview.tt import hy4_fuse_ar as FAR
 
         if (
@@ -78,6 +79,11 @@ class Hy4PoolDecoder(Hy4Decoder):
             assert os.environ.get("HY4_IHC_FUSED", "0") == "1", "HY4_FUSE_AR needs HY4_IHC_FUSED=1"
             FAR.patch_dsv4_tail()
             self.far = FAR.shared(md)
+            self.rp = (
+                FAR.shared_rp(md, int(os.environ.get("HY4_MOE_TP32_T", "1")))
+                if os.environ.get("HY4_TP32_TAIL", "") == "oneshot"
+                else None
+            )
             for ly in ch.layers:
                 ly.attn.far_defer = True
 

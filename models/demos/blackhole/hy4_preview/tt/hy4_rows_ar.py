@@ -27,7 +27,7 @@ def _cores(lst):
 
 
 class Hy4RowsReduce:
-    def __init__(self, md, T=1, h=2, nrp=16, links=2, mode=None, stop=0, red=None, comm=None):
+    def __init__(self, md, T=1, h=2, nrp=16, links=2, mode=None, stop=0, red=None, comm=None, pack=None):
         """mode 'axis0': mesh (4, C), groups = columns, line along axis 0.  mode 'row4': mesh (1, 8), groups = chips 4g..4g+3 of the row (single-slot test).
         h = rows of the wire/compute tiny tile (>= T, power of 2: 2, 4, 8)."""
         self.md, self.T, self.h, self.nrp, self.links, self.stop = md, T, h, nrp, links, stop
@@ -37,8 +37,14 @@ class Hy4RowsReduce:
         assert 4 * T <= 8 and h >= T and h in (2, 4, 8), (T, h)
         assert NTILE % nrp == 0
         self.Q = NTILE // nrp
-        self.tileb = 64 * h
-        self.chunk = self.Q * self.tileb
+        # pack: the Q tile columns x T rows of a block are the rows of ONE 32x32 tile (compute = 1 tile instead of Q, 1 KB..2 KB packet); needs h == 2, Q * T <= 32
+        self.pk = (os.environ.get("HY4_RP_PACK", "1") == "1") if pack is None else bool(pack)
+        if self.pk:
+            assert h == 2 and self.Q * T <= 32, (h, self.Q, T)
+        self.ntc = 1 if self.pk else self.Q  # tiles of one chunk (compute / CB unit)
+        self.tileb = 2048 if self.pk else 64 * h
+        self.tdh = 32 if self.pk else h
+        self.chunk = self.ntc * self.tileb
         assert self.chunk <= 4096, "one chunk = one fabric packet <= 4 KB"
         assert nrp % links == 0
         self.per = nrp // links
@@ -96,7 +102,10 @@ class Hy4RowsReduce:
             b = ttnn.MeshCoordinate(row, col - 1) if r > 0 else None
         return r, f, b
 
-    def _build(self, part, par=0):
+    def _build(self, part, par=0, only=None, sig=None):
+        """only=(row, col): return that chip's (kernels, sems, cbs, comm routing list) instead of a mesh program (used to fuse RP into the FAR program);
+        sig = (sem_id, [(x, y) phys cores]) : after the output writes every reducer increments the local semaphore sem_id on those cores (FAR readers wait for it).
+        """
         md = self.md
         self.recv, self.gsem = self.recvs[par], self.gsems[par]
         rows, cols = tuple(md.shape)
@@ -118,7 +127,7 @@ class Hy4RowsReduce:
         link_of = {p: l for l, ps in enumerate(link_p) for p in ps}
 
         def tdesc():
-            return ttnn.TileDescriptor(h, 32)
+            return ttnn.TileDescriptor(self.tdh, 32)
 
         def tcb(i, pages):
             return ttnn.CBDescriptor(
@@ -132,6 +141,8 @@ class Hy4RowsReduce:
         mpd = ttnn.MeshProgramDescriptor()
         for row in range(rows):
             for col in range(cols):
+                if only is not None and (row, col) != tuple(only):
+                    continue
                 coord = ttnn.MeshCoordinate(row, col)
                 src = md.get_fabric_node_id(coord)
                 r, fn, bn = self._pos(row, col)
@@ -139,7 +150,7 @@ class Hy4RowsReduce:
                 idx = row * cols + col
                 cb_recv = ttnn.cb_descriptor_from_sharded_tensor(CB_RECV, dev_recv[idx])
                 cb_recv.core_ranges = red_set
-                cb_recv.total_size = (NB - 1) * Q * tileb
+                cb_recv.total_size = (NB - 1) * self.ntc * tileb
                 cb_recv.format_descriptors = [
                     ttnn.CBFormatDescriptor(
                         buffer_index=CB_RECV, data_format=ttnn.bfloat16, page_size=tileb, tile=tdesc()
@@ -159,7 +170,8 @@ class Hy4RowsReduce:
                         ttnn.CBFormatDescriptor(buffer_index=CB_SCR, data_format=ttnn.bfloat16, page_size=256)
                     ],
                 )
-                cbs = [cb_recv, tcb(CB_OUT, Q), cb_stg, tcb(CB_PAY, NB * Q), tcb(CB_OWN, Q), cb_scr]
+                NTC = self.ntc
+                cbs = [cb_recv, tcb(CB_OUT, NTC), cb_stg, tcb(CB_PAY, NB * NTC), tcb(CB_OWN, NTC), cb_scr]
                 sems = [ttnn.SemaphoreDescriptor(s, ttnn.CoreType.WORKER, comm_set, 0) for s in range(1)]
                 kernels = []
                 rt_rd, rt_cp, rt_wr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -168,7 +180,7 @@ class Hy4RowsReduce:
                     bx, by = comm_xy[(1, link_of[p])]
                     rt_rd[x][y] = [r, p, nd[0], nd[1], fx, fy, bx, by, p - link_p[link_of[p]][0]]
                     rt_cp[x][y] = []
-                    rt_wr[x][y] = [p, (r * T) - ((r * T) & ~1)]
+                    rt_wr[x][y] = [p, (r * T) - ((r * T) & ~1)] + ([v for xy in sig[1] for v in xy] if sig else [])
                 fp32 = True
                 kernels.append(
                     ttnn.KernelDescriptor(
@@ -181,27 +193,33 @@ class Hy4RowsReduce:
                         config=ttnn.ReaderConfigDescriptor(),
                     )
                 )
+                if self.pk:
+                    kernels[-1].defines = [("RP_PK", "1")]
                 kernels.append(
                     ttnn.KernelDescriptor(
-                        kernel_source=(f"{CDIR}/ar_red_compute.cpp" if self.Q <= 6 else f"{KDIR}/rp_compute.cpp"),
+                        kernel_source=(
+                            f"{CDIR}/ar_red_compute.cpp" if (self.Q <= 6 and not self.pk) else f"{KDIR}/rp_compute.cpp"
+                        ),
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=red_set,
                         compile_time_args=(
                             [CB_RECV, CB_OUT, Q, NB, 1, CB_OWN]
-                            if self.Q <= 6
+                            if (self.Q <= 6 and not self.pk)
                             else [
                                 CB_RECV,
                                 CB_OUT,
-                                Q,
+                                self.ntc,
                                 NB,
                                 CB_OWN,
-                                int(os.environ.get("HY4_RP_SUB", "6")),
+                                int(os.environ.get("HY4_RP_SUB", "7")),
                                 int(os.environ.get("HY4_RP_MODE", "0")),
                             ]
                         ),
                         runtime_args=rt_cp,
                         config=ttnn.ComputeConfigDescriptor(
-                            math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32
+                            math_fidelity=ttnn.MathFidelity.HiFi4,
+                            fp32_dest_acc_en=fp32,
+                            dst_full_sync_en=os.environ.get("HY4_RP_FULLSYNC", "1") == "1",
                         ),
                     )
                 )
@@ -210,12 +228,15 @@ class Hy4RowsReduce:
                         kernel_source=f"{KDIR}/rp_writer.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=red_set,
-                        compile_time_args=[CB_OUT, Q, T, h, tileb] + acc(self.out),
+                        compile_time_args=[CB_OUT, Q, T, h, tileb, len(sig[1]) if sig else 0, sig[0] if sig else 0]
+                        + acc(self.out),
                         runtime_args=rt_wr,
                         common_runtime_args=[out_addr],
                         config=ttnn.WriterConfigDescriptor(),
                     )
                 )
+                if self.pk:
+                    kernels[-1].defines = [("RP_PK", "1")]
                 comm_kidx = {}
                 for dr, neigh in ((0, fn), (1, bn)):
                     if nd[dr] == 0:
@@ -245,6 +266,16 @@ class Hy4RowsReduce:
                             )
                         )
                         comm_kidx[(dr, lk)] = (len(kernels) - 1, neigh)
+                if only is not None:
+                    return (
+                        kernels,
+                        sems,
+                        cbs,
+                        [
+                            (ki, src, md.get_fabric_node_id(neigh), k_[1], self.comm[k_])
+                            for k_, (ki, neigh) in comm_kidx.items()
+                        ],
+                    )
                 prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
                 for (dr, lk), (ki, neigh) in comm_kidx.items():
                     x, y = self.comm[(dr, lk)]

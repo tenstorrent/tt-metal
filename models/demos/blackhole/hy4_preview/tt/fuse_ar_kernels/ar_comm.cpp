@@ -79,6 +79,13 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* hdr0 = PacketHeaderPool::allocate_header(1);
     volatile PACKET_HEADER_TYPE* hdr1 = PacketHeaderPool::allocate_header(1);
 
+#ifdef RPWAIT
+    {  // fused behind the rows-phase reduce: the input partial is the RP output (DRAM): wait for all RP reducers
+        volatile tt_l1_ptr uint32_t* rps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(RPSEM));
+        noc_semaphore_wait_min(rps, RPWAIT);
+        noc_semaphore_set(rps, 0);
+    }
+#endif
     const uint32_t pkt = get_write_ptr(CB_PKT);
     {
         DeviceZoneScopedN("C_READ");

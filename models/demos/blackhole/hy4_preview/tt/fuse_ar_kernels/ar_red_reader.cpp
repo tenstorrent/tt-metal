@@ -36,6 +36,13 @@ void kernel_main() {
         }
     };
 
+#ifdef RPWAIT
+    {  // fused behind the rows-phase reduce: wait until every RP reducer has written its output chunk to DRAM
+        volatile tt_l1_ptr uint32_t* rps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(RPSEM));
+        noc_semaphore_wait_min(rps, RPWAIT);
+        noc_semaphore_set(rps, 0);
+    }
+#endif
     cb_reserve_back(
         CB_RECV, NR * Q);  // the persistent receive tensor: one slot per REMOTE chip (slot = c' if c' < c else c' - 1)
     cb_reserve_back(CB_OWN, Q);  // a plain circular buffer of this program for the own chunk

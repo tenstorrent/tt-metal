@@ -23,7 +23,13 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<9>();
     constexpr uint32_t NB = 4;
     constexpr uint32_t NR = NB - 1;
-    constexpr uint32_t CHUNK = Q * TILEB;
+#ifdef RP_PK
+    constexpr uint32_t NTC =
+        1;  // packed mode: the Q tile columns x T token rows of a block are the rows (y = i T + t) of ONE 32x32 tile
+#else
+    constexpr uint32_t NTC = Q;
+#endif
+    constexpr uint32_t CHUNK = NTC * TILEB;
 
     const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t gsem = get_common_arg_val<uint32_t>(1);
@@ -38,15 +44,45 @@ void kernel_main() {
     const uint32_t sid = get_arg_val<uint32_t>(8);
     const auto in_acc = TensorAccessor(in_args, in_addr, 2048);
 
-    cb_reserve_back(CB_RECV, NR * Q);
-    cb_reserve_back(CB_OWN, Q);
-    cb_reserve_back(CB_PAY, NB * Q);
+    cb_reserve_back(CB_RECV, NR * NTC);
+    cb_reserve_back(CB_OWN, NTC);
+    cb_reserve_back(CB_PAY, NB * NTC);
     const uint32_t own = get_write_ptr(CB_OWN);
     const uint32_t pay = get_write_ptr(CB_PAY);
     {
         DeviceZoneScopedN("P_READ");
         // DRAM reads must be 64 B aligned: block b is read from the tile row A = (b T) & ~1 (even row = 64 B aligned),
         // H rows: the token row b T sits at tile row (b T - A) <= 1 of the wire tile
+#ifdef RP_PK
+        const uint32_t scr = get_write_ptr(CB_SCR);  // [b][i][f] 64 B pieces
+        for (uint32_t b = 0; b < NB; ++b) {
+            const uint32_t A = (b * T) & ~1u;
+            for (uint32_t i = 0; i < Q; ++i) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_read(
+                        in_acc.get_noc_addr(p * Q + i, f * 512 + A * 32), scr + ((b * Q + i) * 2 + f) * 64, 64);
+                }
+            }
+        }
+        noc_async_read_barrier();
+        for (uint32_t b = 0; b < NB;
+             ++b) {  // repack: token row t of tile column i -> row y = i T + t of the block's wire tile
+            const uint32_t base = (b == r) ? own : (pay + b * CHUNK);
+            const uint32_t sh = (b * T) & 1u;
+            for (uint32_t i = 0; i < Q; ++i) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    for (uint32_t t = 0; t < T; ++t) {
+                        const uint32_t y = i * T + t;
+                        noc_async_write(
+                            scr + ((b * Q + i) * 2 + f) * 64 + (sh + t) * 32,
+                            get_noc_addr(base + ((y >> 4) * 2 + f) * 512 + (y & 15) * 32),
+                            32);
+                    }
+                }
+            }
+        }
+        noc_async_write_barrier();
+#else
         for (uint32_t b = 0; b < NB; ++b) {
             const uint32_t base = (b == r) ? own : (pay + b * CHUNK);
             const uint32_t A = (b * T) & ~1u;
@@ -58,6 +94,7 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
+#endif
     }
     {
         DeviceZoneScopedN("P_SHIP");
@@ -85,6 +122,6 @@ void kernel_main() {
         noc_semaphore_wait_min(sem, NR);
     }
     noc_semaphore_set(sem, 0);
-    cb_push_back(CB_OWN, Q);
-    cb_push_back(CB_RECV, NR * Q);
+    cb_push_back(CB_OWN, NTC);
+    cb_push_back(CB_RECV, NR * NTC);
 }

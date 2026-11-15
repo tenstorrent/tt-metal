@@ -116,7 +116,8 @@ class Hy4MoeTp32Block:
         )
 
     # ------------------------------------------------------------------ forward
-    def forward(self, tt_x_gate, tt_x_tokens=None, forced_routing=None, fold=None, ft_defer=False):
+    def forward_partial(self, tt_x_gate, tt_x_tokens=None, forced_routing=None, fold=None):
+        """router + gathers + TP32 kernel + shared-expert fold -> the un-reduced [1,1,4T,HID] bf16 TILE partial of this chip (rows = the Tt tokens of the 4 mesh rows in row order)."""
         T, Tt = self.T, self.Tt
         w, idx = forced_routing if forced_routing is not None else self.gate.forward(tt_x_gate)
         self.last_routing = (w, idx)
@@ -137,6 +138,10 @@ class Hy4MoeTp32Block:
             ttnn.deallocate(part)
             ttnn.deallocate(fp)
             part = part2
+        return part
+
+    def forward(self, tt_x_gate, tt_x_tokens=None, forced_routing=None, fold=None, ft_defer=False):
+        part = self.forward_partial(tt_x_gate, tt_x_tokens, forced_routing, fold)
         y = self._rs(part, 3, 1, ttnn.Topology.Ring)  # [1,1,Tt,HID/8]: summed over the 8 columns
         ttnn.deallocate(part)
         if RED_AG:  # one gather + local sum instead of RS rows + AG rows (HY4_TP32_RED=ag, experiment ab-1)

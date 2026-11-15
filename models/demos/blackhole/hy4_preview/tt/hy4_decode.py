@@ -149,6 +149,14 @@ class Hy4Decoder:
         if (
             getattr(ly, "blk_tp", None) is not None
         ):  # HY4_MOE_TP32=1: TP32 routed experts (tt/hy4_moe_tp32_block); no deferred all-reduce on this path
+            if (
+                getattr(self, "rp", None) is not None
+            ):  # HY4_TP32_TAIL=oneshot: partial -> Hy4RowsReduce + Hy4FuseAR + iHC pre in one program (next pre call)
+                from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import FusedPartial
+
+                pt = ly.blk_tp.forward_partial(h, tok, fold=part)
+                ttnn.deallocate(part)
+                return FusedPartial(pt, rp=self.rp)
             out = ly.blk_tp.forward(h, tok, fold=part)
             ttnn.deallocate(part)
             out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)

@@ -139,8 +139,11 @@ class Hy4FuseAR:
         c = self.md.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
         return c.x, c.y
 
-    def _build(self, part, T, ihc=None):
-        """ihc = (kernels, cbs) of the iHC pre program: they join every chip's program (the landing cores wait inside the iHC reader, so ar_land is not added)."""
+    def _build(self, part, T, ihc=None, rp=None):
+        """rp = (Hy4RowsReduce, rp_part, par): the rows-phase reduce joins every chip's program (one launch); `part` is then the RP output tensor (RP writers signal the local semaphore RPSEM of every
+        FAR reader / comm core after the DRAM write, the FAR kernels wait for it: compile define RPWAIT).
+        ihc = (kernels, cbs) of the iHC pre program: they join every chip's program (the landing cores wait inside the iHC reader, so ar_land is not added).
+        """
         md = self.md
         TILE_B = tile_bytes(T)
         assert TILE_B <= self.tileb, (T, self.tileb)
@@ -165,6 +168,10 @@ class Hy4FuseAR:
         SEM0 = 0
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
         fp32 = os.environ.get("HY4_FAR_FP32ACC", "1") == "1"
+        RPSEM = 15
+        rp_defs = [("RPWAIT", str(rp[0].nrp)), ("RPSEM", str(RPSEM))] if rp else []
+        rp_sig = (RPSEM, red_xy + [self._phys(*v) for v in self.comm.values()]) if rp else None
+        far_all = _cores(red + list(self.comm.values()))
 
         def tcb(i, pages):
             return ttnn.CBDescriptor(
@@ -311,7 +318,22 @@ class Hy4FuseAR:
                 if ihc is not None:
                     kernels += list(ihc[0])
                     cbs += list(ihc[1])
+                koff, rp_comm = 0, []
+                if rp is not None:
+                    for kd in kernels:
+                        if kd.kernel_source.endswith(("ar_red_reader.cpp", "ar_comm.cpp")):
+                            kd.defines = rp_defs
+                    rk, rs, rc, rp_comm = rp[0]._build(rp[1], rp[2], only=(r, col), sig=rp_sig)
+                    koff = len(kernels)
+                    kernels += rk
+                    sems += rs + [ttnn.SemaphoreDescriptor(RPSEM, ttnn.CoreType.WORKER, far_all, 0)]
+                    cbs += rc
                 prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+                for ki_, src_, dst_, lk_, (x_, y_) in rp_comm:
+                    fargs = ttnn.setup_routing_plane_connection(
+                        src_, [dst_], [lk_], prog, koff + ki_, ttnn.CoreCoord(x_, y_)
+                    )
+                    prog.kernels[koff + ki_].runtime_args[x_][y_].extend(fargs)
                 for (name, lk), ki in comm_kidx.items():
                     dst = fwd_n if name == "fwd" else bwd_n
                     x, y = self.comm[(name, lk)]
@@ -319,6 +341,12 @@ class Hy4FuseAR:
                     prog.kernels[ki].runtime_args[x][y].extend(fargs)
                 mpd[ttnn.MeshCoordinateRange(coord, coord)] = prog
         return mpd
+
+    def fused_with(self, rr, part, T=1):
+        """ONE launch: Hy4RowsReduce (rr) on `part`, then this all-reduce on rr.out (FAR kernels wait for the RP writers' semaphore incs). Returns the landing tensor."""
+        par, rr._par = rr._par, 1 - rr._par
+        ttnn.generic_op([part, rr.recvs[par], rr.out, self.recv, self.out], self._build(rr.out, T, rp=(rr, part, par)))
+        return self.out
 
     def __call__(self, part, T=4):
         """All-reduce of the partial [1,1,32,6144] bf16 TILE DRAM tensor (rows 0..T-1 valid): returns the landing tensor (compact tiles, see decode)."""
@@ -339,8 +367,9 @@ class FusedPartial:
     """The un-reduced [1,1,T,6144] bf16 TILE DRAM partial of a column-sharded matmul (attention o_proj, MoE routed+shared): returned instead of the all-reduced tensor when the layer fuses
     the all-reduce into the next iHC pre call (``Hy4FuseAR`` + ``Hy4IHCFused.pre(land=...)``)."""
 
-    def __init__(self, part):
+    def __init__(self, part, rp=None):
         self.part = part
+        self.rp = rp  # Hy4RowsReduce: `part` is then the TP32 [1,1,4T,6144] partial of the 4 token blocks (rows phase fused into the all-reduce program)
 
 
 _SHARED = {}
@@ -372,6 +401,16 @@ def shared(md):
     return _SHARED[key]
 
 
+def shared_rp(md, T):
+    """ONE Hy4RowsReduce per mesh (HY4_TP32_TAIL=oneshot): build after Hy4FuseAR.shared and outside a trace."""
+    from models.demos.blackhole.hy4_preview.tt.hy4_rows_ar import Hy4RowsReduce
+
+    key = ("rp", id(md), T)
+    if key not in _SHARED:
+        _SHARED[key] = Hy4RowsReduce(md, T=T, h=2, nrp=int(os.environ.get("HY4_RP_NRP", "16")))
+    return _SHARED[key]
+
+
 def patch_dsv4_tail():
     """The DSV4 MoE block (``_TailDecode.forward``) returns ``fuse_tail_ar.FusedPartial(red)`` when ``ft_defer`` is set and ``fuse_tail_ar.applies(...)``: route that decision to this module."""
     from models.demos.blackhole.deepseek_v41_flash.tt import fuse_tail_ar as _FT
@@ -398,6 +437,11 @@ def pre_with(ihc, far, x, w4, y, pp_prev, x_out):
     if part is None:
         return ihc.pre(x, w4, y=y, pp_prev=pp_prev, x_out=x_out)
     T = int(x.shape[2]) // 4
+    rp = getattr(y, "rp", None)
+    if rp is not None:  # TP32 tail: rows-phase reduce + column all-reduce + iHC pre in ONE mesh program
+        res = ihc.pre(x, w4, fuse=(far, part, rp), pp_prev=pp_prev, x_out=x_out)
+        ttnn.deallocate(part)
+        return res
     if os.environ.get("HY4_FAR_FUSED", "1") == "1":  # stage 2b: AR + iHC pre in ONE mesh program
         res = ihc.pre(x, w4, fuse=(far, part), pp_prev=pp_prev, x_out=x_out)
         ttnn.deallocate(part)
