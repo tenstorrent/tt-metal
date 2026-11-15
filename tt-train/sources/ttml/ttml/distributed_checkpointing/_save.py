@@ -37,7 +37,7 @@ from ._coordinator import (
     name_hash,
     state_hash,
 )
-from ._errors import CheckpointError, CheckpointFatal
+from ._errors import CheckpointError, CheckpointFatalError
 from ._index import (
     FORMAT,
     VERSION,
@@ -352,7 +352,7 @@ def save(
             finalize_staging(staging, ckpt_dir, overwrite=overwrite)
 
         group.phase("merging the index and finalizing", finalize)
-    except CheckpointFatal:
+    except CheckpointFatalError:
         raise  # the staging directory is left in place; nothing else can be agreed on
     except BaseException:
         if group.is_coordinator:

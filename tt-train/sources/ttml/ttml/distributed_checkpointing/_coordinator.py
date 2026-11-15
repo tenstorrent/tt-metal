@@ -17,13 +17,13 @@ transfers do no local work that could fail on one rank alone. A single process i
 ``LoopbackTransport``: its phases just run, letting their errors propagate as raised, and its transfers return their
 input, so save and load take the same path on one process and on many.
 
-An error raised by a collective itself, a peer that died under ULFM, is fatal: ``CheckpointFatal`` propagates and the
-transport, one per process, records it, so neither this save or load nor any later one attempts another exchange. MPI
-pairs collectives by order, so another exchange could hang or be paired with an unrelated one on a rank that moved on.
-Metadata travels over MPI point-to-point (gathered to rank 0, broadcast from rank 0) under the tag ``DCP_TAG``; no other
-point-to-point traffic between the ranks may be outstanding when save or load is called. Every payload is serialized and
-size-checked inside a phase, so a payload the transport cannot carry fails on every rank. Data files go through the
-shared filesystem and are only ever opened by exact name.
+An error raised by a collective itself, a peer that died under ULFM, is fatal: ``CheckpointFatalError`` propagates and
+the transport, one per process, records it, so neither this save or load nor any later one attempts another exchange.
+MPI pairs collectives by order, so another exchange could hang or be paired with an unrelated one on a rank that moved
+on. Metadata travels over MPI point-to-point (gathered to rank 0, broadcast from rank 0) under the tag ``DCP_TAG``; no
+other point-to-point traffic between the ranks may be outstanding when save or load is called. Every payload is
+serialized and size-checked inside a phase, so a payload the transport cannot carry fails on every rank. Data files go
+through the shared filesystem and are only ever opened by exact name.
 
 Save. Every rank describes its tensors and the mesh coordinates it holds (its plan part); rank 0 merges the parts,
 checking that the ranks describe every key they share alike and together hold every box, and elects one owner per box,
@@ -53,7 +53,7 @@ import ttnn
 
 from ._errors import (
     CheckpointError,
-    CheckpointFatal,
+    CheckpointFatalError,
     CoverageError,
     DtypeMismatchError,
     FSDPStateError,
@@ -202,15 +202,15 @@ class Group:
     def is_coordinator(self) -> bool:
         return self.rank == 0
 
-    def _fatal(self, what: str) -> CheckpointFatal:
+    def _fatal(self, what: str) -> CheckpointFatalError:
         """Record a failed exchange on the transport, which outlives this group, and return the error to raise."""
         message = f"rank {self.rank}: {what}"
         self.transport.broken = message
-        return CheckpointFatal(message)
+        return CheckpointFatalError(message)
 
     def allgather(self, value: int) -> list[int]:
         if self.transport.broken:
-            raise CheckpointFatal(
+            raise CheckpointFatalError(
                 f"rank {self.rank}: an exchange between the ranks already failed in this process "
                 f"({self.transport.broken}); no further exchange is attempted"
             )

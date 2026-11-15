@@ -30,7 +30,7 @@ declares its logical row count; see ``_layouts``.
 
 from ._errors import (
     CheckpointError,
-    CheckpointFatal,
+    CheckpointFatalError,
     CoverageError,
     DtypeMismatchError,
     FSDPStateError,
@@ -53,7 +53,7 @@ from ._train_state import capture_rng, read_train_state, restore_rng
 
 __all__ = [
     "CheckpointError",
-    "CheckpointFatal",
+    "CheckpointFatalError",
     "CoverageError",
     "DtypeMismatchError",
     "FSDPStateError",

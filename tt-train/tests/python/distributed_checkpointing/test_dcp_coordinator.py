@@ -25,7 +25,7 @@ from ttml.distributed_checkpointing._coordinator import (
     merge_plan_parts,
     merge_results,
 )
-from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatal, IncompleteCheckpointError
+from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatalError, IncompleteCheckpointError
 from ttml.distributed_checkpointing._index import ChunkRecord, Entry, FileRecord, data_file_name
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
@@ -306,8 +306,8 @@ def test_a_failing_collective_is_fatal_and_ends_the_exchanges():
             fake.die.add(2)
         try:
             group.allgather(1)
-        except CheckpointFatal:
-            with pytest.raises(CheckpointFatal, match="no further exchange"):
+        except CheckpointFatalError:
+            with pytest.raises(CheckpointFatalError, match="no further exchange"):
                 group.allgather(2)
             raise
 
@@ -324,7 +324,7 @@ def test_a_failing_collective_is_fatal_and_ends_the_exchanges():
     t2 = threading.Thread(target=run, args=(2,))
     t2.start()
     t2.join(timeout=10)
-    assert isinstance(errors[2], CheckpointFatal) and "peer may have died" in str(errors[2])
+    assert isinstance(errors[2], CheckpointFatalError) and "peer may have died" in str(errors[2])
 
 
 def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_anything():
@@ -334,11 +334,11 @@ def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_an
     fake = _Fake(2)
     fake.die.add(1)
     transport = fake.transport(1)
-    with pytest.raises(CheckpointFatal, match="peer may have died"):
+    with pytest.raises(CheckpointFatalError, match="peer may have died"):
         Group(transport).allgather(1)
     calls = []
     transport.allgather_int = lambda value: calls.append(value) or [value, value]  # would succeed if reached
-    with pytest.raises(CheckpointFatal, match="already failed in this process"):
+    with pytest.raises(CheckpointFatalError, match="already failed in this process"):
         Group(transport).phase("a later save", lambda: None)
     assert calls == [], "the retry reached the transport"
 
