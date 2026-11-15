@@ -9,10 +9,22 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-#include <vector>
+#include <array>
+#include <cstdint>
 #include <ostream>
+#include <vector>
 
 namespace tt::tt_fabric {
+
+// A router's channel buffers: each channel's first slot address and slot count, by VC.
+struct RouterChannelLayout {
+    struct Channel {
+        uint32_t base_address = 0;
+        uint32_t num_slots = 0;
+    };
+    std::array<std::vector<Channel>, builder_config::MAX_NUM_VCS> senders;
+    std::array<std::vector<Channel>, builder_config::MAX_NUM_VCS> receivers;
+};
 
 /**
  * Static-sized channels allocator implementation.
@@ -36,14 +48,25 @@ public:
         size_t available_channel_buffering_space,
         const std::vector<MemoryRegion>& memory_regions);
 
+    // One router's allocation: the sender channels it has, laid out from the start of the buffer region, with the
+    // reference's slot counts and receivers. Slot counts stay the fabric's: an upstream router keeps one downstream
+    // buffer count per VC (router_downstream.hpp), so the forwarding channels it feeds must agree across routers.
+    FabricStaticSizedChannelsAllocator(
+        const FabricStaticSizedChannelsAllocator& reference,
+        const std::array<size_t, builder_config::MAX_NUM_VCS>& num_sender_channels_per_vc);
+
+    RouterChannelLayout get_layout() const;
+
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
     /**
      * Emit the complete ChannelAllocations CT arg block including tag, num_entries,
-     * per-channel data, and channel-to-entry index mappings.
+     * per-channel data, and channel-to-entry index mappings. num_sender_channels is the kernel's sender channel
+     * count; positions past this allocator's channels map to entry 0.
      */
     void emit_channel_allocations_ct_args(
         std::vector<uint32_t>& ct_args,
+        size_t num_sender_channels,
         size_t num_used_vc0_sender_channels,
         size_t num_used_vc1_sender_channels,
         size_t num_used_vc2_sender_channels,
@@ -72,19 +95,6 @@ public:
      * @return Number of slots
      */
     size_t get_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const;
-
-    /**
-     * Get the number of slots for a receiver channel on the far end of the link.
-     *
-     * This, not the local count, is what a sender's flow control gates on: bubble flow control
-     * requires the immediate downstream receiver to hold at least two slots. The two counts are
-     * tracked separately, so the distinction matters.
-     *
-     * @param vc_id Virtual Channel ID (0 or 1)
-     * @param channel_id Channel ID within the VC
-     * @return Number of slots on the remote receiver
-     */
-    size_t get_remote_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const;
 
     /**
      * Get the base address for a specific receiver channel in a VC.
@@ -142,6 +152,7 @@ public:
 
 private:
     friend class FabricRemoteChannelsAllocator;
+    void assign_base_addresses();
     /*
      * Helper function that decides the number of buffer slots for each channel per VC.
      */

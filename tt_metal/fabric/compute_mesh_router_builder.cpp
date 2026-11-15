@@ -611,6 +611,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     return router_builder;
 }
 
+std::optional<RouterChannelLayout> ComputeMeshRouterBuilder::get_channel_layout() const {
+    return erisc_builder_->get_channel_layout();
+}
+
 uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     const bool is_2D_routing, const eth_chan_directions downstream_direction, uint32_t vc) const {
     // Which slot on the downstream router this router (as producer) feeds. The 2D establishment

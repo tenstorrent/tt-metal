@@ -504,23 +504,35 @@ void FabricFirmwareInitializer::build_fabric_programs(bool parallel, const std::
     fabric_programs_.resize(devices_.size());
     // One session per launch, created on this thread before the per-device builds that read it.
     build_session_ = tt::tt_fabric::begin_fabric_build_session(descriptor_->env_impl());
-    for_each_device(parallel, [this](size_t i) { fabric_programs_[i] = compile_fabric(devices_[i]); }, on_compiled);
+    if (!build_session_) {
+        return;
+    }
+    // Every device's routers exist, and have published their channel layouts, before any router kernel is created.
+    std::vector<std::optional<tt::tt_fabric::FabricDeviceBuild>> builds(devices_.size());
+    for_each_device(parallel, [this, &builds](size_t i) { builds[i] = build_fabric(devices_[i]); });
+    tt::tt_fabric::exchange_fabric_router_channel_layouts(descriptor_->env_impl());
+    for_each_device(
+        parallel,
+        [this, &builds](size_t i) { fabric_programs_[i] = compile_fabric(devices_[i], std::move(builds[i])); },
+        on_compiled);
 }
 
-std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) const {
-    if (!build_session_) {
-        return nullptr;
-    }
-    auto fabric_program = tt::tt_fabric::create_and_compile_fabric_program(
+std::optional<tt::tt_fabric::FabricDeviceBuild> FabricFirmwareInitializer::build_fabric(Device* dev) const {
+    return tt::tt_fabric::build_fabric_routers(
         descriptor_->env_impl(),
         descriptor_->metal_context().get_dispatch_core_manager().get_dispatch_core_config(),
         dev,
         *build_session_);
-    if (!fabric_program) {
+}
+
+std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(
+    Device* dev, std::optional<tt::tt_fabric::FabricDeviceBuild> build) const {
+    if (!build) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+        return nullptr;
     }
-    return fabric_program;
+    return tt::tt_fabric::compile_fabric_program(descriptor_->env_impl(), dev, std::move(*build));
 }
 
 void FabricFirmwareInitializer::configure_fabric(Device* dev, Program& fabric_program) const {

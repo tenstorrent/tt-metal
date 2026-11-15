@@ -18,9 +18,9 @@ namespace tt::tt_fabric {
 /**
  * Remote channels allocator for tracking channel information about the remote ethernet core.
  *
- * This allocator extracts remote receiver channel information from a FabricStaticSizedChannelsAllocator
- * and manages it separately. It emits compile-time arguments in a similar structure to the static
- * allocator but only for remote receiver channels.
+ * This allocator holds the receiver channels of the router on the far end of the link, as that router
+ * published them (FabricBuilderContext's router channel layouts). It emits compile-time arguments in a similar
+ * structure to the static allocator but only for remote receiver channels.
  *
  * Supports multiple Virtual Channels (VCs) where each VC has its own set of remote receiver channels.
  *
@@ -30,15 +30,10 @@ namespace tt::tt_fabric {
  */
 class FabricRemoteChannelsAllocator : public FabricChannelAllocator {
 public:
-    /**
-     * Construct a remote channels allocator from a static channels allocator.
-     * Extracts remote receiver channel base addresses and buffer counts from the static allocator
-     * for all VCs.
-     *
-     * @param static_allocator The static allocator containing remote channel information
-     */
-    explicit FabricRemoteChannelsAllocator(
-        const FabricStaticSizedChannelsAllocator& static_allocator);
+    // The link peer's receiver channels, as the peer published them. The local allocator supplies the topology and
+    // memory regions the base class records.
+    FabricRemoteChannelsAllocator(
+        const FabricStaticSizedChannelsAllocator& local_allocator, const RouterChannelLayout& peer_layout);
 
     /**
      * Emit compile-time arguments for remote receiver channels.

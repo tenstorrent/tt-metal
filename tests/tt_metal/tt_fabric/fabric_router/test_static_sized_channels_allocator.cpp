@@ -120,5 +120,56 @@ TEST(FabricStaticSizedChannelsAllocatorTest, RingUsesEverySlot) {
     EXPECT_EQ(total_slots(allocator, sender_channels, receiver_channels), available_space / channel_buffer_size);
 }
 
+// A router with fewer sender channels than the fabric allocates for keeps the fabric's slot counts but lays out only
+// its own channels: its buffers end sooner and its receivers move down, which is why a link peer reads them from the
+// router's published layout rather than its own.
+TEST(FabricStaticSizedChannelsAllocatorTest, RouterLaysOutOnlyItsChannels) {
+    constexpr size_t channel_buffer_size = 14432;
+    constexpr size_t available_space = 360800;
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> fabric_senders = {5, 4, 0};
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> router_senders = {4, 3, 0};
+    constexpr std::array<size_t, builder_config::MAX_NUM_VCS> receiver_channels = {1, 1, 0};
+    constexpr size_t region_start = 0x1000;
+    const std::vector<MemoryRegion> memory_regions = {{region_start, available_space}};
+
+    const FabricStaticSizedChannelsAllocator fabric(
+        Topology::Mesh,
+        silicon_options(),
+        fabric_senders,
+        receiver_channels,
+        channel_buffer_size,
+        available_space,
+        memory_regions);
+    const FabricStaticSizedChannelsAllocator router(fabric, router_senders);
+    const RouterChannelLayout layout = router.get_layout();
+
+    size_t next_address = region_start;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        ASSERT_EQ(layout.senders[vc].size(), router_senders[vc]);
+        for (size_t channel = 0; channel < router_senders[vc]; ++channel) {
+            EXPECT_EQ(layout.senders[vc][channel].num_slots, fabric.get_sender_channel_number_of_slots(vc, channel));
+            EXPECT_EQ(layout.senders[vc][channel].base_address, next_address);
+            next_address += layout.senders[vc][channel].num_slots * channel_buffer_size;
+        }
+    }
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        ASSERT_EQ(layout.receivers[vc].size(), receiver_channels[vc]);
+        for (size_t channel = 0; channel < receiver_channels[vc]; ++channel) {
+            EXPECT_EQ(
+                layout.receivers[vc][channel].num_slots, fabric.get_receiver_channel_number_of_slots(vc, channel));
+            EXPECT_EQ(layout.receivers[vc][channel].base_address, next_address);
+            EXPECT_LT(next_address, fabric.get_receiver_channel_base_address(vc, channel));
+            next_address += layout.receivers[vc][channel].num_slots * channel_buffer_size;
+        }
+    }
+    EXPECT_EQ(router.get_channel_buffers_end_address(), next_address);
+    EXPECT_LT(router.get_channel_buffers_end_address(), fabric.get_channel_buffers_end_address());
+
+    // A router with the fabric's channels has the fabric's layout.
+    const FabricStaticSizedChannelsAllocator full_router(fabric, fabric_senders);
+    EXPECT_EQ(full_router.get_channel_buffers_end_address(), fabric.get_channel_buffers_end_address());
+    EXPECT_EQ(full_router.get_receiver_channel_base_address(1, 0), fabric.get_receiver_channel_base_address(1, 0));
+}
+
 }  // namespace
 }  // namespace tt::tt_fabric
