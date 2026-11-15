@@ -99,8 +99,9 @@ def _pairs():
         # The load world only runs a forward pass on the big mesh; the save world's gradient sync spans the hosts,
         # and a collective that hangs there leaves the chips needing a reset, so the pair that loads runs first.
         # The training step the driver takes after a save or a load syncs gradients over the DP axis, whose lines
-        # cross the hosts on the big mesh, and that collective hangs there today (the open fabric issue): the pairs
-        # that touch the big mesh skip the step on both of their worlds.
+        # cross the hosts on the big mesh, and that collective hangs there today (#65032): the pairs that touch the
+        # big mesh skip the step on both of their worlds. The pair that saves on the big mesh cannot skip it: its
+        # save world trains first, so it is skipped until #65032 is fixed (see KNOWN_HANGS).
         no_step = ("--no-resume-step",)
         pairs["1host_fsdp->bigmesh_dp_tp"] = (
             _world(single, "fsdp,dp", ("--fsdp", *sizes, *no_step), single_mgd, first),
@@ -114,6 +115,12 @@ def _pairs():
 
 
 PAIRS = _pairs()
+# Pairs that cannot pass today, skipped with the reason instead of hanging until the budget and leaving the chips to
+# be reset: the save world on the big mesh trains, and its gradient sync across the hosts hangs.
+KNOWN_HANGS = {
+    "bigmesh_dp_tp->1host_fsdp": "#65032: training on a mesh spanning hosts hangs in the cross-host gradient sync, "
+    "so the big-mesh save world never reaches its save",
+}
 _NOISE = re.compile(
     r"nanobind|leaked (instance|type|function|keep_alive)|refleaks|skipped remainder|\| DEBUG |^Config\{"
 )
@@ -173,7 +180,13 @@ def _saved(save_world, shared_root, what):
     return _SAVED[key]
 
 
-@pytest.mark.parametrize("case", list(PAIRS))
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(case, marks=pytest.mark.skip(reason=KNOWN_HANGS[case])) if case in KNOWN_HANGS else case
+        for case in PAIRS
+    ],
+)
 def test_checkpoint_crosses_hosts(shared_root, case):
     save_world, load_world = PAIRS[case]
     ckpt = _saved(save_world, shared_root, f"{case} save")
