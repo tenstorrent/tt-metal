@@ -386,6 +386,30 @@ notes:
     file list still names the old single files. Fix it at the framework cause: the list of ledger files to commit comes
     from the chunk layout (one place), never names a file that no longer exists; add a selftest that commits a ledger after
     the migration. Then run the gate yourself (gate FIX.27 --check) until it passes.'
+- id: OV-39
+  tasks:
+  - FIX.32
+  status: closed
+  t: '2026-11-14T21:29:46'
+  text: 'OWNER 2026-11-14: leaving CHEAP_CCL/ATTN_FUSE at legacy is NOT an acceptable end state. Find the root cause of
+    the race: which program, which read/write pair, why only at chunk-boundary stops, with device evidence (bisect each
+    switch alone, then instrument: dump the snapshot buffer and the cached program key per call). Fix it in the program
+    and prove 20/20 with both on, bit-identical to legacy. If the pattern-only program cache in snapshot_send.py is not
+    the cause, show the evidence and keep digging. Reporting ''not found, left legacy'' will be rejected.'
+  closed: '2026-11-14T21:30:14'
+  why_closed: reworded as the next note (owner adds the proof-of-unworkable outcome)
+- id: OV-40
+  tasks:
+  - FIX.32
+  status: open
+  t: '2026-11-14T21:30:15'
+  text: 'OWNER 2026-11-14: ''I don''t know what went wrong, better to turn it off'' is NOT an acceptable answer. Two outcomes
+    only. (A) Root cause found with device evidence (which program, which read/write pair, why only at chunk-boundary stops;
+    bisect each switch alone, instrument: dump the snapshot buffer and the cached program key per call), fixed in the program,
+    20/20 consecutive passes with BOTH CHEAP_CCL and ATTN_FUSE on, bit-identical to legacy. (B) Proof that the design as
+    implemented cannot work: name the ordering/synchronization assumption it relies on, show on device that it is violated,
+    and why no in-program fix (barrier, semaphore wait) can restore it without losing its gain. Only (B) justifies leaving
+    legacy defaults. If the pattern-only program cache in snapshot_send.py is not the cause, show that and keep digging.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -954,7 +978,7 @@ fixes:
   title: 'Intermittent served-snapshot race after the P.67 merge (DS41-276): safe defaults first, then find and fix it'
   gate:
   - P.67
-  status: queued
+  status: placed
   t: '2026-11-14T20:19:22'
   text: 'OVERSEER 2026-11-14 (owner away-ish, decide autonomously): after P.67 merged the replica branch, test_decoder_skip_decode
     failed 1 of 4 runs (served_bytes_differ=16: layer 0''s served window snapshot differs between the off and decode runs,
@@ -975,6 +999,7 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  placed: '2026-11-14T20:20:55'
 classified:
   L.smoke:
     kind: framework

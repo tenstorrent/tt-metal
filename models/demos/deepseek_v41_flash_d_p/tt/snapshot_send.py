@@ -30,7 +30,10 @@ chip, over a broadcast tree of 1-hop fabric unicasts:
                (fused, after its write)
 
 Programs are built per block pattern (the (kind, owner) of the 4 blocks; one pattern in steady state: the last chip
-owns all 4) and dispatched prepared (ttnn.bringup.prepare_program / run_prepared, OV-23): io [ring, slab], per-call
+owns all 4) and io geometry (FIX.32, DS41-277: the ring's and the slab's shape, dtype, layout and memory config, what
+the TensorAccessor compile-time args hold; an ND-sharded accessor takes the outermost page coordinate modulo the
+tensor's first dim, so a program built for a ladder cache's 1-batch slab wrote every engine slab's (slot, layer) into
+batch 0) and dispatched prepared (ttnn.bringup.prepare_program / run_prepared, OV-23): io [ring, slab], per-call
 values the slab's first page (its (slot, layer) batch) and the 4 ring rows. Data movement only: the slab's bytes equal
 the legacy path's (tests/test_snapshot_send.py)."""
 
@@ -206,6 +209,12 @@ void kernel_main() {
 """
 
 
+def _geom(t: ttnn.Tensor) -> tuple:
+    """FIX.32 (DS41-277): what a program's TensorAccessor compile-time args of ``t`` depend on (only the address is
+    patched per call): shape, dtype, layout, memory config (ND shard spec included)."""
+    return (tuple(t.shape), t.dtype, t.layout, t.memory_config())
+
+
 def _step(n: int, a: int, b: int, wrap: bool) -> int:
     """+1 / -1: the step from a toward b on an axis of n (ring: the shorter way, a tie +1, as the fabric's tables)."""
     if wrap:
@@ -263,7 +272,7 @@ class SnapshotSend:
         for d in range(len(DIRS)):
             w = mesh.worker_core_from_logical_core(ttnn.CoreCoord(HOME[0] + 1 + d, HOME[1]))
             self.port_xy.append((int(w.x), int(w.y)))
-        self._pp = {}  # block pattern -> PreparedProgram
+        self._pp = {}  # (block pattern, ring geometry, slab geometry) -> (PreparedProgram, kernels)
         self.trees = {}
 
     def _tree(self, o: int) -> dict:
@@ -390,7 +399,8 @@ class SnapshotSend:
         assert int(slab.shape[-1]) == 512 and int(slab.shape[-2]) == BLOCKS * BROWS, slab.shape
         pattern = tuple(k if k in ("zero", "local") else int(k) for k, _ in blocks)
         io = [ring, slab]
-        hit = self._pp.get(pattern)
+        key = (pattern, _geom(ring), _geom(slab))  # (FIX.32: never a program built for another slab's geometry)
+        hit = self._pp.get(key)
         if hit is None:
             md, n_ports = self._build(pattern, ring, slab)
             kernels = (0, 1) if n_ports else (0,)
@@ -399,7 +409,7 @@ class SnapshotSend:
             # port cores; nothing else matched an io address
             want = 7 * (self.n + n_ports)
             assert pp.patch_count == want, f"snapshot send: {pp.patch_count} patched slots, {want} expected"
-            hit = self._pp[pattern] = (pp, len(kernels))
+            hit = self._pp[key] = (pp, len(kernels))
         pp, nk = hit
         vals = [int(page0)] + [int(rr) for _, rr in blocks]
         ttnn.bringup.run_prepared(pp, io, vals * nk)
