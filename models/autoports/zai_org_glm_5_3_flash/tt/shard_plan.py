@@ -970,7 +970,7 @@ def shard_sel2(pair: int, r8: bool = True) -> bool:
 
 
 def shard_prefilter(pair: int) -> bool:
-    """rev 74 GLM53_DSA_SHARD_PREFILTER (default 0): the exact merge pre-filter (dsa_shard.hpp PREFILTER, the kernels'
+    """rev 75 GLM53_DSA_SHARD_PREFILTER (default 0): the exact merge pre-filter (dsa_shard.hpp PREFILTER, the kernels'
     MLA_DSA_SHARD_PREFILTER; emulated by helper_merge prefilter=True): each merge helper reports the min over its lists
     of their TOPK / NCHIPS-th largest key, the coordinator broadcasts the min L, the helpers keep their keys >= L before
     the radix rounds -- the same T_g, k_rem and quotas over ~TOPK keys instead of NCHIPS x TOPK; the pair / the 2x4
@@ -1553,7 +1553,7 @@ def helper_merge(
     digit_bits=8 (R8, GLM53_DSA_SHARD_R8): 4 rounds of radix_round's two levels -- each helper's coarse report
     (r8_hist), the coordinator's coarse pick, the pulled bucket's fine counts and the fine pick; `hists` holds both
     levels' sums per round (= the 4-bit run's rounds 2 r, 2 r + 1) and `messages` 4 rounds fewer.
-    Rev 74, prefilter=True (GLM53_DSA_SHARD_PREFILTER, dsa_shard.hpp PREFILTER): before the rounds each helper reports
+    Rev 75, prefilter=True (GLM53_DSA_SHARD_PREFILTER, dsa_shard.hpp PREFILTER): before the rounds each helper reports
     (the min over its lists of their ceil(k / NCHIPS)-th largest key, its key count); L = their min (0 when the union holds
     <= k keys: round 0's done case) is broadcast (one more message) and every helper keeps its keys >= L in place, list by
     list; round 0's done check reads the union's total. T_g, k_rem, done, the quotas are the prefilter=False integers;
@@ -1567,7 +1567,7 @@ def helper_merge(
     prefix, mask, k_rem, msgs, sums = 0, 0, k, 1, []  # (the start message)
     total = sum(len(v) for v in mk)
     pf_l, survivors = None, total
-    if prefilter:  # rev 74: the helpers' bound report + the L message, then the stable in-place filter per list
+    if prefilter:  # rev 75: the helpers' bound report + the L message, then the stable in-place filter per list
         prank = -(-k // len(lists))  # (= TOPK / NCHIPS on the 8x4: 16; ceil keeps NCHIPS x prank >= k)
         bounds = []
         for h in range(nh):

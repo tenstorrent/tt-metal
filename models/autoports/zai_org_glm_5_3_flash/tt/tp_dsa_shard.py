@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import os
 
+from loguru import logger
+
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt import dsa_shard as DS
 from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
@@ -51,6 +53,9 @@ HIDDEN = DS.KV_LORA  # the pair's AG tensors / q_asm width (512 bf16 = 16 pages 
 W_RS = 32 * MK.SHARD_RS_PPC  # rev 59: x_rs / y_rs width (384 bf16 = 12 pages per chunk: 3 chunks = the 36-page message)
 W8 = 32 * MK.SHARD_AG8_PPC  # TP8: the compact AG / RS2 tensors' width (320 bf16 = 10 pages per chunk)
 assert MK.SHARD_RS2_PPC == MK.SHARD_AG8_PPC
+
+
+_PREFILTER_LOGGED: list = []  # the TPMlaShard prefilter log line, once per process
 
 
 class TPMlaShard(TPM.TPMla):
@@ -247,7 +252,14 @@ class TPMlaShard(TPM.TPMla):
             # round marks): kernel defines only
             local_all, rmarks = SP.shard_local_all(self.P), SP.shard_round_marks(self.P, r8)
             sel2 = SP.shard_sel2(self.P, r8)  # rev 73: the local select's cheaper coordinator rounds (kernel define)
-            prefilter = SP.shard_prefilter(self.P)  # rev 74: the exact merge pre-filter (kernel define)
+            prefilter = SP.shard_prefilter(self.P)  # rev 75: the exact merge pre-filter (kernel define)
+            if (
+                prefilter and not _PREFILTER_LOGGED
+            ):  # one line per process: the chains assert the knob reached the build
+                logger.info(
+                    "TPMlaShard: GLM53_DSA_SHARD_PREFILTER active (MLA_DSA_SHARD_PREFILTER, rev 75 exact merge pre-filter)"
+                )
+                _PREFILTER_LOGGED.append(True)
             split = dict(first=lambda p: SP.rs1_early_first(p, self.P), wait2=rs_wait[1]) if early else {}
             rs1 = FS.FabricStreamScatter(mesh, rsa["rs1"]["rows"], rsa["rs1"]["width"], axis=geo.pair_axis, lanes=lane("rs1"),
                                          **sy("rs1"), wait=rs_wait, cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA,

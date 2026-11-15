@@ -460,7 +460,7 @@ inline __attribute__((always_inline)) void sel2_sum(volatile tt_l1_ptr uint32_t*
     }
 }
 #endif
-// rev 74, PREFILTER (MLA_DSA_SHARD_PREFILTER, tt/mk_mla.py GLM53_DSA_SHARD_PREFILTER; the 8x4 only, unset: every
+// rev 75, PREFILTER (MLA_DSA_SHARD_PREFILTER, tt/mk_mla.py GLM53_DSA_SHARD_PREFILTER; the 8x4 only, unset: every
 // build of rev 73 unchanged). THE EXACT MERGE PRE-FILTER (doc/perf/ctx16_decode.md, F16's K16 bound). Past ~64 K tokens
 // every chip's list is a full local top-512, so the global merge's helpers histogram and compact NCHIPS x 512 = 16 K
 // keys per token -- twice or more at full size: an index score's order key concentrates in a few exponent bins, so

@@ -443,7 +443,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* src = mkeys;
         uint32_t nsrc = n;
 #if defined(MLA_DSA_SHARD_PREFILTER)
-        // rev 74 PREFILTER (dsa_shard.hpp): report (this list's PF_RANK-th largest key, its count), take L (merge slot
+        // rev 75 PREFILTER (dsa_shard.hpp): report (this list's PF_RANK-th largest key, its count), take L (merge slot
         // 0), keep the keys >= L in mcand (list order); mkeys stays whole for the per-core tie count below
         hist[0] = mlashard::pf_kth(mkeys, n);
         hist[1] = n;
@@ -644,7 +644,7 @@ void kernel_main() {
             });
 #endif
 #if defined(MLA_DSA_SHARD_PREFILTER)
-        // rev 74 PREFILTER (dsa_shard.hpp): report (the min over the KPH lists of their PF_RANK-th largest key, the
+        // rev 75 PREFILTER (dsa_shard.hpp): report (the min over the KPH lists of their PF_RANK-th largest key, the
         // keys), take L (merge slot 0), keep the keys >= L in place list by list (stable; len[i] = the survivors)
         {
             uint32_t kmin = 0xFFFFFFFFu, b0 = 0;

@@ -452,7 +452,7 @@ void kernel_main() {
             msg[2] = msg[3] = 0;
             hsend(scr + MSG_OFF, mlashard::merge_msg(j, 0), mladsa::MSG_BYTES);  // start: y_ag holds every list
 #if defined(MLA_DSA_SHARD_PREFILTER)
-            // rev 74 PREFILTER (dsa_shard.hpp): the helpers' (min over their lists of the PF_RANK-th largest key, their
+            // rev 75 PREFILTER (dsa_shard.hpp): the helpers' (min over their lists of the PF_RANK-th largest key, their
             // key count) -> L = the min, the union's total; L in merge slot 0 (0: no filter -- a list below PF_RANK
             // keys, or the union <= TOPK keys, round 0's done case)
             uint32_t pf_total = 0;
