@@ -236,3 +236,95 @@ def test_ws_fab_glx_bench(mesh_device, nexp, T, M):
     meas, pcs = launches(mesh_device, build_fn, chips, cfg, Ms, dev, refs, tag)
     summary(tag, cfg, Ms, chips, meas, pcs, aiclk_mhz(0))
     assert min(pcs.values()) > 0.999
+
+
+def dyn_counts(nexp, nchip, T, seed=3):
+    """Per-chip, per-expert row counts for the correctness run: zeros, tiny, tile edges, above the old MMAX (2048),
+    and every token of a chip on one expert; each group's last expert carries the extremes."""
+    g = torch.Generator().manual_seed(seed)
+    Ms = torch.zeros(nchip, nexp, dtype=torch.int64)
+    pick = [0, 0, 1, 31, 32, 33, 300, 586, 586, 700, 1500, 2049, 4000, 7000]
+    for c in range(nchip):
+        for e in range(nexp):
+            Ms[c, e] = pick[int(torch.randint(len(pick), (1,), generator=g))]
+    last = [nexp - 4 + k for k in range(4)]  # the last expert of groups 0..3
+    for c in range(nchip):
+        Ms[c, last[0]] = T if c == 1 else (0 if c % 2 else 1)  # all tokens of chip 1 on one expert; zeros elsewhere
+        Ms[c, last[1]] = 2049 + 7 * c  # above the old MMAX, different on every chip
+        Ms[c, last[2]] = 5000 + 113 * c
+        Ms[c, last[3]] = int(torch.randint(0, 600, (1,), generator=g))
+    return Ms
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [TORUS], indirect=True)
+def test_ws_fab_glx_dynm(mesh_device):
+    """Correctness for arbitrary per-expert, per-chip M on the whole Galaxy (step 2, torus): random counts including
+    0 and M = T, every chip its own counts and token lists; checks each group's last expert on a few chips."""
+    nchip = mesh_device.get_num_devices()
+    T = 31250
+    cfg, ac = GCfg(nexp=128, G=4, T=T, MMAX=T), ACfg(wrap=GLX_FABRIC[1], own_slices=True)
+    Ms = dyn_counts(cfg.nexp, nchip, T)
+    torch.manual_seed(0)
+    x = torch.randn(T + 1, cfg.H)
+    x[T] = 0
+    idx = torch.full((nchip, cfg.nexp, cfg.RMAX * 32), T, dtype=torch.int32)
+    for c in range(nchip):
+        for e in range(cfg.nexp):
+            M = int(Ms[c, e])
+            if M:
+                idx[c, e, :M] = torch.randperm(T)[:M].to(torch.int32)
+    wg = torch.randn(cfg.nexp, cfg.H, cfg.I, dtype=torch.bfloat16) / cfg.H**0.5
+    wu = torch.randn(cfg.nexp, cfg.H, cfg.I, dtype=torch.bfloat16) / cfg.H**0.5
+    wd = torch.randn(cfg.nexp, cfg.I, cfg.H, dtype=torch.bfloat16) / cfg.I**0.5
+    per_chip = [slice_layout(cfg, ac.CHT, wg[o::nchip].float(), wu[o::nchip].float(), wd[o::nchip].float()) for o in range(nchip)]
+    shard = lambda t, dt, lay: ttnn.from_torch(
+        t, dtype=dt, layout=lay, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    )
+    x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    idx_t = shard(idx.reshape(nchip * cfg.nexp, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    counts_t = shard(Ms.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    ws_t = ttnn.from_torch(
+        torch.cat(per_chip, 0),
+        dtype=cfg.w_dt,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    del per_chip
+    out_t = ttnn.empty(
+        [cfg.G * cfg.RMAX * 32, cfg.H],
+        dtype=cfg.out_dt,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    logger.info(f"WSD counts: zeros {int((Ms == 0).sum())}, max {int(Ms.max())}, rows a chip {Ms.sum(1).tolist()[:4]}..")
+    for launch in range(2):
+        mpd, io, st, sst = build_all(mesh_device, cfg, ac, x_t, idx_t, counts_t, ws_t, out_t)
+        ttnn.generic_op(io, mpd)
+        ttnn.synchronize_device(mesh_device)
+        del mpd, io, st, sst
+        logger.info(f"WSD launch {launch} done")
+    outs = ttnn.get_device_tensors(out_t)
+    worst = 1.0
+    for c in (0, 1, 2, 13, 31):
+        out = ttnn.to_torch(outs[c]).float()
+        for g in range(cfg.G):
+            e = max(range(g, cfg.nexp, cfg.G))
+            M = int(Ms[c, e])
+            if M == 0:
+                logger.info(f"WSD chip {c} group {g} expert {e}: M 0 (nothing to check)")
+                continue
+            wguq = quantize(interleave_gu(wg[e].float(), wu[e].float()), cfg.w_dt)
+            wdq = quantize(wd[e].float(), cfg.w_dt)
+            X = quantize(x[idx[c, e, :M].long()].to(torch.bfloat16).float(), cfg.x_dt)
+            wgq = wguq.reshape(cfg.H, -1, 2, 32)[:, :, 0].reshape(cfg.H, cfg.I)
+            wuq = wguq.reshape(cfg.H, -1, 2, 32)[:, :, 1].reshape(cfg.H, cfg.I)
+            ref = quantize(torch.nn.functional.silu(X @ wgq) * (X @ wuq), cfg.h_dt) @ wdq
+            p = pcc(out[g * cfg.RMAX * 32 : g * cfg.RMAX * 32 + M], ref)
+            worst = min(worst, p)
+            logger.info(f"WSD chip {c} group {g} expert {e}: M {M} pcc {p:.5f}")
+    logger.info(f"WSD SUMMARY: dynamic M on {nchip} chips, min pcc {worst:.5f}")
+    assert worst > 0.999
