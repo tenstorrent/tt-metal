@@ -42,7 +42,15 @@ namespace ttnn::experimental::deepseek {
 //   pool_count_output: preallocated ``[1]`` INT32 row-major interleaved. Given exactly in candidate
 //                      source mode.
 //
-// Returns: the selected rows, ``[1, 1, k, Dh]``, or ``output_tensor``. With fewer than k candidates
+//   num_queries:       query rows Sq (a verify block): ``candidates`` is ``[1, 1, num_parts * Sq, width]``,
+//                      page ``p * Sq + j`` part p's candidates for row j (the all_gather of the parts'
+//                      ``[1, 1, Sq, width]``). Every row merges on cores of its own; row j's rows go to
+//                      ``[output_row_offset + j * output_row_stride, ... + k)``, its blocks to row j of
+//                      ``candidate_blocks_output`` ``[Sq, candidate_topk_blocks]`` and its count to
+//                      ``pool_count_output[j]`` (``[Sq]``).
+//   output_row_stride: output rows between consecutive query rows' selections (default k).
+//
+// Returns: the selected rows, ``[1, 1, Sq * k, Dh]``, or ``output_tensor``. With fewer than k candidates
 // in total, only that many rows are written.
 Tensor merge_select_kv(
     const Tensor& candidates,
@@ -54,6 +62,8 @@ Tensor merge_select_kv(
     uint32_t candidate_topk_blocks = 0,
     uint32_t candidate_block_size = 0,
     const std::optional<Tensor>& candidate_blocks_output = std::nullopt,
-    const std::optional<Tensor>& pool_count_output = std::nullopt);
+    const std::optional<Tensor>& pool_count_output = std::nullopt,
+    uint32_t num_queries = 1,
+    std::optional<uint32_t> output_row_stride = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek

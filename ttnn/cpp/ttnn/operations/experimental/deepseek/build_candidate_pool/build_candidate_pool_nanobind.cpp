@@ -40,6 +40,14 @@ void bind_build_candidate_pool(::nanobind::module_& mod) {
             pool_rows_output (Optional[ttnn.Tensor]): preallocated pool rows.
             page_table_row_tensor (Optional[ttnn.Tensor]): ``[1]`` INT32 row of a
                 ``[num_sessions, max_blocks_per_user]`` page table to read, on device.
+            pool_masks_output (Optional[ttnn.Tensor]): preallocated ``[1, Sq * candidate_topk_blocks * cbs]``
+                INT32 pool masks, with several rows.
+            pool_counts_output (Optional[ttnn.Tensor]): preallocated ``[Sq]`` INT32 pool counts, with several rows.
+
+            With ``candidate_blocks`` ``[Sq, candidate_topk_blocks]`` (Sq rows of a verify block, ``pool_count``
+            ``[Sq]``) the pool is the union of the rows' blocks, ascending, and the op also returns
+            ``pool_masks`` (bit j: the key's block is one of row j's) and ``pool_counts`` (the pool prefix
+            holding row j's keys), the consumer's ``row_mask_table`` and ``num_keys_tensor``.
 
         Returns:
             List[ttnn.Tensor]: ``[pool_keys, pool_rows]``: ``[candidate_topk_blocks * cbs / block_size,
@@ -55,7 +63,9 @@ void bind_build_candidate_pool(::nanobind::module_& mod) {
         nb::kw_only(),
         nb::arg("pool_keys_output") = std::nullopt,
         nb::arg("pool_rows_output") = std::nullopt,
-        nb::arg("page_table_row_tensor") = std::nullopt);
+        nb::arg("page_table_row_tensor") = std::nullopt,
+        nb::arg("pool_masks_output") = std::nullopt,
+        nb::arg("pool_counts_output") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

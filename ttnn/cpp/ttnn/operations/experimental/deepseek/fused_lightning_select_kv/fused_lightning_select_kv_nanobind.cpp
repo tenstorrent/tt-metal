@@ -85,10 +85,11 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
                 ``candidate_block_size`` keys by its best key and keeps the
                 ``candidate_topk_blocks`` best blocks, always including the newest key's block.
             candidate_block_size (int): keys per candidate block. Divides 32 and the page block size.
-            candidate_blocks_output (Optional[ttnn.Tensor]): preallocated ``[1, candidate_topk_blocks]``
-                INT32 row-major interleaved candidate block output.
-            pool_count_output (Optional[ttnn.Tensor]): preallocated ``[1]`` INT32 row-major
-                interleaved pool count output.
+                With Sq query rows every row keeps its own blocks (its own newest block pinned).
+            candidate_blocks_output (Optional[ttnn.Tensor]): preallocated ``[Sq, candidate_topk_blocks]``
+                INT32 row-major interleaved candidate block output, row j's blocks in row j.
+            pool_count_output (Optional[ttnn.Tensor]): preallocated ``[Sq]`` INT32 row-major
+                interleaved pool count output, one count per query row.
             num_parts (int): key split across devices when > 1. The page blocks holding the
                 selectable keys split into ``num_parts`` contiguous ranges; this device scores range
                 ``part_index_tensor[0]`` and returns its local top-k candidates instead of gathering
@@ -110,20 +111,25 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
             kv_page_table (Optional[ttnn.Tensor]): ``[num_sessions, max_blocks]`` INT32
                 ``kv_cache`` page table. With ``row_table`` and ``new_kv_row``,
                 ``new_kv_row_index`` is then a logical row mapped through it.
+            row_mask_table (Optional[ttnn.Tensor]): ``[1, n]`` INT32, with ``row_table``: bit j of entry
+                i says whether query row j may select keys ``[i * g, (i + 1) * g)``, ``g = max_keys / n``
+                (``build_candidate_pool``'s ``pool_masks`` of a pool several rows share). A row's other
+                keys are not selectable (their scores read as 0xFFFFFFFF bits).
 
         Returns:
             List[ttnn.Tensor]: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in
             candidate source mode with ``num_parts`` == 1. With ``num_parts`` > 1, ``kv_rows`` is
-            instead the candidates ``[1, 1, 1, 2k + 16 + 2 * candidate_topk_blocks]`` INT32: the
+            instead the candidates ``[1, 1, Sq, 2k + 16 + 2 * candidate_topk_blocks]`` INT32, one page per
+            query row: the
             selected keys' ``kv_cache`` rows in key order, their order keys, 16 header words
             {keys selected, blocks selected, selectable keys, 0...}, then in candidate source mode
             the selected blocks in ascending order and their order keys. Otherwise ``kv_rows`` is
             ``[Sq, Hkv, k, Dh]`` (or
             ``output_tensor`` when given);
             ``scores`` is the fp32 ROW_MAJOR index score ``[1, 1, Sq, max_blocks_per_user * block_size]``,
-            row j valid for its first ``(cur_pos[j] + 1) // 4`` keys. ``candidate_blocks`` holds the kept blocks
-            in ascending order (the first ``min(candidate_topk_blocks, number of blocks)`` entries, zero
-            after them) and ``pool_count`` the keys they hold.
+            row j valid for its first ``(cur_pos[j] + 1) // 4`` keys. ``candidate_blocks`` row j holds row j's
+            kept blocks in ascending order (the first ``min(candidate_topk_blocks, number of blocks)`` entries,
+            zero after them) and ``pool_count[j]`` the keys they hold.
         )doc",
         &ttnn::experimental::deepseek::fused_lightning_select_kv,
         nb::arg("query"),
@@ -151,7 +157,8 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         nb::arg("part_index_tensor") = std::nullopt,
         nb::arg("row_table") = std::nullopt,
         nb::arg("page_table_row_tensor") = std::nullopt,
-        nb::arg("kv_page_table") = std::nullopt);
+        nb::arg("kv_page_table") = std::nullopt,
+        nb::arg("row_mask_table") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::fused_lightning_select_kv::detail

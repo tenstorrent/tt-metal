@@ -39,6 +39,10 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
 
     const uint32_t cbs = args.candidate_block_size;
     const uint32_t topk_blocks = tensor_args.candidate_blocks.logical_shape()[-1];
+    // Query rows of a verify block: the pool is the union of their blocks, up to num_rows * topk_blocks.
+    const uint32_t num_rows = tensor_args.candidate_blocks.logical_shape()[0];
+    const bool union_rows = num_rows > 1;
+    const uint32_t pool_blocks = num_rows * topk_blocks;
     const uint32_t page_block_size = tensor_args.key_cache.logical_shape()[-2];
     const uint32_t tiles_per_row = tensor_args.key_cache.logical_shape()[-1] / tt::constants::TILE_WIDTH;
     const uint32_t num_cores = all_cores.num_cores();
@@ -51,7 +55,7 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
     // Each core takes a multiple of align_blocks candidate blocks, so its run of pool_rows starts on a
     // 64 B boundary.
     const uint32_t align_blocks = std::max(1u, 16 / cbs);
-    const uint32_t max_per_core = tt::round_up(tt::div_up(topk_blocks, num_cores), align_blocks);
+    const uint32_t max_per_core = tt::round_up(tt::div_up(pool_blocks, num_cores), align_blocks);
     // Lookup scratch: pool_count, one page-table chunk, the list slice (with up to 64 B in front of
     // it), the physical blocks, then the rows, each 64 B aligned.
     const uint32_t chunk_offset = 64;
@@ -60,8 +64,13 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
         list_offset + tt::round_up(max_per_core * static_cast<uint32_t>(sizeof(uint32_t)), 64u) + 64;
     const uint32_t rows_offset =
         phys_offset + tt::round_up(max_per_core * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
-    const uint32_t lookup_bytes =
+    const uint32_t mask_list_offset =
         rows_offset + tt::round_up(max_per_core * cbs * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
+    const uint32_t mask_rows_offset =
+        mask_list_offset + tt::round_up(max_per_core * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
+    const uint32_t lookup_bytes =
+        union_rows ? mask_rows_offset + tt::round_up(max_per_core * cbs * static_cast<uint32_t>(sizeof(uint32_t)), 64u)
+                   : mask_list_offset;
 
     // ---- Resource names ----
     const DFBSpecName LOOKUP0_DFB{"lookup0"};
@@ -136,6 +145,61 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
     Group<TensorBinding> rows_bindings = key_bindings;
     rows_bindings.push_back(TensorBinding{.tensor_parameter_name = POOL_ROWS, .accessor_name = "pool_rows"});
 
+    // ---- Union of several rows' blocks (see copy_pool_keys.cpp) ----
+    const TensorParamName POOL_MASKS{"pool_masks"};
+    const TensorParamName POOL_COUNTS{"pool_counts"};
+    const DFBSpecName LISTS_DFB{"lists"};
+    const DFBSpecName RUN_DFB{"run"};
+    const DFBSpecName GATHER_DFB{"gather"};
+    const DFBSpecName RESULT_DFB{"result"};
+    const DFBSpecName FETCH_DFB{"fetch"};
+    const DFBSpecName READY_DFB{"ready"};
+    const SemaphoreSpecName SEM_LISTS_READY{"lists_ready"};
+    const SemaphoreSpecName SEM_GATHERED{"gathered"};
+    const SemaphoreSpecName SEM_RESULT_READY{"result_ready"};
+    std::vector<DataflowBufferSpec> union_dfbs;
+    std::vector<DFBBinding> union_keys1_dfbs;
+    std::vector<DFBBinding> union_keys0_dfbs;
+    if (union_rows) {
+        keys_options.defines.emplace("UNION_ROWS", "1");
+        tensor_parameters.push_back(TensorParameter{.unique_id = POOL_MASKS, .spec = output.at(2).tensor_spec()});
+        tensor_parameters.push_back(TensorParameter{.unique_id = POOL_COUNTS, .spec = output.at(3).tensor_spec()});
+        rows_bindings.push_back(TensorBinding{.tensor_parameter_name = POOL_MASKS, .accessor_name = "pool_masks"});
+        rows_bindings.push_back(TensorBinding{.tensor_parameter_name = POOL_COUNTS, .accessor_name = "pool_counts"});
+        constexpr auto word = static_cast<uint32_t>(sizeof(uint32_t));
+        const uint32_t list_stride = tt::round_up(topk_blocks, 16u);
+        const uint32_t slot_words = tt::round_up(1 + num_rows, 16u);
+        const auto scratch = [](const DFBSpecName& name, uint32_t bytes) {
+            return DataflowBufferSpec{
+                .unique_id = name,
+                .entry_size = tt::round_up(bytes, 64u),
+                .num_entries = 1,
+                .data_format_metadata = tt::DataFormat::UInt32,
+            };
+        };
+        union_dfbs = {
+            scratch(LISTS_DFB, (num_rows * list_stride + 16) * word),
+            scratch(RUN_DFB, 2 * pool_blocks * word),
+            scratch(GATHER_DFB, num_cores * slot_words * word),
+            scratch(RESULT_DFB, (32 + num_cores + 16) * word),
+            scratch(FETCH_DFB, std::max(slot_words, 2 * (max_per_core + 32)) * word),
+            scratch(READY_DFB, 16 * word),
+        };
+        for (const auto& [name, accessor] :
+             {std::pair{LISTS_DFB, "lists"},
+              std::pair{RUN_DFB, "run"},
+              std::pair{GATHER_DFB, "gather"},
+              std::pair{RESULT_DFB, "result"},
+              std::pair{FETCH_DFB, "fetch"}}) {
+            const auto binding = local_dfb(name, accessor);
+            union_keys1_dfbs.insert(union_keys1_dfbs.end(), binding.begin(), binding.end());
+        }
+        union_keys1_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = READY_DFB, .accessor_name = "ready", .endpoint_type = DFBEndpointType::PRODUCER});
+        union_keys0_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = READY_DFB, .accessor_name = "ready", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+
     // ---- Kernels ----
     // Both data-movement RISCs of every core copy keys, each half of the core's blocks on its own NoC;
     // the second also writes the core's rows.
@@ -151,11 +215,15 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
             {"list_offset", list_offset},
             {"phys_offset", phys_offset},
             {"rows_offset", rows_offset},
+            {"mask_list_offset", mask_list_offset},
+            {"mask_rows_offset", mask_rows_offset},
+            {"num_rows", num_rows},
+            {"topk_blocks", topk_blocks},
         };
     };
     KernelSpec::CompilerOptions rows_options = keys_options;
     rows_options.defines.emplace("WRITE_ROWS", "1");
-    const KernelSpec keys0{
+    KernelSpec keys0{
         .unique_id = KEYS0,
         .source = kKeysSource,
         .compiler_options = std::move(keys_options),
@@ -165,7 +233,7 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
         .runtime_arg_schema = {.runtime_arg_names = {"core_index", "num_cores"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
-    const KernelSpec keys1{
+    KernelSpec keys1{
         .unique_id = KEYS1,
         .source = kKeysSource,
         .compiler_options = std::move(rows_options),
@@ -175,6 +243,19 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
         .runtime_arg_schema = {.runtime_arg_names = {"core_index", "num_cores"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
+    if (union_rows) {
+        keys0.dfb_bindings.insert(keys0.dfb_bindings.end(), union_keys0_dfbs.begin(), union_keys0_dfbs.end());
+        keys1.dfb_bindings.insert(keys1.dfb_bindings.end(), union_keys1_dfbs.begin(), union_keys1_dfbs.end());
+        keys1.semaphore_bindings = {
+            SemaphoreBinding{.semaphore_spec_name = SEM_LISTS_READY, .accessor_name = "lists_ready"},
+            SemaphoreBinding{.semaphore_spec_name = SEM_GATHERED, .accessor_name = "gathered"},
+            SemaphoreBinding{.semaphore_spec_name = SEM_RESULT_READY, .accessor_name = "result_ready"},
+        };
+        keys1.runtime_arg_schema.common_runtime_arg_names = {
+            "coord_x", "coord_y", "mcast_x_start", "mcast_y_start", "mcast_x_end", "mcast_y_end"};
+        // NoC (x, y) of every core, in core_index order.
+        keys1.advanced_options = {.num_common_runtime_varargs = 2 * num_cores};
+    }
 
     ProgramSpec spec{
         .name = "build_candidate_pool",
@@ -188,10 +269,34 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
         .work_units = {WorkUnitSpec{
             .name = "build_candidate_pool", .kernels = {KEYS0, KEYS1}, .target_nodes = all_cores}},
     };
+    if (union_rows) {
+        spec.dataflow_buffers.insert(spec.dataflow_buffers.end(), union_dfbs.begin(), union_dfbs.end());
+        spec.semaphores = {
+            SemaphoreSpec{.unique_id = SEM_LISTS_READY, .target_nodes = all_cores},
+            SemaphoreSpec{.unique_id = SEM_GATHERED, .target_nodes = all_cores},
+            SemaphoreSpec{.unique_id = SEM_RESULT_READY, .target_nodes = all_cores}};
+    }
 
     const auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
     KernelRunArgs keys0_run_args{.kernel = KEYS0};
     KernelRunArgs keys1_run_args{.kernel = KEYS1};
+    if (union_rows) {
+        const auto coord = device->worker_core_from_logical_core(cores[0]);
+        const auto mcast_start = device->worker_core_from_logical_core(all_cores.bounding_box().start_coord);
+        const auto mcast_end = device->worker_core_from_logical_core(all_cores.bounding_box().end_coord);
+        keys1_run_args.common_runtime_arg_values = {
+            {"coord_x", static_cast<uint32_t>(coord.x)},
+            {"coord_y", static_cast<uint32_t>(coord.y)},
+            {"mcast_x_start", static_cast<uint32_t>(mcast_start.x)},
+            {"mcast_y_start", static_cast<uint32_t>(mcast_start.y)},
+            {"mcast_x_end", static_cast<uint32_t>(mcast_end.x)},
+            {"mcast_y_end", static_cast<uint32_t>(mcast_end.y)}};
+        for (const auto& core : cores) {
+            const auto physical = device->worker_core_from_logical_core(core);
+            keys1_run_args.advanced_options.common_runtime_varargs.push_back(physical.x);
+            keys1_run_args.advanced_options.common_runtime_varargs.push_back(physical.y);
+        }
+    }
     for (uint32_t i = 0; i < num_cores; ++i) {
         AddRuntimeArgsForNode(
             keys0_run_args.runtime_arg_values, cores[i], {{"core_index", i}, {"num_cores", num_cores}});
@@ -211,6 +316,10 @@ ttnn::device_operation::ProgramArtifacts BuildCandidatePoolDeviceOperation::Prog
     };
     if (has_page_table_row) {
         run_args.tensor_args.emplace(PAGE_TABLE_ROW, tensor_args.page_table_row_tensor->mesh_tensor());
+    }
+    if (union_rows) {
+        run_args.tensor_args.emplace(POOL_MASKS, output.at(2).mesh_tensor());
+        run_args.tensor_args.emplace(POOL_COUNTS, output.at(3).mesh_tensor());
     }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

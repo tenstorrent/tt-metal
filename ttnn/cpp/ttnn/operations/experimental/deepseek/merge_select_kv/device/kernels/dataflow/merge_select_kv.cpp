@@ -84,6 +84,11 @@ void kernel_main() {
     constexpr uint32_t blocks_per_core = get_arg(args::blocks_per_core);
     constexpr uint32_t kv_stage_rows = get_arg(args::kv_stage_rows);
     constexpr uint32_t output_row_offset = get_arg(args::output_row_offset);
+    // Query rows: each merges its own candidates (part p's page p * num_queries + row) on its own
+    // cores_per_row cores, into output rows [output_row_offset + row * output_row_stride, ... + k).
+    constexpr uint32_t num_queries = get_arg(args::num_queries);
+    constexpr uint32_t cores_per_row = get_arg(args::cores_per_row);
+    constexpr uint32_t output_row_stride = get_arg(args::output_row_stride);
     constexpr uint32_t candidate_topk_blocks = get_arg(args::candidate_topk_blocks);
     [[maybe_unused]] constexpr uint32_t candidate_block_size = get_arg(args::candidate_block_size);
     static_assert(num_hist_bins == 256, "the merge histograms 8 order-key bits per pass");
@@ -99,12 +104,15 @@ void kernel_main() {
     // ---- Runtime args ----
     const uint32_t core_index = get_arg(args::core_index);
 
-    // Cores [0, num_key_cores) merge the keys, the next num_block_cores the candidate blocks. A group's
-    // cores only ever talk to each other.
-    const bool is_block_group = core_index >= num_key_cores;
-    const uint32_t group_base = is_block_group ? num_key_cores : 0;
+    // Query row r's cores are [r * cores_per_row, (r + 1) * cores_per_row): the first num_key_cores merge
+    // the keys, the next num_block_cores the candidate blocks. A group's cores only ever talk to each other.
+    const uint32_t row = core_index / cores_per_row;
+    const uint32_t row_core = core_index - row * cores_per_row;
+    const bool is_block_group = row_core >= num_key_cores;
+    const uint32_t group_base = row * cores_per_row + (is_block_group ? num_key_cores : 0);
     const uint32_t group_size = is_block_group ? num_block_cores : num_key_cores;
     const uint32_t member = core_index - group_base;
+    auto page_of = [row](uint32_t p) { return p * num_queries + row; };
     const uint32_t entries_per_part = is_block_group ? candidate_topk_blocks : k;
     const uint32_t num_entries = num_parts * entries_per_part;
     const uint32_t slice_size = is_block_group ? block_slice_size : key_slice_size;
@@ -182,7 +190,7 @@ void kernel_main() {
             candidates,
             header_dfb,
             kHeaderWords * sizeof(uint32_t),
-            {.page_id = p, .offset_bytes = 2 * k * sizeof(uint32_t)},
+            {.page_id = page_of(p), .offset_bytes = 2 * k * sizeof(uint32_t)},
             {.offset_bytes = p * kHeaderWords * sizeof(uint32_t)});
     }
     const uint32_t slice_first = member * slice_size;
@@ -195,13 +203,13 @@ void kernel_main() {
             candidates,
             slice_dfb,
             n * sizeof(uint32_t),
-            {.page_id = p, .offset_bytes = entries_offset + j * sizeof(uint32_t)},
+            {.page_id = page_of(p), .offset_bytes = entries_offset + j * sizeof(uint32_t)},
             {.offset_bytes = (s - slice_first) * sizeof(uint32_t)});
         noc.async_read(
             candidates,
             slice_dfb,
             n * sizeof(uint32_t),
-            {.page_id = p, .offset_bytes = entries_offset + (entries_per_part + j) * sizeof(uint32_t)},
+            {.page_id = page_of(p), .offset_bytes = entries_offset + (entries_per_part + j) * sizeof(uint32_t)},
             {.offset_bytes = (slice_size + s - slice_first) * sizeof(uint32_t)});
         s += n;
     }
@@ -533,9 +541,39 @@ void kernel_main() {
                 candidate_blocks,
                 out_count * sizeof(uint32_t),
                 {.offset_bytes = 0},
-                {.page_id = 0, .offset_bytes = out_first * sizeof(uint32_t)});
+                {.page_id = row, .offset_bytes = out_first * sizeof(uint32_t)});
         }
-        if (member == 0) {
+        if (num_queries > 1 && member == 0 && row == 0) {
+            // Every row's pool count, from the selectable keys in its headers: min(candidate_topk_blocks,
+            // blocks) blocks are chosen, the newest (pinned, last) one holding the row's last keys.
+            constexpr uint32_t kCountOffsetWords = (blocks_per_core * sizeof(uint32_t) + 63) / 64 * 16;
+            constexpr uint32_t kRowHeadersOffsetWords = kCountOffsetWords + 16;
+            for (uint32_t r = 0; r < num_queries; ++r) {
+                noc.async_read(
+                    candidates,
+                    list_dfb,
+                    kHeaderWords * sizeof(uint32_t),
+                    {.page_id = r, .offset_bytes = 2 * k * sizeof(uint32_t)},
+                    {.offset_bytes = (kRowHeadersOffsetWords + r * kHeaderWords) * sizeof(uint32_t)});
+            }
+            noc.async_read_barrier();
+            invalidate_l1_cache();
+            for (uint32_t r = 0; r < num_queries; ++r) {
+                const uint32_t num_keys = list[kRowHeadersOffsetWords + r * kHeaderWords + 2];
+                const uint32_t num_blocks = (num_keys + candidate_block_size - 1) / candidate_block_size;
+                const uint32_t num_chosen = std::min(candidate_topk_blocks, num_blocks);
+                const uint32_t pinned_keys = num_keys - (num_blocks - 1) * candidate_block_size;
+                list[kCountOffsetWords + r] =
+                    num_chosen == 0 ? 0 : (num_chosen - 1) * candidate_block_size + pinned_keys;
+            }
+            (void)ckernel::load_blocking(&list[kCountOffsetWords + num_queries - 1]);
+            noc.async_write(
+                list_dfb,
+                pool_count,
+                num_queries * sizeof(uint32_t),
+                {.offset_bytes = kCountOffsetWords * sizeof(uint32_t)},
+                {.page_id = 0, .offset_bytes = 0});
+        } else if (num_queries == 1 && member == 0) {
             // The newest block always scores highest, so it is chosen, and last; every other one is full.
             const uint32_t num_keys = header[2];
             const uint32_t pinned_block = (num_keys + candidate_block_size - 1) / candidate_block_size - 1;
@@ -557,6 +595,13 @@ void kernel_main() {
     if (list_count != 0) {
         DeviceZoneScopedN("MERGE-GATHER");
         gather_kv_rows<kv_stage_rows>(
-            noc, kv_cache, output, stage_dfb, list, 0, list_count, output_row_offset + out_first);
+            noc,
+            kv_cache,
+            output,
+            stage_dfb,
+            list,
+            0,
+            list_count,
+            output_row_offset + row * output_row_stride + out_first);
     }
 }

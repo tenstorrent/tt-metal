@@ -50,6 +50,12 @@ void bind_merge_select_kv(::nanobind::module_& mod) {
                 candidate source mode.
             pool_count_output (Optional[ttnn.Tensor]): preallocated ``[1]`` INT32 row-major
                 interleaved. Given exactly in candidate source mode.
+            num_queries (int): query rows Sq of a verify block. ``candidates`` is then
+                ``[1, 1, num_parts * Sq, width]`` (the ``all_gather`` of the parts' ``[1, 1, Sq, width]``),
+                each row merges on its own cores and goes to output rows
+                ``[output_row_offset + j * output_row_stride, ... + k)``; the candidate outputs are
+                ``[Sq, candidate_topk_blocks]`` and ``[Sq]``.
+            output_row_stride (Optional[int]): output rows between query rows' selections (default k).
 
         Returns:
             ttnn.Tensor: the selected rows ``[1, 1, k, Dh]``, or ``output_tensor``. With fewer than
@@ -66,7 +72,9 @@ void bind_merge_select_kv(::nanobind::module_& mod) {
         nb::arg("candidate_topk_blocks") = 0,
         nb::arg("candidate_block_size") = 0,
         nb::arg("candidate_blocks_output") = std::nullopt,
-        nb::arg("pool_count_output") = std::nullopt);
+        nb::arg("pool_count_output") = std::nullopt,
+        nb::arg("num_queries") = 1,
+        nb::arg("output_row_stride") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

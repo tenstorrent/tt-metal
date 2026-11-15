@@ -18,7 +18,9 @@ Tensor merge_select_kv(
     uint32_t candidate_topk_blocks,
     uint32_t candidate_block_size,
     const std::optional<Tensor>& candidate_blocks_output,
-    const std::optional<Tensor>& pool_count_output) {
+    const std::optional<Tensor>& pool_count_output,
+    uint32_t num_queries,
+    std::optional<uint32_t> output_row_stride) {
     return ttnn::prim::merge_select_kv(
         candidates,
         kv_cache,
@@ -29,7 +31,9 @@ Tensor merge_select_kv(
         candidate_topk_blocks,
         candidate_block_size,
         candidate_blocks_output,
-        pool_count_output);
+        pool_count_output,
+        num_queries,
+        output_row_stride);
 }
 
 }  // namespace ttnn::experimental::deepseek

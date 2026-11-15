@@ -23,6 +23,10 @@ struct MergeSelectKvDeviceOperation {
         // Candidate source mode when > 0: also merge the parts' candidate blocks.
         uint32_t candidate_topk_blocks = 0;
         uint32_t candidate_block_size = 0;
+        // Query rows: candidates page p * num_queries + j is part p's for row j, whose rows go to output
+        // rows [output_row_offset + j * output_row_stride, ... + k).
+        uint32_t num_queries = 1;
+        uint32_t output_row_stride = 0;
         MemoryConfig output_mem_config;
     };
 
@@ -66,6 +70,8 @@ ttnn::Tensor merge_select_kv(
     uint32_t candidate_topk_blocks = 0,
     uint32_t candidate_block_size = 0,
     const std::optional<ttnn::Tensor>& candidate_blocks_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& pool_count_output = std::nullopt);
+    const std::optional<ttnn::Tensor>& pool_count_output = std::nullopt,
+    uint32_t num_queries = 1,
+    std::optional<uint32_t> output_row_stride = std::nullopt);
 
 }  // namespace ttnn::prim

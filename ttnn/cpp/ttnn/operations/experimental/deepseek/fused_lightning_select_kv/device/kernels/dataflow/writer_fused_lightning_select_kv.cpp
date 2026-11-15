@@ -7,7 +7,10 @@
 // output. With PARTIAL_OUTPUT the top-k is this device's part only and is written out as candidates
 // instead, and in CANDIDATE_SOURCE mode so are the part's best candidate blocks.
 
+#include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <type_traits>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -58,11 +61,16 @@ void kernel_main() {
     constexpr uint32_t owner_words = slices_per_owner * bins_per_slice;
     constexpr uint32_t owner_chunk_words =
         owner_words + (slices_per_owner + bins_per_slice - 1) / bins_per_slice * bins_per_slice;
-    // Per query row {keys above its threshold bin, keys in it}, padded to 16 B for NoC alignment.
-    constexpr uint32_t kCountsWords = (2 * num_queries + 3) / 4 * 4;
+    // Once at most max_ties keys of a row are left in its threshold bin, the cores send them to the
+    // coordinator, which finds the exact threshold, instead of running more passes.
+    constexpr uint32_t kMaxTies = get_arg(args::max_ties);
+    // Per query row {keys above its threshold bin, keys in it, then those keys if the row ends on ties},
+    // padded to 16 B for NoC alignment.
+    constexpr uint32_t kRowCountsWords = 2 + kMaxTies;
+    constexpr uint32_t kCountsWords = (kRowCountsWords + 3) / 4 * 4;
     constexpr uint32_t num_select_words = get_arg(args::num_select_words);
     // select: {query rows still selecting, pad x7}, then per query row a header {prefix, prefix bits,
-    // keys above it, keys still needed from it, pad, total keys, pad, pad}, then the allocation.
+    // keys above it, keys still needed from it, resolved from ties, pad, pad, pad}, then the allocation.
     constexpr uint32_t kSelectLiveWord = 0;
     constexpr uint32_t kSelectRowsWord = 8;
     constexpr uint32_t kSelectHeaderWords = 8;
@@ -70,11 +78,14 @@ void kernel_main() {
     constexpr uint32_t kHdrPrefixBits = 1;
     constexpr uint32_t kHdrAbove = 2;
     constexpr uint32_t kHdrNeeded = 3;
-    constexpr uint32_t kHdrTotal = 5;
+    constexpr uint32_t kHdrTies = 4;  // the row's last bin holds at most kMaxTies keys: resolved from them
     constexpr uint32_t kSelectAllocWord = kSelectRowsWord + num_queries * kSelectHeaderWords;
-    // Allocation entry of (core c, query row j) at kSelectAllocWord + (c * num_queries + j) * 3:
+    // Allocation entry of (core c, query row j) at kSelectAllocWord + j * alloc_row_words + c * 3:
     // {keys to contribute, of which equal to the threshold, output offset}.
     constexpr uint32_t kSelectWordsPerCore = 3;
+    // Query row j's allocation is computed by core j, which writes it and row j's header to core 0 and
+    // bumps alloc_done there; core 0 multicasts them all with select_ready = ready_base + kAllocReady.
+    constexpr uint32_t alloc_row_words = get_arg(args::alloc_row_words);
     static_assert(32 % kHistBits == 0, "radix passes must tile the 32-bit order key");
     // select_ready value of a select's final allocation, above its ready_base; pass p's header uses
     // ready_base + p + 1 <= ready_base + 32 / kHistBits.
@@ -96,6 +107,10 @@ void kernel_main() {
     // selectable keys, pad...}.
     [[maybe_unused]] constexpr uint32_t kCandHeaderWord = 2 * k;
     [[maybe_unused]] constexpr uint32_t kCandBlocksWord = 2 * k + 16;
+    // Query row j's candidates page starts j * cand_page_words words into the staging buffer.
+    [[maybe_unused]] constexpr uint32_t cand_page_words = get_arg(args::cand_page_words);
+    // ROW_MASK: keys per row_mask entry (a candidate block of the pool).
+    [[maybe_unused]] constexpr uint32_t row_mask_group = get_arg(args::row_mask_group);
     // cur_pos words from the reader: the most keys of any query row, the part, each row's keys.
     constexpr uint32_t kMaxKeysWord = 48;
     constexpr uint32_t kPartWord = 49;
@@ -139,7 +154,9 @@ void kernel_main() {
     // On every core: ready_base + pass + 1 = that pass's header arrived, ready_base + kAllocReady = the
     // allocation arrived. Never lowered between selects, so a slow core cannot miss a later select's header.
     Semaphore select_ready(sem::select_ready);
-    Semaphore slice_arrived(sem::slice_arrived);  // on each owner: slices received
+    Semaphore slice_arrived(sem::slice_arrived);
+    Semaphore alloc_done(sem::alloc_done);  // on core 0: rows other than row 0 allocated by their cores  // on each
+                                            // owner: slices received
 
     Noc noc;
 
@@ -274,6 +291,32 @@ void kernel_main() {
     }
 #endif
 
+#ifdef ROW_MASK
+    // Rows that may select each local key, one bit per query row, per row_mask_group keys: a pool shared
+    // by several rows, each of which sees only its own candidate blocks. Keys a row may not select are
+    // left out of its histograms and get order key 0 (score bits 0xFFFFFFFF), below every real score.
+    const auto row_mask = TensorAccessor(tensor::row_mask);
+    DataflowBuffer row_mask_dfb(dfb::row_mask_l1);
+    row_mask_dfb.reserve_back(1);
+    const uint32_t mask_first = first_local_key / row_mask_group;
+    const uint32_t mask_read_first = mask_first * sizeof(uint32_t) / 64 * 64;
+    volatile tt_l1_ptr uint32_t* local_row_mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        row_mask_dfb.get_write_ptr() + mask_first * sizeof(uint32_t) - mask_read_first);
+    if (num_local_chunks != 0) {
+        const uint32_t mask_end =
+            tt::data_movement::common::div_up(first_local_key + num_local_chunks * 32, row_mask_group);
+        const uint32_t mask_read_end = tt::data_movement::common::div_up(mask_end * sizeof(uint32_t), 64) * 64;
+        noc.async_read(
+            row_mask,
+            row_mask_dfb,
+            mask_read_end - mask_read_first,
+            {.page_id = 0, .offset_bytes = mask_read_first},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+    }
+#endif
+
     hist_dfb.reserve_back(1);
     const uint32_t hist_addr = hist_dfb.get_write_ptr();
     uint32_t* const hist = reinterpret_cast<uint32_t*>(hist_addr);
@@ -288,6 +331,20 @@ void kernel_main() {
             const uint32_t first_key = first_local_key + chunk * 32;
             for (uint32_t row = 0; row < num_queries; ++row, ++tile) {
                 scores_dfb.wait_front(tile + 1);
+#ifdef ROW_MASK
+                {
+                    volatile tt_l1_ptr uint32_t* masked_scores = scores_l1 + tile * 32;
+                    const uint32_t local_first = chunk * 32;
+                    for (uint32_t i = 0; i < 32; ++i) {
+                        if (((local_row_mask[(local_first + i) / row_mask_group] >> row) & 1) == 0) {
+                            masked_scores[i] = 0xFFFFFFFFu;
+                        }
+                    }
+                    // Drain the stores before the NoC reads the tile.
+                    masked_scores[31] = masked_scores[31];
+                    (void)ckernel::load_blocking(&masked_scores[31]);
+                }
+#endif
                 noc.async_write(
                     scores_dfb,
                     scores,
@@ -300,6 +357,14 @@ void kernel_main() {
                 volatile tt_l1_ptr uint32_t* tile_scores = scores_l1 + tile * 32;
                 uint32_t* row_hist = hist + row * num_hist_bins;
                 uint32_t i = 0;
+#ifdef ROW_MASK
+                for (; i < valid_in_tile; ++i) {
+                    const uint32_t key = topk_order_key(tile_scores[i]);
+                    if (key != 0) {
+                        ++row_hist[key >> (32 - kHistBits)];
+                    }
+                }
+#endif
                 for (; i + 4 <= valid_in_tile; i += 4) {
                     const uint32_t b0 = topk_order_key(tile_scores[i + 0]) >> (32 - kHistBits);
                     const uint32_t b1 = topk_order_key(tile_scores[i + 1]) >> (32 - kHistBits);
@@ -351,9 +416,27 @@ void kernel_main() {
     // Selects, for every query row j, the k_select largest order keys key_at(j, i), i < num_local[j],
     // over every active core. hist must already hold this core's pass-0 histograms of them. Every core
     // gets its share of each row in results, copied out of select, which the next select overwrites;
-    // that select passes this one's ready_base + kAllocReady.
+    // that select passes this one's ready_base + kAllocReady. With marks, bit j of marks[i] is set for
+    // every local key i query row j selects (marks must be zero for the keys on entry).
+    // The keys are words of base in the scores' layout (row j's key i at ((i / 32 * Sq) + j) * 32 + i % 32),
+    // fp32 scores mapped to order keys when transform is set, else order keys already.
     auto radix_select =
-        [&](uint32_t k_select, const uint32_t* num_local, uint32_t ready_base, auto key_at, SelectResult* results) {
+        [&](uint32_t k_select,
+            const uint32_t* num_local,
+            uint32_t ready_base,
+            const uint32_t* base,
+            auto transform_tag,
+            SelectResult* results,
+            uint32_t* marks) {
+            constexpr bool transform = decltype(transform_tag)::value;
+            auto key_at = [base](uint32_t row, uint32_t i) {
+                const uint32_t word = base[((i / 32 * num_queries) + row) * 32 + i % 32];
+                if constexpr (transform) {
+                    return topk_order_key(word);
+                } else {
+                    return word;
+                }
+            };
             // This core's keys above each row's final threshold and equal to it, counted by the rescans.
             uint32_t core_above[num_queries] = {};
             uint32_t core_bin_count[num_queries] = {};
@@ -365,6 +448,7 @@ void kernel_main() {
                     hdr[kHdrPrefix] = 0;
                     hdr[kHdrPrefixBits] = 0;
                     hdr[kHdrAbove] = 0;
+                    hdr[kHdrTies] = 0;
                 }
             }
 
@@ -484,19 +568,8 @@ void kernel_main() {
                         const uint32_t top_slice = row * kRowSlices + kRowSlices - 1;
                         uint32_t target;
                         if (pass == 0) {
-                            const uint32_t first_slice = row * kRowSlices;
-                            uint32_t owner = first_slice / slices_per_owner;
-                            uint32_t local = first_slice - owner * slices_per_owner;
-                            uint32_t total = 0;
-                            for (uint32_t s = 0; s < kRowSlices; ++s) {
-                                total += sums[owner * owner_chunk_words + owner_words + local];
-                                if (++local == slices_per_owner) {
-                                    local = 0;
-                                    ++owner;
-                                }
-                            }
-                            hdr[kHdrTotal] = total;
-                            target = std::min<uint32_t>(k_select, total);
+                            // min(k_select, keys): with fewer keys the walk below reaches slice 0 first.
+                            target = k_select;
                         } else {
                             target = hdr[kHdrNeeded];
                         }
@@ -509,7 +582,12 @@ void kernel_main() {
                         uint32_t slice = kRowSlices - 1;
                         while (true) {
                             const uint32_t slice_total = sums[owner * owner_chunk_words + owner_words + local];
-                            if (above + slice_total >= target || slice == 0) {
+                            if (above + slice_total >= target) {
+                                break;
+                            }
+                            if (slice == 0) {
+                                // Fewer keys than k_select: take them all.
+                                target = above + slice_total;
                                 break;
                             }
                             above += slice_total;
@@ -536,7 +614,12 @@ void kernel_main() {
                         hdr[kHdrAbove] = hdr[kHdrAbove] + above;
                         hdr[kHdrNeeded] = needed;
                         if (needed != 0 && needed != bin_count && prefix_bits != 32) {
-                            next_live |= 1u << row;
+                            if (bin_count <= kMaxTies) {
+                                // Few keys left in the bin: the final counts carry them instead.
+                                hdr[kHdrTies] = 1;
+                            } else {
+                                next_live |= 1u << row;
+                            }
                         }
                     }
                     select[kSelectLiveWord] = next_live;
@@ -581,16 +664,50 @@ void kernel_main() {
                         uint32_t kept = 0;
                         // The same keys and bits as this pass's histogram: pass 0 had every local key,
                         // later passes the keys kept by the previous one.
-                        const uint32_t num_scanned = pass == 0 ? num_local[row] : cand_count[row];
-                        for (uint32_t t = 0; t < num_scanned; ++t) {
-                            const uint32_t i = pass == 0 ? t : cand[t];
-                            const uint32_t bin = (key_at(row, i) >> shift) & (num_hist_bins - 1);
-                            if (bin > threshold_bin) {
-                                ++above;
-                            } else if (bin == threshold_bin) {
-                                cand[kept++] = i;
+                        if (pass == 0) {
+                            // Every local key, a 32-key chunk at a time; the bins are cleared whole after.
+                            const uint32_t n = num_local[row];
+                            const uint32_t row_bit = 1u << row;
+                            uint16_t* __restrict cand_out = cand;
+                            for (uint32_t chunk = 0; chunk * 32 < n; ++chunk) {
+                                const uint32_t* __restrict words = base + (chunk * num_queries + row) * 32;
+                                const uint32_t first = chunk * 32;
+                                const uint32_t count = std::min<uint32_t>(32, n - first);
+                                for (uint32_t c = 0; c < count; ++c) {
+                                    uint32_t key = words[c];
+                                    if constexpr (transform) {
+                                        key = topk_order_key(key);
+                                    }
+                                    const uint32_t bin = key >> (32 - kHistBits);
+                                    if (bin >= threshold_bin) {
+                                        if (bin == threshold_bin) {
+                                            cand_out[kept++] = first + c;
+                                        } else {
+                                            ++above;
+                                            if (marks != nullptr) {
+                                                marks[first + c] |= row_bit;
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            row_hist[bin] = 0;
+                            for (uint32_t b = 0; b < num_hist_bins; ++b) {
+                                row_hist[b] = 0;
+                            }
+                        } else {
+                            for (uint32_t t = 0; t < cand_count[row]; ++t) {
+                                const uint32_t i = cand[t];
+                                const uint32_t bin = (key_at(row, i) >> shift) & (num_hist_bins - 1);
+                                if (bin > threshold_bin) {
+                                    ++above;
+                                    if (marks != nullptr) {
+                                        marks[i] |= 1u << row;
+                                    }
+                                } else if (bin == threshold_bin) {
+                                    cand[kept++] = i;
+                                }
+                                row_hist[bin] = 0;
+                            }
                         }
                         core_above[row] += above;
                         core_bin_count[row] = kept;
@@ -606,62 +723,146 @@ void kernel_main() {
                 live = next_live;
             }
 
-            // Every active core reports its keys above each row's threshold and equal to it to slot
-            // core_index of hist_gather on the coordinator. Inactive cores have neither. Every owner has
-            // read the histograms by the last header, so they stage the message.
+            // Every active core reports, per query row, its keys above the row's threshold and equal to it
+            // (and on ties those keys) to slot core_index of hist_gather on the row's coordinator, core
+            // row. Inactive cores have neither. Every owner has read the histograms by the last header, so
+            // they stage the messages.
             if (is_active) {
+                DeviceZoneScopedN("SEL-COUNTS");
                 for (uint32_t row = 0; row < num_queries; ++row) {
-                    hist[2 * row] = core_above[row];
-                    hist[2 * row + 1] = core_bin_count[row];
+                    uint32_t* counts = hist + row * kCountsWords;
+                    counts[0] = core_above[row];
+                    counts[1] = core_bin_count[row];
+                    if (select[kSelectRowsWord + row * kSelectHeaderWords + kHdrTies] != 0) {
+                        const uint16_t* cand = cand_list + row * local_key_capacity;
+                        for (uint32_t t = 0; t < cand_count[row]; ++t) {
+                            counts[2 + t] = key_at(row, cand[t]);
+                        }
+                    }
                 }
                 asm volatile("" ::: "memory");
-                (void)ckernel::load_blocking(&hist[2 * num_queries - 1]);
-                noc.async_write(
-                    UnicastEndpoint{},
-                    UnicastEndpoint{},
-                    kCountsWords * sizeof(uint32_t),
-                    {.addr = hist_addr},
-                    {.noc_x = coord_x,
-                     .noc_y = coord_y,
-                     .addr = gather_addr + core_index * kCountsWords * sizeof(uint32_t)});
+                hist[num_queries * kCountsWords - 1] = hist[num_queries * kCountsWords - 1];
+                (void)ckernel::load_blocking(&hist[num_queries * kCountsWords - 1]);
+                for (uint32_t row = 0; row < num_queries; ++row) {
+                    noc.async_write(
+                        UnicastEndpoint{},
+                        UnicastEndpoint{},
+                        kCountsWords * sizeof(uint32_t),
+                        {.addr = hist_addr + row * kCountsWords * sizeof(uint32_t)},
+                        {.noc_x = get_common_vararg(2 * row),
+                         .noc_y = get_common_vararg(2 * row + 1),
+                         .addr = gather_addr + core_index * kCountsWords * sizeof(uint32_t)});
+                }
                 noc.async_write_barrier();
-                hist_arrived.up(noc, coord_x, coord_y, 1);
+                for (uint32_t row = 0; row < num_queries; ++row) {
+                    hist_arrived.up(noc, get_common_vararg(2 * row), get_common_vararg(2 * row + 1), 1);
+                }
                 noc.async_atomic_barrier();
             }
 
-            if (core_index == 0) {
-                hist_arrived.wait(num_active);
+            // Core r allocates query row r. A core contributes all of its keys above the threshold plus a
+            // share of the keys equal to it; that share is handed out in core order, so ties go to lower
+            // key indices. Output offsets are the running sum of contributions.
+            if (core_index < num_queries) {
+                const uint32_t row = core_index;
+                {
+                    DeviceZoneScopedN("SEL-ALLOC-GATHER");
+                    hist_arrived.wait(num_active);
+                }
+                DeviceZoneScopedN("SEL-ALLOC");
                 hist_arrived.set(0);
                 invalidate_l1_cache();
-                volatile tt_l1_ptr uint32_t* gathered = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_addr);
-
-                // Per-core allocation of each row. A core contributes all of its keys above the threshold
-                // plus a share of the keys equal to it; that share is handed out in core order, so ties go
-                // to lower key indices. Output offsets are the running sum of contributions.
-                for (uint32_t row = 0; row < num_queries; ++row) {
-                    uint32_t remaining_from_bin = select[kSelectRowsWord + row * kSelectHeaderWords + kHdrNeeded];
-                    uint32_t next_offset = 0;
+                asm volatile("" ::: "memory");
+                // Plain pointers: every count has landed (the semaphore) and the cache is invalidated.
+                uint32_t* const gathered = reinterpret_cast<uint32_t*>(gather_addr);
+                uint32_t* const select_words = const_cast<uint32_t*>(select);
+                uint32_t* const hdr = select_words + kSelectRowsWord + row * kSelectHeaderWords;
+                if (hdr[kHdrTies] != 0) {
+                    // The row's last bin holds at most kMaxTies keys over all cores: find the needed-th
+                    // largest of them exactly. It becomes the row's full 32-bit threshold, and every core's
+                    // keys above it join its keys above the bin.
+                    uint32_t all[kMaxTies];
+                    uint32_t num_ties = 0;
                     for (uint32_t c = 0; c < num_active; ++c) {
-                        volatile tt_l1_ptr uint32_t* counts = gathered + c * kCountsWords + 2 * row;
-                        const uint32_t in_bin = counts[1];
-                        const uint32_t core_from_bin = std::min(in_bin, remaining_from_bin);
-                        remaining_from_bin -= core_from_bin;
-                        const uint32_t contribute = counts[0] + core_from_bin;
-                        volatile tt_l1_ptr uint32_t* entry =
-                            select + kSelectAllocWord + (c * num_queries + row) * kSelectWordsPerCore;
-                        entry[0] = contribute;
-                        entry[1] = core_from_bin;
-                        entry[2] = next_offset;
-                        next_offset += contribute;
+                        const uint32_t* counts = gathered + c * kCountsWords;
+                        for (uint32_t t = 0; t < counts[1]; ++t) {
+                            all[num_ties++] = counts[2 + t];
+                        }
                     }
+                    const uint32_t needed = hdr[kHdrNeeded];
+                    std::nth_element(all, all + needed - 1, all + num_ties, std::greater<uint32_t>());
+                    const uint32_t threshold = all[needed - 1];
+                    uint32_t greater = 0;
+                    for (uint32_t c = 0; c < num_active; ++c) {
+                        uint32_t* counts = gathered + c * kCountsWords;
+                        uint32_t core_greater = 0;
+                        uint32_t core_equal = 0;
+                        for (uint32_t t = 0; t < counts[1]; ++t) {
+                            core_greater += counts[2 + t] > threshold ? 1 : 0;
+                            core_equal += counts[2 + t] == threshold ? 1 : 0;
+                        }
+                        counts[0] += core_greater;
+                        counts[1] = core_equal;
+                        greater += core_greater;
+                    }
+                    hdr[kHdrPrefix] = threshold;
+                    hdr[kHdrPrefixBits] = 32;
+                    hdr[kHdrAbove] += greater;
+                    hdr[kHdrNeeded] = needed - greater;
                 }
-                // Only active cores read their entries. The last entry stored is the last active core's
-                // entry of the last row (a header word when no core is active, stored long before).
-                const uint32_t alloc_end = kSelectAllocWord + num_active * num_queries * kSelectWordsPerCore;
-                const uint32_t alloc_words = std::min(num_select_words, (alloc_end + 3) / 4 * 4);
-                (void)ckernel::load_blocking(&select[alloc_end - 1]);
-
+                uint32_t remaining_from_bin = hdr[kHdrNeeded];
+                uint32_t next_offset = 0;
+                uint32_t* const row_entries = select_words + kSelectAllocWord + row * alloc_row_words;
+                uint32_t* entry = row_entries;
+                const uint32_t* counts = gathered;
+                for (uint32_t c = 0; c < num_active; ++c, counts += kCountsWords, entry += kSelectWordsPerCore) {
+                    const uint32_t core_from_bin = std::min(counts[1], remaining_from_bin);
+                    remaining_from_bin -= core_from_bin;
+                    const uint32_t contribute = counts[0] + core_from_bin;
+                    entry[0] = contribute;
+                    entry[1] = core_from_bin;
+                    entry[2] = next_offset;
+                    next_offset += contribute;
+                }
+                asm volatile("" ::: "memory");
+                // Only active cores read their entries.
+                const uint32_t entry_words = (num_active * kSelectWordsPerCore + 3) / 4 * 4;
+                // Stores retire in order: storing the header's last (pad) word and loading it back drains them.
+                hdr[kSelectHeaderWords - 1] = 0;
+                (void)ckernel::load_blocking(&hdr[kSelectHeaderWords - 1]);
+                if (row != 0) {
+                    // Hand row r's header and allocation to the coordinator (same addresses), which
+                    // multicasts every row's once all have landed.
+                    auto to_coordinator = [&](uint32_t word, uint32_t words) {
+                        noc.async_write(
+                            UnicastEndpoint{},
+                            UnicastEndpoint{},
+                            words * sizeof(uint32_t),
+                            {.addr = select_addr + word * sizeof(uint32_t)},
+                            {.noc_x = coord_x, .noc_y = coord_y, .addr = select_addr + word * sizeof(uint32_t)});
+                    };
+                    to_coordinator(kSelectRowsWord + row * kSelectHeaderWords, kSelectHeaderWords);
+                    if (entry_words != 0) {
+                        to_coordinator(kSelectAllocWord + row * alloc_row_words, entry_words);
+                    }
+                    noc.async_write_barrier();
+                    alloc_done.up(noc, coord_x, coord_y, 1);
+                    noc.async_atomic_barrier();
+                }
+            }
+            if (core_index == 0) {
+                if constexpr (num_queries > 1) {
+                    DeviceZoneScopedN("SEL-ALLOC-ROWS");
+                    alloc_done.wait(num_queries - 1);
+                    alloc_done.set(0);
+                    invalidate_l1_cache();
+                }
                 if (num_mcast_dests > 0) {
+                    DeviceZoneScopedN("SEL-ALLOC-MCAST");
+                    // Every header and every row's run of allocation (only active cores read theirs).
+                    const uint32_t alloc_end =
+                        kSelectAllocWord + (num_queries - 1) * alloc_row_words + num_active * kSelectWordsPerCore;
+                    const uint32_t alloc_words = std::min(num_select_words, (alloc_end + 3) / 4 * 4);
                     noc.async_write_multicast(
                         UnicastEndpoint{},
                         MulticastEndpoint{},
@@ -680,6 +881,7 @@ void kernel_main() {
                     noc.async_write_barrier();
                 }
             } else {
+                DeviceZoneScopedN("SEL-ALLOC-WAIT");
                 select_ready.wait_min(ready_base + kAllocReady);
                 invalidate_l1_cache();
             }
@@ -692,7 +894,7 @@ void kernel_main() {
                 results[row].final_shift = 32 - hdr[kHdrPrefixBits];
                 if (is_active) {
                     volatile tt_l1_ptr uint32_t* my_entry =
-                        select + kSelectAllocWord + (core_index * num_queries + row) * kSelectWordsPerCore;
+                        select + kSelectAllocWord + row * alloc_row_words + core_index * kSelectWordsPerCore;
                     results[row].num_contribute = my_entry[0];
                     results[row].num_from_bin = my_entry[1];
                     results[row].output_offset = my_entry[2];
@@ -700,6 +902,30 @@ void kernel_main() {
                     results[row].num_contribute = 0;
                     results[row].num_from_bin = 0;
                     results[row].output_offset = 0;
+                }
+            }
+
+            // Marks for the keys of each row's final bin (the threshold's keys and, on ties, those above it):
+            // all those above the threshold and the first num_from_bin equal to it.
+            if (marks != nullptr && is_active) {
+                DeviceZoneScopedN("SEL-MARK");
+                for (uint32_t row = 0; row < num_queries; ++row) {
+                    const uint16_t* cand = cand_list + row * local_key_capacity;
+                    const uint32_t shift = results[row].final_shift;
+                    const uint32_t prefix = results[row].final_prefix;
+                    uint32_t from_bin_left = results[row].num_from_bin;
+                    for (uint32_t t = 0; t < cand_count[row]; ++t) {
+                        const uint32_t i = cand[t];
+                        const uint32_t top = key_at(row, i) >> shift;
+                        bool take = top > prefix;
+                        if (top == prefix && from_bin_left != 0) {
+                            --from_bin_left;
+                            take = true;
+                        }
+                        if (take) {
+                            marks[i] |= 1u << row;
+                        }
+                    }
                 }
             }
         };
@@ -710,8 +936,21 @@ void kernel_main() {
     auto key_at = [local_scores](uint32_t row, uint32_t i) {
         return topk_order_key(local_scores[((i / 32 * num_queries) + row) * 32 + i % 32]);
     };
+    // Bit j of key_marks[i]: query row j selects local key i.
+    DataflowBuffer marks_dfb(dfb::marks);
+    marks_dfb.reserve_back(1);
+    uint32_t* const key_marks = reinterpret_cast<uint32_t*>(marks_dfb.get_write_ptr());
+    {
+        uint32_t scan_end = 0;
+        for (uint32_t row = 0; row < num_queries; ++row) {
+            scan_end = std::max(scan_end, num_local_keys[row]);
+        }
+        for (uint32_t i = 0; i < scan_end; ++i) {
+            key_marks[i] = 0;
+        }
+    }
     SelectResult key_shares[num_queries];
-    radix_select(k, num_local_keys, /*ready_base=*/0, key_at, key_shares);
+    radix_select(k, num_local_keys, /*ready_base=*/0, local_scores, std::true_type{}, key_shares, key_marks);
 
     // ---- KV gather ----
     blocks_dfb.wait_front(1);
@@ -723,107 +962,119 @@ void kernel_main() {
     invalidate_l1_cache();
 #endif
 #ifdef PARTIAL_OUTPUT
-    static_assert(num_queries == 1, "a partial top-k selects for one query row");
-    // A later select overwrites the header.
-    const uint32_t num_keys_selected = select[kSelectRowsWord + kHdrAbove] + select[kSelectRowsWord + kHdrNeeded];
-    const SelectResult& key_share = key_shares[0];
-    // List the selected keys in local key order as kv_cache row ids, taking the first num_from_bin
+    // Query row j's candidates page sits cand_page_words words after row j - 1's in kv_wr, and is page j
+    // of the output. A later select overwrites the headers.
+    uint32_t num_keys_selected[num_queries];
+    for (uint32_t row = 0; row < num_queries; ++row) {
+        volatile tt_l1_ptr uint32_t* hdr = select + kSelectRowsWord + row * kSelectHeaderWords;
+        num_keys_selected[row] = hdr[kHdrAbove] + hdr[kHdrNeeded];
+    }
+    // List each row's selected keys in local key order as kv_cache row ids, taking the first num_from_bin
     // keys equal to the threshold. Each core lists its runs straight into the candidates page's layout
     // (see kCandHeaderWord), at the same kv_wr address it then writes to on core 0.
     kv_wr_dfb.reserve_back(kv_stage_rows);
     const uint32_t cand_addr = kv_wr_dfb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cand_addr);
-    volatile tt_l1_ptr uint32_t* rows = cand + key_share.output_offset;
-    volatile tt_l1_ptr uint32_t* keys = cand + k + key_share.output_offset;
-    uint32_t num_rows = 0;
+    uint32_t num_rows[num_queries];
     {
         DeviceZoneScopedN("SEL-LIST");
-        uint32_t from_bin_left = key_share.num_from_bin;
-        for (uint32_t i = 0; i < num_local_keys[0] && num_rows < key_share.num_contribute; ++i) {
-            const uint32_t key = key_at(0, i);
-            const uint32_t top = key >> key_share.final_shift;
-            bool take = top > key_share.final_prefix;
-            if (top == key_share.final_prefix && from_bin_left != 0) {
-                --from_bin_left;
-                take = true;
-            }
-            if (take) {
+        for (uint32_t row = 0; row < num_queries; ++row) {
+            const SelectResult& key_share = key_shares[row];
+            volatile tt_l1_ptr uint32_t* rows = cand + row * cand_page_words + key_share.output_offset;
+            volatile tt_l1_ptr uint32_t* keys = rows + k;
+            uint32_t listed = 0;
+            for (uint32_t i = 0; i < num_local_keys[row] && listed < key_share.num_contribute; ++i) {
+                if ((key_marks[i] >> row) & 1) {
+                    const uint32_t key = key_at(row, i);
 #ifdef ROW_TABLE
-                rows[num_rows] = row_tbl[i];
+                    rows[listed] = row_tbl[i];
 #else
-                rows[num_rows] = physical_blocks[i / page_block_size] * page_block_size + i % page_block_size;
+                    rows[listed] = physical_blocks[i / page_block_size] * page_block_size + i % page_block_size;
 #endif
-                keys[num_rows] = key;
-                ++num_rows;
+                    keys[listed] = key;
+                    ++listed;
+                }
             }
+            num_rows[row] = listed;
         }
     }
 
-    // Every active core copies its runs into core 0's page, at the offsets it listed them at locally;
-    // core 0 then zeroes the unused entries, fills the header and writes the page. A run is `count`
-    // ids from word `first`, with their order keys `keys_stride` words later.
-    auto write_partial = [&](uint32_t first_block, uint32_t num_blocks_listed, uint32_t num_blocks_selected) {
-        DeviceZoneScopedN("SEL-PARTIAL");
-        // hist_arrived is back at zero: core 0 consumed the last counts before the allocation.
-        if (core_index != 0 && is_active) {
-            auto send_run = [&](uint32_t first, uint32_t count, uint32_t keys_stride) {
-                if (count == 0) {
-                    return;
+    // Every active core copies its runs into core 0's pages, at the offsets it listed them at locally;
+    // core 0 then zeroes the unused entries, fills the headers and writes the pages. A run is `count`
+    // ids from word `first`, with their order keys `keys_stride` words later. Per query row: its first
+    // listed block, the blocks this core listed and the blocks selected over the part.
+    auto write_partial =
+        [&](const uint32_t* first_block, const uint32_t* num_blocks_listed, const uint32_t* num_blocks_selected) {
+            DeviceZoneScopedN("SEL-PARTIAL");
+            // hist_arrived is back at zero: core 0 consumed the last counts before the allocation.
+            if (core_index != 0 && is_active) {
+                auto send_run = [&](uint32_t first, uint32_t count, uint32_t keys_stride) {
+                    if (count == 0) {
+                        return;
+                    }
+                    (void)ckernel::load_blocking(&cand[first + keys_stride + count - 1]);
+                    const uint32_t ids_addr = cand_addr + first * sizeof(uint32_t);
+                    const uint32_t keys_addr = ids_addr + keys_stride * sizeof(uint32_t);
+                    noc.async_write(
+                        UnicastEndpoint{},
+                        UnicastEndpoint{},
+                        count * sizeof(uint32_t),
+                        {.addr = ids_addr},
+                        {.noc_x = coord_x, .noc_y = coord_y, .addr = ids_addr});
+                    noc.async_write(
+                        UnicastEndpoint{},
+                        UnicastEndpoint{},
+                        count * sizeof(uint32_t),
+                        {.addr = keys_addr},
+                        {.noc_x = coord_x, .noc_y = coord_y, .addr = keys_addr});
+                };
+                for (uint32_t row = 0; row < num_queries; ++row) {
+                    const uint32_t page = row * cand_page_words;
+                    send_run(page + key_shares[row].output_offset, num_rows[row], k);
+                    send_run(page + kCandBlocksWord + first_block[row], num_blocks_listed[row], candidate_topk_blocks);
                 }
-                (void)ckernel::load_blocking(&cand[first + keys_stride + count - 1]);
-                const uint32_t ids_addr = cand_addr + first * sizeof(uint32_t);
-                const uint32_t keys_addr = ids_addr + keys_stride * sizeof(uint32_t);
-                noc.async_write(
-                    UnicastEndpoint{},
-                    UnicastEndpoint{},
-                    count * sizeof(uint32_t),
-                    {.addr = ids_addr},
-                    {.noc_x = coord_x, .noc_y = coord_y, .addr = ids_addr});
-                noc.async_write(
-                    UnicastEndpoint{},
-                    UnicastEndpoint{},
-                    count * sizeof(uint32_t),
-                    {.addr = keys_addr},
-                    {.noc_x = coord_x, .noc_y = coord_y, .addr = keys_addr});
-            };
-            send_run(key_share.output_offset, num_rows, k);
-            send_run(kCandBlocksWord + first_block, num_blocks_listed, candidate_topk_blocks);
-            noc.async_write_barrier();
-            hist_arrived.up(noc, coord_x, coord_y, 1);
-            noc.async_atomic_barrier();
-        }
-        if (core_index == 0) {
-            if (num_active > 1) {
-                hist_arrived.wait(num_active - 1);
-                hist_arrived.set(0);
+                noc.async_write_barrier();
+                hist_arrived.up(noc, coord_x, coord_y, 1);
+                noc.async_atomic_barrier();
             }
-            invalidate_l1_cache();
-            for (uint32_t j = num_keys_selected; j < k; ++j) {
-                cand[j] = 0;
-                cand[k + j] = 0;
+            if (core_index == 0) {
+                if (num_active > 1) {
+                    hist_arrived.wait(num_active - 1);
+                    hist_arrived.set(0);
+                }
+                invalidate_l1_cache();
+                for (uint32_t row = 0; row < num_queries; ++row) {
+                    volatile tt_l1_ptr uint32_t* page = cand + row * cand_page_words;
+                    for (uint32_t j = num_keys_selected[row]; j < k; ++j) {
+                        page[j] = 0;
+                        page[k + j] = 0;
+                    }
+                    for (uint32_t j = num_blocks_selected[row]; j < candidate_topk_blocks; ++j) {
+                        page[kCandBlocksWord + j] = 0;
+                        page[kCandBlocksWord + candidate_topk_blocks + j] = 0;
+                    }
+                    for (uint32_t j = 0; j < 16; ++j) {
+                        page[kCandHeaderWord + j] = 0;
+                    }
+                    page[kCandHeaderWord] = num_keys_selected[row];
+                    page[kCandHeaderWord + 1] = num_blocks_selected[row];
+                    page[kCandHeaderWord + 2] = row_keys[row];
+                    (void)ckernel::load_blocking(&page[kCandHeaderWord + 15]);
+                    noc.async_write(
+                        kv_wr_dfb,
+                        output,
+                        (kCandBlocksWord + 2 * candidate_topk_blocks) * sizeof(uint32_t),
+                        {.offset_bytes = row * cand_page_words * static_cast<uint32_t>(sizeof(uint32_t))},
+                        {.page_id = row, .offset_bytes = 0});
+                }
+                noc.async_write_barrier();
             }
-            for (uint32_t j = num_blocks_selected; j < candidate_topk_blocks; ++j) {
-                cand[kCandBlocksWord + j] = 0;
-                cand[kCandBlocksWord + candidate_topk_blocks + j] = 0;
-            }
-            for (uint32_t j = 0; j < 16; ++j) {
-                cand[kCandHeaderWord + j] = 0;
-            }
-            cand[kCandHeaderWord] = num_keys_selected;
-            cand[kCandHeaderWord + 1] = num_blocks_selected;
-            cand[kCandHeaderWord + 2] = num_keys;
-            (void)ckernel::load_blocking(&cand[kCandHeaderWord + 15]);
-            noc.async_write(
-                kv_wr_dfb,
-                output,
-                (kCandBlocksWord + 2 * candidate_topk_blocks) * sizeof(uint32_t),
-                {.offset_bytes = 0},
-                {.page_id = 0, .offset_bytes = 0});
-            noc.async_write_barrier();
-        }
-    };
+        };
 #ifndef CANDIDATE_SOURCE
-    write_partial(0, 0, 0);
+    {
+        const uint32_t zeros[num_queries] = {};
+        write_partial(zeros, zeros, zeros);
+    }
 #endif
 #else
     // List this core's selected keys once each, in local key order, as kv_cache row ids with the mask
@@ -837,39 +1088,18 @@ void kernel_main() {
     uint32_t num_rows = 0;
     {
         DeviceZoneScopedN("SEL-LIST");
-        uint32_t left[num_queries];
-        uint32_t from_bin_left[num_queries];
-        uint32_t listing = 0;  // rows with keys left to list
         uint32_t scan_end = 0;
+        uint32_t to_list = 0;
         for (uint32_t row = 0; row < num_queries; ++row) {
-            left[row] = key_shares[row].num_contribute;
-            from_bin_left[row] = key_shares[row].num_from_bin;
-            if (left[row] != 0) {
-                listing |= 1u << row;
+            to_list += key_shares[row].num_contribute;
+            if (key_shares[row].num_contribute != 0) {
                 scan_end = std::max(scan_end, num_local_keys[row]);
             }
         }
-        for (uint32_t i = 0; i < scan_end && listing != 0; ++i) {
-            uint32_t mask = 0;
-            for (uint32_t pending = listing; pending != 0; pending &= pending - 1) {
-                const uint32_t row = __builtin_ctz(pending);
-                if (i >= num_local_keys[row]) {
-                    continue;
-                }
-                const uint32_t top = key_at(row, i) >> key_shares[row].final_shift;
-                bool take = top > key_shares[row].final_prefix;
-                if (top == key_shares[row].final_prefix && from_bin_left[row] != 0) {
-                    --from_bin_left[row];
-                    take = true;
-                }
-                if (take) {
-                    mask |= 1u << row;
-                    if (--left[row] == 0) {
-                        listing &= ~(1u << row);
-                    }
-                }
-            }
+        for (uint32_t i = 0; i < scan_end && to_list != 0; ++i) {
+            const uint32_t mask = key_marks[i];
             if (mask != 0) {
+                to_list -= __builtin_popcount(mask);
 #ifdef ROW_TABLE
                 rows[num_rows] = row_tbl[i];
 #else
@@ -904,91 +1134,129 @@ void kernel_main() {
 #endif
 
 #ifdef CANDIDATE_SOURCE
-    static_assert(num_queries == 1, "candidate blocks are selected for one query row");
     // ---- Candidate blocks ----
-    // Keys split into blocks of candidate_block_size, each scored by its best key; the block holding
-    // the newest key is only partly filled and always kept. The candidate_topk_blocks best blocks go
-    // to candidate_blocks in ascending order (zero past the last), and pool_count is the number of
-    // valid keys in them. Page blocks are whole multiples of a candidate block, so no candidate block
-    // spans two cores (or two parts). With PARTIAL_OUTPUT the best blocks of this part go into the
-    // candidates page with their order keys instead, for merge_select_kv to pick the global best.
+    // Each query row's keys split into blocks of candidate_block_size, each scored by the row's best key
+    // in it; the block holding the row's newest key is only partly filled and always kept. Every row's
+    // candidate_topk_blocks best blocks go to its candidate_blocks row in ascending order (zero past the
+    // last), and its pool_count entry is the number of valid keys in them. Page blocks are whole
+    // multiples of a candidate block, so no candidate block spans two cores (or two parts). With
+    // PARTIAL_OUTPUT each row's best blocks of this part go into its candidates page with their order
+    // keys instead, for merge_select_kv to pick the global best.
     {
         DeviceZoneScopedN("SEL-CAND");
-        const uint32_t num_blocks = tt::data_movement::common::div_up(num_keys, candidate_block_size);
-        const uint32_t pinned_block = num_blocks - 1;
         const uint32_t first_local_block = first_local_key / candidate_block_size;
-        const uint32_t num_local_blocks = tt::data_movement::common::div_up(num_local_keys[0], candidate_block_size);
-
-        // Every owner has read this core's histogram of the key select, so it can be refilled. The
-        // scores are no longer needed either: block b's order key overwrites score b, which only
-        // blocks <= b have read.
-        for (uint32_t bin = 0; bin < num_hist_bins; ++bin) {
-            hist[bin] = 0;
+        uint32_t num_blocks[num_queries];
+        uint32_t pinned_block[num_queries];
+        uint32_t num_local_blocks[num_queries];
+        uint32_t max_local_blocks = 0;
+        for (uint32_t row = 0; row < num_queries; ++row) {
+            num_blocks[row] = tt::data_movement::common::div_up(row_keys[row], candidate_block_size);
+            pinned_block[row] = num_blocks[row] - 1;
+            num_local_blocks[row] = tt::data_movement::common::div_up(num_local_keys[row], candidate_block_size);
+            max_local_blocks = std::max(max_local_blocks, num_local_blocks[row]);
         }
-        for (uint32_t b = 0; b < num_local_blocks; ++b) {
-            uint32_t best = 0xFFFFFFFFu;
-            if (first_local_block + b != pinned_block) {
-                const uint32_t end = std::min((b + 1) * candidate_block_size, num_local_keys[0]);
-                best = 0;
-                for (uint32_t i = b * candidate_block_size; i < end; ++i) {
-                    best = std::max(best, topk_order_key(scores_l1[i]));
+
+        // Every owner has read this core's histograms of the key select, so they can be refilled. The
+        // scores are no longer needed either: row j's block b's order key overwrites row j's score b,
+        // which only row j's blocks <= b have read (key_at's layout with the block for the key).
+        for (uint32_t w = 0; w < kHistWords; ++w) {
+            hist[w] = 0;
+        }
+        auto block_slot = [](uint32_t row, uint32_t b) { return ((b / 32 * num_queries) + row) * 32 + b % 32; };
+        for (uint32_t b = 0; b < max_local_blocks; ++b) {
+            for (uint32_t row = 0; row < num_queries; ++row) {
+                if (b >= num_local_blocks[row]) {
+                    continue;
                 }
+                uint32_t best = 0xFFFFFFFFu;
+                if (first_local_block + b != pinned_block[row]) {
+                    const uint32_t end = std::min((b + 1) * candidate_block_size, num_local_keys[row]);
+                    best = 0;
+                    for (uint32_t i = b * candidate_block_size; i < end; ++i) {
+                        best = std::max(best, key_at(row, i));
+                    }
+                }
+                scores_l1[block_slot(row, b)] = best;
+                ++hist[row * num_hist_bins + (best >> (32 - kHistBits))];
             }
-            scores_l1[b] = best;
-            ++hist[best >> (32 - kHistBits)];
         }
         const uint32_t* block_keys = local_scores;
-        auto block_key = [block_keys](uint32_t, uint32_t b) { return block_keys[b]; };
-        SelectResult block_share;
-        radix_select(candidate_topk_blocks, &num_local_blocks, /*ready_base=*/kAllocReady, block_key, &block_share);
-        [[maybe_unused]] const uint32_t num_blocks_selected =
-            select[kSelectRowsWord + kHdrAbove] + select[kSelectRowsWord + kHdrNeeded];
+        auto block_key = [block_keys, block_slot](uint32_t row, uint32_t b) { return block_keys[block_slot(row, b)]; };
+        SelectResult block_shares[num_queries];
+        radix_select(
+            candidate_topk_blocks,
+            num_local_blocks,
+            /*ready_base=*/kAllocReady,
+            block_keys,
+            std::false_type{},
+            block_shares,
+            nullptr);
+        uint32_t num_blocks_selected[num_queries];
+        for (uint32_t row = 0; row < num_queries; ++row) {
+            volatile tt_l1_ptr uint32_t* hdr = select + kSelectRowsWord + row * kSelectHeaderWords;
+            num_blocks_selected[row] = hdr[kHdrAbove] + hdr[kHdrNeeded];
+        }
 
 #ifdef PARTIAL_OUTPUT
         // The blocks go after this core's key run in the same staging page.
+        constexpr uint32_t kListRowWords = cand_page_words;
         volatile tt_l1_ptr uint32_t* list = cand + kCandBlocksWord;
 #else
         // kv_wr is free once this core's gather is done, and core 0's is done before the allocation,
-        // so every core lists its blocks at the same L1 offsets it then writes to on core 0.
+        // so every core lists its blocks at the same L1 offsets it then writes to on core 0. Row j's
+        // list starts kListRowWords words after row j - 1's.
+        constexpr uint32_t kListRowWords = (candidate_topk_blocks + 15) / 16 * 16;
         const uint32_t list_addr = kv_wr_dfb.get_write_ptr();
         volatile tt_l1_ptr uint32_t* list = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(list_addr);
 #endif
-        uint32_t num_listed = 0;
-        uint32_t from_bin_left = block_share.num_from_bin;
-        for (uint32_t b = 0; b < num_local_blocks && num_listed < block_share.num_contribute; ++b) {
-            const uint32_t key = block_key(0, b);
-            const uint32_t top = key >> block_share.final_shift;
-            bool take = top > block_share.final_prefix;
-            if (top == block_share.final_prefix && from_bin_left != 0) {
-                --from_bin_left;
-                take = true;
-            }
-            if (take) {
+        uint32_t num_listed[num_queries];
+        uint32_t first_listed[num_queries];
+        for (uint32_t row = 0; row < num_queries; ++row) {
+            const SelectResult& block_share = block_shares[row];
+            volatile tt_l1_ptr uint32_t* row_list = list + row * kListRowWords;
+            uint32_t listed = 0;
+            uint32_t from_bin_left = block_share.num_from_bin;
+            for (uint32_t b = 0; b < num_local_blocks[row] && listed < block_share.num_contribute; ++b) {
+                const uint32_t key = block_key(row, b);
+                const uint32_t top = key >> block_share.final_shift;
+                bool take = top > block_share.final_prefix;
+                if (top == block_share.final_prefix && from_bin_left != 0) {
+                    --from_bin_left;
+                    take = true;
+                }
+                if (take) {
 #ifdef PARTIAL_OUTPUT
-                list[candidate_topk_blocks + block_share.output_offset + num_listed] = key;
+                    row_list[candidate_topk_blocks + block_share.output_offset + listed] = key;
 #endif
-                list[block_share.output_offset + num_listed++] = first_local_block + b;
+                    row_list[block_share.output_offset + listed++] = first_local_block + b;
+                }
             }
+            num_listed[row] = listed;
+            first_listed[row] = block_share.output_offset;
         }
 
 #ifdef PARTIAL_OUTPUT
-        write_partial(block_share.output_offset, num_listed, num_blocks_selected);
+        write_partial(first_listed, num_listed, num_blocks_selected);
 #else
-        constexpr uint32_t kCountOffsetWords = (candidate_topk_blocks * sizeof(uint32_t) + 63) / 64 * 16;
+        // pool_count's Sq words follow the last row's list, 64 B aligned.
+        constexpr uint32_t kCountOffsetWords = num_queries * kListRowWords;
         const auto candidate_blocks = TensorAccessor(tensor::candidate_blocks);
         const auto pool_count = TensorAccessor(tensor::pool_count);
         if (core_index != 0 && is_active) {
-            if (num_listed != 0) {
-                const uint32_t addr = list_addr + block_share.output_offset * sizeof(uint32_t);
-                (void)ckernel::load_blocking(&list[block_share.output_offset + num_listed - 1]);
-                noc.async_write(
-                    UnicastEndpoint{},
-                    UnicastEndpoint{},
-                    num_listed * sizeof(uint32_t),
-                    {.addr = addr},
-                    {.noc_x = coord_x, .noc_y = coord_y, .addr = addr});
-                noc.async_write_barrier();
+            for (uint32_t row = 0; row < num_queries; ++row) {
+                if (num_listed[row] != 0) {
+                    const uint32_t first = row * kListRowWords + first_listed[row];
+                    const uint32_t addr = list_addr + first * sizeof(uint32_t);
+                    (void)ckernel::load_blocking(&list[first + num_listed[row] - 1]);
+                    noc.async_write(
+                        UnicastEndpoint{},
+                        UnicastEndpoint{},
+                        num_listed[row] * sizeof(uint32_t),
+                        {.addr = addr},
+                        {.noc_x = coord_x, .noc_y = coord_y, .addr = addr});
+                }
             }
+            noc.async_write_barrier();
             hist_arrived.up(noc, coord_x, coord_y, 1);
             noc.async_atomic_barrier();
         }
@@ -998,24 +1266,31 @@ void kernel_main() {
                 hist_arrived.wait(num_active - 1);
                 hist_arrived.set(0);
             }
-            const uint32_t num_chosen = std::min(candidate_topk_blocks, num_blocks);
-            for (uint32_t j = num_chosen; j < candidate_topk_blocks; ++j) {
-                list[j] = 0;
+            invalidate_l1_cache();
+            for (uint32_t row = 0; row < num_queries; ++row) {
+                volatile tt_l1_ptr uint32_t* row_list = list + row * kListRowWords;
+                const uint32_t num_chosen = std::min(candidate_topk_blocks, num_blocks[row]);
+                for (uint32_t j = num_chosen; j < candidate_topk_blocks; ++j) {
+                    row_list[j] = 0;
+                }
+                // Every chosen block but the pinned one, which is last, is full.
+                const uint32_t pinned_keys = row_keys[row] - pinned_block[row] * candidate_block_size;
+                list[kCountOffsetWords + row] =
+                    num_chosen == 0 ? 0 : (num_chosen - 1) * candidate_block_size + pinned_keys;
             }
-            // Every chosen block but the pinned one, which is last, is full.
-            const uint32_t pinned_keys = num_keys - pinned_block * candidate_block_size;
-            list[kCountOffsetWords] = num_chosen == 0 ? 0 : (num_chosen - 1) * candidate_block_size + pinned_keys;
-            (void)ckernel::load_blocking(&list[kCountOffsetWords]);
-            noc.async_write(
-                kv_wr_dfb,
-                candidate_blocks,
-                candidate_topk_blocks * sizeof(uint32_t),
-                {.offset_bytes = 0},
-                {.page_id = 0, .offset_bytes = 0});
+            (void)ckernel::load_blocking(&list[kCountOffsetWords + num_queries - 1]);
+            for (uint32_t row = 0; row < num_queries; ++row) {
+                noc.async_write(
+                    kv_wr_dfb,
+                    candidate_blocks,
+                    candidate_topk_blocks * sizeof(uint32_t),
+                    {.offset_bytes = row * kListRowWords * static_cast<uint32_t>(sizeof(uint32_t))},
+                    {.page_id = row, .offset_bytes = 0});
+            }
             noc.async_write(
                 kv_wr_dfb,
                 pool_count,
-                sizeof(uint32_t),
+                num_queries * sizeof(uint32_t),
                 {.offset_bytes = kCountOffsetWords * sizeof(uint32_t)},
                 {.page_id = 0, .offset_bytes = 0});
             noc.async_write_barrier();
@@ -1027,4 +1302,5 @@ void kernel_main() {
     blocks_dfb.pop_front(1);
     scores_dfb.pop_front(num_local_chunks * num_queries);
     select_ready.set(0);
+    alloc_done.set(0);
 }

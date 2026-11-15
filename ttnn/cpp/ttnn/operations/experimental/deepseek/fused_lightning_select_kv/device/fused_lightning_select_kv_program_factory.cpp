@@ -34,6 +34,10 @@ constexpr uint32_t kNumEntriesPerDfb = 2;
 constexpr uint32_t kHeadsPerQueryTile = 8;
 // kv rows each data-movement kernel stages in L1 while gathering; half are read while the other half drain.
 constexpr uint32_t kKvStageRows = 16;
+// A row whose threshold bin holds at most max_ties keys is resolved from them in one exchange: up to
+// kMaxTies, as many as fit every core's counts for every row in kTieGatherBytes on the coordinator.
+constexpr uint32_t kMaxTies = 32;
+constexpr uint32_t kTieGatherBytes = 64 * 1024;
 
 DataflowBufferSpec make_dfb(const DFBSpecName& name, const Tensor& tensor, uint32_t num_entries = kNumEntriesPerDfb) {
     return DataflowBufferSpec{
@@ -71,6 +75,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const bool has_row_table = tensor_args.row_table.has_value();
     const bool has_page_table_row = tensor_args.page_table_row_tensor.has_value();
     const bool has_kv_page_table = tensor_args.kv_page_table.has_value();
+    const bool has_row_mask = tensor_args.row_mask_table.has_value();
     const uint32_t page_block_size = tensor_args.key_cache.logical_shape()[-2];
     const uint32_t chunks_per_block = page_block_size / tt::constants::TILE_HEIGHT;
 
@@ -100,6 +105,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const SemaphoreSpecName SEM_HIST_ARRIVED{"hist_arrived"};
     const SemaphoreSpecName SEM_SLICE_ARRIVED{"slice_arrived"};
     const SemaphoreSpecName SEM_SELECT_READY{"select_ready"};
+    const SemaphoreSpecName SEM_ALLOC_DONE{"alloc_done"};
 
     const TensorParamName QUERY{"query"};
     const TensorParamName KEY_CACHE{"key_cache"};
@@ -120,6 +126,8 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const TensorParamName PAGE_TABLE_ROW{"page_table_row"};
     const TensorParamName KV_PAGE_TABLE{"kv_page_table"};
     const DFBSpecName ROW_TBL_DFB{"row_tbl"};
+    const TensorParamName ROW_MASK{"row_mask"};
+    const DFBSpecName ROW_MASK_DFB{"row_mask_l1"};
 
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -212,9 +220,15 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     // query row (padded to 16 B, the NoC L1 alignment) to slot core_index of this buffer on the
     // coordinator (core 0). It is allocated on every core so its L1 address is the same everywhere,
     // but only core 0's copy is used.
+    // Per query row {keys above, keys in the bin, then up to kMaxTies of those keys}: once at most kMaxTies
+    // keys of a row are left in its threshold bin, the coordinator resolves the row from them.
+    // Query row r's counts go to core r, which allocates the row.
+    const uint32_t gather_row_words = kTieGatherBytes / (cores_in_grid * sizeof(uint32_t));
+    const uint32_t max_ties = std::clamp(gather_row_words, 3u, kMaxTies + 2) - 2;
+    TT_FATAL(num_queries <= cores_in_grid, "fused_lightning_select_kv: every query row needs a core of its own");
     const DataflowBufferSpec hist_gather_dfb{
         .unique_id = HIST_GATHER_DFB,
-        .entry_size = tt::round_up(2 * num_queries, 4u) * static_cast<uint32_t>(sizeof(uint32_t)),
+        .entry_size = tt::round_up(2 + max_ties, 4u) * static_cast<uint32_t>(sizeof(uint32_t)),
         .num_entries = cores_in_grid,
         .data_format_metadata = tt::DataFormat::UInt32,
     };
@@ -235,9 +249,11 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     };
     // Coordinator -> all cores, after every radix pass: 8 global words {query rows still selecting,
     // pad...}, then per query row a header {threshold prefix, prefix bits, keys above it, keys still
-    // needed from it, pad, total keys, pad, pad}; after the last pass, per core and query row {keys to
-    // contribute, of which equal to the threshold, output offset}.
-    const uint32_t kTopkSelectWords = tt::round_up(8 + (8 * num_queries) + (3 * num_queries * cores_in_grid), 4u);
+    // needed from it, resolved from ties, pad, pad, pad}; after the last pass core r multicasts query row
+    // r's header and allocation, per core {keys to contribute, of which equal to the threshold, output
+    // offset}, each row's allocation a 16 B aligned run of its own.
+    const uint32_t alloc_row_words = tt::round_up(3 * cores_in_grid, 4u);
+    const uint32_t kTopkSelectWords = tt::round_up(8 + (8 * num_queries), 4u) + (num_queries * alloc_row_words);
     const DataflowBufferSpec select_dfb{
         .unique_id = SELECT_DFB,
         .entry_size = kTopkSelectWords * sizeof(uint32_t),
@@ -269,6 +285,14 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         local_key_capacity <= (1u << 16),
         "fused_lightning_select_kv: {} keys per core do not fit the 16-bit candidate lists; use a larger grid",
         local_key_capacity);
+    // Writer-local: per local key, the mask of query rows that selected it.
+    const DFBSpecName MARKS_DFB{"marks"};
+    const DataflowBufferSpec marks_dfb{
+        .unique_id = MARKS_DFB,
+        .entry_size = tt::round_up(local_key_capacity * static_cast<uint32_t>(sizeof(uint32_t)), 16u),
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::UInt32,
+    };
     const DataflowBufferSpec cand_list_dfb{
         .unique_id = CAND_LIST_DFB,
         .entry_size = tt::round_up(num_queries * local_key_capacity * static_cast<uint32_t>(sizeof(uint16_t)), 16u),
@@ -362,17 +386,19 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const uint32_t kv_page_bytes = static_cast<uint32_t>(tensor_args.kv_cache.buffer()->page_size());
     // The writer's kv staging rows; with num_parts > 1 core 0 assembles the candidates page there
     // instead, which in candidate source mode can be larger than the gather's stage.
-    uint32_t kv_wr_rows = kKvStageRows;
+    // Several query rows gather several times the rows, so each kernel keeps more reads in flight.
+    const uint32_t kv_stage_rows = num_queries > 1 ? 2 * kKvStageRows : kKvStageRows;
+    uint32_t kv_wr_rows = kv_stage_rows;
+    // num_parts > 1: one candidates page per query row, each starting cand_page_words words after the last.
+    const uint32_t cand_page_words = tt::round_up(2 * args.k + 16 + 2 * args.candidate_topk_blocks, 16u);
     if (is_candidate_source && !is_partial) {
-        // Core 0 assembles the candidate list, then pool_count 64 B past it, in its kv_wr stage.
-        const uint32_t stage_bytes = kKvStageRows * kv_page_bytes;
+        // Core 0 assembles every query row's candidate list (64 B aligned each), then the Sq pool counts,
+        // in its kv_wr stage.
         const uint32_t list_bytes =
-            tt::round_up(args.candidate_topk_blocks * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
-        TT_FATAL(
-            list_bytes + sizeof(uint32_t) <= stage_bytes,
-            "fused_lightning_select_kv: {} candidate blocks do not fit the {} B kv staging buffer",
-            args.candidate_topk_blocks,
-            stage_bytes);
+            num_queries * tt::round_up(args.candidate_topk_blocks * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
+        const uint32_t needed_bytes =
+            list_bytes + tt::round_up(num_queries * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
+        kv_wr_rows = std::max(kv_wr_rows, tt::round_up(tt::div_up(needed_bytes, kv_page_bytes), 2u));
         tensor_parameters.push_back(TensorParameter{.unique_id = CANDIDATE_BLOCKS, .spec = output.at(2).tensor_spec()});
         tensor_parameters.push_back(TensorParameter{.unique_id = POOL_COUNT, .spec = output.at(3).tensor_spec()});
         writer_tensor_bindings.push_back(
@@ -384,8 +410,8 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         writer_compiler_options.defines.emplace("CANDIDATE_SOURCE", "1");
     }
     if (is_partial) {
-        const auto cand_page_bytes = static_cast<uint32_t>(kv_output.buffer()->page_size());
-        kv_wr_rows = std::max(kv_wr_rows, tt::div_up(cand_page_bytes, kv_page_bytes));
+        const uint32_t cand_bytes = num_queries * cand_page_words * static_cast<uint32_t>(sizeof(uint32_t));
+        kv_wr_rows = std::max(kv_wr_rows, tt::round_up(tt::div_up(cand_bytes, kv_page_bytes), 2u));
         writer_compiler_options.defines.emplace("PARTIAL_OUTPUT", "1");
     }
     // The writer reads its keys' rows into row_tbl, one uint32 per key.
@@ -408,6 +434,29 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
             .dfb_spec_name = ROW_TBL_DFB, .accessor_name = "row_tbl", .endpoint_type = DFBEndpointType::PRODUCER});
         extra_writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = ROW_TBL_DFB, .accessor_name = "row_tbl", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+    // The writer reads its keys' row masks into row_mask_l1, from the 64 B boundary at or below them.
+    uint32_t row_mask_group = 1;
+    if (has_row_mask) {
+        row_mask_group = max_num_blocks * page_block_size / tensor_args.row_mask_table->logical_shape()[1];
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = ROW_MASK, .spec = tensor_args.row_mask_table->tensor_spec()});
+        writer_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = ROW_MASK, .accessor_name = "row_mask"});
+        writer_compiler_options.defines.emplace("ROW_MASK", "1");
+        extra_dfbs.push_back(DataflowBufferSpec{
+            .unique_id = ROW_MASK_DFB,
+            .entry_size = tt::round_up(
+                              tt::div_up(std::max(max_blocks_per_core, 1u) * page_block_size, row_mask_group) *
+                                  static_cast<uint32_t>(sizeof(uint32_t)),
+                              64u) +
+                          64,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt32,
+        });
+        extra_writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = ROW_MASK_DFB, .accessor_name = "row_mask_l1", .endpoint_type = DFBEndpointType::PRODUCER});
+        extra_writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = ROW_MASK_DFB, .accessor_name = "row_mask_l1", .endpoint_type = DFBEndpointType::CONSUMER});
     }
 
     // ---- Kernels ----
@@ -477,7 +526,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              {"num_weight_tiles", num_weight_tiles},
              {"page_block_size", page_block_size},
              {"num_tiles_per_block_of_key", num_tiles_per_block_of_key},
-             {"kv_stage_rows", kKvStageRows},
+             {"kv_stage_rows", kv_stage_rows},
              {"sel_rows_word", sel_rows_word},
              {"sel_max_rows", sel_max_rows},
              {"num_parts", args.num_parts}},
@@ -545,12 +594,17 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
                     .dfb_spec_name = CAND_LIST_DFB,
                     .accessor_name = "cand_list",
                     .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = MARKS_DFB, .accessor_name = "marks", .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = MARKS_DFB, .accessor_name = "marks", .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .semaphore_bindings =
             {
                 SemaphoreBinding{.semaphore_spec_name = SEM_HIST_ARRIVED, .accessor_name = "hist_arrived"},
                 SemaphoreBinding{.semaphore_spec_name = SEM_SELECT_READY, .accessor_name = "select_ready"},
                 SemaphoreBinding{.semaphore_spec_name = SEM_SLICE_ARRIVED, .accessor_name = "slice_arrived"},
+                SemaphoreBinding{.semaphore_spec_name = SEM_ALLOC_DONE, .accessor_name = "alloc_done"},
             },
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args =
@@ -563,7 +617,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              {"hist_num_owners", hist_num_owners},
              {"hist_slices_per_owner", hist_slices_per_owner},
              {"num_select_words", kTopkSelectWords},
-             {"kv_stage_rows", kKvStageRows},
+             {"kv_stage_rows", kv_stage_rows},
              {"sel_rows_word", sel_rows_word},
              {"sel_max_rows", sel_max_rows},
              {"output_row_offset", args.output_row_offset},
@@ -571,7 +625,11 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              {"num_new_kv_rows", num_new_kv_rows},
              {"candidate_topk_blocks", args.candidate_topk_blocks},
              {"candidate_block_size", args.candidate_block_size},
-             {"num_parts", args.num_parts}},
+             {"num_parts", args.num_parts},
+             {"cand_page_words", cand_page_words},
+             {"max_ties", max_ties},
+             {"alloc_row_words", alloc_row_words},
+             {"row_mask_group", row_mask_group}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"core_index", "num_cores"},
              .common_runtime_arg_names =
@@ -644,7 +702,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              key_dfb,
              weights_dfb,
              indices_dfb,
-             make_dfb(KV_DFB, tensor_args.kv_cache, kKvStageRows),
+             make_dfb(KV_DFB, tensor_args.kv_cache, kv_stage_rows),
              make_dfb(KV_WR_DFB, tensor_args.kv_cache, kv_wr_rows),
              blocks_dfb,
              sel_dfb,
@@ -656,11 +714,13 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              select_dfb,
              hist_scatter_dfb,
              hist_sum_dfb,
-             cand_list_dfb},
+             cand_list_dfb,
+             marks_dfb},
         .semaphores =
             {SemaphoreSpec{.unique_id = SEM_HIST_ARRIVED, .target_nodes = all_cores},
              SemaphoreSpec{.unique_id = SEM_SELECT_READY, .target_nodes = all_cores},
-             SemaphoreSpec{.unique_id = SEM_SLICE_ARRIVED, .target_nodes = all_cores}},
+             SemaphoreSpec{.unique_id = SEM_SLICE_ARRIVED, .target_nodes = all_cores},
+             SemaphoreSpec{.unique_id = SEM_ALLOC_DONE, .target_nodes = all_cores}},
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = {WorkUnitSpec{
             .name = "fused_lightning_select_kv", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
@@ -739,6 +799,9 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     }
     if (has_kv_page_table) {
         run_args.tensor_args.emplace(KV_PAGE_TABLE, std::cref(tensor_args.kv_page_table->mesh_tensor()));
+    }
+    if (has_row_mask) {
+        run_args.tensor_args.emplace(ROW_MASK, std::cref(tensor_args.row_mask_table->mesh_tensor()));
     }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

@@ -55,14 +55,19 @@ void BuildCandidatePoolDeviceOperation::validate_on_program_cache_miss(
     const auto& blocks = tensor_args.candidate_blocks;
     require_int32_rm_interleaved(blocks, "candidate_blocks");
     TT_FATAL(
-        blocks.logical_shape().rank() == 2 && blocks.logical_shape()[0] == 1,
-        "build_candidate_pool: candidate_blocks must be [1, candidate_topk_blocks], got {}",
+        blocks.logical_shape().rank() == 2 && blocks.logical_shape()[0] >= 1 && blocks.logical_shape()[0] <= 15,
+        "build_candidate_pool: candidate_blocks must be [Sq, candidate_topk_blocks] with 1 <= Sq <= 15, got {}",
         blocks.logical_shape());
+    const uint32_t num_rows = blocks.logical_shape()[0];
     require_int32_rm_interleaved(tensor_args.pool_count, "pool_count");
     TT_FATAL(
-        tensor_args.pool_count.logical_shape().volume() == 1,
-        "build_candidate_pool: pool_count must hold one count, got {}",
+        tensor_args.pool_count.logical_shape().volume() == num_rows,
+        "build_candidate_pool: pool_count must hold one count per row ({}), got {}",
+        num_rows,
         tensor_args.pool_count.logical_shape());
+    TT_FATAL(
+        num_rows > 1 || (!tensor_args.pool_masks_output.has_value() && !tensor_args.pool_counts_output.has_value()),
+        "build_candidate_pool: pool_masks_output / pool_counts_output are outputs of a several-row pool");
     const auto& page_table = tensor_args.page_table_tensor;
     require_int32_rm_interleaved(page_table, "page_table_tensor");
     TT_FATAL(
@@ -121,32 +126,55 @@ void BuildCandidatePoolDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.pool_rows_output.has_value()) {
         require_output(tensor_args.pool_rows_output.value(), specs[1], "pool_rows_output");
     }
+    if (tensor_args.pool_masks_output.has_value()) {
+        require_output(tensor_args.pool_masks_output.value(), specs[2], "pool_masks_output");
+    }
+    if (tensor_args.pool_counts_output.has_value()) {
+        require_output(tensor_args.pool_counts_output.value(), specs[3], "pool_counts_output");
+    }
 }
 
 BuildCandidatePoolDeviceOperation::spec_return_value_t BuildCandidatePoolDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& key_shape = tensor_args.key_cache.logical_shape();
     const uint32_t page_block_size = key_shape[-2];
-    const uint32_t pool_keys = tensor_args.candidate_blocks.logical_shape()[-1] * args.candidate_block_size;
-    return {
+    const uint32_t num_rows = tensor_args.candidate_blocks.logical_shape()[0];
+    const uint32_t pool_keys = num_rows * tensor_args.candidate_blocks.logical_shape()[-1] * args.candidate_block_size;
+    spec_return_value_t specs = {
         TensorSpec(
             ttnn::Shape({pool_keys / page_block_size, 1, page_block_size, key_shape[-1]}),
             TensorLayout(tensor_args.key_cache.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
         TensorSpec(
             ttnn::Shape({1, pool_keys}), TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
     };
+    if (num_rows > 1) {
+        specs.push_back(TensorSpec(
+            ttnn::Shape({1, pool_keys}), TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
+        specs.push_back(TensorSpec(
+            ttnn::Shape({num_rows}), TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
+    }
+    return specs;
 }
 
 BuildCandidatePoolDeviceOperation::tensor_return_value_t BuildCandidatePoolDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.key_cache.device();
-    return {
+    tensor_return_value_t outputs = {
         tensor_args.pool_keys_output.has_value() ? tensor_args.pool_keys_output.value()
                                                  : ttnn::create_device_tensor(specs[0], device),
         tensor_args.pool_rows_output.has_value() ? tensor_args.pool_rows_output.value()
                                                  : ttnn::create_device_tensor(specs[1], device),
     };
+    if (specs.size() > 2) {
+        outputs.push_back(
+            tensor_args.pool_masks_output.has_value() ? tensor_args.pool_masks_output.value()
+                                                      : ttnn::create_device_tensor(specs[2], device));
+        outputs.push_back(
+            tensor_args.pool_counts_output.has_value() ? tensor_args.pool_counts_output.value()
+                                                       : ttnn::create_device_tensor(specs[3], device));
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::build_candidate_pool
@@ -161,7 +189,9 @@ std::vector<ttnn::Tensor> build_candidate_pool(
     uint32_t candidate_block_size,
     const std::optional<ttnn::Tensor>& pool_keys_output,
     const std::optional<ttnn::Tensor>& pool_rows_output,
-    const std::optional<ttnn::Tensor>& page_table_row_tensor) {
+    const std::optional<ttnn::Tensor>& page_table_row_tensor,
+    const std::optional<ttnn::Tensor>& pool_masks_output,
+    const std::optional<ttnn::Tensor>& pool_counts_output) {
     using OperationType =
         ttnn::operations::experimental::deepseek::build_candidate_pool::BuildCandidatePoolDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{.candidate_block_size = candidate_block_size};
@@ -173,6 +203,8 @@ std::vector<ttnn::Tensor> build_candidate_pool(
         .pool_keys_output = pool_keys_output,
         .pool_rows_output = pool_rows_output,
         .page_table_row_tensor = page_table_row_tensor,
+        .pool_masks_output = pool_masks_output,
+        .pool_counts_output = pool_counts_output,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
