@@ -243,7 +243,9 @@ class _Fake:
 
             def recv_bytes(self, size, source):
                 with fake.cv:
-                    fake.cv.wait_for(lambda: fake.boxes[(source, rank)])
+                    fake.cv.wait_for(lambda: fake.boxes[(source, rank)] or source in fake.die)
+                    if not fake.boxes[(source, rank)]:  # the sender died: what ULFM reports to the receiver
+                        raise RuntimeError("MPI_ERR_PROC_FAILED")
                     data = fake.boxes[(source, rank)].pop(0)
                 assert len(data) == size
                 return data
@@ -299,30 +301,45 @@ def test_a_failing_rank_stops_every_rank_and_names_itself():
 
 
 def test_a_failing_collective_is_fatal_and_ends_the_exchanges(expect_error):
-    def body(group, fake):
-        if group.rank == 2:
-            fake.die.add(2)
-        try:
-            group.allgather(1)
-        except CheckpointFatalError:
-            with expect_error(CheckpointFatalError, "no further exchange"):
-                group.allgather(2)
-            raise
+    """A rank whose collective fails (a peer died, under ULFM) raises CheckpointFatalError, and its transport refuses
+    every later exchange."""
+    fake = _Fake(3)
+    fake.die.add(2)
+    group = Group(fake.transport(2))
+    with expect_error(CheckpointFatalError, "collective failed .*; a peer may have died"):
+        group.allgather(1)
+    with expect_error(CheckpointFatalError, "no further exchange is attempted"):
+        group.allgather(2)
 
-    fake_size = 3
-    fake = _Fake(fake_size)
-    errors = {}
 
-    def run(rank):
-        try:
-            body(Group(fake.transport(rank)), fake)
-        except BaseException as err:  # noqa: BLE001
-            errors[rank] = err
+def _dies_sending(group, fake):
+    """Make this rank's next send fail as a dying process's would, and its peers' receives with it."""
 
-    t2 = threading.Thread(target=run, args=(2,))
-    t2.start()
-    t2.join(timeout=10)
-    assert isinstance(errors[2], CheckpointFatalError) and "peer may have died" in str(errors[2])
+    def broken(data, dest):
+        with fake.cv:
+            fake.die.add(group.rank)
+            fake.cv.notify_all()
+        raise RuntimeError("MPI_ERR_PROC_FAILED")
+
+    group.transport.send_bytes = broken
+
+
+def test_a_failing_point_to_point_transfer_is_fatal_on_both_ends():
+    def gather_body(group, fake):
+        if group.rank == 1:
+            _dies_sending(group, fake)
+        group.gather(b"this rank's part")
+
+    def broadcast_body(group, fake):
+        if group.rank == 0:
+            _dies_sending(group, fake)
+        group.broadcast(b"the election" if group.is_coordinator else None)
+
+    for body in (gather_body, broadcast_body):
+        _, errors = _run_ranks(2, body)
+        assert set(errors) == {0, 1}, body.__name__
+        assert all(type(e) is CheckpointFatalError for e in errors.values()), (body.__name__, errors)
+        assert all("point-to-point transfer failed" in str(e) for e in errors.values()), (body.__name__, errors)
 
 
 def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_anything(expect_error):

@@ -217,3 +217,40 @@ def test_a_truncated_file_on_one_rank_stops_every_rank_before_anything_is_placed
     assert after.keys() == before.keys() and before
     assert all(np.array_equal(after[k], before[k]) for k in before), "no rank placed anything"
     ttnn.distributed_context_barrier()
+
+
+def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypatch, expect_error):
+    """The one-rank failures save and load must turn into the same error on every rank: a header that is not JSON
+    on rank 1, a data file rank 1 cannot create (the staging directory is then removed), and ranks that load with
+    different strictness."""
+    from ttml.distributed_checkpointing import _save
+
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "one_rank")
+    with expect_error(
+        dcp.CheckpointError, r"collecting the live tensors failed on rank\(s\) \[1\] of 2: rank 1: .*header at /step"
+    ):
+        dcp.save(path, model=model, header={"step": np.int64(1) if rank == 1 else 1})
+
+    real_create = _save.create_file
+
+    def create_file(file_path, header, data_bytes):
+        if rank == 1:
+            raise OSError("simulated EDQUOT")
+        return real_create(file_path, header, data_bytes)
+
+    monkeypatch.setattr(_save, "create_file", create_file)
+    with expect_error(
+        dcp.CheckpointError, r"writing the shards failed on rank\(s\) \[1\] of 2: rank 1: OSError: simulated EDQUOT"
+    ):
+        dcp.save(path, model=model)
+    monkeypatch.undo()
+    ttnn.distributed_context_barrier()
+    assert not os.path.exists(path) and not any(n.startswith("one_rank.partial-") for n in os.listdir(root))
+    ttnn.distributed_context_barrier()
+
+    dcp.save(path, model=model)
+    with expect_error(dcp.CheckpointError, r"the ranks disagree on strict and whether an optimizer is loaded: rank"):
+        dcp.load(path, model=model, strict=rank == 0)
+    ttnn.distributed_context_barrier()
