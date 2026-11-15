@@ -132,7 +132,8 @@ class Hy4AttentionOpt(Hy4Attention):
 
     def _skinny_o(self, og):
         """HY4_SKINNY=oproj (default OFF): o_proj on the bank-local streaming kernel (tt/hy4_skinny.SkinnyLinear, T <= 16). Builds a second (bank-layout) copy of the o_proj weights
-        (13.4 MB bfp8 per chip per layer) on first use: call once outside a trace (warmup). Returns None when the flag is off or T > 16."""
+        (13.4 MB bfp8 per chip per layer) on first use: call once outside a trace (warmup). Returns None when the flag is off or T > 16.
+        """
         from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyLinear, enabled
 
         T = int(og.shape[2])
@@ -144,7 +145,8 @@ class Hy4AttentionOpt(Hy4Attention):
 
     def _skinny_proj(self, h):
         """HY4_SKINNY=hproj (default OFF): the fused h-proj on the bank-local streaming kernel (tt/hy4_skinny.SkinnyProj, T <= 16); returns the part tensors [q_a, kv_a, gate(, idx_wk, idx_wp)] or None.
-        Builds a second (bank-layout) copy of the fused weight (19.8 MB bfp8 per chip per layer) on first use: call once outside a trace (warmup)."""
+        Builds a second (bank-layout) copy of the fused weight (19.8 MB bfp8 per chip per layer) on first use: call once outside a trace (warmup).
+        """
         from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyProj, enabled
 
         S = int(h.shape[2])
@@ -235,7 +237,9 @@ class Hy4AttentionOpt(Hy4Attention):
         if o.rope1:
             self._lazy_rope1()
         if o.fuseproj:
-            sl = self._skinny_proj(h)  # HY4_SKINNY=hproj (default OFF): bank-local kernel, output already split (no slice ops)
+            sl = self._skinny_proj(
+                h
+            )  # HY4_SKINNY=hproj (default OFF): bank-local kernel, output already split (no slice ops)
             if sl is None:
                 wf = self._lazy_fused()
                 fp = ttnn.linear(
@@ -307,6 +311,17 @@ class Hy4AttentionOpt(Hy4Attention):
         sk = self._skinny_o(og)
         part = sk if sk is not None else self._lin(o, og, self.w_o, "o_proj")
         ttnn.deallocate(og)
+        if (
+            getattr(self, "far_defer", False)
+            and not part.memory_config().is_sharded()
+            and part.dtype == ttnn.bfloat16
+            and part.layout == ttnn.TILE_LAYOUT
+            and int(part.shape[2]) <= 16
+        ):  # HY4_FUSE_AR=1: the layer fuses the all-reduce into the next iHC pre (hy4_fuse_ar)
+            from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import FusedPartial, applies
+
+            if applies(int(part.shape[2])):
+                return FusedPartial(part)
         return self.mesh_config.allreduce(part, self.ccl, axis=1, **({"memory_config": mc} if mc else {}))
 
     def _idx_append_opt(self, o, ik, tabs):

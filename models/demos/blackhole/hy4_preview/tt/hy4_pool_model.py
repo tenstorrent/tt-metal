@@ -11,7 +11,6 @@ import torch
 
 import ttnn
 from models.demos.blackhole.hy4_preview.config import DENSE
-from models.demos.blackhole.hy4_preview.tt import hy4_dense as D
 from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
 from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Opt
 from models.demos.blackhole.hy4_preview.tt.hy4_chain import HID, NSTREAM
@@ -79,6 +78,17 @@ class Hy4PoolDecoder(Hy4Decoder):
             ly.attn.init_pool(self.ctx, kv, kp)
         self.trace = None
         self.out = None
+        self.far = None
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_ar as FAR
+
+        if (
+            FAR.enabled()
+        ):  # HY4_FUSE_AR=1 (needs HY4_IHC_FUSED=1): one-shot all-reduce of the attention o-path and MoE partials inside the next iHC pre; built last (after the CCLManager / XMerge / pools)
+            assert os.environ.get("HY4_IHC_FUSED", "0") == "1", "HY4_FUSE_AR needs HY4_IHC_FUSED=1"
+            FAR.patch_dsv4_tail()
+            self.far = FAR.shared(md)
+            for ly in ch.layers:
+                ly.attn.far_defer = True
 
     # ------------------------------------------------------------------ host side
     def set_inputs(self, tokens, pos):
@@ -213,22 +223,32 @@ class Hy4PoolDecoder(Hy4Decoder):
         x = ttnn.concat([e32] * NSTREAM, dim=2)  # packed [1,1,4,D]
         ttnn.deallocate(e32)
         y = pp_m = None
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_ar as FAR
+
+        pre = (
+            (lambda ihc, x, w, y, pp, xo: FAR.pre_with(ihc, self.far, x, w, y, pp, xo))
+            if self.far is not None
+            else (lambda ihc, x, w, y, pp, xo: ihc.pre(x, w, y=y, pp_prev=pp, x_out=xo))
+        )
         for i, ly in enumerate(ch.layers):
             wa, wm = ly.ihcf_a.norm_weight(ly.hw_in, 1), ly.ihcf_m.norm_weight(ly.hw_post, 1)
             if y is None:
                 h, _, pp_a = ly.ihcf_a.pre(x, wa)
             else:
-                h, _, pp_a, x = ly.ihcf_a.pre(x, wa, y=y, pp_prev=pp_m, x_out=x)
-                ttnn.deallocate(y)
+                h, _, pp_a, x = pre(ly.ihcf_a, x, wa, y, pp_m, x)
+                if getattr(y, "part", None) is None:
+                    ttnn.deallocate(y)
             a = self._attn(ly, None, h)
             ttnn.deallocate(h)
-            h2, _, pp_m, x = ly.ihcf_m.pre(x, wm, y=a, pp_prev=pp_a, x_out=x)
-            ttnn.deallocate(a)
+            h2, _, pp_m, x = pre(ly.ihcf_m, x, wm, a, pp_a, x)
+            if getattr(a, "part", None) is None:
+                ttnn.deallocate(a)
             y = self._mlp(i, ly, h2)
             ttnn.deallocate(h2)
         last = ch.layers[-1]
-        _, _, _, x = last.ihcf_m.pre(x, last.ihcf_m.norm_weight(last.hw_post, 1), y=y, pp_prev=pp_m, x_out=x)
-        ttnn.deallocate(y)
+        _, _, _, x = pre(last.ihcf_m, x, last.ihcf_m.norm_weight(last.hw_post, 1), y, pp_m, x)
+        if getattr(y, "part", None) is None:
+            ttnn.deallocate(y)
         x4 = ttnn.to_layout(
             ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, NSTREAM, 1, HID]), ttnn.TILE_LAYOUT
         )

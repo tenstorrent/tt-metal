@@ -271,6 +271,19 @@ class Hy4ChainLayer:
                 ","
             ):  # HY4_SKINNY=shared: bank-local decode kernel (second weight copy, 5 MB/layer/chip)
                 self.shared_dec = D.make_shared(md, *sw, limit=D.NO_CLAMP, decode=True)
+            self.blk_tp = None
+            if (
+                os.environ.get("HY4_MOE_TP32", "0") == "1" and not self.mtp
+            ):  # kernel-track: TP32 routed experts for decode (second weight copy; prefill keeps the ring layout)
+                from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32 import Tp32Experts
+                from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_block import Hy4MoeTp32Block
+
+                Wf = load_moe_layer(L, W=ch.W, experts=list(range(256)))
+                tpe = Tp32Experts(md, Wf["w0"][0], Wf["w1"][0], Wf["w2"][0])
+                del Wf
+                self.blk_tp = Hy4MoeTp32Block(
+                    md, ch.ccl, self.blk.gate, tpe, int(os.environ.get("HY4_MOE_TP32_T", "1"))
+                )
             del W
         if (
             self.mtp

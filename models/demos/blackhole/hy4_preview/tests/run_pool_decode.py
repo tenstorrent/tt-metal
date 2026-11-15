@@ -14,7 +14,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.hy4_preview.tests.dev_common import close_mesh, open_mesh, pcc
-from models.demos.blackhole.hy4_preview.tt.hy4_chain import CHUNK, Hy4Chain, dram_view
+from models.demos.blackhole.hy4_preview.tt.hy4_chain import Hy4Chain, dram_view
 from models.demos.blackhole.hy4_preview.tt.hy4_pool_model import Hy4PoolDecoder
 from models.demos.gpt_oss.config import mesh_4x8
 from models.demos.gpt_oss.tt.ccl import CCLManager
@@ -33,7 +33,9 @@ PF_ROWS = int(os.environ.get("PF_ROWS", "512"))  # prefill chunk rows per user (
 
 def l1v(md):
     v = ttnn.get_memory_view(md, ttnn.BufferType.L1)
-    return dict(l1_alloc_per_bank=v.total_bytes_allocated_per_bank, l1_largest_free=v.largest_contiguous_bytes_free_per_bank)
+    return dict(
+        l1_alloc_per_bank=v.total_bytes_allocated_per_bank, l1_largest_free=v.largest_contiguous_bytes_free_per_bank
+    )
 
 
 def res(**kw):
@@ -48,9 +50,18 @@ def main():
         from models.demos.blackhole.hy4_preview.tt import hy4_pool_decode as _pd
         from models.demos.blackhole.hy4_preview.tt.hy4_ccl_safe import hy4_fabric_selftest
 
-        links = hy4_fabric_selftest(md)  # D34-2: per-boot CCL safety self-test (all_gather_async parity bug on 4-link rows)
+        links = hy4_fabric_selftest(
+            md
+        )  # D34-2: per-boot CCL safety self-test (all_gather_async parity bug on 4-link rows)
         _pd._POOL_AG_LINKS = links.pool_ag
-        res(event="fabric_selftest", per_op=links.per_op, num_links=links.num_links, pool_ag=links.pool_ag, sec=round(links.seconds, 1), forced=links.forced)
+        res(
+            event="fabric_selftest",
+            per_op=links.per_op,
+            num_links=links.num_links,
+            pool_ag=links.pool_ag,
+            sec=round(links.seconds, 1),
+            forced=links.forced,
+        )
         mc, ccl = mesh_4x8(), CCLManager(md, num_links=links.num_links, topology=ttnn.Topology.Ring)
         ch = Hy4Chain(md, mc, ccl, ckpt=CKPT)
         t0 = time.time()
@@ -77,7 +88,13 @@ def main():
             ttnn.synchronize_device(md)
             res(event="prefill_warm_chunk_ms", ms=round((time.time() - t0) * 1e3, 1), rows=PF_ROWS)
             hn, logits = ch.head(x4)
-            lg = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))).reshape(4, PF_ROWS, -1).float()
+            lg = (
+                ttnn.to_torch(
+                    logits, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))
+                )
+                .reshape(4, PF_ROWS, -1)
+                .float()
+            )
             first = [int(lg[r, lens[r] - 1].argmax()) for r in range(4)]
             ttnn.synchronize_device(md)
             res(event="prefill", sec=round(time.time() - t0, 2), first_tokens=first, lens=lens)
@@ -108,8 +125,16 @@ def main():
                     res(event="step", s=s, ms=round(times[-1] * 1e3, 2), toks=[t[-1] for t in toks])
             dram1 = dram_view(md)
             ts = sorted(times[3:])
-            res(event="decode_done", steps=NSTEPS, median_ms=round(ts[len(ts) // 2] * 1e3, 2), tok_s_per_user=round(1.0 / (sum(ts) / len(ts)), 2), dram_alloc_delta_per_bank=dram1["alloc_per_bank"] - dram0["alloc_per_bank"])
-            json.dump({"prompts": prompts, "generated": toks, "lens": lens}, open(f"{OUT}/decode_tokens_{TAG}.json", "w"))
+            res(
+                event="decode_done",
+                steps=NSTEPS,
+                median_ms=round(ts[len(ts) // 2] * 1e3, 2),
+                tok_s_per_user=round(1.0 / (sum(ts) / len(ts)), 2),
+                dram_alloc_delta_per_bank=dram1["alloc_per_bank"] - dram0["alloc_per_bank"],
+            )
+            json.dump(
+                {"prompts": prompts, "generated": toks, "lens": lens}, open(f"{OUT}/decode_tokens_{TAG}.json", "w")
+            )
             try:
                 ref = json.load(open(f"{OUT}/decode_tokens_d6.json"))["generated"]
                 agree = []
@@ -130,7 +155,11 @@ def main():
             ch.reset()
             x4b, _ = ch.prefill(ids2)
             _, lgb = ch.head(x4b)
-            lgb = ttnn.to_torch(lgb, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))).reshape(4, PF_ROWS, -1).float()
+            lgb = (
+                ttnn.to_torch(lgb, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape)))
+                .reshape(4, PF_ROWS, -1)
+                .float()
+            )
             for r in range(4):
                 pcs, agree = [], []
                 for j in range(K):
@@ -145,6 +174,61 @@ def main():
                 ttnn.execute_trace(md, dec.trace, cq_id=0, blocking=False)
             ttnn.synchronize_device(md)
             res(event="trace_only_ms", ctx="short", ms=round((time.perf_counter() - t1) / 10 * 1e3, 2))
+        if (
+            os.environ.get("AB", "0") == "1"
+        ):  # kernel-track diag: which MoE class runs per layer + per-step replay times (data dependence) + EP-vs-TP32 A/B in one process
+            res(
+                event="moe_classes",
+                layers=[
+                    (i, type(getattr(ly, "blk_tp", None) or ly.blk).__name__)
+                    for i, ly in enumerate(ch.layers)
+                    if hasattr(ly, "blk")
+                ],
+            )
+
+            def timed(tag):
+                for rep_ in range(4):
+                    dec.set_inputs([t[-1] for t in toks], pos)
+                    ttnn.synchronize_device(md)
+                    t1 = time.perf_counter()
+                    ttnn.execute_trace(md, dec.trace, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(md)
+                    t_run = (time.perf_counter() - t1) * 1e3
+                    t1 = time.perf_counter()
+                    nxt, _ = dec.read_argmax(dec.out)
+                    t_rb = (time.perf_counter() - t1) * 1e3
+                    res(
+                        event="ab_step",
+                        tag=tag,
+                        rep=rep_,
+                        run_ms=round(t_run, 2),
+                        readback_ms=round(t_rb, 2),
+                        same_inputs=True,
+                    )
+                    for r in range(4):
+                        toks[r].append(nxt[r])
+                        pos[r] += 1
+                    dec.set_inputs([t[-1] for t in toks], pos)
+                    t1 = time.perf_counter()
+                    for _ in range(5):
+                        ttnn.execute_trace(md, dec.trace, cq_id=0, blocking=False)
+                    ttnn.synchronize_device(md)
+                    res(event="ab_trace_only", tag=tag, rep=rep_, ms=round((time.perf_counter() - t1) / 5 * 1e3, 2))
+
+            timed("current")
+            if any(getattr(ly, "blk_tp", None) is not None for ly in ch.layers):
+                saved = [getattr(ly, "blk_tp", None) for ly in ch.layers]
+                dec.release()
+                for ly in ch.layers:
+                    if hasattr(ly, "blk_tp"):
+                        ly.blk_tp = None
+                dec.set_inputs([t[-1] for t in toks], pos)
+                dec.capture()
+                timed("EP_same_process")
+                dec.release()
+                for ly, b in zip(ch.layers, saved):
+                    if hasattr(ly, "blk_tp"):
+                        ly.blk_tp = b
         # ---------------- stage B: synthetic long-context
         if CTXS:
             gen = torch.Generator().manual_seed(11)
@@ -165,7 +249,9 @@ def main():
                 dram_a = dram_view(md)
                 ts, tl = [], []
                 for s in range(NSTEPS_B):
-                    dec.set_inputs([1000 + s, 2000 + s, 3000 + s, 4000 + s], [x + s for x in p] if C > 2048 and s < 0 else p)
+                    dec.set_inputs(
+                        [1000 + s, 2000 + s, 3000 + s, 4000 + s], [x + s for x in p] if C > 2048 and s < 0 else p
+                    )
                     t1 = time.perf_counter()
                     out = dec.run()
                     nxt, lgs = dec.read_argmax(out)
@@ -175,7 +261,18 @@ def main():
                     ttnn.execute_trace(md, dec.trace, cq_id=0, blocking=False)
                 ttnn.synchronize_device(md)
                 tr = (time.perf_counter() - t1) / 10
-                res(event="ctx_decode", ctx=C, mode=mode, capture_s=round(tc, 1), host_loop_median_ms=round(statistics.median(tl[2:]) * 1e3, 2), trace_only_ms=round(tr * 1e3, 2), finite=bool(torch.isfinite(lgs).all()), next=nxt, dram_after=dram_view(md)["alloc_per_bank"] - dram_a["alloc_per_bank"], **{"free_per_bank": dram_a["free_per_bank"]})
+                res(
+                    event="ctx_decode",
+                    ctx=C,
+                    mode=mode,
+                    capture_s=round(tc, 1),
+                    host_loop_median_ms=round(statistics.median(tl[2:]) * 1e3, 2),
+                    trace_only_ms=round(tr * 1e3, 2),
+                    finite=bool(torch.isfinite(lgs).all()),
+                    next=nxt,
+                    dram_after=dram_view(md)["alloc_per_bank"] - dram_a["alloc_per_bank"],
+                    **{"free_per_bank": dram_a["free_per_bank"]},
+                )
     finally:
         close_mesh(md)
 

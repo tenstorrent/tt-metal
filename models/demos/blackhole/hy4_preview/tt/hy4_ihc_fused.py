@@ -90,7 +90,12 @@ class Hy4IHCFused:
 
     def _consts(self, mesh, T):
         """persistent L1 tensor (one shard of NCST fp32 tiles per core of the 4x8 rectangle, identical content): the constant tiles of the compute kernel."""
-        key = (id(self.device), T, self.dim, self.hc_eps)  # NOT id(mesh): x.device() returns a fresh Python object per call, so a per-call key leaked a new persistent L1 constants tensor (45 KB/core) per call
+        key = (
+            id(self.device),
+            T,
+            self.dim,
+            self.hc_eps,
+        )  # NOT id(mesh): x.device() returns a fresh Python object per call, so a per-call key leaked a new persistent L1 constants tensor (45 KB/core) per call
         c = _CST.get(key)
         if c is None:
             G = (T + 7) // 8
@@ -148,15 +153,23 @@ class Hy4IHCFused:
             _CST[key] = c
         return c
 
-    def pre(self, x, w4, emit_rm=False, y=None, pp_prev=None, x_out=None):
+    def pre(self, x, w4, emit_rm=False, y=None, pp_prev=None, x_out=None, land=None, fuse=None):
         """x: packed streams [1,1,4T,D] fp32 TILE (row 4t + i = stream i of token t), w4 from norm_weight -> (h bf16 [1,1,T,D] TILE, h_tok bf16 [T,1,1,D] ROW_MAJOR | None, pp fp32 [1,1,32,32]).
         With y ([1,1,T,D] bf16 TILE, the previous sub-block output) and pp_prev (the pp of the previous pre call of the SAME streams): the identity-comb
         expand x_new = x + post_prev * y is done first, inside this kernel, and x_new is written to x_out (default: a new tensor; pass x for in place);
         the call then returns (h, h_tok, pp, x_new)."""
         _, _, R4, D = (int(v) for v in x.shape)
         T = R4 // 4
-        EXPAND = int(y is not None)
-        assert (y is None) == (pp_prev is None)
+        # land = (L1 address of the landing buffer, compact tile bytes): y is the landed result of the one-shot all-reduce (hy4_fuse_ar), not a DRAM tensor (B10 persist)
+        # fuse = (Hy4FuseAR, partial): the one-shot all-reduce of the partial runs in the SAME mesh program (the reader waits on the landing semaphore; stage 2b)
+        if fuse is not None:
+            assert y is None and land is None
+            from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import tile_bytes
+
+            land = (fuse[0].out.buffer_address(), tile_bytes(int(x.shape[2]) // 4))
+        EXPAND = int(y is not None or land is not None)
+        assert (y is None and land is None) == (pp_prev is None)
+        LANDB = int(land[1]) if land is not None else 0
         assert R4 == 4 * T and 1 <= T <= 16 and D == self.dim and x.dtype == f32
         G = (T + 7) // 8
         GPC, NT = self.GPC, self.NT
@@ -191,7 +204,7 @@ class Hy4IHCFused:
             x_new = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, R4, D]), f32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
             )
-        y_t = y if EXPAND else pp  # dummies keep the accessor structure
+        y_t = y if y is not None else pp  # dummies keep the accessor structure
         q_t = pp_prev if EXPAND else pp
         cst_t = self._consts(mesh, T)
         (
@@ -298,7 +311,8 @@ class Hy4IHCFused:
             + _acc(y_t)
             + _acc(q_t)
             + [DUAL, 1088 if self.wdt == ttnn.bfloat8_b else 2048, CSTD]
-            + _acc(cst_t),
+            + _acc(cst_t)
+            + [LANDB, (fuse[0].NP // 4) if fuse is not None else 0],
             rt,
             ttnn.ReaderConfigDescriptor(),
             common=[
@@ -311,6 +325,8 @@ class Hy4IHCFused:
                 y_t.buffer_address(),
                 q_t.buffer_address(),
                 cst_t.buffer_address(),
+                int(land[0]) if land is not None else 0,
+                ttnn.get_global_semaphore_address(fuse[0].gsem) if fuse is not None else 0,
             ],
         )
         writer = _kernel(
@@ -398,6 +414,8 @@ class Hy4IHCFused:
             EXPAND,
             DUAL,
             CSTD,
+            LANDB,
+            int(fuse is not None),
             tuple(_acc(y_t)),
             tuple(_acc(q_t)),
             tuple(_acc(x_new)),
@@ -413,5 +431,10 @@ class Hy4IHCFused:
             tuple(_acc(out)),
             tuple(_acc(rm_t)),
         )
-        ttnn.generic_op([x, y_t, q_t, self.wt, self.base, w4, cst_t, pp, dbg, x_new, out, rm_t], prog)
+        tens = [x, y_t, q_t, self.wt, self.base, w4, cst_t, pp, dbg, x_new, out, rm_t]
+        if fuse is not None:
+            far, part = fuse
+            ttnn.generic_op(tens + [part, far.recv, far.out], far._build(part, T, ihc=([reader, writer, compute], cbs)))
+        else:
+            ttnn.generic_op(tens, prog)
         return (out, rm, pp, x_new) if EXPAND else (out, rm, pp)
