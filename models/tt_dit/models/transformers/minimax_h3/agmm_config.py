@@ -104,6 +104,16 @@ def _legacy_switch(name: str) -> bool:
     return value == "1"
 
 
+# On the op's transposed grid (M > N, 12x9) at 24 rows per core (10 s on 4x8): one N block over the 19 (to_qkv) / 25
+# (ff1) columns per core instead of a block of 16 plus a 3-tile tail, M block 6 with a one-row subblock (to_qkv 1.94 ->
+# 1.31 ms, ff1 3.01 -> 2.34 ms; 928 -> 877 ms per 10 s forward). K_block is unchanged; ff1 renders bit-identical,
+# to_qkv does not. Not used on the non-transposed grid, where the same per_core_M has fewer columns per core.
+AGMM_TRANSPOSED_BLOCK_SIZES: dict[tuple[int, int, int], tuple] = {
+    (5376, 5376, 12): (6, 6, 20, (1, 4)),
+    (5376, 7168, 12): (6, 3, 26, (1, 2)),
+}
+
+
 _AGMM_LEGACY_BLOCKS: dict[tuple[int, int, int], tuple] = {
     **({(5376, 7168, 5): (6, 3, 16)} if _legacy_switch("MINIMAX_H3_FF1_AGMM_LEGACY") else {}),
     **({(5376, 5376, 5): (6, 7, 16)} if _legacy_switch("MINIMAX_H3_QKV_AGMM_LEGACY") else {}),
@@ -226,4 +236,6 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
                 f"[agmm] blocking override for (K, N, M)=({k}, {n}, {m}): key {key}, blocks {_AGMM_OVERRIDES[key]}"
             )
         return _AGMM_OVERRIDES[key]
+    if m > n and key in AGMM_TRANSPOSED_BLOCK_SIZES:
+        return AGMM_TRANSPOSED_BLOCK_SIZES[key]
     return _AGMM_LEGACY_BLOCKS.get(key, AGMM_BLOCK_SIZES[key])
