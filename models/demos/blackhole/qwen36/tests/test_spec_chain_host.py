@@ -14,6 +14,7 @@ supports_chained_spec_verify).
   no device drafter, or a chained propose that depends on the count, is built from the engine's own walk instead.
 """
 
+import inspect
 import random
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -28,6 +29,7 @@ from models.demos.blackhole.qwen36.tests.test_spec_accept_host import ROWS, VOCA
 from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
 from models.demos.blackhole.qwen36.tt import spec_engine
 from models.demos.blackhole.qwen36.tt.kv_cache_spec import SPEC_STEP_HOLD
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.spec_accept import TorchOps, graph, step_accept_reference
 from models.demos.blackhole.qwen36.tt.spec_chain import chain_overlay, chain_reference, step_rows_reference
 from models.demos.blackhole.qwen36.tt.spec_step import (
@@ -248,6 +250,8 @@ def chained(monkeypatch):
         return [int(v) for v in ids.reshape(-1)], "feed", None
 
     def verify_enqueue(tokens, positions, mi, accept_rows=None, **kw):
+        # Qwen36Model.verify_enqueue's own signature: a keyword it does not take raises here as on the device.
+        inspect.signature(Qwen36Model.verify_enqueue).bind(model, tokens, positions, mi, accept_rows=accept_rows, **kw)
         step = log["chain_step"].pop() if kw.get("step_staged") else None
         log["enqueue"].append(
             SimpleNamespace(
