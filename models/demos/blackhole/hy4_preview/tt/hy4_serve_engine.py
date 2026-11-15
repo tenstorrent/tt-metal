@@ -197,6 +197,7 @@ class Hy4Engine:
         h_seed = upload(
             md, h.reshape(ROWS, 1, 1, HID).repeat(1, 1, S, 1).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0
         )
+        rn._set_variant("G")  # the seed draft is greedy (the last capture left the sampled variant armed)
         rn.sd.derive(rn.tail.pos)
         rn.tail.run(a_seed, h_seed, derived=True)
         ttnn.synchronize_device(md)
