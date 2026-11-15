@@ -5,12 +5,11 @@
 #pragma once
 
 // Shared by the host and the Tensor prefetcher kernels that fast dispatch runs on a dispatch engine
-// (tt_metal/impl/buffers/kernels/tensor_prefetcher_{reader,pusher}.cpp).
+// (tensor_prefetcher_kernels(): tt_metal/impl/buffers/kernels/tensor_prefetcher_{reader,pusher}.cpp).
 //
-// Those two kernels share one L1 region: the part of the dispatch engine's L1 that the dispatch memory
-// map leaves above every CQ zone. Offsets below are from the base of that region. The host writes
-// requests into a FIFO there and both kernels read each slot in place; the slot is free again once
-// both kernels have retired it.
+// The kernels share one L1 region: the part of the dispatch engine's L1 that the dispatch memory map leaves
+// above every CQ zone. Offsets below are from the base of that region. The host writes requests into a FIFO
+// there and every kernel reads each slot in place; the slot is free again once every kernel has retired it.
 //
 // Every word that another agent reads or writes sits alone on a cache line and is accessed through
 // the uncached L1 alias: host writes and NoC traffic do not snoop the data-movement caches.
@@ -23,20 +22,23 @@ namespace tt::tt_metal::tensor_prefetcher_fifo {
 
 inline constexpr uint32_t kLineBytes = 64;
 
+// The most Tensor prefetcher kernels a dispatch engine runs: it has 8 data-movement cores, and the kernels of
+// the one CQ it serves take 3.
+inline constexpr uint32_t kMaxKernels = 5;
+
 // Control block, one word per line.
-// Non-zero tells both kernels to exit. Written by the host when fast dispatch tears down.
+// Non-zero tells every kernel to exit. Written by the host when fast dispatch tears down.
 inline constexpr uint32_t kTerminateOffset = 0 * kLineBytes;
 // Slots the host has written so far (monotonic).
 inline constexpr uint32_t kFifoWrOffset = 1 * kLineBytes;
-// Slots the reader / the pusher has retired so far (monotonic).
-inline constexpr uint32_t kReaderRdOffset = 2 * kLineBytes;
-inline constexpr uint32_t kPusherRdOffset = 3 * kLineBytes;
-inline constexpr uint32_t kControlBytes = 4 * kLineBytes;
+// Slots kernel `k` (its index in tensor_prefetcher_kernels()) has retired so far (monotonic).
+constexpr uint32_t fifo_rd_offset(uint32_t k) { return (2 + k) * kLineBytes; }
+inline constexpr uint32_t kControlBytes = fifo_rd_offset(kMaxKernels);
 
 // The rest of the region, in order: a FIFO of kFifoSlots request slots, the per-receiver progress
 // counters, the PrefetcherPipe sender state of the DRAM-sender endpoints placed on this dispatch engine,
-// and the stage ring. Its size depends on how many lanes a slot carries, so RegionLayout below gives the
-// offsets for a lane count.
+// the kernels' own state, and the stage ring. Its size depends on how many lanes a slot carries and on how
+// much state the kernels keep, so RegionLayout below gives the offsets for those.
 //
 // One slot = a header naming the DRAM bank behind each lane, then one request page per lane (the Tensor
 // prefetcher request page, tensor_prefetcher_request.hpp). A lane is one DRAM bank's sender endpoint; the
@@ -46,8 +48,8 @@ inline constexpr uint32_t kLanePageBytes = kRequestPageBytes;
 inline constexpr uint32_t kSlotHeaderBytes = kLineBytes;
 inline constexpr uint32_t kFifoSlots = 16;
 
-// Per-receiver progress between the two kernels: blocks staged by the reader, and blocks pushed (so
-// their stage slots are free again) by the pusher. One monotonic word per line, one writer each.
+// Per-receiver progress between the reader and the pusher: blocks staged by the reader, and blocks pushed
+// (so their stage slots are free again) by the pusher. One monotonic word per line, one writer each.
 inline constexpr uint32_t kMaxReceivers = 32;
 
 // Sender config pages of the endpoints' pipes. A bank's one endpoint serves all of its receivers, so a page
@@ -72,7 +74,7 @@ inline constexpr uint32_t kStageSlotsPerReceiver = 2;
 inline constexpr uint32_t kMinStageRingBytes = kMaxReceivers * kStageSlotsPerReceiver * 1024;
 
 enum SlotCommand : uint32_t {
-    // Retired by both kernels with no other effect. Lets the host check that the FIFO is serviced.
+    // Retired by every kernel with no other effect. Lets the host check that the FIFO is serviced.
     kSlotNop = 1,
     // num_lanes request pages follow the header, one per lane, all PREFETCH or all DRAIN. A PREFETCH
     // slot's lanes carry the same tensors for different receivers, and its receivers are served
@@ -90,11 +92,15 @@ struct SlotHeader {
 };
 static_assert(sizeof(SlotHeader) == kSlotHeaderBytes, "SlotHeader must fill exactly one header line");
 
-// The region's layout for slots of up to `lanes` lanes. The host and the kernels build it from the same
-// count -- the device's DRAM bank count, one endpoint per bank; the kernels get it as TENSOR_PREFETCHER_LANES
-// -- so a single-bank device pays for one lane per slot and one endpoint's sender state.
+// The region's layout for slots of up to `lanes` lanes and `kernel_state_bytes` of the kernels' own state.
+// The host and the kernels build it from the same values -- the device's DRAM bank count, one endpoint per
+// bank, and the kernels' state; the kernels get them as TENSOR_PREFETCHER_LANES and
+// TENSOR_PREFETCHER_KERNEL_STATE_BYTES -- so a single-bank device pays for one lane per slot and one
+// endpoint's sender state.
 struct RegionLayout {
     uint32_t lanes = 1;
+    // Whole cache lines.
+    uint32_t kernel_state_bytes = 0;
 
     constexpr uint32_t slot_bytes() const { return kSlotHeaderBytes + lanes * kLanePageBytes; }
     constexpr uint32_t slot_offset(uint32_t slot_count) const {
@@ -104,7 +110,11 @@ struct RegionLayout {
     constexpr uint32_t pushed_offset() const { return staged_offset() + kMaxReceivers * kLineBytes; }
     constexpr uint32_t sender_state_zone_offset() const { return pushed_offset() + kMaxReceivers * kLineBytes; }
     constexpr uint32_t sender_state_zone_bytes() const { return lanes * kSenderStateBytesPerEndpoint; }
-    constexpr uint32_t stage_ring_offset() const { return sender_state_zone_offset() + sender_state_zone_bytes(); }
+    // The kernels' state, each kernel's in whole cache lines, in kernel order.
+    constexpr uint32_t kernel_state_zone_offset() const {
+        return sender_state_zone_offset() + sender_state_zone_bytes();
+    }
+    constexpr uint32_t stage_ring_offset() const { return kernel_state_zone_offset() + kernel_state_bytes; }
     constexpr uint32_t min_region_bytes() const { return stage_ring_offset() + kMinStageRingBytes; }
     // Stage ring bytes in a region of `region_bytes`, whole cache lines.
     constexpr uint32_t stage_ring_bytes(uint32_t region_bytes) const {

@@ -55,9 +55,9 @@ void write_words(
 
 }  // namespace
 
-// Fast dispatch launches the Tensor prefetcher's reader and pusher on the dispatch engine together with the CQ
-// kernels. Both must retire every request slot the host writes, including after the FIFO wraps, and both must
-// exit when the device closes (a kernel that ignored its termination signal would hang teardown).
+// Fast dispatch launches the Tensor prefetcher kernels on the dispatch engine together with the CQ kernels.
+// Each must retire every request slot the host writes, including after the FIFO wraps, and each must exit
+// when the device closes (a kernel that ignored its termination signal would hang teardown).
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsRetireFifoSlots) {
     if (!dram_senders_on_dispatch_engine(this->device())) {
         GTEST_SKIP() << "Requires fast dispatch on a dispatch engine serving one CQ";
@@ -69,16 +69,19 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsR
     const CoreCoord core =
         dram_sender_dispatch_engine(this->device().impl().get_context_id(), this->device().get_device_ids()[0]);
 
-    auto slots_retired_by_both = [&]() {
-        return std::min(
-            read_word(this->device(), core, base + fifo::kReaderRdOffset),
-            read_word(this->device(), core, base + fifo::kPusherRdOffset));
+    const uint32_t num_kernels = tensor_prefetcher_kernels().size();
+    auto slots_retired_by_every_kernel = [&]() {
+        uint32_t retired = read_word(this->device(), core, base + fifo::fifo_rd_offset(0));
+        for (uint32_t k = 1; k < num_kernels; ++k) {
+            retired = std::min(retired, read_word(this->device(), core, base + fifo::fifo_rd_offset(k)));
+        }
+        return retired;
     };
     auto wait_for_retired = [&](uint32_t target) {
         const auto deadline = std::chrono::steady_clock::now() + kRetireTimeout;
-        uint32_t retired = slots_retired_by_both();
+        uint32_t retired = slots_retired_by_every_kernel();
         while (retired < target && std::chrono::steady_clock::now() < deadline) {
-            retired = slots_retired_by_both();
+            retired = slots_retired_by_every_kernel();
         }
         return retired;
     };
@@ -98,8 +101,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsR
         write_words(this->device(), core, base + fifo::kFifoWrOffset, {written + 1});
     }
     EXPECT_EQ(wait_for_retired(kNumSlots), kNumSlots);
-    EXPECT_EQ(read_word(this->device(), core, base + fifo::kReaderRdOffset), kNumSlots);
-    EXPECT_EQ(read_word(this->device(), core, base + fifo::kPusherRdOffset), kNumSlots);
+    for (uint32_t k = 0; k < num_kernels; ++k) {
+        EXPECT_EQ(read_word(this->device(), core, base + fifo::fifo_rd_offset(k)), kNumSlots) << "kernel " << k;
+    }
 }
 
 // Pipes carved for the Tensor prefetcher through the ordinary DRAM-sender API land on the dispatch

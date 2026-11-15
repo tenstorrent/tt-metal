@@ -41,7 +41,7 @@ enum class DramSenderPlacement : uint8_t {
     // Each endpoint on its own programmable DRAM core (Blackhole DRISCs).
     DramCore,
     // Every endpoint on the dispatch engine that runs fast dispatch, beside the CQ kernels (Quasar). The
-    // Tensor prefetcher's reader and pusher, launched with fast dispatch, serve all of them.
+    // Tensor prefetcher kernels, launched with fast dispatch, serve all of them.
     DispatchEngine,
 };
 

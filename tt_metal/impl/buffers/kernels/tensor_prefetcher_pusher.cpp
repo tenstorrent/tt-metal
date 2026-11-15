@@ -4,7 +4,8 @@
 
 // Tensor prefetcher pusher. Fast dispatch runs it on a dispatch engine beside the CQ kernels, paired with
 // tensor_prefetcher_reader.cpp: the reader stages weight blocks from DRAM into this core's L1 and the
-// pusher sends staged blocks on to the receivers. Both retire every request slot the host writes.
+// pusher sends staged blocks on to the receivers. Every Tensor prefetcher kernel retires every request slot
+// the host writes.
 //
 // The pusher serves whichever receivers have a block staged and room in their PrefetcherPipe rings, not
 // the receivers in a fixed order: a consumer that needs all of its receivers to progress together would
@@ -12,10 +13,7 @@
 // receiver, waits once for all of those writes to land, then credits them. Each lane of a request is one DRAM-bank
 // sender endpoint, whose PrefetcherPipe sender state the host keeps in this core's L1.
 //
-// Compile-time defines (set by TensorPrefetcherKernel):
-//   TENSOR_PREFETCHER_REGION_BASE      L1 base of the region described in tensor_prefetcher_fifo.hpp
-//   TENSOR_PREFETCHER_LANES            lanes per request slot (fifo::RegionLayout)
-//   TENSOR_PREFETCHER_STAGE_RING_SIZE  bytes of that region's stage ring
+// Defines: tensor_prefetcher_fifo_device.h.
 
 #include <stdint.h>
 
@@ -34,12 +32,8 @@ using experimental::DramSenderConfigPage;
 using experimental::PrefetcherPipe;
 using tensor_prefetcher::FifoConsumer;
 using tensor_prefetcher::LanePage;
+using tensor_prefetcher::region;
 using tensor_prefetcher::TensorStream;
-
-constexpr tensor_prefetcher::Region region{
-    .base = TENSOR_PREFETCHER_REGION_BASE, .layout = fifo::RegionLayout{TENSOR_PREFETCHER_LANES}};
-constexpr uint32_t stage_ring_base = region.stage_ring_base();
-constexpr uint32_t stage_ring_size = TENSOR_PREFETCHER_STAGE_RING_SIZE;
 
 static_assert(fifo::kMaxReceivers <= 32, "A pass tracks its receivers in one 32-bit mask");
 
@@ -100,8 +94,7 @@ bool push_tensor(
             if (!pipe.receiver_has_space(r, 1)) {
                 continue;
             }
-            const CoreLocalMem<uint8_t> block(
-                stream.stage_slot_addr(stage_ring_base, i, pushed[i] % fifo::kStageSlotsPerReceiver));
+            const CoreLocalMem<uint8_t> block(stream.stage_slot_addr(i, pushed[i] % fifo::kStageSlotsPerReceiver));
             pipe.write_to_receiver(noc, r, block, 1);
             writing |= 1u << i;
         }
@@ -171,7 +164,7 @@ bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHea
     const uint32_t num_tensors = header->prefetch.num_entries;
     TensorStream stream;
     for (uint32_t e = 0; e < num_tensors; ++e) {
-        tensor_prefetcher::plan_tensor(slot, e, stage_ring_size, stream);
+        tensor_prefetcher::plan_tensor(slot, e, stream);
         if (!push_tensor(requests, slot, num_lanes, stream)) {
             return false;
         }
@@ -181,4 +174,4 @@ bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHea
 
 }  // namespace
 
-void kernel_main() { tensor_prefetcher::serve_requests(region, fifo::kPusherRdOffset, push_request); }
+void kernel_main() { tensor_prefetcher::serve_requests(push_request); }

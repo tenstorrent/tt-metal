@@ -6,6 +6,15 @@
 
 // Device side of the request FIFO shared by the Tensor prefetcher kernels that fast dispatch runs on a
 // dispatch engine. Layout: tt_metal/impl/buffers/tensor_prefetcher_fifo.hpp.
+//
+// Compile-time defines, which fast dispatch gives every one of those kernels (TensorPrefetcherKernel):
+//   TENSOR_PREFETCHER_REGION_BASE        L1 base of the region
+//   TENSOR_PREFETCHER_LANES              lanes per request slot (fifo::RegionLayout)
+//   TENSOR_PREFETCHER_KERNEL_STATE_BYTES all the kernels' own state (fifo::RegionLayout)
+//   TENSOR_PREFETCHER_STAGE_RING_SIZE    bytes of the region's stage ring
+//   TENSOR_PREFETCHER_KERNEL_INDEX       this kernel's index in tensor_prefetcher_kernels(): its FIFO consumer
+//   TENSOR_PREFETCHER_STATE_BASE         L1 base of this kernel's own state, zeroed before launch
+//   TENSOR_PREFETCHER_STATE_SIZE         bytes of this kernel's own state
 
 #include <stdint.h>
 
@@ -24,7 +33,7 @@ using tt::tt_metal::TensorPrefetcherLayoutMode;
 using tt::tt_metal::TensorPrefetcherRequestHeader;
 using tt::tt_metal::TensorPrefetcherTensorLayout;
 
-// Every word in the region is shared with the host, the other kernel or the NoC, none of which snoop
+// Every word in the region is shared with the host, the other kernels or the NoC, none of which snoop
 // this core's data cache, so it is always accessed through the uncached L1 alias.
 template <typename T>
 FORCE_INLINE volatile tt_l1_ptr T* region_ptr(uint32_t region_base, uint32_t offset) {
@@ -53,14 +62,23 @@ struct Region {
     constexpr uint32_t stage_ring_base() const { return base + layout.stage_ring_offset(); }
 };
 
-// One kernel's view of the FIFO: it retires slots in order and publishes how many it has retired.
+// This kernel's dispatch engine region and its parts.
+inline constexpr Region region{
+    .base = TENSOR_PREFETCHER_REGION_BASE,
+    .layout = fifo::RegionLayout{
+        .lanes = TENSOR_PREFETCHER_LANES, .kernel_state_bytes = TENSOR_PREFETCHER_KERNEL_STATE_BYTES}};
+inline constexpr uint32_t stage_ring_base = region.stage_ring_base();
+inline constexpr uint32_t stage_ring_size = TENSOR_PREFETCHER_STAGE_RING_SIZE;
+inline constexpr uint32_t kernel_state_base = TENSOR_PREFETCHER_STATE_BASE;
+inline constexpr uint32_t kernel_state_size = TENSOR_PREFETCHER_STATE_SIZE;
+
+// This kernel's view of the FIFO: it retires slots in order and publishes how many it has retired.
 class FifoConsumer {
 public:
-    FORCE_INLINE FifoConsumer(const Region& region, uint32_t rd_offset) :
-        region_(region),
+    FORCE_INLINE FifoConsumer() :
         terminate_(region_ptr<uint32_t>(region.base, fifo::kTerminateOffset)),
         wr_(region_ptr<uint32_t>(region.base, fifo::kFifoWrOffset)),
-        rd_(region_ptr<uint32_t>(region.base, rd_offset)),
+        rd_(region_ptr<uint32_t>(region.base, fifo::fifo_rd_offset(TENSOR_PREFETCHER_KERNEL_INDEX))),
         rd_count_(*rd_) {}
 
     FORCE_INLINE bool terminate_requested() const { return *terminate_ != 0; }
@@ -74,24 +92,24 @@ public:
             }
         }
         WAYPOINT("TFD");
-        return region_.slot(rd_count_);
+        return region.slot(rd_count_);
     }
 
     FORCE_INLINE void retire_slot() { *rd_ = ++rd_count_; }
 
 private:
-    Region region_;
     volatile tt_l1_ptr uint32_t* terminate_;
     volatile tt_l1_ptr uint32_t* wr_;
     volatile tt_l1_ptr uint32_t* rd_;
     uint32_t rd_count_;
 };
 
-// Retires every slot the host writes until termination is requested. `serve_request(requests, slot)`
-// handles a request slot and returns false if termination was requested before it finished.
+// Retires every slot the host writes, as this kernel's FIFO consumer, until termination is requested.
+// `serve_request(requests, slot)` handles a request slot and returns false if termination was requested
+// before it finished.
 template <typename ServeRequest>
-FORCE_INLINE void serve_requests(const Region& region, uint32_t rd_offset, ServeRequest&& serve_request) {
-    FifoConsumer requests(region, rd_offset);
+FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
+    FifoConsumer requests;
     while (volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot()) {
         ASSERT(slot->num_lanes <= region.layout.lanes);
         switch (slot->command) {
@@ -135,9 +153,8 @@ private:
     volatile tt_l1_ptr uint8_t* bytes_;
 };
 
-// How one tensor of a PREFETCH slot streams: every receiver of every lane, numbered in lane order,
-// with the DRAM bank and bank-local address its slab starts at. The reader and the pusher derive
-// the same plan from the same slot, so a receiver number names the same stage slots for both.
+// How one tensor of a PREFETCH slot streams: every receiver of every lane, numbered in lane order. The
+// kernels derive the same plan from the same slot, so a receiver number names the same stage slots for all.
 struct TensorStream {
     uint32_t num_receivers = 0;
     uint32_t block_bytes = 0;
@@ -146,20 +163,16 @@ struct TensorStream {
     uint32_t slot_bytes = 0;
     uint8_t lane[fifo::kMaxReceivers];
     uint8_t receiver_in_lane[fifo::kMaxReceivers];
-    uint32_t bank[fifo::kMaxReceivers];
-    uint32_t slab_base[fifo::kMaxReceivers];
 
     // Stage slot `k` (0 .. kStageSlotsPerReceiver) of receiver `i`.
-    uint32_t stage_slot_addr(uint32_t stage_ring_base, uint32_t i, uint32_t k) const {
+    uint32_t stage_slot_addr(uint32_t i, uint32_t k) const {
         return stage_ring_base + (i * fifo::kStageSlotsPerReceiver + k) * slot_bytes;
     }
 };
 
-// Plans tensor `e` of a PREFETCH slot against a stage ring of `stage_ring_size` bytes. The host serializes
-// one page per lane for the same tensors, so every lane agrees on the geometry and differs only in its
-// bank, its receivers and their slabs.
-FORCE_INLINE void plan_tensor(
-    volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, uint32_t stage_ring_size, TensorStream& stream) {
+// Plans tensor `e` of a PREFETCH slot. The host serializes one page per lane for the same tensors, so every
+// lane agrees on the geometry and differs only in its bank, its receivers and their slabs.
+FORCE_INLINE void plan_tensor(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, TensorStream& stream) {
     const uint32_t num_lanes = slot->num_lanes;
     stream.num_receivers = 0;
     for (uint32_t l = 0; l < num_lanes; ++l) {
@@ -178,8 +191,6 @@ FORCE_INLINE void plan_tensor(
             stream.block_count = block_count;
         }
         ASSERT(stream.block_bytes == block_bytes && stream.block_count == block_count);
-        const uint32_t recv_stride = layout->recv_stride_bytes;
-        const uint32_t slab_base = entry->bank_local_base + layout->recv_index_base * recv_stride;
         // The lane's pipe receivers, from the sender config page the host stamped into this core's L1.
         const uint32_t lane_receivers = experimental::load_prefetcher_pipe_config_word(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page.header()->prefetch.target_config_page_addr),
@@ -189,8 +200,6 @@ FORCE_INLINE void plan_tensor(
             ASSERT(i < fifo::kMaxReceivers);
             stream.lane[i] = l;
             stream.receiver_in_lane[i] = r;
-            stream.bank[i] = slot->lane_bank_id[l];
-            stream.slab_base[i] = slab_base + r * recv_stride;
         }
     }
     stream.slot_bytes = fifo::stage_slot_bytes(stage_ring_size, stream.num_receivers);

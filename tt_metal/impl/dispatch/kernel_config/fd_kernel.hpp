@@ -79,8 +79,7 @@ static std::vector<std::string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",         // PACKET_ROUTER_DEMUX
     "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_MUX
     "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_RETURN_MUX
-    "tt_metal/impl/buffers/kernels/tensor_prefetcher_reader.cpp",  // TENSOR_PREFETCHER_READER
-    "tt_metal/impl/buffers/kernels/tensor_prefetcher_pusher.cpp",  // TENSOR_PREFETCHER_PUSHER
+    "",                                                            // TENSOR_PREFETCHER (tensor_prefetcher_kernels())
     ""                                                             // COUNT
 };
 

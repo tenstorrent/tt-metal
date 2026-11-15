@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 
 #include "fd_kernel.hpp"
 #include "impl/buffers/tensor_prefetcher_fifo.hpp"
@@ -15,8 +16,21 @@ namespace tt::tt_metal {
 
 class DispatchMemMap;
 
+// One Tensor prefetcher kernel that fast dispatch launches on a dispatch engine beside the CQ kernels, and
+// terminates with them.
+struct TensorPrefetcherKernelInfo {
+    // Kernel source file.
+    const char* file = nullptr;
+    // L1 the kernel keeps for itself in the region, zeroed before fast dispatch launches it.
+    uint32_t state_bytes = 0;
+};
+
+// The Tensor prefetcher kernels in the order blocks flow through them. Kernel `k` retires request slots as
+// FIFO consumer `k` (tensor_prefetcher_fifo::fifo_rd_offset). Defined in tensor_prefetcher_kernels.cpp.
+std::span<const TensorPrefetcherKernelInfo> tensor_prefetcher_kernels();
+
 // The layout of the dispatch engine's Tensor prefetcher region on `cluster`: one lane per DRAM bank of its
-// devices, each bank's one sender endpoint.
+// devices, each bank's one sender endpoint, and the state of every kernel in tensor_prefetcher_kernels().
 tensor_prefetcher_fifo::RegionLayout tensor_prefetcher_region_layout(const Cluster& cluster);
 
 // Whether fast dispatch runs the Tensor prefetcher kernels beside the CQ kernels: only on a dispatch
@@ -25,20 +39,17 @@ tensor_prefetcher_fifo::RegionLayout tensor_prefetcher_region_layout(const Clust
 bool dispatch_engine_hosts_tensor_prefetcher(
     const Cluster& cluster, CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map);
 
-// One of the two Tensor prefetcher kernels that fast dispatch launches on a dispatch engine beside the CQ
-// kernels, and terminates with them. The reader stages weight blocks from DRAM into the engine's L1; the
-// pusher sends staged blocks on to the receivers. Both serve a request FIFO the host writes into the L1
+// One of the kernels in tensor_prefetcher_kernels(). The topology chains their nodes in that order, so a
+// node's index is the number of nodes upstream of it. They serve a request FIFO the host writes into the L1
 // region DispatchMemMap::unused_l1_base() names (layout: impl/buffers/tensor_prefetcher_fifo.hpp).
 class TensorPrefetcherKernel : public FDKernel {
 public:
-    // `type` is TENSOR_PREFETCHER_READER or TENSOR_PREFETCHER_PUSHER.
     TensorPrefetcherKernel(
         int node_id,
         ChipId device_id,
         ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
-        DispatchWorkerType type,
         const ContextDescriptor& descriptor,
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane = {},
@@ -52,7 +63,9 @@ public:
     std::optional<TerminationInfo> GetTerminationInfo() const override;
 
 private:
-    DispatchWorkerType type_;
+    // This kernel's index in tensor_prefetcher_kernels().
+    uint32_t index() const;
+
     uint32_t region_base_ = 0;
     tensor_prefetcher_fifo::RegionLayout layout_;
 };

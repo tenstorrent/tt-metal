@@ -294,6 +294,7 @@ set(JITAPI_FILES
     impl/buffers/kernels/tensor_prefetcher_fifo_device.h
     impl/buffers/kernels/tensor_prefetcher_pusher.cpp
     impl/buffers/kernels/tensor_prefetcher_reader.cpp
+    impl/buffers/kernels/tensor_prefetcher_reader.h
     impl/buffers/tensor_prefetcher_fifo.hpp
     impl/buffers/tensor_prefetcher_request.hpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp

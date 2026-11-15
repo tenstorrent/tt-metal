@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // TensorPrefetcherManager when its DRAM-sender endpoints live on the dispatch engine
-// (DramSenderPlacement::DispatchEngine). Fast dispatch launches the reader and pusher that serve them
-// when the device opens, so starting the prefetcher only takes over their request FIFO; requests are
-// the same pages a DRAM-core sender receives, grouped one slot per request so that the kernels serve
-// all of its receivers together.
+// (DramSenderPlacement::DispatchEngine). Fast dispatch launches the kernels that serve them
+// (tensor_prefetcher_kernels()) when the device opens, so starting the prefetcher only takes over their
+// request FIFO; requests are the same pages a DRAM-core sender receives, grouped one slot per request so that
+// the kernels serve all of its receivers together.
 
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 
@@ -139,20 +139,26 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
 }
 
 uint32_t TensorPrefetcherManager::fifo_slots_retired(uint32_t d) const {
-    // The reader's and the pusher's counts, one cache line apart, in one read. A slot is retired once both
-    // kernels pass it, so this returns the count that is behind. The counts wrap and stay within a FIFO's depth
-    // of each other, so their signed difference orders them.
-    constexpr uint32_t kRdWords = (fifo::kPusherRdOffset - fifo::kReaderRdOffset) / sizeof(uint32_t) + 1;
-    std::array<uint32_t, kRdWords> rd{};
+    // Every kernel's count, one cache line apart, in one read. A slot is retired once every kernel passes it,
+    // so this returns the count that is furthest behind. The counts wrap and stay within a FIFO's depth of each
+    // other, so their signed difference orders them.
+    constexpr uint32_t kLineWords = fifo::kLineBytes / sizeof(uint32_t);
+    std::array<uint32_t, (fifo::kMaxKernels - 1) * kLineWords + 1> rd{};
+    const uint32_t num_kernels = tensor_prefetcher_kernels().size();
     ::tt::tt_metal::detail::ReadFromDeviceL1(
         devices_[d],
         fifos_[d].dispatch_engine,
-        fifo_region_base_ + fifo::kReaderRdOffset,
-        std::span(reinterpret_cast<uint8_t*>(rd.data()), sizeof(rd)),
+        fifo_region_base_ + fifo::fifo_rd_offset(0),
+        std::span(reinterpret_cast<uint8_t*>(rd.data()), ((num_kernels - 1) * kLineWords + 1) * sizeof(uint32_t)),
         CoreType::DISPATCH);
-    const uint32_t reader_rd = rd.front();
-    const uint32_t pusher_rd = rd.back();
-    return static_cast<int32_t>(reader_rd - pusher_rd) <= 0 ? reader_rd : pusher_rd;
+    uint32_t retired = rd[0];
+    for (uint32_t k = 1; k < num_kernels; ++k) {
+        const uint32_t kernel_rd = rd[k * kLineWords];
+        if (static_cast<int32_t>(kernel_rd - retired) < 0) {
+            retired = kernel_rd;
+        }
+    }
+    return retired;
 }
 
 void TensorPrefetcherManager::wait_for_fifo_retired(uint32_t d, uint32_t target) const {
@@ -184,7 +190,7 @@ void TensorPrefetcherManager::write_fifo_slot(uint32_t d, std::span<const uint8_
     IDevice* device = devices_[d];
     DeviceFifo& device_fifo = fifos_[d];
     auto& cluster = mesh_device_->impl().metal_env().get_cluster();
-    // A slot is free once both kernels have retired it; they may still be pushing to receivers that
+    // A slot is free once every kernel has retired it; they may still be pushing to receivers that
     // only drain after the caller's next workload launches, so wait without holding any API lock.
     wait_for_fifo_retired(d, device_fifo.written - fifo::kFifoSlots + 1);
     ::tt::tt_metal::detail::WriteToDeviceL1(

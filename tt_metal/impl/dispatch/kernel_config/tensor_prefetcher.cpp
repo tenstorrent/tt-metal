@@ -29,6 +29,11 @@ static_assert(
     fifo::kSenderStatePageBytes >= prefetcher_pipe_noc_xy_byte_offset() + 2 * fifo::kMaxReceivers * sizeof(uint32_t) +
                                        2 * fifo::kMaxReceivers * PREFETCHER_PIPE_MAX_CREDIT_LANES * 16,
     "A sender config page for kMaxReceivers receivers must fit kSenderStatePageBytes");
+
+// A kernel's state rounded up to whole cache lines, which is what the region gives it.
+uint32_t kernel_state_zone_bytes(const TensorPrefetcherKernelInfo& kernel) {
+    return (kernel.state_bytes + fifo::kLineBytes - 1) / fifo::kLineBytes * fifo::kLineBytes;
+}
 }  // namespace
 
 fifo::RegionLayout tensor_prefetcher_region_layout(const Cluster& cluster) {
@@ -36,7 +41,17 @@ fifo::RegionLayout tensor_prefetcher_region_layout(const Cluster& cluster) {
     for (const ChipId chip : cluster.all_chip_ids()) {
         num_dram_banks = std::max<uint32_t>(num_dram_banks, cluster.get_soc_desc(chip).get_num_dram_views());
     }
-    return fifo::RegionLayout{num_dram_banks};
+    const auto kernels = tensor_prefetcher_kernels();
+    TT_FATAL(
+        !kernels.empty() && kernels.size() <= fifo::kMaxKernels,
+        "The Tensor prefetcher runs 1 to {} kernels on a dispatch engine, not {}",
+        fifo::kMaxKernels,
+        kernels.size());
+    uint32_t kernel_state_bytes = 0;
+    for (const TensorPrefetcherKernelInfo& kernel : kernels) {
+        kernel_state_bytes += kernel_state_zone_bytes(kernel);
+    }
+    return fifo::RegionLayout{.lanes = num_dram_banks, .kernel_state_bytes = kernel_state_bytes};
 }
 
 bool dispatch_engine_hosts_tensor_prefetcher(
@@ -54,7 +69,6 @@ TensorPrefetcherKernel::TensorPrefetcherKernel(
     ChipId servicing_device_id,
     uint8_t cq_id,
     noc_selection_t noc_selection,
-    DispatchWorkerType type,
     const ContextDescriptor& descriptor,
     dispatch_core_manager& dispatch_core_manager,
     const GetControlPlaneFn& get_control_plane,
@@ -70,9 +84,7 @@ TensorPrefetcherKernel::TensorPrefetcherKernel(
         dispatch_core_manager,
         get_control_plane,
         get_dispatch_query_manager,
-        get_reads_dispatch_cores),
-    type_(type) {
-    TT_ASSERT(type_ == TENSOR_PREFETCHER_READER || type_ == TENSOR_PREFETCHER_PUSHER);
+        get_reads_dispatch_cores) {
     TT_FATAL(
         GetCoreType() == CoreType::DISPATCH,
         "Tensor prefetcher FD kernels run only on a dispatch engine (device {})",
@@ -81,6 +93,16 @@ TensorPrefetcherKernel::TensorPrefetcherKernel(
     // Shares the dispatch engine (and its L1) with this CQ's prefetch, dispatch and dispatch_s kernels.
     logical_core_ = dispatch_core_manager.dispatcher_core(device_id, channel, cq_id_);
     kernel_type_ = FDKernelType::DISPATCH;
+}
+
+uint32_t TensorPrefetcherKernel::index() const {
+    if (upstream_kernels_.empty()) {
+        return 0;
+    }
+    TT_ASSERT(upstream_kernels_.size() == 1, "A Tensor prefetcher kernel has at most one upstream kernel");
+    const auto* upstream = dynamic_cast<const TensorPrefetcherKernel*>(upstream_kernels_.front());
+    TT_ASSERT(upstream != nullptr, "A Tensor prefetcher kernel's upstream kernel is another Tensor prefetcher kernel");
+    return upstream->index() + 1;
 }
 
 void TensorPrefetcherKernel::GenerateStaticConfigs() {
@@ -92,19 +114,31 @@ void TensorPrefetcherKernel::GenerateStaticConfigs() {
 }
 
 void TensorPrefetcherKernel::CreateKernel() {
+    const auto kernels = tensor_prefetcher_kernels();
+    const uint32_t k = index();
+    TT_ASSERT(k < kernels.size());
+    uint32_t state_offset = layout_.kernel_state_zone_offset();
+    for (uint32_t j = 0; j < k; ++j) {
+        state_offset += kernel_state_zone_bytes(kernels[j]);
+    }
     const std::map<std::string, std::string> defines = {
         {"TENSOR_PREFETCHER_REGION_BASE", std::to_string(region_base_)},
         {"TENSOR_PREFETCHER_LANES", std::to_string(layout_.lanes)},
+        {"TENSOR_PREFETCHER_KERNEL_STATE_BYTES", std::to_string(layout_.kernel_state_bytes)},
         {"TENSOR_PREFETCHER_STAGE_RING_SIZE",
          std::to_string(layout_.stage_ring_bytes(get_dispatch_mem_map().unused_l1_size()))},
+        {"TENSOR_PREFETCHER_KERNEL_INDEX", std::to_string(k)},
+        {"TENSOR_PREFETCHER_STATE_BASE", std::to_string(region_base_ + state_offset)},
+        {"TENSOR_PREFETCHER_STATE_SIZE", std::to_string(kernels[k].state_bytes)},
     };
-    configure_kernel_variant(dispatch_kernel_file_names[type_], {}, defines);
+    configure_kernel_variant(kernels[k].file, {}, defines);
 }
 
 void TensorPrefetcherKernel::ConfigureCore() {
-    // Both kernels share the region; the reader's node clears it once per launch. Nothing is in flight:
-    // fast dispatch has not launched either kernel yet.
-    if (type_ != TENSOR_PREFETCHER_READER) {
+    // The kernels share the region; the first kernel's node clears it once per launch: the control block, the
+    // reader/pusher counters and every kernel's state. Nothing is in flight: fast dispatch has not launched any
+    // of them yet.
+    if (index() != 0) {
         return;
     }
     const CoreCoord core(logical_core_.x, logical_core_.y);
@@ -113,10 +147,15 @@ void TensorPrefetcherKernel::ConfigureCore() {
     std::vector<uint32_t> counters(
         (layout_.sender_state_zone_offset() - layout_.staged_offset()) / sizeof(uint32_t), 0);
     detail::WriteToDeviceL1(device_, core, region_base_ + layout_.staged_offset(), counters, CoreType::DISPATCH);
+    if (layout_.kernel_state_bytes > 0) {
+        std::vector<uint32_t> state(layout_.kernel_state_bytes / sizeof(uint32_t), 0);
+        detail::WriteToDeviceL1(
+            device_, core, region_base_ + layout_.kernel_state_zone_offset(), state, CoreType::DISPATCH);
+    }
 }
 
 std::optional<TerminationInfo> TensorPrefetcherKernel::GetTerminationInfo() const {
-    // Both kernels watch the same word, so both nodes report the same signal and teardown writes it once.
+    // Every kernel watches the same word, so every node reports the same signal and teardown writes it once.
     return TerminationInfo{
         .logical_core = CoreCoord(logical_core_.x, logical_core_.y),
         .core_type = CoreType::DISPATCH,

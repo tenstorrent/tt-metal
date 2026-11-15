@@ -152,12 +152,24 @@ static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
 };
 
-// The CQ kernels above plus the Tensor prefetcher's reader and pusher, which share the dispatch engine and
-// its L1. They come last so the CQ kernels keep the same data-movement cores.
+// The CQ kernels above plus the Tensor prefetcher kernels, which share the dispatch engine and its L1: one
+// node per tensor_prefetcher_kernels() entry, chained in that order. They come last so the CQ kernels keep the
+// same data-movement cores.
 static const std::vector<DispatchKernelNode> quasar_single_chip_1cq_tensor_prefetcher = [] {
     std::vector<DispatchKernelNode> nodes = quasar_single_chip_1cq;
-    nodes.push_back({3, 0, 0, 0, TENSOR_PREFETCHER_READER, {x, x, x, x}, {4, x, x, x}, k_quasar_noc});
-    nodes.push_back({4, 0, 0, 0, TENSOR_PREFETCHER_PUSHER, {3, x, x, x}, {x, x, x, x}, k_quasar_noc});
+    const int first = static_cast<int>(nodes.size());
+    const int last = first + static_cast<int>(tensor_prefetcher_kernels().size()) - 1;
+    for (int id = first; id <= last; ++id) {
+        nodes.push_back(
+            {id,
+             0,
+             0,
+             0,
+             TENSOR_PREFETCHER,
+             {id > first ? id - 1 : x, x, x, x},
+             {id < last ? id + 1 : x, x, x, x},
+             k_quasar_noc});
+    }
     return nodes;
 }();
 

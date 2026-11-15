@@ -228,15 +228,13 @@ FDKernel* FDKernel::Generate(
                 get_control_plane,
                 get_dispatch_query_manager,
                 get_reads_dispatch_cores);
-        case TENSOR_PREFETCHER_READER:
-        case TENSOR_PREFETCHER_PUSHER:
+        case TENSOR_PREFETCHER:
             return new TensorPrefetcherKernel(
                 node_id,
                 device_id,
                 servicing_device_id,
                 cq_id,
                 noc_selection,
-                type,
                 descriptor,
                 dispatch_core_manager,
                 get_control_plane,

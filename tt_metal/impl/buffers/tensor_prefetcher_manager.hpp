@@ -277,7 +277,7 @@ private:
     void set_stage_ring_size(uint32_t raw_bytes, uint32_t l1_alignment);
 
     // DRAM-sender endpoints on the dispatch engine (DramSenderPlacement::DispatchEngine). Fast dispatch
-    // already runs the reader and pusher that serve them, and requests go into a FIFO in the engine's L1
+    // already runs the kernels that serve them, and requests go into a FIFO in the engine's L1
     // instead of one H2D socket per sender. Defined in tensor_prefetcher_manager_dispatch_engine.cpp.
     bool on_dispatch_engine() const;
     // The rest of start() for this placement: stage-ring geometry, FIFO state, the worker.
@@ -288,13 +288,13 @@ private:
     void worker_loop_dispatch_engine();
     // Writes one FIFO slot to device `d`, waiting for a free slot first.
     void write_fifo_slot(uint32_t d, std::span<const uint8_t> slot);
-    // Slots both kernels on device `d` have retired.
+    // Slots every kernel on device `d` has retired.
     uint32_t fifo_slots_retired(uint32_t d) const;
-    // Waits until both kernels on device `d` have retired `target` slots. With an operation timeout set
+    // Waits until every kernel on device `d` has retired `target` slots. With an operation timeout set
     // (TT_METAL_OPERATION_TIMEOUT_SECONDS), no slot retiring for that long is a hang: it runs the dispatch
     // timeout hook and throws, which on the worker thread ends the process.
     void wait_for_fifo_retired(uint32_t d, uint32_t target) const;
-    // Waits until both kernels on every device have retired every slot written to them.
+    // Waits until every kernel on every device has retired every slot written to it.
     void wait_for_fifo_idle() const;
 
     MeshDevice* mesh_device_;
