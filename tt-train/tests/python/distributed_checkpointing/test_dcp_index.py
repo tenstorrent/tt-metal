@@ -193,6 +193,7 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     assert find_latest(str(tmp_path / "missing")) is None
     assert is_complete(str(tmp_path / "step_0000030"))
     assert not is_complete(str(tmp_path / "step_0000100.partial-123"))
+    assert not is_complete(str(tmp_path / "step_0000050.replaced-9")), "renamed back to its final name first"
     assert not is_complete(str(tmp_path / "step_0000040"))
 
 
@@ -276,6 +277,16 @@ def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, exp
         f.write("{")
     with expect_error(IncompleteCheckpointError, "not readable JSON"):
         read_header_json(final)
+    os.remove(os.path.join(final, "header.json"))
+    with expect_error(IncompleteCheckpointError, "has no header.json"):
+        read_header_json(final)
+
+
+def test_only_bool_int_float_and_str_scalars_are_stored(expect_error):
+    index = _index()
+    index.scalars["optimizer/betas"] = (0.9, 0.999)
+    with expect_error(CheckpointError, "scalar of type tuple cannot be stored in the index"):
+        index.to_json()
 
 
 def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypatch, expect_error):
@@ -304,6 +315,32 @@ def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypa
     assert is_complete(final) and read_index(final).checkpoint_id == previous
     assert not [n for n in os.listdir(tmp_path) if ".replaced-" in n], "nothing left aside"
     assert os.path.isdir(staging2), "the new checkpoint is untouched for the caller to retry or delete"
+
+
+def test_a_failed_overwrite_that_cannot_roll_back_says_where_the_previous_checkpoint_is(
+    tmp_path, monkeypatch, expect_error
+):
+    final = str(tmp_path / "step_0000010")
+    staging, _ = begin_staging(final)
+    write_index(staging, _index())
+    finalize_staging(staging, final)
+    staging2, _ = begin_staging(final)
+    write_index(staging2, _index())
+    real_rename = os.rename
+
+    def failing_rename(src, dst):
+        if src == final:
+            real_rename(src, dst)  # moving the previous checkpoint aside works; nothing after it does
+        else:
+            raise OSError(f"simulated NFS failure renaming {os.path.basename(src)}")
+
+    monkeypatch.setattr(os, "rename", failing_rename)
+    with expect_error(
+        CheckpointError, r"nor move the previous checkpoint back from .*\.replaced-.*rename it back by hand"
+    ):
+        finalize_staging(staging2, final, overwrite=True)
+    monkeypatch.setattr(os, "rename", real_rename)
+    assert [n for n in os.listdir(tmp_path) if ".replaced-" in n], "the previous checkpoint is still aside"
 
 
 def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_path, monkeypatch):
