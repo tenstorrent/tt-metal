@@ -350,7 +350,7 @@ To get final detections:
    - Or manually download and place in the correct directory
 
 2. **Device initialization errors**
-   - Check device availability: `ttnn.list_devices()`
+   - Check device availability: `ttnn.GetNumAvailableDevices()`
    - Verify device parameters (l1_small_size, etc.)
 
 3. **Memory errors**
