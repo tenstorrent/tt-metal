@@ -642,6 +642,32 @@ void read_q(
     }
 }
 
+// A paged KV cache marks an unallocated block with an all-ones page-table entry (-1 in the int32
+// table, 0xFFFF in the uint16 sharded table) -- the same sentinel paged_fill_cache skips. The last K
+// chunk of a lane reaches past cur_pos, so it can cover such blocks. Their rows are masked out, but
+// reading them would dereference block 0xFFFFFFFF: the tile id wraps and the read lands at an
+// unrelated DRAM address whose bytes (possibly non-finite) the mask cannot neutralize. Unmapped rows
+// are zero-filled instead of read.
+template <typename PageT, uint32_t block_size_t, uint32_t capacity_t = 0>
+bool page_table_row_is_unmapped(uint32_t seq_tile_idx, const volatile tt_l1_ptr PageT* const page_table_ptr) {
+    if constexpr (capacity_t > 0) {
+        seq_tile_idx %= capacity_t;
+    }
+    return page_table_ptr[seq_tile_idx / block_size_t] == static_cast<PageT>(~PageT{0});
+}
+
+template <uint32_t block_size_t, uint32_t capacity_t, bool is_page_table_sharded>
+bool paged_row_is_unmapped(
+    uint32_t seq_tile_idx,
+    volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
+    volatile tt_l1_ptr uint32_t* page_table_ptr_u32) {
+    if constexpr (is_page_table_sharded) {
+        return page_table_row_is_unmapped<uint16_t, block_size_t, capacity_t>(seq_tile_idx, page_table_ptr_u16);
+    } else {
+        return page_table_row_is_unmapped<uint32_t, block_size_t, capacity_t>(seq_tile_idx, page_table_ptr_u32);
+    }
+}
+
 // Multicast parameters for K streaming (vertical multicast along y, same x)
 struct KMcastParams {
     bool do_mcast;          // true = sender, false = receiver
@@ -679,6 +705,7 @@ uint32_t read_k(
     uint32_t k_write_ptr = cb_k.get_write_ptr();
     uint32_t k_base_read_ptr = k_write_ptr;
     barrier_count = 0;
+    bool wrote_zeros = false;
 
     if constexpr (use_mcast) {
         if (mcast_params.do_mcast) {
@@ -698,13 +725,20 @@ uint32_t read_k(
                                                   block_size_t,
                                                   DHt,
                                                   capacity_t>(virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
+                const bool unmapped = paged_row_is_unmapped<block_size_t, capacity_t, is_page_table_sharded>(
+                    virtual_k_tile_row_num, page_table_ptr_u16, page_table_ptr_u32);
                 for (uint32_t col = 0; col < DHt; ++col) {
-                    noc.async_read(
-                        k_reader,
-                        CoreLocalMem<uint32_t>(k_write_ptr_col),
-                        k_tile_bytes,
-                        {.page_id = physical_k_tile_id},
-                        {});
+                    if (unmapped) {
+                        noc.async_write_zeros(cb_k, k_tile_bytes, {.offset_bytes = k_write_ptr_col - k_write_ptr});
+                        wrote_zeros = true;
+                    } else {
+                        noc.async_read(
+                            k_reader,
+                            CoreLocalMem<uint32_t>(k_write_ptr_col),
+                            k_tile_bytes,
+                            {.page_id = physical_k_tile_id},
+                            {});
+                    }
                     physical_k_tile_id += 1;
                     k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;
                     if (++barrier_count == barrier_threshold) {
@@ -714,6 +748,9 @@ uint32_t read_k(
                 }
             }
             noc.async_read_barrier();
+            if (wrote_zeros) {
+                noc.write_zeros_l1_barrier();
+            }
             // Multicast the full K^T chunk to all receiver cores at once
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(k_write_ptr),
@@ -760,13 +797,20 @@ uint32_t read_k(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
                     : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt, capacity_t>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
+            const bool unmapped = paged_row_is_unmapped<block_size_t, capacity_t, is_page_table_sharded>(
+                virtual_k_tile_row_num, page_table_ptr_u16, page_table_ptr_u32);
             for (uint32_t col = 0; col < DHt; ++col) {
-                noc.async_read(
-                    k_reader,
-                    CoreLocalMem<uint32_t>(k_write_ptr_col),
-                    k_tile_bytes,
-                    {.page_id = physical_k_tile_id},
-                    {});
+                if (unmapped) {
+                    noc.async_write_zeros(cb_k, k_tile_bytes, {.offset_bytes = k_write_ptr_col - k_write_ptr});
+                    wrote_zeros = true;
+                } else {
+                    noc.async_read(
+                        k_reader,
+                        CoreLocalMem<uint32_t>(k_write_ptr_col),
+                        k_tile_bytes,
+                        {.page_id = physical_k_tile_id},
+                        {});
+                }
                 physical_k_tile_id += 1;                               // Go to next tile in row
                 k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
 
@@ -777,6 +821,9 @@ uint32_t read_k(
             }
         }
         noc.async_read_barrier();
+        if (wrote_zeros) {
+            noc.write_zeros_l1_barrier();
+        }
         cb_k.push_back(k_chunk_tiles);
     }
     return k_base_read_ptr;
@@ -808,6 +855,8 @@ void read_v(
     CircularBuffer cb_v(cb_v_in);
     cb_v.reserve_back(v_chunk_tiles);
     uint32_t v_write_ptr = cb_v.get_write_ptr();
+    const uint32_t v_base_write_ptr = v_write_ptr;
+    bool wrote_zeros = false;
     if constexpr (reuse_k) {
         // Read V chunk (transpose of K), from K's L1 buffer (same core)
         const uint8_t noc_id = noc.get_noc_id();
@@ -842,9 +891,20 @@ void read_v(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
                     : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt, capacity_t>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
+            const bool unmapped = paged_row_is_unmapped<block_size_t, capacity_t, is_page_table_sharded>(
+                virtual_v_tile_row_num, page_table_ptr_u16, page_table_ptr_u32);
             for (uint32_t col = 0; col < vDHt; ++col) {
-                noc.async_read(
-                    v_reader, CoreLocalMem<uint32_t>(v_write_ptr), v_tile_bytes, {.page_id = physical_v_tile_id}, {});
+                if (unmapped) {
+                    noc.async_write_zeros(cb_v, v_tile_bytes, {.offset_bytes = v_write_ptr - v_base_write_ptr});
+                    wrote_zeros = true;
+                } else {
+                    noc.async_read(
+                        v_reader,
+                        CoreLocalMem<uint32_t>(v_write_ptr),
+                        v_tile_bytes,
+                        {.page_id = physical_v_tile_id},
+                        {});
+                }
                 physical_v_tile_id += 1;
                 v_write_ptr += v_tile_bytes;
 
@@ -856,6 +916,9 @@ void read_v(
             // No padding to skip - V is an independent tensor with contiguous layout
         }
         noc.async_read_barrier();
+        if (wrote_zeros) {
+            noc.write_zeros_l1_barrier();
+        }
     }
     cb_v.push_back(v_chunk_tiles);
 }
