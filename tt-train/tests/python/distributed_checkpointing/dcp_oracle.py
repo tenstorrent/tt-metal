@@ -11,6 +11,8 @@ numpy. The oracle for every case is plain array slicing through the transforms, 
 
 from __future__ import annotations
 
+import zlib
+
 import numpy as np
 
 from ttml.distributed_checkpointing._boxes import Box
@@ -89,6 +91,7 @@ class FakeCheckpoint:
         plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord))
         self.files = {}
         records = []
+        crcs = {}
         for fplan in plan.files:
             buf = bytearray(fplan.data_bytes)
             for item in fplan.items:
@@ -96,9 +99,10 @@ class FakeCheckpoint:
                 chunk = np.ascontiguousarray(arr[item.chunk.box.slices()])
                 assert chunk.nbytes == item.nbytes
                 buf[item.data_offset : item.data_offset + item.nbytes] = chunk.tobytes()
+                crcs[(item.key, fplan.index)] = zlib.crc32(chunk.tobytes())
             self.files[fplan.index] = buf
             records.append(FileRecord(fplan.path, len(fplan.header) + fplan.data_bytes, 0, 0, fplan.coord))
-        self.index = Index(checkpoint_id="fake", world={"group_size": 1}, files=records, entries=plan.entries())
+        self.index = Index(checkpoint_id="fake", world={"group_size": 1}, files=records, entries=plan.entries(crcs))
         return self.index
 
     def load(self, dests: dict[str, tuple[Label, object, tuple]], strict=True):

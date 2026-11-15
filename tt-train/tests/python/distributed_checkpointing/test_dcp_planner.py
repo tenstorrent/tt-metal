@@ -10,6 +10,7 @@ slicing of the canonical array says it should hold. The cases are the design's w
 both directions.
 """
 
+import zlib
 from dataclasses import dataclass
 
 import numpy as np
@@ -236,7 +237,7 @@ def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
         offsets = [it.data_offset for it in fplan.items]
         assert offsets == sorted(offsets) and offsets[0] == 0
         assert sum(it.nbytes for it in fplan.items) == fplan.data_bytes
-    entries = plan.entries()
+    entries = plan.entries({(item.key, f.index): 0 for f in plan.files for item in f.items})
     assert len(entries["model/blocks/3/w"].chunks) == 8
     assert {plan.files[c.file].coord[1] for c in entries["model/blocks/3/w"].chunks} == set(range(8))
 
@@ -310,8 +311,8 @@ def test_chunks_that_are_not_one_grid_are_found_by_scanning():
     ckpt.files = {0: bytearray(raw[: 3 * row]), 1: bytearray(raw[3 * row :])}
     entry = ckpt.index.entries["w"]
     entry.chunks = [
-        ChunkRecord(Box((0, 0, 0, 0), (1, 1, 3, 4)), 0, 0, 3 * row),
-        ChunkRecord(Box((0, 0, 3, 0), (1, 1, 7, 4)), 1, 0, 7 * row),
+        ChunkRecord(Box((0, 0, 0, 0), (1, 1, 3, 4)), 0, 0, 3 * row, zlib.crc32(raw[: 3 * row])),
+        ChunkRecord(Box((0, 0, 3, 0), (1, 1, 7, 4)), 1, 0, 7 * row, zlib.crc32(raw[3 * row :])),
     ]
     assert _ChunkLookup(entry).by_cell is None, "the uneven chunks take the scan path"
     tp2 = world([R(), S(2)], (1, 2))

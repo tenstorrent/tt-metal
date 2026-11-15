@@ -90,8 +90,8 @@ def _index() -> Index:
             label,
             ("model/Llama/blocks/0/attention/qkv_linear/weight",),
             [
-                ChunkRecord(Box((0, 0, 0, 0), (1, 1, 32, 16)), 0, 3072, 2048),
-                ChunkRecord(Box((0, 0, 32, 0), (1, 1, 32, 16)), 1, 0, 2048),
+                ChunkRecord(Box((0, 0, 0, 0), (1, 1, 32, 16)), 0, 3072, 2048, 0x0BADC0DE),
+                ChunkRecord(Box((0, 0, 32, 0), (1, 1, 32, 16)), 1, 0, 2048, 0x00000001),
             ],
         ),
     }
@@ -114,7 +114,8 @@ def test_index_round_trips_through_json_with_columnar_chunks():
         table["n"] == 2 and table["sizes"] == [[1, 1, 96, 16]] and table["nbytes"] == [3072]
     ), "equal columns broadcast"
     assert table["crc32"] == ["3f0a9c11", "77c2e0d9"]
-    assert "crc32" not in encoded["state"]["model/Llama/blocks/0/attention/qkv_linear/weight"]["chunks"]
+    qkv_table = encoded["state"]["model/Llama/blocks/0/attention/qkv_linear/weight"]["chunks"]
+    assert qkv_table["crc32"] == ["0badc0de", "00000001"], "eight hex digits, leading zeros kept"
 
     decoded = Index.from_json(json.loads(json.dumps(encoded)))
 
@@ -233,15 +234,8 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     assert is_complete(final) and not [n for n in os.listdir(tmp_path) if ".replaced-" in n]
 
 
-def test_crc_column_keeps_known_checksums_and_is_validated(expect_error):
-    index = _index()
-    chunks = index.entries["model/Llama/fc/weight"].chunks
-    chunks[1].crc32 = None
-    encoded = index.to_json()
-    assert encoded["state"]["model/Llama/fc/weight"]["chunks"]["crc32"] == ["3f0a9c11", None]
-    decoded = Index.from_json(json.loads(json.dumps(encoded)))
-    assert [c.crc32 for c in decoded.entries["model/Llama/fc/weight"].chunks] == [0x3F0A9C11, None]
-
+def test_the_crc_column_is_validated(expect_error):
+    encoded = _index().to_json()
     short = json.loads(json.dumps(encoded))
     short["state"]["model/Llama/fc/weight"]["chunks"]["crc32"] = ["3f0a9c11"]
     with expect_error(CheckpointError, "columns disagree"):
@@ -250,6 +244,10 @@ def test_crc_column_keeps_known_checksums_and_is_validated(expect_error):
     bad["state"]["model/Llama/fc/weight"]["chunks"]["crc32"] = ["3f0a9c11", "not-hex"]
     with expect_error(CheckpointError, "malformed crc32"):
         Index.from_json(bad)
+    unchecked = json.loads(json.dumps(encoded))
+    unchecked["state"]["model/Llama/fc/weight"]["chunks"]["crc32"] = ["3f0a9c11", None]
+    with expect_error(CheckpointError, "malformed crc32"):
+        Index.from_json(unchecked)  # every chunk has a checksum
 
 
 def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, expect_error):
@@ -276,6 +274,12 @@ def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, exp
     with open(index_path, "w") as f:
         json.dump(value, f)  # a field every save writes, missing: no default stands in for it
     with expect_error(IncompleteCheckpointError, r"not a readable index \(KeyError: 'layout'\)"):
+        read_index(final)
+    value = json.loads(text)
+    del value["state"]["model/Llama/fc/weight"]["chunks"]["crc32"]
+    with open(index_path, "w") as f:
+        json.dump(value, f)  # the checksum column too: no chunk is read unchecked
+    with expect_error(IncompleteCheckpointError, r"not a readable index \(KeyError: 'crc32'\)"):
         read_index(final)
     with open(os.path.join(final, "header.json"), "w") as f:
         f.write("{")
