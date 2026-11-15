@@ -14,6 +14,8 @@ device of its own.
 groups must not interleave: the TP tests come first, the FSDP test last.
 """
 
+import json
+import os
 import random
 
 import numpy as np
@@ -269,8 +271,6 @@ def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
 
 
 def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_path, monkeypatch, expect_error):
-    import os
-
     from ttml.distributed_checkpointing import _save
 
     model, params, opt = fresh_tp(DIM)
@@ -334,7 +334,6 @@ def test_a_load_that_fails_after_placing_says_the_model_is_partly_restored(
 
 def test_a_truncated_data_file_is_refused_before_anything_is_placed(tp_mesh, tmp_path, expect_error):
     import glob
-    import os
 
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
@@ -430,7 +429,7 @@ def _adamw_stochastic_rounding(params):
     return ttml.optimizers.AdamW(params, cfg)
 
 
-def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
+def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_error):
     """The scheduler, the dataloader and every generator continue exactly as the uninterrupted run would, and so
     does the next training step, taken with the restored moments, step count, LR and generator: the optimizer rounds
     stochastically, so the step matches only if the ttml generator was restored, not reseeded."""
@@ -519,10 +518,35 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
     bare = str(tmp_path / "bare")
     dcp.save(bare, model=model, rng=False)
     assert dcp.read_train_state(bare) == {}
-    with pytest.raises(dcp.MissingKeyError):  # allow-pytest.raises: the fixture matches on device error text
+    untouched = _model_shards(params2), sched2.get_state_dict()
+    with expect_error(dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/scheduler'\]"):
         dcp.load(bare, model=model2, scheduler=sched2)
+    assert sched2.get_state_dict() == untouched[1]
+    _assert_same_shards(_model_shards(params2), untouched[0])
     lenient = dcp.load(bare, model=model2, scheduler=sched2, rng=True, strict=False)
     assert lenient.missing == ["train_state/scheduler", "train_state/rng"] and lenient.restored == []
+
+    # A damaged RNG block is refused before anything is placed, generators and model alike.
+    header_path = os.path.join(path, "header.json")
+    header = json.loads(open(header_path).read())
+    numpy_state = header["train_state"]["rng"]["ranks"]["0"]["numpy"]
+    numpy_state["state"] = numpy_state["state"][:-8]  # 623 words
+    with open(header_path, "w") as f:
+        json.dump(header, f)
+    untouched = _model_shards(params2), ctx.get_generator_state(), random.getstate()
+    with expect_error(dcp.CheckpointError, "the stored RNG state is malformed"):
+        dcp.load(path, model=model2, optimizer=opt2, rng=True)
+    _assert_same_shards(_model_shards(params2), untouched[0])
+    assert (ctx.get_generator_state(), random.getstate()) == untouched[1:]
+
+    # And a save whose dataloader state is not JSON writes nothing.
+    class _NotJson(Loader):
+        def get_state_dict(self) -> dict:
+            return {"position": np.int64(self.position)}
+
+    with expect_error(dcp.CheckpointError, "dataloader state at /position: a int64 has no JSON form"):
+        dcp.save(str(tmp_path / "not_json"), model=model, dataloader=_NotJson())
+    assert not [name for name in os.listdir(tmp_path) if name.startswith("not_json")], "nothing on disk"
 
 
 def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_error):
