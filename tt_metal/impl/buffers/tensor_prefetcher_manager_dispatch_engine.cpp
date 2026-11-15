@@ -139,7 +139,9 @@ void TensorPrefetcherManager::validate_dispatch_engine_pages(
 }
 
 uint32_t TensorPrefetcherManager::fifo_slots_retired(uint32_t d) const {
-    // The reader's and the pusher's counts, one cache line apart, in one read.
+    // The reader's and the pusher's counts, one cache line apart, in one read. A slot is retired once both
+    // kernels pass it, so this returns the count that is behind. The counts wrap and stay within a FIFO's depth
+    // of each other, so their signed difference orders them.
     constexpr uint32_t kRdWords = (fifo::kPusherRdOffset - fifo::kReaderRdOffset) / sizeof(uint32_t) + 1;
     std::array<uint32_t, kRdWords> rd{};
     ::tt::tt_metal::detail::ReadFromDeviceL1(
@@ -148,7 +150,9 @@ uint32_t TensorPrefetcherManager::fifo_slots_retired(uint32_t d) const {
         fifo_region_base_ + fifo::kReaderRdOffset,
         std::span(reinterpret_cast<uint8_t*>(rd.data()), sizeof(rd)),
         CoreType::DISPATCH);
-    return std::min(rd.front(), rd.back());
+    const uint32_t reader_rd = rd.front();
+    const uint32_t pusher_rd = rd.back();
+    return static_cast<int32_t>(reader_rd - pusher_rd) <= 0 ? reader_rd : pusher_rd;
 }
 
 void TensorPrefetcherManager::wait_for_fifo_retired(uint32_t d, uint32_t target) const {

@@ -1466,7 +1466,7 @@ void TensorPrefetcherManager::queue(
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
     validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherRequest");
     TT_FATAL(
-        trace_capture_cq == nullptr || !on_dispatch_engine(),
+        trace_capture_cq == nullptr || !trace_capture_cq->trace_id().has_value() || !on_dispatch_engine(),
         "QueueTensorPrefetcherRequest: trace capture is not supported when fast dispatch runs the Tensor prefetcher "
         "(#65545)");
     send_or_capture(build_requests(target, device_subset, tensors), trace_capture_cq);
@@ -1679,6 +1679,9 @@ uint32_t TensorPrefetcherManager::signal_slot_addr(uint32_t slot_index) const {
 uint32_t TensorPrefetcherManager::signal_address(uint32_t signal_id) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "GetTensorPrefetcherSignalAddress called before StartTensorPrefetcher");
+    TT_FATAL(
+        !on_dispatch_engine(),
+        "GetTensorPrefetcherSignalAddress is not supported when fast dispatch runs the Tensor prefetcher (#65545)");
     validate_signal_id(signal_id, "GetTensorPrefetcherSignalAddress");
     return signal_slot_addr(op_signal_slot_index(signal_id));
 }

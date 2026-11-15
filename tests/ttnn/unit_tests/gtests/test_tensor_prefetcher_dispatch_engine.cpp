@@ -142,12 +142,14 @@ struct ReceiverContiguousCase {
     Tensor weight;
 };
 
-// Queues one request for the weight `num_layers` times over.
+// Queues one request for the weight `num_layers` times over. It names the device's command queue, which is not
+// capturing a trace, so the request is sent at once.
 void queue_layers(
     tt::tt_metal::distributed::MeshDevice* device, const ReceiverContiguousCase& prefetch, uint32_t num_layers) {
     const std::vector<metal_exp::TensorPrefetcherInput> inputs(
         num_layers, metal_exp::TensorPrefetcherInput{prefetch.weight.mesh_tensor(), prefetch.block_count});
-    metal_exp::QueueTensorPrefetcherRequest(*device, prefetch.pipe_refs(), std::nullopt, inputs);
+    metal_exp::QueueTensorPrefetcherRequest(
+        *device, prefetch.pipe_refs(), std::nullopt, inputs, &device->mesh_command_queue());
 }
 
 // Validates every entry of `num_layers` copies of the weight as the receivers consume them.
@@ -188,6 +190,14 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverC
     queue_layers(device_, narrow, /*num_layers=*/2);
     validate_layers(device_, wide, /*num_layers=*/2);
     validate_layers(device_, narrow, /*num_layers=*/2);
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// The dispatch engine's kernels have no op-signal slots, so asking for one's address fails instead of
+// returning an address nothing watches.
+TEST_F(DispatchEngineTensorPrefetcherFixture, RejectsSignalAddressQuery) {
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    EXPECT_ANY_THROW(metal_exp::GetTensorPrefetcherSignalAddress(*device_, /*signal_id=*/0));
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
