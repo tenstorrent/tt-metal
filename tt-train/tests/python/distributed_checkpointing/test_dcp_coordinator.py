@@ -414,6 +414,19 @@ def test_every_rank_raises_the_class_the_failing_rank_raised():
     assert "no index.json" in str(errors[1]) and "IncompleteCheckpointError on rank 1" in str(errors[0])
 
 
+def test_an_interrupt_on_one_rank_is_exchanged_before_it_propagates():
+    def body(group, fake):
+        def work():
+            if group.rank == 1:
+                raise KeyboardInterrupt
+
+        group.phase("writing the shards", work)  # rank 0 would wait here for good if rank 1 never reported
+
+    _, errors = _run_ranks(2, body)
+    assert type(errors[1]) is KeyboardInterrupt, "re-raised as it was on the interrupted rank"
+    assert type(errors[0]) is CheckpointError and "writing the shards failed on rank(s) [1] of 2" in str(errors[0])
+
+
 def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
     monkeypatch.setattr(_coordinator, "MAX_PAYLOAD", 64)
 

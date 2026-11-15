@@ -221,16 +221,21 @@ class Group:
 
     def phase(self, name: str, fn: Callable[[], Any]) -> Any:
         """Run ``fn`` on this rank, then exchange its outcome: every rank raises when any rank failed. The group of
-        one has no other rank to tell, so its phases run ``fn`` and let its errors propagate as raised."""
+        one has no other rank to tell, so its phases run ``fn`` and let its errors propagate as raised.
+
+        An interrupt (``KeyboardInterrupt``, ``SystemExit``) is exchanged like any failure, so the other ranks raise
+        instead of waiting for this one in the next collective, and is then re-raised here as it was."""
         if self.size == 1:
             return fn()
         status, err = 0, None
         try:
             result = fn()
-        except Exception as caught:  # noqa: BLE001
+        except BaseException as caught:  # noqa: BLE001
             status, err, result = error_status(caught), caught, None
             traceback.print_exc()
         statuses = self.allgather(status)
+        if err is not None and not isinstance(err, Exception):
+            raise err
         failed = [r for r, s in enumerate(statuses) if s]
         if failed:
             # Every rank raises the class the first failing rank reported, so callers can catch the typed error.
