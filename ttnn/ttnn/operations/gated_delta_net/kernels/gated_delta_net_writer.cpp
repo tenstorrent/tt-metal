@@ -10,6 +10,9 @@
 // only). After the pair's last token: drains the piece's slice of recurrent_state_out.
 // R-BCAST (decode R-VSPLIT): the key head's q and k injectors multicast qn and kn (one channel each) into
 // cb_kq_rows on every core of the key head, where the writer hands the landed rows to compute.
+// R-PREP prep core (ROLE): expands the coefficient pages of its key head's r value heads per tile row, then, once
+// every state core of the group has granted the row's inbox slot, writes the prepped row into their inboxes and
+// bumps their landed counters. A state core's writer skips the coefficient expansion (its gates come prepped).
 
 #include <stdint.h>
 
@@ -33,6 +36,11 @@ constexpr uint32_t cb_osum_gather = GDN_CB_OSUM_GATHER;
 constexpr uint32_t cb_kq_rows = GDN_CB_KQ_ROWS;
 constexpr uint32_t cb_kq_rows_f32 = GDN_CB_KQ_ROWS_F32;
 constexpr uint32_t cb_qk_stage = GDN_CB_QK_STAGE;
+constexpr uint32_t cb_prep_send = GDN_CB_PREP_SEND;
+constexpr uint32_t cb_knT = GDN_CB_KNT;
+constexpr uint32_t cb_v = GDN_CB_V;
+constexpr uint32_t cb_chunk_vec = GDN_CB_CHUNK_VEC;
+constexpr uint32_t cb_chunk_mat = GDN_CB_CHUNK_MAT;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t OUT_TILE_BYTES = get_compile_time_arg_val(3);    // output tile (dtype-derived on host)
@@ -42,6 +50,12 @@ constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;
 constexpr uint32_t PIECES = get_compile_time_arg_val(5);       // column pieces per pair
 constexpr uint32_t OSUM_SEM_ID = get_compile_time_arg_val(6);  // peer partial sums landed (cumulative)
 constexpr bool CHUNKED = get_compile_time_arg_val(7) != 0;     // R-CHUNK: chunk coefficients per tile row
+constexpr uint32_t ROLE = get_compile_time_arg_val(8);         // GDN_ROLE_*
+constexpr uint32_t INBOX_SLOTS = get_compile_time_arg_val(9) > 0 ? get_compile_time_arg_val(9)
+                                                                 : 1;  // R-PREP inbox slots (1 outside R-PREP)
+constexpr uint32_t RATIO = get_compile_time_arg_val(10);               // value heads per key head
+constexpr bool PREP = ROLE == GDN_ROLE_PREP;
+constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
@@ -50,6 +64,105 @@ FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES 
 // Word index of element (r, c) of an fp32 tile (four 16x16 faces).
 FORCE_INLINE uint32_t elem_index(uint32_t r, uint32_t c) {
     return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15);
+}
+
+// Column-0 chunk coefficient pages of one pair for tile row [base_row, +32): g (page 0) and beta (page 1) of gate
+// column gate_col, exactly 0 on rows outside [lo, hi) (no decay, no write), whatever the gate tile holds there.
+FORCE_INLINE void push_chunk_coefs(
+    volatile tt_l1_ptr uint32_t* gates, uint32_t gate_col, uint32_t base_row, uint32_t lo, uint32_t hi) {
+    cb_reserve_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
+    volatile tt_l1_ptr uint32_t* coef = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tok_coef));
+    for (uint32_t p = 0; p < TILE_ROWS; ++p) {
+        const bool valid = p + base_row >= lo && p + base_row < hi;
+        const uint32_t e = elem_index(p, 0);
+        coef[e] = valid ? gates[elem_index(p, gate_col)] : 0u;
+        coef[TILE_WORDS + e] = valid ? gates[TILE_WORDS + elem_index(p, gate_col)] : 0u;
+    }
+    cb_push_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
+}
+
+// R-PREP prep core. Unit = (sequence, key head); tile rows i = offset, offset + stride, ... of the sequence. The row's
+// prepped tiles arrive in cb_prep_send as [v of the r heads (r Vt)][kn, qn (2 Kt)][kn^T (Kt)][head pack x r] and go
+// to the group's state cores (unit order: head j, piece p) at inbox slot i % INBOX_SLOTS of cb_v (the piece's Vb v
+// tiles), cb_kq_rows, cb_knT (all), cb_chunk_vec, cb_chunk_mat (the head's pieces). Every core has the same CB
+// layout, so this core's base addresses of those buffers are the state cores'.
+template <uint32_t Kt, uint32_t Vt, uint32_t Hv>
+void prep_writer(uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride, uint32_t arg) {
+    constexpr uint32_t Vb = Vt / PIECES;
+    constexpr uint32_t GROUP = RATIO * PIECES;
+    constexpr uint32_t T_BYTES = STATE_TILE_BYTES;
+    constexpr uint32_t ROW_PAGES = RATIO * Vt + 3 * Kt + RATIO * GDN_HEAD_PACK_PAGES;
+    uint32_t cons_x[GROUP];
+    uint32_t cons_y[GROUP];
+    for (uint32_t c = 0; c < GROUP; ++c) {
+        cons_x[c] = get_arg_val<uint32_t>(arg++);
+        cons_y[c] = get_arg_val<uint32_t>(arg++);
+    }
+    const uint32_t v_base = get_write_ptr(cb_v);
+    const uint32_t kq_base = get_write_ptr(cb_kq_rows);
+    const uint32_t knT_base = get_write_ptr(cb_knT);
+    const uint32_t vec_base = get_write_ptr(cb_chunk_vec);
+    const uint32_t mat_base = get_write_ptr(cb_chunk_mat);
+    constexpr uint32_t VEC_PAGES = GDN_STATE_VEC_PAGES;
+    constexpr uint32_t MAT_PAGES = GDN_HEAD_PACK_PAGES - GDN_STATE_VEC_PAGES;
+
+    Noc noc;
+    Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
+    const uint32_t pair0 = first_unit / PIECES;
+    const uint32_t head0 = pair0 % Hv;
+    const uint32_t seq_lo = (pair0 / Hv) * T;
+    const uint32_t seq_hi = seq_lo + T;
+    const uint32_t first_tr = seq_lo / TILE_ROWS;
+    const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
+    uint32_t sent = 0;
+    for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride, ++sent) {
+        const uint32_t base_row = tr * TILE_ROWS;
+        const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
+        const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
+        cb_wait_front(cb_gates, 2);
+        volatile tt_l1_ptr uint32_t* gates = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_gates));
+        for (uint32_t j = 0; j < RATIO; ++j) {
+            push_chunk_coefs(gates, (head0 + j) % TILE_ROWS, base_row, lo, hi);
+        }
+        cb_pop_front(cb_gates, 2);
+
+        // Every state core of the group grants each of its rows once, in order; this core's next row is granted
+        // only after this one has landed (stride >= inbox slots), so the cumulative count identifies the row.
+        granted.wait_min((sent + 1) * GROUP);
+        const uint32_t slot = (tr - first_tr) % INBOX_SLOTS;
+        cb_wait_front(cb_prep_send, ROW_PAGES);
+        const uint32_t src = get_read_ptr(cb_prep_send);
+        const uint32_t kq_src = src + RATIO * Vt * T_BYTES;
+        for (uint32_t c = 0; c < GROUP; ++c) {
+            const uint32_t j = c / PIECES;
+            const uint32_t p = c % PIECES;
+            const uint32_t head_src = kq_src + (3 * Kt + j * GDN_HEAD_PACK_PAGES) * T_BYTES;
+            noc_async_write(
+                src + (j * Vt + p * Vb) * T_BYTES,
+                get_noc_addr(cons_x[c], cons_y[c], v_base + slot * Vb * T_BYTES),
+                Vb * T_BYTES);
+            noc_async_write(
+                kq_src, get_noc_addr(cons_x[c], cons_y[c], kq_base + slot * 2 * Kt * T_BYTES), 2 * Kt * T_BYTES);
+            noc_async_write(
+                kq_src + 2 * Kt * T_BYTES,
+                get_noc_addr(cons_x[c], cons_y[c], knT_base + slot * Kt * T_BYTES),
+                Kt * T_BYTES);
+            noc_async_write(
+                head_src,
+                get_noc_addr(cons_x[c], cons_y[c], vec_base + slot * VEC_PAGES * T_BYTES),
+                VEC_PAGES * T_BYTES);
+            noc_async_write(
+                head_src + VEC_PAGES * T_BYTES,
+                get_noc_addr(cons_x[c], cons_y[c], mat_base + slot * MAT_PAGES * T_BYTES),
+                MAT_PAGES * T_BYTES);
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_prep_send, ROW_PAGES);
+        for (uint32_t c = 0; c < GROUP; ++c) {
+            Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
+            landed.up(noc, cons_x[c], cons_y[c], 1);
+        }
+    }
 }
 
 // Lands kn (cb_kq_rows tiles [0, Kt)) and qn ([Kt, 2Kt)) of one tile row. An injector multicasts its staged
@@ -99,7 +212,7 @@ void kernel_main() {
     constexpr uint32_t n_state = Kt * Vb;
     constexpr uint32_t out_width_tiles = Hv * Vt;
 
-    constexpr auto out_args = TensorAccessorArgs<8>();
+    constexpr auto out_args = TensorAccessorArgs<11>();
     constexpr auto q_channel = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("qkq_ct_offset"), get_named_compile_time_arg_val("qkq_rt_offset")>();
     constexpr auto k_channel = dataflow_kernel_lib::
@@ -115,11 +228,13 @@ void kernel_main() {
     const uint32_t qk_role = get_arg_val<uint32_t>(arg++);
     const uint32_t zero_slots = get_arg_val<uint32_t>(arg++);       // cb_window slots this core's reader uses
     const uint32_t zero_slot_bytes = get_arg_val<uint32_t>(arg++);  // one window group
+    const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);        // tile rows handled: offset, + stride, ...
+    const uint32_t tr_stride = get_arg_val<uint32_t>(arg++);
     // R-VSPLIT: NoC (x, y) of the pair's piece cores in piece order (this core included). The host runs
     // one unit per core then, so every piece of a pair walks the same tile rows in lockstep.
     uint32_t peer_x[PIECES];
     uint32_t peer_y[PIECES];
-    for (uint32_t s = 0; s < PIECES && PIECES > 1; ++s) {
+    for (uint32_t s = 0; s < PIECES && PIECES > 1 && !PREP; ++s) {
         peer_x[s] = get_arg_val<uint32_t>(arg++);
         peer_y[s] = get_arg_val<uint32_t>(arg++);
     }
@@ -139,6 +254,11 @@ void kernel_main() {
         }
     }
 
+    if constexpr (PREP) {
+        prep_writer<Kt, Vt, Hv>(first_unit, T, tr_offset, tr_stride, arg);
+        return;
+    }
+
     for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
         const uint32_t pair = unit / PIECES;
         const uint32_t piece = unit % PIECES;
@@ -151,45 +271,37 @@ void kernel_main() {
         const uint32_t first_tr = seq_lo / TILE_ROWS;
         const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
 
-        for (uint32_t tr = first_tr; tr <= last_tr; ++tr) {
+        for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride) {
             const uint32_t base_row = tr * TILE_ROWS;
             const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
             // ---- per-token coefficient expansion (R-CHUNK: per-tile-row g / beta columns) ----
-            cb_wait_front(cb_gates, 2);
-            volatile tt_l1_ptr uint32_t* gates = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_gates));
-            if constexpr (CHUNKED) {
-                // Column 0 of page 0: g of the pair, of page 1: beta; exactly 0 on rows that are no token of
-                // the pair (no decay, no write), whatever the gate tile holds there.
-                cb_reserve_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
-                volatile tt_l1_ptr uint32_t* coef =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tok_coef));
-                for (uint32_t p = 0; p < TILE_ROWS; ++p) {
-                    const bool valid = p + base_row >= lo && p + base_row < hi;
-                    const uint32_t e = elem_index(p, 0);
-                    coef[e] = valid ? gates[elem_index(p, gate_col)] : 0u;
-                    coef[TILE_WORDS + e] = valid ? gates[TILE_WORDS + elem_index(p, gate_col)] : 0u;
+            if constexpr (!STATE) {
+                cb_wait_front(cb_gates, 2);
+                volatile tt_l1_ptr uint32_t* gates =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_gates));
+                if constexpr (CHUNKED) {
+                    push_chunk_coefs(gates, gate_col, base_row, lo, hi);
                 }
-                cb_push_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
-            }
-            for (uint32_t row = lo; row < hi && !CHUNKED; ++row) {
-                const uint32_t p = row - base_row;
-                const uint32_t alpha = gates[elem_index(p, gate_col)];
-                const uint32_t beta = gates[TILE_WORDS + elem_index(p, gate_col)];
-                cb_reserve_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
-                volatile tt_l1_ptr uint32_t* coef =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tok_coef));
-                for (uint32_t r = 0; r < TILE_ROWS; ++r) {
-                    const uint32_t e = elem_index(r, 0);
-                    const bool at_p = (r == p);
-                    coef[e] = alpha;
-                    coef[TILE_WORDS + e] = at_p ? beta : 0u;
-                    coef[2 * TILE_WORDS + e] = at_p ? alpha : 0u;
+                for (uint32_t row = lo; row < hi && !CHUNKED; ++row) {
+                    const uint32_t p = row - base_row;
+                    const uint32_t alpha = gates[elem_index(p, gate_col)];
+                    const uint32_t beta = gates[TILE_WORDS + elem_index(p, gate_col)];
+                    cb_reserve_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
+                    volatile tt_l1_ptr uint32_t* coef =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tok_coef));
+                    for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+                        const uint32_t e = elem_index(r, 0);
+                        const bool at_p = (r == p);
+                        coef[e] = alpha;
+                        coef[TILE_WORDS + e] = at_p ? beta : 0u;
+                        coef[2 * TILE_WORDS + e] = at_p ? alpha : 0u;
+                    }
+                    cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
                 }
-                cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
+                cb_pop_front(cb_gates, 2);
             }
-            cb_pop_front(cb_gates, 2);
 
             if (!CHUNKED && qk_role != GDN_QK_OWN) {
                 land_qk_rows(q_channel, k_channel, qk_role, Kt);

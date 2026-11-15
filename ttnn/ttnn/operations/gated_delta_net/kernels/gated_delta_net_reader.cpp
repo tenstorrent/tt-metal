@@ -14,6 +14,9 @@
 //   copy_conv_state_block: conv_state_out rows 3b..3b+2 of the pair's columns (bit-exact DM copy).
 // Token rows are moved as face-row segments (64 B fp32, 32 B bf16; bf16 reads go through RowReader
 // staging) unless the pair owns the whole tile row.
+// R-PREP (ROLE): a prep core's unit is a (sequence, key head) with the r value heads' v columns, and it reads the
+// gate and window inputs of tile rows offset, offset + stride, ... only; a state core reads norm_weight, S0 and z,
+// hands its inbox rows to compute as prep cores land them, and copies conv_state_out.
 
 #include <stdint.h>
 
@@ -21,6 +24,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 namespace {
@@ -40,6 +44,11 @@ constexpr uint32_t cb_row_stage = GDN_CB_ROW_STAGE;
 constexpr uint32_t cb_window_zeroed = GDN_CB_WINDOW_ZEROED;
 constexpr uint32_t cb_hist_stage = GDN_CB_HIST_STAGE;
 constexpr uint32_t cb_tri_mask = GDN_CB_TRI_MASK;
+constexpr uint32_t cb_kq_rows = GDN_CB_KQ_ROWS;
+constexpr uint32_t cb_knT = GDN_CB_KNT;
+constexpr uint32_t cb_v = GDN_CB_V;
+constexpr uint32_t cb_chunk_vec = GDN_CB_CHUNK_VEC;
+constexpr uint32_t cb_chunk_mat = GDN_CB_CHUNK_MAT;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t TILE_BYTES = get_compile_time_arg_val(6);        // token-tensor tile (dtype-derived on host)
@@ -51,6 +60,11 @@ constexpr uint32_t WINDOW_GROUP_COLS = get_compile_time_arg_val(11);  // column 
 constexpr uint32_t WINDOW_SLOTS = get_compile_time_arg_val(12);       // window groups held by cb_window
 constexpr uint32_t PIECES = get_compile_time_arg_val(13);             // column pieces per pair
 constexpr bool CHUNKED = get_compile_time_arg_val(14) != 0;           // R-CHUNK: chunk step per tile row
+constexpr uint32_t ROLE = get_compile_time_arg_val(15);               // GDN_ROLE_*
+constexpr uint32_t INBOX_SLOTS = get_compile_time_arg_val(16) > 0 ? get_compile_time_arg_val(16)
+                                                                  : 1;  // R-PREP inbox slots (1 outside R-PREP)
+constexpr bool PREP = ROLE == GDN_ROLE_PREP;    // R-PREP prep core: token-row inputs of strided tile rows
+constexpr bool STATE = ROLE == GDN_ROLE_STATE;  // R-PREP state core: inbox, S0, z, norm_weight
 constexpr uint32_t FACE_BYTES = TILE_BYTES / 4;                     // one 16x16 face
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;                     // one face row
 constexpr uint32_t CS_COLS_PER_FLUSH = TILE_ROWS / GDN_HISTORY;     // conv_state_out columns per scratch tile
@@ -202,12 +216,13 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(4);
     constexpr uint32_t Gt = get_compile_time_arg_val(5);
     constexpr uint32_t ratio = Hv / Hk;
-    constexpr uint32_t Vb = Vt / PIECES;  // v / state column tiles of one piece
+    // v columns of a unit: a piece's, or on a prep core those of the key head's r value heads.
+    constexpr uint32_t Vb = PREP ? ratio * Vt : Vt / PIECES;
     constexpr uint32_t n_state = Kt * Vb;
     constexpr uint32_t z_width_tiles = Hv * Vt;
     constexpr uint32_t pair_cols = 2 * Kt + Vb;
 
-    constexpr auto mixed_args = TensorAccessorArgs<15>();
+    constexpr auto mixed_args = TensorAccessorArgs<17>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
@@ -236,6 +251,22 @@ void kernel_main() {
     const uint32_t T = get_arg_val<uint32_t>(arg++);
     const uint32_t qk_role = get_arg_val<uint32_t>(arg++);
     const uint32_t zero_slots = get_arg_val<uint32_t>(arg++);  // cb_window slots the writer zeroes
+    // Tile rows of the unit's sequence this core handles: offset, offset + stride, ... (R-PREP prep core), or all.
+    const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);
+    const uint32_t tr_stride = get_arg_val<uint32_t>(arg++);
+    // R-PREP state core: NoC (x, y) of its group's prep cores; tile row i of the sequence comes from prep core
+    // i % producers into inbox slot i % INBOX_SLOTS.
+    constexpr uint32_t MAX_PRODUCERS = STATE ? 64 : 1;
+    uint32_t producers = 0;
+    uint32_t producer_x[MAX_PRODUCERS];
+    uint32_t producer_y[MAX_PRODUCERS];
+    if constexpr (STATE) {
+        producers = get_arg_val<uint32_t>(arg++);
+        for (uint32_t q = 0; q < producers; ++q) {
+            producer_x[q] = get_arg_val<uint32_t>(arg++);
+            producer_y[q] = get_arg_val<uint32_t>(arg++);
+        }
+    }
     // The unit's columns: q/k columns [qk_lo, qk_lo + qk_cols) of the pair's 2Kt, then its Vb v columns.
     const uint32_t qk_lo = qk_role == GDN_QK_K_INJECTOR ? Kt : 0;
     const uint32_t qk_cols = qk_role == GDN_QK_OWN ? 2 * Kt : (qk_role == GDN_QK_RECEIVER ? 0 : Kt);
@@ -264,7 +295,7 @@ void kernel_main() {
 
     dataflow_kernel_lib::
         prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
-    if constexpr (CHUNKED) {
+    if constexpr (CHUNKED && !STATE) {
         // Lower-triangular 0/1 mask (column <= row) of the chunk decay matrix, once per kernel: zeroed over
         // the NoC, then only the 528 ones are stored.
         CircularBuffer mask_buf(cb_tri_mask);
@@ -283,7 +314,7 @@ void kernel_main() {
 
     for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
         const uint32_t pair = unit / PIECES;
-        const uint32_t v_first = (unit % PIECES) * Vb;  // first v / state column tile of the piece
+        const uint32_t v_first = PREP ? 0 : (unit % PIECES) * Vb;  // first v / state column tile of the piece
         const uint32_t seq = pair / Hv;
         const uint32_t head = pair % Hv;
         const uint32_t key_head = head / ratio;
@@ -304,191 +335,232 @@ void kernel_main() {
         };
 
         // ---- load_pair_block ----
-        cb_reserve_back(cb_conv_w, conv_w_pages);
-        cb_reserve_back(cb_gate_w, 2);
-        cb_reserve_back(cb_norm_w, Vb);
-        const uint32_t conv_w_base = get_write_ptr(cb_conv_w);
-        for (uint32_t local = 0; local < unit_cols; ++local) {
-            const uint32_t ct = pair_col(unit_col(local));
-            if constexpr (CONV_W_RAW) {
-                // Tap j stays at row j; compute broadcasts it by row index.
-                read_row_span(conv_w, ct, 0, GDN_CONV_TAPS, conv_w_base + local * TILE_BYTES);
-            } else {
-                for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
-                    rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * local + tap) * TILE_BYTES, 0);
-                }
+        if constexpr (!PREP) {
+            cb_reserve_back(cb_norm_w, Vb);
+            const uint32_t norm_w_base = get_write_ptr(cb_norm_w);
+            for (uint32_t vt = 0; vt < Vb; ++vt) {
+                read_row_span(norm_w, v_first + vt, 0, 1, norm_w_base + vt * TILE_BYTES);
             }
         }
-        // Rank-1 weights: compute broadcasts row 0.
-        const uint32_t gate_w_base = get_write_ptr(cb_gate_w);
-        read_row_span(a_log, head / TILE_ROWS, 0, 1, gate_w_base);
-        read_row_span(dt_bias, head / TILE_ROWS, 0, 1, gate_w_base + TILE_BYTES);
-        const uint32_t norm_w_base = get_write_ptr(cb_norm_w);
-        for (uint32_t vt = 0; vt < Vb; ++vt) {
-            read_row_span(norm_w, v_first + vt, 0, 1, norm_w_base + vt * TILE_BYTES);
+        if constexpr (STATE) {
+            noc_async_read_barrier();
+            cb_push_back(cb_norm_w, Vb);
+        }
+        if constexpr (!STATE) {
+            cb_reserve_back(cb_conv_w, conv_w_pages);
+            cb_reserve_back(cb_gate_w, 2);
+            const uint32_t conv_w_base = get_write_ptr(cb_conv_w);
+            for (uint32_t local = 0; local < unit_cols; ++local) {
+                const uint32_t ct = pair_col(unit_col(local));
+                if constexpr (CONV_W_RAW) {
+                    // Tap j stays at row j; compute broadcasts it by row index.
+                    read_row_span(conv_w, ct, 0, GDN_CONV_TAPS, conv_w_base + local * TILE_BYTES);
+                } else {
+                    for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
+                        rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * local + tap) * TILE_BYTES, 0);
+                    }
+                }
+            }
+            // Rank-1 weights: compute broadcasts row 0.
+            const uint32_t gate_w_base = get_write_ptr(cb_gate_w);
+            read_row_span(a_log, head / TILE_ROWS, 0, 1, gate_w_base);
+            read_row_span(dt_bias, head / TILE_ROWS, 0, 1, gate_w_base + TILE_BYTES);
         }
         // Completed by the first window group's flush (one DRAM round trip for weights, gates and window).
-        bool weights_pending = true;
+        bool weights_pending = !STATE;
 
         const uint32_t seq_lo = seq * T;
         const uint32_t seq_hi = seq_lo + T;
         const uint32_t first_tr = seq_lo / TILE_ROWS;
         const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
-        for (uint32_t tr = first_tr; tr <= last_tr; ++tr) {
+        for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride) {
             const uint32_t base_row = tr * TILE_ROWS;
             const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
-            // ---- gate inputs: token rows of the b, a tiles of the gate column ----
-            cb_reserve_back(cb_gate_in, 2);
-            const uint32_t gate_in_base = get_write_ptr(cb_gate_in);
-            const uint32_t gate_page = tr * Gt + head / TILE_ROWS;
-            read_row_span(b_acc, gate_page, lo - base_row, hi - base_row, gate_in_base);
-            read_row_span(a_acc, gate_page, lo - base_row, hi - base_row, gate_in_base + TILE_BYTES);
-            bool gates_pending = true;  // pushed after the first window group's flush
+            if constexpr (STATE) {
+                // ---- R-PREP inbox: grant slot i % INBOX_SLOTS to tile row i's prep core once compute has freed
+                // it, then hand the landed row to compute ----
+                const uint32_t i = tr - first_tr;
+                const uint32_t slot = i % INBOX_SLOTS;
+                cb_reserve_back(cb_kq_rows, 2 * Kt);
+                cb_reserve_back(cb_knT, Kt);
+                cb_reserve_back(cb_v, Vb);
+                cb_reserve_back(cb_chunk_vec, GDN_STATE_VEC_PAGES);
+                cb_reserve_back(cb_chunk_mat, GDN_HEAD_PACK_PAGES - GDN_STATE_VEC_PAGES);
+                Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
+                granted.up(noc, producer_x[i % producers], producer_y[i % producers], 1);
+                Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
+                landed.wait_min(i / INBOX_SLOTS + 1);
+                cb_push_back(cb_kq_rows, 2 * Kt);
+                cb_push_back(cb_knT, Kt);
+                cb_push_back(cb_v, Vb);
+                cb_push_back(cb_chunk_vec, GDN_STATE_VEC_PAGES);
+                cb_push_back(cb_chunk_mat, GDN_HEAD_PACK_PAGES - GDN_STATE_VEC_PAGES);
+            } else {
+                // ---- gate inputs: token rows of the b, a tiles of the gate column ----
+                cb_reserve_back(cb_gate_in, 2);
+                const uint32_t gate_in_base = get_write_ptr(cb_gate_in);
+                const uint32_t gate_page = tr * Gt + head / TILE_ROWS;
+                read_row_span(b_acc, gate_page, lo - base_row, hi - base_row, gate_in_base);
+                read_row_span(a_acc, gate_page, lo - base_row, hi - base_row, gate_in_base + TILE_BYTES);
+                bool gates_pending = true;  // pushed after the first window group's flush
 
-            // ---- conv window: X_j[p] = xx[row(p) + j - 3], WINDOW_GROUP_COLS column tiles per hand-off ----
-            // Per group: one zero fill, one flush of every DRAM row read (current rows + history rows),
-            // then one flush of the L1 row shifts that source the current-row tiles. A uniform group
-            // size keeps every reservation contiguous in cb_window (its size is a multiple of a group).
-            const uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
-            for (uint32_t group_first = 0; group_first < unit_cols; group_first += group_cols) {
-                cb_reserve_back(cb_window, group_tiles);
-                const uint32_t win = get_write_ptr(cb_window);
-                if (zero_tokens != 0) {
-                    // The writer zeroes the buffer slot by slot at kernel start, off this RISC's critical path.
-                    cb_wait_front(cb_window_zeroed, 1);
-                    cb_pop_front(cb_window_zeroed, 1);
-                    --zero_tokens;
-                }
-                // Rows outside [lo, hi) are other sequences or padding: zero, never sourced.
-                const uint32_t row_lo = lo - base_row;
-                const uint32_t row_hi = hi - base_row;
-                if (dirty_lo[window_slot] < row_lo || dirty_hi[window_slot] > row_hi) {
-                    noc.async_write_zeros(window_buf, group_tiles * TILE_BYTES, {.offset_bytes = 0});
-                    noc.write_zeros_l1_barrier();
-                }
-                dirty_lo[window_slot] = row_lo;
-                dirty_hi[window_slot] = row_hi;
-                window_slot = window_slot + 1 == WINDOW_SLOTS ? 0 : window_slot + 1;
-                // History rows n = t + tap (t = row - seq_lo) all lie in conv_state rows
-                // [HISTORY * seq, HISTORY * seq + HISTORY): read that span once per column into a staging
-                // tile in place (one aligned read per face half) and copy rows out after the flush. A span
-                // crossing a tile row is read row by row instead.
-                const uint32_t hist_row0 = GDN_HISTORY * seq;
-                const bool hist_needed = lo < seq_lo + GDN_HISTORY;
-                const bool hist_staged = hist_needed && (hist_row0 % TILE_ROWS) + GDN_HISTORY <= TILE_ROWS;
-                // The HISTORY token rows before lo, when all are rows of mixed_qkv inside one tile row (a tile
-                // row continuing its sequence): read once per column as one aligned span into the same
-                // staging tile, then copied out as row runs.
-                const uint32_t prev_row0 = lo - GDN_HISTORY;
-                const bool prev_staged = !hist_needed && prev_row0 / TILE_ROWS == (lo - 1) / TILE_ROWS;
-                // A single token row (decode): one request per column into staging, then copied into the tap tile,
-                // whose other rows must stay zero.
-                const bool cur_staged = hi - lo == 1;
-                for (uint32_t col = 0; col < group_cols; ++col) {
-                    const uint32_t ct = pair_col(unit_col(group_first + col));
-                    const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
-                    if (cur_staged) {
-                        read_row_span(mixed, tr * Ct + ct, lo - base_row, hi - base_row, cur_stage + col * TILE_BYTES);
-                    } else {
-                        read_tile_rows(
-                            rows, mixed, tr * Ct + ct, base_row, lo, hi, col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
+                // ---- conv window: X_j[p] = xx[row(p) + j - 3], WINDOW_GROUP_COLS column tiles per hand-off ----
+                // Per group: one zero fill, one flush of every DRAM row read (current rows + history rows),
+                // then one flush of the L1 row shifts that source the current-row tiles. A uniform group
+                // size keeps every reservation contiguous in cb_window (its size is a multiple of a group).
+                const uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
+                for (uint32_t group_first = 0; group_first < unit_cols; group_first += group_cols) {
+                    cb_reserve_back(cb_window, group_tiles);
+                    const uint32_t win = get_write_ptr(cb_window);
+                    if (zero_tokens != 0) {
+                        // The writer zeroes the buffer slot by slot at kernel start, off this RISC's critical path.
+                        cb_wait_front(cb_window_zeroed, 1);
+                        cb_pop_front(cb_window_zeroed, 1);
+                        --zero_tokens;
                     }
-                    if (hist_staged) {
-                        const uint32_t r0 = hist_row0 % TILE_ROWS;
-                        read_row_span(
-                            conv_state,
-                            (hist_row0 / TILE_ROWS) * Ct + ct,
-                            r0,
-                            r0 + GDN_HISTORY,
-                            hist_stage + col * TILE_BYTES);
-                    } else if (prev_staged) {
-                        const uint32_t r0 = prev_row0 % TILE_ROWS;
-                        read_row_span(
-                            mixed,
-                            (prev_row0 / TILE_ROWS) * Ct + ct,
-                            r0,
-                            r0 + GDN_HISTORY,
-                            hist_stage + col * TILE_BYTES);
-                        continue;
+                    // Rows outside [lo, hi) are other sequences or padding: zero, never sourced.
+                    const uint32_t row_lo = lo - base_row;
+                    const uint32_t row_hi = hi - base_row;
+                    if (dirty_lo[window_slot] < row_lo || dirty_hi[window_slot] > row_hi) {
+                        noc.async_write_zeros(window_buf, group_tiles * TILE_BYTES, {.offset_bytes = 0});
+                        noc.write_zeros_l1_barrier();
                     }
-                    for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
-                        const uint32_t shift = GDN_HISTORY - tap;  // source row = row - shift
-                        const uint32_t remote_hi = hi < lo + shift ? hi : lo + shift;
-                        for (uint32_t row = lo; row < remote_hi; ++row) {
-                            const uint32_t p = row - base_row;
-                            const uint32_t tap_tile = col_win + tap * TILE_BYTES;
-                            if (row >= seq_lo + shift) {
-                                const uint32_t src = row - shift;
-                                rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
-                            } else if (!hist_staged) {
-                                const uint32_t src = hist_row0 + (row - seq_lo) + tap;
-                                rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
-                            }
-                        }
-                    }
-                }
-                rows.finish();
-                if (hist_staged || prev_staged || cur_staged) {
+                    dirty_lo[window_slot] = row_lo;
+                    dirty_hi[window_slot] = row_hi;
+                    window_slot = window_slot + 1 == WINDOW_SLOTS ? 0 : window_slot + 1;
+                    // History rows n = t + tap (t = row - seq_lo) all lie in conv_state rows
+                    // [HISTORY * seq, HISTORY * seq + HISTORY): read that span once per column into a staging
+                    // tile in place (one aligned read per face half) and copy rows out after the flush. A span
+                    // crossing a tile row is read row by row instead.
+                    const uint32_t hist_row0 = GDN_HISTORY * seq;
+                    const bool hist_needed = lo < seq_lo + GDN_HISTORY;
+                    const bool hist_staged = hist_needed && (hist_row0 % TILE_ROWS) + GDN_HISTORY <= TILE_ROWS;
+                    // The HISTORY token rows before lo, when all are rows of mixed_qkv inside one tile row (a tile
+                    // row continuing its sequence): read once per column as one aligned span into the same
+                    // staging tile, then copied out as row runs.
+                    const uint32_t prev_row0 = lo - GDN_HISTORY;
+                    const bool prev_staged = !hist_needed && prev_row0 / TILE_ROWS == (lo - 1) / TILE_ROWS;
+                    // A single token row (decode): one request per column into staging, then copied into the tap tile,
+                    // whose other rows must stay zero.
+                    const bool cur_staged = hi - lo == 1;
                     for (uint32_t col = 0; col < group_cols; ++col) {
+                        const uint32_t ct = pair_col(unit_col(group_first + col));
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
                         if (cur_staged) {
-                            copy_local_rows(
-                                cur_stage + col * TILE_BYTES,
-                                lo - base_row,
-                                col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES,
-                                lo - base_row,
-                                1);
+                            read_row_span(
+                                mixed, tr * Ct + ct, lo - base_row, hi - base_row, cur_stage + col * TILE_BYTES);
+                        } else {
+                            read_tile_rows(
+                                rows,
+                                mixed,
+                                tr * Ct + ct,
+                                base_row,
+                                lo,
+                                hi,
+                                col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
                         }
-                        for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1 && (hist_staged || prev_staged); ++tap) {
-                            const uint32_t shift = GDN_HISTORY - tap;
-                            uint32_t end = hi < lo + shift ? hi : lo + shift;
-                            uint32_t src = (prev_row0 + tap) % TILE_ROWS;  // row lo - shift
-                            if (hist_staged) {
-                                end = end < seq_lo + shift ? end : seq_lo + shift;
-                                src = hist_row0 % TILE_ROWS + (lo - seq_lo) + tap;
-                            }
-                            if (end > lo) {
-                                copy_local_rows(
-                                    hist_stage + col * TILE_BYTES,
-                                    src,
-                                    col_win + tap * TILE_BYTES,
-                                    lo - base_row,
-                                    end - lo);
-                            }
+                        if (hist_staged) {
+                            const uint32_t r0 = hist_row0 % TILE_ROWS;
+                            read_row_span(
+                                conv_state,
+                                (hist_row0 / TILE_ROWS) * Ct + ct,
+                                r0,
+                                r0 + GDN_HISTORY,
+                                hist_stage + col * TILE_BYTES);
+                        } else if (prev_staged) {
+                            const uint32_t r0 = prev_row0 % TILE_ROWS;
+                            read_row_span(
+                                mixed,
+                                (prev_row0 / TILE_ROWS) * Ct + ct,
+                                r0,
+                                r0 + GDN_HISTORY,
+                                hist_stage + col * TILE_BYTES);
+                            continue;
                         }
-                    }
-                }
-                if (weights_pending) {
-                    cb_push_back(cb_conv_w, conv_w_pages);
-                    cb_push_back(cb_gate_w, 2);
-                    cb_push_back(cb_norm_w, Vb);
-                    weights_pending = false;
-                }
-                if (gates_pending) {
-                    cb_push_back(cb_gate_in, 2);
-                    gates_pending = false;
-                }
-                if (hi - lo > 1 || hist_staged || prev_staged || cur_staged) {
-                    for (uint32_t col = 0; col < group_cols && hi - lo > 1; ++col) {
-                        const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
-                        const uint32_t cur_tap = col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES;
                         for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
-                            const uint32_t shift = GDN_HISTORY - tap;
-                            if (hi > lo + shift) {
-                                copy_local_rows(
-                                    cur_tap,
-                                    lo - base_row,
-                                    col_win + tap * TILE_BYTES,
-                                    lo + shift - base_row,
-                                    hi - lo - shift);
+                            const uint32_t shift = GDN_HISTORY - tap;  // source row = row - shift
+                            const uint32_t remote_hi = hi < lo + shift ? hi : lo + shift;
+                            for (uint32_t row = lo; row < remote_hi; ++row) {
+                                const uint32_t p = row - base_row;
+                                const uint32_t tap_tile = col_win + tap * TILE_BYTES;
+                                if (row >= seq_lo + shift) {
+                                    const uint32_t src = row - shift;
+                                    rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
+                                } else if (!hist_staged) {
+                                    const uint32_t src = hist_row0 + (row - seq_lo) + tap;
+                                    rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
+                                }
                             }
                         }
                     }
-                    noc_async_read_barrier();
+                    rows.finish();
+                    if (hist_staged || prev_staged || cur_staged) {
+                        for (uint32_t col = 0; col < group_cols; ++col) {
+                            const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
+                            if (cur_staged) {
+                                copy_local_rows(
+                                    cur_stage + col * TILE_BYTES,
+                                    lo - base_row,
+                                    col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES,
+                                    lo - base_row,
+                                    1);
+                            }
+                            for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1 && (hist_staged || prev_staged); ++tap) {
+                                const uint32_t shift = GDN_HISTORY - tap;
+                                uint32_t end = hi < lo + shift ? hi : lo + shift;
+                                uint32_t src = (prev_row0 + tap) % TILE_ROWS;  // row lo - shift
+                                if (hist_staged) {
+                                    end = end < seq_lo + shift ? end : seq_lo + shift;
+                                    src = hist_row0 % TILE_ROWS + (lo - seq_lo) + tap;
+                                }
+                                if (end > lo) {
+                                    copy_local_rows(
+                                        hist_stage + col * TILE_BYTES,
+                                        src,
+                                        col_win + tap * TILE_BYTES,
+                                        lo - base_row,
+                                        end - lo);
+                                }
+                            }
+                        }
+                    }
+                    if (weights_pending) {
+                        cb_push_back(cb_conv_w, conv_w_pages);
+                        cb_push_back(cb_gate_w, 2);
+                        if constexpr (!PREP) {
+                            cb_push_back(cb_norm_w, Vb);
+                        }
+                        weights_pending = false;
+                    }
+                    if (gates_pending) {
+                        cb_push_back(cb_gate_in, 2);
+                        gates_pending = false;
+                    }
+                    if (hi - lo > 1 || hist_staged || prev_staged || cur_staged) {
+                        for (uint32_t col = 0; col < group_cols && hi - lo > 1; ++col) {
+                            const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
+                            const uint32_t cur_tap = col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES;
+                            for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
+                                const uint32_t shift = GDN_HISTORY - tap;
+                                if (hi > lo + shift) {
+                                    copy_local_rows(
+                                        cur_tap,
+                                        lo - base_row,
+                                        col_win + tap * TILE_BYTES,
+                                        lo + shift - base_row,
+                                        hi - lo - shift);
+                                }
+                            }
+                        }
+                        noc_async_read_barrier();
+                    }
+                    cb_push_back(cb_window, group_tiles);
                 }
-                cb_push_back(cb_window, group_tiles);
+            }
+            if constexpr (PREP) {
+                continue;
             }
             // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs ----
             if (tr == first_tr) {
@@ -515,6 +587,9 @@ void kernel_main() {
             cb_push_back(cb_z, Vb);
         }
 
+        if constexpr (PREP) {
+            continue;
+        }
         // ---- copy_conv_state_block: conv_state_out[3b + n] = xx[b, T + n] ----
         // Columns are staged HISTORY rows apiece in the rows of one scratch tile: one read flush and one
         // write barrier per CS_COLS_PER_FLUSH columns.

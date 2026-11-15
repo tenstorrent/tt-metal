@@ -36,6 +36,10 @@
 // R-BCAST (decode R-VSPLIT): the key head's q (k) injector convolves and L2-normalizes only q (k) and hands qn
 // (kn) to its writer for the multicast; a receiver convolves only its v columns. On every such core the writer
 // lands kn / qn in cb_kq_rows, and compute derives d = qn . kn and kn^T from them (qk_finish_block).
+// R-PREP (ROLE, chunked R-VSPLIT): a prep core runs, per tile row of its key head, gates, conv, L2 norm, gram_block
+// and head_prep for each of the r value heads, packing every operand the state part needs into cb_prep_send; a
+// state core runs chunk_state on its inbox rows (landed by its reader) and the RMS norm. Same ops, same order of
+// rounding per value as the local chunk step, so the split is bit-identical.
 
 #include <cstdint>
 
@@ -111,6 +115,7 @@ constexpr uint32_t cb_uw = GDN_CB_UW;
 constexpr uint32_t cb_tri_mask = GDN_CB_TRI_MASK;
 constexpr uint32_t cb_qk_stage = GDN_CB_QK_STAGE;
 constexpr uint32_t cb_kq_rows_f32 = GDN_CB_KQ_ROWS_F32;
+constexpr uint32_t cb_prep_send = GDN_CB_PREP_SEND;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t COEF_ALPHA = 0;      // alpha_p in every row
@@ -147,6 +152,22 @@ constexpr uint32_t WINDOW_GROUP_COLS = get_compile_time_arg_val(8);  // columns 
 constexpr bool CHUNKED = get_compile_time_arg_val(9) != 0;           // R-CHUNK: one chunk step per tile row
 constexpr bool QK_SHARED = get_compile_time_arg_val(10) != 0;        // R-BCAST: q/k prepped once per key head
 static_assert(!(QK_SHARED && CHUNKED), "R-BCAST is a decode regime");
+constexpr uint32_t ROLE = get_compile_time_arg_val(11);   // GDN_ROLE_*
+constexpr uint32_t RATIO = get_compile_time_arg_val(12);  // value heads per key head
+constexpr bool PREP = ROLE == GDN_ROLE_PREP;              // Vb is then the key head's r * Vt v columns
+constexpr bool STATE = ROLE == GDN_ROLE_STATE;
+static_assert(CHUNKED || ROLE == GDN_ROLE_LOCAL, "R-PREP is a chunked regime");
+// A prep core's conv sends v straight to the state cores; its row's send block starts with the v tiles.
+constexpr uint32_t cb_v_out = PREP ? cb_prep_send : cb_v;
+// Where the chunk step's state part reads its per-head operands: the local chunk buffers, or the state core's
+// inbox slot (head pack: cb_chunk_vec = exp(c), exp(c_last - c), beta exp(c), beta; cb_chunk_mat = L, QD).
+constexpr uint32_t cb_beta_src = STATE ? cb_chunk_vec : cb_tok_coef;
+constexpr uint32_t IDX_BETA = STATE ? GDN_HP_BETA : CHUNK_BETA;
+constexpr uint32_t IDX_EC = STATE ? GDN_HP_EC : CV_EC;
+constexpr uint32_t IDX_W = STATE ? GDN_HP_W : CV_W;
+constexpr uint32_t IDX_BEC = STATE ? GDN_HP_BEC : CV_BEC;
+constexpr uint32_t IDX_L = STATE ? GDN_HP_L - GDN_STATE_VEC_PAGES : CM_L;
+constexpr uint32_t IDX_QD = STATE ? GDN_HP_QD - GDN_STATE_VEC_PAGES : CM_QD;
 
 constexpr uint32_t largest_divisor_at_most(uint32_t n, uint32_t cap) {
     uint32_t best = 1;
@@ -484,7 +505,7 @@ ALWI void conv_block(RowScope scope, UnitCols cols, uint32_t first, uint32_t las
         cb_reserve_back(cb_y_qk, cols.qk_cols);
     }
     if (v_range) {
-        cb_reserve_back(cb_v, Vb);
+        cb_reserve_back(cb_v_out, Vb);
     }
     for (uint32_t local = first; local < last; ++local) {
         const uint32_t col = cols.pair_col(local);
@@ -514,7 +535,7 @@ ALWI void conv_block(RowScope scope, UnitCols cols, uint32_t first, uint32_t las
         if (col < 2 * Kt) {
             pack_first(0, cb_y_qk, col - cols.qk_lo);
         } else {
-            pack_first(0, cb_v, col - 2 * Kt);
+            pack_first(0, cb_v_out, col - 2 * Kt);
         }
         tile_regs_release();
         cb_pop_front(cb_conv_acc, 1);
@@ -523,7 +544,7 @@ ALWI void conv_block(RowScope scope, UnitCols cols, uint32_t first, uint32_t las
         cb_push_back(cb_y_qk, cols.qk_cols);
     }
     if (v_range) {
-        cb_push_back(cb_v, Vb);
+        cb_push_back(cb_v_out, Vb);
     }
 }
 
@@ -541,7 +562,7 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
         cb_reserve_back(cb_y_qk, cols.qk_cols);
     }
     if (v_range) {
-        cb_reserve_back(cb_v, Vb);
+        cb_reserve_back(cb_v_out, Vb);
     }
     static_assert(pair_cols % CONV_BATCH == 0, "window groups tile the unit's columns");
     for (uint32_t col0 = first; col0 < last; col0 += CONV_BATCH) {
@@ -567,7 +588,7 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
             if (col < 2 * Kt) {
                 pack_at(i, cb_y_qk, col - cols.qk_lo);
             } else {
-                pack_at(i, cb_v, col - 2 * Kt);
+                pack_at(i, cb_v_out, col - 2 * Kt);
             }
         }
         tile_regs_release();
@@ -577,7 +598,7 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
         cb_push_back(cb_y_qk, cols.qk_cols);
     }
     if (v_range) {
-        cb_push_back(cb_v, Vb);
+        cb_push_back(cb_v_out, Vb);
     }
 }
 
@@ -667,6 +688,9 @@ ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
     if constexpr (!CHUNKED) {
         cb_reserve_back(cb_sq, Kt);
     }
+    if constexpr (PREP) {
+        cb_reserve_back(cb_prep_send, 3 * Kt);  // kn, qn, then kn^T (kn_transpose_block)
+    }
     for (uint32_t kt = 0; kt < Kt; ++kt) {
         tile_regs_acquire();
         begin_loads(cb_y_qk);
@@ -687,6 +711,10 @@ ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
         pack_at(0, cb_kq_rows, Kt + kt);
         if constexpr (!CHUNKED) {
             pack_at(1, cb_sq, kt);
+        }
+        if constexpr (PREP) {
+            pack_at(2, cb_prep_send, kt);
+            pack_at(0, cb_prep_send, Kt + kt);
         }
         tile_regs_release();
     }
@@ -720,13 +748,21 @@ ALWI void kn_transpose_block() {
         for (uint32_t i = 1; i < n; ++i) {
             pack_at(i, cb_knT, kt0 + i);
         }
+        for (uint32_t i = 0; i < n && PREP; ++i) {
+            pack_at(i, cb_prep_send, 2 * Kt + kt0 + i);
+        }
         tile_regs_release();
     }
     cb_push_back(cb_knT, Kt);
+    if constexpr (PREP) {
+        cb_push_back(cb_prep_send, 3 * Kt);
+    }
     if constexpr (!CHUNKED) {
         cb_wait_front(cb_d, 1);
     }
-    cb_wait_front(cb_v, Vb);
+    if constexpr (!PREP) {
+        cb_wait_front(cb_v, Vb);
+    }
     cb_wait_front(cb_knT, Kt);
 }
 
@@ -912,10 +948,27 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
 }
 
 // ---------------------------------------------------------------- one chunk step (R-CHUNK)
-// Chunk vectors from g and beta (column 0 of the writer's coefficient pages, 0 on rows that are no token,
-// so c is flat there and those rows neither decay nor write). row_last: tile-local last token row.
-// Returns exp(c_last), the chunk's state decay.
-ALWI uint32_t chunk_vectors(uint32_t row_last) {
+// [Kn Kn^T; Qn Kn^T] -> cb_gram (2 tiles, left waited for head_prep); per key head, shared by its value heads.
+ALWI void gram_block(Buffers& bufs) {
+    DataflowBuffer gram{cb_gram};
+    DataflowBuffer knT{cb_knT};
+    ckl::matmul_block<
+        false,
+        false,
+        ckl::LastBlockTarget::Out,
+        ckl::OutputCBLayout::TileRowMajor,
+        ckl::matmul_config::InitMode::Short,
+        ckl::InputPolicy::WaitAndRetainOnLastBlock,
+        ckl::InputPolicy::NoWaitNoPop>(bufs.kq_rows, knT, gram, gram, ckl::MatmulBlockShape::of(2, 1, 1, 1, Kt, 1));
+    cb_wait_front(cb_gram, 2);
+}
+
+// One value head's chunk operands from g and beta (column 0 of the writer's coefficient pages, 0 on rows that are
+// no token, so c is flat there and those rows neither decay nor write) and the gram tiles. row_last: tile-local
+// last token row. Local: exp(c), exp(c_last - c), beta exp(c) -> cb_chunk_vec after D, c; L, QD -> cb_chunk_mat.
+// PREP: the head pack (exp(c), exp(c_last - c), beta exp(c), beta, L, QD) -> cb_prep_send; pops its D, c and
+// coefficient pages.
+ALWI void head_prep(uint32_t row_last) {
     cb_wait_front(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
     cb_reserve_back(cb_chunk_vec, 2);
     tile_regs_acquire();
@@ -952,7 +1005,11 @@ ALWI uint32_t chunk_vectors(uint32_t row_last) {
 
     cb_wait_front(cb_chunk_vec, 2);
     const uint32_t c_last_bits = read_tile_value(cb_chunk_vec, CV_C, elem_index(row_last, 0));
-    cb_reserve_back(cb_chunk_vec, GDN_CHUNK_VEC_PAGES - 2);
+    if constexpr (PREP) {
+        cb_reserve_back(cb_prep_send, GDN_HEAD_PACK_PAGES);
+    } else {
+        cb_reserve_back(cb_chunk_vec, GDN_CHUNK_VEC_PAGES - 2);
+    }
     tile_regs_acquire();
     begin_loads(cb_chunk_vec);
     load(cb_chunk_vec, CV_C, 0);
@@ -969,31 +1026,23 @@ ALWI uint32_t chunk_vectors(uint32_t row_last) {
     sfpu_mul_bcast_col(3, 2);  // beta exp(c)
     tile_regs_commit();
     tile_regs_wait();
-    pack_first(0, cb_chunk_vec, CV_EC - 2);
-    pack_at(1, cb_chunk_vec, CV_W - 2);
-    pack_at(3, cb_chunk_vec, CV_BEC - 2);
+    if constexpr (PREP) {
+        pack_first(0, cb_prep_send, GDN_HP_EC);
+        pack_at(1, cb_prep_send, GDN_HP_W);
+        pack_at(3, cb_prep_send, GDN_HP_BEC);
+        pack_at(2, cb_prep_send, GDN_HP_BETA);
+    } else {
+        pack_first(0, cb_chunk_vec, CV_EC - 2);
+        pack_at(1, cb_chunk_vec, CV_W - 2);
+        pack_at(3, cb_chunk_vec, CV_BEC - 2);
+    }
     tile_regs_release();
-    cb_push_back(cb_chunk_vec, GDN_CHUNK_VEC_PAGES - 2);
-    cb_wait_front(cb_chunk_vec, GDN_CHUNK_VEC_PAGES);
-    return read_tile_value(cb_chunk_vec, CV_EC, elem_index(row_last, 0));
-}
+    if constexpr (!PREP) {
+        cb_push_back(cb_chunk_vec, GDN_CHUNK_VEC_PAGES - 2);
+        cb_reserve_back(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
+    }
 
-ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint32_t row_last) {
-    const uint32_t decay_bits = chunk_vectors(row_last);
-
-    // [Kn Kn^T; Qn Kn^T] (2 tiles), then L and QD (fp32 SFPU products with D and beta).
-    DataflowBuffer gram{cb_gram};
-    DataflowBuffer knT{cb_knT};
-    ckl::matmul_block<
-        false,
-        false,
-        ckl::LastBlockTarget::Out,
-        ckl::OutputCBLayout::TileRowMajor,
-        ckl::matmul_config::InitMode::Short,
-        ckl::InputPolicy::WaitAndRetainOnLastBlock,
-        ckl::InputPolicy::NoWaitNoPop>(bufs.kq_rows, knT, gram, gram, ckl::MatmulBlockShape::of(2, 1, 1, 1, Kt, 1));
-    cb_wait_front(cb_gram, 2);
-    cb_reserve_back(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
+    // L and QD: fp32 SFPU products of the gram tiles with D and beta.
     tile_regs_acquire();
     begin_loads(cb_gram);
     load(cb_gram, 0, 0);
@@ -1007,12 +1056,27 @@ ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint3
     sfpu_mul_bcast_col(0, 3);
     tile_regs_commit();
     tile_regs_wait();
-    pack_first(0, cb_chunk_mat, CM_L);
-    pack_at(1, cb_chunk_mat, CM_QD);
+    if constexpr (PREP) {
+        pack_first(0, cb_prep_send, GDN_HP_L);
+        pack_at(1, cb_prep_send, GDN_HP_QD);
+    } else {
+        pack_first(0, cb_chunk_mat, CM_L);
+        pack_at(1, cb_chunk_mat, CM_QD);
+    }
     tile_regs_release();
-    cb_push_back(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
-    cb_pop_front(cb_gram, 2);
+    if constexpr (PREP) {
+        cb_push_back(cb_prep_send, GDN_HEAD_PACK_PAGES);
+        cb_pop_front(cb_chunk_vec, 2);
+        cb_pop_front(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
+    } else {
+        cb_push_back(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
+        cb_wait_front(cb_chunk_vec, GDN_CHUNK_VEC_PAGES);
+    }
+}
 
+// The chunk step's state part, on the head operands at (cb_beta_src / cb_chunk_vec / cb_chunk_mat, IDX_*) and the
+// kn / qn, kn^T, v tiles (waited by the caller); decay_bits = exp(c_last). Pops only its own intermediates.
+ALWI void chunk_state(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint32_t decay_bits) {
     read_state(bufs, first_in_pair);
 
     // U = (I + L)^-1 (beta V - beta exp(c) Rk), one fp32 SFPU solve per column tile.
@@ -1025,15 +1089,15 @@ ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint3
         begin_loads(cb_v);
         load(cb_v, vt, 0);
         load(cb_reads, vt, 1);
-        load(cb_tok_coef, CHUNK_BETA, 2);
-        load(cb_chunk_vec, CV_BEC, 3);
+        load(cb_beta_src, IDX_BETA, 2);
+        load(cb_chunk_vec, IDX_BEC, 3);
         sfpu_bcast_col_init();
         sfpu_mul_bcast_col(0, 2);
         sfpu_mul_bcast_col(1, 3);
         sub_binary_tile_init();
         sub_binary_tile(0, 1, 0);
         triangle_solve_tile_init();
-        triangle_solve_tile<DataFormat::Float32>(cb_chunk_mat, CM_L, 0, 1);
+        triangle_solve_tile<DataFormat::Float32>(cb_chunk_mat, IDX_L, 0, 1);
         tile_regs_commit();
         tile_regs_wait();
         pack_first(1, cb_u, vt);
@@ -1055,7 +1119,7 @@ ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint3
         for (uint32_t i = 0; i < n; ++i) {
             load(cb_u_f32, vt0 + i, i);
         }
-        load(cb_chunk_vec, CV_W, VEC_BATCH);
+        load(cb_chunk_vec, IDX_W, VEC_BATCH);
         sfpu_bcast_col_init();
         for (uint32_t i = 0; i < n; ++i) {
             sfpu_mul_bcast_col(i, VEC_BATCH);
@@ -1076,7 +1140,7 @@ ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint3
         for (uint32_t i = 0; i < n; ++i) {
             load(cb_reads, Vb + vt0 + i, i);
         }
-        load(cb_chunk_vec, CV_EC, VEC_BATCH);
+        load(cb_chunk_vec, IDX_EC, VEC_BATCH);
         sfpu_bcast_col_init();
         for (uint32_t i = 0; i < n; ++i) {
             sfpu_mul_bcast_col(i, VEC_BATCH);
@@ -1085,7 +1149,7 @@ ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint3
         reconfig_data_format(cb_u, cb_chunk_mat);
         matmul_init(cb_chunk_mat, cb_u);
         for (uint32_t i = 0; i < n; ++i) {
-            matmul_tiles(cb_chunk_mat, cb_u, CM_QD, vt0 + i, i);
+            matmul_tiles(cb_chunk_mat, cb_u, IDX_QD, vt0 + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -1102,6 +1166,14 @@ ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint3
     cb_pop_front(cb_uw, Vb);
     cb_pop_front(cb_u, Vb);
     cb_pop_front(cb_u_f32, Vb);
+}
+
+// Prep and state part on one core (local roles).
+ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint32_t row_last) {
+    gram_block(bufs);
+    head_prep(row_last);
+    cb_pop_front(cb_gram, 2);
+    chunk_state(bufs, first_in_pair, last_in_pair, read_tile_value(cb_chunk_vec, CV_EC, elem_index(row_last, 0)));
     cb_pop_front(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
     cb_pop_front(cb_chunk_vec, GDN_CHUNK_VEC_PAGES);
     cb_pop_front(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
@@ -1170,12 +1242,89 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope)
 
 }  // namespace
 
+// R-PREP prep core: tile rows offset, offset + stride, ... of its (sequence, key head).
+ALWI void prep_main(Buffers& bufs, uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride) {
+    const UnitCols cols{0, 2 * Kt};
+    const uint32_t conv_w_pages = (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * cols.count();
+    const uint32_t seq_lo = (first_unit / PIECES / Hv) * T;
+    const uint32_t seq_hi = seq_lo + T;
+    const uint32_t first_tr = seq_lo / TILE_ROWS;
+    const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
+    cb_wait_front(cb_tri_mask, 1);
+    cb_wait_front(cb_conv_w, conv_w_pages);
+    cb_wait_front(cb_gate_w, 2);
+    for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride) {
+        const uint32_t base_row = tr * TILE_ROWS;
+        const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
+        const RowScope scope{RowScope::FULL_TILE};
+        gates_block(scope);
+        if constexpr (CONV_ON_FPU) {
+            conv_block_fpu(scope, cols, 0, cols.count());
+        } else {
+            conv_block(scope, cols, 0, cols.count());
+        }
+        l2norm_block(bufs, scope);
+        gram_block(bufs);
+#pragma GCC unroll 1
+        for (uint32_t head = 0; head < RATIO; ++head) {
+            head_prep(hi - 1 - base_row);
+        }
+        cb_pop_front(cb_gram, 2);
+        cb_pop_front(cb_kq_rows, 2 * Kt);
+        cb_pop_front(cb_knT, Kt);
+    }
+}
+
+// R-PREP state core: the chunk step's state part per tile row on its inbox slot, then the RMS norm.
+ALWI void state_main(Buffers& bufs, uint32_t first_unit, uint32_t T, uint32_t v_eps_bits) {
+    const uint32_t seq_lo = (first_unit / PIECES / Hv) * T;
+    const uint32_t seq_hi = seq_lo + T;
+    const uint32_t first_tr = seq_lo / TILE_ROWS;
+    const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
+    const RowScope scope{RowScope::FULL_TILE};
+    cb_wait_front(cb_norm_w, Vb);
+    uint32_t token = 0;
+    for (uint32_t tr = first_tr; tr <= last_tr; ++tr) {
+        const uint32_t base_row = tr * TILE_ROWS;
+        const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
+        const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
+        cb_reserve_back(cb_o_acc, Vb);
+        cb_wait_front(cb_chunk_vec, GDN_STATE_VEC_PAGES);
+        cb_wait_front(cb_v, Vb);
+        cb_wait_front(cb_knT, Kt);
+        const uint32_t decay_bits = read_tile_value(cb_chunk_vec, IDX_EC, elem_index(hi - 1 - base_row, 0));
+        chunk_state(bufs, token == 0, token + (hi - lo) == T, decay_bits);
+        token += hi - lo;
+        cb_push_back(cb_o_acc, Vb);
+        cb_pop_front(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
+        cb_pop_front(cb_chunk_vec, GDN_STATE_VEC_PAGES);
+        cb_pop_front(cb_kq_rows, 2 * Kt);
+        cb_pop_front(cb_knT, Kt);
+        cb_pop_front(cb_v, Vb);
+        rmsnorm_gate_block(bufs, v_eps_bits, scope);
+    }
+    cb_pop_front(cb_norm_w, Vb);
+}
+
 void kernel_main() {
     const uint32_t first_unit = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
     const uint32_t T = get_arg_val<uint32_t>(2);
     const uint32_t v_eps_bits = get_arg_val<uint32_t>(3);  // V * epsilon
     const uint32_t qk_role = get_arg_val<uint32_t>(4);
+    const uint32_t tr_offset = get_arg_val<uint32_t>(5);  // R-PREP prep core: tile rows offset, + stride, ...
+    const uint32_t tr_stride = get_arg_val<uint32_t>(6);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_kq_rows, cb_state_mm, cb_reads);
+    Buffers bufs;
+    if constexpr (PREP) {
+        prep_main(bufs, first_unit, T, tr_offset, tr_stride);
+        return;
+    }
+    if constexpr (STATE) {
+        state_main(bufs, first_unit, T, v_eps_bits);
+        return;
+    }
     constexpr bool qk_shared = QK_SHARED;  // every core of an R-BCAST program has a shared role
     // Compile-time outside R-BCAST (every q/k column), so those builds fold the column mapping away.
     const UnitCols cols = !QK_SHARED
@@ -1184,8 +1333,6 @@ void kernel_main() {
     // FPU conv reads raw conv_weight tiles (tap j at row j); the SFPU conv one row-0 tile per tap.
     const uint32_t conv_w_pages = (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * cols.count();
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_kq_rows, cb_state_mm, cb_reads);
-    Buffers bufs;
     if constexpr (CHUNKED) {
         cb_wait_front(cb_tri_mask, 1);  // reader-built once, held for the kernel
     }
