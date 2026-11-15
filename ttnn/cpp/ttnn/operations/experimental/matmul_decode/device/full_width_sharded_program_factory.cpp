@@ -355,8 +355,13 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
     // the last, so an entry has to be a legal kt_dim on its own and every output of the row must stay
     // resident in DST across the whole traversal -- which is what restricts it to one tile row.
     const bool in0_rm = input_tensor_a.layout() == Layout::ROW_MAJOR;
+    // custom_mm takes in0 tiles [h, 32] with h in {1, 2, 4, 8}. ROW_MAJOR A is h = 1. A TILE row block
+    // with h > 1 (h rows in one in0 tile per K step), or a TILE replica of any such h, takes it too; a
+    // width-sharded TILE A with a 1x32 tile keeps the general block matmul it has always used.
+    const bool in0_custom_mm_tile =
+        in0_rm || (is_custom_mm_in0_tile_height(inputA_tile_height) && (inputA_tile_height > 1 || in0_rm_hs));
     const bool custom_mm_streams_ok = num_k_blocks == 1 || M_tiles == 1;
-    const bool use_custom_mm = in0_rm && device->arch() == tt::ARCH::BLACKHOLE && !operation_attributes.all_gather &&
+    const bool use_custom_mm = in0_custom_mm_tile && device->arch() == tt::ARCH::BLACKHOLE && !operation_attributes.all_gather &&
                                custom_mm_streams_ok && is_custom_mm_kt_dim(k_block_tiles) &&
                                is_custom_mm_ct_dim(inB_N_tiles_per_core);
     // custom_mm reads each row's K tiles contiguously, but the gather lays A out sender-major
@@ -373,10 +378,17 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
     // FP32 word as two 16-bit datums, which interleaves the tile instead of converting it. The
     // intermediates therefore have to match the DST width.
     const bool rms_fp32_stats = rms_norm && !use_custom_mm;
+    // Taller output tiles hold several rows, so the statistics are reduced per row (RMS_ROWS in the
+    // compute kernel) instead of over the whole tile.
+    const bool rms_rows = rms_norm && output_tile_height > 1;
+    TT_FATAL(
+        !rms_rows || !rms_fp32_stats,
+        "matmul_decode fused RMSNorm on {}-row tiles needs the custom_mm path (BF16 statistics)",
+        output_tile_height);
     if (!use_custom_mm) {
         std::string_view reason;
-        if (!in0_rm) {
-            reason = "input A is not ROW_MAJOR";
+        if (!in0_custom_mm_tile) {
+            reason = "input A is neither ROW_MAJOR nor a TILE row block with an [h, 32] tile, h in {2, 4, 8}";
         } else if (device->arch() != tt::ARCH::BLACKHOLE) {
             reason = "custom_mm is Blackhole-only";
         } else if (operation_attributes.all_gather) {
@@ -437,6 +449,9 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
     const DFBSpecName RMS_REDUCE_SCALER_DFB{"rms_reduce_scaler"};
     const DFBSpecName RMS_SCALE_SRC_DFB{"rms_scale_src"};
     const DFBSpecName RMS_SCALE_DFB{"rms_scale"};
+    const DFBSpecName RMS_SQ_DFB{"rms_sq"};
+    const DFBSpecName RMS_ONES_DFB{"rms_ones"};
+    const DFBSpecName RMS_GAMMA_ROWS_DFB{"rms_gamma_rows"};
     const DFBSpecName OUT_FULL_DFB{"out_full"};
     const DFBSpecName OUT_STAGE_DFB{"out_stage"};
 
@@ -552,6 +567,10 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
     const tt::tt_metal::Tile rms_reduce_tile({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
     const uint32_t rms_reduce_tile_size = rms_reduce_tile.get_tile_size(rms_data_format);
     const bool rms_vector_gamma = rms_norm && tensor_args.rms_norm_gamma.has_value();
+    // Per-row statistics travel as whole [h, 32] tiles, so the hub's gather slots are those tiles too.
+    const tt::tt_metal::Tile rms_gathered_tile = rms_rows ? output_tile : rms_reduce_tile;
+    const uint32_t rms_gathered_tile_size = rms_rows ? rms_tile_size : rms_reduce_tile_size;
+    uint32_t rms_gamma_face_row_bytes = 0;
     if (rms_norm) {
         TT_FATAL(
             rms_reduce_tile_size % rms_tile_size == 0,
@@ -592,11 +611,48 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
         // buffer sits at one address on every core it lives on.
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = RMS_GATHERED_DFB,
-            .entry_size = rms_reduce_tile_size,
+            .entry_size = rms_gathered_tile_size,
             .num_entries = M_tiles * rms_max_hub_contributors,
             .data_format_metadata = rms_data_format,
-            .tile_format_metadata = rms_reduce_tile,
+            .tile_format_metadata = rms_gathered_tile,
         });
+        if (rms_rows) {
+            TT_FATAL(
+                rms_data_format == tt::DataFormat::Float16_b,
+                "matmul_decode fused RMSNorm on row-block tiles keeps its statistics in BF16");
+            // One fragment's elementwise sum of squares, the matmul's in0.
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = RMS_SQ_DFB,
+                .entry_size = rms_tile_size,
+                .num_entries = 1,
+                .data_format_metadata = rms_data_format,
+                .tile_format_metadata = output_tile,
+            });
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = RMS_ONES_DFB,
+                .entry_size = rms_reduce_tile_size,
+                .num_entries = 1,
+                .data_format_metadata = rms_data_format,
+                .tile_format_metadata = rms_reduce_tile,
+            });
+            if (rms_vector_gamma) {
+                const auto& gamma = tensor_args.rms_norm_gamma.value();
+                const tt::DataFormat gamma_data_format = datatype_to_dataformat_converter(gamma.dtype());
+                TT_FATAL(
+                    gamma_data_format == tt::DataFormat::Float16_b || gamma_data_format == tt::DataFormat::Float32,
+                    "matmul_decode fused RMSNorm on row-block tiles needs a BF16 or FP32 gamma, but got {}",
+                    gamma_data_format);
+                const tt::tt_metal::Tile gamma_rows_tile({output_tile_height, tt::constants::TILE_WIDTH});
+                rms_gamma_face_row_bytes = gamma.tensor_spec().tile().get_tile_size(gamma_data_format) / 2;
+                dataflow_buffers.push_back(DataflowBufferSpec{
+                    .unique_id = RMS_GAMMA_ROWS_DFB,
+                    .entry_size = gamma_rows_tile.get_tile_size(gamma_data_format),
+                    .num_entries = inB_N_tiles_per_core,
+                    .data_format_metadata = gamma_data_format,
+                    .tile_format_metadata = gamma_rows_tile,
+                });
+            }
+        }
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = RMS_REDUCE_SCALER_DFB,
             .entry_size = rms_reduce_tile_size,
@@ -966,7 +1022,17 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
             compute.dfb_bindings.push_back(ConsumerOf(RMS_SCALE_DFB, "rms_scale"));
             if (rms_vector_gamma) {
                 defines.emplace("FUSE_RMS_VECTOR_GAMMA", "1");
-                compute.dfb_bindings.push_back(ConsumerOf(RMS_GAMMA_DFB, "rms_gamma"));
+                if (rms_rows) {
+                    compute.dfb_bindings.push_back(ConsumerOf(RMS_GAMMA_ROWS_DFB, "rms_gamma_rows"));
+                } else {
+                    compute.dfb_bindings.push_back(ConsumerOf(RMS_GAMMA_DFB, "rms_gamma"));
+                }
+            }
+            if (rms_rows) {
+                defines.emplace("RMS_ROWS", "1");
+                compute.dfb_bindings.push_back(ProducerOf(RMS_SQ_DFB, "rms_sq"));
+                compute.dfb_bindings.push_back(ConsumerOf(RMS_SQ_DFB, "rms_sq"));
+                compute.dfb_bindings.push_back(ConsumerOf(RMS_ONES_DFB, "rms_ones"));
             }
             compute.compile_time_args.emplace("rms_num_groups", rms_num_groups);
             compute.compile_time_args.emplace(
@@ -1049,11 +1115,26 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
             SemaphoreBinding{.semaphore_spec_name = RMS_SCALE_READY_SEM, .accessor_name = "rms_scale_ready"});
         writer.compile_time_args.emplace("rms_m_tiles", M_tiles);
         writer.compile_time_args.emplace("rms_local_tile_size", rms_local_tile_size);
-        writer.compile_time_args.emplace("rms_reduce_tile_size", rms_reduce_tile_size);
+        writer.compile_time_args.emplace("rms_reduce_tile_size", rms_gathered_tile_size);
         if (rms_vector_gamma) {
             // gamma is resident in the tensor it borrows and compute reads it in place, so this
             // binding only gives the buffer the producer it must have.
             writer.dfb_bindings.push_back(ProducerOf(RMS_GAMMA_DFB, "rms_gamma"));
+        }
+        if (rms_rows) {
+            auto& writer_defines = writer.compiler_options.defines;
+            writer_defines.emplace("RMS_ROWS", "1");
+            writer.dfb_bindings.push_back(ProducerOf(RMS_ONES_DFB, "rms_ones"));
+            writer.compile_time_args.emplace("rms_ones_bytes", rms_reduce_tile_size);
+            if (rms_vector_gamma) {
+                // The writer reads gamma in place to build the row-repeated copy compute uses.
+                writer_defines.emplace("FUSE_RMS_VECTOR_GAMMA", "1");
+                writer.dfb_bindings.push_back(ConsumerOf(RMS_GAMMA_DFB, "rms_gamma"));
+                writer.dfb_bindings.push_back(ProducerOf(RMS_GAMMA_ROWS_DFB, "rms_gamma_rows"));
+                writer.compile_time_args.emplace("rms_gamma_tiles", inB_N_tiles_per_core);
+                writer.compile_time_args.emplace("rms_rows", output_tile_height);
+                writer.compile_time_args.emplace("rms_gamma_face_row_bytes", rms_gamma_face_row_bytes);
+            }
         }
         writer.advanced_options.num_runtime_varargs = rms_num_varargs;
         for (const auto& core : cores) {

@@ -67,6 +67,50 @@ ALWI void square_reduce_scalar_tiles(
     MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY>()));
     MATH((llk_math_mul_reduce_scalar_clear_dvalid()));
 }
+
+#ifdef RMS_ROWS
+// Row-block statistics ([h, 32] tiles, h > 1): a whole-tile scalar reduction would mix the h rows, so
+// each row is reduced on its own. Sum the fragment's squares elementwise into DST (the accumulating FPU
+// multiply the one-row path uses, which on [h, 32] tiles only touches h rows per face), pack that one
+// [h, 32] tile, then multiply it by a 32x32 ones tile: row r of the product holds row r's sum of squares
+// in every column. Matmul unpacks in1 (the ones) to SrcA, so the LoFi fidelity custom_mm leaves behind
+// truncates nothing (1.0 has no mantissa bits) while the squares keep their whole bf16 mantissa in SrcB.
+ALWI void row_sum_squares_tiles(
+    uint32_t input_cb_id, uint32_t sq_cb_id, uint32_t ones_cb_id, uint32_t output_cb_id,
+    uint32_t tile_start, uint32_t tile_count) {
+    CircularBuffer sq_cb(sq_cb_id);
+    CircularBuffer output_cb(output_cb_id);
+    sq_cb.reserve_back(1);
+    tile_regs_acquire();
+    // The accumulating multiply reads the prior DST value, which acquiring does not clear.
+    fill_tile_init();
+    fill_tile(0, 0.0F);
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(input_cb_id, input_cb_id, true);
+    for (uint32_t tile = 0; tile < tile_count; ++tile) {
+        mul_tiles(input_cb_id, input_cb_id, tile_start + tile, tile_start + tile, 0);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, sq_cb_id);
+    tile_regs_release();
+    sq_cb.push_back(1);
+
+    sq_cb.wait_front(1);
+    output_cb.reserve_back(1);
+    tile_regs_acquire();
+    // matmul_tiles accumulates into DST, which acquiring does not clear.
+    fill_tile_init();
+    fill_tile(0, 0.0F);
+    matmul_init(sq_cb_id, ones_cb_id);
+    matmul_tiles(sq_cb_id, ones_cb_id, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, output_cb_id);
+    tile_regs_release();
+    sq_cb.pop_front(1);
+    output_cb.push_back(1);
+}
+#endif
 #endif
 
 // C = A @ B per core. full_in0 is sender-major. matmul_block does not reduce over kt_dim; K is accumulated in the loop.
@@ -107,8 +151,16 @@ void kernel_main() {
     // from rms_scale, which is the distribution's destination and is consumed by compute on every producer.
     constexpr uint32_t rms_scale_src_cb_id = dfb::rms_scale_src;
     constexpr uint32_t rms_scale_cb_id = dfb::rms_scale;
-#ifdef FUSE_RMS_VECTOR_GAMMA
+#if defined(FUSE_RMS_VECTOR_GAMMA) && !defined(RMS_ROWS)
     constexpr uint32_t rms_gamma_cb_id = dfb::rms_gamma;
+#endif
+#ifdef RMS_ROWS
+    constexpr uint32_t rms_sq_cb_id = dfb::rms_sq;
+    constexpr uint32_t rms_ones_cb_id = dfb::rms_ones;
+#ifdef FUSE_RMS_VECTOR_GAMMA
+    // gamma with each 1x32 tile repeated over the block's h rows, built by the writer.
+    constexpr uint32_t rms_gamma_rows_cb_id = dfb::rms_gamma_rows;
+#endif
 #endif
     constexpr uint32_t rms_num_groups = get_arg(args::rms_num_groups);
     constexpr uint32_t rms_local_group_arg_words = 6;
@@ -273,7 +325,7 @@ void kernel_main() {
     // epilogue packs 1x32 tiles whose stride is 64 bytes, and with a 2048-byte stride each tile's
     // second face lands a whole 32x32 tile away instead of next to the first. Reprogram the packer
     // from the geometry of the circular buffers this epilogue actually uses.
-#ifdef FUSE_RMS_VECTOR_GAMMA
+#if defined(FUSE_RMS_VECTOR_GAMMA) && !defined(RMS_ROWS)
     compute_kernel_hw_startup(mm_out_cb_id, rms_gamma_cb_id, out_cb_id);
 #else
     compute_kernel_hw_startup(mm_out_cb_id, mm_out_cb_id, out_cb_id);
@@ -286,6 +338,25 @@ void kernel_main() {
     // local tile interval for each fragment, in the same order the writer transports its pages.
     reconfig_data_format(mm_out_cb_id, mm_out_cb_id);
     pack_reconfig_data_format(rms_local_cb_id);
+#ifdef RMS_ROWS
+    CircularBuffer rms_ones_cb(rms_ones_cb_id);
+    rms_ones_cb.wait_front(1);
+    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+        for (uint32_t lg = 0; lg < rms_local_group_count; ++lg) {
+            const uint32_t fragment_arg = rms_local_groups_arg_base + lg * rms_local_group_arg_words;
+            const uint32_t local_tile_offset = get_vararg(fragment_arg);
+            const uint32_t fragment_tile_count = get_vararg(fragment_arg + 1);
+            row_sum_squares_tiles(
+                mm_out_cb_id,
+                rms_sq_cb_id,
+                rms_ones_cb_id,
+                rms_local_cb_id,
+                mt * N_tiles_per_core + local_tile_offset,
+                fragment_tile_count);
+        }
+    }
+    rms_ones_cb.pop_front(1);
+#else
     for (uint32_t mt = 0; mt < M_tiles; ++mt) {
         for (uint32_t lg = 0; lg < rms_local_group_count; ++lg) {
             const uint32_t fragment_arg = rms_local_groups_arg_base + lg * rms_local_group_arg_words;
@@ -304,6 +375,7 @@ void kernel_main() {
             rms_local_cb.push_back(1);
         }
     }
+#endif
 
     // Every first-contributor hub reduces exactly the contiguous contributor slots for each group
     // it owns, then publishes one row/group scale in row-major order for the writer to distribute.
@@ -326,7 +398,12 @@ void kernel_main() {
                 binop_with_scalar_tile_init();
                 mul_unary_tile(0, rms_inv_group_size_bits);
                 add_rsqrt_tile_init();
+#ifdef RMS_ROWS
+                // Every row of the block carries its own statistic.
+                add_rsqrt_tile(0, rms_epsilon_bits);
+#else
                 add_rsqrt_tile<false, VectorMode::RC_custom, 1>(0, rms_epsilon_bits);
+#endif
 #ifndef FUSE_RMS_VECTOR_GAMMA
                 binop_with_scalar_tile_init();
                 mul_unary_tile(0, rms_gamma_bits);
@@ -384,6 +461,61 @@ void kernel_main() {
         }
     }
     final_out_cb.push_back(local_out_tiles);
+    rms_scale_cb.pop_front(M_tiles * rms_local_group_count);
+    mm_out_cb.pop_front(local_out_tiles);
+#elif defined(RMS_ROWS)
+    // out = mm_out * scale (* gamma), elementwise on the FPU like the one-row path (mm_out in SrcA, then
+    // the product reused from DST against gamma): the scale tile holds each row's scale in every column
+    // of that row, and gamma_rows repeats gamma down the rows. Up to 8 tiles share one DST acquire.
+    reconfig_data_format(mm_out_cb_id, mm_out_cb_id);
+    pack_reconfig_data_format(out_cb_id);
+#ifdef FUSE_RMS_VECTOR_GAMMA
+    CircularBuffer rms_gamma_rows_cb(rms_gamma_rows_cb_id);
+    rms_gamma_rows_cb.wait_front(N_tiles_per_core);
+#endif
+    for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+        final_out_cb.reserve_back(N_tiles_per_core);
+        for (uint32_t lg = 0; lg < rms_local_group_count; ++lg) {
+            const uint32_t fragment_arg = rms_local_groups_arg_base + lg * rms_local_group_arg_words;
+            const uint32_t local_tile_offset = get_vararg(fragment_arg);
+            const uint32_t fragment_tile_count = get_vararg(fragment_arg + 1);
+            constexpr uint32_t dst_chunk = 8;
+            for (uint32_t first = 0; first < fragment_tile_count; first += dst_chunk) {
+                const uint32_t count =
+                    fragment_tile_count - first < dst_chunk ? fragment_tile_count - first : dst_chunk;
+                const uint32_t local_first = local_tile_offset + first;
+                tile_regs_acquire();
+                reconfig_data_format(mm_out_cb_id, rms_scale_cb_id);
+                binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(mm_out_cb_id, rms_scale_cb_id);
+                for (uint32_t i = 0; i < count; ++i) {
+                    mul_tiles(
+                        mm_out_cb_id,
+                        rms_scale_cb_id,
+                        mt * N_tiles_per_core + local_first + i,
+                        mt * rms_local_group_count + lg,
+                        i);
+                }
+#ifdef FUSE_RMS_VECTOR_GAMMA
+                reconfig_data_format(rms_gamma_rows_cb_id, rms_gamma_rows_cb_id);
+                mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(rms_gamma_rows_cb_id);
+                for (uint32_t i = 0; i < count; ++i) {
+                    mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        rms_gamma_rows_cb_id, local_first + i, i);
+                }
+#endif
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < count; ++i) {
+                    pack_tile<true>(i, out_cb_id, local_first + i);
+                }
+                tile_regs_release();
+            }
+        }
+        final_out_cb.push_back(N_tiles_per_core);
+    }
+#ifdef FUSE_RMS_VECTOR_GAMMA
+    rms_gamma_rows_cb.pop_front(N_tiles_per_core);
+#endif
     rms_scale_cb.pop_front(M_tiles * rms_local_group_count);
     mm_out_cb.pop_front(local_out_tiles);
 #else
