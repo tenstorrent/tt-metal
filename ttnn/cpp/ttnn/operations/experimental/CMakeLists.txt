@@ -78,6 +78,7 @@ add_subdirectory(deepseek/attention_qkv_decode)
 add_subdirectory(deepseek/all_gather_for_matmul)
 add_subdirectory(deepseek/width_sharded_all_reduce)
 add_subdirectory(deepseek/sharded_rmsnorm)
+add_subdirectory(deepseek/step_context)
 add_subdirectory(deepseek/compress_pool_decode)
 add_subdirectory(deepseek/moe/deepseek_moe_gate)
 add_subdirectory(deepseek/moe/fused_experts)
@@ -150,6 +151,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::AllGatherForMatmul
         TTNN::Ops::Experimental::DeepSeek::WidthShardedAllReduce
         TTNN::Ops::Experimental::DeepSeek::ShardedRmsNorm
+        TTNN::Ops::Experimental::DeepSeek::StepContext
         TTNN::Ops::Experimental::DeepSeek::CompressPoolDecode
         TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
         TTNN::Ops::Experimental::DeepSeek::MoE::FusedExperts
@@ -227,6 +229,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::AllGatherForMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::WidthShardedAllReduce>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::ShardedRmsNorm>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::StepContext>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::CompressPoolDecode>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::FusedExperts>
