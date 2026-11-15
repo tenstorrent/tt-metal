@@ -155,6 +155,14 @@ def test_a_refused_state_stops_the_restore_before_anything_else_moves(expect_err
     assert loader.position == 0, "the scheduler is restored first, so the loader has not moved"
 
 
+def test_a_component_that_cannot_take_a_state_is_refused_before_anything_is_placed(expect_error):
+    stored = {"scheduler": {"m_last_step": 3}, "dataloader": {"position": 5}}
+    with expect_error(TypeError, r"the dataloader passed \(list_iterator\) has no set_state_dict"):
+        check_train_state(stored, dataloader=iter([]))
+    check_train_state(stored, scheduler=_RefusingScheduler(), dataloader=Loader())  # both can take a state
+    check_train_state({}, dataloader=iter([]))  # nothing stored for it: nothing to restore it with
+
+
 def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
     random.seed(21)
     block = capture_rng(world_rank=0)

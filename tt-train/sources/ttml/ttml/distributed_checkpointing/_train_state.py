@@ -203,9 +203,13 @@ def missing_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bo
     return [f"{TRAIN_STATE_KEY}/{name}" for name, asked in wanted if asked and name not in state]
 
 
-def check_train_state(state: dict, *, rng: bool = False, world_rank: int = 0) -> None:
-    """What can be checked before ``load`` touches anything: the RNG block's format, and that this rank's entry
-    decodes. The scheduler and dataloader states can only be judged by their own ``set_state_dict``."""
+def check_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bool = False, world_rank: int = 0) -> None:
+    """What can be checked before ``load`` touches anything: that a scheduler or dataloader passed can take a state
+    (a ``set_state_dict``), the RNG block's format, and that this rank's entry decodes. The scheduler and dataloader
+    states themselves can only be judged by their own ``set_state_dict``, after the tensors are placed."""
+    for name, component in (("scheduler", scheduler), ("dataloader", dataloader)):
+        if component is not None and name in state and not callable(getattr(component, "set_state_dict", None)):
+            raise TypeError(f"the {name} passed ({type(component).__name__}) has no set_state_dict to restore it with")
     if rng and "rng" in state:
         _check_rng_format(state["rng"])
         own = state["rng"].get("ranks", {}).get(str(int(world_rank)))

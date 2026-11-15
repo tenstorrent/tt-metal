@@ -203,7 +203,9 @@ def load(
     shapes, dtypes, layouts, param groups, the sizes of the data files and the stored RNG state. A failure after that
     (a read error, the device out of memory) leaves the model and optimizer partly restored; the ``CheckpointError``
     raised then says how many tensors were placed, and the model should be loaded again or discarded. A scheduler or
-    dataloader that refuses its state raises a ``CheckpointError`` naming it.
+    dataloader without a ``set_state_dict`` is refused before anything is placed; one that refuses its state can only
+    say so after, and raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and the scheduler
+    (when the dataloader refuses) already restored.
     """
     if model is None and optimizer is None:
         raise TypeError("load needs a model and/or an optimizer")
@@ -222,7 +224,13 @@ def load(
     missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
     if strict and missing_state:
         raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
-    check_train_state(train_state, rng=rng, world_rank=world_record()["ranks"][0]["world_rank"])
+    check_train_state(
+        train_state,
+        scheduler=scheduler,
+        dataloader=dataloader,
+        rng=rng,
+        world_rank=world_record()["ranks"][0]["world_rank"],
+    )
 
     fsdp_states = fsdp_gate(model, reshard_fsdp)
     # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
