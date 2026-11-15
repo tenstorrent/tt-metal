@@ -317,6 +317,13 @@ class Hy4ChainLayer:
                 self.blk_tp = Hy4MoeTp32Block(
                     md, ch.ccl, self.blk.gate, tpe, int(os.environ.get("HY4_MOE_TP32_T", "1"))
                 )
+                self.blk_pf = None
+                if (
+                    os.environ.get("HY4_TP32_PF", "0") == "1"
+                ):  # tp32-prefill2: grouped-GEMM prefill on the SAME weights (no second copy)
+                    from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_prefill_block import Hy4MoeTp32PrefillBlock
+
+                    self.blk_pf = Hy4MoeTp32PrefillBlock(md, ch.ccl, self.blk.gate, tpe, CHUNK)
             del W
         if (
             self.mtp
@@ -351,9 +358,25 @@ class Hy4ChainLayer:
             return ttnn.multiply(h, 0.05)
         from models.demos.blackhole.hy4_preview.tt.hy4_prefill_moe import COLS, moe_cols
 
+        if getattr(self, "blk_pf", None) is not None:  # TP32 grouped-GEMM prefill (single weight copy)
+            y = self.blk_pf.forward(h)  # [1,1,n,D/8]: routed partial summed over all 32 chips, own rows
+            g = ttnn.all_gather(
+                y,
+                dim=3,
+                cluster_axis=1,
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # [1,1,n,D] replicated over the columns
+            ttnn.deallocate(y)
+            sh = D.allreduce_cols(self.shared.forward(h))
+            out = ttnn.add(g, sh)
+            ttnn.deallocate(g)
+            ttnn.deallocate(sh)
+            return out
         assert (
             self.um is not None
-        ), "HY4_TP32_ONLY: no ring experts, the MoE prefill needs the TP32 grouped-GEMM kernel (tp32-prefill-build K1/K2, not built)"
+        ), "HY4_TP32_ONLY: no ring experts, the MoE prefill needs HY4_TP32_PF=1 (tp32-prefill2 grouped-GEMM kernels)"
         n = h.shape[2]
         G = n // 256
         h4 = ttnn.reshape(h, [G, COLS, 32, HID])
