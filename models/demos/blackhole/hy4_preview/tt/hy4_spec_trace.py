@@ -153,7 +153,8 @@ class MTPRoundTail:
     ONE XMerge / PoolCtx S per process. Persistent tensors are allocated here (before any trace capture); ``run`` is the traced body.
     """
 
-    def __init__(self, ch, mtp, derive, ctx, k, greedy):
+    def __init__(self, ch, mtp, derive, ctx, k, greedy, sampling=None):
+        self.sampling = sampling  # SpecSampling (lossless draft-q rejection sampling) or None (greedy)
         self.ch, self.mtp, self.sd, self.ctx, self.k, self.S = ch, mtp, derive, ctx, k, k + 1
         self.greedy = greedy  # fn(logits [1,1,T,V/8]) -> uint32 [T,1] ids (hy4_mtp.greedy_tokens)
         md, S = ch.md, self.S
@@ -205,9 +206,18 @@ class MTPRoundTail:
         h_cur = hm
         for i in range(k):
             lg = ttnn.linear(h_cur, ch.lm_head, compute_kernel_config=ch.ckc_head, dtype=ttnn.float32)
-            t = self.greedy(lg)  # [1,1] u32
+            if self.sampling is None:
+                t = self.greedy(lg)  # [1,1] u32
+                drafts.append(
+                    ttnn.typecast(ttnn.to_layout(ttnn.reshape(t, [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32)
+                )
+            else:
+                tok_f = self.sampling.draft(
+                    lg, i, ttnn.add(p_new, float(i + 1))
+                )  # the drafted token sits at position L' + i + 1
+                t = ttnn.reshape(ttnn.to_layout(ttnn.typecast(tok_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, 1])
+                drafts.append(tok_f)
             ttnn.deallocate(lg)
-            drafts.append(ttnn.typecast(ttnn.to_layout(ttnn.reshape(t, [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32))
             if i == k - 1:
                 break
             # recursive step i+1: row 0 = (token d_{i+1}, hidden h_cur) at position L' + i; filler rows repeat it
@@ -218,6 +228,8 @@ class MTPRoundTail:
             ttnn.deallocate(h_rows_)
             h_cur = ttnn.slice(o, [0, 0, 0, 0], [1, 1, 1, int(o.shape[3])])
             ttnn.deallocate(o)
+        if self.sampling is not None:
+            self.sampling.finish()
         # next-round state
         dcat = ttnn.concat(drafts, dim=3)  # [1,1,1,k]
         d_pad = ttnn.concat([dcat, self.neg_pad], dim=3)
@@ -233,7 +245,7 @@ class Hy4SpecRunner:
     Build order: chain + head + MTP layer, Hy4PoolVerifier (pools, XMerge), ``Hy4SpecRunner`` (MTP pool + persistent tensors), then ``capture`` (eager warm round first).
     """
 
-    def __init__(self, dec, mtp, k, greedy, pages, key_dtype=ttnn.bfloat8_b):
+    def __init__(self, dec, mtp, k, greedy, pages, key_dtype=ttnn.bfloat8_b, sampling=None):
         self.dec, self.mtp, self.k, self.S = dec, mtp, k, k + 1
         ch, md, ctx = dec.ch, dec.md, dec.ctx
         ly = mtp.ly
@@ -260,7 +272,8 @@ class Hy4SpecRunner:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ly.attn.init_pool(ctx, self.mtp_kv, self.mtp_keys)
-        self.tail = MTPRoundTail(ch, mtp, self.sd, ctx, k, greedy)
+        self.sampling = sampling
+        self.tail = MTPRoundTail(ch, mtp, self.sd, ctx, k, greedy, sampling=sampling)
         dec.tok = self.tail.tok  # the verify input IS the tail's next-round token tensor
         self.greedy = greedy
         self.trace = None
@@ -269,7 +282,9 @@ class Hy4SpecRunner:
         dec, tail = self.dec, self.tail
         self.sd.derive(tail.pos)
         hn, logits = dec.step_verify()
-        a_tok = self.greedy(logits)  # [S, 1] uint32 per device row
+        a_tok = (
+            self.greedy(logits) if self.sampling is None else self.sampling.verify(logits, tail.pos)
+        )  # [S, 1] uint32 per device row
         ttnn.deallocate(logits)
         tail.run(a_tok, hn, derived=True)
         ttnn.deallocate(hn)
