@@ -100,6 +100,7 @@ CONV_ACC_DEPTH = 1  # partial tap sum: compute-to-compute, one compute thread, s
 HISTORY = 3  # spec constant: conv_state rows per sequence
 CONV_TAPS = HISTORY + 1  # history rows + current token, not a knob
 TOK_COEF_PAGES = 3  # alpha (all rows), beta at row p, alpha at row p
+D_PAGES = 2  # token step: [kn; qn] x kn^T, d = qn . kn of row p at (p, p) of the second tile
 CHUNK_COEF_PAGES = 2  # R-CHUNK, per tile row: g and beta of the pair in column 0, 0 on rows that are no token
 CHUNK_VEC_PAGES = 5  # R-CHUNK: D, c, exp(c), exp(c_last - c), beta exp(c)
 CHUNK_MAT_PAGES = 2  # R-CHUNK: L (solve operand), (Qn Kn^T) * D (matmul operand)
@@ -203,6 +204,7 @@ def _kernel_defines():
         "HISTORY",
         "CONV_TAPS",
         "TOK_COEF_PAGES",
+        "D_PAGES",
         "CHUNK_COEF_PAGES",
         "CHUNK_VEC_PAGES",
         "CHUNK_MAT_PAGES",
@@ -246,7 +248,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_
         # R-BCAST lands kn / qn in place; the U2D view feeds the fp32 qn . kn.
         ((CB_KQ_ROWS, CB_KQ_ROWS_F32), 2 * Kt * trb),
         ((CB_KNT,), Kt * trb),
-        ((CB_D,), trb),
+        ((CB_D,), D_PAGES * trb),
         ((CB_GATE_IN,), 2 * ROW_DEPTH),
         ((CB_GATE_W,), 2 * unit_depth),
         ((CB_GATES,), 2 * trb),

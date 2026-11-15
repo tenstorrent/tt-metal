@@ -73,6 +73,10 @@ constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;   // R-QKCORE: q or k columns of o
 constexpr uint32_t FACE_BYTES = TILE_BYTES / 4;                     // one 16x16 face
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;                     // one face row
 constexpr uint32_t CS_COLS_PER_FLUSH = TILE_ROWS / GDN_HISTORY;     // conv_state_out columns per scratch tile
+// Decode NoC read transaction ids (trid 0 also counts other requests of the NIU): the first window group's staged rows,
+// then the unit's other inputs issued before that group's flush.
+constexpr uint32_t WINDOW_TRID = 1;
+constexpr uint32_t INPUTS_TRID = 2;
 static_assert((STAGE_SLOTS == 0) == (SEG_BYTES % READ_ALIGN == 0), "row staging iff a face row is sub-alignment");
 
 // Byte offset of the left half of tile row p (faces 0/2); the right half is FACE_BYTES further.
@@ -119,6 +123,13 @@ public:
                 noc_async_read_barrier();
                 pending_ = 0;
             }
+        }
+    }
+
+    // Completes staged rows only if any are pending (a full barrier then); else nothing.
+    void finish_staged() {
+        if (pending_ != 0) {
+            finish();
         }
     }
 
@@ -443,6 +454,35 @@ void kernel_main() {
 
             // Pass 0 reads every unit's inputs; pass 1 copies conv_state_out, so a core's next unit is not read behind
             // this unit's copy.
+            // Decode: the first window group's staged current and history rows, read into staging. They are what the
+            // window waits for, so they are issued before the weights and gates (transaction id WINDOW_TRID): the row
+            // copies start as soon as they land, while the weights are still in flight.
+            const uint32_t seq_first = seq * T;
+            const uint32_t hist_row0 = GDN_HISTORY * seq;
+            const bool unit_hist_staged = (hist_row0 % TILE_ROWS) + GDN_HISTORY <= TILE_ROWS;
+            // Unit column `local` into staging slot `slot`: its current row `row` of tile row `tr`, and (with_hist) its
+            // history rows.
+            auto issue_staged = [&](uint32_t local, uint32_t slot, uint32_t tr, uint32_t row, bool with_hist) {
+                const uint32_t ct = pair_col(unit_col(local));
+                read_row_span(mixed, tr * Ct + ct, row, row + 1, cur_stage + slot * TILE_BYTES);
+                if (with_hist) {
+                    const uint32_t r0 = hist_row0 % TILE_ROWS;
+                    read_row_span(
+                        conv_state,
+                        (hist_row0 / TILE_ROWS) * Ct + ct,
+                        r0,
+                        r0 + GDN_HISTORY,
+                        hist_stage + slot * TILE_BYTES);
+                }
+            };
+            const bool prefetch = pass == 0 && T == 1 && !STATE;
+            if (prefetch) {
+                noc_async_read_set_trid(WINDOW_TRID);
+                for (uint32_t col = 0; col < group_cols; ++col) {
+                    issue_staged(col, col, seq_first / TILE_ROWS, seq_first % TILE_ROWS, unit_hist_staged);
+                }
+                noc_async_read_set_trid(INPUTS_TRID);  // until the first window group's flush
+            }
             if (pass == 0) {
                 // ---- load_pair_block ----
                 // norm_weight columns of the unit (a prep core's r heads share the Vt tiles).
@@ -584,9 +624,8 @@ void kernel_main() {
                             // [HISTORY * seq, HISTORY * seq + HISTORY): read that span once per column into a staging
                             // tile in place (one aligned read per face half) and copy rows out after the flush. A span
                             // crossing a tile row is read row by row instead.
-                            const uint32_t hist_row0 = GDN_HISTORY * seq;
                             const bool hist_needed = lo < seq_lo + GDN_HISTORY;
-                            const bool hist_staged = hist_needed && (hist_row0 % TILE_ROWS) + GDN_HISTORY <= TILE_ROWS;
+                            const bool hist_staged = hist_needed && unit_hist_staged;
                             // The HISTORY token rows before lo, when all are rows of mixed_qkv inside one tile row (a
                             // tile row continuing its sequence): read once per column as one aligned span into the same
                             // staging tile, then copied out as row runs.
@@ -598,13 +637,11 @@ void kernel_main() {
                             for (uint32_t col = 0; col < group_cols; ++col) {
                                 const uint32_t ct = pair_col(unit_col(group_first + col));
                                 const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
+                                const bool prefetched = prefetch && group_first == 0;
                                 if (cur_staged) {
-                                    read_row_span(
-                                        mixed,
-                                        tr * Ct + ct,
-                                        lo - base_row,
-                                        hi - base_row,
-                                        cur_stage + col * TILE_BYTES);
+                                    if (!prefetched) {
+                                        issue_staged(group_first + col, col, tr, lo - base_row, hist_staged);
+                                    }
                                 } else {
                                     read_tile_rows(
                                         rows,
@@ -615,7 +652,7 @@ void kernel_main() {
                                         hi,
                                         col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
                                 }
-                                if (hist_staged) {
+                                if (hist_staged && !cur_staged) {
                                     const uint32_t r0 = hist_row0 % TILE_ROWS;
                                     read_row_span(
                                         conv_state,
@@ -650,7 +687,14 @@ void kernel_main() {
                                     }
                                 }
                             }
-                            rows.finish();
+                            const bool split_flush = prefetch && group_first == 0;
+                            if (split_flush) {
+                                noc_async_read_barrier_with_trid(WINDOW_TRID);
+                                noc_async_read_set_trid(
+                                    WINDOW_TRID);  // the row copies, so the inputs barrier skips them
+                            } else {
+                                rows.finish();
+                            }
                             if (hist_staged || prev_staged || cur_staged) {
                                 for (uint32_t col = 0; col < group_cols; ++col) {
                                     const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
@@ -681,6 +725,11 @@ void kernel_main() {
                                         }
                                     }
                                 }
+                            }
+                            if (split_flush) {
+                                noc_async_read_barrier_with_trid(INPUTS_TRID);  // weights and gate rows
+                                noc_async_read_set_trid(0);
+                                rows.finish_staged();
                             }
                             if (weights_pending) {
                                 cb_push_back(cb_conv_w, conv_w_pages);
