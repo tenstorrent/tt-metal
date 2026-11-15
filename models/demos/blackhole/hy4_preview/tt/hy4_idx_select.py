@@ -141,12 +141,16 @@ def cs_gather(pos, cid, cval=None, split=1, ncores=None):
     return oid, (oval if want else None)
 
 
-def select_v2(ag, colid, rows, n, B=16, kb=512, kloc=1024, K=TOPK, split=4, sort_final=False, max_id=None):
+def select_v2(
+    ag, colid, rows, n, B=16, kb=512, kloc=1024, K=TOPK, split=4, sort_final=False, max_id=None, valid_local=None
+):
     """rows bf16 RM [1,1,S,n] local score rows -> ids u32 [S,1,1,K] global. Local stage = blockwise top-k (B blocks, kb each) + local merge to kloc; then AG + merge to K."""
     S = int(rows.shape[2])
     m = n // B
     blk = ttnn.reshape(rows, [1, 1, S * B, m])
-    bids = topk_ids(blk, kb, m)
+    bids = topk_ids(
+        blk, kb, valid_local if (valid_local and B == 1) else m
+    )  # pool-prefill: rows are a bucket wide, only the first valid_local columns are ranked (runtime arg: one program per bucket)
     bvals, bgids = cs_cand2(
         ttnn.reshape(rows, [S * B, 1, 1, m]), ttnn.reshape(bids, [S * B, 1, 1, kb]), colid, 1, m, B, split
     )
