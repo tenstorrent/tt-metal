@@ -16,8 +16,11 @@ tie-break does), so a step without a sampled row runs no sampler at all.
 
 Seeds: a seeded row's column j draws with the device seed that a plain decode at that input position uses,
 ``_hash_request_seed_to_device_seed(seed, position + 1)``, so the draw at a position does not depend on how the
-positions were grouped into verifies. An unseeded row's column takes fresh entropy. Every row that draws nothing
-carries the device SKIP seed, which leaves its core's random state untouched.
+positions were grouped into verifies. An unseeded row's column takes fresh entropy. A row that draws nothing is
+matched to no core (``manual_seed`` user id NO_CORE) and carries the device SKIP seed, so its core's random state stays
+untouched. A chained verify (spec_chain) knows its positions only on the device: its plan carries no seeds
+(``chained_sampling_plan``), and the chain program writes each drawing row's seed, picked by the predecessor's
+accepted count from candidates the host hashes for every position the column can take.
 
 Device graph (``VerifySampler.body``, a trace of its own after the verify trace): the verify's gathered logits
 [1, 1, B*T, V] (at most 32 rows, one core each) are cut into equal vocabulary chunks of at most 64K columns, each chunk gives its
@@ -27,7 +30,7 @@ plugin samples such a row on the host (``max_device_top_k``).
 """
 
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 import torch
@@ -45,6 +48,7 @@ SAMPLER_ROWS = 32  # one ttnn.sampling call: a row per core, B * T <= 32 verify 
 SAMPLER_TOP_K = 32  # candidates per vocabulary chunk; the plugin keeps a row with top-k above it on the host
 TOPK_MAX_WIDTH = 64 * 1024  # widest input one ttnn.topk call takes
 SKIP_SEED = MAX_UINT32  # manual_seed leaves the core's random state untouched
+NO_CORE = MAX_UINT32  # a manual_seed user id no core matches: the entry seeds nothing
 
 
 def _row_value(value, row, default):
@@ -80,18 +84,28 @@ def _fresh_seed():
 @dataclass
 class SamplingPlan:
     """The sampler's inputs for one verify of B users by T columns, row u*T + j: the device encoding of top-k, top-p and
-    inverse temperature (``format_sampling_params``), the device seed, and whether the row's draw replaces its
-    argmax id."""
+    inverse temperature (``format_sampling_params``), the device seed (None on a chained verify, whose chain program
+    writes the seeds), and whether the row's draw replaces its argmax id."""
 
     k: list
     p: list
     temp: list
-    seeds: list
+    seeds: list | None
     sampled: list
 
     @property
     def any_sampled(self):
         return any(self.sampled)
+
+    @property
+    def user_ids(self):
+        """The manual_seed user id of each row: the row's own core for a drawing row, NO_CORE for the others."""
+        return [r if s else NO_CORE for r, s in enumerate(self.sampled)]
+
+
+def drawn_users(plan, B, T):
+    """Per user, whether ``plan`` (or None) draws the user's columns."""
+    return [bool(plan is not None and plan.sampled[u * T]) for u in range(B)]
 
 
 def sampling_plan(sampling_params, positions, T, fresh_seed=_fresh_seed):
@@ -133,6 +147,33 @@ def sampling_plan(sampling_params, positions, T, fresh_seed=_fresh_seed):
     )
 
 
+def chained_sampling_plan(sampling_params, p0_prev, T, fresh_seed=_fresh_seed):
+    """The plan of a chained verify of ``len(p0_prev)`` users by T columns, whose column-0 positions the chain program
+    computes on the device: p0_prev[u] + c for the c tokens the predecessor committed for user u, a negative
+    p0_prev[u] for a user the verify does not run. Returns (plan, candidates). The plan's top-k, top-p, temperature
+    and drawing rows do not depend on c; its seeds are None. ``candidates`` float32 [T * B, T]: row (c - 1) * B + u
+    holds user u's seeds if the predecessor committed c tokens, for a seeded user the seeds ``sampling_plan`` gives
+    its columns at p0_prev[u] + c, for an unseeded drawing user the same fresh seed per column at every c, 0 for a
+    user that draws nothing. Every seed is below 2**24, so the chain program picks it exactly in float32."""
+    B = len(p0_prev)
+    first = sampling_plan(sampling_params, [int(p) + 1 if int(p) >= 0 else -1 for p in p0_prev], T, fresh_seed)
+    candidates = torch.zeros(T * B, T, dtype=torch.float64)
+    for u in range(B):
+        if not first.sampled[u * T]:
+            continue
+        seed = row_sampling(sampling_params, u)[3]
+        for c in range(1, T + 1):
+            for j in range(T):
+                candidates[(c - 1) * B + u, j] = (
+                    first.seeds[u * T + j]
+                    if seed is None
+                    else _hash_request_seed_to_device_seed(seed, int(p0_prev[u]) + c + j + 1)
+                )
+    if bool((candidates >= 2**24).any()):
+        raise ValueError("a chained verify's device seed is at or above 2**24")
+    return replace(first, seeds=None), candidates.to(torch.float32)
+
+
 def with_draws(ids, draws, plan):
     """``ids`` [B, T] with each sampled row's draw in place of its argmax id, as int64."""
     # The verify's argmax reads back as torch.uint32, which has no index_put.
@@ -168,9 +209,10 @@ class VerifySampler:
         self.k = self._device(torch.tensor(idle.k, dtype=torch.int32), ttnn.uint32)
         self.p = self._device(torch.tensor(idle.p), ttnn.bfloat16)
         self.temp = self._device(torch.tensor(idle.temp), ttnn.bfloat16)
+        # The chain program (spec_chain.ChainInputs) writes the seeds of a chained verify.
         self.seeds = self._device(torch.tensor(idle.seeds, dtype=torch.int64), ttnn.uint32)
         self._staged = {}  # name -> host tensor its device buffer holds (stage)
-        self.user_ids = self._device(torch.arange(self.rows, dtype=torch.int32), ttnn.uint32)
+        self.user_ids = self._device(torch.tensor(idle.user_ids, dtype=torch.int64), ttnn.uint32)
         self.draws = self._device(torch.zeros(1, 1, 1, self.rows, dtype=torch.int32), ttnn.uint32)
         offsets = torch.arange(self.chunks, dtype=torch.int32).repeat_interleave(SAMPLER_TOP_K) * width
         self.offsets = self._device(
@@ -184,20 +226,27 @@ class VerifySampler:
         return ttnn.to_device(self._host(t, dtype, layout), self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def stage(self, plan):
-        """Host -> device copies of the plan's parameters and seeds (addresses preserved). A parameter equal to the one
-        staged last is not copied again: top-k, top-p and temperature change only with the rows' requests, the seeds
-        every step."""
-        for name, host, dev, dtype in (
+        """Host -> device copies of the plan's parameters, user ids and seeds (addresses preserved); a chained plan has
+        no seeds (the chain program wrote them). A parameter equal to the one staged last is not copied again: top-k,
+        top-p, temperature and user ids change only with the rows' requests, the seeds every step."""
+        staged = [
             ("k", torch.tensor(plan.k, dtype=torch.int32), self.k, ttnn.uint32),
             ("p", torch.tensor(plan.p), self.p, ttnn.bfloat16),
             ("temp", torch.tensor(plan.temp), self.temp, ttnn.bfloat16),
-            ("seeds", torch.tensor(plan.seeds, dtype=torch.int64), self.seeds, ttnn.uint32),
-        ):
+            ("user_ids", torch.tensor(plan.user_ids, dtype=torch.int64), self.user_ids, ttnn.uint32),
+        ]
+        if plan.seeds is not None:
+            staged.append(("seeds", torch.tensor(plan.seeds, dtype=torch.int64), self.seeds, ttnn.uint32))
+        for name, host, dev, dtype in staged:
             held = self._staged.get(name)
             if held is not None and torch.equal(held, host):
                 continue
             ttnn.copy_host_to_device_tensor(self._host(host, dtype), dev)
             self._staged[name] = host
+
+    def seeds_written(self):
+        """The chain program wrote the seeds buffer: the next host plan copies its seeds again."""
+        self._staged.pop("seeds", None)
 
     def body(self, logits):
         """``logits`` [1, 1, rows, vocab] bfloat16 TILE, replicated. Writes one draw per row into ``draws``."""

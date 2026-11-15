@@ -7,11 +7,13 @@ The sampler runs as the model runs it: a trace of its own over a persistent [1, 
 fresh ``sampling_plan`` per verify. Each sampled row's draws are checked against vLLM's sampling distribution
 (sampling_reference.target_probs, chi-square), on every device of the mesh; then the plugin's id walk over the draws
 (accept_greedy_drafts) against the target: the first committed token and the acceptance of the first draft. Greedy,
-top-k 1 and padding rows draw nothing; a seeded row draws the same token for the same position.
+top-k 1 and padding rows draw nothing; a seeded row draws the same token for the same position, also on a chained
+verify, whose seeds the chain program writes (spec_chain.ChainInputs).
 
     pytest models/demos/blackhole/qwen36/tests/test_spec_sample.py    (Blackhole, up to 2 chips)
 """
 
+import random
 import time
 from types import SimpleNamespace
 
@@ -22,7 +24,7 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tests.sampling_reference import chi_square_p, target_probs
 from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape
-from models.demos.blackhole.qwen36.tt.spec_sample import VerifySampler, sampling_plan
+from models.demos.blackhole.qwen36.tt.spec_sample import VerifySampler, chained_sampling_plan, sampling_plan
 
 VOCAB = 248320
 MESH = _resolve_mesh_shape(2)
@@ -193,6 +195,88 @@ def test_verify_draws_at_every_supported_k(mesh_device, K, B):
             assert set(d[0].tolist()) <= set(SUPPORT)
     finally:
         s.release()
+
+
+@_parametrize
+def test_a_chained_seeded_row_draws_what_an_unchained_verify_draws(mesh_device):
+    """The chain program (spec_chain.ChainInputs.body) writes a chained verify's sampler seeds, each user's picked by
+    the predecessor's count from the host's candidates (spec_sample.chained_sampling_plan). Over the same logits a
+    seeded user then draws, token for token, what an unchained verify whose column 0 sits at that count's position
+    draws: the float32 pick, the uint32 typecast, the 1-D copy into the sampler's seeds and manual_seed's user-id match
+    lose no bit. An unseeded user draws support tokens."""
+    from models.demos.blackhole.qwen36.tests.test_spec_accept_host import ROWS
+    from models.demos.blackhole.qwen36.tests.test_spec_chain_host import _chain_case, _ctrl_words
+    from models.demos.blackhole.qwen36.tt.spec_chain import ChainInputs
+    from models.demos.blackhole.qwen36.tt.spec_step import VERIFY_STEP_ROWS, drafter_pack_rows, pack_width
+
+    B, K, groups, nv = 8, 3, 3, 6
+    T, R = K + 1, B * (K + 1)
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def buffer(t, dtype):
+        return ttnn.from_torch(
+            torch.as_tensor(t).to(torch.int32),
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rep,
+        )
+
+    def copy_in(host, dev):
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.as_tensor(host).to(torch.int32), dtype=dev.dtype, mesh_mapper=rep), dev
+        )
+
+    s = _Sampler(mesh_device, B, T)
+    s.stage_logits(torch.stack([_row_logits(r) for r in range(R)]))
+    step_dev = buffer(torch.zeros(VERIFY_STEP_ROWS, pack_width(R)), ttnn.uint32)
+    pack_dev = buffer(torch.zeros(drafter_pack_rows(K), pack_width(R)), ttnn.uint32)
+    ctrl_devs = [buffer(torch.zeros(1, _ctrl_words(B, nv)), ttnn.int32) for _ in range(groups)]
+    ids_dev = buffer(torch.zeros(1, 1, 1, 32), ttnn.uint32)
+    draft_devs = [buffer(torch.zeros(1, 1, B, 1), ttnn.uint32) for _ in range(K)]
+    chain = ChainInputs(mesh_device, B, K, ROWS, step_dev, pack_dev, ctrl_devs, nv, sampler=s.sampler)
+    chain.bind(ids_dev, draft_devs)
+    seeded = [u for u in range(B) if u % 2 == 0]
+    params = SimpleNamespace(
+        temperature=[1.0] * B,
+        top_k=[20] * B,
+        top_p=[1.0] * B,
+        seed=[1000 + u if u in seeded else None for u in range(B)],
+    )
+    rng = random.Random(11)
+    compared = 0
+    try:
+        for _ in range(10):
+            case = _chain_case(rng, B, K, groups, nv, True)
+            p0_prev = [p if a else -1 for p, a in zip(case.p0_prev, case.active)]
+            plan, seed_cand = chained_sampling_plan(params, p0_prev, T)
+            copy_in(case.ids, ids_dev)
+            copy_in(case.pack, pack_dev)
+            for d, dev in zip(case.drafts, draft_devs):
+                copy_in(d.reshape(1, 1, B, 1), dev)
+            copy_in(case.draws[..., :R], s.sampler.draws)  # the predecessor's draws
+            chain.stage(case.overlay, case.cand, seed_cand)
+            chain.body()
+            s.sampler.seeds_written()
+            chained = s.draw(plan)
+            positions = [p + m + 1 if p >= 0 else -1 for p, m in zip(p0_prev, case.m)]
+            unchained = s.draw(sampling_plan(params, positions, T))
+            for u in range(B):
+                if p0_prev[u] < 0:
+                    continue
+                cols = slice(u * T, (u + 1) * T)
+                if u in seeded:
+                    assert torch.equal(chained[:, cols], unchained[:, cols]), f"user {u} at {positions[u]}"
+                    compared += 1
+                else:
+                    assert set(chained[0, cols].tolist()) <= set(SUPPORT)
+        assert compared > 10
+    finally:
+        s.release()
+        chain.release()
+        for t in (step_dev, pack_dev, ids_dev, *ctrl_devs, *draft_devs):
+            ttnn.deallocate(t)
 
 
 @_parametrize

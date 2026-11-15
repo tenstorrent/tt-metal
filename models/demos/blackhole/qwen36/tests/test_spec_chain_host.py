@@ -4,14 +4,21 @@
 supports_chained_spec_verify).
 
 * The chain program's arithmetic (spec_chain.chain_graph, run with torch ops) writes the verify step buffer the host
-  stages for the same block (the predecessor's committed token at the device's count, the drafts its drafter made,
-  the positions after that commit, the RoPE rows and the acceptance rows), and each ctrl page the GDN verify tables of
-  that count's start blocks (GdnBlockState.ctrl_candidates and verify_tables), over random predecessors: every count,
-  padding rows, rows the chained verify drops, declined rows, M-RoPE deltas, held rows.
+  stages for the same block (the predecessor's committed token at the device's count, a draw for a drawn user, the
+  drafts its drafter made, the positions after that commit, the RoPE rows and the acceptance rows with the chained
+  verify's drawn users), each ctrl page the GDN verify tables of that count's start blocks
+  (GdnBlockState.ctrl_candidates and verify_tables), and the sampler seeds of that count, over random predecessors:
+  every count, padding rows, rows the chained verify drops, declined rows, M-RoPE deltas, held rows, drawn users.
+* spec_sample.chained_sampling_plan: picked by any count, a seeded user's seeds are those an unchained verify (or a
+  draftless narrow decode) at the same position draws with; an unseeded user's are fresh and the same at every
+  count; a user that draws nothing seeds no core; a top-k the sampler cannot draw raises.
 * MTPBlockEngine: a chained verify replays the chain, verify, step and drafter traces with the host rows in one
   overlay; the predecessor's propose returns the device drafts and fills the chained verify's block, the chained
   verify's own propose checks it against the device; a commit unequal to the device's raises; a predecessor that ran
-  no device drafter, or a chained propose that depends on the count, is built from the engine's own walk instead.
+  no device drafter, or a chained propose that depends on the count, is built from the engine's own walk instead. On
+  a device-sampled step the same holds for sampled rows: the device counts over the draws, the chained verify
+  stages no seeds (the chain program writes those of its positions), and a commit of the argmax instead of the draws
+  raises.
 """
 
 import random
@@ -29,7 +36,16 @@ from models.demos.blackhole.qwen36.tt import gdn_block_state as gbs
 from models.demos.blackhole.qwen36.tt import spec_engine
 from models.demos.blackhole.qwen36.tt.kv_cache_spec import SPEC_STEP_HOLD
 from models.demos.blackhole.qwen36.tt.spec_accept import TorchOps, graph, step_accept_reference
-from models.demos.blackhole.qwen36.tt.spec_chain import chain_overlay, chain_reference, step_rows_reference
+from models.demos.blackhole.qwen36.tt.spec_chain import (
+    CH_DRAWN,
+    CH_DRAWN_PREV,
+    ChainInputs,
+    chain_overlay,
+    chain_reference,
+    step_rows_reference,
+)
+from models.demos.blackhole.qwen36.tt.spec_engine import mask_unused_columns
+from models.demos.blackhole.qwen36.tt.spec_sample import NO_CORE, chained_sampling_plan, sampling_plan
 from models.demos.blackhole.qwen36.tt.spec_step import (
     STEP_DECLINED,
     STEP_DRAWN,
@@ -46,16 +62,28 @@ def _ctrl_words(B, nv):
     return -(-(1 + B + 2 * B * nv) // 16) * 16
 
 
-def _chain_case(rng, B, K, groups, nv_heads):
-    """A random predecessor (its ids, the drafter pack its step trace wrote, its drafts) and a chained verify over it
-    (the overlay and random ctrl candidates), with the block and ctrl pages the host stages for that verify."""
+def _chain_case(rng, B, K, groups, nv_heads, sampler):
+    """A random predecessor (its ids, with a device ``sampler`` its draws for the drawn users, the drafter pack its
+    step trace wrote, its drafts) and a chained verify over it (the overlay, random ctrl candidates, with a sampler
+    random seed candidates), with the block, ctrl pages and seeds the host stages for that verify."""
     T = K + 1
     ids, tokens, accept = _case(rng, B, K)
     for u in range(B):
         if accept[STEP_P0][u] == 0:
             accept[STEP_DECLINED][u] = 1
+    draws = None
+    if sampler:
+        # A drawn user's draws repeat its ids for a random prefix, so the walk over the draws takes every count.
+        draws = torch.tensor([rng.randrange(VOCAB) for _ in range(B * T)])
+        for u in range(B):
+            n = rng.randrange(T + 1)
+            draws[u * T : u * T + n] = ids[u, :n]
+    else:
+        accept[STEP_DRAWN] = [0] * B
     pt = torch.randint(1, 900, (B, 5), dtype=torch.int32)
-    _, m, pack, _ = step_accept_reference(ids.reshape(-1), tokens.reshape(-1), accept, pt, 999, K, ROWS)
+    merged, m, pack, _ = step_accept_reference(
+        ids.reshape(-1), tokens.reshape(-1), accept, pt, 999, K, ROWS, draws=draws
+    )
     m = m.reshape(-1).tolist()
     drafts = [torch.tensor([rng.randrange(VOCAB) for _ in range(B)]) for _ in range(K)]
     pred_active = [p > 0 for p in accept[STEP_P0]]
@@ -66,7 +94,9 @@ def _chain_case(rng, B, K, groups, nv_heads):
     declined = [not a or rng.random() < 0.15 for a in active]
     keep = [d and a and rng.random() < 0.5 for d, a in zip(declined, active)]
     p0_prev = [accept[STEP_P0][u] if active[u] else 0 for u in range(B)]
-    overlay = chain_overlay(p0_prev, active, deltas, nv, declined, keep)
+    drawn = [int(sampler and a and rng.random() < 0.5) for a in active]
+    overlay = chain_overlay(p0_prev, active, deltas, nv, declined, keep, accept[STEP_DRAWN], drawn)
+    seed_cand = torch.randint(1, 1_000_001, (T * B, T)).to(torch.float32) if sampler else None
     width = 2 * nv_heads * groups
     cand = torch.randint(0, 1 << 20, (T * B, width), dtype=torch.int64)
     for u in range(B):
@@ -78,13 +108,13 @@ def _chain_case(rng, B, K, groups, nv_heads):
     for u in range(B):
         if not active[u]:
             continue
-        tok[u] = int(ids[u, m[u]])
+        tok[u] = int(merged[u, m[u]])
         tok[u, 1 : nv[u] + 1] = torch.tensor([int(drafts[k][u]) for k in range(nv[u])], dtype=torch.int64)
         p0[u] = p0_prev[u] + m[u] + 1
     pos = (p0.reshape(B, 1) + torch.arange(T)).reshape(-1)
     rows = {
         STEP_NUM_VALID: nv,
-        STEP_DRAWN: [0] * B,
+        STEP_DRAWN: drawn,
         STEP_P0: p0.tolist(),
         STEP_ROPE_BASE: rope_rows(p0, deltas, ROWS).tolist(),
         STEP_DECLINED: [int(d) for d in declined],
@@ -102,20 +132,39 @@ def _chain_case(rng, B, K, groups, nv_heads):
             base = 1 + B + B * nv_heads
             ctrl[0, base + u * nv_heads : base + (u + 1) * nv_heads] = pick[nv_heads:]
         want_ctrls.append(ctrl.to(torch.int32))
+    want_seeds = None
+    if sampler:
+        want_seeds = torch.stack([seed_cand[m[u] * B + u] for u in range(B)]).reshape(-1).to(torch.int64)
     return SimpleNamespace(
-        ids=_lanes(ids), pack=pack, overlay=overlay, cand=cand, drafts=drafts, step=want_step, ctrls=want_ctrls, m=m
+        ids=_lanes(ids),
+        draws=None if draws is None else _lanes(draws),
+        pack=pack,
+        overlay=overlay,
+        cand=cand,
+        seed_cand=seed_cand,
+        drafts=drafts,
+        step=want_step,
+        ctrls=want_ctrls,
+        seeds=want_seeds,
+        m=m,
+        drawn_prev=accept[STEP_DRAWN],
+        p0_prev=p0_prev,
+        active=active,
     )
 
 
+@pytest.mark.parametrize("sampler", [False, True])
 @pytest.mark.parametrize("B,K", [(1, 3), (2, 3), (4, 3), (8, 3), (4, 7), (2, 11)])
-def test_the_chain_program_writes_the_block_the_host_stages(B, K):
-    """chain_graph (the device arithmetic, in torch) == the step buffer verify_enqueue stages for the chained block and
-    the ctrl pages of each row's count, over random predecessors and chained verifies."""
-    rng = random.Random(B * 13 + K)
+def test_the_chain_program_writes_the_block_the_host_stages(B, K, sampler):
+    """chain_graph (the device arithmetic, in torch) == the step buffer verify_enqueue stages for the chained block,
+    the ctrl pages of each row's count and, with a device sampler, the seeds of that count, over random predecessors
+    and chained verifies; a drawn predecessor user continues from its draw."""
+    rng = random.Random(B * 13 + K + 1000 * sampler)
     groups, nv_heads = 3, 6
+    counts, drawn_tokens = set(), 0
     for _ in range(40):
-        case = _chain_case(rng, B, K, groups, nv_heads)
-        step, ctrls = chain_reference(
+        case = _chain_case(rng, B, K, groups, nv_heads, sampler)
+        step, ctrls, seeds = chain_reference(
             case.ids,
             case.pack,
             case.overlay,
@@ -127,10 +176,20 @@ def test_the_chain_program_writes_the_block_the_host_stages(B, K):
             _ctrl_words(B, nv_heads),
             nv_heads,
             groups,
+            draws=case.draws,
+            seed_cand=case.seed_cand,
         )
         assert torch.equal(step.to(torch.int64), case.step.to(torch.int64))
         for got, want in zip(ctrls, case.ctrls):
             assert torch.equal(got, want)
+        assert (seeds is None) == (case.seeds is None)
+        if seeds is not None:
+            assert torch.equal(seeds, case.seeds)
+        counts |= set(case.m)
+        drawn_tokens += sum(case.drawn_prev)
+    if K == 3 and B > 1:
+        assert counts == set(range(K + 1)), "every count of the predecessor"
+    assert bool(drawn_tokens) == sampler
 
 
 def _block_state(T=4, bmax=4):
@@ -210,13 +269,17 @@ def test_the_ctrl_candidates_select_the_verify_tables_of_each_count(copies):
 
 @pytest.fixture
 def chained(monkeypatch):
-    """An MTPBlockEngine whose device is a stand-in: each verify's ids are the next of state["ids"]; the step trace runs
-    as spec_accept.graph in torch over the step buffer the verify staged or the chain program wrote
-    (spec_chain.chain_reference over the predecessor's ids, pack and drafts); the drafter answers state["drafts"]."""
+    """An MTPBlockEngine whose device is a stand-in: each verify's ids are the next of state["ids"], and a device-sampled
+    verify's draws the next of state["draws"]; the step trace runs as spec_accept.graph in torch over the step buffer
+    the verify staged or the chain program wrote (spec_chain.chain_reference over the predecessor's ids, draws, pack
+    and drafts, and the staged seed candidates); the drafter answers state["drafts"]."""
     B, K = 4, 3
     T = K + 1
-    log = {"traces": [], "traced": [], "enqueue": [], "staged": [], "overlay": [], "blocks": []}
-    state = {"ids": [], "drafts": [torch.arange(100 * k, 100 * k + B) for k in range(K)]}
+    log = {
+        "traces": [], "traced": [], "enqueue": [], "staged": [], "overlay": [], "seed_cand": [], "blocks": [],
+        "chain_seeds": [],
+    }  # fmt: skip
+    state = {"ids": [], "draws": [], "drafts": [torch.arange(100 * k, 100 * k + B) for k in range(K)]}
     gdn = SimpleNamespace(remap_spec_slots=lambda idx: None)
     blocks = SimpleNamespace(
         verify_tokens=T,
@@ -237,7 +300,9 @@ def chained(monkeypatch):
         rope_table_rows=lambda: ROWS,
         _vfy_rows_out="feed",
         _vfy_ids_out="ids",
-        _vfy_sampler=SimpleNamespace(draws="draws"),
+        _vfy_sampler=SimpleNamespace(
+            draws="draws", seeds="seeds", seeds_written=lambda: log["blocks"].append(("seeds_written",))
+        ),
         _vfy_kv_grouped=False,
     )
 
@@ -249,9 +314,16 @@ def chained(monkeypatch):
 
     def verify_enqueue(tokens, positions, mi, accept_rows=None, **kw):
         step = log["chain_step"].pop() if kw.get("step_staged") else None
+        draws = state["draws"].pop(0) if kw.get("sample_plan") is not None else None
         log["enqueue"].append(
             SimpleNamespace(
-                tokens=tokens, positions=positions, accept=accept_rows, kw=kw, ids=state["ids"].pop(0), step=step
+                tokens=tokens,
+                positions=positions,
+                accept=accept_rows,
+                kw=kw,
+                ids=state["ids"].pop(0),
+                draws=draws,
+                step=step,
             )
         )
 
@@ -261,7 +333,13 @@ def chained(monkeypatch):
     eng._active = set(range(B))
     eng._acc_trace, eng._dr_trace, eng._chain_trace = "step", "drafter", "chain"
     eng._accept = SimpleNamespace(stage_pt_rows=lambda rows: log.setdefault("pt_rows", []).append(rows))
-    eng._chain = SimpleNamespace(stage=lambda overlay, cand: log["overlay"].append(overlay))
+    eng.sample_on_device = True
+
+    def stage(overlay, cand, seed_cand=None):
+        log["overlay"].append(overlay)
+        log["seed_cand"].append(seed_cand)
+
+    eng._chain = SimpleNamespace(stage=stage)
     eng._dr_pack, eng._mtp_pt, eng._dr_rs_pt, eng._dr_outs = "pack", "mtp_pt", "rs_pt", [f"d{k}" for k in range(K)]
     eng._stage = lambda host, buf, *a: log["staged"].append((buf, host))
 
@@ -269,11 +347,15 @@ def chained(monkeypatch):
         log["traces"].append(trace)
         if trace == "chain":
             pred = log["enqueue"][-1]
-            step, _ = chain_reference(
+            seed_cand = log["seed_cand"][-1]
+            step, _, seeds = chain_reference(
                 _lanes(pred.ids), pred.pack, log["overlay"][-1], torch.zeros(T * B, 36), state["drafts"],
                 B, K, ROWS, _ctrl_words(B, 6), 6, 3,
+                draws=_lanes(torch.zeros(B * T) if pred.draws is None else pred.draws),
+                seed_cand=torch.zeros(T * B, T) if seed_cand is None else seed_cand,
             )  # fmt: skip
             log.setdefault("chain_step", []).append(step)
+            log["chain_seeds"].append(seeds)
 
     monkeypatch.setattr(ttnn, "execute_trace", execute_trace)
 
@@ -285,9 +367,19 @@ def chained(monkeypatch):
             stepbuf = _step_buffer(
                 torch.tensor(e.tokens).reshape(-1), [0] * (B * T), [0] * (B * T), e.accept or {}, B, T
             )
-        out = {"ids": _lanes(e.ids)}
+        draws = getattr(e, "draws", None)
+        out = {"ids": _lanes(e.ids), "draws": None if draws is None else _lanes(draws)}
         if e.accept is not None or getattr(e, "step", None) is not None:
-            o = TorchOps(_lanes(e.ids), stepbuf, log["pt_rows"][-1], B, K, eng._scratch_block, ROWS)
+            o = TorchOps(
+                _lanes(e.ids),
+                stepbuf,
+                log["pt_rows"][-1],
+                B,
+                K,
+                eng._scratch_block,
+                ROWS,
+                draws=_lanes(torch.zeros(B * T) if draws is None else draws),
+            )
             e.pack = graph(o, B, K, pack_width(B * T))[0].to(torch.int64)
             out["pack"] = e.pack
         out.update({f"d{k}": state["drafts"][k].reshape(1, 1, B, 1) for k in range(K)})
@@ -298,7 +390,7 @@ def chained(monkeypatch):
     return eng, log, state
 
 
-def _host_verify(eng, tokens, starts, nv):
+def _host_verify(eng, tokens, starts, nv, sampling=None):
     T = eng.T
     start_pos = torch.tensor([[s + j if s >= 0 else -1 for j in range(T)] for s in starts])
     return eng.decode_forward(
@@ -309,6 +401,7 @@ def _host_verify(eng, tokens, starts, nv):
         page_table=torch.arange(1, eng.B * eng.nb + 1, dtype=torch.int32).reshape(eng.B, eng.nb),
         spec_mode="argmax_ids",
         mamba_state=_mamba(eng),
+        sampling=sampling,
         defer=True,
     )
 
@@ -320,7 +413,7 @@ def _mamba(eng):
     return SimpleNamespace(groups=(group,))
 
 
-def _chained_verify(eng, res, upper_starts, hint, rows=None):
+def _chained_verify(eng, res, upper_starts, hint, rows=None, sampling=None):
     """The runner's chained call: placeholders at the positions of a full acceptance, with ``res`` the predecessor."""
     B, T = eng.B, eng.T
     rows = [s >= 0 for s in upper_starts] if rows is None else rows
@@ -334,6 +427,7 @@ def _chained_verify(eng, res, upper_starts, hint, rows=None):
         page_table=torch.arange(1, B * eng.nb + 1, dtype=torch.int32).reshape(B, eng.nb),
         spec_mode="argmax_ids",
         mamba_state=_mamba(eng),
+        sampling=sampling,
         defer=True,
         predecessor=res.argmax_ids,
     )
@@ -520,3 +614,206 @@ def test_a_request_released_before_its_propose_keeps_the_rope_delta_it_ran_with(
     succ = res1.argmax_ids
     committed1, counts1 = _walk(res1, succ.tokens, succ.num_valid.tolist())
     _propose(eng, succ.p0.where(succ.active, torch.tensor(-1)).tolist(), committed1, counts1)
+
+
+# ----------------------------------------------------------------------------------------- sampled rows
+
+
+def _sampling():
+    """Row 0 seeded, row 1 unseeded, row 2 padding, row 3 greedy (vllm-tt-plugin's per-row sampling_params)."""
+    return SimpleNamespace(
+        temperature=[0.8, 1.0, 0.0, 0.0], top_k=[5, 20, 1, 1], top_p=[1.0, 0.9, 1.0, 1.0], seed=[77, None, None, None]
+    )
+
+
+def test_a_chained_plan_stages_the_seeds_of_every_position_a_count_gives(expect_error):
+    """Whichever count c the predecessor commits, the candidates the chain program picks for a seeded user are the
+    seeds sampling_plan stages for an unchained verify whose column 0 sits at p0_prev + c, and so for column 0 the seed
+    of a draftless narrow decode at that position (Qwen36MTPContractForCausalLM._decode_narrow plans the same way);
+    an unseeded user's are fresh and the same at every count; a user that draws nothing seeds no core."""
+    T = 4
+    sp = SimpleNamespace(
+        temperature=[0.8, 1.0, 0.0, 0.7, 1.0],
+        top_k=[5, 20, 1, 32, 3],
+        top_p=[1.0, 0.9, 1.0, 1.0, 1.0],
+        seed=[77, None, None, 2**40 + 5, 9],
+    )
+    p0_prev = [100, 200, 300, 4000, -1]
+    B = len(p0_prev)
+    fresh = iter(range(1, 1000))
+    plan, cand = chained_sampling_plan(sp, p0_prev, T, fresh_seed=lambda: next(fresh))
+    assert plan.seeds is None and cand.dtype == torch.float32
+    assert [plan.sampled[u * T] for u in range(B)] == [True, True, False, True, False]
+    assert plan.user_ids == [r if r // T in (0, 1, 3) else NO_CORE for r in range(B * T)]
+    for c in range(1, T + 1):
+        unchained = sampling_plan(sp, [p + c if p >= 0 else -1 for p in p0_prev], T, fresh_seed=lambda: 0)
+        assert (unchained.k, unchained.p, unchained.temp, unchained.sampled) == (
+            plan.k,
+            plan.p,
+            plan.temp,
+            plan.sampled,
+        )
+        for u in (0, 3):
+            assert cand[(c - 1) * B + u].to(torch.int64).tolist() == unchained.seeds[u * T : (u + 1) * T]
+        assert torch.equal(cand[(c - 1) * B + 1], cand[1]), "an unseeded user's fresh seeds do not depend on c"
+        assert not bool(cand[(c - 1) * B + 2].any()) and not bool(cand[(c - 1) * B + 4].any())
+    assert len(set(cand[1].tolist())) == T, "each column of an unseeded user takes its own fresh seed"
+    _, again = chained_sampling_plan(sp, p0_prev, T, fresh_seed=lambda: next(fresh))
+    assert not torch.equal(again[1], cand[1]), "fresh seeds every step"
+    with expect_error(ValueError, "top_k 64 outside"):
+        chained_sampling_plan(SimpleNamespace(temperature=[1.0], top_k=[64], top_p=[1.0], seed=[None]), [10], T)
+
+
+def _sampled_predecessor(eng, state):
+    """A device-sampled one-enqueue predecessor whose drawn rows accept over their draws, not their argmax ids."""
+    B, T = eng.B, eng.T
+    ids0 = torch.tensor([[7, 8, 9, 10], [11, 12, 13, 14], [0, 0, 0, 0], [21, 22, 23, 24]])
+    draws0 = torch.tensor([[40, 41, 42, 43], [50, 51, 52, 53], [0] * T, [0] * T]).reshape(-1)
+    # Row 0's first two drafts equal its draws, row 3's first equals its argmax.
+    tokens0 = torch.tensor([[1, 40, 41, 5], [2, 9, 9, 9], [0, 0, 0, 0], [3, 21, 9, 9]])
+    starts0, nv0 = [100, 200, -1, 300], [3, 3, 0, 2]
+    state["ids"] += [ids0]
+    state["draws"] += [draws0]
+    return _host_verify(eng, tokens0, starts0, nv0, _sampling()), tokens0, starts0, nv0
+
+
+def test_a_chained_verify_draws_its_sampled_rows_at_the_positions_of_the_device_count(chained):
+    """A device-sampled predecessor is chained on the device: its drawn rows continue from the device's count over
+    their draws, the chained verify draws its sampled rows (no seeds staged: the chain program wrote them, and the
+    seeded row's are those an unchained verify at the device's positions stages), and both proposes check the runner's
+    walk of the draws."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    res0, tokens0, starts0, nv0 = _sampled_predecessor(eng, state)
+    assert res0.argmax_ids.plan is not None and res0.argmax_ids.sample_plan is not None
+    drafts = torch.stack(state["drafts"], dim=1)
+    ids1 = torch.tensor([[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [3, 4, 4, 4]])
+    draws1 = torch.zeros(B, T, dtype=torch.int64)
+    draws1[0] = torch.tensor([int(drafts[0, 0]), int(drafts[0, 1]), 7, 7])  # accepts two drafts
+    draws1[1] = torch.tensor([9, 9, 9, 9])  # accepts none
+    state["ids"] += [ids1]
+    state["draws"] += [draws1.reshape(-1)]
+    upper = [s + T if s >= 0 else -1 for s in starts0]
+    res1 = _chained_verify(eng, res0, upper, [K] * B, sampling=_sampling())
+    assert eng.chained_steps == 1 and eng.materialized_steps == 0
+    assert log["traces"] == ["step", "drafter", "chain", "step", "drafter"]
+    overlay = log["overlay"][-1]
+    assert overlay[CH_DRAWN_PREV, :B].tolist() == [1, 1, 0, 0] and overlay[CH_DRAWN, :B].tolist() == [1, 1, 0, 0]
+    plan = log["enqueue"][-1].kw["sample_plan"]
+    assert plan.seeds is None and plan.user_ids == [r if r < 2 * T else NO_CORE for r in range(B * T)]
+    assert log["blocks"].index(("seeds_written",)) > log["blocks"].index(("written",))
+    assert res1.argmax_ids.sample_plan is plan
+    committed0, counts0 = _walk(res0, tokens0, nv0)
+    assert counts0.tolist() == [3, 1, 1, 2], "the walk of the draws, not of the argmax ids"
+    out0 = _propose(eng, starts0, committed0, counts0)
+    assert out0.num_valid.tolist() == [K, K, 0, K]
+    succ = res0.argmax_ids.successor
+    assert succ.p0.tolist() == [103, 201, 0, 302]
+    assert succ.tokens[0].tolist() == [42, *drafts[0].tolist()] and succ.tokens[1].tolist() == [50, *drafts[1].tolist()]
+    seeds = log["chain_seeds"][-1]
+    unchained = sampling_plan(_sampling(), [103, 201, -1, 302], T, fresh_seed=lambda: 0)
+    assert seeds[:T].tolist() == unchained.seeds[:T], "the seeded row draws with the seeds of its positions"
+    assert seeds[T : 2 * T].tolist() == log["seed_cand"][-1][B + 1].to(torch.int64).tolist(), "count 1's fresh seeds"
+    committed1, counts1 = _walk(res1, succ.tokens.clone(), [K, K, 0, K])
+    assert counts1.tolist() == [3, 1, 1, 2]
+    out1 = _propose(eng, succ.p0.where(succ.active, torch.tensor(-1)).tolist(), committed1, counts1)
+    assert out1.num_valid.tolist() == [K, K, 0, K] and not eng._pending and eng.one_enqueue_host_proposes == 0
+
+
+def test_a_commit_of_the_argmax_instead_of_the_draws_raises_at_the_predecessor_propose(chained, expect_error):
+    """The guard covers sampled rows: the chained verify continued the device's count over the draws, so a runner
+    commit that walked the argmax ids of a drawn row raises."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    res0, tokens0, starts0, nv0 = _sampled_predecessor(eng, state)
+    state["ids"] += [torch.zeros(B, T, dtype=torch.int64)]
+    state["draws"] += [torch.zeros(B * T, dtype=torch.int64)]
+    _chained_verify(eng, res0, [s + T if s >= 0 else -1 for s in starts0], [K] * B, sampling=_sampling())
+    argmax = log["enqueue"][0].ids
+    committed, counts = accept_greedy_drafts(
+        mask_unused_columns(argmax, torch.tensor(nv0)).to(torch.int32),
+        tokens0[:, 1:].to(torch.int32),
+        torch.tensor(nv0, dtype=torch.int32),
+    )
+    assert counts.tolist() == [1, 1, 1, 2]
+    with expect_error(ValueError, "the chained verify and the one-enqueue drafts continue the device's commit"):
+        _propose(eng, starts0, committed, counts)
+
+
+def test_a_chained_verify_refuses_a_top_k_the_sampler_cannot_draw(chained, expect_error):
+    """Candidate overflow cannot reach a chained verify: a sampled row with more candidates than the sampler keeps
+    (the plugin samples such a step on the host, max_device_top_k) raises instead of drawing from a cut list, and
+    leaves the predecessor to a chained verify the sampler can draw."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    res0, tokens0, starts0, nv0 = _sampled_predecessor(eng, state)
+    upper = [s + T if s >= 0 else -1 for s in starts0]
+    wide = _sampling()
+    wide.top_k = [64, 20, 1, 1]
+    with expect_error(ValueError, "top_k 64 outside"):
+        _chained_verify(eng, res0, upper, [K] * B, sampling=wide)
+    assert eng.chained_steps == 0 and "chain" not in log["traces"]
+    state["ids"] += [torch.zeros(B, T, dtype=torch.int64)]
+    state["draws"] += [torch.zeros(B * T, dtype=torch.int64)]
+    wide.top_k = [32, 20, 1, 1]
+    _chained_verify(eng, res0, upper, [K] * B, sampling=wide)
+    assert eng.chained_steps == 1 and log["enqueue"][-1].kw["sample_plan"].k[:T] == [32] * T
+
+
+def test_a_sampled_chained_verify_built_from_the_read_predecessor_stages_the_seeds_of_its_positions(chained):
+    """When the chain program cannot build the chained verify (its propose depends on the count), the engine reads
+    the predecessor, walks its draws and verifies on the host path, staging the seeds of the positions it read."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    ids0 = torch.tensor([[7, 8, 9, 10]] * B)
+    draws0 = torch.tensor([[40, 41, 42, 43]] * B).reshape(-1)
+    tokens0 = torch.tensor([[1, 40, 41, 9]] * B)
+    edge = eng.nb * eng.block_size - 9  # every count fits here, but not every count of the chained verify
+    starts0, nv0 = [100, 200, edge, 400], [3] * B
+    sampling = SimpleNamespace(temperature=[0.8] * B, top_k=[5] * B, top_p=[1.0] * B, seed=[77, 78, 79, 80])
+    state["ids"] = [ids0, torch.zeros(B, T, dtype=torch.int64)]
+    state["draws"] = [draws0, torch.zeros(B * T, dtype=torch.int64)]
+    res0 = _host_verify(eng, tokens0, starts0, nv0, sampling)
+    assert res0.argmax_ids.plan is not None
+    _chained_verify(eng, res0, [s + T for s in starts0], [K] * B, sampling=sampling)
+    assert eng.materialized_steps == 1 and "chain" not in log["traces"]
+    e = log["enqueue"][-1]
+    assert e.positions[0] == 103 and e.tokens[0][0] == 42, "count 3 over the draws"
+    want = sampling_plan(sampling, [103, 203, edge + 3, 403], T, fresh_seed=lambda: 0)
+    assert e.kw["sample_plan"].seeds == want.seeds
+
+
+def test_the_chain_program_reads_the_sampler_draws_and_writes_its_seeds_as_one_row(monkeypatch):
+    """ChainInputs over a device sampler (ttnn stand-in): the program reads the sampler's draws, stages the seed
+    candidates only when they change, and copies the picked seeds into the sampler's seeds buffer as the 1-D row
+    manual_seed takes; without a sampler it writes no seeds."""
+    B, K = 8, 3
+    T, R = K + 1, B * (K + 1)
+    copies, reshapes, staged = [], [], []
+    monkeypatch.setattr(ttnn, "copy", lambda src, dst: copies.append(dst))
+    real_reshape = ttnn.reshape
+
+    def reshape(t, shape):
+        reshapes.append(tuple(shape))
+        return real_reshape(t, shape)
+
+    monkeypatch.setattr(ttnn, "reshape", reshape)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, dev: staged.append(dev))
+    sampler = SimpleNamespace(draws=MagicMock(name="draws"), seeds=MagicMock(name="seeds"))
+    step, pack, ctrls = MagicMock(name="step"), MagicMock(name="pack"), [MagicMock(name="ctrl")]
+    step.shape = (9, pack_width(R))
+    ctrls[0].shape = (1, _ctrl_words(B, 6))
+    chain = ChainInputs(None, B, K, ROWS, step, pack, ctrls, 6, sampler=sampler)
+    assert chain.draws is sampler.draws and chain.seeds is sampler.seeds
+    chain.body()
+    assert copies == [step, ctrls[0], sampler.seeds] and reshapes[-1] == (R,)
+    overlay = chain_overlay([0] * B, [1] * B, [0] * B, [0] * B, [0] * B, [0] * B)
+    seed_cand = torch.ones(T * B, T)
+    chain.stage(overlay, torch.zeros(T * B, 12), seed_cand)
+    chain.stage(overlay, torch.zeros(T * B, 12), seed_cand)
+    assert staged == [chain.overlay, chain.cand, chain.seed_cand, chain.overlay]
+    copies.clear()
+    plain = ChainInputs(None, B, K, ROWS, step, pack, ctrls, 6)
+    assert plain.seed_cand is None and plain.draws is None
+    plain.body()
+    assert copies == [step, ctrls[0]]

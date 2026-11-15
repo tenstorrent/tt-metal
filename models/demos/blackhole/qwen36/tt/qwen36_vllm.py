@@ -596,7 +596,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # ordinary decode returns host ids.
         "supports_async_decode": True,
         "supports_async_spec_decode": True,
-        # A greedy verify submitted over the unread one before it builds its rows on the device (spec_chain).
+        # A verify submitted over the unread one before it builds its rows on the device (spec_chain): greedy rows, and
+        # on a device-sampled step sampled rows, which draw with the seeds of the positions the device computes.
         "supports_chained_spec_verify": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": True,
