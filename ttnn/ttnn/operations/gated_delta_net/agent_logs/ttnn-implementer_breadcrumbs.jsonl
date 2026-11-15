@@ -24,3 +24,5 @@
 {"event":"finding","note":"R9: NOC0 read responses to top grid rows wrap the torus; weights barrier 25-31 us vs 4-5 us; swap 3 rows wins, bank-0 hypothesis refuted by ablation","ts":"2026-11-15T06:26:15+00:00"}
 {"event":"test_run","status":"pass","test":"test_gated_delta_net_in_place.py (19), perf+qkcore+bcast (27)","note":"in-place conv_state sync: reader->writer semaphore; without it decode_b16 differs at call 0","ts":"2026-11-15T06:52:05+00:00"}
 {"event":"test_run","status":"pass","test":"golden -k loose or decode 34/34; perf in-place b1 22.0 vs 22.0 us, b16 73.3 vs 73.7 us","ts":"2026-11-15T06:54:36+00:00"}
+{"event":"test_run","refinement":11,"result":"pass","detail":"R-PREP PREP_HEADS auto (h=1 short), cluster placement, send NoC auto, unicast, zw precompute: T=128 92us, T=96 85us, b2t40 127us, 4096 911us; decode guards flat","ts":"2026-11-15T07:26:25+00:00"}
+{"event":"test_run","refinement":11,"result":"pass","detail":"final: T=128 82us, T=64 73, T=96 78, 4096 912us, golden loose+prefill 52/52, regression 36/36, unit 148/148, decode guards flat","ts":"2026-11-15T07:39:14+00:00"}
