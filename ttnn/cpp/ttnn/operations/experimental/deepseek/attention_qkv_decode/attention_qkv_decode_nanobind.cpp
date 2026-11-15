@@ -60,8 +60,16 @@ void bind_attention_qkv_decode(::nanobind::module_& mod) {
             comp_output (Optional[ttnn.Tensor]): ``[1, 1, 1, N_c]`` bfloat16 ROW_MAJOR DRAM, overwritten with
                 ``tokens @ w_comp``. Given with ``w_comp``.
 
+        Several-row blocks (DSpark verify): ``tokens`` a bfloat16 TILE with ``(h, 32)`` tiles, h in 2, 4, 8,
+        HEIGHT_SHARDED one ``[h, K]`` block per core. Each row is its own token (per-row RMSNorms and RoPE), the
+        weights read once. ``cos`` / ``sin`` are then ``(h, 32)`` TILE ``[1, 1, h, rope_dim]`` (row j = block row
+        j's angles); ``kv_cache`` is the staging tensor, 32x32 TILE ``[1, 1, 32, head_dim]``, whose rows 0..h-1
+        receive the kv rows (the ring is not written and ``cache_pos`` is not read); ``comp_output`` is ``(h, 32)``
+        TILE ``[1, 1, h, N_c]``; q is ``[1, 1, heads * h, head_dim]`` head-major (head hd's row j at hd * h + j).
+
         Returns:
-            ttnn.Tensor: q ``[1, 1, heads, head_dim]`` bfloat16 ROW_MAJOR.
+            ttnn.Tensor: q ``[1, 1, heads, head_dim]`` bfloat16 ROW_MAJOR (``[1, 1, heads * h, head_dim]`` for a
+            block).
         )doc",
         &ttnn::experimental::deepseek::attention_qkv_decode,
         nb::arg("tokens"),

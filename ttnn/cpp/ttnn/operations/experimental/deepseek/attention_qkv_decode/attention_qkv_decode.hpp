@@ -42,6 +42,17 @@ namespace ttnn::experimental::deepseek {
 //
 // Returns: q ``[1, 1, heads, head_dim]`` bfloat16 ROW_MAJOR, by default flash_mqa_decode's layout (every
 // head HEIGHT_SHARDED on core (0, 0)).
+//
+// Several-row blocks (DSpark verify): tokens a bfloat16 TILE with (h, 32) tiles, h in {2, 4, 8} (rows padded up
+// to h), HEIGHT_SHARDED one [h, K] block per core ([1, 1, ncores * h, K]). Every row is its own token, as a
+// one-row call computes it, with the weights read once for all rows:
+//   cos, sin:  (h, 32) TILE ``[1, 1, h, rope_dim]`` interleaved, row j the angles of block row j.
+//   kv_cache:  the staging tensor, 32x32 TILE ``[1, 1, 32, head_dim]`` interleaved: kv rows j = 0..h-1 into its
+//              rows 0..h-1 (the rest untouched). The ring is not written; cache_pos is not read.
+//   comp_output: (h, 32) TILE ``[1, 1, h, N_c]`` interleaved, row j = tokens[j] @ w_comp.
+//   q:         ``[1, 1, heads * h, head_dim]`` ROW_MAJOR, head-major: head hd's row j at hd * h + j; by default
+//              all on core (0, 0).
+// The gammas, weights and prefetcher pipes are as for one row.
 Tensor attention_qkv_decode(
     const Tensor& tokens,
     const Tensor& w_q_a,

@@ -59,6 +59,10 @@ const DFBSpecName CACHE_TILE_DFB{"cache_tile"};
 const DFBSpecName POS_DFB{"pos"};
 const DFBSpecName W_COMP_DFB{"w_comp"};
 const DFBSpecName COMP_X_DFB{"comp_x"};
+// Several-row blocks only: the summed squares of the per-row RMSNorm statistic, and the ones it is summed against.
+const DFBSpecName SQ_DFB{"sq"};
+const DFBSpecName ONES_DFB{"ones"};
+const DFBSpecName Q_ROWS_DFB{"q_rows"};
 
 const SemaphoreSpecName ARRIVE_SEM{"arrive"};
 const SemaphoreSpecName READY_SEM{"ready"};
@@ -102,9 +106,14 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
     const uint32_t scaled_q_a_first = q_lora_tiles + head_tiles;
     const uint32_t row_tiles = scaled_q_a_first + q_lora_tiles;
 
-    const tt::tt_metal::Tile row_tile({1, TILE_W});
+    // rows: 1 for one token (1x32 "row tiles"), else a block of that many token rows in (rows x 32) tiles.
+    const uint32_t rows = block_rows(t.tokens);
+    const bool is_block = rows > 1;
+    const tt::tt_metal::Tile row_tile({rows, TILE_W});
     const tt::DataFormat bf16 = tt::DataFormat::Float16_b;
     const uint32_t row_tile_bytes = row_tile.get_tile_size(bf16);
+    // Bytes of one 32-column tile within a ROW_MAJOR row (q's columns).
+    const uint32_t col_tile_bytes = TILE_W * tt::datum_size(bf16);
     const tt::DataFormat w_format = datatype_to_dataformat_converter(t.w_q_a.dtype());
     const tt::DataFormat w_qb_format = datatype_to_dataformat_converter(t.w_q_b.dtype());
     const uint32_t w_tile_bytes = tt::tile_size(w_format);
@@ -199,6 +208,18 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
         // producer addresses the hub's copy with its own write pointer.
         row_dfb(ROW_DFB, row_tiles),
         row_dfb(STAT_DFB, 1),
+    };
+    if (is_block) {
+        // On the q_b and kv cores, like stat.
+        dataflow_buffers.push_back(row_dfb(SQ_DFB, 1));
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = ONES_DFB,
+            .entry_size = tt::tile_size(bf16),
+            .num_entries = 1,
+            .data_format_metadata = bf16,
+        });
+    }
+    for (auto&& dfb : std::initializer_list<DataflowBufferSpec>{
         row_dfb(SCALE_DFB, 1),
         row_dfb(TMP_DFB, rope_tiles),
         // cos tiles then sin tiles, row 0 of the tables' 32x32 tiles as 1x32 tiles.
@@ -232,22 +253,25 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             .data_format_metadata = w_qb_format,
             .advanced_options = {.prefetcher_pipe_relays = qb_pipe_names},
         },
-        DataflowBufferSpec{
-            .unique_id = Q_A_GAMMA_DFB,
-            .entry_size = row_tile_bytes,
-            .num_entries = 1,
-            .data_format_metadata = bf16,
-            .tile_format_metadata = row_tile,
-            .borrowed_from = Q_A_GAMMA,
-        },
-        DataflowBufferSpec{
-            .unique_id = GAMMA_DFB,
-            .entry_size = row_tile_bytes,
-            .num_entries = 1,
-            .data_format_metadata = bf16,
-            .tile_format_metadata = row_tile,
-            .borrowed_from = KV_GAMMA,
-        },
+        // gamma's tile: borrowed in place for one row; for a block, a copy per row the readers build.
+        is_block ? row_dfb(Q_A_GAMMA_DFB, 1)
+                 : DataflowBufferSpec{
+                       .unique_id = Q_A_GAMMA_DFB,
+                       .entry_size = row_tile_bytes,
+                       .num_entries = 1,
+                       .data_format_metadata = bf16,
+                       .tile_format_metadata = row_tile,
+                       .borrowed_from = Q_A_GAMMA,
+                   },
+        is_block ? row_dfb(GAMMA_DFB, 1)
+                 : DataflowBufferSpec{
+                       .unique_id = GAMMA_DFB,
+                       .entry_size = row_tile_bytes,
+                       .num_entries = 1,
+                       .data_format_metadata = bf16,
+                       .tile_format_metadata = row_tile,
+                       .borrowed_from = KV_GAMMA,
+                   },
         DataflowBufferSpec{
             .unique_id = CACHE_TILE_DFB,
             .entry_size = cache_tile_bytes,
@@ -260,7 +284,9 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             .num_entries = 1,
             .data_format_metadata = tt::DataFormat::Int32,
         },
-    };
+        }) {
+        dataflow_buffers.push_back(dfb);
+    }
     if (use_pipes) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = W_KV_DFB,
@@ -268,6 +294,15 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             .num_entries = relay_tiles(WeightRole::KV, w_tile_bytes),
             .data_format_metadata = w_format,
             .advanced_options = {.prefetcher_pipe_relays = kv_pipe_names},
+        });
+    }
+    if (is_block) {
+        // On the q_b cores: a q_b core's block of q, its rows put together for the writes.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = Q_ROWS_DFB,
+            .entry_size = nc_tiles * row_tile_bytes,
+            .num_entries = 1,
+            .data_format_metadata = bf16,
         });
     }
     if (has_comp) {
@@ -291,6 +326,13 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
     ////////////////////////////////////////////////////////////////////////////
     //                      Kernels
     ////////////////////////////////////////////////////////////////////////////
+    // A block's kernels take the BLOCK_ROWS paths, with its row count.
+    auto mark_block = [&](KernelSpec& kernel) {
+        if (is_block) {
+            kernel.compiler_options.defines.emplace("BLOCK_ROWS", "1");
+            kernel.compile_time_args.emplace("rows", rows);
+        }
+    };
     const uint32_t inv_q_lora_bits = std::bit_cast<uint32_t>(1.0f / static_cast<float>(q_lora_tiles * TILE_W));
     const uint32_t inv_head_dim_bits = std::bit_cast<uint32_t>(1.0f / static_cast<float>(head_dim));
     const uint32_t eps_bits = std::bit_cast<uint32_t>(operation_attributes.epsilon);
@@ -339,7 +381,12 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             reader.compiler_options.defines.emplace("IS_KV", "1");
         } else {
             reader.dfb_bindings.push_back(ProducerOf(Q_A_GAMMA_DFB, "q_a_gamma"));
+            if (is_block) {
+                reader.tensor_bindings.push_back(
+                    TensorBinding{.tensor_parameter_name = Q_A_GAMMA, .accessor_name = "q_a_gamma"});
+            }
         }
+        mark_block(reader);
         KernelRunArgs reader_run_args{.kernel = name};
         const auto& cores = is_kv ? kv_cores : qa_cores;
         for (uint32_t i = 0; i < cores.size(); ++i) {
@@ -382,6 +429,11 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             compute.dfb_bindings.push_back(ConsumerOf(GAMMA_DFB, "gamma"));
             compute.dfb_bindings.push_back(ConsumerOf(CS_DFB, "cs"));
             compute.dfb_bindings.push_back(ProducerOf(OUT_DFB, "out"));
+            if (is_block) {
+                compute.dfb_bindings.push_back(ProducerOf(SQ_DFB, "sq"));
+                compute.dfb_bindings.push_back(ConsumerOf(SQ_DFB, "sq"));
+                compute.dfb_bindings.push_back(ConsumerOf(ONES_DFB, "ones"));
+            }
             compute.compile_time_args.emplace("row_tiles", row_tiles);
             compute.compile_time_args.emplace("kv_first_tile", q_lora_tiles);
             compute.compile_time_args.emplace("kv_tiles", head_tiles);
@@ -399,6 +451,7 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             compute.dfb_bindings.push_back(ConsumerOf(MM_OUT_DFB, "mm_out"));
             compute.dfb_bindings.push_back(ConsumerOf(Q_A_GAMMA_DFB, "q_a_gamma"));
         }
+        mark_block(compute);
         kernels.push_back(std::move(compute));
         run_args.kernel_run_args.push_back(std::move(compute_run_args));
     }
@@ -432,6 +485,12 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             .runtime_arg_schema = {.runtime_arg_names = {"kv_index", "do_rope"}},
             .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_1),
         };
+        if (is_block) {
+            writer.dfb_bindings.push_back(ProducerOf(ONES_DFB, "ones"));
+            writer.tensor_bindings.push_back(
+                TensorBinding{.tensor_parameter_name = KV_GAMMA, .accessor_name = "kv_gamma"});
+        }
+        mark_block(writer);
         KernelRunArgs writer_run_args{.kernel = KV_WRITER};
         for (uint32_t i = 0; i < kv_cores.size(); ++i) {
             AddRuntimeArgsForNode(
@@ -494,6 +553,11 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
         qb_compute.dfb_bindings.push_back(ProducerOf(dfb, dfb.get()));
         qb_compute.dfb_bindings.push_back(ConsumerOf(dfb, dfb.get()));
     }
+    if (is_block) {
+        qb_compute.dfb_bindings.push_back(ProducerOf(SQ_DFB, "sq"));
+        qb_compute.dfb_bindings.push_back(ConsumerOf(SQ_DFB, "sq"));
+        qb_compute.dfb_bindings.push_back(ConsumerOf(ONES_DFB, "ones"));
+    }
 
     // ---- q_b writer (RISCV_0, NOC 1): RoPE table rows, (comp: its comp_output tile), q into SDPA's layout ----
     KernelSpec qb_writer{
@@ -513,6 +577,15 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
         .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_1),
     };
 
+    if (is_block) {
+        qb_writer.dfb_bindings.push_back(ProducerOf(ONES_DFB, "ones"));
+        qb_writer.dfb_bindings.push_back(ProducerOf(Q_ROWS_DFB, "q_rows"));
+        qb_writer.dfb_bindings.push_back(ConsumerOf(Q_ROWS_DFB, "q_rows"));
+    }
+    for (KernelSpec* kernel : {&qb_reader, &qb_compute, &qb_writer}) {
+        mark_block(*kernel);
+    }
+
     if (has_comp) {
         for (KernelSpec* kernel : {&qb_reader, &qb_compute, &qb_writer}) {
             kernel->compiler_options.defines.emplace("COMP", "1");
@@ -530,7 +603,9 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
         qb_writer.dfb_bindings.push_back(ConsumerOf(COMP_X_DFB, "comp_x"));
         qb_writer.tensor_bindings.push_back(
             TensorBinding{.tensor_parameter_name = COMP_OUT, .accessor_name = "comp_output"});
-        qb_writer.runtime_arg_schema.runtime_arg_names.push_back("comp_col_bytes");
+        // comp_output: one ROW_MAJOR row, the tile at byte comp_col_bytes; a block's, (rows x 32)-tiled, page
+        // comp_page.
+        qb_writer.runtime_arg_schema.runtime_arg_names.push_back(is_block ? "comp_page" : "comp_col_bytes");
     }
 
     KernelRunArgs qb_reader_run_args{.kernel = QB_READER};
@@ -545,7 +620,7 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             qb_cores[i],
             {{"do_rope", qb_does_rope(i)},
              {"q_row", first_tile / head_tiles},
-             {"q_col_bytes", (first_tile % head_tiles) * row_tile_bytes}});
+             {"q_col_bytes", (first_tile % head_tiles) * col_tile_bytes}});
         if (has_comp) {
             const uint32_t is_comp = static_cast<uint32_t>(is_comp_core[i]);
             AddRuntimeArgsForNode(
@@ -556,7 +631,8 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             AddRuntimeArgsForNode(
                 qb_writer_run_args.runtime_arg_values,
                 qb_cores[i],
-                {{"is_comp", is_comp}, {"comp_col_bytes", comp_slot[i] * row_tile_bytes}});
+                {{"is_comp", is_comp},
+                 {is_block ? "comp_page" : "comp_col_bytes", is_block ? comp_slot[i] : comp_slot[i] * row_tile_bytes}});
         }
     }
     for (auto* kernel : {&qb_reader, &qb_compute, &qb_writer}) {

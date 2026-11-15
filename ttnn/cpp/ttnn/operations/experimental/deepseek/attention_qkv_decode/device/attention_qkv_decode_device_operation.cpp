@@ -84,15 +84,24 @@ void AttentionQkvDecodeDeviceOperation::validate_on_program_cache_miss(
         grid.y);
 
     const auto& tokens = t.tokens;
+    const uint32_t rows = block_rows(tokens);
     TT_FATAL(
-        tokens.layout() == Layout::ROW_MAJOR && tokens.dtype() == DataType::BFLOAT16 &&
+        tokens.dtype() == DataType::BFLOAT16 &&
             tokens.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-        "attention_qkv_decode: tokens must be the ROW_MAJOR bfloat16 HEIGHT_SHARDED replica of all_gather_for_matmul");
+        "attention_qkv_decode: tokens must be a bfloat16 HEIGHT_SHARDED replica");
+    TT_FATAL(
+        tokens.layout() == Layout::ROW_MAJOR || ((rows == 2 || rows == 4 || rows == 8) &&
+                                                 tokens.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH),
+        "attention_qkv_decode: tokens must be the ROW_MAJOR one-row replica, or a block TILE with (h, 32) tiles, h in "
+        "2, 4, 8; got tile {}x{}",
+        tokens.tensor_spec().tile().get_height(),
+        tokens.tensor_spec().tile().get_width());
     const auto& tokens_shard = tokens.shard_spec().value();
     const uint32_t k = tokens.logical_shape()[-1];
     TT_FATAL(
-        tokens_shard.shape[0] == 1 && tokens_shard.shape[1] == k && k % tt::constants::TILE_WIDTH == 0,
-        "attention_qkv_decode: tokens must hold one [1, K] row per core, got shard {}",
+        tokens_shard.shape[0] == rows && tokens_shard.shape[1] == k && k % tt::constants::TILE_WIDTH == 0,
+        "attention_qkv_decode: tokens must hold one [{}, K] block per core, got shard {}",
+        rows,
         tokens_shard.shape);
     const CoreRangeSet proj_cores(std::vector<CoreRange>{
         CoreRange({0, kQbCoresY}, {kRowCoresX - 1, kGridY - 1}), CoreRange({kRowCoresX, 0}, {kGridX - 1, kGridY - 1})});
@@ -153,13 +162,26 @@ void AttentionQkvDecodeDeviceOperation::validate_on_program_cache_miss(
             "attention_qkv_decode: w_comp's {} columns must be at most {} tiles, one per q_b core",
             n_comp,
             kNumQbCores);
-        TT_FATAL(
-            comp_output.layout() == Layout::ROW_MAJOR && comp_output.dtype() == DataType::BFLOAT16 &&
-                !comp_output.is_sharded() && comp_output.buffer()->buffer_type() == BufferType::DRAM &&
-                comp_output.logical_shape()[-1] == n_comp && comp_output.logical_shape().volume() == n_comp,
-            "attention_qkv_decode: comp_output must be a DRAM-interleaved ROW_MAJOR bfloat16 [1, 1, 1, {}], got {}",
-            n_comp,
-            comp_output.logical_shape());
+        if (rows == 1) {
+            TT_FATAL(
+                comp_output.layout() == Layout::ROW_MAJOR && comp_output.dtype() == DataType::BFLOAT16 &&
+                    !comp_output.is_sharded() && comp_output.buffer()->buffer_type() == BufferType::DRAM &&
+                    comp_output.logical_shape()[-1] == n_comp && comp_output.logical_shape().volume() == n_comp,
+                "attention_qkv_decode: comp_output must be a DRAM-interleaved ROW_MAJOR bfloat16 [1, 1, 1, {}], got {}",
+                n_comp,
+                comp_output.logical_shape());
+        } else {
+            TT_FATAL(
+                comp_output.layout() == Layout::TILE && comp_output.dtype() == DataType::BFLOAT16 &&
+                    comp_output.tensor_spec().tile().get_height() == rows && !comp_output.is_sharded() &&
+                    comp_output.logical_shape()[-1] == n_comp && comp_output.padded_shape().volume() == rows * n_comp,
+                "attention_qkv_decode: comp_output must be an interleaved bfloat16 ({}, 32) TILE [1, 1, {}, {}], got "
+                "{}",
+                rows,
+                rows,
+                n_comp,
+                comp_output.logical_shape());
+        }
         TT_FATAL(
             tokens_shard.grid.contains(weight_role_cores(WeightRole::QB)),
             "attention_qkv_decode: with w_comp the tokens replica must also cover the q_b cores {}, got {}",
@@ -213,11 +235,23 @@ void AttentionQkvDecodeDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t rope_dim = t.cos.logical_shape()[-1];
     for (const Tensor* x : {&t.cos, &t.sin}) {
-        TT_FATAL(
-            x->layout() == Layout::TILE && x->dtype() == DataType::BFLOAT16 &&
-                x->tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT && !x->is_sharded() &&
-                x->logical_shape()[-1] == rope_dim && x->logical_shape()[-2] == 1,
-            "attention_qkv_decode: cos / sin must be interleaved bfloat16 32x32 TILE [1, 1, 1, rope_dim]");
+        if (rows == 1) {
+            TT_FATAL(
+                x->layout() == Layout::TILE && x->dtype() == DataType::BFLOAT16 &&
+                    x->tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT && !x->is_sharded() &&
+                    x->logical_shape()[-1] == rope_dim && x->logical_shape()[-2] == 1,
+                "attention_qkv_decode: cos / sin must be interleaved bfloat16 32x32 TILE [1, 1, 1, rope_dim]");
+        } else {
+            TT_FATAL(
+                x->layout() == Layout::TILE && x->dtype() == DataType::BFLOAT16 &&
+                    x->tensor_spec().tile().get_height() == rows && !x->is_sharded() &&
+                    x->logical_shape()[-1] == rope_dim && x->padded_shape().volume() == rows * rope_dim,
+                "attention_qkv_decode: with a {}-row block, cos / sin must be interleaved bfloat16 ({}, 32) TILE "
+                "[1, 1, {}, rope_dim], row r the angles of block row r",
+                rows,
+                rows,
+                rows);
+        }
     }
     TT_FATAL(
         rope_dim == 2 * tt::constants::TILE_WIDTH && nc_tiles >= rope_dim / tt::constants::TILE_WIDTH,
@@ -230,6 +264,10 @@ void AttentionQkvDecodeDeviceOperation::validate_on_program_cache_miss(
             cache.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
             cache.logical_shape()[-1] == head_dim,
         "attention_qkv_decode: kv_cache must be an interleaved bfloat16 32x32 TILE [.., rows, {}]",
+        head_dim);
+    TT_FATAL(
+        rows == 1 || cache.padded_shape()[-2] >= tt::constants::TILE_HEIGHT,
+        "attention_qkv_decode: with a block, kv_cache is the staging tensor [1, 1, 32, {}] (rows 0..h-1 written)",
         head_dim);
     TT_FATAL(
         t.cache_pos.dtype() == DataType::INT32 && t.cache_pos.layout() == Layout::ROW_MAJOR &&
@@ -247,7 +285,7 @@ AttentionQkvDecodeDeviceOperation::spec_return_value_t AttentionQkvDecodeDeviceO
     const uint32_t head_dim = t.w_kv.logical_shape()[-1];
     const uint32_t heads = t.w_q_b.logical_shape()[-1] / head_dim;
     return TensorSpec(
-        ttnn::Shape({1, 1, heads, head_dim}),
+        ttnn::Shape({1, 1, heads * block_rows(t.tokens), head_dim}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
@@ -281,12 +319,14 @@ ttnn::Tensor attention_qkv_decode(
     using namespace ttnn::operations::experimental::deepseek::attention_qkv_decode;
     const uint32_t head_dim = w_kv.logical_shape()[-1];
     const uint32_t heads = w_q_b.logical_shape()[-1] / head_dim;
-    // flash_mqa_decode's own layout for its q: every head on the first core.
+    // flash_mqa_decode's own layout for its q: every head (every head's rows, head-major) on the first core.
     const tt::tt_metal::MemoryConfig default_mem(
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         tt::tt_metal::BufferType::L1,
         tt::tt_metal::ShardSpec(
-            CoreRangeSet(CoreRange({0, 0}, {0, 0})), {heads, head_dim}, tt::tt_metal::ShardOrientation::ROW_MAJOR));
+            CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+            {heads * block_rows(tokens), head_dim},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR));
     auto attrs = OperationType::operation_attributes_t{
         .epsilon = epsilon,
         .output_mem_config = memory_config.value_or(default_mem),
