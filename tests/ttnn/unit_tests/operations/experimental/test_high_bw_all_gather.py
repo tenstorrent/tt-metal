@@ -1116,6 +1116,8 @@ def _run_high_bw_all_gather_ci_perf(
     arms walk the same cases against the same floors, and each pairs its measurement with a compact
     correctness run through the SAME invocation, so a bandwidth number never stands alone on a
     functionally wrong gather.
+
+    `min_bandwidth_gbps` is one floor, a floor per global row count, or per global row count a floor per case name.
     """
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("high_bw_all_gather CI performance coverage requires the realtime device profiler")
@@ -1128,6 +1130,11 @@ def _run_high_bw_all_gather_ci_perf(
             min_bandwidth_gbps[global_rows] if isinstance(min_bandwidth_gbps, dict) else min_bandwidth_gbps
         )
         for case_name, dtype, width, layout, expected_page_size in _CI_PERF_TEST_CASES:
+            case_bandwidth_gbps = (
+                required_bandwidth_gbps[case_name]
+                if isinstance(required_bandwidth_gbps, dict)
+                else required_bandwidth_gbps
+            )
             print(f"HIGH_BW_ALL_GATHER_CI_PERF invocation={invocation} global_rows={global_rows} case={case_name}")
             # Replace the large BF16 measurement with the serving-shaped indexed-cache path. Its
             # 512K active payload keeps the existing ring floor meaningful while the 1M allocation
@@ -1153,7 +1160,7 @@ def _run_high_bw_all_gather_ci_perf(
                 width,
                 layout,
                 expected_page_size,
-                required_bandwidth_gbps,
+                case_bandwidth_gbps,
                 cluster_axis,
                 rows_per_device=rows_per_device,
                 capacity_rows_per_device=capacity_rows_per_device,
@@ -1242,10 +1249,19 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
 
 # A 4x4 submesh of the Galaxy is a cylinder: axis 1 (four columns) keeps its wrap, axis 0 (four of eight rows) is a
 # line. The 16-rank full-mesh gather runs over three Hamiltonian cycles (2 links per hop, one per cycle on a hop two
-# cycles share). Same global volumes as the 32-rank gate (both divide by 16). No floors yet: the test reports time and
-# bandwidth. Expected from link volume: the cycles carry 5 shards on the busiest hop against the 2-link snake's 7.5
-# (1.5x).
+# cycles share). Same global volumes as the 32-rank gate (both divide by 16). Expected from link volume: the cycles
+# carry 5 shards on the busiest hop against the 2-link snake's 7.5 (1.5x).
 _GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
+
+# Floors per case, about 5% under the lowest of repeated runs on 110-A Galaxies (FABRIC_2D_TORUS_XY, 2 links). The
+# short case differs by dtype (96-116 GB/s), so one floor per row count would either fail its fp8 and bfloat8 cases or
+# leave bf16 unguarded. Override every floor with TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS when recalibrating.
+_GALAXY_CYLINDER_CI_MIN_BANDWIDTH_GBPS = {
+    55_040: {"bf16_row_major": 107.0, "fp8_row_major": 95.0, "bf16_tiled": 108.0, "bfloat8_tiled": 91.0},
+    512 * 1024: {"bf16_row_major": 132.0, "fp8_row_major": 130.0, "bf16_tiled": 132.0, "bfloat8_tiled": 129.0},
+}
+if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS") is not None:
+    _GALAXY_CYLINDER_CI_MIN_BANDWIDTH_GBPS = float(os.environ["TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS"])
 
 
 @run_for_blackhole("Blackhole Galaxy 4x4 cylinder perf requires Blackhole")
@@ -1255,13 +1271,13 @@ _GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device):
-    """Time and bandwidth of the 16-rank full-mesh gather on a 4x4 cylinder, each paired with a correctness run."""
+    """Bandwidth floors of the 16-rank full-mesh gather on a 4x4 cylinder, each paired with a correctness run."""
     cylinder = mesh_device.create_submesh(ttnn.MeshShape(4, 4))
     assert cylinder.get_num_devices() == 16
     _run_high_bw_all_gather_ci_perf(
         cylinder,
         cluster_axis=None,
-        min_bandwidth_gbps=0.0,
+        min_bandwidth_gbps=_GALAXY_CYLINDER_CI_MIN_BANDWIDTH_GBPS,
         global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
         num_links=2,
     )
