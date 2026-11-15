@@ -10,6 +10,7 @@ returns the canonical order and back. No device is involved.
 
 import numpy as np
 import pytest
+from dcp_oracle import canonical_of, device_global, per_shard_fused, world
 
 from ttml.distributed_checkpointing._boxes import Box, boxes_tile
 from ttml.distributed_checkpointing._errors import LayoutError
@@ -24,57 +25,26 @@ from ttml.distributed_checkpointing._layouts import (
     padded_extent,
     transform_from_json,
 )
-from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
+from ttml.distributed_checkpointing._topology import Placement
 
 
-def _label(placements, dist_shape) -> Label:
-    return Label(tuple(placements), tuple(dist_shape), tuple(dist_coords(dist_shape)))
-
-
-TP4 = _label([Placement.shard(2)], (4,))
-DP2_TP1 = _label([Placement.replicate(), Placement.shard(2)], (2, 1))  # a TP layer's label on a TP-1 axis
-FSDP2_TP4_COLS = _label([Placement.shard(3), Placement.shard(2)], (2, 4))  # FSDP's default dim on a TP weight
-
-
-def _per_shard_fused(canonical: np.ndarray, sizes, shards: int, dim: int) -> np.ndarray:
-    """The device-layout array a model with ``shards`` TP shards holds for a weight fused from ``sizes`` segments:
-    shard ``j`` holds piece ``j`` of every segment, in segment order, the way ColumnParallelLinear lays it out."""
-    starts = np.cumsum((0,) + tuple(sizes[:-1]))
-    pieces = []
-    for j in range(shards):
-        for g, size in enumerate(sizes):
-            n = size // shards
-            lo = starts[g] + j * n
-            pieces.append(np.take(canonical, range(lo, lo + n), axis=dim))
-    return np.concatenate(pieces, axis=dim)
-
-
-def _to_canonical(transform, device: np.ndarray, canonical_shape) -> np.ndarray:
-    out = np.full(canonical_shape, np.nan, dtype=device.dtype)
-    for dev, can in transform.to_canonical(Box.whole(device.shape)):
-        out[can.slices()] = device[dev.slices()]
-    return out
-
-
-def _from_canonical(transform, canonical: np.ndarray, device_shape) -> np.ndarray:
-    out = np.full(device_shape, np.nan, dtype=canonical.dtype)
-    for can, dev in transform.from_canonical(Box.whole(canonical.shape)):
-        out[dev.slices()] = canonical[can.slices()]
-    return out
+TP4 = world([Placement.shard(2)], (4,))
+DP2_TP1 = world([Placement.replicate(), Placement.shard(2)], (2, 1))  # a TP layer's label on a TP-1 axis
+FSDP2_TP4_COLS = world([Placement.shard(3), Placement.shard(2)], (2, 4))  # FSDP's default dim on a TP weight
 
 
 @pytest.mark.parametrize("sizes, shards", [((4, 2, 2), 2), ((128, 64, 64), 8), ((96, 96), 4), ((8, 8), 1)])
 def test_fused_segments_matches_the_per_shard_layout(sizes, shards):
     rows = sum(sizes)
     canonical = np.arange(rows * 3, dtype=np.float32).reshape(1, 1, rows, 3)
-    device = _per_shard_fused(canonical, sizes, shards, dim=2)
+    device = per_shard_fused(canonical, sizes, shards, dim=2)
 
     transform = fused_segments(2, sizes, shards)
 
     if shards == 1:
         assert isinstance(transform, Identity)
-    np.testing.assert_array_equal(_to_canonical(transform, device, canonical.shape), canonical)
-    np.testing.assert_array_equal(_from_canonical(transform, canonical, device.shape), device)
+    np.testing.assert_array_equal(canonical_of(device, transform, canonical.shape), canonical)
+    np.testing.assert_array_equal(device_global(canonical, transform, device.shape, np.nan), device)
 
 
 def test_fused_segments_refuses_sizes_that_do_not_split(expect_error):
@@ -133,10 +103,10 @@ def test_compose_pad_then_segments_round_trips(expect_error):
     assert isinstance(transform, Compose)
     canonical = np.arange(24 * 16, dtype=np.float32).reshape(1, 1, 24, 16)
     device = np.full((1, 1, 32, 16), -1.0, dtype=np.float32)
-    device[:, :, :24, :] = _per_shard_fused(canonical, (8, 8), 2, dim=3)
+    device[:, :, :24, :] = per_shard_fused(canonical, (8, 8), 2, dim=3)
 
-    np.testing.assert_array_equal(_to_canonical(transform, device, canonical.shape), canonical)
-    back = _from_canonical(transform, canonical, device.shape)
+    np.testing.assert_array_equal(canonical_of(device, transform, canonical.shape), canonical)
+    back = device_global(canonical, transform, device.shape, np.nan)
     np.testing.assert_array_equal(back[:, :, :24, :], device[:, :, :24, :])
     assert np.isnan(back[:, :, 24:, :]).all(), "padding rows have no canonical source"
     assert transform.padding_boxes((1, 1, 32, 16)) == [Box((0, 0, 24, 0), (1, 1, 8, 16))]
@@ -183,7 +153,7 @@ def test_declared_dims_count_from_the_end_and_are_range_checked(expect_error):
     # Labels hold non-negative dims; a declared -2 is dim 2, so it must get dim 2's interleave and padding.
     assert declared_transform((1, 1, 64, 32), TP4, fused=(-2, (32, 16, 16))) == fused_segments(2, (32, 16, 16), 4)
     assert declared_transform((1, 1, 192, 64), TP4, logical_extent=(-2, 130)) == Pad(2, 130, 192)
-    fsdp2_rows_tp4 = _label([Placement.shard(2), Placement.shard(2)], (2, 4))
+    fsdp2_rows_tp4 = world([Placement.shard(2), Placement.shard(2)], (2, 4))
     with expect_error(LayoutError, "2 mesh axes shard"):
         declared_transform((1, 1, 64, 32), fsdp2_rows_tp4, fused=(-2, (32, 16, 16)))
     with expect_error(LayoutError, "both declared on dim 2"):
@@ -207,9 +177,9 @@ def test_declared_transform_refuses_layouts_it_cannot_describe(expect_error):
         declared_transform((1, 1, 64, 32), TP4, fused=(2, (32, 16, 16)), logical_extent=(2, 60))
     # FSDP sharding the fused rows next to TP, which would make the label's count describe an interleave the weight
     # does not have: at TP 1 (fused_segments would claim 2 shards where the rows are canonical) and at TP 4.
-    fsdp2_rows_tp1 = _label([Placement.shard(2), Placement.shard(2)], (2, 1))
+    fsdp2_rows_tp1 = world([Placement.shard(2), Placement.shard(2)], (2, 1))
     with expect_error(LayoutError, "model/qkv: fused_segments on dim 2, which 2 mesh axes shard"):
         declared_transform((1, 1, 64, 32), fsdp2_rows_tp1, fused=(2, (32, 16, 16)), key="model/qkv")
-    fsdp2_rows_tp4 = _label([Placement.shard(2), Placement.shard(2)], (2, 4))
+    fsdp2_rows_tp4 = world([Placement.shard(2), Placement.shard(2)], (2, 4))
     with expect_error(LayoutError, "2 mesh axes shard"):
         declared_transform((1, 1, 64, 32), fsdp2_rows_tp4, fused=(2, (32, 16, 16)))

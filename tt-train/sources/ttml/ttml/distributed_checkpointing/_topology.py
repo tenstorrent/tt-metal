@@ -28,7 +28,7 @@ class Placement:
     dim: int | None = None
 
     def __post_init__(self) -> None:
-        # TODO: #62347 - accept a "partial" kind here once tensor placements carry a partial-sum label.
+        # TODO(awliu-TT): #62347 - accept a "partial" kind here once tensor placements carry a partial-sum label.
         if self.kind not in ("replicate", "shard"):
             raise TopologyError(f"unknown placement kind {self.kind!r}")
         if (self.kind == "shard") != (self.dim is not None):

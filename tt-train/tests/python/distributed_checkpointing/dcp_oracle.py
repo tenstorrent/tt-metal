@@ -39,6 +39,20 @@ def world(placements, dist_shape, mesh_shape=None) -> Label:
     return Label(tuple(placements), tuple(dist_shape), tuple(dist_coords(mesh_shape or dist_shape)))
 
 
+def per_shard_fused(canonical: np.ndarray, sizes, shards: int, dim: int) -> np.ndarray:
+    """The device-layout array a model with ``shards`` TP shards holds for a weight fused from ``sizes`` segments:
+    shard ``j`` holds piece ``j`` of every segment, in segment order, the way ColumnParallelLinear lays it out. Built
+    by slicing, independently of ``fused_segments``."""
+    starts = np.cumsum((0,) + tuple(sizes[:-1]))
+    pieces = []
+    for j in range(shards):
+        for g, size in enumerate(sizes):
+            n = size // shards
+            lo = starts[g] + j * n
+            pieces.append(np.take(canonical, range(lo, lo + n), axis=dim))
+    return np.concatenate(pieces, axis=dim)
+
+
 def arange(shape) -> np.ndarray:
     return np.arange(int(np.prod(shape)), dtype=np.float32).reshape(shape)
 
@@ -52,7 +66,9 @@ def device_global(canonical: np.ndarray, transform, global_shape, pad_value: flo
 
 
 def canonical_of(device: np.ndarray, transform, canonical_shape) -> np.ndarray:
-    out = np.zeros(canonical_shape, dtype=device.dtype)
+    """The canonical array ``device`` holds under ``transform``; an element no piece writes stays NaN, so a transform
+    that misses one cannot pass a comparison."""
+    out = np.full(canonical_shape, np.nan, dtype=device.dtype)
     for dev, can in transform.to_canonical(Box.whole(device.shape)):
         out[can.slices()] = device[dev.slices()]
     return out
