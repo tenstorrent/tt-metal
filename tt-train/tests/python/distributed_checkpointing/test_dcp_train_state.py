@@ -19,7 +19,7 @@ import torch
 from dcp_oracle import Loader, advance_generators
 
 import ttml
-from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler
+from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler, StepScheduler
 from ttml.distributed_checkpointing._errors import CheckpointError, VersionError
 from ttml.distributed_checkpointing._index import read_header_json, write_header
 from ttml.distributed_checkpointing._train_state import (
@@ -34,21 +34,11 @@ from ttml.distributed_checkpointing._train_state import (
 )
 
 
-class _Opt:
-    """The three LR accessors a scheduler needs, with no device behind them."""
-
-    def __init__(self, lrs):
-        self._initial = list(lrs)
-        self._lrs = list(lrs)
-
-    def get_initial_group_lrs(self):
-        return list(self._initial)
-
-    def get_group_lrs(self):
-        return list(self._lrs)
-
-    def set_group_lrs(self, lrs):
-        self._lrs = list(lrs)
+def _adamw(lrs):
+    """A device-free AdamW with one param group per LR and no parameters, as test_schedulers.py builds it."""
+    cfg = ttml.optimizers.AdamWConfig.make(lr=lrs[0], beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
+    groups = [{"params": [], "lr": lr} for lr in lrs[1:]]
+    return ttml.optimizers.AdamW(ttml.NamedParameters(), cfg, param_groups=groups)
 
 
 def test_every_generator_comes_back_exactly():
@@ -132,7 +122,7 @@ def test_a_rank_restores_only_its_own_entry():
 
 
 def test_scheduler_and_dataloader_round_trip_through_the_header(tmp_path):
-    opt = _Opt([1e-3, 2e-3])
+    opt = _adamw([1e-3, 2e-3])
     sched = CosineAnnealingScheduler(opt, T_max=10)
     loader = Loader()
     for _ in range(3):
@@ -144,7 +134,7 @@ def test_scheduler_and_dataloader_round_trip_through_the_header(tmp_path):
     back = read_header_json(str(tmp_path))[TRAIN_STATE_KEY]
     assert back == state
 
-    opt2 = _Opt([1e-3, 2e-3])
+    opt2 = _adamw([1e-3, 2e-3])
     sched2 = CosineAnnealingScheduler(opt2, T_max=10)
     loader2 = Loader()
     assert missing_train_state(back, scheduler=sched2, dataloader=loader2, rng=True) == ["train_state/rng"]
@@ -167,13 +157,13 @@ def test_a_warmup_then_cosine_schedule_resumes_where_it_stopped(steps):
         cosine = CosineAnnealingScheduler(opt, T_max=10)
         return SequentialScheduler(opt, [warmup, cosine], [4, 10])
 
-    opt = _Opt([1e-3, 2e-3])
+    opt = _adamw([1e-3, 2e-3])
     sched = schedule(opt)
     for _ in range(steps):
         sched.step()
     stored = json.loads(json.dumps(capture_train_state(scheduler=sched, rng=False)))
 
-    opt2 = _Opt([1e-3, 2e-3])
+    opt2 = _adamw([1e-3, 2e-3])
     sched2 = schedule(opt2)
     assert restore_train_state(stored, scheduler=sched2) == ["scheduler"]
     assert sched2.get_last_lrs() == sched.get_last_lrs() and opt2.get_group_lrs() == opt.get_group_lrs()
@@ -192,19 +182,21 @@ def test_state_that_is_not_json_is_refused(expect_error):
         capture_train_state(dataloader=_Bad(), rng=False)
 
 
-class _RefusingScheduler:
-    def get_state_dict(self) -> dict:
-        return {}
-
-    def set_state_dict(self, state: dict) -> None:
-        raise KeyError("m_step_size")  # what a StepScheduler raises for a cosine scheduler's state
+def _cosine_state() -> dict:
+    sched = CosineAnnealingScheduler(_adamw([1e-3]), T_max=4)
+    sched.step()
+    return json.loads(json.dumps(sched.get_state_dict()))
 
 
 def test_a_refused_state_stops_the_restore_before_anything_else_moves(expect_error):
+    # A StepScheduler given a cosine scheduler's state: the run was configured differently.
     loader = Loader()
-    stored = {"scheduler": {"m_last_step": 3}, "dataloader": {"position": 5}}
-    with expect_error(CheckpointError, "the live scheduler refused the stored scheduler state"):
-        restore_train_state(stored, scheduler=_RefusingScheduler(), dataloader=loader)
+    stepper = StepScheduler(_adamw([1e-3]), step_size=2)
+    before = stepper.get_state_dict()
+    stored = {"scheduler": _cosine_state(), "dataloader": {"position": 5}}
+    with expect_error(CheckpointError, r"the live scheduler refused the stored scheduler state \(KeyError"):
+        restore_train_state(stored, scheduler=stepper, dataloader=loader)
+    assert stepper.get_state_dict() == before, "a refusing scheduler keeps its state"
     assert loader.position == 0, "the scheduler is restored first, so the loader has not moved"
 
 
@@ -212,7 +204,7 @@ def test_a_component_that_cannot_take_a_state_is_refused_before_anything_is_plac
     stored = {"scheduler": {"m_last_step": 3}, "dataloader": {"position": 5}}
     with expect_error(TypeError, r"the dataloader passed \(list_iterator\) has no set_state_dict"):
         check_train_state(stored, dataloader=iter([]))
-    check_train_state(stored, scheduler=_RefusingScheduler(), dataloader=Loader())  # both can take a state
+    check_train_state(stored, scheduler=StepScheduler(_adamw([1e-3]), step_size=2), dataloader=Loader())
     check_train_state({}, dataloader=iter([]))  # nothing stored for it: nothing to restore it with
 
 
