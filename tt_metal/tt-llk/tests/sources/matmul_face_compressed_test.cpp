@@ -15,6 +15,8 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+constexpr std::uint32_t num_calls = CUSTOM_MM_NUM_CALLS;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_face_compressed_mm.h"
@@ -40,7 +42,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_AB_face_compressed_mm_init_<false>(params.in0_face_r_dim);
 
-    _llk_unpack_AB_face_compressed_mm_<CT_DIM, true, true>(L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM);
+    for (std::uint32_t call = 0; call < num_calls; ++call)
+    {
+        _llk_unpack_AB_face_compressed_mm_<CT_DIM, true, true>(L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM);
+    }
 
     _llk_unpack_AB_face_compressed_mm_uninit_(params.num_faces_B);
 }
@@ -65,7 +70,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    _llk_math_face_compressed_mm_<CT_DIM, true>(params.buffer_C[0], params.in0_face_r_dim, 0, KT_DIM);
+    for (std::uint32_t call = 0; call < num_calls; ++call)
+    {
+        _llk_math_face_compressed_mm_<CT_DIM, true>(params.buffer_C[0], params.in0_face_r_dim, 0, KT_DIM);
+    }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

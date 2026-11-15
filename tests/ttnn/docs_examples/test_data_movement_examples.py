@@ -107,9 +107,7 @@ def test_repeat_interleave(device):
 
     # Repeat interleave the tensor
     repeated_tensor = ttnn.repeat_interleave(input_tensor, repeats=2, dim=0)
-    logger.info(
-        "Repeat Interleave Tensor Shape:", repeated_tensor.shape
-    )  # Repeat Interleave Tensor Shape: Shape([20, 10])
+    logger.info(f"Repeat Interleave Tensor Shape: {repeated_tensor.shape}")  # Shape([20, 10])
 
 
 def test_slice(device):

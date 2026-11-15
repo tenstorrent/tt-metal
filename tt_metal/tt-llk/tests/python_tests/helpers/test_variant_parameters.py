@@ -715,6 +715,41 @@ class CUSTOM_MM_CALLS(TemplateParameter):
         )
 
 
+@dataclass(init=False)
+class COMPRESSED_META(TemplateParameter):
+    """Perf report label plus packed metadata that contributes to the build identity."""
+
+    compression_case: str
+
+    def __init__(self, compression_case: str, packed_meta: bytes):
+        assert (
+            compression_case
+        ), "a perf compressed-metadata stream needs a stable case label"
+        assert (
+            len(packed_meta) % 4 == 0 and packed_meta
+        ), "compressed metadata must contain complete u32 words"
+        self.compression_case = compression_case
+        self._words = tuple(
+            int.from_bytes(packed_meta[i : i + 4], "little")
+            for i in range(0, len(packed_meta), 4)
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(compression_case={self.compression_case!r}, "
+            f"packed_words={self._words!r})"
+        )
+
+    def convert_to_cpp(self) -> str:
+        words = ", ".join(f"0x{word:08x}u" for word in self._words)
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t PERF_COMPRESSED_META_WORDS[] = {{{words}}};",
+                f"constexpr std::uint32_t PERF_COMPRESSED_META_WORD_COUNT = {len(self._words)}u;",
+            ]
+        )
+
+
 @dataclass
 class SAMPLING_PRGM0_HAZARD(TemplateParameter):
     """Cross-op vConstFloatPrgm0 hazard switches for ``sfpu_sampling_test.cpp``.

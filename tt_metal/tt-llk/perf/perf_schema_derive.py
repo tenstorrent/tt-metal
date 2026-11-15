@@ -350,6 +350,15 @@ def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
     """
     fields = set()
     local_helpers = _local_returned_param_calls(tree, specs)
+    default_params = {}
+    for fn in (node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)):
+        positional = [*fn.args.posonlyargs, *fn.args.args]
+        for arg, default in zip(positional[-len(fn.args.defaults) :], fn.args.defaults):
+            if isinstance(default, ast.Call) and _call_name(default) in specs:
+                default_params.setdefault(arg.arg, []).append(default)
+        for arg, default in zip(fn.args.kwonlyargs, fn.args.kw_defaults):
+            if isinstance(default, ast.Call) and _call_name(default) in specs:
+                default_params.setdefault(arg.arg, []).append(default)
 
     def add_list(list_node):
         for elt in list_node.elts:
@@ -366,6 +375,10 @@ def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
         if isinstance(expr, ast.IfExp):
             add_expr(expr.body)
             add_expr(expr.orelse)
+            return
+        if isinstance(expr, ast.Name) and expr.id in default_params:
+            for default in default_params[expr.id]:
+                fields.update(emitted_fields(default, specs, helpers, post_init))
             return
         if not isinstance(expr, ast.Call):
             return
