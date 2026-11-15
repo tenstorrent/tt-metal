@@ -130,13 +130,32 @@ void kernel_main() {
         PacketHeaderPool::allocate_header(), PacketHeaderPool::allocate_header()};
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hcr = PacketHeaderPool::allocate_header();
 
-    // ---- slots: current occupant, its packets sent a direction, computed
+    // ---- slots: current occupant (its table entry cached in registers), its packets sent a direction, computed
     volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(warr_addr);
     volatile tt_l1_ptr uint32_t* cred = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cred_addr);
     volatile tt_l1_ptr uint32_t* freew = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(freew_addr);
     uint32_t occ[3] = {0, 0, 0}, sent[3][2] = {{0, 0}, {0, 0}, {0, 0}};
-    bool done_c[3] = {false, false, false};
-    auto entry = [&](uint32_t s, uint32_t k) { return tab + tab[4 + s] + 4 * k; };
+    uint32_t cur_e[3], cur_fwd[3], cur_nk[3], cur_dst[3][2], base[3];
+    bool live[3], done_c[3] = {false, false, false};
+    auto load = [&](uint32_t s) {
+        live[s] = occ[s] < tab[1 + s];
+        base[s] = PK * occ[s];
+        if (live[s]) {
+            volatile tt_l1_ptr uint32_t* en = tab + tab[4 + s] + 4 * occ[s];
+            const uint32_t w0 = en[0];
+            cur_e[s] = w0 & 0xFFFF;
+            cur_fwd[s] = (w0 >> 18) & 3;
+            cur_nk[s] = (w0 >> 20) & 3;
+            cur_dst[s][0] = en[1];
+            cur_dst[s][1] = en[2];
+        } else {
+            cur_e[s] = 0xFFFF;
+            cur_fwd[s] = cur_nk[s] = 0;
+        }
+    };
+    for (uint32_t s = 0; s < 3; ++s) {
+        load(s);
+    }
     auto slot_addr = [&](uint32_t s, uint32_t u) {  // packet u of slot s in this core's L1 (same on every chip)
         return u < GU_PK ? wgu_ring + (s * WGU + u * CHT) * wtile : wd_ring + (s * WDN + (u - GU_PK) * CHT) * wtile;
     };
@@ -145,26 +164,25 @@ void kernel_main() {
     uint32_t w_n = 0, w_dn = 0, freed = 0, gu_pages = 0, dn_pages = 0;
     const uintptr_t gu_ack = (uintptr_t)get_cb_tiles_acked_ptr(w_cb), dn_ack = (uintptr_t)get_cb_tiles_acked_ptr(wd_cb);
     uint16_t gu_last = (uint16_t)reg_read(gu_ack), dn_last = (uint16_t)reg_read(dn_ack);
-    auto current_is = [&](uint32_t n) {  // slot of order entry n holds that expert now
-        const uint32_t s = order[n] >> 16;
-        return occ[s] < tab[1 + s] && (entry(s, occ[s])[0] & 0xFFFF) == (order[n] & 0xFFFF);
-    };
     auto qw = [&]() -> bool {
         bool did = false;
-        invalidate_l1_cache();
-        if (w_n < nexp_g && current_is(w_n) && warr[(order[w_n] >> 16) * 4] >= PK * occ[order[w_n] >> 16] + GU_PK &&
-            cb_pages_reservable_at_back(w_cb, WGU)) {
-            cb_reserve_back(w_cb, WGU);
-            cb_push_back(w_cb, WGU);
-            ++w_n;
-            did = true;
+        if (w_n < nexp_g) {
+            const uint32_t o = order[w_n], s = o >> 16;
+            if (cur_e[s] == (o & 0xFFFF) && warr[s * 4] >= base[s] + GU_PK && cb_pages_reservable_at_back(w_cb, WGU)) {
+                cb_reserve_back(w_cb, WGU);
+                cb_push_back(w_cb, WGU);
+                ++w_n;
+                did = true;
+            }
         }
-        if (w_dn < w_n && current_is(w_dn) && warr[(order[w_dn] >> 16) * 4] >= PK * (occ[order[w_dn] >> 16] + 1) &&
-            cb_pages_reservable_at_back(wd_cb, WDN)) {
-            cb_reserve_back(wd_cb, WDN);
-            cb_push_back(wd_cb, WDN);
-            ++w_dn;
-            did = true;
+        if (w_dn < w_n) {
+            const uint32_t o = order[w_dn], s = o >> 16;
+            if (cur_e[s] == (o & 0xFFFF) && warr[s * 4] >= base[s] + PK && cb_pages_reservable_at_back(wd_cb, WDN)) {
+                cb_reserve_back(wd_cb, WDN);
+                cb_push_back(wd_cb, WDN);
+                ++w_dn;
+                did = true;
+            }
         }
         const uint16_t a = (uint16_t)reg_read(gu_ack), b = (uint16_t)reg_read(dn_ack);
         gu_pages += (uint16_t)(a - gu_last);
@@ -186,21 +204,16 @@ void kernel_main() {
     // ---- QF: forward the slots' occupants, a packet a call; QR: release finished slots
     uint32_t rr = 0, n_fwd = 0, n_credit = 0;
     auto qf = [&]() -> bool {
-        invalidate_l1_cache();
         for (uint32_t t = 0; t < 6; ++t) {
             const uint32_t s = (rr + t) % 3, d = ((rr + t) / 3) % 2;
-            if (occ[s] >= tab[1 + s]) {
-                continue;
-            }
-            volatile tt_l1_ptr uint32_t* en = entry(s, occ[s]);
-            if (!((en[0] >> 18) & (1u << d)) || sent[s][d] >= PK) {
+            if (!((cur_fwd[s] >> d) & 1) || sent[s][d] >= PK) {
                 continue;
             }
             const uint32_t u = sent[s][d];
-            if (warr[s * 4] < PK * occ[s] + u + 1) {
+            if (warr[s * 4] < base[s] + u + 1) {
                 continue;
             }
-            const uint32_t s2 = en[1 + d] & 3, k2 = en[1 + d] >> 2;
+            const uint32_t s2 = cur_dst[s][d] & 3, k2 = cur_dst[s][d] >> 2;
             if (u == 0 && cred[(d * 3 + s2) * 4] < k2) {
                 continue;
             }
@@ -229,15 +242,14 @@ void kernel_main() {
     auto qr = [&]() -> bool {
         bool did = false;
         for (uint32_t s = 0; s < 3; ++s) {
-            if (occ[s] >= tab[1 + s] || !done_c[s]) {
+            if (!live[s] || !done_c[s]) {
                 continue;
             }
-            volatile tt_l1_ptr uint32_t* en = entry(s, occ[s]);
-            const uint32_t fwd = (en[0] >> 18) & 3;
+            const uint32_t fwd = cur_fwd[s];
             if (((fwd & 1) && sent[s][0] < PK) || ((fwd & 2) && sent[s][1] < PK)) {
                 continue;
             }
-            const uint32_t nk = (en[0] >> 20) & 3, next = occ[s] + 1;
+            const uint32_t nk = cur_nk[s], next = occ[s] + 1;
             if (nk >= 2 && !mux[1 - (nk - 2)].edm_has_space_for_packet()) {
                 continue;
             }
@@ -259,6 +271,7 @@ void kernel_main() {
             occ[s] = next;
             sent[s][0] = sent[s][1] = 0;
             done_c[s] = false;
+            load(s);
             did = true;
         }
         return did;
@@ -452,6 +465,7 @@ void kernel_main() {
         const uint32_t t0 = wall();
         const bool y = qy();
         const bool l = ql();
+        invalidate_l1_cache();
         const bool a = qw() | qf() | qr();
         const uint32_t t1 = wall();
         const bool b = qa();
