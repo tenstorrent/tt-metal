@@ -31,13 +31,17 @@ inline constexpr uint32_t SFPU_PAYLOAD_MAX_TILES = 4;
 // each kernel serves every core. The CBs on a core are part of every kernel build there, so every sender core declares
 // the payload CB and every receiver core the request, flag and all SFPU_VERIFY_MAX_CONFIGS data CBs, as placeholders
 // where nothing uses them. Configs 0 .. SFPU_VERIFY_MAX_CONFIGS - 1 of a receiver can be verified on its compute
-// engine; data CB c lies over config c's receive ring.
+// engine (the host takes the first TT_FABRIC_TEST_SFPU_VERIFY_MAX_CONFIGS of them, default 8); data CB c lies over
+// config c's receive ring. The verifier finds a config's data CB from the request at runtime, so the cap costs one CB
+// index per config and nothing else on the device.
 inline constexpr uint32_t SFPU_PAYLOAD_CB_INDEX = 0;
 inline constexpr uint32_t SFPU_PAYLOAD_MAX_CONFIGS = 64;
 inline constexpr uint32_t SFPU_VERIFY_REQ_CB_INDEX = 0;
 inline constexpr uint32_t SFPU_VERIFY_FLAG_CB_INDEX = 1;
 inline constexpr uint32_t SFPU_VERIFY_DATA_CB_BASE = 2;
-inline constexpr uint32_t SFPU_VERIFY_MAX_CONFIGS = 8;
+inline constexpr uint32_t SFPU_VERIFY_MAX_CONFIGS = 16;
+// Wormhole has 32 CB indices (Blackhole 64).
+static_assert(SFPU_VERIFY_DATA_CB_BASE + SFPU_VERIFY_MAX_CONFIGS <= 32);
 
 // Receiver -> compute verify request, one CB page of uint32 words (tt_fabric_test_payload_verify.cpp).
 inline constexpr uint32_t SFPU_VERIFY_REQ_OP = 0;

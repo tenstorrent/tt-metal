@@ -156,6 +156,48 @@ inline bool sfpu_verify() {
     return on;
 }
 
+// Each receiver config's ring fills the receiver core's L1 up to the compute verifier's control pages
+// (TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1=1), instead of 1 MB split over max_configs_per_core. Deeper rings = more
+// credits per flow.
+inline bool receiver_rings_fill_l1() {
+    static const bool on = [] {
+        const char* v = std::getenv("TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return on;
+}
+
+// Receivers return credits in batches of ring slots / TT_FABRIC_TEST_CREDIT_BATCH_DIVISOR (default 4, at least 1 credit
+// per batch). A larger divisor returns credits sooner, in more credit packets.
+inline uint32_t credit_batch_divisor() {
+    static const uint32_t divisor = [] {
+        const char* v = std::getenv("TT_FABRIC_TEST_CREDIT_BATCH_DIVISOR");
+        const uint32_t d = v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 4;
+        return std::max<uint32_t>(d, 1);
+    }();
+    return divisor;
+}
+
+// Reads the fabric routers' bandwidth counters after every test and logs them per ethernet link
+// (TT_FABRIC_TEST_ROUTER_TELEMETRY=1), with validation still on. Turns on the routers' counters itself.
+inline bool router_telemetry() {
+    static const bool on = [] {
+        const char* v = std::getenv("TT_FABRIC_TEST_ROUTER_TELEMETRY");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return on;
+}
+
+// How many of a receiver core's configs (the first ones) its compute engine verifies
+// (TT_FABRIC_TEST_SFPU_VERIFY_MAX_CONFIGS, default 8; capped at SFPU_VERIFY_MAX_CONFIGS by the caller).
+inline uint32_t sfpu_verify_max_configs() {
+    static const uint32_t max_configs = [] {
+        const char* v = std::getenv("TT_FABRIC_TEST_SFPU_VERIFY_MAX_CONFIGS");
+        return v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 8u;
+    }();
+    return max_configs;
+}
+
 // Packets a receiver may have outstanding with its compute verifier (TT_FABRIC_TEST_SFPU_VERIFY_DEPTH, default 4;
 // 1 waits for each verdict before polling the next packet).
 inline uint32_t sfpu_verify_depth() {
@@ -301,6 +343,16 @@ inline bool host_detail() {
 inline bool perf_sched() {
     static const bool on = [] {
         const char* v = std::getenv("TT_FABRIC_TEST_PERF_SCHED");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return on;
+}
+
+// One PERF_CORE line per sender core: its loop, waits and the destinations of its configs
+// (TT_FABRIC_TEST_PERF_PER_CORE=1, with TT_FABRIC_TEST_PERF_BREAKDOWN=1). Shows which cores set the device time.
+inline bool perf_per_core() {
+    static const bool on = [] {
+        const char* v = std::getenv("TT_FABRIC_TEST_PERF_PER_CORE");
         return v != nullptr && v[0] != '\0' && v[0] != '0';
     }();
     return on;

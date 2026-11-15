@@ -19,6 +19,8 @@
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_memory_map.hpp"
 #include <tt-metalium/math.hpp>
+#include "tt_fabric_test_perf_breakdown.hpp"
+#include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -604,7 +606,7 @@ inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
     uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes, uint32_t num_packets) {
     uint32_t buffer_capacity_packets = buffer_capacity_bytes / packet_size_bytes;
     uint32_t initial_credits = std::min(buffer_capacity_packets, num_packets);
-    uint32_t batch_size = std::max(1u, initial_credits / 4);
+    uint32_t batch_size = std::max(1u, initial_credits / perf_breakdown::credit_batch_divisor());
     return {initial_credits, batch_size};
 }
 

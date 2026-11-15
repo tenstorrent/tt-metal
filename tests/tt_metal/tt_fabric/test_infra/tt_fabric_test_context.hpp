@@ -250,6 +250,8 @@ private:
     void initialize_memory_maps();
 
     void update_memory_maps(const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies);
+    tt::tt_fabric::fabric_tests::AllocatorPolicies size_receiver_rings_to_fill_l1(
+        tt::tt_fabric::fabric_tests::AllocatorPolicies policies) const;
 
     void validate_packet_sizes_for_policy(const TestConfig& config, uint32_t payload_chunk_size);
 
