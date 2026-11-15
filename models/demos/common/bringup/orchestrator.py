@@ -342,6 +342,37 @@ def agent_stalled(log: Path, pgid: int, stall_s: int, now_t: float | None = None
     return not [p for p in out if p != str(pgid)]
 
 
+def agent_gates(tid: str) -> list[int]:
+    """FIX.32 (2026-11-15): an agent may start its own gate detached (`gate <task> --check`, setsid / nohup), so it
+    leaves the agent's process group and outlives a kill of the agent. Its pids, found by command line."""
+    me, out = os.getpid(), []
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit() or int(d.name) == me:
+            continue
+        try:
+            argv = (d / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        argv = [a.decode(errors="replace") for a in argv if a]
+        if "models.demos.common.bringup" in argv and "gate" in argv and tid in argv:
+            out.append(int(d.name))
+    return out
+
+
+def wait_agent_gates(tid: str, echo=print, poll_s: float = 30.0) -> int:
+    """Wait for an ended agent's own gate run to finish before the orchestrator's gate: its units are checkpointed and
+    kept, so the orchestrator then runs only what is left. Without this both ran the same unit (the device lock kept
+    them apart; FIX.32 ran test_moe_prev_replicas twice, 15 min). Never kills it: finished units are never discarded."""
+    pids, said = agent_gates(tid), False
+    while pids:
+        if not said:
+            echo(f"  [{tid}] waiting for the agent's own gate run (pids {pids}) before the gate: its units are kept")
+            said = True
+        time.sleep(poll_s)
+        pids = agent_gates(tid)
+    return int(said)
+
+
 def _killpg(pgid: int, sig) -> None:
     from models.demos.common.bringup.core.hangdump import wait_triage
 
@@ -1008,6 +1039,7 @@ class Orchestrator:
                 raise
             finally:
                 OV.agent_finished(self.run_dir)
+        wait_agent_gates(tid, self.echo)
         info = parse_stream(log)
         problems = []
         self.aborted = OV.take_abort(self.run_dir)
