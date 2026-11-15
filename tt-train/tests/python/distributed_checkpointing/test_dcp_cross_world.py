@@ -19,7 +19,11 @@ import sys
 import pytest
 from dcp_driver import MESH_OPEN_FAILED
 
-pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(3600)]
+# Each child is one process opening a mesh, training or loading a tiny Llama: about a minute warm, a few cold (the
+# whole module took 5 minutes warm and 13 cold on a loudbox). A hung child fails after 10 minutes, so one hang still
+# leaves a 25-minute CI leg the time to report the tests after it.
+CHILD_TIMEOUT_S = 600
+pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(2 * CHILD_TIMEOUT_S + 60)]
 
 DRIVER = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcp_driver.py")]
 
@@ -93,7 +97,7 @@ _NOISE = re.compile(
 def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
     env = dict(os.environ)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    proc = subprocess.run(DRIVER + args, capture_output=True, text=True, timeout=1500, env=env)
+    proc = subprocess.run(DRIVER + args, capture_output=True, text=True, timeout=CHILD_TIMEOUT_S, env=env)
     # The interpreter's exit prints a long nanobind leak report after any traceback; keep the lines that matter.
     lines = [ln for ln in (proc.stdout + proc.stderr).splitlines() if not _NOISE.search(ln)]
     if proc.returncode == MESH_OPEN_FAILED:  # only the descriptor-fabric mismatch: the QuietBox 1x4 ring on a loudbox
