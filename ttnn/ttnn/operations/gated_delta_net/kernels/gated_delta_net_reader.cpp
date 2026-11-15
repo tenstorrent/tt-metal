@@ -15,8 +15,8 @@
 // Token rows are moved as face-row segments (64 B fp32, 32 B bf16; bf16 reads go through RowReader
 // staging) unless the pair owns the whole tile row.
 // R-PREP (ROLE): a prep core's unit is a (sequence, key head) with the r value heads' v columns, and it reads the
-// gate and window inputs of tile rows offset, offset + stride, ... only; a state core reads norm_weight, S0 and z,
-// hands its inbox rows to compute as prep cores land them, and copies conv_state_out.
+// gate, window and z inputs of tile rows offset, offset + stride, ... only (and norm_weight once); a state core reads
+// S0, hands its inbox rows to compute as prep cores land them, and copies conv_state_out.
 
 #include <stdint.h>
 
@@ -260,6 +260,7 @@ void kernel_main() {
     uint32_t producers = 0;
     uint32_t producer_x[MAX_PRODUCERS];
     uint32_t producer_y[MAX_PRODUCERS];
+    uint32_t granted_rows = 0;  // R-PREP state core: inbox rows granted to their prep cores
     if constexpr (STATE) {
         producers = get_arg_val<uint32_t>(arg++);
         for (uint32_t q = 0; q < producers; ++q) {
@@ -296,20 +297,23 @@ void kernel_main() {
     dataflow_kernel_lib::
         prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
     if constexpr (CHUNKED && !STATE) {
-        // Lower-triangular 0/1 mask (column <= row) of the chunk decay matrix, once per kernel: zeroed over
-        // the NoC, then only the 528 ones are stored.
+        // Lower-triangular 0/1 mask (column <= row) of the chunk decay matrix, then the identity, once per kernel:
+        // zeroed over the NoC, then only the ones are stored.
         CircularBuffer mask_buf(cb_tri_mask);
-        cb_reserve_back(cb_tri_mask, 1);
-        noc.async_write_zeros(mask_buf, STATE_TILE_BYTES, {.offset_bytes = 0});
+        cb_reserve_back(cb_tri_mask, 2);
+        noc.async_write_zeros(mask_buf, 2 * STATE_TILE_BYTES, {.offset_bytes = 0});
         noc.write_zeros_l1_barrier();
         volatile tt_l1_ptr uint32_t* mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tri_mask));
         constexpr uint32_t ONE_BITS = 0x3f800000u;
+        constexpr uint32_t TILE_WORDS = TILE_ROWS * TILE_ROWS;
         for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+            const uint32_t row = (r >> 4) * 2 * 256 + (r & 15) * 16;
             for (uint32_t c = 0; c <= r; ++c) {
-                mask[((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15)] = ONE_BITS;
+                mask[row + (c >> 4) * 256 + (c & 15)] = ONE_BITS;
             }
+            mask[TILE_WORDS + row + (r >> 4) * 256 + (r & 15)] = ONE_BITS;  // identity (R-PREP inverse)
         }
-        cb_push_back(cb_tri_mask, 1);
+        cb_push_back(cb_tri_mask, 2);
     }
 
     for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
@@ -335,16 +339,14 @@ void kernel_main() {
         };
 
         // ---- load_pair_block ----
-        if constexpr (!PREP) {
-            cb_reserve_back(cb_norm_w, Vb);
+        // norm_weight columns of the unit (a prep core's r heads share the Vt tiles).
+        constexpr uint32_t norm_w_pages = PREP ? Vt : Vb;
+        if constexpr (!STATE) {
+            cb_reserve_back(cb_norm_w, norm_w_pages);
             const uint32_t norm_w_base = get_write_ptr(cb_norm_w);
-            for (uint32_t vt = 0; vt < Vb; ++vt) {
+            for (uint32_t vt = 0; vt < norm_w_pages; ++vt) {
                 read_row_span(norm_w, v_first + vt, 0, 1, norm_w_base + vt * TILE_BYTES);
             }
-        }
-        if constexpr (STATE) {
-            noc_async_read_barrier();
-            cb_push_back(cb_norm_w, Vb);
         }
         if constexpr (!STATE) {
             cb_reserve_back(cb_conv_w, conv_w_pages);
@@ -379,19 +381,32 @@ void kernel_main() {
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
             if constexpr (STATE) {
-                // ---- R-PREP inbox: grant slot i % INBOX_SLOTS to tile row i's prep core once compute has freed
-                // it, then hand the landed row to compute ----
+                // ---- R-PREP inbox: grant each tile row's slot to its prep core as soon as compute has freed it (up to
+                // INBOX_SLOTS rows ahead, so the prep cores' writes overlap the chunk steps), then hand row i to
+                // compute once it has landed. Compute pops cb_v last of the inbox buffers, so a free cb_v slot frees
+                // the row's.
                 const uint32_t i = tr - first_tr;
-                const uint32_t slot = i % INBOX_SLOTS;
+                const uint32_t n_rows = last_tr - first_tr + 1;
+                volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_semaphore(GDN_LANDED_FIRST_SEM_ID + i % INBOX_SLOTS));
+                Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
+                auto grant_free_slots = [&]() {
+                    while (granted_rows < n_rows && cb_pages_reservable_at_back(cb_v, (granted_rows - i + 1) * Vb)) {
+                        granted.up(noc, producer_x[granted_rows % producers], producer_y[granted_rows % producers], 1);
+                        ++granted_rows;
+                    }
+                };
+                if (granted_rows == i) {
+                    cb_reserve_back(cb_v, Vb);  // row i's slot: freed once compute pops row i - INBOX_SLOTS
+                }
+                do {
+                    grant_free_slots();
+                } while (*landed < i / INBOX_SLOTS + 1);
                 cb_reserve_back(cb_kq_rows, 2 * Kt);
                 cb_reserve_back(cb_knT, Kt);
                 cb_reserve_back(cb_v, Vb);
                 cb_reserve_back(cb_chunk_vec, GDN_STATE_VEC_PAGES);
                 cb_reserve_back(cb_chunk_mat, GDN_HEAD_PACK_PAGES - GDN_STATE_VEC_PAGES);
-                Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
-                granted.up(noc, producer_x[i % producers], producer_y[i % producers], 1);
-                Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
-                landed.wait_min(i / INBOX_SLOTS + 1);
                 cb_push_back(cb_kq_rows, 2 * Kt);
                 cb_push_back(cb_knT, Kt);
                 cb_push_back(cb_v, Vb);
@@ -529,9 +544,7 @@ void kernel_main() {
                     if (weights_pending) {
                         cb_push_back(cb_conv_w, conv_w_pages);
                         cb_push_back(cb_gate_w, 2);
-                        if constexpr (!PREP) {
-                            cb_push_back(cb_norm_w, Vb);
-                        }
+                        cb_push_back(cb_norm_w, norm_w_pages);
                         weights_pending = false;
                     }
                     if (gates_pending) {
@@ -559,11 +572,8 @@ void kernel_main() {
                     cb_push_back(cb_window, group_tiles);
                 }
             }
-            if constexpr (PREP) {
-                continue;
-            }
             // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs ----
-            if (tr == first_tr) {
+            if (tr == first_tr && !PREP) {
                 cb_reserve_back(cb_state_in, n_state);
                 cb_reserve_back(cb_state_in_mm, n_state);
                 const uint32_t state_base = get_write_ptr(cb_state_in);
@@ -576,7 +586,10 @@ void kernel_main() {
                 cb_push_back(cb_state_in_mm, n_state);
             }
 
-            // ---- z columns of the piece ----
+            if constexpr (STATE) {
+                continue;
+            }
+            // ---- z columns of the unit ----
             cb_reserve_back(cb_z, Vb);
             const uint32_t z_base = get_write_ptr(cb_z);
             for (uint32_t vt = 0; vt < Vb; ++vt) {

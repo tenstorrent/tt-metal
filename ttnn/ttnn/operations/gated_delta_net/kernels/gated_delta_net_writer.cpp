@@ -41,6 +41,8 @@ constexpr uint32_t cb_knT = GDN_CB_KNT;
 constexpr uint32_t cb_v = GDN_CB_V;
 constexpr uint32_t cb_chunk_vec = GDN_CB_CHUNK_VEC;
 constexpr uint32_t cb_chunk_mat = GDN_CB_CHUNK_MAT;
+constexpr uint32_t cb_o_acc = GDN_CB_O_ACC;
+constexpr uint32_t cb_o_in = GDN_CB_O_IN;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t OUT_TILE_BYTES = get_compile_time_arg_val(3);    // output tile (dtype-derived on host)
@@ -66,6 +68,42 @@ FORCE_INLINE uint32_t elem_index(uint32_t r, uint32_t c) {
     return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15);
 }
 
+// store_rows_block: n output tiles from cb_out_rows to pages first_page.. of tile row [base_row, +32), whole tiles
+// when [lo, hi) is the whole tile row, else face-row segments of those rows only.
+template <typename Accessor>
+void store_rows(const Accessor& out_acc, uint32_t n, uint32_t first_page, uint32_t base_row, uint32_t lo, uint32_t hi) {
+    cb_wait_front(cb_out_rows, n);
+    const uint32_t out_base = get_read_ptr(cb_out_rows);
+    for (uint32_t vt = 0; vt < n; ++vt) {
+        const uint32_t page = first_page + vt;
+        const uint32_t src_tile = out_base + vt * OUT_TILE_BYTES;
+        if (hi - lo == TILE_ROWS) {
+            noc_async_write(src_tile, out_acc.get_noc_addr(page), OUT_TILE_BYTES);
+        } else {
+            for (uint32_t row = lo; row < hi; ++row) {
+                const uint32_t off = row_offset(row - base_row);
+                noc_async_write(src_tile + off, out_acc.get_noc_addr(page, off), SEG_BYTES);
+                noc_async_write(src_tile + off + FACE_BYTES, out_acc.get_noc_addr(page, off + FACE_BYTES), SEG_BYTES);
+            }
+        }
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_out_rows, n);
+}
+
+// One multicast write per rectangle of the runtime-arg list at `arg` (count, then x_lo, y_lo, x_hi, y_hi, cores each);
+// the sender lies outside every rectangle. NOC 1 takes the corners in the opposite order.
+FORCE_INLINE void mcast_rects(uint32_t arg, uint32_t src, uint32_t dst, uint32_t bytes) {
+    const uint32_t rects = get_arg_val<uint32_t>(arg++);
+    for (uint32_t r = 0; r < rects; ++r, arg += 5) {
+        const uint32_t x_lo = get_arg_val<uint32_t>(arg), y_lo = get_arg_val<uint32_t>(arg + 1);
+        const uint32_t x_hi = get_arg_val<uint32_t>(arg + 2), y_hi = get_arg_val<uint32_t>(arg + 3);
+        const uint64_t dst_noc = noc_index == 0 ? get_noc_multicast_addr(x_lo, y_lo, x_hi, y_hi, dst)
+                                                : get_noc_multicast_addr(x_hi, y_hi, x_lo, y_lo, dst);
+        noc_async_write_multicast(src, dst_noc, bytes, get_arg_val<uint32_t>(arg + 4));
+    }
+}
+
 // Column-0 chunk coefficient pages of one pair for tile row [base_row, +32): g (page 0) and beta (page 1) of gate
 // column gate_col, exactly 0 on rows outside [lo, hi) (no decay, no write), whatever the gate tile holds there.
 FORCE_INLINE void push_chunk_coefs(
@@ -85,9 +123,12 @@ FORCE_INLINE void push_chunk_coefs(
 // prepped tiles arrive in cb_prep_send as [v of the r heads (r Vt)][kn, qn (2 Kt)][kn^T (Kt)][head pack x r] and go
 // to the group's state cores (unit order: head j, piece p) at inbox slot i % INBOX_SLOTS of cb_v (the piece's Vb v
 // tiles), cb_kq_rows, cb_knT (all), cb_chunk_vec, cb_chunk_mat (the head's pieces). Every core has the same CB
-// layout, so this core's base addresses of those buffers are the state cores'.
-template <uint32_t Kt, uint32_t Vt, uint32_t Hv>
-void prep_writer(uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride, uint32_t arg) {
+// layout, so this core's base addresses of those buffers are the state cores'. The state cores write the row's o
+// back into slot k % GDN_O_IN_DEPTH of cb_o_in (k: this core's row count), which compute RMS-normalizes one row later
+// (after its next row's prep); this writer then stores the output rows.
+template <uint32_t Kt, uint32_t Vt, uint32_t Hv, typename Accessor>
+void prep_writer(
+    const Accessor& out_acc, uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride, uint32_t arg) {
     constexpr uint32_t Vb = Vt / PIECES;
     constexpr uint32_t GROUP = RATIO * PIECES;
     constexpr uint32_t T_BYTES = STATE_TILE_BYTES;
@@ -97,6 +138,14 @@ void prep_writer(uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t t
     for (uint32_t c = 0; c < GROUP; ++c) {
         cons_x[c] = get_arg_val<uint32_t>(arg++);
         cons_y[c] = get_arg_val<uint32_t>(arg++);
+    }
+    // Multicast rectangles: the group's, then each head's pieces' (host _mcast_rects).
+    const uint32_t group_rects = arg;
+    uint32_t head_rects[RATIO];
+    arg += 1 + 5 * get_arg_val<uint32_t>(arg);
+    for (uint32_t j = 0; j < RATIO; ++j) {
+        head_rects[j] = arg;
+        arg += 1 + 5 * get_arg_val<uint32_t>(arg);
     }
     const uint32_t v_base = get_write_ptr(cb_v);
     const uint32_t kq_base = get_write_ptr(cb_kq_rows);
@@ -108,17 +157,25 @@ void prep_writer(uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t t
 
     Noc noc;
     Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
+    Semaphore<> o_landed(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 1);
+    constexpr uint32_t O_PAGES = RATIO * Vt;  // o of one tile row: the r heads' V columns, head-major
+    constexpr uint32_t out_width_tiles = Hv * Vt;
     const uint32_t pair0 = first_unit / PIECES;
     const uint32_t head0 = pair0 % Hv;
     const uint32_t seq_lo = (pair0 / Hv) * T;
     const uint32_t seq_hi = seq_lo + T;
     const uint32_t first_tr = seq_lo / TILE_ROWS;
     const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
+    auto row_lo = [&](uint32_t tr) { return seq_lo > tr * TILE_ROWS ? seq_lo : tr * TILE_ROWS; };
+    auto row_hi = [&](uint32_t tr) { return seq_hi < (tr + 1) * TILE_ROWS ? seq_hi : (tr + 1) * TILE_ROWS; };
+    auto store = [&](uint32_t tr) {
+        store_rows(out_acc, O_PAGES, tr * out_width_tiles + head0 * Vt, tr * TILE_ROWS, row_lo(tr), row_hi(tr));
+    };
     uint32_t sent = 0;
     for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride, ++sent) {
         const uint32_t base_row = tr * TILE_ROWS;
-        const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
-        const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
+        const uint32_t lo = row_lo(tr);
+        const uint32_t hi = row_hi(tr);
         cb_wait_front(cb_gates, 2);
         volatile tt_l1_ptr uint32_t* gates = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_gates));
         for (uint32_t j = 0; j < RATIO; ++j) {
@@ -129,32 +186,31 @@ void prep_writer(uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t t
         // Every state core of the group grants each of its rows once, in order; this core's next row is granted
         // only after this one has landed (stride >= inbox slots), so the cumulative count identifies the row.
         granted.wait_min((sent + 1) * GROUP);
+        // The row's o slot is free (compute has normalized the row that used it), so the row may be sent.
+        cb_reserve_back(cb_o_in, O_PAGES);
         const uint32_t slot = (tr - first_tr) % INBOX_SLOTS;
         cb_wait_front(cb_prep_send, ROW_PAGES);
         const uint32_t src = get_read_ptr(cb_prep_send);
         const uint32_t kq_src = src + RATIO * Vt * T_BYTES;
+        // kn, qn (cb_kq_rows) and kn^T (cb_knT) are contiguous in the send block: two multicasts per row run.
+        mcast_rects(group_rects, kq_src, kq_base + slot * 2 * Kt * T_BYTES, 2 * Kt * T_BYTES);
+        mcast_rects(group_rects, kq_src + 2 * Kt * T_BYTES, knT_base + slot * Kt * T_BYTES, Kt * T_BYTES);
+        for (uint32_t j = 0; j < RATIO; ++j) {
+            const uint32_t head_src = kq_src + (3 * Kt + j * GDN_HEAD_PACK_PAGES) * T_BYTES;
+            mcast_rects(head_rects[j], head_src, vec_base + slot * VEC_PAGES * T_BYTES, VEC_PAGES * T_BYTES);
+            mcast_rects(
+                head_rects[j],
+                head_src + VEC_PAGES * T_BYTES,
+                mat_base + slot * MAT_PAGES * T_BYTES,
+                MAT_PAGES * T_BYTES);
+        }
         for (uint32_t c = 0; c < GROUP; ++c) {
             const uint32_t j = c / PIECES;
             const uint32_t p = c % PIECES;
-            const uint32_t head_src = kq_src + (3 * Kt + j * GDN_HEAD_PACK_PAGES) * T_BYTES;
             noc_async_write(
                 src + (j * Vt + p * Vb) * T_BYTES,
                 get_noc_addr(cons_x[c], cons_y[c], v_base + slot * Vb * T_BYTES),
                 Vb * T_BYTES);
-            noc_async_write(
-                kq_src, get_noc_addr(cons_x[c], cons_y[c], kq_base + slot * 2 * Kt * T_BYTES), 2 * Kt * T_BYTES);
-            noc_async_write(
-                kq_src + 2 * Kt * T_BYTES,
-                get_noc_addr(cons_x[c], cons_y[c], knT_base + slot * Kt * T_BYTES),
-                Kt * T_BYTES);
-            noc_async_write(
-                head_src,
-                get_noc_addr(cons_x[c], cons_y[c], vec_base + slot * VEC_PAGES * T_BYTES),
-                VEC_PAGES * T_BYTES);
-            noc_async_write(
-                head_src + VEC_PAGES * T_BYTES,
-                get_noc_addr(cons_x[c], cons_y[c], mat_base + slot * MAT_PAGES * T_BYTES),
-                MAT_PAGES * T_BYTES);
         }
         noc_async_write_barrier();
         cb_pop_front(cb_prep_send, ROW_PAGES);
@@ -162,6 +218,16 @@ void prep_writer(uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t t
             Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
             landed.up(noc, cons_x[c], cons_y[c], 1);
         }
+        // Every state core writes its o of the row once; a row is sent only after the previous row's o has
+        // landed everywhere, so the cumulative count identifies the row.
+        o_landed.wait_min((sent + 1) * GROUP);
+        cb_push_back(cb_o_in, O_PAGES);
+        if (sent > 0) {
+            store(tr - tr_stride);
+        }
+    }
+    if (sent > 0) {
+        store(first_tr + tr_offset + (sent - 1) * tr_stride);
     }
 }
 
@@ -239,6 +305,18 @@ void kernel_main() {
         peer_y[s] = get_arg_val<uint32_t>(arg++);
     }
     uint32_t rows_combined = 0;
+    // R-PREP state core: NoC (x, y) of its group's prep cores; tile row i's o goes back to prep core i % producers.
+    constexpr uint32_t MAX_PRODUCERS = STATE ? 64 : 1;
+    uint32_t producers = 0;
+    uint32_t producer_x[MAX_PRODUCERS];
+    uint32_t producer_y[MAX_PRODUCERS];
+    if constexpr (STATE) {
+        producers = get_arg_val<uint32_t>(arg++);
+        for (uint32_t q = 0; q < producers; ++q) {
+            producer_x[q] = get_arg_val<uint32_t>(arg++);
+            producer_y[q] = get_arg_val<uint32_t>(arg++);
+        }
+    }
 
     // Zero the window groups the reader will use once (it keeps rows outside the token rows zero from then
     // on), one slot at a time with a token per slot so the reader starts on slot 0 without waiting for
@@ -255,7 +333,7 @@ void kernel_main() {
     }
 
     if constexpr (PREP) {
-        prep_writer<Kt, Vt, Hv>(first_unit, T, tr_offset, tr_stride, arg);
+        prep_writer<Kt, Vt, Hv>(out_acc, first_unit, T, tr_offset, tr_stride, arg);
         return;
     }
 
@@ -313,6 +391,24 @@ void kernel_main() {
             // the peers' counters. cb_osum_gather holds two tile rows: a peer can be at most one tile
             // row ahead, because it cannot finish row i+1 without this core's partial of row i+1, which
             // compute produces only after it has consumed row i's slots.
+            if constexpr (STATE) {
+                // ---- R-PREP: o of the piece into its place in slot k % GDN_O_IN_DEPTH of the row's prep core ----
+                const uint32_t i = tr - first_tr;
+                const uint32_t q = i % producers;
+                const uint32_t head_in_group = head % RATIO;
+                const uint32_t o_slot = (i / producers) % GDN_O_IN_DEPTH;
+                const uint32_t dst =
+                    get_write_ptr(cb_o_in) + (o_slot * RATIO * Vt + head_in_group * Vt + v_first) * STATE_TILE_BYTES;
+                cb_wait_front(cb_o_acc, Vb);
+                noc_async_write(
+                    get_read_ptr(cb_o_acc), get_noc_addr(producer_x[q], producer_y[q], dst), Vb * STATE_TILE_BYTES);
+                noc_async_write_barrier();
+                cb_pop_front(cb_o_acc, Vb);
+                Noc noc;
+                Semaphore<> o_landed(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 1);
+                o_landed.up(noc, producer_x[q], producer_y[q], 1);
+                continue;
+            }
             if constexpr (PIECES > 1) {
                 Noc noc;
                 Semaphore<> osum_landed(OSUM_SEM_ID);
@@ -335,25 +431,7 @@ void kernel_main() {
                 cb_push_back(cb_osum_gather, PIECES);
             }
 
-            // ---- store_rows_block ----
-            cb_wait_front(cb_out_rows, Vb);
-            const uint32_t out_base = get_read_ptr(cb_out_rows);
-            for (uint32_t vt = 0; vt < Vb; ++vt) {
-                const uint32_t page = tr * out_width_tiles + head * Vt + v_first + vt;
-                const uint32_t src_tile = out_base + vt * OUT_TILE_BYTES;
-                if (hi - lo == TILE_ROWS) {
-                    noc_async_write(src_tile, out_acc.get_noc_addr(page), OUT_TILE_BYTES);
-                } else {
-                    for (uint32_t row = lo; row < hi; ++row) {
-                        const uint32_t off = row_offset(row - base_row);
-                        noc_async_write(src_tile + off, out_acc.get_noc_addr(page, off), SEG_BYTES);
-                        noc_async_write(
-                            src_tile + off + FACE_BYTES, out_acc.get_noc_addr(page, off + FACE_BYTES), SEG_BYTES);
-                    }
-                }
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cb_out_rows, Vb);
+            store_rows(out_acc, Vb, tr * out_width_tiles + head * Vt + v_first, base_row, lo, hi);
         }
 
         // ---- store_state_block ----
