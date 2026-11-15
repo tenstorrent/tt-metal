@@ -19,7 +19,7 @@ import torch
 from dcp_oracle import Loader, advance_generators
 
 import ttml
-from ttml.common.schedulers import CosineAnnealingScheduler
+from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler
 from ttml.distributed_checkpointing._errors import CheckpointError, VersionError
 from ttml.distributed_checkpointing._index import read_header_json, write_header
 from ttml.distributed_checkpointing._train_state import (
@@ -156,6 +156,31 @@ def test_scheduler_and_dataloader_round_trip_through_the_header(tmp_path):
     assert loader2.get_state_dict() == loader.get_state_dict()
     assert missing_train_state({}, scheduler=sched2) == ["train_state/scheduler"]
     assert restore_train_state({}, scheduler=sched2, dataloader=loader2, rng=True) == []
+
+
+@pytest.mark.parametrize("steps", [2, 7], ids=["mid_warmup", "into_cosine"])
+def test_a_warmup_then_cosine_schedule_resumes_where_it_stopped(steps):
+    """The common schedule: a linear warmup chained to a cosine decay, saved inside either child."""
+
+    def schedule(opt):
+        warmup = LinearScheduler(opt, start_factor=0.1, end_factor=1.0, total_steps=4)
+        cosine = CosineAnnealingScheduler(opt, T_max=10)
+        return SequentialScheduler(opt, [warmup, cosine], [4, 10])
+
+    opt = _Opt([1e-3, 2e-3])
+    sched = schedule(opt)
+    for _ in range(steps):
+        sched.step()
+    stored = json.loads(json.dumps(capture_train_state(scheduler=sched, rng=False)))
+
+    opt2 = _Opt([1e-3, 2e-3])
+    sched2 = schedule(opt2)
+    assert restore_train_state(stored, scheduler=sched2) == ["scheduler"]
+    assert sched2.get_last_lrs() == sched.get_last_lrs() and opt2.get_group_lrs() == opt.get_group_lrs()
+    for _ in range(6):  # across the milestone for the run saved mid-warmup
+        sched.step()
+        sched2.step()
+        assert sched2.get_last_lrs() == sched.get_last_lrs()
 
 
 def test_state_that_is_not_json_is_refused(expect_error):
