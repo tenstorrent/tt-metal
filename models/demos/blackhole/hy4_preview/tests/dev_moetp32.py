@@ -20,6 +20,9 @@ TS = [int(t) for t in os.environ.get("TP_T", "1").split(",")]
 REPS = int(os.environ.get("TP_REPS", "5"))
 OUT = os.environ.get("OUT", "/tmp/moetp32.json")
 CHIP0 = int(os.environ.get("TP_CHIP0", "0"))
+LAYER = int(
+    os.environ.get("VL", "1")
+)  # layer of the weights (activations stay layer 1: numerics gate vs emulation of the same tiles)
 
 acts = torch.load(ACTS + "acts_l0_l1.pt")
 X = torch.cat([h.reshape(-1, HID) for h, y, r in acts["moe"]])
@@ -41,11 +44,11 @@ try:
         os.environ.get("TP_FROM_CACHE", "0") == "1"
     )  # weights + reference tiles ONLY from the HY4_TP32_CACHE_DIR dump (no checkpoint read)
     if FROM_CACHE:
-        tp = IMPL(md, layer=1, chip0=CHIP0)
+        tp = IMPL(md, layer=LAYER, chip0=CHIP0)
         assert tp.from_cache, "TP_FROM_CACHE=1 but no cache for layer 1"
         from models.demos.blackhole.hy4_preview.tt import hy4_tp32_cache as TC
 
-        _d = TC.check_layer(TC.cache_root(), 1)
+        _d = TC.check_layer(TC.cache_root(), LAYER)
         _h01, _h2 = TC.load_host_chips(_d, [CHIP0 + i for i in range(8)])
         _unt = (
             lambda h, n: ttnn.to_torch(h).reshape(n, 32, 8, 32).permute(2, 0, 1, 3).float()
@@ -54,7 +57,7 @@ try:
         tp.t2 = [_unt(h, TC.T2) for h in _h2]
         p("weights from cache", _d)
     else:
-        W = load_moe_layer(1, load_experts=True)
+        W = load_moe_layer(LAYER, load_experts=True)
         w0, w1, w2 = [W[k].reshape(W[k].shape[-3], W[k].shape[-2], W[k].shape[-1]) for k in ("w0", "w1", "w2")]
         p("weights", tuple(w0.shape), tuple(w2.shape))
         tp = IMPL(md, w0, w1, w2, chip0=CHIP0)
