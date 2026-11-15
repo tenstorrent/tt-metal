@@ -675,7 +675,7 @@ per repeat call not worse than refinement 13 left it (330 us prefill T=128, 112 
 
 **Outcome**: compute is one source per role (local, prep, state, q / k) over two shared headers. The split alone is size-neutral (ROLE was already compile-time); the fit comes from the group qk role compiled in (decode pair compute 51.6 -> 37.5 KB), `-Os` reader / writer under NoC tracing, and compute zones on unpack / pack only. Golden + perf set 117/117 in plain, NoC-traced and zones (`GDN_PROFILE_ZONES=1`) builds; tightest program 3728 / 160 / 1904 B under 70688 (the 160 B is fp32 T=4096, local chunk step on 48 cores: the next NoC-traced addition to that build needs a cut). Max binary per role and RISC (ncrisc / brisc / trisc0-2, B), plain -> NoC trace: local 9164 / 9164 / 15828 / 32684 / 11020 -> 11004 / 11348 / 15928 / 32784 / 11108; prep 6884 / 5196 / 10892 / 26888 / 11908 -> 8264 / 7396 / 10992 / 26988 / 11996; state 4084 / 2012 / 7688 / 5956 / 4268 -> 6088 / 3764 / 7788 / 6036 / 4356; qk 3704 / 4368 / 7108 / 12100 / 3660 -> 6336 / 7276 / 7196 / 12180 / 3748; prep_qk 5868 / 1620 / 7168 / 9740 / 4272 -> 7252 / 3340 / 7256 / 9820 / 4360 (`tests/ttnn/unit_tests/operations/gated_delta_net/kernel_text_sizes.py`). NoC captures: `generated/noc/r17_capture_perf_decode_b1` (CONGESTED (merging chain) 3.8x, NOC0 E(0,11)) and `generated/noc/r17_capture_model_decode_b16` (DRAM BANK SHARED). Bit-identical to HEAD on one shape per regime, bf16 and fp32, default and in place. Device time of the guard set within the spread; host per call 112.8 vs 111.6 us (HEAD) at decode B=1 in the same process. The reader and writer were not split: their role paths are `if constexpr`, so separate sources would not change a binary. Parked: one R-BCAST kernel group per qk role (`SPLIT_BCAST_GROUPS`, +54 us host per decode call, no gain on the largest group).
 
-### [ ] Refinement 18 — Decode B=1: shorten the serial q / k chain
+### [x] Refinement 18 — Decode B=1: shorten the serial q / k chain
 
 **Type**: perf
 
@@ -703,6 +703,31 @@ next-program tests stay green.
 **Done when**: model_decode_b1 device kernel time is below 17 us (median of 11 after launch 1) or the
 marker table shows which link cannot be shortened and why, golden green, no regression on the guard
 set.
+
+**Outcome**: perf_decode_b1 22.64 -> 12.99 us (median of launches 2..12, same session against R17), decode_b1_f32
+30.20 -> 22.33. Marker table, slowest key head, us from the first kernel start (GDN_PROFILE_ZONES=2,
+`zone_timeline.py`), before -> after: (a) inputs landed: injector window 3.1, weights + gates 4.7 -> q / k cores 1.4-2.1,
+state cores 1.5-3.9 (S0 3.1-5.4); (b) conv done 7.9 (after the injector's gates, 6.0) -> 3.4-4.2, y sent 4.5-5.8;
+(c) norms done 10.8 (square 0.7, reduce + rsqrt ~2) -> 4.9-5.6, inverse norms sent 6.1-7.1; (d) k / q on the last
+state core 14.3 -> y 4.8-5.9, inverse norms 6.4-7.2; (e) update done 18.7 -> 9.7-10.5; (f) written 21.3 -> 12.4-13.3.
+Links cut: (1) the multicasts stalled up to 4.7 us after the norm: NOC 1 starts a rectangle multicast at its highest
+corner and routes toward lower x / y only, so a sender at a group's first core went around the torus across every
+other group (one-rectangle groups alone did not help); (2) the q / k part on 8 dedicated cores (`QK_CORES_VSPLIT`,
+R-QKCORE on R-VSPLIT pieces, each key head's 12 pieces a 6 x 2 rectangle, q and k cores right of its last row on
+NOC 1), so no state core carries an injector's tail; (3) two-stage hand-off (`QK_RAW_HANDOFF`): y at once, the inverse
+norms later, the state cores transpose y_k and read the state with raw rows while the norm runs and scale by fp32
+scalars after (accuracy equal to the normalized hand-off); (4) conv_state_out by the core that reads each column
+(the q / k readers had copied 10 columns serially, ending last at 13-14.6 us); (5) SWAP_NOC_ROWS = 3 for the B=1
+state cores (14.7 vs 15.3 us). The R-BCAST fallback (B=2, Hv=48) keeps `BCAST_SPLIT_NOCS` and injector gates after
+the q / k part (21.5 -> 18.3 us where it was B=1's path). Guard set (median of 2..12): B=8 40.52 vs 40.36, B=16
+73.4 / 73.4 vs 73.1 / 73.6, prefill T=128 65.79 vs 65.77, prefill 4096 910-911 (3 launches) unchanged. Cost: host per
+call at B=1 112 -> 145 us (3 kernel groups instead of 1, ~13 us each in generic_op; `QK_VSPLIT_SPLIT_NOCS` would buy
+0.2 us of device time for one more group, kept off). What binds now: the state cores' serial compute after y lands
+(~7.5 us: y_k^T + d 1.3, read matmul + token vector 2.5, update 0.8, o^2 gather 0.5, RMS 1.5, writes 0.8); DRAM bound
+4.8 us. Next: send y_k^T with y_k from the k core (drops the state cores' transposes); gates once per call on one core
+multicast to the state cores (removes 48 cores' reads of the same a / b / A_log / dt_bias pages, the late inputs of
+the top rows, and ~1 us of SFPU per state core); one conv window of the 4 columns on the q / k cores (staging 1.4 ->
+conv 3.4 us). Not done here: each is a new hand-off or CB layout and the target is met.
 
 ### [ ] Refinement 19 — Decode B=16: state reads issued earlier (second producer on the writer RISC)
 
