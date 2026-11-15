@@ -12,7 +12,8 @@
 namespace ttnn::operations::experimental::deepseek::sample_candidates {
 
 struct SampleCandidatesSharedVariables {
-    tt::tt_metal::KernelHandle kernel_id = 0;
+    // The reader RISC's kernel, then the writer RISC's (rows > 1).
+    std::vector<tt::tt_metal::KernelHandle> kernel_ids;
     std::vector<CoreCoord> cores;
 };
 

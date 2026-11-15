@@ -16,19 +16,20 @@ void bind_sample_candidates(::nanobind::module_& mod) {
     ttnn::bind_function<"decode_sample_candidates", "ttnn.experimental.deepseek.">(
         mod,
         R"doc(
-        The top-``k`` candidates of one row of logits, laid out as ``ttnn.sampling`` takes them, in one program.
+        The top-``k`` candidates of each of ``R`` rows of logits, laid out as ``ttnn.sampling`` takes them (``R``
+        users), in one program.
 
         Args:
-            logits (ttnn.Tensor): ``[1, 1, 1, V]`` BFLOAT16 TILE DRAM interleaved.
+            logits (ttnn.Tensor): ``[1, 1, R, V]`` BFLOAT16 TILE (32 x 32) DRAM interleaved, ``1 <= R <= 8``.
             inv_temp (ttnn.Tensor): ``[1, 1, 1, 1]`` BFLOAT16 TILE; the values are multiplied by it.
             index_offset (ttnn.Tensor): ``[1, 1, 1, 1]`` INT32 ROW_MAJOR; added to each index.
             k (int): candidates kept (default 32).
             fill_value (float): the value of the ``k`` padding candidates after them.
-            num_workers (int): cores scanning the logits; core 0 merges their lists.
+            num_workers (int): cores scanning the logits; core ``r`` merges row ``r``'s lists.
 
         Returns:
-            List[ttnn.Tensor]: values ``[1, 1, 1, 2k]`` BFLOAT16 TILE (the ``k`` largest, descending, ties by lower
-            index, times ``inv_temp``, then ``fill_value``) and indices ``[1, 1, 1, 2k]`` INT32 ROW_MAJOR (their
+            List[ttnn.Tensor]: values ``[1, 1, R, 2k]`` BFLOAT16 TILE (per row the ``k`` largest, descending, ties by
+            lower index, times ``inv_temp``, then ``fill_value``) and indices ``[1, 1, R, 2k]`` INT32 ROW_MAJOR (their
             columns plus ``index_offset``, then 0), DRAM interleaved.
         )doc",
         &ttnn::experimental::deepseek::decode_sample_candidates,

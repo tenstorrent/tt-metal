@@ -42,6 +42,8 @@ std::vector<Tensor> decode_step_context(
     const std::vector<std::vector<int32_t>>& int_terms,
     const std::vector<uint32_t>& rope_table_ids,
     const std::vector<uint32_t>& rope_fields,
-    const std::vector<int32_t>& rope_offsets);
+    const std::vector<int32_t>& rope_offsets,
+    const std::vector<uint32_t>& rope_rows = {},
+    const std::vector<uint32_t>& rope_tile_heights = {});
 
 }  // namespace ttnn::prim

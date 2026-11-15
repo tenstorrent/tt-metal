@@ -36,14 +36,18 @@ void SampleCandidatesDeviceOperation::validate_on_program_cache_miss(
         "decode_sample_candidates: logits must be BFLOAT16 TILE DRAM interleaved");
     const auto& s = logits.logical_shape();
     TT_FATAL(
-        s.rank() == 4 && s[0] == 1 && s[1] == 1 && s[2] == 1,
-        "decode_sample_candidates: logits must be [1, 1, 1, V], got {}",
+        s.rank() == 4 && s[0] == 1 && s[1] == 1 && s[2] >= 1 && s[2] <= 8,
+        "decode_sample_candidates: logits must be [1, 1, R, V] with 1 <= R <= 8, got {}",
         s);
     TT_FATAL(
         attrs.k >= 1 && attrs.k <= tt::constants::TILE_WIDTH && (2 * attrs.k) % tt::constants::TILE_WIDTH == 0,
         "decode_sample_candidates: k must be 16 or 32, got {}",
         attrs.k);
     const uint32_t tiles = tt::div_up(static_cast<uint32_t>(s[3]), tt::constants::TILE_WIDTH);
+    TT_FATAL(
+        logits.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+            logits.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+        "decode_sample_candidates: logits must be in 32 x 32 tiles");
     TT_FATAL(attrs.num_workers >= 1, "decode_sample_candidates: needs a worker");
     TT_FATAL(
         static_cast<uint32_t>(s[3]) >= attrs.k && tiles >= 1,
@@ -64,8 +68,8 @@ void SampleCandidatesDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& /*args*/) {}
 
 SampleCandidatesDeviceOperation::spec_return_value_t SampleCandidatesDeviceOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t& /*args*/) {
-    const ttnn::Shape shape({1, 1, 1, 2 * attrs.k});
+    const operation_attributes_t& attrs, const tensor_args_t& args) {
+    const ttnn::Shape shape({1, 1, args.logits.logical_shape()[2], 2 * attrs.k});
     return {
         TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config)),
         TensorSpec(shape, TensorLayout(DataType::INT32, PageConfig(Layout::ROW_MAJOR), attrs.output_mem_config))};

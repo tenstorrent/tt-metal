@@ -16,9 +16,20 @@ std::vector<Tensor> decode_step_context(
     const std::vector<std::vector<int32_t>>& int_terms,
     const std::vector<uint32_t>& rope_table_ids,
     const std::vector<uint32_t>& rope_fields,
-    const std::vector<int32_t>& rope_offsets) {
+    const std::vector<int32_t>& rope_offsets,
+    const std::vector<uint32_t>& rope_rows,
+    const std::vector<uint32_t>& rope_tile_heights) {
     return ttnn::prim::decode_step_context(
-        packet, rope_tables, int_shapes, int_dtypes, int_terms, rope_table_ids, rope_fields, rope_offsets);
+        packet,
+        rope_tables,
+        int_shapes,
+        int_dtypes,
+        int_terms,
+        rope_table_ids,
+        rope_fields,
+        rope_offsets,
+        rope_rows,
+        rope_tile_heights);
 }
 
 }  // namespace ttnn::experimental::deepseek

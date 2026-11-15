@@ -25,6 +25,10 @@ namespace ttnn::experimental::deepseek {
 // A RoPE table [1, 1, H + 1025, 2 * Rd] INT32 (Q28 fixed point) holds rows [cos | sin] of h * 1024 * w for
 // h < H, then scale * [cos | sin] of l * w for l = -1 .. 1023; position p = pkt[field] + offset (>= -1) takes
 // the angle-sum of its 1024-block row and its offset row.
+//
+// A RoPE output of rope_rows[j] = R > 1 rows (default 1) holds row r at position pkt[field + r] + offset: cos, sin,
+// -sin are [1, 1, R, Rd] TILE with tile (rope_tile_heights[j], 32) (default 32; >= R), rows R.. zero. E.g. a
+// 4-row verify block's rows: R = 4, height 4, i.e. (4, 32) tiles.
 std::vector<Tensor> decode_step_context(
     const Tensor& packet,
     const std::vector<Tensor>& rope_tables,
@@ -33,6 +37,8 @@ std::vector<Tensor> decode_step_context(
     const std::vector<std::vector<int32_t>>& int_terms,
     const std::vector<uint32_t>& rope_table_ids,
     const std::vector<uint32_t>& rope_fields,
-    const std::vector<int32_t>& rope_offsets);
+    const std::vector<int32_t>& rope_offsets,
+    const std::vector<uint32_t>& rope_rows = {},
+    const std::vector<uint32_t>& rope_tile_heights = {});
 
 }  // namespace ttnn::experimental::deepseek

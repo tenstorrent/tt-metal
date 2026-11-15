@@ -22,6 +22,10 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import _CachePath
 
 # Candidates each rank keeps for its draw: one tile of ttnn.sampling's top-k.
 SAMPLE_K = 32
+# decode_sample_candidates' scanning cores for one row (its default) and for a several-row verify block, where each
+# core scans two rows per RISC: the whole grid (it clamps) keeps the per-RISC share near one row's.
+SAMPLE_WORKERS = {1: 64}
+SAMPLE_WORKERS_ROWS = 128
 # The rank's top-SAMPLE_K candidates (values scaled, indices offset, both padded) as one decode_sample_candidates
 # program instead of ttnn.topk and the ops that lay its output out for ttnn.sampling.
 # ``DEEPSEEK_V41_FUSED_SAMPLE_CANDIDATES=0``: ttnn.topk.
@@ -89,12 +93,17 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
     relative to their max first: bf16 cannot place a log-partition of ~30 closer than 0.125.
 
     Returns ``[1, 1, 1, out_words]`` int32 ROW_MAJOR, the token first: one PCIe-aligned D2H page.
+
+    With ``rows = R > 1`` (a verify block) ``logits`` is ``[1, 1, R, V / TP]`` (what ``lm_head`` gives for ``M = R``,
+    rows 0 .. R - 1 of the tiles) and each row is drawn independently, as ``R`` users of ``ttnn.sampling``: the
+    page holds row ``j``'s token in word ``j``. Greedy is each row's argmax.
     """
 
-    def __init__(self, device: ttnn.MeshDevice, local_vocab: int, pcie_alignment: int):
+    def __init__(self, device: ttnn.MeshDevice, local_vocab: int, pcie_alignment: int, rows: int = 1):
         self.device = device
         self.tp_size = device.get_num_devices()
-        self.out_words = pcie_alignment // 4
+        self.rows = rows
+        self.out_words = -(-rows * 4 // pcie_alignment) * pcie_alignment // 4  # whole PCIe-aligned pages
         replicate = ttnn.ReplicateTensorToMesh(device)
         offsets = torch.arange(self.tp_size, dtype=torch.int32).reshape(-1, 1, 1, 1) * local_vocab
         self.index_offset = ttnn.from_torch(
@@ -111,9 +120,9 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
             device=device,
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
         )
-        lead = torch.full((1, 1, 1, SAMPLE_K), _MASK_NEG)
+        lead = torch.full((1, 1, rows, SAMPLE_K), _MASK_NEG)
         lead[..., 0] = 0.0
-        consts = {"lead": lead, "zeros": torch.zeros(1, 1, 1, SAMPLE_K), "gate": torch.zeros(1, 1, 1, 1)}
+        consts = {"lead": lead, "zeros": torch.zeros(1, 1, rows, SAMPLE_K), "gate": torch.zeros(1, 1, 1, 1)}
         for name, value in consts.items():
             setattr(
                 self,
@@ -141,12 +150,12 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
             device=device,
             mesh_mapper=replicate,
         )
-        # ttnn.sampling's per-user k, p and temp; temp multiplies, and the values arrive already scaled.
+        # ttnn.sampling's per-user (per-row) k, p and temp; temp multiplies, and the values arrive already scaled.
         self.k = ttnn.from_torch(
-            torch.ones(1, dtype=torch.int32), dtype=ttnn.int32, device=device, mesh_mapper=replicate
+            torch.ones(rows, dtype=torch.int32), dtype=ttnn.int32, device=device, mesh_mapper=replicate
         )
-        self.p = ttnn.from_torch(torch.ones(1), dtype=ttnn.bfloat16, device=device, mesh_mapper=replicate)
-        self.one = ttnn.from_torch(torch.ones(1), dtype=ttnn.bfloat16, device=device, mesh_mapper=replicate)
+        self.p = ttnn.from_torch(torch.ones(rows), dtype=ttnn.bfloat16, device=device, mesh_mapper=replicate)
+        self.one = ttnn.from_torch(torch.ones(rows), dtype=ttnn.bfloat16, device=device, mesh_mapper=replicate)
 
     def set_sampling(self, temperature: float, seed: int) -> None:
         """Sample at ``temperature`` (0, the initial state, is greedy) from PRNGs seeded with ``seed``.
@@ -155,16 +164,22 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
         if temperature < 0:
             raise ValueError(f"temperature must be >= 0, got {temperature}")
         greedy = temperature == 0
-        host_to_device(torch.full((1,), 1 if greedy else SAMPLE_K, dtype=torch.int32), self.k)
+        host_to_device(torch.full((self.rows,), 1 if greedy else SAMPLE_K, dtype=torch.int32), self.k)
         host_to_device(torch.full((1, 1, 1, 1), 1.0 if greedy else 1.0 / temperature), self.inv_temp)
         host_to_device(torch.full((1, 1, 1, 1), 0.0 if greedy else 1.0), self.gate)
         ttnn.manual_seed(seed, device=self.device)
 
     def forward(self, logits: ttnn.Tensor) -> ttnn.Tensor:
-        if FUSED_SAMPLE_CANDIDATES:
+        rows = self.rows
+        if FUSED_SAMPLE_CANDIDATES or rows > 1:
             # [top-K * inv_temp | fill] and [top-K + offset | 0]; the fill adds nothing to the log-partition below.
             vals, idx = ttnn.experimental.deepseek.decode_sample_candidates(
-                logits, self.inv_temp, self.index_offset, k=SAMPLE_K, fill_value=_MASK_NEG
+                logits,
+                self.inv_temp,
+                self.index_offset,
+                k=SAMPLE_K,
+                fill_value=_MASK_NEG,
+                num_workers=SAMPLE_WORKERS.get(rows, SAMPLE_WORKERS_ROWS),
             )
             token = ttnn.sampling(vals, idx, k=self.k, p=self.p, temp=self.one)
         else:
@@ -180,6 +195,8 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
             weight = ttnn.add(top, ttnn.multiply(spread, self.gate))
             # Each rank's row: its weight in column 0 behind no-candidate fill, and its token in every column.
             weights = ttnn.add(self.lead, weight)
+            if rows > 1:  # [1, 1, 1, R] -> one token per row
+                token = ttnn.reshape(token, [1, 1, rows, 1])
             tokens = ttnn.add(self.zeros, ttnn.typecast(ttnn.to_layout(token, ttnn.TILE_LAYOUT), ttnn.float32))
             weights, tokens = (
                 ttnn.all_gather(
@@ -195,4 +212,4 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
             weights = ttnn.typecast(ttnn.subtract(weights, ttnn.max(weights, dim=-1, keepdim=True)), ttnn.bfloat16)
             tokens = ttnn.to_layout(ttnn.typecast(tokens, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT)
             token = ttnn.sampling(weights, tokens, k=self.k, p=self.p, temp=self.one)
-        return ttnn.pad(token, [(0, 0), (0, 0), (0, 0), (0, self.out_words - 1)], 0)
+        return ttnn.pad(token, [(0, 0), (0, 0), (0, 0), (0, self.out_words - rows)], 0)

@@ -88,7 +88,21 @@ void validate(const StepContextParams& attrs, const StepContextInputs& args) {
         TT_FATAL(attrs.rope_tables[j] < args.rope_tables.size(), "decode_step_context: RoPE table id out of range");
         check_field(static_cast<int32_t>(attrs.rope_fields[j]));
         TT_FATAL(attrs.rope_offsets[j] >= -1, "decode_step_context: a RoPE position offset must be >= -1");
+        const uint32_t rows = rope_rows_of(attrs, j);
+        const uint32_t height = rope_tile_height_of(attrs, j);
+        TT_FATAL(rows >= 1 && rows <= kMaxRopeRows, "decode_step_context: a RoPE output has 1..{} rows", kMaxRopeRows);
+        TT_FATAL(
+            (height == 1 || height == 2 || height == 4 || height == 8 || height == 16 || height == 32) &&
+                height >= rows,
+            "decode_step_context: RoPE tile height {} must be a power of two in [rows ({}), 32]",
+            height,
+            rows);
+        check_field(static_cast<int32_t>(attrs.rope_fields[j] + rows - 1));
     }
+    TT_FATAL(
+        (attrs.rope_rows.empty() || attrs.rope_rows.size() == n_rope) &&
+            (attrs.rope_tile_heights.empty() || attrs.rope_tile_heights.size() == n_rope),
+        "decode_step_context: rope_rows and rope_tile_heights must be empty or have one entry per RoPE output");
     for (const auto& table : args.rope_tables) {
         TT_FATAL(
             table.dtype() == DataType::INT32 && table.layout() == Layout::ROW_MAJOR,
@@ -127,10 +141,15 @@ StepContextDeviceOperation::spec_return_value_t StepContextDeviceOperation::comp
     }
     for (size_t j = 0; j < attributes.rope_tables.size(); ++j) {
         const uint32_t rd = tensor_args.rope_tables[attributes.rope_tables[j]].logical_shape()[3] / 2;
+        const uint32_t rows = rope_rows_of(attributes, j);
+        const uint32_t height = rope_tile_height_of(attributes, j);
         for (int k = 0; k < 3; ++k) {
             specs.emplace_back(
-                ttnn::Shape({1, 1, 1, rd}),
-                TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attributes.output_mem_config));
+                ttnn::Shape({1, 1, rows, rd}),
+                TensorLayout(
+                    DataType::BFLOAT16,
+                    PageConfig(Layout::TILE, Tile({height, tt::constants::TILE_WIDTH})),
+                    attributes.output_mem_config));
         }
     }
     return specs;
@@ -157,7 +176,9 @@ std::vector<Tensor> decode_step_context(
     const std::vector<std::vector<int32_t>>& int_terms,
     const std::vector<uint32_t>& rope_table_ids,
     const std::vector<uint32_t>& rope_fields,
-    const std::vector<int32_t>& rope_offsets) {
+    const std::vector<int32_t>& rope_offsets,
+    const std::vector<uint32_t>& rope_rows,
+    const std::vector<uint32_t>& rope_tile_heights) {
     using OperationType = ttnn::operations::experimental::deepseek::step_context::StepContextDeviceOperation;
     auto attributes = OperationType::operation_attributes_t{
         .int_shapes = int_shapes,
@@ -166,6 +187,8 @@ std::vector<Tensor> decode_step_context(
         .rope_tables = rope_table_ids,
         .rope_fields = rope_fields,
         .rope_offsets = rope_offsets,
+        .rope_rows = rope_rows,
+        .rope_tile_heights = rope_tile_heights,
         .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
     };
     auto tensor_args = OperationType::tensor_args_t{.packet = packet, .rope_tables = rope_tables};
