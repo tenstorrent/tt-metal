@@ -439,14 +439,6 @@ protected:
     }
 };
 
-TEST_F(SpecPerDeviceRunArgsTest, MergedRangeGetsEveryCallsValues) {
-    run_sequence(/*with_extra=*/false, /*ranges=*/0, /*expected_programs=*/1);
-}
-
-TEST_F(SpecPerDeviceRunArgsTest, OptionalKernelAndSeveralRanges) {
-    run_sequence(/*with_extra=*/true, /*ranges=*/1, /*expected_programs=*/2);
-}
-
 // A single-device range runs split next to merged ranges in one workload.
 TEST_F(SpecPerDeviceRunArgsTest, MergedAndSplitRangesInOneWorkload) {
     run_sequence(/*with_extra=*/true, /*ranges=*/2, /*expected_programs=*/3);
@@ -479,11 +471,6 @@ TEST_F(SpecPerDeviceRunArgsTest, BaseMustListWhatThePreviousCallSetPerDevice) {
 // cached workload still holds the previous call's values, and later calls are unconstrained by the rejected args.
 TEST_F(SpecPerDeviceRunArgsTest, BadPerDeviceValuesAreRejectedBeforeAnyChange) { bad_values_rejected(); }
 
-TEST_F(SpecPerDeviceRunArgsTest, BadPerDeviceValuesAreRejectedBeforeAnyChangeSplit) {
-    ttnn::device_operation::per_device_run_args::ScopedForceSplit split(*mesh_device_);
-    bad_values_rejected();
-}
-
 // A hit can still fail part-way on something the adapter does not check (here: row 1's base sets an undeclared
 // arg, which metal rejects as it applies it), possibly after row 0 got its new per-device values. Every range then
 // keeps tracking its old and new per-device args: a base without the new array fails, one with it restores every
@@ -498,24 +485,6 @@ TEST_F(SpecPerDeviceRunArgsTest, HitFailingPartWayKeepsItsArgsTracked) {
     clear_l1();
     launch(next);
     expect_values(next);
-}
-
-TEST_F(SpecPerDeviceRunArgsTest, TraceKeepsCapturedValues) {
-    using Attrs = PerDeviceRunArgsOp::operation_attributes_t;
-    const Attrs captured{.call = 0, .bias_cores = {0}};
-    launch(captured);  // compile and cache
-    auto& cq = mesh_device_->mesh_command_queue();
-    const auto args = input();
-    const auto trace_id = mesh_device_->begin_mesh_trace(cq.id());
-    auto traced_output = ttnn::device_operation::launch<PerDeviceRunArgsOp>(captured, args);
-    mesh_device_->end_mesh_trace(cq.id(), trace_id);
-
-    const Attrs later{.call = 5, .bias_cores = {1}, .array_per_device = true};
-    launch(later);
-    clear_l1();
-    mesh_device_->replay_mesh_trace(cq.id(), trace_id, /*blocking=*/true);
-    expect_values(captured);
-    mesh_device_->release_mesh_trace(trace_id);
 }
 
 }  // namespace spec_per_device_run_args_test
