@@ -194,6 +194,12 @@ def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
     newer = dict(block, format=2)
     with expect_error(VersionError, "newer than this reader"):
         check_train_state({"rng": newer}, rng=True, world_rank=0)
+    # The whole train state passed where its RNG block belongs, or a block with a bad format, restores nothing
+    # silently no more.
+    with expect_error(CheckpointError, r"not an RNG block \(found \['dataloader', 'rng'\]\)"):
+        restore_rng({"dataloader": {"position": 1}, "rng": block}, world_rank=0)
+    with expect_error(CheckpointError, "RNG state format 'x' is not a version number"):
+        restore_rng(dict(block, format="x"), world_rank=0)
     check_train_state({"rng": block}, rng=False)  # not asked for: nothing to check
 
 

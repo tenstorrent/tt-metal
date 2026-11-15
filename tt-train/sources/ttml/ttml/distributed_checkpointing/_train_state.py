@@ -105,8 +105,18 @@ def capture_process_rng() -> dict:
 
 
 def _check_rng_format(state: dict) -> None:
-    if int(state.get("format", RNG_FORMAT)) > RNG_FORMAT:
-        raise VersionError(f"RNG state format {state['format']} is newer than this reader ({RNG_FORMAT})")
+    """``state`` must be an RNG block, as ``capture_rng`` makes it, of a format this reader knows."""
+    if not isinstance(state, dict) or "format" not in state or not isinstance(state.get("ranks"), dict):
+        found = sorted(state) if isinstance(state, dict) else type(state).__name__
+        raise CheckpointError(
+            f"not an RNG block (found {found}); it needs 'format' and 'ranks': pass the train state's 'rng' entry"
+        )
+    try:
+        version = int(state["format"])
+    except (TypeError, ValueError):
+        raise CheckpointError(f"RNG state format {state['format']!r} is not a version number") from None
+    if version > RNG_FORMAT:
+        raise VersionError(f"RNG state format {version} is newer than this reader ({RNG_FORMAT})")
 
 
 def restore_rng(state: dict, world_rank: int = 0) -> list[str]:
@@ -114,7 +124,7 @@ def restore_rng(state: dict, world_rank: int = 0) -> list[str]:
     ``rng.python``, ``rng.numpy``, ``rng.ttml_init``, ``rng.torch``). A rank without an entry keeps its generators,
     with a warning; torch's is restored only when torch is imported."""
     _check_rng_format(state)
-    ranks = state.get("ranks", {})
+    ranks = state["ranks"]
     own = ranks.get(str(int(world_rank)))
     if own is None:
         warnings.warn(
@@ -242,7 +252,7 @@ def check_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bool
             raise TypeError(f"the {name} passed ({type(component).__name__}) has no set_state_dict to restore it with")
     if rng and "rng" in state:
         _check_rng_format(state["rng"])
-        own = state["rng"].get("ranks", {}).get(str(int(world_rank)))
+        own = state["rng"]["ranks"].get(str(int(world_rank)))
         if own is not None:
             _decode_process_rng(own)
 
