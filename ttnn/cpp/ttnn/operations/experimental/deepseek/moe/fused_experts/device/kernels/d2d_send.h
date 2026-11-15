@@ -144,7 +144,7 @@ struct D2DHeaderRing {
     }
 };
 
-// `size` bytes from `src` to `dst` on core (x, y) of the route's chips, then +1 on `flag` there: the last
+// `size` bytes from `src` to `dst` on core (x, y) of the route's chips, then +`inc` on `flag` there: the last
 // chunk carries the increment as one fused packet, issued after its write by the destination router, so the
 // flag counts only once every byte has landed (the route's packets, and a packet's write and increment, arrive
 // in order). Each packet takes its own
@@ -159,7 +159,8 @@ void d2d_send_flagged(
     uint32_t x,
     uint32_t y,
     uint32_t dst,
-    uint32_t flag) {
+    uint32_t flag,
+    uint32_t inc = 1) {
     namespace fabric_api = tt::tt_fabric::mesh::experimental;
     using tt::tt_fabric::common::experimental::UnicastFusedAtomicIncUpdateMask;
     using tt::tt_fabric::common::experimental::UnicastWriteUpdateMask;
@@ -171,7 +172,7 @@ void d2d_send_flagged(
             // packets), the increment follows the write from the same router to the same core in order; a flush
             // there would hold the router for each write's ack and serialize the burst.
             const tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader cmd{
-                safe_get_noc_addr(x, y, dst, 0), safe_get_noc_addr(x, y, flag, 0), 1, false};
+                safe_get_noc_addr(x, y, dst, 0), safe_get_noc_addr(x, y, flag, 0), inc, false};
             if (route.multicast) {
                 fabric_api::fabric_multicast_noc_fused_unicast_with_atomic_inc(
                     sender, header, route.dst_chip, route.dst_mesh, route.range, src, chunk, cmd);

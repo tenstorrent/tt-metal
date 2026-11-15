@@ -23,7 +23,10 @@
 // Compile-time args:
 //   0: cb_parts   1: num_parts   2: cb_rbias   3: cb_rout   4: top_k   5: my_chip   6: cand_slot_bytes
 //   7: num_slots (chips)   8: sem_router (on the route merge)   9: bias_tiles   10: bias row bytes
-//   11+: TensorAccessorArgs(bias)
+//   11+: TensorAccessorArgs(bias), then rows (the request's token rows, the height of the score tiles)
+//
+// Several rows: cb_rout's tiles are (rows x 32), expert i of row r at face i / 16, face row r; a slot holds each row's
+// top_k in turn (row r's at triplet r * top_k).
 //
 // Runtime args:
 //   0: candidate slots address   1: route merge NoC x   2: route merge NoC y   3: sender NoC x   4: sender NoC y
@@ -47,6 +50,9 @@ void kernel_main() {
     constexpr uint32_t bias_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t bias_row_bytes = get_compile_time_arg_val(10);
     constexpr auto bias_args = TensorAccessorArgs<11>();
+    constexpr uint32_t rows = get_compile_time_arg_val(bias_args.next_compile_time_args_offset());
+    // A (rows x 32) bf16 tile: two faces of rows x 16, so a tile is 32 * rows half-words.
+    constexpr uint32_t tile_halves = 32u * rows;
 
     const uint32_t cand_addr = get_arg_val<uint32_t>(0);
     const uint32_t merge_x = get_arg_val<uint32_t>(1);
@@ -57,13 +63,92 @@ void kernel_main() {
     const uint32_t sender_ready_addr = get_arg_val<uint32_t>(6);
     auto* forwarded = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(7));
 
+    // Rows [r0, r1) of the [score, ranking] tiles at words_l1 (two bf16 per word: expert i of row r at face i / 16,
+    // face row r), each row's top_k into the slot at slot_l1, best first, ties to the lower expert.
+    auto topk_rows = [&](uint32_t words_l1, uint32_t slot_l1, uint32_t r0, uint32_t r1) {
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words_l1);
+        auto* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_l1);
+        for (uint32_t r = r0; r < r1; ++r) {
+            uint32_t key[32];
+            for (uint32_t f = 0; f < 2u; ++f) {
+                for (uint32_t w = 0; w < 8u; ++w) {
+                    const uint32_t pair = words[tile_halves / 2u + (f * rows + r) * 8u + w];
+                    key[f * 16u + 2u * w] = f32_order_key(pair << 16);
+                    key[f * 16u + 2u * w + 1u] = f32_order_key(pair & 0xFFFF0000u);
+                }
+            }
+            for (uint32_t j = 0; j < top_k; ++j) {
+                uint32_t best = 0;
+                for (uint32_t i = 1; i < 32u; ++i) {
+                    if (key[i] > key[best]) {
+                        best = i;
+                    }
+                }
+                const uint32_t pair = words[((best >> 4) * rows + r) * 8u + ((best & 15u) >> 1)];
+                const uint32_t at = 3u * (r * top_k + j);
+                cand[at] = key[best];
+                cand[at + 1u] = my_chip * 32u + best;
+                cand[at + 2u] = (best & 1u) != 0u ? (pair & 0xFFFF0000u) : (pair << 16);
+                key[best] = 0u;
+            }
+        }
+    };
+
+#if defined(FE_TOPK_HELPER)
+    // The reducer's other RISC: the second half of the rows' top-k, each iteration once the reader has published the
+    // tiles' address (FE_TOPK_SEM_ADDR) and the iteration (FE_TOPK_SEM_GO); its slot is at the same address.
+    (void)merge_x;
+    (void)merge_y;
+    (void)sender_x;
+    (void)sender_y;
+    (void)parts;
+    (void)sender_ready_addr;
+    (void)forwarded;
+    auto* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_GO));
+    for (uint32_t it = 0;; ++it) {
+        uint32_t v;
+        do {
+            invalidate_l1_cache();
+            v = *go;
+        } while ((v & ~kFeStopBit) < it + 1u);
+        if ((v & kFeStopBit) != 0u) {
+            break;
+        }
+        const uint32_t words_l1 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_ADDR));
+        topk_rows(words_l1, cand_addr + ((it & 1u) * num_slots + my_chip) * cand_slot_bytes, rows / 2u, rows);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_DONE)) = it + 1u;
+    }
+    return;
+#endif
+
     uint32_t iter = 0;
     for (; fe_begin_iteration(iter, cb_parts_id, num_parts, /*has_writer=*/false); ++iter) {
         // 1. The bias does not depend on the row.
         cb_reserve_back(cb_rbias_id, bias_tiles);
         const auto bias = TensorAccessor(bias_args, fe_header(kFeHdrRouterBias));
-        noc_async_read(bias.get_noc_addr(0), get_write_ptr(cb_rbias_id), bias_row_bytes);
-        noc_async_read_barrier();
+        if constexpr (rows == 1u) {
+            // The row is bias_tiles 1x32 tiles: tile my_chip is this chip's experts' biases.
+            noc_async_read(bias.get_noc_addr(0), get_write_ptr(cb_rbias_id), bias_row_bytes);
+            noc_async_read_barrier();
+        } else {
+            // Taller tiles: tile 0 is this chip's 32 biases in every row (router_reduce.cpp's compute takes tile 0),
+            // built from the row read into the CB's last bias_row_bytes.
+            constexpr uint32_t tile_bytes = 64u * rows;
+            constexpr uint32_t raw_offset = (bias_tiles * tile_bytes - bias_row_bytes) & ~63u;
+            static_assert(rows == 1u || raw_offset >= tile_bytes, "the bias row must land past tile 0");
+            const uint32_t base = get_write_ptr(cb_rbias_id);
+            noc_async_read(bias.get_noc_addr(0), base + raw_offset, bias_row_bytes);
+            noc_async_read_barrier();
+            auto* raw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + raw_offset) + my_chip * 16u;
+            auto* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
+            for (uint32_t f = 0; f < 2u; ++f) {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    for (uint32_t w = 0; w < 8u; ++w) {
+                        tile[(f * rows + r) * 8u + w] = raw[f * 8u + w];
+                    }
+                }
+            }
+        }
         cb_push_back(cb_rbias_id, bias_tiles);
 
         // 2.
@@ -74,36 +159,29 @@ void kernel_main() {
         cb_reserve_back(cb_parts_id, num_parts);
         cb_push_back(cb_parts_id, num_parts);
 
-        // 3. A 1x32 tile is its 32 values in column order: expert i's score is half-word i, its ranking 32 + i.
+        // 3. A 1x32 tile is its 32 values in column order: expert i's score is half-word i, its ranking 32 + i;
+        // row r of a taller tile is face row r of both faces.
         cb_wait_front(cb_rout_id, 2);
         const uint32_t slot_l1 = cand_addr + ((iter & 1u) * num_slots + my_chip) * cand_slot_bytes;
         {
             DeviceZoneScopedN("FE_R_TOPK");
-            auto* vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_rout_id));
-            uint32_t best_key[top_k];
-            uint32_t best_idx[top_k];
-            for (uint32_t i = 0; i < 32u; ++i) {
-                const uint32_t key = f32_order_key(static_cast<uint32_t>(vals[32u + i]) << 16);
-                if (i < top_k || key > best_key[top_k - 1u]) {
-                    uint32_t p = 0;
-                    while (p < i && p + 1u < top_k && best_key[p] >= key) {
-                        ++p;
-                    }
-                    for (uint32_t j = (i < top_k ? i : top_k - 1u); j > p; --j) {
-                        best_key[j] = best_key[j - 1u];
-                        best_idx[j] = best_idx[j - 1u];
-                    }
-                    best_key[p] = key;
-                    best_idx[p] = i;
-                }
+            // Both tiles' rows, two bf16 per word: score (tile 0) and ranking (tile 1) of expert i of row r at face
+            // i / 16, face row r -- read once as words into registers.
+            const uint32_t words_l1 = get_read_ptr(cb_rout_id);
+#if defined(FE_TOPK_SEM_GO)
+            // Several rows: the reducer's other RISC (FE_TOPK_HELPER) takes the second half of them.
+            if constexpr (rows > 1u) {
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_ADDR)) = words_l1;
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_GO)) = iter + 1u;
+                topk_rows(words_l1, slot_l1, 0u, rows / 2u);
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_DONE)), iter + 1u);
+            } else {
+                topk_rows(words_l1, slot_l1, 0u, rows);
             }
-            auto* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_l1);
-            for (uint32_t j = 0; j < top_k; ++j) {
-                const uint32_t i = best_idx[j];
-                cand[3u * j] = best_key[j];
-                cand[3u * j + 1u] = my_chip * 32u + i;
-                cand[3u * j + 2u] = static_cast<uint32_t>(vals[i]) << 16;
-            }
+#else
+            topk_rows(words_l1, slot_l1, 0u, rows);
+#endif
         }
         cb_pop_front(cb_rout_id, 2);
 
@@ -125,4 +203,7 @@ void kernel_main() {
     noc_semaphore_wait_min(forwarded, iter);
     *parts = 0;
     *forwarded = 0;
+#if defined(FE_TOPK_SEM_GO)
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_GO)) = kFeStopBit | (iter + 1u);
+#endif
 }
