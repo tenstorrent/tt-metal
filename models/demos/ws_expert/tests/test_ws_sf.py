@@ -1,0 +1,197 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Store-and-forward weight landing (ws_sf.py): every chip runs the 4 groups on its own tokens, expert e owned by
+chip e % NCHIP; the weights travel one fabric hop at a time around Hamiltonian cycles. test_sf_schedule checks the
+ring streams on the host; the device tests make the inputs once and launch WS_WARM (default 20) warm-up + WS_MEAS
+(default 5) measured times (every launch builds the program again: fresh credit / arrival words). The steady-state time
+per expert comes from the group cores' expert-done stamps; PCC (each group's last expert) is checked on the last
+launch, and the forwarders' timers of the last launch are logged."""
+
+import os
+import statistics
+from collections import Counter
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.ws_expert.bench_util import aiclk_mhz
+from models.demos.ws_expert.tests.test_ws_fab_bench import (
+    FAB,
+    TORUS,
+    chip_pcc,
+    chip_time,
+    make_inputs,
+    make_inputs_owned,
+)
+from models.demos.ws_expert.ws_group import GCfg
+from models.demos.ws_expert.ws_sf import RCfg, build_sf, hops, ring_schedule, rings, snake, torus_cycles
+
+WARM = int(os.environ.get("WS_WARM", "20"))
+MEAS = int(os.environ.get("WS_MEAS", "5"))
+
+
+def check_schedule(shape, rc: RCfg, cfg: GCfg):
+    """Every chip receives every slice of every expert it does not own exactly once, the owner injects each slice into
+    both directions of its lane, and each chip's outgoing stream on a ring is exactly the next chip's incoming one.
+    Returns the incoming packets per chip and ring (load balance)."""
+    R, Cn = shape
+    NCHIP = R * Cn
+    NCH = (2 * cfg.KT + cfg.PAIRS * cfg.DCOLS) // rc.CHT
+    rl = rings(shape, rc)
+    NL = len(rl) // 2
+    got = [Counter() for _ in range(NCHIP)]
+    load = {}
+    for lane, d, cyc, _ in rl:
+        N = len(cyc)
+        streams = {}
+        for rc_ in cyc:
+            me = rc_[0] * Cn + rc_[1]
+            sch = ring_schedule(cfg.nexp, NCHIP, cfg.G, cfg.GC, NL, NCH, hops(cyc, rc_, d, Cn), d, lane, N)
+            streams[rc_] = sch
+            for kind, e, n, c, u in sch:
+                if kind != 0 and u == 0:
+                    got[me][(e, c)] += 1
+            load[(me, lane, d)] = sum(k != 0 for k, *_ in sch)
+        for i, rc_ in enumerate(cyc):
+            nx = cyc[(i + (1 if d == 0 else -1)) % N]
+            out = [t[1:] for t in streams[rc_] if t[0] != 2]
+            inc = [t[1:] for t in streams[nx] if t[0] != 0]
+            assert out == inc, f"ring lane {lane} dir {d}: stream {rc_} -> {nx} differs"
+    for me in range(NCHIP):
+        want = {(e, (e % cfg.G) * cfg.GC + j) for e in range(cfg.nexp) if e % NCHIP != me for j in range(cfg.GC)}
+        assert set(got[me]) == want and all(v == 1 for v in got[me].values()), f"chip {me} receives a wrong slice set"
+    return load
+
+
+@pytest.mark.parametrize("shape,nexp", [((2, 4), 32), ((8, 4), 128)])
+def test_sf_schedule(shape, nexp):
+    cfg = GCfg(nexp=nexp, G=4)
+    rc = RCfg() if shape[0] == 2 else RCfg(cycles=torus_cycles(*shape))
+    load = check_schedule(shape, rc, cfg)
+    per_ring = Counter()
+    for (me, lane, d), v in load.items():
+        per_ring[(lane, d)] += v
+    logger.info(
+        f"WSS schedule {shape}: incoming packets a chip and ring min {min(load.values())} max {max(load.values())}; "
+        f"per ring {dict(per_ring)}"
+    )
+    assert max(load.values()) - min(load.values()) <= max(load.values()) // 4
+
+
+def fwd_report(rc: RCfg, nf, sst_chip, clk):
+    """Per forwarder: NCRISC (arrival / downstream credit / owner read / send / drain waits, K cycles), packets out,
+    link GB/s over the send span; BRISC (arrival / slot credit / land / DRAM read, K cycles)."""
+    s = (ttnn.to_torch(sst_chip).to(torch.int64) & 0xFFFFFFFF).reshape(1 + nf, 32)
+    chb = rc.CHT * 576
+    out = []
+    for f in range(nf):
+        w = s[1 + f].tolist()
+        span = max(w[12], 1)
+        out.append(
+            dict(
+                nc=[w[i] // 1000 for i in range(6)],
+                sent=w[6],
+                tin=w[7],
+                relays=w[9],
+                nbuf=w[10],
+                stage=w[11],
+                gbs=w[6] * chb / (span / clk * 1e3),
+                br=[w[16 + i] // 1000 for i in range(5)],
+                landed=w[21],
+            )
+        )
+    return out
+
+
+def run(mesh, cfg: GCfg, rc: RCfg, Ms, dev, refs, tag, warm=WARM, meas=MEAS):
+    chips = list(range(mesh.get_num_devices()))
+    clk = aiclk_mhz(0)
+    nf = len(rings(tuple(mesh.shape), rc))
+    rows, fw = [], None
+    for i in range(warm + meas):
+        mpd, io, st, sst = build_sf(mesh, cfg, rc, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], dev["out_t"])
+        ttnn.synchronize_device(mesh)  # (every chip's fresh credit words are written before any chip starts)
+        ttnn.generic_op(io, mpd)
+        ttnn.synchronize_device(mesh)
+        if i >= warm:
+            sts = ttnn.get_device_tensors(st)
+            row = {ci: chip_time(cfg, Ms, sts[ci]) for ci in chips}
+            rows.append(row)
+            del sts
+            logger.info(
+                f"WSS {tag} launch {i - warm + 1}/{meas}: util tile per chip "
+                f"{[round(100 * row[ci][1], 1) for ci in chips]}"
+            )
+        if i == warm + meas - 1:
+            outs = ttnn.get_device_tensors(dev["out_t"])
+            pcs = {ci: chip_pcc(cfg, Ms, refs, outs[ci]) for ci in chips}
+            ssts = ttnn.get_device_tensors(sst)
+            fw = {ci: fwd_report(rc, nf, ssts[ci], clk) for ci in chips}
+            del ssts, outs
+        del mpd, io, st, sst
+    we = 3 * cfg.H * cfg.I * 576 / 1024  # bfp4 bytes of one expert
+    stages = {f["stage"] for ci in chips for f in fw[ci]}
+    assert len(stages) == 1, f"staging CB address differs between forwarders: {stages}"
+    for ci in chips:
+        cyc = statistics.median(r[ci][0] for r in rows)
+        ut = [100 * r[ci][1] for r in rows]
+        logger.info(
+            f"WSS {tag} chip {ci}: median {cyc:.0f} cyc/expert ({cyc / clk:.2f} us), util tile median "
+            f"{statistics.median(ut):.1f}% (min {min(ut):.1f}, max {max(ut):.1f}), weights in "
+            f"{we / (cyc / clk * 1e3):.0f} GB/s; waits (K) tilize/x/weight/h {rows[-1][ci][2]}; pcc {pcs[ci]:.5f}"
+        )
+        for f, r in enumerate(fw[ci]):
+            logger.info(
+                f"WSS {tag} chip {ci} ring {f // 2}{'+-'[f % 2]}: out {r['sent']} in {r['tin']} pkts, "
+                f"{r['gbs']:.1f} GB/s over the send span; NCRISC K arr/dcred/own/send/drain/total {r['nc']}, "
+                f"relays {r['relays']}, fabric slots {r['nbuf']}; BRISC K arr/slot/land/dram/total {r['br']}"
+            )
+    allu = [100 * r[ci][1] for r in rows for ci in chips]
+    logger.info(
+        f"WSS {tag} SUMMARY: {warm} warm-up + {meas} measured launches, aiclk {clk} MHz, util tile over chips and "
+        f"launches median {statistics.median(allu):.1f}% (min {min(allu):.1f}, max {max(allu):.1f}), "
+        f"min pcc {min(pcs.values()):.5f}"
+    )
+    return rows, pcs, fw
+
+
+def rcfg_from_env(**kw):
+    """RCfg with overrides from WS_SF (e.g. "S=12,CRB=4")."""
+    for item in filter(None, os.environ.get("WS_SF", "").split(",")):
+        k, v = item.split("=")
+        kw[k] = int(v)
+    return RCfg(**kw)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("M", [586, 2048])
+def test_ws_sf_tray(mesh_device, M):
+    """Stage A: one 2 x 4 tray, the row-snake cycle (0,0)..(0,3),(1,3)..(1,0), both directions x 2 links."""
+    cfg, rc = GCfg(nexp=32, G=4), rcfg_from_env()
+    check_schedule(tuple(mesh_device.shape), rc, cfg)
+    Ms = [M] * cfg.nexp
+    dev, refs = make_inputs(mesh_device, cfg, rc.CHT, Ms)
+    warm = int(os.environ.get("WS_SF_WARM", WARM))
+    rows, pcs, fw = run(mesh_device, cfg, rc, Ms, dev, refs, f"tray M {M}", warm=warm)
+    assert min(pcs.values()) > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [TORUS], indirect=True)
+@pytest.mark.parametrize("nexp,T,M", [(128, 8192, 586), (128, 8192, 2048)], ids=["e128m586", "e128m2048"])
+def test_ws_sf_glx(mesh_device, nexp, T, M):
+    """Stage B: the whole Galaxy (8 x 4, FABRIC_2D_TORUS_XY), two edge-disjoint Hamiltonian cycles x 2 directions x 2
+    links = 8 directed rings, one per incoming link of every chip; each chip holds only its own experts' slices."""
+    nchip = mesh_device.get_num_devices()
+    cfg = GCfg(nexp=nexp, G=4, T=T)
+    rc = rcfg_from_env(cycles=torus_cycles(*tuple(mesh_device.shape)), own_slices=True)
+    check_schedule(tuple(mesh_device.shape), rc, cfg)
+    Ms = [M] * cfg.nexp
+    dev, refs = make_inputs_owned(mesh_device, cfg, rc.CHT, Ms, nchip)
+    warm = int(os.environ.get("WS_SF_WARM", WARM))
+    rows, pcs, fw = run(mesh_device, cfg, rc, Ms, dev, refs, f"glx {nexp} experts M {M}", warm=warm)
+    assert min(pcs.values()) > 0.999
