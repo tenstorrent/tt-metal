@@ -1,8 +1,13 @@
-# L1 ledger: gated_delta_net (regimes R-STEP and R-VSPLIT)
+# L1 ledger: gated_delta_net (regimes R-STEP, R-VSPLIT and R-CHUNK)
 
 Refinement 3 (R-VSPLIT): a core runs one unit = one piece of a pair, owning `Vb = Vt / pieces` state
 columns (`v_block_tiles`; R-STEP is `Vb = Vt`). Every `Vt` below is the unit's `Vb`; capacities are
-written once in `_cb_plan(Kt, Vb, conv_on_fpu, pieces)`.
+written once in `_cb_plan(Kt, Vb, conv_on_fpu, pieces, chunked)`.
+
+Refinement 4 (R-CHUNK, calls with T >= CHUNK_MIN_TOKENS on Blackhole): the token loop of a tile row is
+one chunk step. cb_tok_coef carries 2 chunk pages per tile row instead of 3 per token; cb_gates page 0
+carries g instead of alpha; cb_d / cb_sq are not used by the chunk step (cb_d stays allocated, one
+page); five buffers are added (rows marked R-CHUNK, allocated only when chunked).
 
 Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (op_design.md,
 Blocking Model): `pair` (b, h; one pair per block), `t` (token rows; block = 1 tile row, step = 1
@@ -34,7 +39,12 @@ fed by DEST: it is the output ABI (output dtype = input dtype).
 | cb_gate_in | `2*ROW_DEPTH` | 2 (b, a tiles) | {pair: streams, t: spans 1 tile row, K: streams, V: streams, c: streams (gate column h//32), j: streams} | Float32 (U2D; input dtype) | reader | compute | tile row | double buffered across tile rows |
 | cb_gate_w | 2 | 2 (A_log, dt_bias rows) | {pair: streams (refilled per pair), t: streams (constant), K, V, c, j: streams} | Float32 (U2D) | reader | compute | pair | constant per pair; 2 pages genuinely constant |
 | cb_gates | 2 | 2 (alpha, beta) | {pair: streams, t: spans 1 tile row, K, V, c, j: streams} | Float32 (std; dataflow reads elements) | compute | writer | tile row | consumed by the writer across the whole token loop: concurrent |
-| cb_tok_coef | `3*TOK_COEF_DEPTH` | 3 (one token) | {pair: streams, t: streams (one token per fill), K, V, c, j: streams} | Float32 (U2D) | writer | compute | token | depth 2 so the writer runs one token ahead; not shared: concurrent with every token-loop buffer |
+| cb_tok_coef | `3*TOK_COEF_DEPTH` (R-CHUNK: `2*TOK_COEF_DEPTH`) | 3 (one token) / 2 (R-CHUNK: g, beta of one tile row in column 0, 0 on rows that are no token) | {pair: streams, t: streams (one token per fill; R-CHUNK one tile row), K, V, c, j: streams} | Float32 (U2D) | writer | compute | token / tile row | depth 2 so the writer runs one token (tile row) ahead; not shared: concurrent with every token-loop buffer. R-CHUNK: the writer masks rows that are no token to exactly 0 (gate tiles hold arbitrary values there) |
+| cb_gram (R-CHUNK) | 2 | [Kn Kn^T; Qn Kn^T] | {pair: streams, t: spans 1 tile row twice (32 x 32 tokens), K: contracted, V: streams} | Float32 (U2D) | compute (matmul_block) | compute | tile row, Gram -> L/QD window | own CB: matmul_block's in0/in1/out must be distinct, and the SFPU products need the U2D view; dead before cb_chunk_mat is read, but both are 1-2 pages |
+| cb_chunk_vec (R-CHUNK) | 5 | D, c, exp(c), exp(c_last - c), beta exp(c) | {pair: streams, t: spans 1 tile row; others streams} | Float32 (U2D) | compute | compute | tile row (chunk_vectors -> end of chunk step) | read by index throughout the chunk step (D in the L/QD window, exp(c) in O, W in Uw, beta exp(c) in the right-hand side) and by read_tile_value (c_last, exp(c_last)); live together: no sharing |
+| cb_chunk_mat (R-CHUNK) | 2 | L, (Qn Kn^T) * D | {pair: streams, t: spans 1 tile row twice; others streams} | Float32 (std) | compute | compute (triangle_solve reads L from L1; QD is matmul in0) | tile row | not U2D: QD feeds srcB; the solve reads L straight from L1 |
+| cb_uw (R-CHUNK) | `Vt` | Vt | {pair: streams, t: spans 1 tile row, V: spans Vt} | Float32 (std) | compute | compute | tile row (Uw -> update) | the update operand exp(c_last - c) (*)col U; not packed over cb_u: U is still the in1 of the O matmul when Uw is produced |
+| cb_tri_mask (R-CHUNK) | 1 | lower-triangular 0/1 (column <= row) | {all axes: streams (constant)} | Float32 (U2D) | reader (once: NoC zero + the 528 ones) | compute (never popped) | kernel | constant; masks the decay matrix D |
 | cb_reads | `2*Vt` | 2Vt | {pair: streams, t: streams (one token), K: streams (contracted), V: spans Vt, c, j: streams} | Float32 (U2D) | compute | compute | token | not with cb_u: cb_reads is consumed while cb_u is produced in the same op (concurrent); different unpack mode |
 | cb_u (+ alias cb_u_f32) | `Vt` | Vt | {pair: streams, t: streams (one token), K: streams, V: spans Vt, c, j: streams} | Float32 (std) | compute | compute | token (vector op -> update) | alias cb_u_f32 is a second format descriptor over the same allocation: u feeds the increment matmul (srcB view) and the fp32 o term (U2D view); lockstep push/pop |
 | cb_o_acc | `Vt` | Vt | {pair: streams, t: spans 1 tile row (one row per token, packer L1 accumulation), K: streams, V: spans Vt, c, j: streams} | Float32 (U2D) | compute | compute | tile row | live through the token loop: concurrent with cb_u, cb_reads |
@@ -77,6 +87,7 @@ footprint = 4096 * ( Kt*Vt*(STATE_IN_DEPTH + 1 + STATE_OUT_DEPTH)
                    + CONV_ACC_DEPTH + 2*ROW_DEPTH + 3*TOK_COEF_DEPTH + 9 )
           + 2048 + 32*WINDOW_DEPTH
           [+ 4096*(1 + 2*pieces) for R-VSPLIT]
+          [+ 4096*(10 + Vt - TOK_COEF_DEPTH) for R-CHUNK]
 ```
 
 (fp32 token tensors, SFPU conv.) For bf16 the token-buffer pages above are 2048 B, cb_row_stage adds
@@ -127,6 +138,12 @@ bf16 token tensors (Refinement 1): crossings unchanged; token bytes halve. Row r
 aligned chunks holding the wanted 32 B row (2x the useful bytes on those rows only); row writes
 stay 32 B (Tensix-to-DRAM writes need only L1 alignment; repeated calls with neighbouring rows
 written by different cores are bit-identical, `test_gated_delta_net_bf16.py`).
+
+R-CHUNK (Refinement 4): DRAM crossings unchanged (same reads and writes per tile row; the chunk
+step only changes compute). The reader's conv window for a full tile row now copies each shifted
+tap as row runs inside a face (6 L1 NoC copies per tap per column instead of one per row and half)
+and reads the previous tile row's last 3 rows as one aligned span per column (cb_hist_stage),
+replacing 6 staged row reads per column.
 
 R-VSPLIT (Refinement 3), decode B=1 bf16, pieces = 4: each of 48 cores reads the key head's q/k
 columns (8 window columns, 8 raw conv_weight row spans) plus its 1 v column, its Kt x 1 state slice

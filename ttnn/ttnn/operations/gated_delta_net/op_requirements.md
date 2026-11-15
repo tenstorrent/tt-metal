@@ -173,7 +173,7 @@ and L2 partial sums across the pieces of a pair and all-gather kn/qn), which rem
 requests and the replicated 12 us of conv + L2 norm. Not done here: it is a second cross-core topology
 (kn/qn tile rows, 3Kt fp32 tiles per tile row per pair) on top of this one.
 
-### [ ] Refinement 4 — Chunked recurrence for prefill (model_prefill_4096)
+### [x] Refinement 4 — Chunked recurrence for prefill (model_prefill_4096)
 
 **Type**: perf
 
@@ -200,3 +200,13 @@ state fails them). Must not slow `perf_decode_b1` or the decode B=8 / B=16 model
 **Done when**: measured device-ns on `model_prefill_4096` improves by a large factor over 89.6 ms, its
 precision gates and every state-carry case hold, the golden suite is green, and there is no regression
 on `perf_decode_b1` and across the config-spanning guard set of Refinement 2.
+
+**Outcome**: model_prefill_4096 22.94 ms (HEAD, R-STEP token steps on R-VSPLIT's 48 cores; 89.6 ms on 12
+cores in the note above) -> 6.41 ms device kernel time (R-CHUNK, then reader row-run tap copies); guard set
+faster or at parity (prefill T=96 589 -> 170 us, batched B=2 T=40 367 -> 230 us, decode B=8 / B=16 slightly
+faster, perf_decode_b1 33.8-34.0 vs 33.9 us). State-carry gates hold (state_carry_one_call_f32 state rel RMS
+8.7e-4). Now compute bound at ~50 us per tile row per core: gates 4, conv 13, L2 norm 11, chunk step 16, RMS 6;
+reader 14 us and writer 5 us are hidden. Next: share the q/k conv + L2 norm (+ Gram and chunk vectors) of a key
+head across its 12 cores (R-BCAST / split prep across pieces), which removes most of the 28 us of replicated
+prep; then R-SEG to use the 62 idle cores. Not done here: both are separate cross-core topologies; and the
+chunked compute sits near the 70688 B kernel-config text limit, so any added compute code needs a size cut.
