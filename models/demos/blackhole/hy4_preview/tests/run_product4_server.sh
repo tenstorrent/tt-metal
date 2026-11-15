@@ -17,7 +17,7 @@ MD=models/demos/blackhole
 OPS=ttnn/cpp/ttnn/operations/experimental
 MAXLEN=${MAXLEN:-65536}; NSEQ=${NSEQ:-4}; SPEC_K=${SPEC_K:-3}
 LIBDIR=${LIBDIR-$PR/integ/libs}
-FLAGS_DEFAULT="HY4_POOL=1 HY4_POOL_PF=1 HY4_KV_FMT=scaled_fp8 HY4_OPT=all HY4_IHC_FUSED=1 HY4_FUSE=sparse,xchg HY4_XM_NSPLIT=8 HY4_SKINNY=shared,router,oproj,hproj HY4_PF_OPT=all,moeall MOE_RING_FAST=1 HY4_TP42_ONLY=1 HY4_MOE_TP42=1 HY4_TP42_PF=1 HY4_TP42_CACHE_DIR=/tp32"
+FLAGS_DEFAULT="HY4_POOL=1 HY4_POOL_PF=1 HY4_KV_FMT=scaled_fp8 HY4_OPT=all HY4_IHC_FUSED=1 HY4_FUSE=sparse,xchg HY4_XM_NSPLIT=8 HY4_SKINNY=shared,router,oproj,hproj HY4_PF_OPT=all,moeall MOE_RING_FAST=1 HY4_TP32_ONLY=1 HY4_MOE_TP32=1 HY4_TP32_PF=1 HY4_TP32_CACHE_DIR=/tp32 HY4_SPEC_PIPE=1 HY4_SPEC_CAP_FILE=/out4/spec_cap HY4_SPEC_PIPE_FILE=/out4/spec_pipe"
 FLAGS=${FLAGS-$FLAGS_DEFAULT}
 TRACE=${TRACE:-1900000000}
 mkdir -p $P4/logs $O/traces $O/gen $O/root $O/logs $P/logs
