@@ -154,7 +154,10 @@ def main():
         mp = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape))
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
-                torch.full((R, 1, 1, 1), float(K)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=mp
+                torch.full((R, 1, 1, 1), float(os.environ.get("SPEC_CAP", K))),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mp,
             ),
             runner.tail.cap,
         )

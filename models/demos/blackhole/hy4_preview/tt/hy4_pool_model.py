@@ -292,6 +292,22 @@ class Hy4PoolDecoder(Hy4Decoder):
         if ly.spec.mlp == DENSE:
             return D.allreduce_cols(self.mlp[i].forward(h))
         part = self.mlp[i].forward(h)
+        if (
+            os.environ.get("HY4_VERIFY_MOE_SPLIT", "0") == "1"
+        ):  # diagnostic: S separate T=1-shaped MoE calls (the plain decode shape) instead of one T=S call
+            outs = []
+            for j in range(S):
+                hj = ttnn.slice(h, [0, 0, j, 0], [1, 1, j + 1, HID])
+                pj = ttnn.slice(part, [0, 0, j, 0], [1, 1, j + 1, HID])
+                tj = ttnn.reshape(ttnn.to_layout(hj, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, HID])
+                oj = ttnn.to_memory_config(ly.blk.forward(hj, tj, fold=pj), ttnn.DRAM_MEMORY_CONFIG)
+                outs.append(ttnn.to_layout(oj, ttnn.ROW_MAJOR_LAYOUT))
+            out = ttnn.to_layout(ttnn.concat(outs, dim=2), ttnn.TILE_LAYOUT)
+            ttnn.deallocate(part)
+            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+            y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
+            ttnn.deallocate(out)
+            return y
         tok = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [S, 1, 1, HID])
         blk = self._blks[i]
         out = blk.forward(h, tok, fold=part)
