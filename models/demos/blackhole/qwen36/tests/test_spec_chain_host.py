@@ -41,7 +41,6 @@ from models.demos.blackhole.qwen36.tt.spec_accept import TorchOps, graph, step_a
 from models.demos.blackhole.qwen36.tt.spec_chain import (
     CH_DRAWN,
     CH_DRAWN_PREV,
-    ChainInputs,
     chain_overlay,
     chain_reference,
     step_rows_reference,
@@ -785,39 +784,3 @@ def test_a_sampled_chained_verify_built_from_the_read_predecessor_stages_the_see
     assert e.positions[0] == 103 and e.tokens[0][0] == 42, "count 3 over the draws"
     want = sampling_plan(sampling, [103, 203, edge + 3, 403], T, fresh_seed=lambda: 0)
     assert e.kw["sample_plan"].seeds == want.seeds
-
-
-def test_the_chain_program_reads_the_sampler_draws_and_writes_its_seeds_as_one_row(monkeypatch):
-    """ChainInputs over a device sampler (ttnn stand-in): the program reads the sampler's draws, stages the seed
-    candidates only when they change, and copies the picked seeds into the sampler's seeds buffer as the 1-D row
-    manual_seed takes; without a sampler it writes no seeds."""
-    B, K = 8, 3
-    T, R = K + 1, B * (K + 1)
-    copies, reshapes, staged = [], [], []
-    monkeypatch.setattr(ttnn, "copy", lambda src, dst: copies.append(dst))
-    real_reshape = ttnn.reshape
-
-    def reshape(t, shape):
-        reshapes.append(tuple(shape))
-        return real_reshape(t, shape)
-
-    monkeypatch.setattr(ttnn, "reshape", reshape)
-    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda host, dev: staged.append(dev))
-    sampler = SimpleNamespace(draws=MagicMock(name="draws"), seeds=MagicMock(name="seeds"))
-    step, pack, ctrls = MagicMock(name="step"), MagicMock(name="pack"), [MagicMock(name="ctrl")]
-    step.shape = (9, pack_width(R))
-    ctrls[0].shape = (1, _ctrl_words(B, 6))
-    chain = ChainInputs(None, B, K, ROWS, step, pack, ctrls, 6, sampler=sampler)
-    assert chain.draws is sampler.draws and chain.seeds is sampler.seeds
-    chain.body()
-    assert copies == [step, ctrls[0], sampler.seeds] and reshapes[-1] == (R,)
-    overlay = chain_overlay([0] * B, [1] * B, [0] * B, [0] * B, [0] * B, [0] * B)
-    seed_cand = torch.ones(T * B, T)
-    chain.stage(overlay, torch.zeros(T * B, 12), seed_cand)
-    chain.stage(overlay, torch.zeros(T * B, 12), seed_cand)
-    assert staged == [chain.overlay, chain.cand, chain.seed_cand, chain.overlay]
-    copies.clear()
-    plain = ChainInputs(None, B, K, ROWS, step, pack, ctrls, 6)
-    assert plain.seed_cand is None and plain.draws is None
-    plain.body()
-    assert copies == [step, ctrls[0]]

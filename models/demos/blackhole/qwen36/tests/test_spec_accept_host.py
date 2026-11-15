@@ -458,17 +458,18 @@ def test_the_runners_commit_proposes_with_the_walks_counts(step):
     assert runner._proposed_draft_token_ids["r1"] == [int(state["drafts"][k][1]) for k in range(K)]
 
 
-def test_the_step_trace_never_frees_an_input(monkeypatch):
-    """A whole-tensor slice returns its input (the ids or the draws at B * T = 32): the step trace frees every
-    intermediate but no tensor that aliases one of its inputs."""
-    from models.demos.blackhole.qwen36.tt import spec_accept
+def test_the_op_graph_step_program_never_frees_an_input(monkeypatch):
+    """The op-graph step program the device tests run beside the step kernel (tests/spec_op_graphs.py): a whole-tensor
+    slice returns its input (the ids or the draws at B * T = 32), so it frees every intermediate but no tensor that
+    aliases one of its inputs."""
+    from models.demos.blackhole.qwen36.tests.spec_op_graphs import _DeviceOps
 
     buf = lambda a: SimpleNamespace(buffer_address=lambda: a)
     acc = SimpleNamespace(
         ids=buf(1), draws=buf(2), step=buf(3), pt_rows=buf(4), iota_t=buf(5), iota_k=buf(6), user_rows=buf(7)
     )
     acc.c_top, acc.c_scratch = buf(8), buf(9)
-    o = spec_accept._DeviceOps(acc)
+    o = _DeviceOps(acc)
     whole = buf(1)  # a slice over all of the ids: the same buffer
     part = buf(100)
     o._keep(whole)

@@ -27,18 +27,33 @@ The chain program (ChainInputs.body, traced) runs before the verify trace of n +
 What the host knows before n is read rides in the overlay (CH_* rows): n's column-0 positions, the rows n + 1 runs,
 their M-RoPE deltas, n + 1's valid drafts and propose decisions (decided for every count n can accept), and the users
 whose ids are draws in n and in n + 1. Every value is an integer below 2**24 (token ids, positions, table rows, page
-indices, device seeds) or -1 (SPEC_STEP_HOLD, a held row's ctrl word), so float32 holds it exactly and the arithmetic
-runs in float32 tiles, as spec_accept.graph does.
+indices, device seeds) or -1 (SPEC_STEP_HOLD, a held row's ctrl word).
 
-``chain_graph`` is written against an op set and runs on the device (_ChainDeviceOps) and in torch (ChainTorchOps), so
-host tests check the arithmetic against the host staging of the same block.
+The chain program is one single-core kernel (kernels/chain_inputs.cpp; its arithmetic is chain_words in
+kernels/spec_step_words.hpp). ``chain_graph`` states the same arithmetic as the float32 op graph the kernel replaced,
+over an op set: ChainTorchOps runs it in torch, so host tests check it against the host staging of the same block, and
+tests/spec_op_graphs.py keeps the ttnn op set, which the device tests run beside the kernel. Float32 is exact on
+integers below 2**24, so the kernel's int32 words equal the graph's.
 """
+
+from pathlib import Path
 
 import torch
 
 import ttnn
-from models.demos.blackhole.qwen36.tt.spec_accept import TorchOps, _DeviceOps
-from models.demos.blackhole.qwen36.tt.spec_step import draft_anchor, pack_u32_rows, pack_width
+from models.demos.blackhole.qwen36.tt.spec_accept import (
+    IDS_LANES,
+    KERNEL_CB,
+    SLOT,
+    TorchOps,
+    accessor_args,
+    check_same_accessor,
+    one_core_program,
+    slot_bytes,
+)
+from models.demos.blackhole.qwen36.tt.spec_step import VERIFY_STEP_ROWS, draft_anchor, pack_u32_rows, pack_width
+
+CHAIN_INPUTS_KERNEL = str(Path(__file__).resolve().parent / "kernels" / "chain_inputs.cpp")
 
 # Overlay rows (B words each).
 CH_P0_PREV, CH_ACTIVE, CH_DELTA, CH_NUM_VALID, CH_DECLINED, CH_KEEP, CH_DRAWN_PREV, CH_DRAWN = range(8)
@@ -167,70 +182,65 @@ def chain_reference(
     )
 
 
-class _ChainDeviceOps(_DeviceOps):
-    """chain_graph's op set in ttnn (spec_accept._DeviceOps plus the chain's own inputs)."""
+def chain_kernel_l1_bytes(B, K, nv_heads, groups, step_words, ctrl_words, sampler):
+    """spec_step_words.hpp ChainLayout(B, K, nv_heads, groups, step_words, ctrl_words, sampler).bytes."""
+    T, R = K + 1, B * (K + 1)
+    reads = 2 * slot_bytes(R) + slot_bytes(B) + CHAIN_OVERLAY_ROWS * slot_bytes(B) + K * B * SLOT
+    reads += R * slot_bytes(2 * nv_heads * groups) + (R * slot_bytes(T) if sampler else 0)
+    writes = VERIFY_STEP_ROWS * slot_bytes(step_words) + groups * slot_bytes(ctrl_words)
+    return reads + writes + (slot_bytes(R) if sampler else 0)
 
-    def __init__(self, chain):
-        names = (
-            "ids", "pack", "overlay", "cand", "draws", "seed_cand", "iota_t", "iota_k", "user_rows", "one", "head", "tail"
-        )  # fmt: skip
-        self.__dict__.update({n: getattr(chain, n) for n in names})
-        self.top = chain.c_top
-        self._drafts = chain.drafts
-        self.inputs = [t for t in (*(getattr(chain, n) for n in names), self.top, *self._drafts) if t is not None]
-        self.owned = []
 
-    def draft(self, k, B):
-        return self._float(self._keep(ttnn.reshape(self._drafts[k], (B, 1))))
-
-    def relu(self, x):
-        return self._keep(ttnn.relu(x))
+def candidate_words(t):
+    """The int32 words the chain kernel reads for host candidates ``t`` (ctrl or seed candidates, float32 integers):
+    the value the op graph held in float32, as its float32 -> int32 typecast wrote it."""
+    return torch.as_tensor(t).to(torch.float32).to(torch.int64).to(torch.int32)
 
 
 class ChainInputs:
-    """The chain program of a chained MTP verify over B users and K drafts (module doc). Inputs: ``ids`` (the verify's
-    argmax lanes [1, 1, 1, 32] uint32), ``pack`` (the drafter pack), ``drafts`` (K [1, 1, B, 1] uint32 drafter
-    outputs; stand-ins until bind), with a device ``sampler`` (spec_sample.VerifySampler) its ``draws``, and its own
-    ``overlay`` (int32 [CHAIN_OVERLAY_ROWS, W]), ``cand`` (float32 [T*B, 2*Nv*groups]) and, with a sampler,
-    ``seed_cand`` (float32 [T*B, T]), staged per step. Outputs, written in place: ``step`` (the verify step buffer),
-    ``ctrls`` (the GDN verify ctrl pages, int32) and, with a sampler, its ``seeds``."""
+    """The chain program of a chained MTP verify over B users and K drafts (module doc): one
+    kernels/chain_inputs.cpp program. Inputs: ``ids`` (the verify's argmax lanes [1, 1, 1, 32] uint32), ``pack`` (the
+    drafter pack), ``drafts`` (K [1, 1, B, 1] uint32 drafter outputs; stand-ins until bind), with a device ``sampler``
+    (spec_sample.VerifySampler) its ``draws``, and its own ``overlay`` (int32 [CHAIN_OVERLAY_ROWS, W]), ``cand``
+    (int32 [T*B, 2*Nv*groups]) and, with a sampler, ``seed_cand`` (int32 [T*B, T]), staged per step. Outputs,
+    written in place: ``step`` (the verify step buffer), ``ctrls`` (the GDN verify ctrl pages, int32) and, with a
+    sampler, its ``seeds``."""
 
     def __init__(self, mesh, B, K, table_rows, step, pack, ctrls, nv_heads, sampler=None):
         T = K + 1
+        if B * T > IDS_LANES:
+            raise ValueError(f"{B} users x {T} columns exceed the {IDS_LANES} verify id lanes")
         self.mesh, self.B, self.K, self.nv_heads = mesh, int(B), int(K), int(nv_heads)
+        self.top = int(table_rows) - 1
         self.step, self.pack, self.ctrls = step, pack, list(ctrls)
         self.draws = None if sampler is None else sampler.draws
         self.seeds = None if sampler is None else sampler.seeds
         self.groups, self.ctrl_words = len(self.ctrls), int(self.ctrls[0].shape[-1])
-        f32 = lambda t: self._device(torch.as_tensor(t, dtype=torch.float32), ttnn.float32, ttnn.TILE_LAYOUT)
-        self.iota_t = f32(torch.arange(T).reshape(1, T))
-        self.iota_k = f32(torch.arange(K).reshape(1, K))
-        self.user_rows = f32((torch.arange(B) * T).reshape(B, 1))
-        self.c_top = f32([[int(table_rows) - 1]])
-        self.one = f32([[1.0]])
-        self.head = f32(torch.zeros(1, 1 + B))
-        rest = self.ctrl_words - 1 - B - 2 * B * self.nv_heads
-        if rest < 0:
+        self.step_words = int(step.shape[-1])
+        if 1 + B + 2 * B * self.nv_heads > self.ctrl_words:
             raise ValueError(f"a ctrl page of {self.ctrl_words} words holds no {B} rows of {nv_heads} heads")
-        self.tail = f32(torch.zeros(1, rest)) if rest else None
+        for k, c in enumerate(self.ctrls[1:], 1):
+            check_same_accessor(c, self.ctrls[0], f"ctrl page {k}")
         self.overlay = self._device(torch.zeros(CHAIN_OVERLAY_ROWS, pack_width(B), dtype=torch.int32), ttnn.int32)
-        self.cand = f32(torch.zeros(T * B, 2 * self.nv_heads * self.groups))
+        self.cand = self._device(torch.zeros(T * B, 2 * self.nv_heads * self.groups, dtype=torch.int32), ttnn.int32)
         self._cand_staged = None
-        self.seed_cand = None if sampler is None else f32(torch.zeros(T * B, T))
+        self.seed_cand = None if sampler is None else self._device(torch.zeros(T * B, T, dtype=torch.int32), ttnn.int32)
         self._seed_cand_staged = None
         self._refs = []  # host tensors of the copies of the last two steps
-        self.ids = self.standin = self._device(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32)
+        self.ids = self.standin = self._device(torch.zeros(1, 1, 1, IDS_LANES, dtype=torch.int32), ttnn.uint32)
         self.drafts = self.draft_standins = [
             self._device(torch.zeros(1, 1, B, 1, dtype=torch.int32), ttnn.uint32) for _ in range(K)
         ]
-        consts = [self.iota_t, self.iota_k, self.user_rows, self.c_top, self.one, self.head, self.tail]
-        self.buffers = [t for t in (*consts, self.overlay, self.cand, self.seed_cand) if t is not None]
+        self.cb_bytes = SLOT + chain_kernel_l1_bytes(
+            self.B, self.K, self.nv_heads, self.groups, self.step_words, self.ctrl_words, sampler is not None
+        )
+        self.buffers = [t for t in (self.overlay, self.cand, self.seed_cand) if t is not None]
 
-    def _device(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+    def _device(self, t, dtype):
         return ttnn.from_torch(
             t,
             dtype=dtype,
-            layout=layout,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
@@ -238,8 +248,14 @@ class ChainInputs:
 
     def bind(self, ids, drafts):
         """Read the verify trace's ids and the drafter trace's outputs (they exist only after their captures) instead of
-        the stand-ins the programs were compiled on."""
-        self.ids, self.drafts = ids, list(drafts)
+        the stand-ins the program was compiled on."""
+        drafts = list(drafts)
+        if len(drafts) != self.K:
+            raise ValueError(f"{len(drafts)} draft id tensors for K = {self.K}")
+        check_same_accessor(ids, self.standin, "the verify ids")
+        for k, d in enumerate(drafts):
+            check_same_accessor(d, self.draft_standins[0], f"draft ids {k}")
+        self.ids, self.drafts = ids, drafts
 
     def stage(self, overlay, cand, seed_cand=None):
         """Host -> device copies of the overlay (every step), and of the ctrl candidates and, with a sampler, the seed
@@ -248,36 +264,41 @@ class ChainInputs:
         refs = [ttnn.from_torch(torch.as_tensor(overlay).to(torch.int32), dtype=ttnn.int32, mesh_mapper=rep)]
         ttnn.copy_host_to_device_tensor(refs[0], self.overlay)
         T = self.K + 1
-        staged = [(torch.as_tensor(cand).to(torch.float32), self.cand, "_cand_staged")]
+        staged = [(candidate_words(cand), self.cand, "_cand_staged")]
         if self.seed_cand is not None:
-            seeds = torch.zeros(T * self.B, T) if seed_cand is None else torch.as_tensor(seed_cand)
-            staged.append((seeds.to(torch.float32), self.seed_cand, "_seed_cand_staged"))
+            seeds = torch.zeros(T * self.B, T) if seed_cand is None else seed_cand
+            staged.append((candidate_words(seeds), self.seed_cand, "_seed_cand_staged"))
         for host, dev, held in staged:
             if getattr(self, held) is None or not torch.equal(getattr(self, held), host):
-                refs.append(ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep))
+                refs.append(ttnn.from_torch(host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep))
                 ttnn.copy_host_to_device_tensor(refs[-1], dev)
                 setattr(self, held, host.clone())
         # A copy can read its host tensor after it returns, while the step before still runs.
         self._refs = [*self._refs[-1:], refs]
 
+    def program(self):
+        """The kernel's program over the bound tensors; without a device sampler the ids stand in for the draws, the
+        seed candidates and the seeds, which it then never touches."""
+        sampler = self.seeds is not None
+        draws, seed_cand, seeds = (self.draws, self.seed_cand, self.seeds) if sampler else (self.ids,) * 3
+        draft_page = int(self.drafts[0].buffer_aligned_page_size())
+        if not 4 <= draft_page <= SLOT:
+            raise ValueError(f"a draft id page of {draft_page} B does not fit one {SLOT} B slot")
+        cta = [self.B, self.K, self.nv_heads, self.groups, self.step_words, self.ctrl_words, self.top, int(sampler)]
+        cta += [draft_page, KERNEL_CB, self.cb_bytes]
+        for t in (self.ids, draws, self.pack, self.overlay, self.cand, seed_cand, self.drafts[0], self.step):
+            cta += accessor_args(t)
+        cta += accessor_args(self.ctrls[0]) + accessor_args(seeds)
+        rt = [t.buffer_address() for t in (self.ids, draws, self.pack, self.overlay, self.cand, seed_cand, self.step)]
+        rt += [seeds.buffer_address()] + [d.buffer_address() for d in self.drafts]
+        rt += [c.buffer_address() for c in self.ctrls]
+        return one_core_program(CHAIN_INPUTS_KERNEL, cta, rt, self.cb_bytes)
+
     def body(self):
         """Trace-capturable: writes ``step``, every ``ctrls`` page and, with a sampler, its ``seeds`` in place."""
-        o = _ChainDeviceOps(self)
-        W = int(self.step.shape[-1])
-        step, ctrls, seeds = chain_graph(o, self.B, self.K, W, self.groups, self.nv_heads, self.ctrl_words)
-        for out, dtype, dst in (
-            (step, ttnn.uint32, self.step),
-            *((c, ttnn.int32, d) for c, d in zip(ctrls, self.ctrls)),
-        ):
-            rm = ttnn.to_layout(o._keep(ttnn.typecast(out, dtype)), ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.copy(rm, dst)
-            o._keep(rm)
-        if seeds is not None:
-            # manual_seed takes the seeds as a 1-D uint32 row-major tensor.
-            rm = o._keep(ttnn.to_layout(o._keep(ttnn.typecast(seeds, ttnn.uint32)), ttnn.ROW_MAJOR_LAYOUT))
-            ttnn.copy(o._keep(ttnn.reshape(rm, (self.B * (self.K + 1),))), self.seeds)
-        for t in o.owned:
-            ttnn.deallocate(t)
+        inputs = (self.ids, self.draws, self.pack, self.overlay, self.cand, self.seed_cand, *self.drafts)
+        outputs = (self.step, *self.ctrls, self.seeds)
+        ttnn.generic_op([t for t in (*inputs, *outputs) if t is not None], self.program())
 
     def release(self):
         for t in (*self.buffers, self.standin, *self.draft_standins):
