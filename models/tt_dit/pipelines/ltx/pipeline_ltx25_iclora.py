@@ -79,15 +79,31 @@ SERVED_RECIPES["ltx25-ic-5s-iclora"] = (448, 768, 121, True)
 REFERENCE_CACHE_ENTRIES = 2
 # Worker routing/export metadata. These do not override explicit pipeline assets
 # or generation arguments. Unknown LTX knobs still fail closed.
-WORKER_PATH_ENV = frozenset({
-    "LTX25_ROOT", "LTX_MODEL_ROOT", "LTX_SERVER_SRC", "LTX_SERVED_TT_METAL",
-    "LTX_WORKER_SCRATCH", "LTX_WORKER_TOKEN_FILE", "LTX_I2V_IMAGE", "LTX_REF_LATENT_DIR",
-})
+WORKER_PATH_ENV = frozenset(
+    {
+        "LTX25_ROOT",
+        "LTX_MODEL_ROOT",
+        "LTX_SERVER_SRC",
+        "LTX_SERVED_TT_METAL",
+        "LTX_WORKER_SCRATCH",
+        "LTX_WORKER_TOKEN_FILE",
+        "LTX_I2V_IMAGE",
+        "LTX_REF_LATENT_DIR",
+    }
+)
 WORKER_ENVIRONMENT = {
-    "LTX_PIPELINE": "ltx25", "LTX_QUALITY": "high", "LTX25_DIFFVAE": "0",
-    "LTX_LORAS": "[]", "LTX_FAST": "0", "LTX_RELEASE_TRACES": "0",
-    "LTX_DIT_PREFETCH": "1", "LTX_YUV_FRAMES": "1", "LTX_EXPORT_PROCESS": "1",
-    "LTX_IMAGE_ENCODE_CACHE": "1", "LTX_CLAIM_AHEAD": "1", "LTX_FUSE_GATE_ON_DEVICE": "0",
+    "LTX_PIPELINE": "ltx25",
+    "LTX_QUALITY": "high",
+    "LTX25_DIFFVAE": "0",
+    "LTX_LORAS": "[]",
+    "LTX_FAST": "0",
+    "LTX_RELEASE_TRACES": "0",
+    "LTX_DIT_PREFETCH": "1",
+    "LTX_YUV_FRAMES": "1",
+    "LTX_EXPORT_PROCESS": "1",
+    "LTX_IMAGE_ENCODE_CACHE": "1",
+    "LTX_CLAIM_AHEAD": "1",
+    "LTX_FUSE_GATE_ON_DEVICE": "0",
 }
 RUNTIME_OPTIONS = frozenset({"sp_axis", "tp_axis", "num_links", "dynamic_load", "topology", "is_fsdp", "traced"})
 
@@ -143,11 +159,21 @@ def generation_recipe(name, *, mode="r2v"):
     _require(name in SERVED_RECIPES, f"unknown served recipe: {name}")
     _require(mode in ("r2v", "fl2v"), "mode must be r2v or fl2v")
     height, width, frames, _ = SERVED_RECIPES[name]
-    return dict(mode=mode, quality_variant=name, height=height, width=width,
-                num_frames=frames, ref_frames=121, fps=24, reference_strength=1.0,
-                pin_s1_strength=1.0, pin_s2_strength=1.0,
-                sampler="deterministic_euler_s1_ref_s2_ref",
-                s1_sigmas=list(S1_SIGMAS), s2_sigmas=list(S2_SIGMAS))
+    return dict(
+        mode=mode,
+        quality_variant=name,
+        height=height,
+        width=width,
+        num_frames=frames,
+        ref_frames=121,
+        fps=24,
+        reference_strength=1.0,
+        pin_s1_strength=1.0,
+        pin_s2_strength=1.0,
+        sampler="deterministic_euler_s1_ref_s2_ref",
+        s1_sigmas=list(S1_SIGMAS),
+        s2_sigmas=list(S2_SIGMAS),
+    )
 
 
 def _environment(fixture, traced=None):
@@ -161,6 +187,9 @@ def _environment(fixture, traced=None):
             valid = Path(value).resolve() == Path(fixture["assets"]["transformer"]["path"])
         elif name == "LTX_TRACED":
             valid = value in ("0", "1") and (traced is None or value == str(int(traced)))
+        elif name == "LTX_FUSE_GATE_ON_DEVICE":
+            # The worker selects 0 for a cold cache; native warm-cache default is 1.
+            valid = value in ("0", "1")
         elif name == "LTX_MESH":
             valid = value in ("bh_4x8sp1tp0_ring", "bh_2x4sp1tp0")
         elif name == "LTX_EDGE_WORKER_URL":
@@ -183,10 +212,14 @@ def _prepare_served_recipe(name):
     import ttnn
     from models.tt_dit.utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs
 
-    register_fused_mmrs_configs({ttnn.CoreCoord(12, 10): {
-        (m, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 16, 2, 2, None, 1, mm_window_blocks=None)
-        for m in (8928, 10464, 12000)
-    }})
+    register_fused_mmrs_configs(
+        {
+            ttnn.CoreCoord(12, 10): {
+                (m, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 16, 2, 2, None, 1, mm_window_blocks=None)
+                for m in (8928, 10464, 12000)
+            }
+        }
+    )
 
 
 def _native_factory():
@@ -331,8 +364,10 @@ def load_fixture(fixture_path):
                 "changed recipe requires a separately named quality variant",
             )
         if g["quality_variant"] in SERVED_RECIPES:
-            _require(g == generation_recipe(g["quality_variant"], mode=g["mode"]) and adapter["scale"] == 1,
-                     "changed served recipe requires a separately named quality variant")
+            _require(
+                g == generation_recipe(g["quality_variant"], mode=g["mode"]) and adapter["scale"] == 1,
+                "changed served recipe requires a separately named quality variant",
+            )
         elif g["quality_variant"].startswith("ltx25-ic-"):
             raise ValueError("unknown served recipe")
         _require(fixture["environment"] == ENVIRONMENT, "unsupported fixture environment recipe")
@@ -419,8 +454,10 @@ class LTX25ICLoRAPipeline:
 
     def _validate_session(self):
         _environment(self._fixture, self._traced)
-        _require(os.environ.get("LTX_FUSE_GATE_ON_DEVICE") == self._gate_folding,
-                 "incompatible environment: LTX_FUSE_GATE_ON_DEVICE changed")
+        _require(
+            os.environ.get("LTX_FUSE_GATE_ON_DEVICE") == self._gate_folding,
+            "incompatible environment: LTX_FUSE_GATE_ON_DEVICE changed",
+        )
 
     def warmup_buffers(self):
         _require(self._call_lock.acquire(blocking=False), "concurrent session call")
@@ -438,8 +475,18 @@ class LTX25ICLoRAPipeline:
         finally:
             self._call_lock.release()
 
-    def generate_r2v(self, prompt, *, reference_path=None, reference_sha256=None,
-                     first_frame=None, last_frame=None, seed, output_path=None, output_type="rgb"):
+    def generate_r2v(
+        self,
+        prompt,
+        *,
+        reference_path=None,
+        reference_sha256=None,
+        first_frame=None,
+        last_frame=None,
+        seed,
+        output_path=None,
+        output_type="rgb",
+    ):
         """Generate with a request's ingredient sheet and independent endpoint pins.
 
         Omit reference_path to use the digest-bound legacy fixture sheet. A supplied
@@ -448,11 +495,15 @@ class LTX25ICLoRAPipeline:
         """
         _require(self._call_lock.acquire(blocking=False), "concurrent session call")
         try:
-            return self._generate(prompt, reference_path, reference_sha256, first_frame, last_frame, seed, output_path, output_type)
+            return self._generate(
+                prompt, reference_path, reference_sha256, first_frame, last_frame, seed, output_path, output_type
+            )
         finally:
             self._call_lock.release()
 
-    def _generate(self, prompt, reference_path, reference_sha256, first_frame, last_frame, seed, output_path, output_type):
+    def _generate(
+        self, prompt, reference_path, reference_sha256, first_frame, last_frame, seed, output_path, output_type
+    ):
         self._validate_session()
         _text(prompt, "prompt")
         _require(type(seed) is int and 0 <= seed < 2**32, "seed must be uint32")
@@ -465,7 +516,9 @@ class LTX25ICLoRAPipeline:
             reference_path = self._fixture["reference"]["path"]
             expected_digest = self._fixture["reference"]["sha256"]
         else:
-            _require(isinstance(reference_path, (str, os.PathLike)) and bool(str(reference_path)), "invalid reference path")
+            _require(
+                isinstance(reference_path, (str, os.PathLike)) and bool(str(reference_path)), "invalid reference path"
+            )
             expected_digest = reference_sha256
         path = str(Path(reference_path).resolve(strict=True))
         _still_image(path)

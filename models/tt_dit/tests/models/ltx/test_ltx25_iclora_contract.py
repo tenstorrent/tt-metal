@@ -195,7 +195,7 @@ def test_bare_base_and_mutated_file_rejected(contract):
         c.create()
     c.fixture["fusion"]["base"]["sha256"] = "b" * 64
     Path(c.fixture["assets"]["audio_vae"]["path"]).write_bytes(b"changed")
-    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only run excludes native conftest
         c.create()
 
 
@@ -221,11 +221,11 @@ def test_runtime_override_rejected(contract, option):
 def test_inherited_overrides_and_post_creation_drift_rejected(contract, monkeypatch, name, value):
     pipe = contract.create()
     monkeypatch.setenv(name, value)
-    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
         contract.create()
-    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.generate_r2v("x", seed=1)
-    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.warmup_buffers()
     assert not contract.native.calls
 
@@ -273,7 +273,7 @@ def test_reference_mutation_fl2v_and_bad_endpoint(contract):
     with pytest.raises(ValueError, match="geometry"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.generate_r2v("x", seed=1, first_frame=first, last_frame=first)
     Image.new("RGB", (128, 128), "blue").save(c.fixture["reference"]["path"])
-    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.warmup_buffers()
 
 
@@ -661,15 +661,18 @@ def test_live_reference_switch_without_model_rebind(contract, monkeypatch):
     assert len(c.native.calls) == 4
 
 
-@pytest.mark.parametrize("name,height,width,frames,traced", [
-    ("ltx25-ic-5s-iclora", 448, 768, 121, True),
-    ("ltx25-ic-6s-720p", 704, 1280, 145, True),
-    ("ltx25-ic-10s-720p", 704, 1280, 241, False),
-    ("ltx25-ic-6s-1080p", 1088, 1920, 145, True),
-    ("ltx25-ic-10s-1080p", 1088, 1920, 241, False),
-    ("ltx25-ic-6s-iclora", 448, 768, 145, True),
-    ("ltx25-ic-10s-iclora", 448, 768, 241, False),
-])
+@pytest.mark.parametrize(
+    "name,height,width,frames,traced",
+    [
+        ("ltx25-ic-5s-iclora", 448, 768, 121, True),
+        ("ltx25-ic-6s-720p", 704, 1280, 145, True),
+        ("ltx25-ic-10s-720p", 704, 1280, 241, False),
+        ("ltx25-ic-6s-1080p", 1088, 1920, 145, True),
+        ("ltx25-ic-10s-1080p", 1088, 1920, 241, False),
+        ("ltx25-ic-6s-iclora", 448, 768, 145, True),
+        ("ltx25-ic-10s-iclora", 448, 768, 241, False),
+    ],
+)
 def test_named_served_recipe(contract, monkeypatch, name, height, width, frames, traced):
     c = contract
     c.fixture["generation"] = c.module.generation_recipe(name)
@@ -686,17 +689,26 @@ def test_named_served_recipe(contract, monkeypatch, name, height, width, frames,
     monkeypatch.setenv("LTX25_ROOT", str(c.path.parent))
     pipe = c.create()
     assert c.native.factory["traced"] is traced
-    assert (c.native.factory["height"], c.native.factory["width"], c.native.factory["num_frames"]) == (height, width, frames)
+    assert (c.native.factory["height"], c.native.factory["width"], c.native.factory["num_frames"]) == (
+        height,
+        width,
+        frames,
+    )
     assert c.native.factory["ref_num_frames"] == 121
     pipe.generate_r2v("recipe", seed=1)
     assert c.native.calls[-1][1]["fps"] == 24
 
 
-
-@pytest.mark.parametrize("field,value", [
-    ("num_frames", 153), ("ref_frames", 145), ("pin_s1_strength", 0.5), ("fps", 30),
-    ("quality_variant", "ltx25-ic-6s-unknown"),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("num_frames", 153),
+        ("ref_frames", 145),
+        ("pin_s1_strength", 0.5),
+        ("fps", 30),
+        ("quality_variant", "ltx25-ic-6s-unknown"),
+    ],
+)
 def test_served_recipe_cannot_be_relabelled(contract, field, value):
     c = contract
     c.fixture["generation"] = c.module.generation_recipe("ltx25-ic-6s-720p")
@@ -706,12 +718,21 @@ def test_served_recipe_cannot_be_relabelled(contract, field, value):
     assert not hasattr(c.native, "factory")
 
 
-@pytest.mark.parametrize("name,value", [
-    ("LTX_QUALITY", "fast"), ("LTX25_DIFFVAE", "1"), ("LTX_PIPELINE", "h3"),
-    ("LTX_LORAS", '[["other", 1]]'), ("LTX_CHECKPOINT", "/other/model"),
-    ("LTX_WORKER_SCRATCH", "relative/path"), ("LTX_TRACED", "True"),
-    ("LTX_TRACED", "0"), ("LTX_FAST", "1"), ("LTX_FUTURE_KNOB", "1"),
-])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("LTX_QUALITY", "fast"),
+        ("LTX25_DIFFVAE", "1"),
+        ("LTX_PIPELINE", "h3"),
+        ("LTX_LORAS", '[["other", 1]]'),
+        ("LTX_CHECKPOINT", "/other/model"),
+        ("LTX_WORKER_SCRATCH", "relative/path"),
+        ("LTX_TRACED", "True"),
+        ("LTX_TRACED", "0"),
+        ("LTX_FAST", "1"),
+        ("LTX_FUTURE_KNOB", "1"),
+    ],
+)
 def test_worker_recipe_rejects_conflicts_and_drift(contract, monkeypatch, name, value):
     pipe = contract.create(traced=True)
     monkeypatch.setenv(name, value)
@@ -800,12 +821,18 @@ def test_live_native_cache_and_endpoint_updates_after_replay(contract, monkeypat
     assert all(call.kwargs["trace_key"] in ("s1_ref", "s2_ref") for call in native._denoise_no_guidance.call_args_list)
 
 
-@pytest.mark.parametrize("name,expected", [("ltx25-ic-6s-1080p", True), ("ltx25-ic-10s-1080p", True), ("ltx25-ic-6s-720p", False), (None, False)])
+@pytest.mark.parametrize(
+    "name,expected",
+    [("ltx25-ic-6s-1080p", True), ("ltx25-ic-10s-1080p", True), ("ltx25-ic-6s-720p", False), (None, False)],
+)
 def test_served_stage2_settings_use_existing_registration(contract, monkeypatch, name, expected):
     calls = []
     monkeypatch.setitem(sys.modules, "ttnn", SimpleNamespace(CoreCoord=lambda *args: args))
-    monkeypatch.setitem(sys.modules, "models.tt_dit.utils.matmul", SimpleNamespace(
-        FusedMMRSConfig=lambda *args, **kw: (args, kw), register_fused_mmrs_configs=calls.append))
+    monkeypatch.setitem(
+        sys.modules,
+        "models.tt_dit.utils.matmul",
+        SimpleNamespace(FusedMMRSConfig=lambda *args, **kw: (args, kw), register_fused_mmrs_configs=calls.append),
+    )
     contract.module._prepare_served_recipe(name)
     assert len(calls) == int(expected)
     if expected:
@@ -818,10 +845,12 @@ def test_served_stage2_settings_use_existing_registration(contract, monkeypatch,
 def test_live_reference_failure_cleans_cache_and_unlocks(contract, monkeypatch, error):
     c = contract
     pipe = c.create()
+
     def fail(prompt, **kw):
         key = (c.module.file_digest(kw["reference_video"][0]), 9, 128, 128)
         c.native._ref_latent_cache[key] = (object(), object())
         raise error
+
     original = c.native.generate
     monkeypatch.setattr(c.native, "generate", fail)
     with pytest.raises(type(error)):  # allow-pytest.raises: CPU-only contract
@@ -831,12 +860,14 @@ def test_live_reference_failure_cleans_cache_and_unlocks(contract, monkeypatch, 
     pipe.generate_r2v("recovered", seed=1)
 
 
-def test_worker_metadata_and_folding_drift(contract, monkeypatch):
+@pytest.mark.parametrize("fold_gates", ["0", "1"])
+def test_worker_metadata_and_folding_drift(contract, monkeypatch, fold_gates):
     c = contract
     for name in c.module.WORKER_PATH_ENV:
         monkeypatch.setenv(name, str(c.path.parent))
     for name, value in c.module.WORKER_ENVIRONMENT.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("LTX_FUSE_GATE_ON_DEVICE", fold_gates)
     monkeypatch.setenv("LTX_EDGE_WORKER_URL", "https://worker.example.invalid")
     monkeypatch.setenv("LTX_MESH", "bh_4x8sp1tp0_ring")
     pipe = c.create(traced=True)

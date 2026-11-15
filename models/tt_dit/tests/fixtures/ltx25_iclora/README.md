@@ -62,6 +62,8 @@ worker settings in `WORKER_ENVIRONMENT`. `LTX_PIPELINE=ltx25`, `LTX_QUALITY=high
 `LTX25_DIFFVAE=0`, empty `LTX_LORAS`, and `LTX_TRACED` matching the session are
 accepted; `LTX_CHECKPOINT` must resolve to the bound fused transformer. Known
 worker path metadata must be absolute. The worker URL must be HTTP(S).
+The worker's cold-cache gate folding setting `0` and warm default `1` are accepted;
+the session keeps its creation-time choice fixed.
 Unknown knobs, fast/quantized schedules, diffusion/2.3 fallbacks, append-token
 conditioning and incompatible post-creation changes still fail. No environment
 is silently changed. Use a dedicated worker process with this environment. Already imported
