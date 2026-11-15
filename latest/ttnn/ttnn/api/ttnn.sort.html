@@ -445,10 +445,8 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 </tr>
 </tbody>
 </table>
-<p>NaN input is unsupported (undefined ordering). The bfloat16 datapath canonicalizes NaN
-to same-sign infinity before comparing, and FLOAT32 orders NaN by sign, so NaN placement
-deviates from torch.sort, which treats NaN as larger than any number. Mask or replace
-NaNs before sorting.</p>
+<p>Input values must not be NaN, so replace or mask NaNs before sorting. <code class="docutils literal notranslate"><span class="pre">torch.sort</span></code>, by contrast, sorts NaN
+as larger than any number.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>

@@ -397,7 +397,7 @@ The output tensor will have the same shape as the index tensor. Note that the in
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>sparse_grad</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Not supported: it must be <cite>False</cite>, and <cite>True</cite> raises an error. Defaults to <cite>False</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>sparse_grad</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Must be <cite>False</cite>. Defaults to <cite>False</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Specifies the memory configuration for the output tensor. Defaults to <cite>None</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>out</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">A preallocated tensor to store the gathered values. Defaults to <cite>None</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Custom core range set for operation execution. Allows specification of which cores should be used for the operation. Defaults to <cite>None</cite>.</span></p></li>
@@ -407,14 +407,6 @@ The output tensor will have the same shape as the index tensor. Note that the in
 </dt>
 <dd class="field-odd">
 <p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the gathered values, with the same shape as <cite>index</cite>.</span></p>
-</dd>
-</dl>
-<dl class="simple">
-<dt>Additional Information:</dt>
-<dd>
-<ul class="simple">
-<li><p>Currently, the <cite>sparse_grad</cite> argument is not supported.</p></li>
-</ul>
 </dd>
 </dl>
 <div class="admonition note">
