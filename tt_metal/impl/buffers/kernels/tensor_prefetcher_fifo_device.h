@@ -110,7 +110,7 @@ class LanePage {
 public:
     FORCE_INLINE LanePage(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t lane) :
         bytes_(
-            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(slot) + fifo::kSlotHeaderBytes +
+            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(slot) + fifo::kSlotPagesOffset +
             lane * fifo::kLanePageBytes) {}
 
     FORCE_INLINE volatile tt_l1_ptr TensorPrefetcherRequestHeader* header() const {
@@ -131,6 +131,29 @@ public:
 private:
     volatile tt_l1_ptr uint8_t* bytes_;
 };
+
+// The word of `slot`'s plan that says how many blocks each receiver gets of tensor `e`.
+FORCE_INLINE volatile tt_l1_ptr uint32_t* tensor_blocks(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e) {
+    ASSERT(e < fifo::kMaxSlotTensors);
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+               reinterpret_cast<volatile tt_l1_ptr uint8_t*>(slot) + fifo::kSlotHeaderBytes) +
+           e;
+}
+
+// Waits for the kernel that reads tensor `e` of `slot` from its source to plan how many blocks each receiver
+// gets of it, and returns that count in `blocks`. False if termination was requested first.
+FORCE_INLINE bool wait_for_tensor_blocks(
+    const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, uint32_t& blocks) {
+    volatile tt_l1_ptr uint32_t* planned = tensor_blocks(slot, e);
+    WAYPOINT("TBW");
+    while ((blocks = *planned) == fifo::kTensorBlocksUnplanned) {
+        if (requests.terminate_requested()) {
+            return false;
+        }
+    }
+    WAYPOINT("TBD");
+    return true;
+}
 
 // Waits until the signal slot a WAIT_SIGNAL page names reaches its count. The slots only grow and may wrap, so
 // their difference is compared. False if termination was requested first.
@@ -182,6 +205,7 @@ FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
 struct TensorStream {
     uint32_t num_receivers = 0;
     uint32_t block_bytes = 0;
+    // Blocks of each of the tensor's groups per receiver; a group selector decides how many groups arrive.
     uint32_t block_count = 0;
     // Bytes of each stage slot, set by the receiver count alone (fifo::stage_slot_bytes).
     uint32_t slot_bytes = 0;
@@ -203,11 +227,10 @@ FORCE_INLINE void plan_tensor(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_
         const LanePage page(slot, l);
         volatile tt_l1_ptr TensorPrefetcherEntry* entry = page.entry(e);
         volatile tt_l1_ptr TensorPrefetcherTensorLayout* layout = page.layout_of(entry);
-        // Receiver-contiguous, batched, ungrouped and unselected: the host rejects the rest for
-        // this placement.
+        // Receiver-contiguous and batched: the host rejects the rest for this placement.
         ASSERT(
             layout->layout_mode == static_cast<uint32_t>(TensorPrefetcherLayoutMode::ReceiverContiguous) &&
-            layout->streaming == 0 && entry->num_groups == 1);
+            layout->streaming == 0);
         const uint32_t block_bytes = layout->page_bytes_per_recv;
         const uint32_t block_count = layout->block_count;
         if (l == 0) {

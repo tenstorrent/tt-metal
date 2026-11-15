@@ -520,9 +520,10 @@ uint32_t pack_virtual_xy(const CoreCoord& xy) {
     return static_cast<uint32_t>(xy.x) | (static_cast<uint32_t>(xy.y) << 16);
 }
 
-// Where the DRISC kernel reads a group selector's mask page: a NoC endpoint packed by pack_virtual_xy,
-// and the page's address there.
+// Where the sender reads a group selector's mask page: a NoC endpoint packed by pack_virtual_xy, or a DRAM
+// bank, and the page's address there.
 struct SelectorLocation {
+    TensorPrefetcherSelectorLocation location = TENSOR_PREFETCHER_SELECTOR_AT_NOC_XY;
     uint32_t noc_xy = 0;
     uint32_t addr = 0;
 };
@@ -573,7 +574,13 @@ SelectorLocation resolve_group_selector(
     std::optional<SelectorLocation> location;
     for (IDevice* device : devices) {
         SelectorLocation here;
-        if (memory_config.buffer_type() == BufferType::DRAM && !memory_config.is_sharded()) {
+        if (memory_config.buffer_type() == BufferType::DRAM && !memory_config.is_sharded() &&
+            dram_senders_on_dispatch_engine(mesh_device)) {
+            // A dispatch engine reads DRAM by bank. Page 0 of an interleaved buffer is at its base in bank 0.
+            here.location = TENSOR_PREFETCHER_SELECTOR_IN_DRAM_BANK;
+            here.noc_xy = 0;
+            here.addr = static_cast<uint32_t>(mask.mesh_buffer().address());
+        } else if (memory_config.buffer_type() == BufferType::DRAM && !memory_config.is_sharded()) {
             // Page 0 of an interleaved buffer sits in bank 0.
             const auto channel = mesh_device.allocator()->impl().get_dram_channel_from_bank_id(0);
             const CoreCoord xy = cluster.get_soc_desc(device->id())
@@ -1351,6 +1358,7 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
             entry.layout_offset = slot_offset(plan.entries[k].layout_index);
             entry.selector_noc_xy = plan.entries[k].selector.noc_xy;
             entry.selector_addr = plan.entries[k].selector.addr;
+            entry.selector_location = plan.entries[k].selector.location;
             entry.num_groups = plan.entries[k].num_groups;
             entry.selector_mode = plan.entries[k].selector_mode;
             std::memcpy(templ.data() + (kHeaderBytes + k * kEntryBytes), &entry, kEntryBytes);

@@ -5,7 +5,8 @@
 // The Tensor prefetcher where fast dispatch runs it on a dispatch engine: the same Start / Queue / Stop and
 // the same PrefetcherPipes as on a DRAM-core prefetcher, with a reader and a pusher on the dispatch engine
 // streaming a receiver-contiguous weight to the PrefetcherPipe validator, whether the request is queued
-// directly, behind a CQ fence or an op signal, or replayed from a trace or a CommandList. The validator checks
+// directly, behind a CQ fence or an op signal, or replayed from a trace or a CommandList, and the groups a
+// mask selects of a grouped weight. The validator checks
 // every entry against the weight in DRAM and hangs on a mismatch, so a run that finishes delivered every block
 // intact.
 
@@ -50,7 +51,9 @@ using ::tt::tt_metal::NdShardSpec;
 using ::tt::tt_metal::PageConfig;
 using ::tt::tt_metal::ShardDistributionStrategy;
 using ::tt::tt_metal::ShardOrientation;
+using ::tt::tt_metal::ShardSpec;
 using ::tt::tt_metal::TensorLayout;
+using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
 
 constexpr uint32_t kTilesPerReceiver = 2;
@@ -85,12 +88,14 @@ enum class WeightWrite { Finished, InFlight };
 // A receiver-contiguous weight -- one (K, N / receivers) slab per receiver, round-robin over the DRAM banks --
 // and the PrefetcherPipes that deliver it to `receivers_per_bank` receivers of every bank, `ring_entries`
 // blocks deep per receiver. A dispatch engine holds one sender endpoint per bank, so each bank's
-// receivers share one pipe.
+// receivers share one pipe. With `num_groups` above 1 the weight is grouped, (1, num_groups, K, N), and every
+// receiver slab stacks one (K, N / receivers) block per group.
 struct ReceiverContiguousCase {
     ReceiverContiguousCase(
         tt::tt_metal::distributed::MeshDevice* device,
         uint32_t receivers_per_bank,
         uint32_t ring_entries,
+        uint32_t num_groups = 1,
         WeightWrite weight_write = WeightWrite::Finished) {
         const uint32_t num_banks = device->dram_grid_size().x;
         const uint32_t num_receivers = receivers_per_bank * num_banks;
@@ -129,19 +134,19 @@ struct ReceiverContiguousCase {
 
         std::mt19937 rng(0xC0FFEE + num_receivers);
         std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-        std::vector<::bfloat16> values(static_cast<size_t>(k) * n);
+        std::vector<::bfloat16> values(static_cast<size_t>(num_groups) * k * n);
         for (auto& value : values) {
             value = ::bfloat16(dist(rng));
         }
         const MemoryConfig weight_memory_config(
             BufferType::DRAM,
             NdShardSpec{
-                ttnn::Shape({k, n / num_receivers}),
+                num_groups > 1 ? ttnn::Shape({num_groups, k, n / num_receivers}) : ttnn::Shape({k, n / num_receivers}),
                 CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_banks - 1, 0))),
                 ShardOrientation::ROW_MAJOR,
                 ShardDistributionStrategy::ROUND_ROBIN_1D});
         const TensorSpec weight_spec(
-            ttnn::Shape({1, 1, k, n}),
+            ttnn::Shape({1, num_groups, k, n}),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), weight_memory_config));
         weight = Tensor::from_vector(std::move(values), weight_spec).to_device(device);
         if (weight_write == WeightWrite::Finished) {
@@ -176,11 +181,35 @@ void queue_layers(
         *device, prefetch.pipe_refs(), std::nullopt, inputs, &device->mesh_command_queue());
 }
 
-// Validates every entry of `num_layers` copies of the weight as the receivers consume them.
+// Validates every entry of `num_layers` copies of the weight as the receivers consume them: of a grouped
+// weight, the `groups` listed, ascending, or every group when none are.
 void validate_layers(
-    tt::tt_metal::distributed::MeshDevice* device, const ReceiverContiguousCase& prefetch, uint32_t num_layers) {
+    tt::tt_metal::distributed::MeshDevice* device,
+    const ReceiverContiguousCase& prefetch,
+    uint32_t num_layers,
+    const std::vector<uint32_t>& groups = {}) {
     ttnn::operations::experimental::test::test_tensor_prefetcher_pipe_validator(
-        device, prefetch.weight, num_layers, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
+        device,
+        prefetch.weight,
+        num_layers,
+        /*print_stride=*/0,
+        prefetch.pipes,
+        prefetch.bank_to_receivers,
+        /*streaming=*/false,
+        /*rotation=*/{},
+        groups);
+}
+
+// A group selector's mask on `device`: one UINT16 word per group in a single row-major page, in `memory_config`.
+Tensor make_group_mask(
+    tt::tt_metal::distributed::MeshDevice* device,
+    const std::vector<uint16_t>& words,
+    const MemoryConfig& memory_config) {
+    const auto num_groups = static_cast<uint32_t>(words.size());
+    const TensorSpec spec(
+        ttnn::Shape({1, 1, 1, num_groups}),
+        TensorLayout(DataType::UINT16, PageConfig(Layout::ROW_MAJOR), memory_config));
+    return Tensor::from_vector(std::vector<uint16_t>(words), spec).to_device(device);
 }
 
 // Every block of one tensor arrives, through two-entry rings.
@@ -222,7 +251,8 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverC
 // dispatcher writes into the dispatch engine's own L1 that every kernel waits on.
 TEST_F(DispatchEngineTensorPrefetcherFixture, FencesRequestsAgainstCommandQueue) {
     metal_exp::StartTensorPrefetcher(*device_, {});
-    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, WeightWrite::InFlight);
+    ReceiverContiguousCase prefetch(
+        device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, /*num_groups=*/1, WeightWrite::InFlight);
     metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(), std::nullopt);
     queue_layers(device_, prefetch, /*num_layers=*/1);
     validate_layers(device_, prefetch, /*num_layers=*/1);
@@ -233,13 +263,47 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, FencesRequestsAgainstCommandQueue)
 // after the signalling op gets every block intact only if every kernel held at the wait.
 TEST_F(DispatchEngineTensorPrefetcherFixture, ServesRequestAfterOpSignal) {
     constexpr uint32_t kSignalId = 1;
-    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, WeightWrite::InFlight);
+    ReceiverContiguousCase prefetch(
+        device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, /*num_groups=*/1, WeightWrite::InFlight);
     metal_exp::StartTensorPrefetcher(*device_, {});
     for (uint32_t layer = 0; layer < 2; ++layer) {
         metal_exp::QueueTensorPrefetcherWaitForSignal(*device_, kSignalId, /*trace_capture_cq=*/nullptr);
         queue_layers(device_, prefetch, /*num_layers=*/1);
         ttnn::operations::experimental::signal_tensor_prefetcher(device_, kSignalId, CoreCoord(0, 0));
         validate_layers(device_, prefetch, /*num_layers=*/1);
+    }
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// A grouped weight stacks its groups (MoE experts) in every receiver slab. Every group arrives, in ascending
+// order; with a group selector only those whose mask word is non-zero do. The reader reads the mask when it
+// reaches the request -- from DRAM by bank, or from a worker core's L1 -- and the pusher sends what it read.
+TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
+    constexpr uint32_t kNumGroups = 4;
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, kNumGroups);
+    const Tensor dram_mask =
+        make_group_mask(device_, {1, 0, 1, 1}, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
+    const CoreRangeSet mask_core(CoreRange(CoreCoord(0, 1)));
+    const Tensor l1_mask = make_group_mask(
+        device_,
+        {0, 1, 0, 0},
+        MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, ShardSpec(mask_core, {1, kNumGroups})));
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    // The masks were written through the command queue, which the prefetcher does not follow on its own.
+    metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(), std::nullopt);
+
+    queue_layers(device_, prefetch, /*num_layers=*/1);
+    validate_layers(device_, prefetch, /*num_layers=*/1);
+    const std::vector<std::pair<const Tensor*, std::vector<uint32_t>>> selections = {
+        {&dram_mask, {0, 2, 3}}, {&l1_mask, {1}}};
+    for (const auto& [mask, groups] : selections) {
+        const std::vector<metal_exp::TensorPrefetcherInput> inputs = {
+            {.tensor = prefetch.weight.mesh_tensor(),
+             .block_count = prefetch.block_count,
+             .group_selector = metal_exp::TensorPrefetcherGroupSelector{mask->mesh_tensor()}}};
+        metal_exp::QueueTensorPrefetcherRequest(
+            *device_, prefetch.pipe_refs(), std::nullopt, inputs, &device_->mesh_command_queue());
+        validate_layers(device_, prefetch, /*num_layers=*/1, groups);
     }
     metal_exp::StopTensorPrefetcher(*device_);
 }

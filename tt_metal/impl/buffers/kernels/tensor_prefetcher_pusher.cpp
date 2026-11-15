@@ -67,12 +67,14 @@ private:
     uint32_t num_lanes_;
 };
 
-// Pushes every block of one tensor as the reader stages it. False if termination was requested first.
+// Pushes `blocks` blocks of one tensor to each receiver as the reader stages them. False if termination was
+// requested first.
 bool push_tensor(
     const FifoConsumer& requests,
     volatile tt_l1_ptr fifo::SlotHeader* slot,
     uint32_t num_lanes,
-    const TensorStream& stream) {
+    const TensorStream& stream,
+    uint32_t blocks) {
     LanePipes pipes(slot, num_lanes, stream.block_bytes);
     Noc noc;
     uint32_t pushed[fifo::kMaxReceivers];
@@ -81,13 +83,13 @@ bool push_tensor(
         pushed[i] = *region.pushed(i);
         blocks_pushed[i] = 0;
     }
-    uint32_t remaining = stream.num_receivers * stream.block_count;
+    uint32_t remaining = stream.num_receivers * blocks;
     WAYPOINT("TPPW");
     while (remaining > 0) {
         uint32_t writing = 0;
         bool waiting_on_receiver = false;
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
-            if (blocks_pushed[i] == stream.block_count || *region.staged(i) == pushed[i]) {
+            if (blocks_pushed[i] == blocks || *region.staged(i) == pushed[i]) {
                 continue;
             }
             PrefetcherPipe& pipe = pipes[stream.lane[i]];
@@ -175,7 +177,13 @@ bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHea
     TensorStream stream;
     for (uint32_t e = 0; e < num_tensors; ++e) {
         tensor_prefetcher::plan_tensor(slot, e, stream);
-        if (!push_tensor(requests, slot, num_lanes, stream)) {
+        // As many blocks as the reader planned, which a group selector may make fewer than the tensor holds.
+        uint32_t blocks = 0;
+        if (!tensor_prefetcher::wait_for_tensor_blocks(requests, slot, e, blocks)) {
+            return false;
+        }
+        // A selector that picks no group leaves nothing to send, and the pipes keep the entry size they had.
+        if (blocks != 0 && !push_tensor(requests, slot, num_lanes, stream, blocks)) {
             return false;
         }
     }
