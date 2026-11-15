@@ -81,6 +81,7 @@ class StepContextBuilder:
         self.tables = [tables[n] for n in self.table_names]
         self.int_keys, self.int_shapes, self.int_dtypes, self.int_terms = [], [], [], []
         self.rope_keys, self.rope_tables, self.rope_fields, self.rope_offsets = [], [], [], []
+        self.rope_rows, self.rope_heights = [], []
 
     def add_int(self, key, shape: list[int], terms: list[list[int]], dtype=ttnn.int32) -> None:
         assert math.prod(shape) == len(terms), (shape, len(terms))
@@ -89,14 +90,18 @@ class StepContextBuilder:
         self.int_dtypes.append(dtype)
         self.int_terms.append([w for t in terms for w in t])
 
-    def add_rope(self, key, family: str, field: int, offset: int = 0) -> None:
+    def add_rope(self, key, family: str, field: int, offset: int = 0, rows: int = 1, tile_height: int = 32) -> None:
+        """A ``(cos, sin, -sin)`` triple ``[1, 1, rows, Rd]``, row ``r`` at position ``pkt[field + r] + offset``,
+        tiled ``(tile_height, 32)``: a verify block's 4 rows take ``rows=4, tile_height=4``."""
+        self.rope_rows.append(rows)
+        self.rope_heights.append(tile_height)
         self.rope_keys.append(key)
         self.rope_tables.append(self.table_names.index(family))
         self.rope_fields.append(field)
         self.rope_offsets.append(offset)
 
     def run(self) -> dict:
-        outs = ttnn.experimental.deepseek.decode_step_context(
+        args = [
             self.pkt,
             self.tables,
             self.int_shapes,
@@ -105,7 +110,10 @@ class StepContextBuilder:
             self.rope_tables,
             self.rope_fields,
             self.rope_offsets,
-        )
+        ]
+        if any(r != 1 for r in self.rope_rows) or any(h != 32 for h in self.rope_heights):
+            args += [self.rope_rows, self.rope_heights]
+        outs = ttnn.experimental.deepseek.decode_step_context(*args)
         n = len(self.int_keys)
         result = dict(zip(self.int_keys, outs[:n]))
         for j, key in enumerate(self.rope_keys):

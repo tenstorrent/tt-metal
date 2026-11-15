@@ -14,10 +14,14 @@ namespace ttnn::operations::experimental::deepseek::step_context {
 struct StepContextSharedVariables {
     tt::tt_metal::KernelHandle int_kernel_id = 0;
     tt::tt_metal::KernelHandle rope_kernel_id = 0;
-    CoreCoord int_core;
+    // The integer outputs are split over int_cores in order; int_addr_slots[c] is the runtime-arg index of each of
+    // core c's outputs' address, its first output int_first[c].
+    std::vector<CoreCoord> int_cores;
+    std::vector<uint32_t> int_first;
+    std::vector<std::vector<uint32_t>> int_addr_slots;
+    // One core per RoPE row; rope_output[i] is core i's RoPE output.
     std::vector<CoreCoord> rope_cores;
-    // Index of each integer output's address in the int core's runtime args.
-    std::vector<uint32_t> int_addr_slots;
+    std::vector<uint32_t> rope_output;
 };
 
 struct StepContextProgramFactory {

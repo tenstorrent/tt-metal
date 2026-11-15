@@ -31,9 +31,13 @@ void bind_step_context(::nanobind::module_& mod) {
                 + pkt[add_field] * add_mul``.
             rope_table_ids, rope_fields, rope_offsets (List[int]): per RoPE output, its table and the position
                 ``pkt[field] + offset`` (``>= -1``).
+            rope_rows (List[int]): per RoPE output its rows ``R`` (default 1): row ``r`` is at position
+                ``pkt[field + r] + offset``.
+            rope_tile_heights (List[int]): per RoPE output its tile height (default 32, ``>= R``); a 4-row verify
+                block uses ``R = 4`` with height 4, i.e. ``ttnn.Tile((4, 32))``.
 
         Returns:
-            List[ttnn.Tensor]: the integer outputs (ROW_MAJOR, DRAM), then ``cos, sin, -sin`` ``[1, 1, 1, Rd]``
+            List[ttnn.Tensor]: the integer outputs (ROW_MAJOR, DRAM), then ``cos, sin, -sin`` ``[1, 1, R, Rd]``
             BFLOAT16 TILE (DRAM) per RoPE output.
         )doc",
         &ttnn::experimental::deepseek::decode_step_context,
@@ -44,7 +48,9 @@ void bind_step_context(::nanobind::module_& mod) {
         nb::arg("int_terms"),
         nb::arg("rope_table_ids"),
         nb::arg("rope_fields"),
-        nb::arg("rope_offsets"));
+        nb::arg("rope_offsets"),
+        nb::arg("rope_rows") = std::vector<uint32_t>{},
+        nb::arg("rope_tile_heights") = std::vector<uint32_t>{});
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

@@ -5,6 +5,7 @@
 #include "step_context_program_factory.hpp"
 
 #include <algorithm>
+#include <set>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -45,20 +46,42 @@ StepContextProgramFactory::cached_program_t StepContextProgramFactory::create(
 
     const uint32_t n_int = attrs.int_shapes.size();
     const uint32_t n_rope = attrs.rope_tables.size();
-    TT_FATAL(1 + n_rope <= grid.x * grid.y, "decode_step_context: not enough cores");
+
+    // Integer outputs in order, kIntElemsPerCore elements per core at most (an output stays on one core).
+    std::vector<uint32_t> int_first;
+    uint32_t elems = 0;
+    for (uint32_t i = 0; i < n_int; ++i) {
+        const uint32_t n = attrs.int_terms[i].size() / kTermWords;
+        if (int_first.empty() || elems + n > kIntElemsPerCore) {
+            int_first.push_back(i);
+            elems = 0;
+        }
+        elems += n;
+    }
+    const uint32_t n_int_cores = int_first.size();
+    std::vector<uint32_t> rope_output;
+    for (uint32_t j = 0; j < n_rope; ++j) {
+        for (uint32_t r = 0; r < rope_rows_of(attrs, j); ++r) {
+            rope_output.push_back(j);
+        }
+    }
+    TT_FATAL(n_int_cores + rope_output.size() <= grid.x * grid.y, "decode_step_context: not enough cores");
     auto core_at = [&](uint32_t i) { return CoreCoord{i % grid.x, i / grid.x}; };
 
-    const CoreCoord int_core = core_at(0);
+    std::vector<CoreCoord> int_cores;
+    std::set<CoreRange> int_ranges;
+    for (uint32_t c = 0; c < n_int_cores; ++c) {
+        int_cores.push_back(core_at(c));
+        int_ranges.insert(CoreRange(int_cores.back()));
+    }
     std::vector<CoreCoord> rope_cores;
-    for (uint32_t j = 0; j < n_rope; ++j) {
-        rope_cores.push_back(core_at(1 + j));
-    }
-    std::set<CoreRange> all_ranges{CoreRange(int_core)};
     std::set<CoreRange> rope_ranges;
-    for (const auto& c : rope_cores) {
-        all_ranges.insert(CoreRange(c));
-        rope_ranges.insert(CoreRange(c));
+    for (uint32_t i = 0; i < rope_output.size(); ++i) {
+        rope_cores.push_back(core_at(n_int_cores + i));
+        rope_ranges.insert(CoreRange(rope_cores.back()));
     }
+    std::set<CoreRange> all_ranges = int_ranges;
+    all_ranges.insert(rope_ranges.begin(), rope_ranges.end());
     const CoreRangeSet all_cores(all_ranges);
 
     const uint32_t pkt_bytes = pkt.logical_shape()[3] * sizeof(int32_t);
@@ -67,16 +90,23 @@ StepContextProgramFactory::cached_program_t StepContextProgramFactory::create(
         max_rd = std::max(max_rd, static_cast<uint32_t>(t.logical_shape()[3] / 2));
     }
     const uint32_t max_tiles = max_rd / tt::constants::TILE_WIDTH;
+    uint32_t max_core_outputs = 1;
+    for (uint32_t c = 0; c < n_int_cores; ++c) {
+        const uint32_t next = c + 1 < n_int_cores ? int_first[c + 1] : n_int;
+        max_core_outputs = std::max(max_core_outputs, next - int_first[c]);
+    }
     add_cb(program, all_cores, kCbPkt, tt::round_up(pkt_bytes, kSlotBytes));
-    add_cb(program, all_cores, kCbScratch, std::max(n_int, 1u) * kSlotBytes);
+    add_cb(program, all_cores, kCbScratch, max_core_outputs * kSlotBytes);
     add_cb(program, all_cores, kCbRows, 2 * tt::round_up(2 * max_rd * sizeof(int32_t), kSlotBytes));
+    // Three outputs of (tile height x Rd) bf16 each: at most three 32 x 32 tiles per 32 columns.
     add_cb(program, all_cores, kCbTiles, 3 * max_tiles * kBf16TileBytes);
+    const uint32_t sem = n_rope ? CreateSemaphore(program, CoreRangeSet(rope_ranges), 0) : 0;
 
     const Buffer* int_out = outputs[0].buffer();
     const Buffer* table_buf = n_rope ? args.rope_tables[0].buffer() : pkt.buffer();
     const Buffer* rope_out = n_rope ? outputs[n_int].buffer() : int_out;
     auto ct_args = [&](uint32_t role) {
-        std::vector<uint32_t> ct = {role, kCbPkt, kCbScratch, kCbRows, kCbTiles, pkt_bytes};
+        std::vector<uint32_t> ct = {role, kCbPkt, kCbScratch, kCbRows, kCbTiles, pkt_bytes, sem};
         TensorAccessorArgs(pkt.buffer()).append_to(ct);
         TensorAccessorArgs(int_out).append_to(ct);
         TensorAccessorArgs(table_buf).append_to(ct);
@@ -84,57 +114,75 @@ StepContextProgramFactory::cached_program_t StepContextProgramFactory::create(
         return ct;
     };
     const KernelHandle int_kernel_id =
-        CreateKernel(program, kKernelPath, CoreRangeSet(CoreRange(int_core)), ReaderDataMovementConfig(ct_args(0)));
+        CreateKernel(program, kKernelPath, CoreRangeSet(int_ranges), ReaderDataMovementConfig(ct_args(0)));
     KernelHandle rope_kernel_id = 0;
     if (n_rope) {
         rope_kernel_id =
             CreateKernel(program, kKernelPath, CoreRangeSet(rope_ranges), ReaderDataMovementConfig(ct_args(1)));
     }
 
-    std::vector<uint32_t> int_args = {pkt.buffer()->address(), n_int};
-    std::vector<uint32_t> int_addr_slots;
-    for (uint32_t i = 0; i < n_int; ++i) {
-        const auto& terms = attrs.int_terms[i];
-        int_addr_slots.push_back(int_args.size());
-        int_args.push_back(outputs[i].buffer()->address());
-        int_args.push_back(terms.size() / kTermWords);
-        for (int32_t w : terms) {
-            int_args.push_back(static_cast<uint32_t>(w));
+    std::vector<std::vector<uint32_t>> int_addr_slots(n_int_cores);
+    for (uint32_t c = 0; c < n_int_cores; ++c) {
+        const uint32_t next = c + 1 < n_int_cores ? int_first[c + 1] : n_int;
+        std::vector<uint32_t> int_args = {pkt.buffer()->address(), next - int_first[c]};
+        for (uint32_t i = int_first[c]; i < next; ++i) {
+            const auto& terms = attrs.int_terms[i];
+            int_addr_slots[c].push_back(int_args.size());
+            int_args.push_back(outputs[i].buffer()->address());
+            int_args.push_back(terms.size() / kTermWords);
+            for (int32_t w : terms) {
+                int_args.push_back(static_cast<uint32_t>(w));
+            }
         }
+        TT_FATAL(
+            int_args.size() <= tt::tt_metal::max_runtime_args,
+            "decode_step_context: {} integer-term args exceed the {} runtime args of a kernel",
+            int_args.size(),
+            tt::tt_metal::max_runtime_args);
+        SetRuntimeArgs(program, int_kernel_id, int_cores[c], int_args);
     }
-    TT_FATAL(
-        int_args.size() <= tt::tt_metal::max_runtime_args,
-        "decode_step_context: {} integer-term args exceed the {} runtime args of a kernel",
-        int_args.size(),
-        tt::tt_metal::max_runtime_args);
-    SetRuntimeArgs(program, int_kernel_id, int_core, int_args);
 
-    for (uint32_t j = 0; j < n_rope; ++j) {
+    // Row r of RoPE output j runs on its own core; rows 1.. send theirs to row 0's core, which writes the tiles.
+    uint32_t gather = 0;
+    for (uint32_t i = 0; i < rope_cores.size(); ++i) {
+        const uint32_t j = rope_output[i];
+        if (i == 0 || rope_output[i - 1] != j) {
+            gather = i;
+        }
+        const uint32_t r = i - gather;
         const auto& table = args.rope_tables[attrs.rope_tables[j]];
         const uint32_t rows = table.logical_shape()[2];
         const uint32_t rd = table.logical_shape()[3] / 2;
+        const CoreCoord hub = device->worker_core_from_logical_core(rope_cores[gather]);
         SetRuntimeArgs(
             program,
             rope_kernel_id,
-            rope_cores[j],
+            rope_cores[i],
             {pkt.buffer()->address(),
              table.buffer()->address(),
              rows - kRopeLoRows,
              rd,
-             attrs.rope_fields[j],
+             attrs.rope_fields[j] + r,
              static_cast<uint32_t>(attrs.rope_offsets[j]),
              outputs[n_int + 3 * j].buffer()->address(),
              outputs[n_int + 3 * j + 1].buffer()->address(),
-             outputs[n_int + 3 * j + 2].buffer()->address()});
+             outputs[n_int + 3 * j + 2].buffer()->address(),
+             r,
+             rope_rows_of(attrs, j),
+             rope_tile_height_of(attrs, j),
+             static_cast<uint32_t>(hub.x),
+             static_cast<uint32_t>(hub.y)});
     }
 
     return cached_program_t{
         std::move(program),
         {.int_kernel_id = int_kernel_id,
          .rope_kernel_id = rope_kernel_id,
-         .int_core = int_core,
+         .int_cores = int_cores,
+         .int_first = int_first,
+         .int_addr_slots = int_addr_slots,
          .rope_cores = rope_cores,
-         .int_addr_slots = int_addr_slots}};
+         .rope_output = rope_output}};
 }
 
 void StepContextProgramFactory::override_runtime_arguments(
@@ -147,13 +195,16 @@ void StepContextProgramFactory::override_runtime_arguments(
     const uint32_t pkt_addr = args.packet.buffer()->address();
     const uint32_t n_int = attrs.int_shapes.size();
 
-    auto& int_args = GetRuntimeArgs(program, shared.int_kernel_id, shared.int_core);
-    int_args[0] = pkt_addr;
-    for (uint32_t i = 0; i < n_int; ++i) {
-        int_args[shared.int_addr_slots[i]] = outputs[i].buffer()->address();
+    for (uint32_t c = 0; c < shared.int_cores.size(); ++c) {
+        auto& int_args = GetRuntimeArgs(program, shared.int_kernel_id, shared.int_cores[c]);
+        int_args[0] = pkt_addr;
+        for (uint32_t s = 0; s < shared.int_addr_slots[c].size(); ++s) {
+            int_args[shared.int_addr_slots[c][s]] = outputs[shared.int_first[c] + s].buffer()->address();
+        }
     }
-    for (uint32_t j = 0; j < shared.rope_cores.size(); ++j) {
-        auto& a = GetRuntimeArgs(program, shared.rope_kernel_id, shared.rope_cores[j]);
+    for (uint32_t i = 0; i < shared.rope_cores.size(); ++i) {
+        const uint32_t j = shared.rope_output[i];
+        auto& a = GetRuntimeArgs(program, shared.rope_kernel_id, shared.rope_cores[i]);
         a[0] = pkt_addr;
         a[1] = args.rope_tables[attrs.rope_tables[j]].buffer()->address();
         a[6] = outputs[n_int + 3 * j].buffer()->address();
