@@ -43,7 +43,6 @@ and placing the shards, restoring the scalars and the train state.
 from __future__ import annotations
 
 import json
-import re
 import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -69,6 +68,7 @@ from ._errors import (
 from ._index import Entry, FileRecord, Index, _entry_from_json, _entry_to_json
 from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
+from ._state_dict import is_structural_scalar
 from ._topology import Chunk, Label, crc31, owner
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
@@ -604,7 +604,7 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
     scalars = dict(rank0.scalars)
     # A param group's member list is per rank (each rank's optimizer holds the parameters of its own mesh); the index
     # records the union, which load checks every rank's live members against.
-    for key in [k for k in scalars if _PARAM_GROUP_MEMBERS.search(k)]:
+    for key in [k for k in scalars if is_structural_scalar(k)]:
         names: set[str] = set()
         for part in parts:
             value = part.scalars.get(key)
@@ -627,6 +627,3 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
         "train_state": train_state,
     }
     return index, header
-
-
-_PARAM_GROUP_MEMBERS = re.compile(r"(^|/)param_groups\.\d+\.params$")
