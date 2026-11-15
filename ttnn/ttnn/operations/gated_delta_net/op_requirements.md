@@ -84,6 +84,19 @@ attack the dominant region with the relevant patterns in
   fewer copy/SFPU/matmul re-inits per batch (`compute_block_size`, `compute_fusion`).
 No SUPPORTED change.
 
+**Measured on this op at fdff462 (operator, device kernel duration, median of 11 launches, bf16 config of perf_decode_b1)**:
+101.5 us on 12 cores; the DRAM bank bound for the bytes of this call is 4.8 us, so DRAM is 5% used and is
+not what limits the kernel. Per-core zones: the reader (NCRISC) spans 39 us and issues 9,324 NoC calls
+per launch (705 to 849 per core); the trace counts about 2.46 MB read where the inputs hold 1.39 MB, so
+about 1.07 MB is read more than once. The compute kernel waits 35 us for its first input
+(cb_wait_front), then runs about 62 us with the vector engine busy 43% of the window and the matrix
+engine 3%. So two regions, in this order of size: (1) the compute chain after the first input, about 62 us,
+vector-engine work on full tiles for one valid row; (2) the reader's window assembly, about 35 to 39 us,
+many small reads behind many barriers and bytes read twice. Captures: generated/chip_runs/gdn_v00_d1_*.
+Decode B=8 and B=16 (126.6 us and 262.8 us): the fastest core takes 100 us as at B=1 and the slow cores
+wait on input (42 to 44% of compute time in cb_wait_front), not on more work: the reader side scales
+badly with the number of pairs.
+
 **Done when**: measured device-ns on `perf_decode_b1` (exactly its bf16 config) improves and moves
 toward the 5.3 us goal, its precision gates (output PCC 0.995 / rel RMS 0.04, state PCC 0.999 / rel
 RMS 0.01) still hold, the golden suite is green, and there is no regression across the
@@ -117,3 +130,31 @@ fill the grid, e.g. decode B=16) with regime-pinned tests for both. The unused c
 **Done when**: measured device-ns on `perf_decode_b1` improves over the Refinement 2 result and
 moves toward 5.3 us, its precision gates hold, the golden suite is green, and no regression across
 the config-spanning guard set (as in Refinement 2, plus one decode B=16 representative on R-STEP).
+
+### [ ] Refinement 4 — Chunked recurrence for prefill (model_prefill_4096)
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES[3]` (`model_prefill_4096`: Hk=4, Hv=12, K=V=128, B=1, T=4096, bf16
+token tensors, fp32 state, DRAM interleaved, HiFi4, `fp32_dest_acc_en=True`) is the shape in which the
+model ingests every prompt. Measured on this op at fdff462 (operator, device kernel duration, median of
+11 launches): 89.63 ms on 12 cores, 21.9 us per token step, 4096 ordered token steps per pair; compute
+bound (vector engine 35% of the window, matrix engine 10%), reader not limiting. Build the deferred
+R-CHUNK regime of op_design.md: the closed form over a chunk of up to 32 tokens (one tile row) with the
+float32 state carried across chunks, so that a tile row costs a few matrix products on Kt x Vt state
+tiles instead of 32 token steps (math.md of the exploration bundle: reformulations F1 and F5 and their
+licences; the oracle holds one function per form). The carried state and exp(g) stay float32 at every
+chunk boundary (spec rules); inside a chunk, narrow operands of the products are allowed as the spec
+states. If the measurement after R-CHUNK shows cores idle, consider the deferred R-VSPLIT / R-SEG on
+top; decide by measurement. Regime selection by a host predicate on T (decode T=1 keeps its path).
+No SUPPORTED change.
+
+**Verifier notes**: scheme-change on the dependent t axis; regime-pinned tests for the chunked and the
+token-step paths, including T not a multiple of 32, T < 32, a call that starts mid-sequence from a
+non-zero state, and the state-carry loose cases (`state_carry_f32`, `state_carry_bf16`,
+`state_carry_one_call_f32` gate the state at 0.002 relative RMS: a chunk form that narrows the carried
+state fails them). Must not slow `perf_decode_b1` or the decode B=8 / B=16 model cases.
+
+**Done when**: measured device-ns on `model_prefill_4096` improves by a large factor over 89.6 ms, its
+precision gates and every state-carry case hold, the golden suite is green, and there is no regression
+on `perf_decode_b1` and across the config-spanning guard set of Refinement 2.
