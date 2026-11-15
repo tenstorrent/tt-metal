@@ -12,18 +12,28 @@
 
 // persistent_moe_request (see PersistentMoeRequestParams): one request to the persistent fused_experts
 // op from this chip. The page -- a 64-byte header, the layer id in word 0, then the input row -- is
-// built in cb_page and sent to the request socket's receivers (d2d_send.h), then bytes_sent. The op's chips
-// send their partials of the row straight to this chip's sum cores (moe_partials_sum.cpp), which write the
-// output. The receivers do not ack the request: the op takes a requester's next page only after this one's
-// partials, which this op waits for, so the request socket's acks are set here.
+// built in cb_page and sent to the request socket's receivers (d2d_send.h); the last packet of each send bumps
+// their bytes_sent. The op's chips send their partials of the row straight to this chip's sum cores
+// (moe_partials_sum.cpp), which write the output. The receivers do not ack the request: the op takes a
+// requester's next page only after this one's partials, which this op waits for, so the request socket's acks
+// are set here.
+//
+// The page may go over two fabric links: the socket's sender core (the main one) sends bytes [0, send_bytes)
+// over link 0 and a partner core the rest over link 1. The partner takes the page's FIFO address, the
+// receivers' bytes_sent address and their core from the main core (its semaphores 0, 1, 2), and bumps
+// bytes_sent by its own bytes; the main core bumps it by the rest of what the socket push added. The page counts
+// at the receivers only once both halves have landed.
 //
 // Compile-time args:
 //   0: request socket config address   1: row_bytes   2: max_payload (fabric packet bytes)   3: cb_page
 //   4+: TensorAccessorArgs(input)
 //
 // Runtime args:
-//   0: layer   1: input address   2: num_routes   3+: the request's routes (d2d_send.h), then the fabric
-//   connection they leave by (link 0)
+//   0: layer   1: input address   2: send_start (0 on the main core)   3: send_bytes   4: the partner's NoC x
+//   (kNoPartner: none; main core only)   5: its NoC y   6: num_routes   7+: the request's routes (d2d_send.h),
+//   then the fabric connection they leave by
+
+constexpr uint32_t kNoPartner = 0xFFFFFFFFu;
 
 void kernel_main() {
     constexpr uint32_t request_config_addr = get_compile_time_arg_val(0);
@@ -34,10 +44,15 @@ void kernel_main() {
     constexpr uint32_t kHdrBytes = 64;
     constexpr uint32_t page_bytes = kHdrBytes + row_bytes;
     constexpr uint32_t kMaxRoutes = 16;
+    constexpr uint32_t kSendHeaders = 8;  // of the RISC's 12 in the pool
 
     size_t arg_idx = 0;
     const uint32_t layer = get_arg_val<uint32_t>(arg_idx++);
     const auto input = TensorAccessor(input_args, get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t send_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t send_bytes = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t partner_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t partner_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_routes = get_arg_val<uint32_t>(arg_idx++);
     D2DRoute routes[kMaxRoutes];
     for (uint32_t r = 0; r < num_routes; ++r) {
@@ -45,15 +60,48 @@ void kernel_main() {
     }
     tt::tt_fabric::RoutingPlaneConnectionManager request_connection;
     open_connections(request_connection, 1, arg_idx);
-    auto* request_header = PacketHeaderPool::allocate_header();
-
+    // The page's packets go out back to back, each with its own header.
+    D2DHeaderRing<kSendHeaders> headers;
+    headers.init();
+    auto* sender = &request_connection.get(0).sender;
     const uint32_t page_l1 = get_write_ptr(cb_page);
+
+    if (send_start > 0u) {
+        // The partner: its part of the row, once the main core has the page's place.
+        noc_async_read(input.get_noc_addr(0) + (send_start - kHdrBytes), page_l1 + send_start, send_bytes);
+        auto* place = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+        auto* sent_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));
+        auto* rx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(2));
+        noc_async_read_barrier();
+        DeviceZoneScopedN("MOE_REQ_SEND");
+        do {
+            invalidate_l1_cache();
+        } while (*place == 0u || *sent_addr == 0u || *rx == 0u);
+        headers.reset();
+        for (uint32_t r = 0; r < num_routes; ++r) {
+            d2d_send_flagged<max_payload>(
+                sender,
+                headers,
+                routes[r],
+                page_l1 + send_start,
+                send_bytes,
+                *rx >> 16,
+                *rx & 0xFFFFu,
+                *place + send_start,
+                *sent_addr,
+                send_bytes);
+        }
+        noc_async_write_barrier();
+        close_connections(request_connection);
+        return;
+    }
+
     auto* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_l1);
     for (uint32_t w = 0; w < kHdrBytes / 4u; ++w) {
         header[w] = 0;
     }
     header[0] = layer;
-    noc_async_read(input.get_noc_addr(0), page_l1 + kHdrBytes, row_bytes);
+    noc_async_read(input.get_noc_addr(0), page_l1 + kHdrBytes, send_bytes - kHdrBytes);
     noc_async_read_barrier();
 
     SocketSenderInterface request = create_sender_socket_interface(request_config_addr);
@@ -64,15 +112,32 @@ void kernel_main() {
         const auto receiver = get_downstream_encoding(request, 0);
         const uint32_t rx_x = receiver.d2d.downstream_noc_x;
         const uint32_t rx_y = receiver.d2d.downstream_noc_y;
-        auto* sender = &request_connection.get(0).sender;
         const uint32_t dst = request.downstream_fifo_addr + request.write_ptr;
-        for (uint32_t r = 0; r < num_routes; ++r) {
-            d2d_send<max_payload>(sender, request_header, routes[r], page_l1, page_bytes, rx_x, rx_y, dst);
+        if (partner_x != kNoPartner) {
+            noc_inline_dw_write(get_noc_addr(partner_x, partner_y, get_semaphore(0)), dst);
+            noc_inline_dw_write(
+                get_noc_addr(partner_x, partner_y, get_semaphore(1)), request.downstream_bytes_sent_addr);
+            noc_inline_dw_write(get_noc_addr(partner_x, partner_y, get_semaphore(2)), (rx_x << 16) | rx_y);
         }
+        const uint32_t sent_before = request.bytes_sent;
         socket_push_pages(request, 1);
+        // The receivers' bytes_sent goes up by what the push added, fused into each send's last packet: the
+        // partner's bytes from it, the rest (with any wrap padding) from here.
+        const uint32_t pushed = request.bytes_sent - sent_before;
+        const uint32_t mine = pushed - (page_bytes - send_bytes);
+        headers.reset();
         for (uint32_t r = 0; r < num_routes; ++r) {
-            d2d_send_word(
-                sender, request_header, routes[r], rx_x, rx_y, request.downstream_bytes_sent_addr, request.bytes_sent);
+            d2d_send_flagged<max_payload>(
+                sender,
+                headers,
+                routes[r],
+                page_l1,
+                send_bytes,
+                rx_x,
+                rx_y,
+                dst,
+                request.downstream_bytes_sent_addr,
+                mine);
         }
     }
     // The next request's page goes out only after this op, whose sum cores wait for this page's partials.

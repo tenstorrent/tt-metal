@@ -20,6 +20,8 @@ using tt::tt_metal::distributed::SocketEndpoint;
 
 constexpr uint32_t kRequestHeaderBytes = 64;
 constexpr uint32_t kRequestStopLayer = 0xFFFFFFFFu;
+constexpr uint32_t kRequestNoPartner = 0xFFFFFFFFu;  // moe_request.cpp's kNoPartner
+constexpr uint32_t kMinPartnerPackets = 4;
 
 // This chip's side of the request socket: the core that sends the request, and the request's receivers.
 struct RequestEndpoints {
@@ -53,6 +55,36 @@ std::optional<RequestEndpoints> request_endpoints(
     return RequestEndpoints{.core = *core, .receivers = std::move(receivers)};
 }
 
+// The request's second sender, on fabric link 1: a core next to the socket's sender core, when the page spans
+// kMinPartnerPackets packets or more and the route's first hop has a second link. It sends the page's back part.
+// A link carries about a packet per 0.84 us; the partner starts about 0.7 us behind the main core (it waits for
+// the page's place), so a several-row block's 41 KB page gains ~3.5 us, while a one-row 10 KB page (3 packets) loses.
+struct RequestPartner {
+    tt::tt_metal::CoreCoord core;
+    uint32_t link0;
+    uint32_t link1;
+    uint32_t split;  // the page bytes the main core sends; the partner sends the rest
+};
+
+std::optional<RequestPartner> request_partner(
+    const tt::tt_metal::distributed::MeshDevice& mesh,
+    const tt::tt_fabric::FabricNodeId& src,
+    const tt::tt_fabric::FabricNodeId& next,
+    const tt::tt_metal::CoreCoord& core,
+    uint32_t page_bytes) {
+    const auto max_payload = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    const uint32_t packets = (page_bytes + max_payload - 1) / max_payload;
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src, next);
+    const auto grid = mesh.compute_with_storage_grid_size();
+    if (packets < kMinPartnerPackets || links.size() < 2 || grid.x < 2) {
+        return std::nullopt;
+    }
+    const tt::tt_metal::CoreCoord partner =
+        core.x + 1 < grid.x ? tt::tt_metal::CoreCoord(core.x + 1, core.y) : tt::tt_metal::CoreCoord(core.x - 1, core.y);
+    return RequestPartner{
+        .core = partner, .link0 = links[0], .link1 = links[1], .split = ((packets + 1) / 2) * max_payload};
+}
+
 // The partials buffer's layout (see PersistentMoeRequestParams): its sum cores, one per part of the row, the
 // part's bytes, and the slots (the persistent op's chips) per shard.
 struct PartialsLayout {
@@ -66,7 +98,6 @@ struct PartialsLayout {
 constexpr uint32_t kSumTileH = 4;
 constexpr uint32_t kSumTileW = 32;
 constexpr uint32_t kSumTileBytes = kSumTileH * kSumTileW * 2;
-constexpr uint32_t kSumTileBytesFp32 = kSumTileH * kSumTileW * 4;
 // The HC post kernel views each part (a stream-collapse core's columns of one row) as ONE 32x32 bf16 tile through
 // CBs whose pages are part_bytes apart (unpack and pack address tile i at i * page size): every step is elementwise,
 // so the tile's elements past the part are don't-cares, and the FPU runs on whole tiles, as tt-blaze's BcastMulAdd
@@ -243,10 +274,20 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
         const auto& core = endpoints->core;
         const uint32_t page_bytes = kRequestHeaderBytes + row_bytes;
 
+        const auto partner = request_partner(*mesh, src, routes.front().next, core, page_bytes);
+        CoreRangeSet senders(CoreRange(core, core));
+        if (partner.has_value()) {
+            senders = senders.merge(CoreRangeSet(CoreRange(partner->core, partner->core)));
+            // The partner's page place, the receivers' bytes_sent address and their core, from the main core.
+            for (uint32_t id = 0; id < 3; ++id) {
+                desc.semaphores.push_back(SemaphoreDescriptor{.id = id, .core_ranges = senders, .initial_value = 0});
+            }
+        }
+
         constexpr uint32_t cb_page = tt::CBIndex::c_0;
         desc.cbs.push_back(CBDescriptor{
             .total_size = page_bytes,
-            .core_ranges = CoreRangeSet(CoreRange(core, core)),
+            .core_ranges = senders,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = cb_page,
                 .data_format = tt::DataFormat::UInt32,
@@ -265,39 +306,78 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
         kernel.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/device/kernels/dataflow/moe_request.cpp";
         kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        kernel.core_ranges = CoreRangeSet(CoreRange(core, core));
+        kernel.core_ranges = senders;
         kernel.compile_time_args = std::move(ct_args);
         kernel.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
         tt::tt_metal::KernelHandle kernel_id = desc.kernels.size();
         desc.kernels.push_back(std::move(kernel));
 
-        std::vector<uint32_t> args = {attributes.layer, static_cast<uint32_t>(input.buffer()->address())};
         TT_FATAL(
             routes.size() <= 16,
             "persistent_moe_request: {} sends to {} chips, more than the kernel's 16",
             coord,
             routes.size());
-        args.push_back(static_cast<uint32_t>(routes.size()));
-        for (const auto& route : routes) {
-            append_d2d_route_args(route, args);
+        // One sender's args: its part of the page, the partner's NoC coordinates (main core), the routes, and the
+        // fabric link it leaves by.
+        auto sender_args = [&](const CoreCoord& at, uint32_t start, uint32_t bytes, uint32_t link, bool main) {
+            std::vector<uint32_t> args = {
+                attributes.layer, static_cast<uint32_t>(input.buffer()->address()), start, bytes};
+            if (main && partner.has_value()) {
+                const auto noc = mesh->worker_core_from_logical_core(partner->core);
+                args.push_back(noc.x);
+                args.push_back(noc.y);
+            } else {
+                args.push_back(kRequestNoPartner);
+                args.push_back(kRequestNoPartner);
+            }
+            args.push_back(static_cast<uint32_t>(routes.size()));
+            for (const auto& route : routes) {
+                append_d2d_route_args(route, args);
+            }
+            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                *mesh,
+                src,
+                {routes.front().next},
+                {link},
+                desc,
+                kernel_id,
+                at,
+                args,
+                tt::tt_fabric::FabricApiType::Mesh);
+            desc.kernels[kernel_id].runtime_args.emplace_back(
+                at, KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end()));
+        };
+        if (partner.has_value()) {
+            sender_args(core, 0, partner->split, partner->link0, true);
+            sender_args(partner->core, partner->split, page_bytes - partner->split, partner->link1, false);
+        } else {
+            sender_args(core, 0, page_bytes, 0u, true);
         }
-        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-            *mesh, src, {routes.front().next}, {0u}, desc, kernel_id, core, args, tt::tt_fabric::FabricApiType::Mesh);
-        desc.kernels[kernel_id].runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs(args.begin(), args.end()));
     }
 
     // The sum of each part of the row, on its sum core: the slots are a CB over the partials shard, which the
     // persistent op's chips fill.
     const auto layout = partials_layout(attributes, row_bytes);
-    const uint32_t tiles_per_part = layout.part_bytes / kSumTileBytes;
+    // The plain sum's view: the tallest tile (up to 32x32) that a part is a whole number of -- per-tile overhead is
+    // what the sum costs, so a several-row block's part (20 KB) goes in 32x32 tiles rather than 80 4x32 ones.
+    uint32_t sum_tile_h = kSumTileH;
+    if (!hc_post(tensors)) {
+        for (uint32_t h : {32u, 16u, 8u}) {
+            if (layout.part_bytes % (h * kSumTileW * 2u) == 0u) {
+                sum_tile_h = h;
+                break;
+            }
+        }
+    }
+    const uint32_t sum_tile_bytes = sum_tile_h * kSumTileW * 2u;
+    const uint32_t tiles_per_part = layout.part_bytes / sum_tile_bytes;
     CoreRangeSet sum_set;
     for (const auto& c : layout.sum_cores) {
         sum_set = sum_set.merge(CoreRangeSet(CoreRange(c, c)));
     }
-    const TileDescriptor sum_tile(tt::tt_metal::Tile({kSumTileH, kSumTileW}));
+    const TileDescriptor sum_tile(tt::tt_metal::Tile({sum_tile_h, kSumTileW}));
     auto add_cb = [&](uint32_t index, uint32_t tiles, tt::DataFormat format, Buffer* buffer = nullptr) {
-        const uint32_t page = format == tt::DataFormat::Float32 ? kSumTileBytesFp32 : kSumTileBytes;
+        const uint32_t page = format == tt::DataFormat::Float32 ? 2u * sum_tile_bytes : sum_tile_bytes;
         desc.cbs.push_back(CBDescriptor{
             .total_size = tiles * page,
             .core_ranges = sum_set,
@@ -441,9 +521,20 @@ void PersistentMoeRequestDeviceOperation::MultiCore::override_runtime_arguments(
     // Kernel 0 is the request on a sending chip; the sums' data movement and compute follow, on every sum core.
     uint32_t sum_kernel = 0;
     if (endpoints.has_value()) {
-        auto& args = tt::tt_metal::GetRuntimeArgs(program, 0, endpoints->core);
-        args[0] = attributes.layer;
-        args[1] = input.buffer()->address();
+        auto* mesh = input.device();
+        const auto src = mesh->get_fabric_node_id(*mesh_dispatch_coordinate);
+        const auto routes = d2d_routes(src, endpoints->receivers);
+        const auto partner = request_partner(
+            *mesh, src, routes.front().next, endpoints->core, kRequestHeaderBytes + input.buffer()->page_size());
+        std::vector<tt::tt_metal::CoreCoord> senders = {endpoints->core};
+        if (partner.has_value()) {
+            senders.push_back(partner->core);
+        }
+        for (const auto& c : senders) {
+            auto& args = tt::tt_metal::GetRuntimeArgs(program, 0, c);
+            args[0] = attributes.layer;
+            args[1] = input.buffer()->address();
+        }
         sum_kernel = 1;
     }
     const auto layout = partials_layout(attributes, input.buffer()->page_size());

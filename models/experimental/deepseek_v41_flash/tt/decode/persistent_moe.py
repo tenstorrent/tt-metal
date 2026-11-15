@@ -337,6 +337,20 @@ def build_moe_layers(config, loader, moe_mesh, cache, layer_ids: Sequence[int], 
     return _cold_build(config, loader, moe_mesh, cache, layer_ids, log, manifest_path)
 
 
+def tile_rows(block: torch.Tensor) -> torch.Tensor:
+    """``block`` ``[rows, D]`` laid out as the op's ``(rows x 32)`` tiles, flat: tile t is columns
+    ``[32t, 32t + 32)``, face f its 16-column half, each face row-major (rows x 16). A several-row request's row is
+    this (see :class:`PersistentMoE`'s ``rows``), and so is its output."""
+    rows, d = block.shape
+    return block.reshape(rows, d // 32, 2, 16).permute(1, 2, 0, 3).reshape(-1)
+
+
+def untile_rows(flat: torch.Tensor, rows: int) -> torch.Tensor:
+    """The inverse of :func:`tile_rows`: ``[rows, D]``."""
+    d = flat.numel() // rows
+    return flat.reshape(d // 32, 2, rows, 16).permute(2, 0, 1, 3).reshape(rows, d)
+
+
 def _as_int32(values):
     return torch.tensor([v - (1 << 32) if v >= 1 << 31 else v for v in values], dtype=torch.int32)
 
@@ -358,6 +372,12 @@ class PersistentMoE:
     The op takes requests in strict turn (requester 0, 1, ..., then 0 again), so with several requesters each
     sends its next request only after the others have sent theirs. Use :meth:`request` (or :meth:`upload` and
     :meth:`request` for a host row), and :meth:`stop` once to end the kernels.
+
+    ``rows`` (1, 2 or 4) makes every request a block of that many token rows -- DSpark's verify block -- each
+    routed on its own, through one pass of the op: the union of the rows' top-k is fetched once and applied to every
+    row (with each row's own routing weight, zero where it did not pick the expert). A block travels as its
+    ``(rows x 32)`` tiles (:func:`tile_rows`), in request rows and in outputs alike, ``[1, 1, 1, rows * D]``. The HC
+    post step is not fused for blocks.
     """
 
     def __init__(
@@ -369,6 +389,7 @@ class PersistentMoE:
         request_core: ttnn.CoreCoord | None = None,
         single_senders: Sequence[bool] | None = None,
         fuse_hc: bool | None = None,
+        rows: int = 1,
     ):
         if not isinstance(moes, Mapping):
             moes = dict(enumerate(moes))
@@ -381,11 +402,18 @@ class PersistentMoE:
         self.socket_core = socket_core or default_socket_core(moe_mesh)
         self.request_core = request_core or default_socket_core(self.request_meshes[0])
         # With the HC post step fused, one partials part per stream-collapse core; without, one per fabric link.
-        self.fuse_hc = FUSE_HC if fuse_hc is None else fuse_hc
+        # 8 rows (up to 8 experts per group) would wrap a down read across the weight CB's end.
+        if rows not in (1, 2, 4):
+            raise ValueError(f"a request block takes 1, 2 or 4 rows, got {rows}")
+        self.rows = rows
+        self.fuse_hc = (FUSE_HC and rows == 1) if fuse_hc is None else fuse_hc
+        if self.fuse_hc and rows > 1:
+            raise ValueError("the HC post step is fused for one-row requests only")
         self.parts = _HC_COLLAPSE_CORES if self.fuse_hc else 2
         first = moes[self.layer_ids[0]]
         self.hidden = first.hidden
-        self.row_bytes = self.hidden * 2
+        # A request's row: its block's (rows x 32) tiles.
+        self.row_bytes = self.hidden * 2 * rows
         experts = first.experts
         for layer in self.layer_ids:
             moe = moes[layer]
@@ -431,14 +459,14 @@ class PersistentMoE:
         )
         # The row lands here on every core of the grid, replacing the all_gather_for_matmul replica.
         self.replica = ttnn.from_torch(
-            torch.zeros(1, 1, REPLICA_GRID.num_cores(), self.hidden),
+            torch.zeros(1, 1, REPLICA_GRID.num_cores() * self.rows, self.hidden),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=moe_mesh,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(REPLICA_GRID, [1, self.hidden], ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(REPLICA_GRID, [self.rows, self.hidden], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(moe_mesh),
         )
@@ -473,6 +501,15 @@ class PersistentMoE:
         self.inputs = [self.request_input(j) for j in range(len(self.request_meshes))]
 
         shared = first.fused_shared
+        # A block's partial: its rows' tiles over the same output cores.
+        output_memory_config = experts.output_memory_config
+        if self.rows > 1:
+            spec = output_memory_config.shard_spec
+            output_memory_config = ttnn.MemoryConfig(
+                output_memory_config.memory_layout,
+                output_memory_config.buffer_type,
+                ttnn.ShardSpec(spec.grid, [self.rows, spec.shape[1]], spec.orientation),
+            )
         # Kept to relaunch the kernels after a stop (see :meth:`start`): the mesh is time-shared with the prefill MoE.
         self._launch = lambda: ttnn.experimental.deepseek.moe.fused_experts(
             self.replica,
@@ -480,7 +517,8 @@ class PersistentMoE:
             router_bias=first.gate.ranking_bias(),
             gate_up_weights=experts.gate_up_weights,
             down_weights=experts.down_weights,
-            num_experts=experts.top_k,
+            # The union of the block's selections is at most rows * top_k experts.
+            num_experts=experts.top_k * self.rows,
             intermediate_size=experts.intermediate,
             swiglu_limit=experts.limit,
             top_k=experts.top_k,
@@ -490,7 +528,7 @@ class PersistentMoE:
             shared_gate_up_weights=shared.gate_up,
             shared_down_weights=shared.down,
             shared_swiglu_limit=shared.swiglu_limit,
-            memory_config=experts.output_memory_config,
+            memory_config=output_memory_config,
             all_reduce_cluster_axes=experts.fused_all_reduce_axes,
             all_reduce_num_links=2,
             all_reduce_topology=CCL_TOPOLOGY,
@@ -574,11 +612,11 @@ class PersistentMoE:
         )
 
     def request_input(self, requester: int):
-        """A ``[1, 1, 1, D]`` request row on every chip of ``requester``, zeroed: the DRAM-interleaved one-page
-        ROW_MAJOR bf16 row :meth:`request` sends."""
+        """A ``[1, 1, 1, rows * D]`` request row on every chip of ``requester``, zeroed: the DRAM-interleaved one-page
+        ROW_MAJOR bf16 row :meth:`request` sends (a block's tiles, see :func:`tile_rows`)."""
         mesh = self.request_meshes[requester]
         return ttnn.from_torch(
-            torch.zeros(1, 1, 1, self.hidden),
+            torch.zeros(1, 1, 1, self.hidden * self.rows),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh,
@@ -587,6 +625,9 @@ class PersistentMoE:
         )
 
     def upload(self, requester: int, row: torch.Tensor, tensor=None):
+        """``row`` ``[D]``, or a block ``[rows, D]``, into the requester's request row."""
+        if self.rows > 1:
+            row = tile_rows(row.reshape(self.rows, self.hidden))
         host = ttnn.from_torch(
             row.reshape(1, 1, 1, -1),
             dtype=ttnn.bfloat16,
