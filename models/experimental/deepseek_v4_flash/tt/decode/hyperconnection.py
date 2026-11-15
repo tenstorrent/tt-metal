@@ -277,7 +277,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
 
         ``norm`` ``(weight, eps)`` (see :meth:`can_fuse_norm`; one row) fuses the next sublayer's RMSNorm onto the
         collapse: ``weight`` is the gain as a bf16 ROW_MAJOR ``[1, 1, 1, D]`` DRAM row, and ``collapsed`` comes back
-        normed, ROW_MAJOR and DRAM interleaved (``collapsed_layout`` is ignored).
+        normed, ROW_MAJOR and DRAM interleaved (``collapsed_layout`` is ignored). ``(weight, eps, True)`` keeps the
+        normed row on the collapse cores instead, ROW_MAJOR ``[1, D/8]`` L1 WIDTH_SHARDED.
         """
         b, s, hc, d = hidden_streams.shape
         t = b * s
@@ -297,6 +298,8 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                     mix_kwargs = {"mix_post": mix[0], "mix_comb": mix[1], "mix_sublayer_out": mix[2]}
                 if norm is not None:
                     mix_kwargs.update(collapsed_norm_weight=norm[0], collapsed_norm_epsilon=float(norm[1]))
+                    if len(norm) > 2 and norm[2]:
+                        mix_kwargs["collapsed_norm_sharded"] = True
                     collapsed_layout = ttnn.ROW_MAJOR_LAYOUT
                 return ttnn.experimental.deepseek.fused_hyperconnection(
                     hidden_streams,

@@ -36,7 +36,8 @@ std::vector<Tensor> fused_hyperconnection(
     const std::optional<Tensor>& mix_comb,
     const std::optional<Tensor>& mix_sublayer_out,
     const std::optional<Tensor>& collapsed_norm_weight,
-    float collapsed_norm_epsilon) {
+    float collapsed_norm_epsilon,
+    bool collapsed_norm_sharded) {
     const auto& shape = hidden_streams.logical_shape();
     const uint32_t b = static_cast<uint32_t>(shape[0]);
     const uint32_t s = static_cast<uint32_t>(shape[1]);
@@ -72,7 +73,8 @@ std::vector<Tensor> fused_hyperconnection(
             mix_comb,
             mix_sublayer_out,
             collapsed_norm_weight,
-            collapsed_norm_epsilon);
+            collapsed_norm_epsilon,
+            collapsed_norm_sharded);
     }
     TT_FATAL(
         !collapsed_norm_weight.has_value(),

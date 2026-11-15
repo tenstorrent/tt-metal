@@ -223,7 +223,8 @@ def test_fused_hc_single_user_folded_mix(device, reset_seeds, sub_memory, collap
 
 @pytest.mark.parametrize("hidden", (5120, 4096))
 @pytest.mark.parametrize("fold_mix", (True, False), ids=("mix", "no_mix"))
-def test_fused_hc_single_user_collapsed_norm(device, reset_seeds, hidden, fold_mix):
+@pytest.mark.parametrize("sharded", (False, True), ids=("dram", "sharded"))
+def test_fused_hc_single_user_collapsed_norm(device, reset_seeds, hidden, fold_mix, sharded):
     """``collapsed_norm_weight`` (the FFN sublayer's RMSNorm fused onto the collapse) vs the same program without
     it followed by ``sharded_rmsnorm``, and vs torch. The other outputs must not change. Twice, the second on the
     cached programs."""
@@ -290,10 +291,16 @@ def test_fused_hc_single_user_collapsed_norm(device, reset_seeds, hidden, fold_m
             collapsed_layout=ttnn.ROW_MAJOR_LAYOUT,
             collapsed_norm_weight=gamma_row,
             collapsed_norm_epsilon=rms_eps,
+            collapsed_norm_sharded=sharded,
             **call,
         )
         assert len(new) == len(old), f"{len(new)} outputs, expected {len(old)}"
-        assert new[2].layout == ttnn.ROW_MAJOR_LAYOUT and new[2].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+        want_config = (
+            width_sharded_l1_config(1, hidden, device, num_cores=8, tile_height=1)
+            if sharded
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
+        assert new[2].layout == ttnn.ROW_MAJOR_LAYOUT and new[2].memory_config() == want_config, new[2].memory_config()
         ttnn.synchronize_device(device)
 
         failures = []
