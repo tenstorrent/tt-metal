@@ -104,27 +104,6 @@ private:
     uint32_t rd_count_;
 };
 
-// Retires every slot the host writes, as this kernel's FIFO consumer, until termination is requested.
-// `serve_request(requests, slot)` handles a request slot and returns false if termination was requested
-// before it finished.
-template <typename ServeRequest>
-FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
-    FifoConsumer requests;
-    while (volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot()) {
-        ASSERT(slot->num_lanes <= region.layout.lanes);
-        switch (slot->command) {
-            case fifo::kSlotNop: break;
-            case fifo::kSlotRequest:
-                if (!serve_request(requests, slot)) {
-                    return;
-                }
-                break;
-            default: ASSERT(false); break;
-        }
-        requests.retire_slot();
-    }
-}
-
 // One lane's request page, read in place: each field is loaded through the slot's uncached alias when
 // used, so a kernel's stack does not grow with the number of lanes a slot can carry.
 class LanePage {
@@ -152,6 +131,51 @@ public:
 private:
     volatile tt_l1_ptr uint8_t* bytes_;
 };
+
+// Waits until the signal slot a WAIT_SIGNAL page names reaches its count. The slots only grow and may wrap, so
+// their difference is compared. False if termination was requested first.
+FORCE_INLINE bool wait_for_signal(
+    const FifoConsumer& requests, volatile tt_l1_ptr TensorPrefetcherRequestHeader* header) {
+    volatile tt_l1_ptr uint32_t* signal =
+        region_ptr<uint32_t>(region.base, fifo::signal_slot_offset(header->wait_signal.slot_index));
+    const uint32_t count = header->wait_signal.wait_value;
+    WAYPOINT("TSW");
+    while (static_cast<int32_t>(*signal - count) < 0) {
+        if (requests.terminate_requested()) {
+            return false;
+        }
+    }
+    WAYPOINT("TSD");
+    return true;
+}
+
+// Retires every slot the host writes, as this kernel's FIFO consumer, until termination is requested.
+// `serve_request(requests, slot)` handles a PREFETCH or DRAIN request slot and returns false if termination
+// was requested before it finished. Every kernel waits out a WAIT_SIGNAL slot here, so no kernel reads or
+// sends anything the requests after it name until the signal arrives.
+template <typename ServeRequest>
+FORCE_INLINE void serve_requests(ServeRequest&& serve_request) {
+    FifoConsumer requests;
+    while (volatile tt_l1_ptr fifo::SlotHeader* slot = requests.wait_for_slot()) {
+        ASSERT(slot->num_lanes <= region.layout.lanes);
+        switch (slot->command) {
+            case fifo::kSlotNop: break;
+            case fifo::kSlotRequest: {
+                ASSERT(slot->num_lanes > 0);
+                volatile tt_l1_ptr TensorPrefetcherRequestHeader* header = LanePage(slot, 0).header();
+                const bool served = header->base.cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_WAIT_SIGNAL
+                                        ? wait_for_signal(requests, header)
+                                        : serve_request(requests, slot);
+                if (!served) {
+                    return;
+                }
+                break;
+            }
+            default: ASSERT(false); break;
+        }
+        requests.retire_slot();
+    }
+}
 
 // How one tensor of a PREFETCH slot streams: every receiver of every lane, numbered in lane order. The
 // kernels derive the same plan from the same slot, so a receiver number names the same stage slots for all.
