@@ -89,8 +89,9 @@ void kernel_main() {
 #endif
     // With WS_DEFER a send is issued without waiting for its payload to leave L1: that wait (settle) comes before the
     // next send, or while this RISC waits on anything, and only then does the packet's staging slot count as done
-    // (FWD) or its CB 0 chunk get popped (INJ); without it every send settles at once. Inline writes to L1 go through scratch words (no implicit flush), rotated over 8 slots
-    // with a flush before a slot comes round again; the credit header is reused only after a flush.
+    // (FWD) or its CB 0 chunk get popped (INJ); without it every send settles at once. With WS_DEFER the L1 inline
+    // writes also go through rotating scratch words (a plain inline write flushes every outstanding write, the
+    // payload included), and the credit header waits for a flush only when its previous packet may still be in L1.
     bool pend = false, pend_inj = false, cr_out = false;
     uint32_t pend_k = 0, n_inj = 0, scr_n = 0, scr_since = 0;
     const uint32_t inj_base = get_write_ptr(0);
@@ -109,6 +110,7 @@ void kernel_main() {
         }
     };
     auto inline_l1 = [&](uint64_t dst, uint32_t v) {
+#ifdef WS_DEFER
         if (scr_since == 8) {
             flushed();
         }
@@ -116,6 +118,9 @@ void kernel_main() {
         ++scr_n;
         ++scr_since;
         noc_inline_dw_write<InlineWriteDst::L1, false, false>(dst, v, 0xF, noc_index, NOC_UNICAST_WRITE_VC, scr);
+#else
+        noc_inline_dw_write(dst, v);
+#endif
     };
     auto update_free = [&]() {
         const uint32_t landed = rd(wr::W_LANDED);
@@ -136,9 +141,13 @@ void kernel_main() {
 #endif
         const uint32_t r = rd(wr::W_RELAY);
         if (r > relayed && (idle || r - relayed >= CRB || r == pair_in)) {
+#ifdef WS_DEFER
             if (cr_out) {
                 flushed();  // (the credit header's previous packet has left L1)
             }
+#else
+            flushed();
+#endif
             fabric_unicast_noc_unicast_inline_write(
                 &conn,
                 hcr,
