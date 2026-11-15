@@ -257,7 +257,7 @@ def transform_from_json(value: dict) -> Transform:
     if kind == "identity":
         return Identity()
     if kind == "pad":
-        return Pad(int(value["dim"]), int(value["logical"]), int(value["padded"]), str(value.get("fill", "zeros")))
+        return Pad(int(value["dim"]), int(value["logical"]), int(value["padded"]), str(value["fill"]))
     if kind == "segments":
         return Segments(int(value["dim"]), tuple(tuple(int(x) for x in t) for t in value["map"]))
     if kind == "compose":
