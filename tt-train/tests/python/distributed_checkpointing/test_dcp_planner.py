@@ -26,10 +26,10 @@ from dcp_oracle import (
 
 from ttml.distributed_checkpointing._errors import (
     CoverageError,
-    DtypeMismatch,
+    DtypeMismatchError,
     MissingKeyError,
-    RoleMismatch,
-    ShapeMismatch,
+    RoleMismatchError,
+    ShapeMismatchError,
     TopologyError,
     UnexpectedKeyError,
 )
@@ -215,9 +215,9 @@ def test_mismatches_are_refused_before_any_read(expect_error):
     canonical = arange((1, 1, 64, 32))
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (canonical, TP8_DP4, Identity())})
-    with expect_error(ShapeMismatch, "canonical shape"):
+    with expect_error(ShapeMismatchError, "canonical shape"):
         ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 64))})
-    with expect_error(DtypeMismatch, "checkpoint holds"):
+    with expect_error(DtypeMismatchError, "checkpoint holds"):
         dests = [TensorInfo("w", "param", "BF16", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",))]
         from ttml.distributed_checkpointing._planner import create_load_plan
 
@@ -278,7 +278,7 @@ def test_a_live_tensor_matching_an_entry_of_another_role_is_refused(expect_error
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (canonical, SINGLE, Identity())})
     state = TensorInfo("w", "optimizer_state", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",))
-    with expect_error(RoleMismatch, "w: resolves to checkpoint entry 'w', a 'param'"):
+    with expect_error(RoleMismatchError, "w: resolves to checkpoint entry 'w', a 'param'"):
         create_load_plan(ckpt.index, [state])
 
 

@@ -18,7 +18,7 @@ from ttml.distributed_checkpointing._safetensors import (
     create_file,
     pread_all,
     pwrite_all,
-    read_header,
+    read_file_header,
 )
 
 
@@ -64,7 +64,7 @@ def test_file_written_at_fixed_offsets_opens_with_the_safetensors_package(tmp_pa
     finally:
         os.close(fd)
 
-    parsed, start = read_header(path)
+    parsed, start = read_file_header(path)
     assert start == data_start and parsed["model/a"]["dtype"] == "BF16" and parsed["model/a"]["shape"] == [1, 1, 32, 64]
     assert parsed["__metadata__"] == {"ttml.format": "ttml-dcp/1"}
 

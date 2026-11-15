@@ -9,7 +9,7 @@ import os
 
 
 from ttml.distributed_checkpointing._boxes import Box
-from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpoint, VersionError
+from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError, VersionError
 from ttml.distributed_checkpointing._index import (
     ChunkRecord,
     Entry,
@@ -21,7 +21,7 @@ from ttml.distributed_checkpointing._index import (
     find_latest,
     is_complete,
     parse_dir_name,
-    read_header,
+    read_header_json,
     read_index,
     read_user_header,
     step_dir_name,
@@ -181,10 +181,10 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     finalize_staging(staging, final)
 
     assert is_complete(final) and find_latest(str(tmp_path)) == final
-    assert read_header(final) == {"step": 10}
+    assert read_header_json(final) == {"step": 10}
     assert read_index(final).checkpoint_id == "step_0000010"
     assert read_index(final).created, "written at finalize"
-    with expect_error(IncompleteCheckpoint, "no index.json"):
+    with expect_error(IncompleteCheckpointError, "no index.json"):
         read_index(str(tmp_path / "nowhere"))
 
     staging2, _ = begin_staging(final)
@@ -225,18 +225,18 @@ def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, exp
 
     with open(index_path, "w") as f:
         f.write(text[: len(text) // 2])  # truncated
-    with expect_error(IncompleteCheckpoint, "not a readable index"):
+    with expect_error(IncompleteCheckpointError, "not a readable index"):
         read_index(final)
     value = json.loads(text)
     del value["state"]["model/Llama/fc/weight"]["chunks"]["file"]
     with open(index_path, "w") as f:
         json.dump(value, f)  # a required column missing
-    with expect_error(IncompleteCheckpoint, "not a readable index"):
+    with expect_error(IncompleteCheckpointError, "not a readable index"):
         read_index(final)
     with open(os.path.join(final, "header.json"), "w") as f:
         f.write("{")
-    with expect_error(IncompleteCheckpoint, "not readable JSON"):
-        read_header(final)
+    with expect_error(IncompleteCheckpointError, "not readable JSON"):
+        read_header_json(final)
 
 
 def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypatch, expect_error):

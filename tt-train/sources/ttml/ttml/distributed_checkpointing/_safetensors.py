@@ -75,7 +75,7 @@ def create_file(path: str, header: bytes, data_bytes: int) -> int:
     return len(header)
 
 
-def read_header(path: str) -> tuple[dict, int]:
+def read_file_header(path: str) -> tuple[dict, int]:
     """The parsed header of a safetensors file and the offset of its data section."""
     with open(path, "rb") as f:
         prefix = f.read(8)
