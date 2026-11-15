@@ -56,6 +56,10 @@ FUSED_HC_MIX = os.environ.get("DEEPSEEK_V41_FUSED_HC_MIX", "1") not in ("0", "",
 # (``DeepSeekV4HyperConnection.forward``'s ``norm``), which hands the MoE request the normed DRAM row: one op less per
 # layer. Needs ``DEEPSEEK_V41_FUSED_HC_FN``. ``DEEPSEEK_V41_FOLD_POST_NORM=0`` runs ``sharded_rmsnorm`` on its own.
 FOLD_POST_NORM = os.environ.get("DEEPSEEK_V41_FOLD_POST_NORM", "1") not in ("0", "", "false", "False")
+# Likewise the input RMSNorm the ratio-2 compressor layers still need (see FOLD_INPUT_NORM) onto the attention
+# hyper-connection's collapse, kept on its collapse cores where the norm's output was.
+# ``DEEPSEEK_V41_FUSE_INPUT_NORM=0`` runs ``sharded_rmsnorm`` on its own.
+FUSE_INPUT_NORM = os.environ.get("DEEPSEEK_V41_FUSE_INPUT_NORM", "1") not in ("0", "", "false", "False")
 DEFER_FFN_MIX = FUSED_HC_MIX and os.environ.get("DEEPSEEK_V41_DEFER_FFN_MIX", "1") not in ("0", "", "false", "False")
 
 
@@ -221,6 +225,14 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         self.post_norm_row = None
         if FOLD_POST_NORM and FUSED_HC_FN and device.arch() == ttnn.Arch.BLACKHOLE:
             self.post_norm_row = ttnn.to_layout(self.post_attention_layernorm.weight, ttnn.ROW_MAJOR_LAYOUT)
+        self.input_norm_row = None
+        if (
+            FUSE_INPUT_NORM
+            and FUSED_HC_FN
+            and device.arch() == ttnn.Arch.BLACKHOLE
+            and (not self.fold_input_norm or self.self_attn.needs_normed_input)
+        ):
+            self.input_norm_row = ttnn.to_layout(self.input_layernorm.weight, ttnn.ROW_MAJOR_LAYOUT)
         self.attn_hc = DeepSeekV4HyperConnection(
             config,
             _strip_prefix(weights, "attn_hc"),
@@ -271,7 +283,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             ttnn.deallocate(pending.sublayer_out)
         return streams
 
-    def _attn_hc(self, hidden_streams, pre_mix, collapsed_layout, one_row: bool):
+    def _attn_hc(self, hidden_streams, pre_mix, collapsed_layout, one_row: bool, norm=None):
         """ATTN_HC: ``(post, comb, collapsed, attn_pre, streams)``. ``hidden_streams`` is the streams, which are
         returned as they are, or a :class:`PendingMix`, folded into the hyper-connection where it can be (one row,
         see :data:`FUSED_HC_MIX`) and else run first; ``streams`` are then the mixed ones."""
@@ -284,6 +296,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
                         pre_mix=pre_mix,
                         collapsed_layout=collapsed_layout,
                         mix=(pending.post, pending.comb, pending.sublayer_out),
+                        norm=norm,
                     )
                 ttnn.deallocate(pending.streams)
                 if pending.free_sublayer_out:
@@ -292,7 +305,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             hidden_streams = self._run_pending_mix(pending)
         with _region("ATTN_HC"):
             post, comb, collapsed, attn_pre = self.attn_hc(
-                hidden_streams, pre_mix=pre_mix, collapsed_layout=collapsed_layout
+                hidden_streams, pre_mix=pre_mix, collapsed_layout=collapsed_layout, norm=norm
             )
         return post, comb, collapsed, attn_pre, hidden_streams
 
@@ -604,11 +617,19 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         skip_input_norm = (
             self.fold_input_norm and self.device.arch() == ttnn.Arch.BLACKHOLE and not self.self_attn.needs_normed_input
         )
+        fuse_input_norm = (
+            not skip_input_norm and one_row and self.input_norm_row is not None and self.attn_hc.can_fuse_norm()
+        )
         post, comb, collapsed, attn_pre, hidden_streams = self._attn_hc(
-            hidden_streams, pre_mix, ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None, one_row
+            hidden_streams,
+            pre_mix,
+            ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None,
+            one_row,
+            norm=(self.input_norm_row, self.input_layernorm.eps, True) if fuse_input_norm else None,
         )
         with _region("INPUT_NORM"):
-            if skip_input_norm:
+            if skip_input_norm or fuse_input_norm:
+                # Either unnormed (the gain folded into attention), or ATTN_HC's collapse cores normed it.
                 normed = collapsed
             elif self.device.arch() == ttnn.Arch.BLACKHOLE:
                 normed = ttnn.experimental.deepseek.sharded_rmsnorm(

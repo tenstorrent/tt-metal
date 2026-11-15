@@ -14,7 +14,9 @@
 //
 // Compile-time args:
 //   0: cb_stat   1: cb_gather   2: cb_out   3: row_chunks (cb_out's pages)   4: stat_tile_bytes
-//   5: row_bytes (the core's columns)   6: num_cores   7: arrive semaphore id   8+: TensorAccessorArgs(out)
+//   5: row_bytes (the core's columns)   6: num_cores   7: arrive semaphore id
+//   8: out_sharded (collapsed is L1 WIDTH_SHARDED [1, D/8]: the row goes to this core's shard)
+//   9+: TensorAccessorArgs(out) (DRAM interleaved; unused when sharded)
 //
 // Runtime args:
 //   0: out address   1: core_idx   2+: the collapse cores' NoC (x, y), in core_idx order
@@ -27,7 +29,8 @@ void kernel_main() {
     constexpr uint32_t row_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t num_cores = get_compile_time_arg_val(6);
     constexpr uint32_t arrive_sem_id = get_compile_time_arg_val(7);
-    constexpr auto out_args = TensorAccessorArgs<8>();
+    constexpr bool out_sharded = get_compile_time_arg_val(8) != 0;
+    constexpr auto out_args = TensorAccessorArgs<9>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_idx = get_arg_val<uint32_t>(1);
@@ -61,8 +64,12 @@ void kernel_main() {
 
     CircularBuffer out(cb_out);
     out.wait_front(row_chunks);
-    const auto out_acc = TensorAccessor(out_args, out_addr);
-    noc_async_write(out.get_read_ptr(), out_acc.get_noc_addr(0, core_idx * row_bytes), row_bytes);
+    if constexpr (out_sharded) {
+        noc_async_write(out.get_read_ptr(), get_noc_addr(out_addr), row_bytes);
+    } else {
+        const auto out_acc = TensorAccessor(out_args, out_addr);
+        noc_async_write(out.get_read_ptr(), out_acc.get_noc_addr(0, core_idx * row_bytes), row_bytes);
+    }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     out.pop_front(row_chunks);

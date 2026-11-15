@@ -336,10 +336,18 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
             "collapsed_norm_epsilon must be non-negative, got {}",
             attributes.collapsed_norm_epsilon);
         const auto& out_mem = attributes.collapsed_output_mem_config;
+        const bool dram = out_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                          out_mem.buffer_type() == tt::tt_metal::BufferType::DRAM;
+        const bool own_shard =
+            out_mem.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            out_mem.buffer_type() == tt::tt_metal::BufferType::L1 && out_mem.shard_spec().has_value() &&
+            out_mem.shard_spec()->grid == hidden_streams.shard_spec()->grid && out_mem.shard_spec()->shape[0] == 1 &&
+            out_mem.shard_spec()->shape[1] == d / kCollapseCores;
         TT_FATAL(
-            out_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                out_mem.buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "with collapsed_norm_weight, collapsed must be DRAM interleaved, got {}",
+            dram || own_shard,
+            "with collapsed_norm_weight, collapsed must be DRAM interleaved or L1 WIDTH_SHARDED [1, {}] on the "
+            "hidden_streams cores, got {}",
+            d / kCollapseCores,
             out_mem);
     } else if (attributes.collapsed_layout == Layout::ROW_MAJOR) {
         // The collapse packs its row straight into the output shard, so it must be that core's [1, D/8].
@@ -472,7 +480,8 @@ std::vector<Tensor> fused_hyperconnection_single_user(
     const std::optional<Tensor>& mix_comb,
     const std::optional<Tensor>& mix_sublayer_out,
     const std::optional<Tensor>& collapsed_norm_weight,
-    float collapsed_norm_epsilon) {
+    float collapsed_norm_epsilon,
+    bool collapsed_norm_sharded) {
     using OperationType = ttnn::operations::experimental::deepseek::hyperconnection::FusedSingleUserDeviceOperation;
     const MemoryConfig post_comb_output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const Layout resolved_collapsed_layout = collapsed_layout.value_or(Layout::TILE);
@@ -484,8 +493,8 @@ std::vector<Tensor> fused_hyperconnection_single_user(
         collapsed_output_mem_config = MemoryConfig(
             hidden_streams.memory_config().memory_layout(), hidden_streams.memory_config().buffer_type(), shard_spec);
     }
-    // The normed collapsed row goes to DRAM, where the next op (the MoE request) reads it.
-    if (collapsed_norm_weight.has_value()) {
+    // The normed collapsed row goes to DRAM, where the next op (the MoE request) reads it, unless it is kept sharded.
+    if (collapsed_norm_weight.has_value() && !collapsed_norm_sharded) {
         collapsed_output_mem_config = ttnn::DRAM_MEMORY_CONFIG;
     }
     collapsed_output_mem_config = memory_config.value_or(collapsed_output_mem_config);

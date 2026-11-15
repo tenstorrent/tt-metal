@@ -73,6 +73,8 @@ void bind_fused_hyperconnection(nb::module_& mod) {
                 ``[1, 1, 1, D]`` BFLOAT16 ROW_MAJOR DRAM gain of an RMSNorm fused onto ``collapsed``, which is then
                 returned normed, ROW_MAJOR and DRAM interleaved.
             collapsed_norm_epsilon: That RMSNorm's epsilon.
+            collapsed_norm_sharded: Keep the normed ``collapsed`` on the collapse cores instead, L1 WIDTH_SHARDED
+                ``[1, D / 8]`` as an unnormed ROW_MAJOR ``collapsed`` is.
 
         Returns:
             List of [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus
@@ -103,7 +105,8 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         nb::arg("mix_comb") = std::nullopt,
         nb::arg("mix_sublayer_out") = std::nullopt,
         nb::arg("collapsed_norm_weight") = std::nullopt,
-        nb::arg("collapsed_norm_epsilon") = 0.0F);
+        nb::arg("collapsed_norm_epsilon") = 0.0F,
+        nb::arg("collapsed_norm_sharded") = false);
 
     ttnn::bind_function<"fused_hyperconnection_weights", "ttnn.experimental.deepseek.">(
         mod,

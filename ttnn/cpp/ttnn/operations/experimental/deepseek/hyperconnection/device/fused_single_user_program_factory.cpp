@@ -435,8 +435,9 @@ FusedSingleUserSharedVariables build_single_user_hc(
             norm_row_bytes,
             kCollapseCoreCount,
             norm_sem,
+            collapsed_out.is_sharded() ? 1u : 0u,
         };
-        TensorAccessorArgs(collapsed_out.buffer()).append_to(args);
+        TensorAccessorArgs(collapsed_out.is_sharded() ? norm_gamma_buffer : collapsed_out.buffer()).append_to(args);
         shared.collapse_writer_kernel_id =
             CreateKernel(program, kFsNormWriterKernelPath, collapse_cores, WriterDataMovementConfig(args));
     } else if (shared.has_collapse_writer) {
