@@ -310,8 +310,8 @@ class GdnBlockState:
             return ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh, mesh_mapper=rep)
 
         groups = max(self._verify_group.values()) + 1
-        # The ctrl page is int32 (gdn_spec_step takes UINT32 or INT32): a chained verify writes it on the device from
-        # float32 words, where a held row's word is -1 (SPEC_STEP_HOLD).
+        # The ctrl page is int32 (gdn_spec_step takes UINT32 or INT32): a chained verify's chain kernel writes it on the
+        # device, and a held row's word is -1 (SPEC_STEP_HOLD).
         self._verify_ctrl = [table(ctrl0, ttnn.int32) for _ in range(groups)]
         self._verify_idx = [table(idx0, ttnn.uint32) for _ in range(groups)]
         for i, dn in self.layers.items():

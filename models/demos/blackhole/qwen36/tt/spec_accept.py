@@ -16,11 +16,16 @@ verify's ids:
 What the host knows before the verify comes from the acceptance rows of the verify step buffer (spec_step): valid
 drafts, drawn rows, column-0 positions, RoPE base rows, and the rows the propose declines whatever they accept. So the
 drafter runs on exactly the inputs the host would stage after reading the ids. Every value is an integer below 2**24
-(token ids, positions, table rows, block ids), so float32 holds it exactly and the arithmetic runs in float32 tiles.
+(token ids, positions, table rows, block ids).
 
-``graph`` is written against an op set, so the same steps run on the device (_DeviceOps) and in torch (TorchOps);
+The step trace is one single-core kernel (kernels/step_accept.cpp; its arithmetic is accept_words in
+kernels/spec_step_words.hpp). ``graph`` states the same arithmetic as the float32 op graph the kernel replaced, over an
+op set: TorchOps runs it in torch, and tests/spec_op_graphs.py keeps the ttnn op set, which the device tests run
+beside the kernel. Float32 is exact on integers below 2**24, so the kernel's int32 words equal the graph's;
 step_accept_reference states the result in the terms of the host path.
 """
+
+from pathlib import Path
 
 import torch
 
@@ -35,10 +40,10 @@ from models.demos.blackhole.qwen36.tt.spec_step import (
     VERIFY_STEP_ROWS,
     VERIFY_TOKENS,
     drafter_pack,
+    drafter_pack_rows,
     reseed_real_rows,
     reseed_table,
 )
-from models.demos.blackhole.qwen36.tt.tp_common import aliases
 
 
 def greedy_counts(ids, tokens, num_valid):
@@ -72,8 +77,8 @@ def step_accept_reference(ids, tokens, step, pt, scratch_block, K, table_rows, d
 
 
 def graph(o, B, K, W):
-    """The step trace's arithmetic over the op set ``o`` (TorchOps or _DeviceOps): returns (pack [2K + 5, W],
-    reseed table [B * T, nb]) as float32."""
+    """The step trace's arithmetic over the op set ``o`` (TorchOps, or the ttnn op set of tests/spec_op_graphs.py):
+    returns (pack [2K + 5, W], reseed table [B * T, nb]) as float32."""
     T, R = K + 1, B * (K + 1)
     ids = o.lanes(o.ids, B, T)  # [B, T]
     aux = o.transpose(o.rows(o.step, STEP_NUM_VALID, VERIFY_STEP_ROWS, W))  # [W, 6], column i = row STEP_NUM_VALID + i
@@ -115,7 +120,7 @@ def graph(o, B, K, W):
 
 class TorchOps:
     """``graph``'s op set in torch over host tensors: ``ids`` / ``draws`` [1, 1, 1, >= B*T], ``step`` [rows, W],
-    ``pt_rows`` [B*T, nb]; the constants as StepAccept stages them."""
+    ``pt_rows`` [B*T, nb]; the constants as the op graph staged them."""
 
     def __init__(self, ids, step, pt_rows, B, K, scratch_block, table_rows, draws=None):
         T = K + 1
@@ -158,111 +163,92 @@ class TorchOps:
         return torch.nn.functional.pad(x, (0, W - n))
 
 
-class _DeviceOps:
-    """``graph``'s op set in ttnn: float32 TILE tensors; every intermediate is collected in ``owned``, except a tensor
-    that aliases an input: a slice over a whole tensor (the ids or draws at B * T = 32) returns its input, which
-    the step trace must not free."""
+_KERNELS = Path(__file__).resolve().parent / "kernels"
+STEP_ACCEPT_KERNEL = str(_KERNELS / "step_accept.cpp")
+IDS_LANES = 32  # words of the verify's ids row (the fused argmax lanes): B * T verify rows at most
+SLOT = 64  # spec_step_words.hpp SLOT: every L1 slot of the kernels starts on it
+RS_CHUNK_MAX = 1024  # bytes of one reseed table column chunk; L1 holds B * T + 1 chunks
+STEP_USER_ROWS = VERIFY_STEP_ROWS - STEP_NUM_VALID
+KERNEL_CB = 0
 
-    def __init__(self, accept):
-        self.__dict__.update(
-            {n: getattr(accept, n) for n in ("ids", "draws", "step", "pt_rows", "iota_t", "iota_k", "user_rows")}
-        )
-        self.top, self.scratch = accept.c_top, accept.c_scratch
-        self.inputs = [t for t in (self.ids, self.draws, self.step, self.pt_rows) if t is not None]
-        self.inputs += [self.iota_t, self.iota_k, self.user_rows, self.top, self.scratch]
-        self.owned = []
 
-    def _keep(self, t):
-        if not any(t is s or aliases(t, s) for s in self.inputs):
-            self.owned.append(t)
-        return t
+def slot_bytes(words):
+    """spec_step_words.hpp slot_bytes: ``words`` uint32 words rounded up to whole L1 slots."""
+    return -(-4 * int(words) // SLOT) * SLOT
 
-    def _float(self, t):
-        return self._keep(ttnn.typecast(self._keep(ttnn.to_layout(t, ttnn.TILE_LAYOUT)), ttnn.float32))
 
-    def lanes(self, t, B, T):
-        R = B * T
-        return self._float(self._keep(ttnn.reshape(self._keep(ttnn.slice(t, (0, 0, 0, 0), (1, 1, 1, R))), (B, T))))
+def rs_chunk_bytes(nb):
+    """Bytes of the reseed table column chunk kernels/step_accept.cpp moves per row: the whole slotted row up to
+    RS_CHUNK_MAX."""
+    return min(slot_bytes(nb), RS_CHUNK_MAX)
 
-    def row_block(self, t, row, B, T):
-        R = B * T
-        return self._float(self._keep(ttnn.reshape(self._keep(ttnn.slice(t, (row, 0), (row + 1, R))), (B, T))))
 
-    def rows(self, t, start, stop, n):
-        return self._float(self._keep(ttnn.slice(t, (start, 0), (stop, n))))
+def step_kernel_l1_bytes(B, K, pack_words, chunk):
+    """spec_step_words.hpp AcceptLayout(B, K, pack_words, chunk).bytes."""
+    R = B * (K + 1)
+    rows = 3 * slot_bytes(R) + STEP_USER_ROWS * slot_bytes(B) + drafter_pack_rows(K) * slot_bytes(pack_words)
+    return rows + slot_bytes(R) + chunk + R * chunk
 
-    def table(self, t):
-        return self._float(t)
 
-    def transpose(self, x):
-        return self._keep(ttnn.transpose(x, 0, 1))
+def accessor_args(t):
+    return list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
-    def slice(self, x, s, e):
-        return self._keep(ttnn.slice(x, s, e))
 
-    def reshape(self, x, shape):
-        return self._keep(ttnn.reshape(x, shape))
+def check_same_accessor(live, standin, what):
+    """A live tensor bound after the warm call must keep the stand-in's accessor (layout, memory, aligned page size):
+    the kernel's compile-time arguments carry it, so another one would compile a new program inside a trace capture."""
+    old, new = accessor_args(standin), accessor_args(live)
+    if old != new:
+        raise ValueError(f"{what}: accessor {new} differs from the stand-in's {old} the program was compiled on")
 
-    def add(self, a, b):
-        return self._keep(ttnn.add(a, b))
 
-    def sub(self, a, b):
-        return self._keep(ttnn.subtract(a, b))
-
-    def mul(self, a, b):
-        return self._keep(ttnn.multiply(a, b))
-
-    def minimum(self, a, b):
-        return self._keep(ttnn.minimum(a, b))
-
-    def rsub1(self, x):
-        return self._keep(ttnn.rsub(x, 1.0))
-
-    def eq(self, a, b):
-        return self._keep(ttnn.eq(a, b, dtype=ttnn.float32))
-
-    def lt(self, a, b):
-        return self._keep(ttnn.lt(a, b, dtype=ttnn.float32))
-
-    def cumprod(self, x):
-        return self._keep(ttnn.cumprod(x, dim=1))
-
-    def sum(self, x):
-        return self._keep(ttnn.sum(x, dim=1, keepdim=True))
-
-    def concat(self, xs, dim):
-        return self._keep(ttnn.concat(xs, dim=dim))
-
-    def pad_w(self, x, n, W):
-        return x if n == W else self._keep(ttnn.pad(x, [(0, 0), (0, W - n)], value=0.0))
+def one_core_program(source, compile_time_args, runtime_args, cb_bytes):
+    """A single-core (core (0, 0)) data-movement program with one L1 scratch CB of ``cb_bytes``. Buffer addresses
+    travel as common runtime arguments, which the program cache does not hash."""
+    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    cb = ttnn.CBDescriptor(
+        total_size=cb_bytes,
+        core_ranges=core,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=KERNEL_CB, data_format=ttnn.uint32, page_size=cb_bytes)
+        ],
+    )
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=source,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core,
+        compile_time_args=compile_time_args,
+        common_runtime_args=runtime_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb])
 
 
 class StepAccept:
-    """The step trace of a one-enqueue MTP step over B users and K drafts. Inputs: ``ids`` (the verify's argmax lanes
-    [1, 1, 1, 32] uint32; a stand-in until bind_ids), ``draws`` (the sampler's [1, 1, 1, B*T] draws, or None without a
-    device sampler), ``step`` (the verify step buffer) and ``pt_rows`` ([B*T, nb] int32: row u*T + i holds the user's
-    drafter table, staged when it changes). Outputs, written in place: ``pack`` (the drafter pack) and ``rs_pt`` (the
-    reseed table)."""
+    """The step trace of a one-enqueue MTP step over B users and K drafts: one kernels/step_accept.cpp program. Inputs:
+    ``ids`` (the verify's argmax lanes [1, 1, 1, 32] uint32; a stand-in until bind_ids), ``draws`` (the sampler's
+    [1, 1, 1, B*T] draws, or None without a device sampler), ``step`` (the verify step buffer) and ``pt_rows``
+    ([B*T, nb] int32: row u*T + i holds the user's drafter table, staged when it changes). Outputs, written in place:
+    ``pack`` (the drafter pack) and ``rs_pt`` (the reseed table)."""
 
     def __init__(self, mesh, B, K, nb, table_rows, scratch_block, step, pack, rs_pt, draws=None):
         T, R = K + 1, B * (K + 1)
-        self.mesh, self.B, self.K, self.W = mesh, int(B), int(K), int(pack.shape[-1])
+        if R > IDS_LANES:
+            raise ValueError(f"{B} users x {T} columns exceed the {IDS_LANES} verify id lanes")
+        self.mesh, self.B, self.K, self.nb, self.W = mesh, int(B), int(K), int(nb), int(pack.shape[-1])
+        self.top, self.scratch = int(table_rows) - 1, int(scratch_block)
         self.step, self.pack, self.rs_pt, self.draws = step, pack, rs_pt, draws
-        f32 = lambda t: self._device(torch.as_tensor(t, dtype=torch.float32), ttnn.float32, ttnn.TILE_LAYOUT)
-        self.iota_t = f32(torch.arange(T).reshape(1, T))
-        self.iota_k = f32(torch.arange(K).reshape(1, K))
-        self.user_rows = f32((torch.arange(B) * T).reshape(B, 1))
-        self.c_top = f32([[int(table_rows) - 1]])
-        self.c_scratch = f32([[int(scratch_block)]])
-        self.pt_rows = self._device(torch.zeros(R, int(nb), dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self.ids = self.standin = self._device(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32)
-        self.buffers = [self.iota_t, self.iota_k, self.user_rows, self.c_top, self.c_scratch, self.pt_rows]
+        self.pt_rows = self._device(torch.zeros(R, int(nb), dtype=torch.int32), ttnn.int32)
+        self.ids = self.standin = self._device(torch.zeros(1, 1, 1, IDS_LANES, dtype=torch.int32), ttnn.uint32)
+        self.chunk = rs_chunk_bytes(nb)
+        self.cb_bytes = step_kernel_l1_bytes(self.B, self.K, self.W, self.chunk) + SLOT
+        self.buffers = [self.pt_rows]
 
-    def _device(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+    def _device(self, t, dtype):
         return ttnn.from_torch(
             t,
             dtype=dtype,
-            layout=layout,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
@@ -270,7 +256,8 @@ class StepAccept:
 
     def bind_ids(self, ids):
         """Read the verify trace's ids output (it exists only after the verify capture) instead of the stand-in the
-        programs were compiled on; both are [1, 1, 1, 32] uint32 ROW_MAJOR in DRAM."""
+        program was compiled on; both are [1, 1, 1, 32] uint32 ROW_MAJOR in DRAM."""
+        check_same_accessor(ids, self.standin, "the verify ids")
         self.ids = ids
 
     def stage_pt_rows(self, pt_rows):
@@ -283,16 +270,20 @@ class StepAccept:
         )
         ttnn.copy_host_to_device_tensor(h, self.pt_rows)
 
+    def program(self):
+        """The kernel's program over the bound tensors; without a device sampler the ids stand in for the draws."""
+        draws = self.ids if self.draws is None else self.draws
+        tensors = [self.ids, draws, self.step, self.pt_rows, self.pack, self.rs_pt]
+        cta = [self.B, self.K, self.W, self.nb, self.top, self.scratch, int(self.draws is not None), self.chunk]
+        cta += [KERNEL_CB, self.cb_bytes]
+        for t in tensors:
+            cta += accessor_args(t)
+        return one_core_program(STEP_ACCEPT_KERNEL, cta, [t.buffer_address() for t in tensors], self.cb_bytes)
+
     def body(self):
         """Trace-capturable: writes ``pack`` and ``rs_pt`` in place."""
-        o = _DeviceOps(self)
-        pack, rs = graph(o, self.B, self.K, self.W)
-        for out, dtype, dst in ((pack, ttnn.uint32, self.pack), (rs, ttnn.int32, self.rs_pt)):
-            rm = ttnn.to_layout(o._keep(ttnn.typecast(out, dtype)), ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.copy(rm, dst)
-            o._keep(rm)
-        for t in o.owned:
-            ttnn.deallocate(t)
+        io = [t for t in (self.ids, self.draws, self.step, self.pt_rows, self.pack, self.rs_pt) if t is not None]
+        ttnn.generic_op(io, self.program())
 
     def release(self):
         for t in (*self.buffers, self.standin):

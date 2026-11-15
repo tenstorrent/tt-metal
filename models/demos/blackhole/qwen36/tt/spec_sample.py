@@ -154,7 +154,7 @@ def chained_sampling_plan(sampling_params, p0_prev, T, fresh_seed=_fresh_seed):
     and drawing rows do not depend on c; its seeds are None. ``candidates`` float32 [T * B, T]: row (c - 1) * B + u
     holds user u's seeds if the predecessor committed c tokens, for a seeded user the seeds ``sampling_plan`` gives
     its columns at p0_prev[u] + c, for an unseeded drawing user the same fresh seed per column at every c, 0 for a
-    user that draws nothing. Every seed is below 2**24, so the chain program picks it exactly in float32."""
+    user that draws nothing. Every seed is below 2**24, so float32 holds it exactly."""
     B = len(p0_prev)
     first = sampling_plan(sampling_params, [int(p) + 1 if int(p) >= 0 else -1 for p in p0_prev], T, fresh_seed)
     candidates = torch.zeros(T * B, T, dtype=torch.float64)
