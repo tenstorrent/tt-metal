@@ -140,7 +140,12 @@ void kernel_main() {
             noc_async_write(get_read_ptr(0), get_noc_addr(tx, ty, dst), CHB);
             if (last) {
                 noc_async_write_barrier();
+#ifdef WS_ITEMS
+                // (store-and-forward: the slot's arrival word as an absolute count, no NoC atomic; see wr_land.cpp)
+                noc_inline_dw_write(get_noc_addr(tx, ty, warr + (n & 1) * 16), n / 2 + 1);
+#else
                 noc_semaphore_inc(get_noc_addr(tx, ty, warr + (n & 1) * 16), 1);
+#endif
             } else {
                 noc_async_writes_flushed();
             }

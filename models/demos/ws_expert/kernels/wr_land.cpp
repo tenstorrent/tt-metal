@@ -8,7 +8,7 @@
 //              id each; slices stored chunk-contiguous, ws_fab.slice_layout) for the NCRISC to send;
 //   FWD/TERM:  once the packet is in staging slot k % S (arrival count > k), writes it into its group core's ring slot
 //              (the slice's first packet waits until the core freed the slot's previous expert: credit word >= n - 1,
-//              fanned out by wr_relay); the slice's last packet then increments the core's arrival word for the slot.
+//              fanned out by wr_relay); after the slice's last packet it writes the slot's arrival count.
 //              The landed count goes to this core's W_LANDED word, which the NCRISC folds into the staging credits.
 // The cursors are independent so that the owner's reads run ahead of (and never wait on) the packets passing through.
 // RT: 0 ring index (table page), 1 table length, 2 table addr, 3 slices addr, 4 this core's NoC xy (x | y << 8),
@@ -161,8 +161,11 @@ void kernel_main() {
                 u0 < WGU ? wgu_ring + ((n & 1) * WGU + u0) * tb : wd_ring + ((n & 1) * WDN + u0 - WGU) * tb;
             noc_async_write(stage + (k % S) * CHB, get_noc_addr(tx, ty, dst), CHB);
             if (p.u == NCH - 1) {
+                // (the slot's arrival word as an absolute count, n / 2 + 1 experts of this parity: one lander writes a
+                // core's slot at a time and the counts only grow, so a plain write does and no NoC atomic goes to a
+                // busy group core)
                 noc_async_write_barrier();
-                noc_semaphore_inc(get_noc_addr(tx, ty, warr + (n & 1) * 16), 1);
+                noc_inline_dw_write(get_noc_addr(tx, ty, warr + (n & 1) * 16), n / 2 + 1);
             } else {
                 noc_async_writes_flushed();
             }
