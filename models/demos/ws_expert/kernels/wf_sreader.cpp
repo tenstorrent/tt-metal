@@ -9,6 +9,7 @@
 // transaction id each). The slices are stored chunk-contiguous (ws_fab.slice_layout): chunk q = (e GC + j) NCH + u
 // is one read of CHT tiles from bank q % 8 (576 B page reads were issue-bound at ~10 GB/s a sender).
 // RT: 0 slices addr, 1 own (reads experts e % NOWN == own), 2 ntargets, 3.. targets (c | x << 8 | y << 16)
+// WS_OWN_SLICES: the slices tensor holds only this chip's experts, in expert order (local index e / NOWN)
 // CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 PAIRS, 5 HT, 6 CHT, 7 G, 8 GC, then TensorAccessorArgs(slices)
 #include "api/dataflow/dataflow_api.h"
 
@@ -65,7 +66,11 @@ void kernel_main() {
                 uint32_t l1 = base + (issued % SCB) * CHB;
                 noc_async_read_set_trid(1 + issued % D);
                 // chunk q's CHT tiles are pages (q / 8) CHT 8 + q % 8 + 8 k: contiguous in one bank
+#ifdef WS_OWN_SLICES
+                const uint32_t q = ((e / NOWN) * GC + j) * NCH + u;  // slices of this chip's experts only
+#else
                 const uint32_t q = (e * GC + j) * NCH + u;
+#endif
                 noc_async_read(ws.get_noc_addr((q / 8) * CHT * 8 + q % 8), l1, CHB);
                 ++issued;
                 t_issue += wall() - i0;
