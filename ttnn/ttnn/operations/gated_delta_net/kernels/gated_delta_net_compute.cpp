@@ -37,7 +37,6 @@
 // (kn) to its writer for the multicast; a receiver convolves only its v columns. On every such core the writer
 // lands kn / qn in cb_kq_rows, and compute derives d = qn . kn and kn^T from them (qk_finish_block).
 
-#include "api/debug/kernel_profiler.hpp"  // TMP-ZONES
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -473,10 +472,16 @@ ALWI void conv_two_taps(uint32_t col, uint32_t tap0) {
 
 // ---------------------------------------------------------------- conv_block
 // y = silu(sum_j X_j (*)row W_j) per column tile of the unit; q, k -> cb_y_qk, v -> cb_v.
-ALWI void conv_block(RowScope scope, UnitCols cols) {
-    cb_reserve_back(cb_y_qk, cols.qk_cols);
-    cb_reserve_back(cb_v, Vb);
-    for (uint32_t local = 0; local < cols.count(); ++local) {
+ALWI void conv_block(RowScope scope, UnitCols cols, uint32_t first, uint32_t last) {
+    const bool qk_range = first < cols.qk_cols;
+    const bool v_range = last > cols.qk_cols;
+    if (qk_range) {
+        cb_reserve_back(cb_y_qk, cols.qk_cols);
+    }
+    if (v_range) {
+        cb_reserve_back(cb_v, Vb);
+    }
+    for (uint32_t local = first; local < last; ++local) {
         const uint32_t col = cols.pair_col(local);
         cb_wait_front(cb_window, GDN_CONV_TAPS);
         cb_reserve_back(cb_conv_acc, 1);
@@ -509,8 +514,12 @@ ALWI void conv_block(RowScope scope, UnitCols cols) {
         tile_regs_release();
         cb_pop_front(cb_conv_acc, 1);
     }
-    cb_push_back(cb_y_qk, cols.qk_cols);
-    cb_push_back(cb_v, Vb);
+    if (qk_range) {
+        cb_push_back(cb_y_qk, cols.qk_cols);
+    }
+    if (v_range) {
+        cb_push_back(cb_v, Vb);
+    }
 }
 
 // ---------------------------------------------------------------- conv_block_fpu
@@ -518,12 +527,20 @@ ALWI void conv_block(RowScope scope, UnitCols cols) {
 // after acquire), then silu in the same window. Exact for bf16 operands; products accumulate in fp32.
 // CONV_BATCH columns per window: one init / reconfig / sync per batch, not per column. An R-BCAST unit's columns
 // are one window group of one tile row, so its ragged last batch cannot straddle the wrap.
-ALWI void conv_block_fpu(RowScope scope, UnitCols cols) {
-    cb_reserve_back(cb_y_qk, cols.qk_cols);
-    cb_reserve_back(cb_v, Vb);
+// Unit columns [first, last): a range starts at 0 or at qk_cols and ends at qk_cols or at the end, so cb_y_qk
+// and cb_v are each filled by one range.
+ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t last) {
+    const bool qk_range = first < cols.qk_cols;
+    const bool v_range = last > cols.qk_cols;
+    if (qk_range) {
+        cb_reserve_back(cb_y_qk, cols.qk_cols);
+    }
+    if (v_range) {
+        cb_reserve_back(cb_v, Vb);
+    }
     static_assert(pair_cols % CONV_BATCH == 0, "window groups tile the unit's columns");
-    for (uint32_t col0 = 0; col0 < cols.count(); col0 += CONV_BATCH) {
-        const uint32_t n = cols.count() - col0 < CONV_BATCH ? cols.count() - col0 : CONV_BATCH;
+    for (uint32_t col0 = first; col0 < last; col0 += CONV_BATCH) {
+        const uint32_t n = last - col0 < CONV_BATCH ? last - col0 : CONV_BATCH;
         cb_wait_front(cb_window, GDN_CONV_TAPS * n);
         tile_regs_acquire();
         reconfig_data_format(cb_window, cb_conv_w);
@@ -551,8 +568,12 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols) {
         tile_regs_release();
         cb_pop_front(cb_window, GDN_CONV_TAPS * n);
     }
-    cb_push_back(cb_y_qk, cols.qk_cols);
-    cb_push_back(cb_v, Vb);
+    if (qk_range) {
+        cb_push_back(cb_y_qk, cols.qk_cols);
+    }
+    if (v_range) {
+        cb_push_back(cb_v, Vb);
+    }
 }
 
 // Squares of `count` tiles of an fp32 buffer starting at `base` (the input is kept) -> sq_cb, DEST_AUTO_LIMIT
@@ -1180,45 +1201,50 @@ void kernel_main() {
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
             const RowScope scope = RowScope::of(lo - base_row, hi - base_row);
-            {
-                gates_block(scope);
-            }
-            {
-                DeviceZoneScopedN("C-PART");
-                if constexpr (CONV_ON_FPU) {
-                    conv_block_fpu(scope, cols);
-                } else {
-                    conv_block(scope, cols);
-                }
-                if constexpr (qk_shared) {
-                    if (cols.qk_cols != 0) {
+            gates_block(scope);
+            if constexpr (qk_shared) {
+                // An injector convolves and normalizes its q/k part before its v columns: the part is what every
+                // core of the key head waits for.
+                const uint32_t split = cols.qk_cols != 0 ? cols.qk_cols : cols.count();
+#pragma GCC unroll 1
+                for (uint32_t pass = 0; pass < (split < cols.count() ? 2 : 1); ++pass) {
+                    const uint32_t first = pass == 0 ? 0 : split;
+                    const uint32_t last = pass == 0 ? split : cols.count();
+                    if constexpr (CONV_ON_FPU) {
+                        conv_block_fpu(scope, cols, first, last);
+                    } else {
+                        conv_block(scope, cols, first, last);
+                    }
+                    if (pass == 0 && cols.qk_cols != 0) {
                         qk_part_block(bufs, qk_role == GDN_QK_Q_INJECTOR, scope);
                     }
-                    DeviceZoneScopedN("C-FIN");
-                    qk_finish_block(bufs, scope);
+                }
+                qk_finish_block(bufs, scope);
+            } else {
+                if constexpr (CONV_ON_FPU) {
+                    conv_block_fpu(scope, cols, 0, cols.count());
                 } else {
-                    l2norm_block(bufs, scope);
+                    conv_block(scope, cols, 0, cols.count());
                 }
+                l2norm_block(bufs, scope);
             }
-            {
-                cb_reserve_back(cb_o_acc, Vb);
-                if constexpr (CHUNKED) {
-                    chunk_step(bufs, token == 0, token + (hi - lo) == T, hi - 1 - base_row);
-                    token += hi - lo;
-                } else {
-                    for (uint32_t row = lo; row < hi; ++row, ++token) {
-                        token_step(bufs, token == 0, token == T - 1, row == lo, scope);
-                    }
-                    cb_pop_front(cb_d, 1);
+            cb_reserve_back(cb_o_acc, Vb);
+            if constexpr (CHUNKED) {
+                chunk_step(bufs, token == 0, token + (hi - lo) == T, hi - 1 - base_row);
+                token += hi - lo;
+            } else {
+                for (uint32_t row = lo; row < hi; ++row, ++token) {
+                    token_step(bufs, token == 0, token == T - 1, row == lo, scope);
                 }
-                cb_push_back(cb_o_acc, Vb);
-                cb_pop_front(cb_kq_rows, 2 * Kt);
-                if constexpr (qk_shared) {
-                    cb_pop_front(cb_kq_rows_f32, 2 * Kt);
-                }
-                cb_pop_front(cb_knT, Kt);
-                cb_pop_front(cb_v, Vb);
+                cb_pop_front(cb_d, 1);
             }
+            cb_push_back(cb_o_acc, Vb);
+            cb_pop_front(cb_kq_rows, 2 * Kt);
+            if constexpr (qk_shared) {
+                cb_pop_front(cb_kq_rows_f32, 2 * Kt);
+            }
+            cb_pop_front(cb_knT, Kt);
+            cb_pop_front(cb_v, Vb);
             rmsnorm_gate_block(bufs, v_eps_bits, scope);
         }
         cb_pop_front(cb_conv_w, conv_w_pages);

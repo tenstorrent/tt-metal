@@ -350,9 +350,10 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if _share_qk(pieces, tokens):
         order = [(core.y, core.x) for core, _, _ in assignment]
         assert order == sorted(order), "units must be assigned in row-major core order"
-        # No handshake: each receiver's landing CB is untouched before the single hand-off. The injectors' writers
-        # send on the writer's NoC (WriterConfigDescriptor: NOC 1, the preferred DRAM-write NoC).
-        config = ttnn.McastConfig(noc=ttnn.NOC.RISCV_1_default, handshake=False, data_ready=ttnn.McastDataReady.Counter)
+        # One round per channel per call: no handshake (each receiver's landing CB is untouched before it) and a
+        # flag signal linked behind the payload (a counter would wait a write barrier per rectangle). The
+        # injectors' writers send on the writer's NoC (WriterConfigDescriptor: NOC 1, the DRAM-write NoC).
+        config = ttnn.McastConfig(noc=ttnn.NOC.RISCV_1_default, handshake=False, data_ready=ttnn.McastDataReady.Flag)
         qk_channels = [
             ttnn.Mcast(
                 device,

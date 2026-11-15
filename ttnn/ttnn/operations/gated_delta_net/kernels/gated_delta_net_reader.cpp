@@ -15,7 +15,6 @@
 // Token rows are moved as face-row segments (64 B fp32, 32 B bf16; bf16 reads go through RowReader
 // staging) unless the pair owns the whole tile row.
 
-#include "api/debug/kernel_profiler.hpp"  // TMP-ZONES
 #include <stdint.h>
 
 #include "api/alignment.h"
@@ -357,7 +356,6 @@ void kernel_main() {
                 cb_reserve_back(cb_window, group_tiles);
                 const uint32_t win = get_write_ptr(cb_window);
                 if (zero_tokens != 0) {
-                    DeviceZoneScopedN("R-ZEROWAIT");
                     // The writer zeroes the buffer slot by slot at kernel start, off this RISC's critical path.
                     cb_wait_front(cb_window_zeroed, 1);
                     cb_pop_front(cb_window_zeroed, 1);
@@ -431,10 +429,7 @@ void kernel_main() {
                         }
                     }
                 }
-                {
-                    DeviceZoneScopedN("R-FLUSH");
-                    rows.finish();
-                }
+                rows.finish();
                 if (hist_staged || prev_staged || cur_staged) {
                     for (uint32_t col = 0; col < group_cols; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
@@ -475,7 +470,6 @@ void kernel_main() {
                     cb_push_back(cb_gate_in, 2);
                     gates_pending = false;
                 }
-                DeviceZoneScopedN("R-COPIES");
                 if (hi - lo > 1 || hist_staged || prev_staged || cur_staged) {
                     for (uint32_t col = 0; col < group_cols && hi - lo > 1; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
@@ -498,7 +492,6 @@ void kernel_main() {
             }
             // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs ----
             if (tr == first_tr) {
-                DeviceZoneScopedN("R-STATE");
                 cb_reserve_back(cb_state_in, n_state);
                 cb_reserve_back(cb_state_in_mm, n_state);
                 const uint32_t state_base = get_write_ptr(cb_state_in);

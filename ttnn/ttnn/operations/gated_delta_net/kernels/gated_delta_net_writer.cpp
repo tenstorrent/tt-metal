@@ -11,7 +11,6 @@
 // R-BCAST (decode R-VSPLIT): the key head's q and k injectors multicast qn and kn (one channel each) into
 // cb_kq_rows on every core of the key head, where the writer hands the landed rows to compute.
 
-#include "api/debug/kernel_profiler.hpp"  // TMP-ZONES
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -54,8 +53,9 @@ FORCE_INLINE uint32_t elem_index(uint32_t r, uint32_t c) {
 }
 
 // Lands kn (cb_kq_rows tiles [0, Kt)) and qn ([Kt, 2Kt)) of one tile row. An injector multicasts its staged
-// part (qn from the q injector, kn from the k injector) and copies it into its own rows; every core receives the
-// parts it did not prep. Every core has the same CB layout and R-BCAST hands off one block per core, so a
+// part (qn from the q injector, kn from the k injector), its own rows included (the sender lies inside its
+// group, so a send from another address loops back and is complete when send() returns); every core receives
+// the parts it did not prep. Every core has the same CB layout and R-BCAST hands off one block per core, so a
 // receiver's write pointer is the address the injector targets.
 template <typename QChannel, typename KChannel>
 void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t qk_role, uint32_t Kt) {
@@ -75,8 +75,6 @@ void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t
         } else {
             k_channel.optional_sender(noc)->send(stage, dst, part_bytes);
         }
-        noc_async_read(get_noc_addr(stage), dst, part_bytes);
-        noc_async_read_barrier();
         cb_pop_front(cb_qk_stage, Kt);
         if (is_q) {
             k_channel.optional_receiver(noc)->receive();
@@ -134,7 +132,6 @@ void kernel_main() {
         Noc noc;
         CircularBuffer window_buf(cb_window);
         for (uint32_t slot = 0; slot < zero_slots; ++slot) {
-            DeviceZoneScopedN("W-ZERO");
             noc.async_write_zeros(window_buf, zero_slot_bytes, {.offset_bytes = slot * zero_slot_bytes});
             noc.write_zeros_l1_barrier();
             cb_reserve_back(cb_window_zeroed, 1);
@@ -195,7 +192,6 @@ void kernel_main() {
             cb_pop_front(cb_gates, 2);
 
             if (!CHUNKED && qk_role != GDN_QK_OWN) {
-                DeviceZoneScopedN("W-QK");
                 land_qk_rows(q_channel, k_channel, qk_role, Kt);
             }
 
