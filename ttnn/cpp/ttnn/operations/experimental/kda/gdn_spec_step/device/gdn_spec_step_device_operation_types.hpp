@@ -48,6 +48,10 @@ struct GdnSpecStepParams {
     // kernel_opts: GdnSpecStepKernelOpt bits (fast_mode + fp32_state only). Each bit restructures the kernels and keeps
     // outputs, states and window (or conv_hist history pages) bit-identical to 0.
     uint32_t kernel_opts = 0;
+    // max_users (ring_page_idx only): the user count M >= B that the ctrl page is laid out for; 0 = B. The op runs
+    // users 0 .. B-1 and reads their words of the M-user page (start pages at 1 + M + u*Nv + h, start history pages at
+    // 1 + M + M*Nv + u*Nv + h), so one ctrl page serves a call over any leading subset of its users.
+    uint32_t max_users = 0;
 };
 
 // gdn_spec_step kernel_opts bits. Bits 0, 2, 8 and 9 are not assigned.
@@ -86,9 +90,9 @@ struct GdnSpecStepInputs {
     std::optional<Tensor> win_b;
     Tensor ring;     // fp32 TILE, >= T*B*Nv blocks of [Dk, Dv]: block (t*B*Nv + u*Nv + h) = state after token t; the
                      // start block per (u,h) comes from the ctrl page
-    Tensor ctrl;     // uint32 ROW_MAJOR, one page [1, N >= 1 + B + B*Nv] (N*4 % 64 == 0): word 0 = window parity,
-                     // words [1, 1+B) = mi[u], words [1+B, 1+B+B*Nv) = start ring block per (u,h) or HOLD sentinel
-                     // (HOLD must cover all Nv heads of a user; contents are data, not validated)
+    Tensor ctrl;     // uint32 ROW_MAJOR, one page [1, N >= 1 + M + M*Nv] (N*4 % 64 == 0), M = max_users or B: word 0 =
+                     // window parity, words [1, 1+M) = mi[u], words [1+M, 1+M+M*Nv) = start ring block per (u,h) or
+                     // HOLD sentinel (HOLD must cover all Nv heads of a user; contents are data, not validated)
     Tensor taps;     // [1, K, C] bf16 TILE: conv taps, tap j in row j of tile column c (row-broadcast operand)
     Tensor dt_bias;  // [1, 1, Nv] fp32/bf16
     Tensor neg_exp_A;  // [1, 1, Nv] fp32/bf16
@@ -104,7 +108,7 @@ struct GdnSpecStepInputs {
     // optional bf16 TILE page pool (ring_page_idx only) holding the convolution history in gdn_decode_step's packed
     // format: 4 pages per value head, slot s >= 1 = history row s - 1 (slot 3 the newest), channel chunk c of the
     // head's [q | k | v] row in tile rows 2c and 2c + 1. It replaces the window pair (win_a / win_b absent): the
-    // start history of (u, h) is slots 1..3 at ctrl word 1 + B + B*Nv + u*Nv + h (its slot-0 page), the history after
+    // start history of (u, h) is slots 1..3 at ctrl word 1 + M + M*Nv + u*Nv + h (its slot-0 page), the history after
     // token t goes to slots 1..3 at ring_page_idx entry (u, T*Nv + t*Nv + h), and the ctrl mi words are not read.
     std::optional<Tensor> conv_hist;
 };

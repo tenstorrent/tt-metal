@@ -237,10 +237,18 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
             kOp,
             in.ring.logical_shape());
     }
+    // the ctrl page is laid out for M users; only the paged ring takes M > B (the ring layout is per-page then)
+    const uint32_t M = a.max_users ? a.max_users : B;
+    TT_FATAL(
+        M == B || (M > B && in.ring_page_idx.has_value()),
+        "{}: max_users ({}) must be 0, B ({}) or, with ring_page_idx, larger than B",
+        kOp,
+        a.max_users,
+        B);
     const auto& cs = in.ctrl.logical_shape();
     const uint32_t words = static_cast<uint32_t>(cs[-1]);
     // with conv_hist the ctrl page also carries the start history page of every (u, h)
-    const uint32_t ctrl_words = 1 + B + (in.conv_hist.has_value() ? 2 : 1) * B * Nv;
+    const uint32_t ctrl_words = 1 + M + (in.conv_hist.has_value() ? 2 : 1) * M * Nv;
     TT_FATAL(
         static_cast<uint64_t>(words) == in.ctrl.logical_volume() && words >= ctrl_words && (words * 4) % 64 == 0,
         "{}: ctrl must be one row-major page [.., N] with N >= {} and N*4 %% 64 == 0 (got {})",
@@ -294,6 +302,7 @@ Tensor gdn_spec_step(
     bool fp32_state,
     uint32_t value_blocks,
     uint32_t kernel_opts,
+    uint32_t max_users,
     const std::optional<Tensor>& ring_page_idx,
     const std::optional<Tensor>& ring_pool2,
     const std::optional<Tensor>& conv_hist) {
@@ -318,6 +327,7 @@ Tensor gdn_spec_step(
             .fp32_state = fp32_state,
             .value_blocks = value_blocks,
             .kernel_opts = kernel_opts,
+            .max_users = max_users,
         },
         GdnSpecStepInputs{
             .qkvzab = qkvzab,

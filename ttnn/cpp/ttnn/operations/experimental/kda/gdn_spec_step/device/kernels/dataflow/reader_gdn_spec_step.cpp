@@ -18,9 +18,10 @@
 // projection and tap reads to the block's ChA chunks: its q/k share [s*Qk, (s+1)*Qk), Qk = 2*Kt / VB, then its own v
 // chunks. Without it every block reads all of the head's chunks.
 // GDN_RING_PAGE_IDX: the ctrl word of (u,h) is the first fp32 ring page of the start state, not a block index.
+// M: the users the ctrl page is laid out for (max_users, M >= B); the start word of (u,h) is 1 + M + bh.
 // GDN_RING_POOL2 (= ring's page count): pages from there on are ring_pool2's (page - count).
 // GDN_HIST_PAGED: the start history comes from gdn_decode_step's packed history pages (conv_hist) instead of win[par]:
-// ctrl word 1 + B + B*Nv + bh is the slot-0 page of (u, h)'s start history, slots 1..3 go to rows 1..3 of the head's
+// ctrl word 1 + M + M*Nv + bh is the slot-0 page of (u, h)'s start history, slots 1..3 go to rows 1..3 of the head's
 // window tiles (mi = 0), the other window rows are 0, and the ctrl mi word is not read.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -70,7 +71,8 @@ template <
     uint32_t norm_eps_bits,
     uint32_t ctrl_bytes,
     uint32_t hold_sentinel,
-    uint32_t VB>
+    uint32_t VB,
+    uint32_t M>
 TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t s) {
     const auto qkv_acc = TensorAccessor(tensor::qkv);
 #if GDN_HIST_PAGED
@@ -164,11 +166,11 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t s) {
         par = p[0] & 1u;
 #if GDN_HIST_PAGED
         mi = 0;
-        hist_page0 = p[1 + B + B * Nv + bh];
+        hist_page0 = p[1 + M + M * Nv + bh];
 #else
         mi = p[1 + u];
 #endif
-        blk = p[1 + B + bh];
+        blk = p[1 + M + bh];
     }
     ctrl_r.push_back(1);
     ctrl_r.wait_front(1);

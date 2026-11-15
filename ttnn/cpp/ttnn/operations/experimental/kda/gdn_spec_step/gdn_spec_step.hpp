@@ -16,8 +16,9 @@ namespace ttnn::experimental::kda {
 // the window parity, mi and the start state per (u,h) (HOLD sentinel 0xFFFFFFFF: no state writes for that head, window
 // rows copied through). fast_mode / fp32_state select the per-token arithmetic of gdn_decode_step(fast_mode,
 // fp32_state), so a T-token call equals T chained gdn_decode_step calls at B = 1.
-// value_blocks and kernel_opts select bit-identical faster programs (see GdnSpecStepParams). hnew_depth and max_users
-// accept only hnew_depth 2 and max_users 0 or B.
+// value_blocks and kernel_opts select bit-identical faster programs (see GdnSpecStepParams). hnew_depth accepts only 2.
+// max_users is the user count the ctrl page is laid out for (0 = B); with ring_page_idx it can exceed B, and the op
+// then runs users 0 .. B-1 of that page (GdnSpecStepParams::max_users).
 ttnn::Tensor gdn_spec_step(
     const ttnn::Tensor& qkvzab,
     const std::optional<ttnn::Tensor>& win_a,

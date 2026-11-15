@@ -205,7 +205,8 @@ template <
     uint32_t out_w_tiles,
     uint32_t ctrl_bytes,
     uint32_t hold_sentinel,
-    uint32_t VB>
+    uint32_t VB,
+    uint32_t M>
 TT_KERNEL void writer(
     uint32_t u,
     uint32_t h,
@@ -292,7 +293,7 @@ TT_KERNEL void writer(
         auto lock = ctrl_w.scoped_write_lock(1);
         auto p = lock.template get_ptr<volatile uint32_t>();
         par = p[0] & 1u;
-        blk = p[1 + B + bh];
+        blk = p[1 + M + bh];
     }
     ctrl_w.push_back(1);
     ctrl_w.wait_front(1);

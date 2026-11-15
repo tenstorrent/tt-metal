@@ -179,7 +179,8 @@ class Verify:
     def windows(self):
         return self.win_dev[0], self.win_dev[1]
 
-    def run(self, consts, taps, **kw):
+    def run(self, consts, taps, users=None, **kw):
+        """``users``: run only users 0 .. users-1 of the ctrl page and index (default all B)."""
         return ttnn.experimental.kda.gdn_spec_step(
             self.qkv,
             *self.windows(),
@@ -194,7 +195,7 @@ class Verify:
             DK,
             DV,
             self.T,
-            self.B,
+            self.B if users is None else users,
             AZ,
             conv_kernel=CONV_K,
             scale=SCALE,
@@ -681,9 +682,9 @@ def test_spec_step_program_cache_follows_new_buffers(device, opts):
 
 
 def test_spec_step_refuses_unsupported_options(device, expect_error):
-    """hnew_depth and max_users accept only their defaults; value_blocks is at most 4; kernel_opts accepts only the
-    GdnSpecStepKernelOpt bits, and only with fast_mode and fp32_state. fp32_state needs fast_mode, and B * Nv cores
-    must fit the grid."""
+    """hnew_depth accepts only its default; max_users is 0, B, or above B with a ctrl page of that many users;
+    value_blocks is at most 4; kernel_opts accepts only the GdnSpecStepKernelOpt bits, and only with fast_mode and
+    fp32_state. fp32_state needs fast_mode, and B * Nv cores must fit the grid."""
     B, T = 2, 4
     gen = torch.Generator().manual_seed(0)
     inp = inputs(B, seed=0)
@@ -697,11 +698,13 @@ def test_spec_step_refuses_unsupported_options(device, expect_error):
         (dict(kernel_opts=4), "unsupported kernel_opts bits 0x4"),
         (dict(kernel_opts=256 | 512), "unsupported kernel_opts bits 0x300"),
         (dict(hnew_depth=4), "hnew_depth must be 2"),
-        (dict(max_users=B + 1), "max_users must be 0 or B"),
+        (dict(max_users=B - 1), "max_users must be 0, B, or with ring_page_idx larger than B"),
+        (dict(max_users=B + 1), "ctrl must be one row-major page"),  # the ctrl page holds B users only
     ]:
         with expect_error(RuntimeError, msg):
             v.run(consts, taps, **kw)
     ttnn.deallocate(v.run(consts, taps, value_blocks=1, max_users=B))  # the defaults' equivalents are accepted
+    ttnn.deallocate(v.run(consts, taps, users=B - 1, max_users=B))  # the leading users of the B-user page
     for mode in ((False, False), (True, False)):
         v.mode = mode
         with expect_error(RuntimeError, "kernel_opts need fast_mode and fp32_state"):
@@ -1097,3 +1100,30 @@ def test_spec_step_history_pages_traced_latency(device, B, K_draft):
         for k, call in calls.items():
             res[k].append(per_call_us(call))
     logger.info(f"LATENCY B={B} T={T}: " + ", ".join(f"{k} {min(x):.2f} us" for k, x in res.items()))
+
+
+@pytest.mark.parametrize("opts", ["minimal", "vb4_opts"])
+@pytest.mark.parametrize("b", [1, 2, 4])
+def test_spec_step_history_pages_run_the_leading_users_of_a_wider_ctrl_page(device, b, opts):
+    """max_users M > B, as the qwen36 verify row buckets run it: a call over users 0 .. b-1 of a ctrl page and an index
+    laid out for M = 8 users reads each user's own start words (1 + M + u*Nv + h, 1 + M + M*Nv + u*Nv + h). Its
+    outputs, states and history pages equal gdn_decode_step run token by token for those users, bit for bit; the
+    output rows past b*T are 0, and the blocks of users b .. M-1 keep their bytes."""
+    M, T = 8, 4
+    gen = torch.Generator().manual_seed(3100 + 10 * b + len(opts))
+    inp = inputs(M, seed=3100 + b)
+    consts, taps = consts_dev(device, inp), spec_taps(device, inp)
+    starts, dests = distinct_blocks(M, T, num_blocks_for(M, T), gen)
+    kv = _kv_blocks_or_skip(device, num_blocks_for(M, T), gen)
+    kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(M)])
+    kv.write()
+    v = HistVerify(device, kv, M, T, gen, starts, dests)
+    out = ttnn.to_torch(v.run(consts, taps, users=b, max_users=M, **OPTION_SETS[opts])).reshape(v.R, VD)
+    ref = decode_per_user(device, consts, inp["h"][:b], inp["hist2"][:b], v.token_rows()[:, :b], MODEL_MODE)
+    assert not out[b * T :].any(), "output rows past b*T are not 0"
+    writes = []
+    for t in range(T):
+        for u in range(b):
+            assert torch.equal(bits(out[u * T + t]), bits(ref[t][0][u])), f"position {t} user {u}: output"
+            writes.append((dests[u][t], ref[t][1][u], ref[t][2][u]))
+    check_pages(kv, expected_pages_hist(kv, writes))
