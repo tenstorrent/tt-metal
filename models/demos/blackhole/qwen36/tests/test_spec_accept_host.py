@@ -8,9 +8,11 @@
 * MTPBlockEngine: an argmax_ids verify enqueues the verify, the step trace and the drafter trace, stages the
   acceptance rows in the verify's one copy and reads once; the next propose returns the device's drafts when the
   runner commits what the device accepted, and raises otherwise. Steps whose propose depends on the count, logits
-  and narrow steps keep the host-staged drafter.
+  and narrow steps keep the host-staged drafter; deferred, such a step calls the model's verify_enqueue with
+  arguments its signature takes.
 """
 
+import inspect
 import random
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -21,6 +23,7 @@ from vllm_tt_plugin.spec_decode import accept_greedy_drafts
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import spec_engine
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.spec_accept import TorchOps, graph, greedy_counts, step_accept_reference
 from models.demos.blackhole.qwen36.tt.spec_step import (
     STEP_DECLINED,
@@ -526,4 +529,31 @@ def test_a_deferred_verify_that_stages_its_drafter_from_the_host_reads_its_ids_o
     res = _verify(eng, tokens, starts, [3] * B, defer=True)
     assert isinstance(res.argmax_ids, spec_engine.PendingVerify) and res.argmax_ids.plan is None
     assert log["traced"] == [] and len(log["enqueue"]) == 1 and log["traces"] == []
+    assert res.argmax_ids.result().shape == (B, eng.T)
+
+
+@pytest.mark.parametrize("why", ["mixed_fit", "all_declined", "one_enqueue_off"])
+def test_a_deferred_verify_without_a_one_enqueue_plan_passes_only_what_verify_enqueue_takes(step, why):
+    """A deferred argmax_ids verify without a one-enqueue plan (a row fits at some counts only, every row declines, or
+    one-enqueue steps are off) calls the model's verify_enqueue with arguments its signature accepts."""
+    eng, log, state = step
+    B = eng.B
+    signature = inspect.signature(Qwen36Model.verify_enqueue)
+
+    def verify_enqueue(*args, **kw):
+        signature.bind(None, *args, **kw)  # TypeError for an argument Qwen36Model.verify_enqueue does not take
+        log["enqueue"].append(SimpleNamespace(tokens=args[0], positions=args[1], accept=kw.get("accept_rows"), kw=kw))
+
+    eng.model.verify_enqueue = verify_enqueue
+    state["ids"] = torch.zeros(B, eng.T, dtype=torch.int64)
+    starts = [100, 200, 300, 400]
+    if why == "mixed_fit":
+        starts[2] = eng.nb * eng.block_size - 1 - eng.K - 2
+    elif why == "all_declined":
+        eng._no_draft = set(range(B))
+    else:
+        eng._acc_trace = None
+    res = _verify(eng, torch.zeros(B, eng.T, dtype=torch.int64), starts, [3] * B, defer=True)
+    assert isinstance(res.argmax_ids, spec_engine.PendingVerify) and res.argmax_ids.plan is None
+    assert len(log["enqueue"]) == 1 and log["traced"] == [] and log["traces"] == []
     assert res.argmax_ids.result().shape == (B, eng.T)
