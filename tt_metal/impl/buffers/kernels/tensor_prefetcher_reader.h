@@ -19,10 +19,17 @@
 // count does (tensor_prefetcher_fifo.hpp), so the reader runs on into the next tensor while the pusher
 // is still sending the last one's blocks.
 //
+// A reader that is the first kernel in tensor_prefetcher_kernels() plans each tensor (kPlansBlocks): its source
+// decides how many blocks each receiver gets, and the reader publishes that in the slot's plan. A reader further
+// down follows the plan the first kernel published.
+//
 // A BlockSource has these members, `i` naming a receiver of the tensor's TensorStream:
-//   uint32_t begin_tensor(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream)
-//       Before the reader stages tensor `e` of `slot`, planned as `stream`. Returns how many blocks each receiver
-//       gets of it, which the reader publishes in the slot's plan for the kernels after it.
+//   uint32_t plan_blocks(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream)
+//       Only in a planning reader: how many blocks each receiver gets of tensor `e` of `slot`, planned as
+//       `stream`. GroupSelection (tensor_prefetcher_groups.h) picks a grouped tensor's groups.
+//   void begin_tensor(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e, const TensorStream& stream,
+//                     uint32_t blocks)
+//       Before the reader stages `blocks` blocks of tensor `e` for each receiver.
 //   bool ready(uint32_t i, uint32_t block)
 //       Whether receiver `i`'s block `block` can be read now. A block that is not ready waits for a later
 //       pass, as one whose stage slot is still full does.
@@ -141,8 +148,14 @@ bool stage_request(
             }
             layout_receivers = stream.num_receivers;
         }
-        const uint32_t blocks = source.begin_tensor(slot, e, stream);
-        *tensor_blocks(slot, e) = blocks;
+        uint32_t blocks = 0;
+        if constexpr (kPlansBlocks) {
+            blocks = source.plan_blocks(slot, e, stream);
+            *tensor_blocks(slot, e) = blocks;
+        } else if (!wait_for_tensor_blocks(requests, slot, e, blocks)) {
+            return false;
+        }
+        source.begin_tensor(slot, e, stream, blocks);
         if (!stage_tensor(requests, stream, blocks, source)) {
             return false;
         }

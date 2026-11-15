@@ -132,6 +132,11 @@ private:
     volatile tt_l1_ptr uint8_t* bytes_;
 };
 
+// The first kernel in tensor_prefetcher_kernels() plans each tensor of a PREFETCH slot: it reads the tensor's
+// source and decides how many blocks each receiver gets, which it publishes in the slot's plan. Every later
+// kernel follows that plan (wait_for_tensor_blocks) rather than derive it, so a group selector is read once.
+inline constexpr bool kPlansBlocks = TENSOR_PREFETCHER_KERNEL_INDEX == 0;
+
 // The word of `slot`'s plan that says how many blocks each receiver gets of tensor `e`.
 FORCE_INLINE volatile tt_l1_ptr uint32_t* tensor_blocks(volatile tt_l1_ptr fifo::SlotHeader* slot, uint32_t e) {
     ASSERT(e < fifo::kMaxSlotTensors);

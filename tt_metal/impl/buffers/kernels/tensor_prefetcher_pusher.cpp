@@ -36,6 +36,7 @@ using tensor_prefetcher::region;
 using tensor_prefetcher::TensorStream;
 
 static_assert(fifo::kMaxReceivers <= 32, "A pass tracks its receivers in one 32-bit mask");
+static_assert(!tensor_prefetcher::kPlansBlocks, "The pusher sends what a kernel before it planned");
 
 namespace {
 
@@ -177,7 +178,7 @@ bool push_request(const FifoConsumer& requests, volatile tt_l1_ptr fifo::SlotHea
     TensorStream stream;
     for (uint32_t e = 0; e < num_tensors; ++e) {
         tensor_prefetcher::plan_tensor(slot, e, stream);
-        // As many blocks as the reader planned, which a group selector may make fewer than the tensor holds.
+        // As many blocks as the first kernel planned, which a group selector may make fewer than the tensor holds.
         uint32_t blocks = 0;
         if (!tensor_prefetcher::wait_for_tensor_blocks(requests, slot, e, blocks)) {
             return false;
