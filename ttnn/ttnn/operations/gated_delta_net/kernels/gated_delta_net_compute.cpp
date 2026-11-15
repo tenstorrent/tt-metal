@@ -903,7 +903,10 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
 }
 
 // ---------------------------------------------------------------- one token step
-ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool first_in_row, RowScope scope) {
+ALWI void osum_partial(Buffers& bufs, RowScope scope);
+
+ALWI void token_step(
+    Buffers& bufs, bool first_in_pair, bool last_in_pair, bool first_in_row, bool last_in_row, RowScope scope) {
     // read (5a): [rk; ro] = [kn; qn] x S_{t-1}
     read_state<cb_kq_rows>(bufs, first_in_pair);
     // token vector (5b): u = beta_sel (*)col (v - alpha rk); o = alpha_sel (*)col ro + d (*)col u
@@ -957,6 +960,13 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         tile_regs_release();
     }
     cb_pop_front(cb_reads, 2 * Vb);
+    if constexpr (PIECES > 1) {
+        // o of the tile row is final: its partial sum o^2 goes to the peers now, so the all-gather overlaps the update.
+        if (last_in_row) {
+            cb_push_back(cb_o_acc, Vb);
+            osum_partial(bufs, scope);
+        }
+    }
     // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
     update_state<cb_knT>(first_in_pair, last_in_pair, cb_u, alpha_bits);
     cb_pop_front(cb_u, Vb);
@@ -1357,19 +1367,28 @@ ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint3
 // out = ((o (*)col rsqrt(mean o^2 + eps)) (*)row w) * silu(z), with
 // rsqrt(mean o^2 + eps) = sqrt(V) * rsqrt(sum o^2 + V eps); sum over the whole V (all pieces).
 // o_cb holds the unit's Vb columns of o for HEADS value heads (a prep core's r heads, else one head or one piece).
-template <uint32_t o_cb, uint32_t HEADS>
+// R-VSPLIT: this piece's partial sum o^2 of cb_o_acc -> cb_osum_part (the writer all-gathers it over the pieces).
+ALWI void osum_partial(Buffers& bufs, RowScope scope) {
+    square_block<cb_o_acc, cb_sq_o>(0, Vb, scope);
+    DataflowBuffer osum_part{cb_osum_part};
+    row_sum<cb_sq_o, cb_osum_part>(bufs, bufs.sq_o, osum_part, Vb, ckl::NoOp{});
+}
+
+// PARTIAL_DONE: the token step already produced this piece's partial sum (osum_partial).
+template <uint32_t o_cb, uint32_t HEADS, bool PARTIAL_DONE = false>
 ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope) {
     constexpr uint32_t W = Vb / HEADS;  // columns of one head in o_cb
-    square_block<o_cb, cb_sq_o>(0, Vb, scope);
     const RsqrtPost rsqrt_post{v_eps_bits, SQRT_V_BITS, scope};
     if constexpr (PIECES == 1 || PREP) {
+        square_block<o_cb, cb_sq_o>(0, Vb, scope);
 #pragma GCC unroll 1
         for (uint32_t head = 0; head < HEADS; ++head) {
             row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, W, rsqrt_post);
         }
     } else {
-        DataflowBuffer osum_part{cb_osum_part};
-        row_sum<cb_sq_o, cb_osum_part>(bufs, bufs.sq_o, osum_part, Vb, ckl::NoOp{});
+        if constexpr (!PARTIAL_DONE) {
+            osum_partial(bufs, scope);
+        }
         cb_wait_front(cb_osum_gather, PIECES);
         cb_reserve_back(cb_rinv_o, 1);
         tile_regs_acquire();
@@ -1596,18 +1615,20 @@ void kernel_main() {
                     token += hi - lo;
                 } else {
                     for (uint32_t row = lo; row < hi; ++row, ++token) {
-                        token_step(bufs, token == 0, token == T - 1, row == lo, scope);
+                        token_step(bufs, token == 0, token == T - 1, row == lo, row + 1 == hi, scope);
                     }
                     cb_pop_front(cb_d, 1);
                 }
-                cb_push_back(cb_o_acc, Vb);
+                if (CHUNKED || PIECES == 1) {
+                    cb_push_back(cb_o_acc, Vb);  // else pushed by the token step
+                }
                 cb_pop_front(cb_kq_rows, 2 * Kt);
                 if constexpr (qk_shared) {
                     cb_pop_front(cb_kq_rows_f32, 2 * Kt);
                 }
                 cb_pop_front(cb_knT, Kt);
                 cb_pop_front(cb_v, Vb);
-                rmsnorm_gate_block<cb_o_acc, 1>(bufs, v_eps_bits, scope);
+                rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(bufs, v_eps_bits, scope);
             }
             cb_pop_front(cb_conv_w, conv_w_pages);
             cb_pop_front(cb_gate_w, 2);
