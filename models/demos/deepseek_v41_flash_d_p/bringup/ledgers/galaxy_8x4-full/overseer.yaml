@@ -386,6 +386,86 @@ notes:
     file list still names the old single files. Fix it at the framework cause: the list of ledger files to commit comes
     from the chunk layout (one place), never names a file that no longer exists; add a selftest that commits a ledger after
     the migration. Then run the gate yourself (gate FIX.27 --check) until it passes.'
+- id: OV-39
+  tasks:
+  - P.55b
+  - P.55c
+  status: open
+  t: '2026-11-13T22:22:49'
+  text: 'P.55a (overseer reading, 2026-11-13): deadline-surviving saving at chunk 10 is novel 10.1 ms GO, code 2.9 ms NO-GO,
+    random 16.5 ms; your brief''s stop rule (both prompts under ~5 ms) does NOT trigger, so do step 2. The bound assumed
+    a WHOLE-expert copy (lands ~0.75 ms, receivers finish own work ~0.47 ms: 0 of 335 copies on time) and one link path;
+    two paths per copy recover most of it (novel 20.9 ms). So design the copy to beat that: (1) per-block streaming with
+    ready flags so the receiver computes blocks as they land, (2) split each copy over two link paths, (3) the home keeps
+    or re-reads the weight blocks: in ~94% of planned copies the copy outlasts the home''s own compute of that expert, so
+    say which you do and what it costs. Report copies-on-time and the surviving ms for novel AND code with your measured
+    copy latency, using P.55a''s model (tests/moe_exact_model.py).'
+- id: OV-40
+  tasks:
+  - P.55c
+  status: open
+  t: '2026-11-13T23:51:55'
+  text: 'Owner go (2026-11-13) after P.55a/P.55b: copies land late (pair 0.77-0.88 ms, real split ~1.23 ms) but late copies
+    still offload the busiest chip; the estimate is novel ~0-8 ms/chunk net, code ~1-2 ms. This task answers it with measurements.
+    (1) The decision is read from device ms per chunk off vs exact on the REAL prompts: test_moe_exact_replicas must record,
+    at chunk 10 after the device''s own prefill of chunks 0-9 (as P.55a did), for novel AND code: exact_device_ms_off_<prompt>,
+    exact_device_ms_exact_<prompt>, and the experts-phase ms of each. The orchestrator''s A/B profile uses random tokens
+    (DS41-228: does not route like a prompt): report it, but it is not the deliverable. (2) Receivers compute the replicated
+    expert LAST, after their own; use P.55b''s ready flags so they start on blocks as they land. (3) Report the real per-layer
+    program time added by the copy in these real chunks (P.55b''s +0.30-0.42 ms was on a balanced random chunk). (4) Accuracy
+    within limits and bit-identical repeats, as in the brief. If the full integration fails, report where (the fallback
+    is c'': serial fill first).'
+- id: OV-41
+  tasks:
+  - P.58
+  status: open
+  t: '2026-11-14T07:21:12'
+  text: 'OWNER 2026-11-14: evaluate TP=8 as well as TP=4, side by side in every step. The mesh is 8 rows x 4 columns: TP=4
+    = one ROW of 4 chips (8 groups, 48 experts each, split 4 ways); TP=8 = one COLUMN of 8 chips (4 groups, 96 experts each,
+    split 8 ways). Overseer''s compute-only model (P.55a fit, chunk 10 at 51,200, assuming chip id = row*4+col; check the
+    real mapping): experts phase novel EP 49.9 / TP4 29.1 / TP8 28.1 ms per chunk (busiest/mean 4.39x / 1.66x / 1.30x),
+    code 38.7 / 28.3 / 28.1 (2.79x / 1.45x / 1.20x); TP8 sits at the weight-read floor (C0 + 12 x A per layer). So TP8 balances
+    fully but needs dispatch to 8 chips along a column and 8 partial sums per token-expert: measure both in the microbenchmark,
+    and report all three (EP, TP4, TP8) in the verdict, including 1/8-width blocks (padding, smaller weight reads). Record
+    tp8_* metrics alongside tp4_*.'
+- id: OV-42
+  tasks:
+  - P.58
+  status: open
+  t: '2026-11-14T07:33:15'
+  text: 'Correction to the overseer''s estimates in the brief and OV-41: they charged every chip 12 weight reads, but flat_routed_expert
+    skips 0-token experts outright, weights included (expert_schedule.hpp:5-9; ~10.2 of 12 active per chip on novel, 10.7
+    on code). With active experts only (as P.55a''s model does): experts phase novel EP 49.9 / TP4 28.3 / TP8 26.0 ms per
+    chunk, code 38.7 / 27.5 / 26.6. Use active-expert reads in your model (a chip of a TP group reads 1/k of each ACTIVE
+    expert of its group).'
+- id: OV-43
+  tasks:
+  - P.63
+  status: open
+  t: '2026-11-14T12:30:26'
+  text: 'P.62 (DS41-258) measured that a mesh-wide prepared program launches about as slowly as 32 per-chip programs (85
+    vs 92 us a call): once prepared, per-device dispatch dominates. So FIRST measure, cheaply, whether a mesh-wide fused
+    head / combine actually cuts host us a call (a 1-layer probe) before rebuilding them; if it does not, report that with
+    the numbers and look for the real per-call cost instead (runtime-arg updates, per-device enqueue, cache lookups), fixing
+    what you find.'
+- id: OV-44
+  tasks:
+  - P.63b
+  status: open
+  t: '2026-11-14T15:28:38'
+  text: 'The overseer stopped attempt 2 (perf): Overseer: stop P.63b. Attempt 1''s mesh-wide fused-head program hung the
+    8x4 on first launch (recovered by the safe runner); DS41-264 (per-chip programs differ in structure) and DS41-265 (per-chip
+    arg copies remain with a mesh program) show a small payoff for a large, risky rewrite. Not retried; task to be rejected.'
+- id: OV-45
+  tasks:
+  - P.65
+  status: open
+  t: '2026-11-14T16:19:30'
+  text: 'From P.64''s census (BREADCRUMBS P.64): the biggest CCL group is the window snapshot, tt/attention write_snapshot:
+    every layer, every chunk, 2 high_bw_all_gathers of every chip''s whole 192-row ring + slice + update_padded_kv_cache,
+    4 launches ~470 us host a layer (~19 ms a chunk) plus the gathers'' device time. Start there: replace it with a fabric
+    broadcast of the owner''s 128 rows only (or fold it into P.64''s prepared window program), bit-identical served snapshot.
+    Then all_gather / mhc_post as the brief says.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'

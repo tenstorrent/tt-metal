@@ -5525,6 +5525,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,
@@ -5542,6 +5543,9 @@
   "status": "PASS",
   "units": null,
   "waiting": null
+ },
+ "P.68": {
+  "waiting": "the 'before' side of P.68 (ab.before) is not measured and the tree already holds changes under its paths (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state.chunks/0001.json): revert them or measure 'before' on a clean tree first"
  },
  "P.7": {
   "agent": {
