@@ -44,8 +44,16 @@ def _by_chunk(kplan):
     return groups
 
 
-def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path):
+def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path, monkeypatch):
     kplan, fds, src = _plan_and_files(tmp_path)
+    reads = []
+    real_pread = _load.pread_all
+
+    def counting_pread(fd, nbytes, offset):
+        reads.append(nbytes)
+        return real_pread(fd, nbytes, offset)
+
+    monkeypatch.setattr(_load, "pread_all", counting_pread)
     try:
         expected = expected_shards(src, FSDP4_ROWS)
         by_chunk = _by_chunk(kplan)
@@ -58,7 +66,9 @@ def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path):
             for items in by_chunk.values()
         )
         assert n == src.nbytes
+        assert reads == [src.nbytes // 2] * 2, "one pread per chunk, the speed-up a same-world load relies on"
         assert_shards_equal(whole, expected)
+        reads.clear()
 
         # One destination shard needs a quarter of each chunk: below the threshold, so one read per run of rows.
         group = next(iter(kplan.boxes))
@@ -77,6 +87,7 @@ def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path):
             for items in by_chunk.values()
         )
         assert n == expected[group].nbytes
+        assert reads == [expected[group].nbytes // 2] * 2, "the quarter of each chunk the shard needs, nothing more"
         np.testing.assert_array_equal(one[group], expected[group])
     finally:
         for fd in fds.values():
