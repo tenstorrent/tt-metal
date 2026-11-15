@@ -75,6 +75,9 @@ void bind_fused_hyperconnection(nb::module_& mod) {
             collapsed_norm_epsilon: That RMSNorm's epsilon.
             collapsed_norm_sharded: Keep the normed ``collapsed`` on the collapse cores instead, L1 WIDTH_SHARDED
                 ``[1, D / 8]`` as an unnormed ROW_MAJOR ``collapsed`` is.
+            collapsed_replica_grid: Single token with a ROW_MAJOR ``collapsed``: a rectangle of cores the collapse
+                cores also multicast their slices of ``collapsed`` to, returned last as
+                ``all_gather_for_matmul(collapsed, collapsed_replica_grid)`` would return it.
 
         Returns:
             List of [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus
@@ -106,7 +109,8 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         nb::arg("mix_sublayer_out") = std::nullopt,
         nb::arg("collapsed_norm_weight") = std::nullopt,
         nb::arg("collapsed_norm_epsilon") = 0.0F,
-        nb::arg("collapsed_norm_sharded") = false);
+        nb::arg("collapsed_norm_sharded") = false,
+        nb::arg("collapsed_replica_grid") = std::nullopt);
 
     ttnn::bind_function<"fused_hyperconnection_weights", "ttnn.experimental.deepseek.">(
         mod,

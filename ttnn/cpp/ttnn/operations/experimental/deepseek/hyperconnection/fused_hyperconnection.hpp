@@ -73,6 +73,8 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 //     `collapsed_layout`: fuse RMSNorm(collapsed) * collapsed_norm_weight ([1,1,1,D] BFLOAT16 ROW_MAJOR, DRAM
 //     interleaved) onto the collapse cores. `collapsed` is then the normed row, ROW_MAJOR and DRAM interleaved, or with
 //     `collapsed_norm_sharded` L1 WIDTH_SHARDED [1, D/8] on the collapse cores.
+//   collapsed_replica_grid: with a ROW_MAJOR `collapsed`, also return all_gather_for_matmul(collapsed, grid) (last),
+//     multicast by the collapse cores themselves.
 //
 // Returns [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus pre [B,S,1,H] (BFLOAT16
 // TILE, zero-padded, the layout `pre_mix` takes) when `pre_mix` is given, plus the mixed streams
@@ -101,7 +103,8 @@ std::vector<Tensor> fused_hyperconnection(
     const std::optional<Tensor>& mix_sublayer_out = std::nullopt,
     const std::optional<Tensor>& collapsed_norm_weight = std::nullopt,
     float collapsed_norm_epsilon = 0.0F,
-    bool collapsed_norm_sharded = false);
+    bool collapsed_norm_sharded = false,
+    const std::optional<CoreRangeSet>& collapsed_replica_grid = std::nullopt);
 
 // `fused_hyperconnection` without the collapse, for stream-major residual stacks [1, H, T, D]
 // (DeepSeek V4.1 prefill), which the caller collapses itself with `stream_mix(streams, pre)`.

@@ -366,6 +366,16 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
             out_mem);
     }
 
+    if (attributes.collapsed_replica_grid.has_value()) {
+        TT_FATAL(
+            attributes.collapsed_layout == Layout::ROW_MAJOR && hidden_streams.layout() == Layout::ROW_MAJOR,
+            "collapsed_replica_grid needs ROW_MAJOR hidden_streams and a ROW_MAJOR collapsed");
+        TT_FATAL(
+            attributes.collapsed_replica_grid->ranges().size() == 1,
+            "collapsed_replica_grid must be one rectangle of cores, got {}",
+            *attributes.collapsed_replica_grid);
+    }
+
     if (tensor_args.pre_mix.has_value()) {
         const auto& pre_mix = *tensor_args.pre_mix;
         TT_FATAL(pre_mix.storage_type() == StorageType::DEVICE, "pre_mix must be on device");
@@ -440,6 +450,17 @@ FusedSingleUserDeviceOperation::spec_return_value_t FusedSingleUserDeviceOperati
         // The mixed streams sit where the streams did: same shape, layout and shards.
         specs.push_back(tensor_args.hidden_streams.tensor_spec());
     }
+    if (attributes.collapsed_replica_grid.has_value()) {
+        // all_gather_for_matmul's replica: the row once per core, stacked along dim -2.
+        const auto& grid = *attributes.collapsed_replica_grid;
+        const tt::tt_metal::ShardSpec shard(grid, {1, d}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        specs.emplace_back(
+            ttnn::Shape({1, 1, grid.num_cores(), d}),
+            tt::tt_metal::TensorLayout(
+                tensor_args.hidden_streams.dtype(),
+                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard)));
+    }
     return specs;
 }
 
@@ -481,7 +502,8 @@ std::vector<Tensor> fused_hyperconnection_single_user(
     const std::optional<Tensor>& mix_sublayer_out,
     const std::optional<Tensor>& collapsed_norm_weight,
     float collapsed_norm_epsilon,
-    bool collapsed_norm_sharded) {
+    bool collapsed_norm_sharded,
+    const std::optional<CoreRangeSet>& collapsed_replica_grid) {
     using OperationType = ttnn::operations::experimental::deepseek::hyperconnection::FusedSingleUserDeviceOperation;
     const MemoryConfig post_comb_output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const Layout resolved_collapsed_layout = collapsed_layout.value_or(Layout::TILE);
@@ -512,6 +534,7 @@ std::vector<Tensor> fused_hyperconnection_single_user(
         .reduce_fan_in = reduce_fan_in,
         .rms_norm_epsilon = rms_norm_epsilon,
         .collapsed_norm_epsilon = collapsed_norm_epsilon,
+        .collapsed_replica_grid = collapsed_replica_grid,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .fused_w = fused_w,

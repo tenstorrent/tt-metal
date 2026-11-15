@@ -27,6 +27,9 @@ struct FusedSingleUserSharedVariables {
     // row to DRAM): the collapse cores run a writer, whose runtime arg 0 is collapsed's address.
     bool has_collapse_writer = false;
     bool fuse_norm = false;
+    bool has_replica = false;
+    // The replica address's index in the collapse writer's runtime args.
+    uint32_t replica_arg_index = 0;
     tt::tt_metal::CBHandle hidden_cb = 0;
     tt::tt_metal::CBHandle collapsed_output_cb = 0;
     // The folded mix step: the collapse cores pack the mixed streams into their shard of the last output.

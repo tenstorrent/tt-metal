@@ -919,6 +919,15 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             )
         self.fused_prefetch_queued = True
 
+    def token_replica_grid(self, select: bool = False, dense: bool = False) -> ttnn.CoreRangeSet | None:
+        """The rectangle a one-row :meth:`decode` (with these ``select`` / ``dense``) replicates its input row onto
+        (``all_gather_for_matmul``), for its caller to build the replica itself; ``None`` if not one rectangle."""
+        grid = _FUSED_QKV_GRID if self.fused_qkv and (not select or dense) else self._decode_activation_grid()
+        box = grid.bounding_box()
+        if box.grid_size().x * box.grid_size().y != grid.num_cores():
+            return None
+        return ttnn.CoreRangeSet({box})
+
     def _decode_activation_grid(self) -> ttnn.CoreRangeSet:
         """Cores that receive the decode all-gather replica of ``tokens``: q_a's B grid, or kv's if it contains it,
         else the rectangle around both (their prefetcher rings sit side by side), which the gather multicasts."""
@@ -1477,6 +1486,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         dense: bool = False,
         dense_entry: ttnn.Tensor | None = None,
         dense_offset: ttnn.Tensor | None = None,
+        tokens: ttnn.Tensor | None = None,
         dense_fill: bool = False,
     ) -> ttnn.Tensor:
         """One decode step: ``hidden`` ``[B, S, 1, D]`` -> the block's output, same shape.
@@ -1532,9 +1542,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             assert ring_rows is not None, "decode_inputs(..., rows=S) builds the rows' ring copies"
         fused = self.fused_qkv and b == 1 and s == 1 and (not select or dense)
         assert fused or not self.fused_prefetch_queued, "attention_qkv_decode's slabs were queued for a one-row step"
-        tokens = ttnn.experimental.deepseek.all_gather_for_matmul(
-            _pack_tokens(hidden), _FUSED_QKV_GRID if fused else self._decode_activation_grid()
-        )
+        token_grid = _FUSED_QKV_GRID if fused else self._decode_activation_grid()
+        if tokens is None:
+            tokens = ttnn.experimental.deepseek.all_gather_for_matmul(_pack_tokens(hidden), token_grid)
+        else:
+            # The attention hyper-connection already multicast the row onto token_replica_grid().
+            assert tokens.shape[-2] == token_grid.num_cores() * b * s, (tokens.shape, token_grid)
         if self.compress_ratio == 0:
             if fused:
                 q = self._fused_qkv_into_ring(tokens, cos, sin, scache.kv, sliding_pos)

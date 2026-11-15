@@ -25,6 +25,8 @@ from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_con
 
 PCC = 0.999
 ITERS = 8
+# attention_qkv_decode's token replica grid.
+REPLICA_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))})
 
 
 @pytest.mark.parametrize("use_pre_mix", (True, False), ids=("pre_mix", "own_pre"))
@@ -292,8 +294,11 @@ def test_fused_hc_single_user_collapsed_norm(device, reset_seeds, hidden, fold_m
             collapsed_norm_weight=gamma_row,
             collapsed_norm_epsilon=rms_eps,
             collapsed_norm_sharded=sharded,
+            collapsed_replica_grid=REPLICA_GRID,
             **call,
         )
+        replica = new[-1]
+        new = new[:-1]
         assert len(new) == len(old), f"{len(new)} outputs, expected {len(old)}"
         want_config = (
             width_sharded_l1_config(1, hidden, device, num_cores=8, tile_height=1)
@@ -323,4 +328,19 @@ def test_fused_hc_single_user_collapsed_norm(device, reset_seeds, hidden, fold_m
             )
             if not passing:
                 failures.append(f"normed vs {label}: {pcc}")
+        # The replica is the normed row on every core of the grid, as all_gather_for_matmul builds it.
+        want = got.reshape(1, 1, 1, hidden).bfloat16().float().expand(1, 1, REPLICA_GRID.num_cores(), hidden)
+        if not torch.equal(ttnn.to_torch(replica).float(), want):
+            failures.append("normed replica differs from the normed row")
+        # Without the norm: the replica of the plain ROW_MAJOR collapsed row vs all_gather_for_matmul's.
+        rm = ttnn.experimental.deepseek.fused_hyperconnection(
+            streams_tt, collapsed_layout=ttnn.ROW_MAJOR_LAYOUT, collapsed_replica_grid=REPLICA_GRID, **call
+        )
+        ref_replica = ttnn.experimental.deepseek.all_gather_for_matmul(rm[2], REPLICA_GRID)
+        if ttnn.to_torch(rm[-1]).float().shape != ttnn.to_torch(ref_replica).float().shape or not torch.equal(
+            ttnn.to_torch(rm[-1]).float(), ttnn.to_torch(ref_replica).float()
+        ):
+            failures.append("replica differs from all_gather_for_matmul's")
+        if rm[-1].memory_config() != ref_replica.memory_config():
+            failures.append(f"replica config {rm[-1].memory_config()} vs {ref_replica.memory_config()}")
         assert not failures, "; ".join(failures)

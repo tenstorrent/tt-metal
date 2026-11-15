@@ -60,6 +60,10 @@ FOLD_POST_NORM = os.environ.get("DEEPSEEK_V41_FOLD_POST_NORM", "1") not in ("0",
 # hyper-connection's collapse, kept on its collapse cores where the norm's output was.
 # ``DEEPSEEK_V41_FUSE_INPUT_NORM=0`` runs ``sharded_rmsnorm`` on its own.
 FUSE_INPUT_NORM = os.environ.get("DEEPSEEK_V41_FUSE_INPUT_NORM", "1") not in ("0", "", "false", "False")
+# A one-row step has the attention hyper-connection's collapse cores multicast the (normed) collapsed row straight
+# into the token replica attention's QKV reads, instead of a separate all_gather_for_matmul.
+# ``DEEPSEEK_V41_HC_TOKEN_REPLICA=0`` gathers it in attention.
+HC_TOKEN_REPLICA = os.environ.get("DEEPSEEK_V41_HC_TOKEN_REPLICA", "1") not in ("0", "", "false", "False")
 DEFER_FFN_MIX = FUSED_HC_MIX and os.environ.get("DEEPSEEK_V41_DEFER_FFN_MIX", "1") not in ("0", "", "false", "False")
 
 
@@ -283,30 +287,36 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             ttnn.deallocate(pending.sublayer_out)
         return streams
 
-    def _attn_hc(self, hidden_streams, pre_mix, collapsed_layout, one_row: bool, norm=None):
+    def _attn_hc(self, hidden_streams, pre_mix, collapsed_layout, one_row: bool, norm=None, replica_grid=None):
         """ATTN_HC: ``(post, comb, collapsed, attn_pre, streams)``. ``hidden_streams`` is the streams, which are
         returned as they are, or a :class:`PendingMix`, folded into the hyper-connection where it can be (one row,
-        see :data:`FUSED_HC_MIX`) and else run first; ``streams`` are then the mixed ones."""
+        see :data:`FUSED_HC_MIX`) and else run first; ``streams`` are then the mixed ones. With ``replica_grid``
+        ``collapsed`` is the pair ``(collapsed, its replica on replica_grid)`` (see :data:`HC_TOKEN_REPLICA`)."""
         if isinstance(hidden_streams, PendingMix):
             pending = hidden_streams
             if one_row and self.attn_hc.can_fold_mix(pending.post, pending.comb, pending.sublayer_out):
                 with _region("ATTN_HC"):
-                    post, comb, collapsed, attn_pre, streams = self.attn_hc(
+                    post, comb, collapsed, attn_pre, streams, *replica = self.attn_hc(
                         pending.streams,
                         pre_mix=pre_mix,
                         collapsed_layout=collapsed_layout,
                         mix=(pending.post, pending.comb, pending.sublayer_out),
                         norm=norm,
+                        replica_grid=replica_grid,
                     )
                 ttnn.deallocate(pending.streams)
                 if pending.free_sublayer_out:
                     ttnn.deallocate(pending.sublayer_out)
+                if replica:
+                    collapsed = (collapsed, replica[0])
                 return post, comb, collapsed, attn_pre, streams
             hidden_streams = self._run_pending_mix(pending)
         with _region("ATTN_HC"):
-            post, comb, collapsed, attn_pre = self.attn_hc(
-                hidden_streams, pre_mix=pre_mix, collapsed_layout=collapsed_layout, norm=norm
+            post, comb, collapsed, attn_pre, *replica = self.attn_hc(
+                hidden_streams, pre_mix=pre_mix, collapsed_layout=collapsed_layout, norm=norm, replica_grid=replica_grid
             )
+            if replica:
+                collapsed = (collapsed, replica[0])
         return post, comb, collapsed, attn_pre, hidden_streams
 
     def _fuses_post_norm(self, one_row: bool) -> bool:
@@ -620,13 +630,23 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         fuse_input_norm = (
             not skip_input_norm and one_row and self.input_norm_row is not None and self.attn_hc.can_fuse_norm()
         )
+        replica_grid = None
+        if HC_TOKEN_REPLICA and one_row and (skip_input_norm or fuse_input_norm) and self.attn_hc.can_fuse_norm():
+            replica_grid = self.self_attn.token_replica_grid(
+                select=bool(attn_inputs.get("select", False)), dense=bool(attn_inputs.get("dense", False))
+            )
         post, comb, collapsed, attn_pre, hidden_streams = self._attn_hc(
             hidden_streams,
             pre_mix,
             ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None,
             one_row,
             norm=(self.input_norm_row, self.input_layernorm.eps, True) if fuse_input_norm else None,
+            replica_grid=replica_grid,
         )
+        tokens = None
+        if isinstance(collapsed, tuple):
+            collapsed, tokens = collapsed
+            attn_inputs["tokens"] = tokens
         with _region("INPUT_NORM"):
             if skip_input_norm or fuse_input_norm:
                 # Either unnormed (the gain folded into attention), or ATTN_HC's collapse cores normed it.

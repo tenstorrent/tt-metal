@@ -37,7 +37,8 @@ std::vector<Tensor> fused_hyperconnection(
     const std::optional<Tensor>& mix_sublayer_out,
     const std::optional<Tensor>& collapsed_norm_weight,
     float collapsed_norm_epsilon,
-    bool collapsed_norm_sharded) {
+    bool collapsed_norm_sharded,
+    const std::optional<CoreRangeSet>& collapsed_replica_grid) {
     const auto& shape = hidden_streams.logical_shape();
     const uint32_t b = static_cast<uint32_t>(shape[0]);
     const uint32_t s = static_cast<uint32_t>(shape[1]);
@@ -74,8 +75,13 @@ std::vector<Tensor> fused_hyperconnection(
             mix_sublayer_out,
             collapsed_norm_weight,
             collapsed_norm_epsilon,
-            collapsed_norm_sharded);
+            collapsed_norm_sharded,
+            collapsed_replica_grid);
     }
+    TT_FATAL(
+        !collapsed_replica_grid.has_value(),
+        "fused_hyperconnection: only a single token can return collapsed's replica, got {}",
+        num_tokens);
     TT_FATAL(
         !collapsed_norm_weight.has_value(),
         "fused_hyperconnection: only a single token can fuse the collapsed RMSNorm, got {}",

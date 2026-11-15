@@ -253,6 +253,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         collapsed_layout: ttnn.Layout | None = None,
         mix: tuple | None = None,
         norm: tuple | None = None,
+        replica_grid: ttnn.CoreRangeSet | None = None,
     ):
         """``hidden_streams`` ``[B,S,hc,D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``.
 
@@ -279,6 +280,9 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         collapse: ``weight`` is the gain as a bf16 ROW_MAJOR ``[1, 1, 1, D]`` DRAM row, and ``collapsed`` comes back
         normed, ROW_MAJOR and DRAM interleaved (``collapsed_layout`` is ignored). ``(weight, eps, True)`` keeps the
         normed row on the collapse cores instead, ROW_MAJOR ``[1, D/8]`` L1 WIDTH_SHARDED.
+
+        ``replica_grid`` (one row, the fused ``fn``, a ROW_MAJOR ``collapsed``): the collapse cores also multicast
+        ``collapsed`` onto that rectangle, returned last as ``all_gather_for_matmul(collapsed, replica_grid)``.
         """
         b, s, hc, d = hidden_streams.shape
         t = b * s
@@ -289,6 +293,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             t == 1 and pre_mix is not None and self.can_fold_mix(*mix)
         ), "the folded mix step needs one row, pre_mix and can_fold_mix"
         assert norm is None or (t == 1 and self.can_fuse_norm()), "the fused norm needs one row and can_fuse_norm"
+        assert replica_grid is None or (t == 1 and self.can_fuse_norm()), "the replica needs one row and the fused fn"
 
         if self.row_major_streams:
             assert hidden_streams.layout == ttnn.ROW_MAJOR_LAYOUT, hidden_streams.layout
@@ -301,6 +306,9 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                     if len(norm) > 2 and norm[2]:
                         mix_kwargs["collapsed_norm_sharded"] = True
                     collapsed_layout = ttnn.ROW_MAJOR_LAYOUT
+                if replica_grid is not None:
+                    assert collapsed_layout == ttnn.ROW_MAJOR_LAYOUT, "the replica is of a ROW_MAJOR collapsed row"
+                    mix_kwargs["collapsed_replica_grid"] = replica_grid
                 return ttnn.experimental.deepseek.fused_hyperconnection(
                     hidden_streams,
                     pre_bias=self.pre_b,

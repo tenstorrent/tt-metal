@@ -30,7 +30,13 @@ struct FusedSingleUserParams {
     std::optional<float> rms_norm_epsilon;
     // With collapsed_norm_weight: the epsilon of the RMSNorm the collapse cores apply to collapsed.
     float collapsed_norm_epsilon = 0.0F;
+    // With a ROW_MAJOR collapsed: a rectangle of cores the collapse cores also multicast the (normed) collapsed row
+    // to, returned last as all_gather_for_matmul's replica ([1, 1, cores, D] ROW_MAJOR HEIGHT_SHARDED [1, D]).
+    std::optional<CoreRangeSet> collapsed_replica_grid;
 };
+
+// The mixed streams' place in the outputs: the mix step comes with pre_mix.
+inline constexpr uint32_t kMixedOutputIndex = 4;
 
 struct FusedSingleUserInputs {
     // [1,1,1,(2+H)*H], WIDTH_SHARDED on core 0: the fn projection, already computed. Exactly one of fused_w /
@@ -61,7 +67,8 @@ struct FusedSingleUserInputs {
 };
 
 // Returns {post [1,1,H,1], comb [1,1,H,H], collapsed [1,1,1,D]}, plus pre [1,1,1,H] when pre_mix is
-// given, plus the mixed streams [1,1,H,D] (hidden_streams' spec) when mix_post / mix_comb / mix_sublayer_out are.
+// given, plus the mixed streams [1,1,H,D] (hidden_streams' spec) when mix_post / mix_comb / mix_sublayer_out are,
+// plus collapsed's replica with collapsed_replica_grid.
 using FusedSingleUserSpecReturn = std::vector<tt::tt_metal::TensorSpec>;
 using FusedSingleUserTensorReturn = std::vector<Tensor>;
 
