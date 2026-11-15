@@ -196,15 +196,35 @@ class _LoraQKV(AbstractModuleBase):
         return self.qkv_linear(x)
 
 
-def test_lora_on_a_fused_layer_declares_the_rows_it_adds_to(tp_mesh, expect_error):
-    from ttml.distributed_checkpointing._layouts import fused_segments
-    from ttml.distributed_checkpointing._state_dict import collect_model
+class _LoraHeads(AbstractModuleBase):
+    """LoRA on two padded vocab heads, a TP one and a replicated one: 100 logical rows padded to 128."""
+
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        from ttml.modules import ColumnParallelLinear
+        from ttml.modules.lora import LoraColumnParallelLinear, LoraConfig, LoraLinear
+
+        tp_head = ColumnParallelLinear(dim, 128, has_bias=False)
+        tp_head.weight.checkpoint_layout = {"logical_extent": (2, 100)}
+        self.tp_head = LoraColumnParallelLinear(tp_head, LoraConfig(rank=8))
+        head = LinearLayer(dim, 128, has_bias=False)
+        head.weight.checkpoint_layout = {"logical_extent": (2, 100)}
+        self.head = LoraLinear(head, LoraConfig(rank=8))
+
+
+def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
+    from ttml.distributed_checkpointing._layouts import Pad, fused_segments
     from ttml.modules import ColumnParallelLinear
 
     infos = {lt.key.rsplit("/", 1)[-1]: lt.info for lt in collect_model(_LoraQKV(DIM))}
     segments = (DIM, DIM // 2, DIM // 2)
     assert infos["weight"].transform == fused_segments(2, segments, 2)
     assert infos["lora_B"].transform == fused_segments(2, segments, 2), "lora_B follows the base's per-shard rows"
+    # On a padded head lora_B carries the vocab padding too, so it reshards across TP sizes like the head does.
+    infos = {"/".join(lt.key.rsplit("/", 2)[-2:]): lt.info for lt in collect_model(_LoraHeads(DIM))}
+    for head in ("tp_head", "head"):
+        assert infos[f"{head}/weight"].transform == Pad(2, 100, 128)
+        assert infos[f"{head}/lora_B"].transform == Pad(2, 100, 128), head
     # A segment that does not split evenly over the TP shards is refused when the layer is built, not at the first save.
     with expect_error(ValueError, "must each divide"):
         ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(63, 33))
