@@ -176,11 +176,14 @@ class _FabricStream:
     divides the staged pages per chunk."""
 
     scatter = False  # FabricStreamScatter: per-destination unicast (fs_send.cpp / fs_read.cpp FS_SCATTER)
+    # rev 76 (tt/tp_dsa_shard.py GLM53_DSA_SHARD_RS1_SPLIT): the name of the stream whose consumers' signal releases this
+    # one's link (its waiter signals after it closed the link) -- None: the AR lane of link_base releases it
+    released_by = None
 
     def __init__(self, mesh, chunks: int, hidden: int, dst_rows: int, *, lanes=None, nb: int = 16, slots: int = 4,
                  wait: tuple | None = None, cons: tuple | None = None, link_base: int = 0,
                  after: int | None = None, axis: int | None = None, y=None, sync=None,
-                 keypack: tuple | None = None, sub: tuple | None = None):  # fmt: skip
+                 keypack: tuple | None = None, sub: tuple | None = None, sync_cores=None):  # fmt: skip
         """link_base: lane h sends on ethernet link link_base + h. after=(semaphore id): the lane opens its
         connections only around its sends (fs_send.cpp FS_LATE_OPEN) and only once that semaphore on the lane core
         was incremented by the link's other holder (FS_AFTER_SEM); it closes before DONE / the consumers' signal.
@@ -188,7 +191,10 @@ class _FabricStream:
         this existing DRAM tensor (same address on every chip) instead of allocating one. sync: an existing stream's
         sync tensor (the same lane-0 core and per-launch counts; its counters are monotonic across launches, so
         streams launched one after another in the same order on every chip can share it: tt/tp_dsa_shard.py
-        GLM53_DSA_SHARD_SHARE_SYNC) instead of allocating one."""
+        GLM53_DSA_SHARD_SHARE_SYNC) instead of allocating one. sync_cores (rev 76, default the lane-0 core): the cores
+        the sync tensor is sharded over, one row of sync words each at the SAME L1 address -- two streams whose lane-0
+        cores are both listed share one allocation (the split RS1's rs1 / rs1a: no extra L1 per bank), each using the
+        words of its own core."""
         self.mesh = mesh
         self.R, self.C = int(mesh.shape[0]), int(mesh.shape[1])
         if axis is None:
@@ -230,13 +236,15 @@ class _FabricStream:
         self.link_base, self.after = int(link_base), after
         rep = ttnn.ReplicateTensorToMesh(mesh)
         words = SYNC_WORDS * WORD // 4
+        score = [tuple(v) for v in sync_cores] if sync_cores is not None else self.lanes[:1]
+        assert tuple(self.lanes[0]) in {tuple(v) for v in score} and len(set(score)) == len(score), (score, self.lanes)
         mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
-                               ttnn.ShardSpec(_crs(self.lanes[:1]), [1, words], ttnn.ShardOrientation.ROW_MAJOR))  # fmt: skip
+                               ttnn.ShardSpec(_crs(score), [1, words], ttnn.ShardOrientation.ROW_MAJOR))  # fmt: skip
         if sync is not None:  # shared: the same lane-0 core and the same word count
             assert tuple(sync.shape)[-1] == words and sync.memory_config() == mc, (tuple(sync.shape), words)
             self.sync = sync
         else:
-            self.sync = ttnn.from_torch(torch.zeros(1, words, dtype=torch.int32), dtype=ttnn.uint32,
+            self.sync = ttnn.from_torch(torch.zeros(len(score), words, dtype=torch.int32), dtype=ttnn.uint32,
                                         layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=mc, mesh_mapper=rep)  # fmt: skip
         self.own_y = y is None
         if y is None:
@@ -265,6 +273,10 @@ class _FabricStream:
     def _split_args(self, p: int, dsts: list) -> list:
         """FabricStreamScatter first= / wait2= (rev 65): fs_read.cpp FS_WAIT2's (k_split, wait2) after the bases"""
         return []
+
+    def _src_args(self, p: int) -> list:
+        """fs_send.cpp's waiter sources of position p: (first_src, n_src, the reserved word / FS_SRC_STRIDE's stride)"""
+        return [0, self.n, 0]
 
     def parts(self, x, r: int, c: int, *, cb_stage: int = CB_STAGE_FS, probe: tuple | None = None):
         """The phase pieces for mesh coordinate (r, c), for a program to merge: (kernels [fs_send, fs_read] on the lane
@@ -295,10 +307,11 @@ class _FabricStream:
         if probe is not None:
             assert len(self.lanes) == 1, "the stream probe: one lane (its scratch is the lane-0 sync tensor)"
             pr = [int(probe[0]), int(probe[1])]
+        src_rt = self._src_args(p)
         for h, (lx, ly) in enumerate(self.lanes):
             args = [sync, self.l0_noc[0], self.l0_noc[1], p, up, dn, x.buffer_address(), self.y.buffer_address(),
                     h * per * xper, per * xper, row_base, int(h == 0), self.n, len(self.lanes), h, int(local), src_base,
-                    0, self.n, 0, per, per] + cons_rt + sc_send  # fmt: skip
+                    *src_rt, per, per] + cons_rt + sc_send  # fmt: skip
             n_base = len(args)  # (the probe pair's index: before the fabric connections connect() appends)
             rt_send[lx][ly] = args + pr
             rt_read[lx][ly] = ([x.buffer_address(), h * per * xper, per * xper, src_base] + ([int(self.wait[1])] if self.wait else [])
@@ -312,6 +325,8 @@ class _FabricStream:
             rdefs.append(("FS_SCATTER", "1"))
             if self._split_args(p, dsts):
                 rdefs.append(("FS_WAIT2", "1"))
+            if getattr(self, "srcs", None) is not None:  # rev 76: the waiter's strided sources (fs_send.cpp)
+                sdefs.append(("FS_SRC_STRIDE", "1"))
         if self.keypack:  # rev 68: fs_read.cpp packs the staged chunk, fs_send.cpp ships its first ppc pages
             yp = self.keypack[1] + 1
             sdefs.append(("FS_KEYPACK", str(yp)))
@@ -466,17 +481,23 @@ class FabricStreamScatter(_FabricStream):
 
     scatter = True
 
-    def __init__(self, mesh, rows_local: int, hidden: int, *, first=None, wait2: int | None = None, **kw):
+    def __init__(self, mesh, rows_local: int, hidden: int, *, first=None, wait2: int | None = None, subset=None,
+                 srcs=None, **kw):  # fmt: skip
         """first= (rev 65, the shard's RS1 early): position p -> the destinations streamed first (in position order),
         the rest only once the second gate opened (fs_read.cpp FS_WAIT2). Rev 67: the wait semaphore then counts TWO
         FIELDS -- wait= (its count) gates the first destinations on bits [0, 16), wait2 the rest on bits [16, 32): the
         producers of the second gate add 1 << FS_WAIT2_SHIFT (one shared count let the second gate's producers open the
-        first gate early)"""
+        first gate early). subset= / srcs= (rev 76, the split RS1: tt/shard_plan.py rs1_split_dsts / rs1_split_srcs):
+        position p -> the destinations this stream sends (the others go on another stream), and receiver p -> its
+        waiter's (first_src, n_src, stride): the sources whose blocks for p take this stream (fs_send.cpp
+        FS_SRC_STRIDE)"""
         assert rows_local % 32 == 0, rows_local
         assert (first is None) == (wait2 is None), "first= and wait2= go together"
         assert first is None or kw.get("wait") is not None, "wait2= is the second gate of wait="
         assert first is None or (int(kw["wait"][1]) < 1 << FS_WAIT2_SHIFT and int(wait2) < 1 << FS_WAIT2_SHIFT), kw
+        assert (subset is None) == (srcs is None), "subset= and srcs= go together"
         self.first, self.wait2 = first, wait2
+        self.subset, self.srcs = subset, srcs
         ax = kw.get("axis")
         R, C = int(mesh.shape[0]), int(mesh.shape[1])
         n = (R if ax == 0 else C) if ax is not None else R * C
@@ -491,7 +512,20 @@ class FabricStreamScatter(_FabricStream):
         if self.first is not None:  # the first= destinations, then the rest (each in position order)
             early = set(self.first(p))
             out = [d for d in out if d[0] in early] + [d for d in out if d[0] not in early]
+        if self.subset is not None:  # rev 76: this stream's destinations only (the order above)
+            keep = set(self.subset(p))
+            out = [d for d in out if d[0] in keep]
         return out
+
+    def _src_args(self, p: int) -> list:
+        if self.srcs is None:
+            return super()._src_args(p)
+        first, n_src, stride = (int(v) for v in self.srcs(p))
+        # every source the waiter counts sends this receiver a block on this stream, and no other source does
+        got = [q for q in range(first, first + n_src, stride) if q != p]
+        want = [q for q in range(self.n) if q != p and p in set(self.subset(q))]
+        assert stride > 0 and first + n_src <= self.n and got == want, (p, first, n_src, stride, got, want)
+        return [first, n_src, stride]
 
     def _split_args(self, p: int, dsts: list) -> list:
         if self.first is None:

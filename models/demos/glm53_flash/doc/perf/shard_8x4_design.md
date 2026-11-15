@@ -460,6 +460,38 @@ offset), header count, kept pairs and records bitwise; the upward drops equal th
 ~0.15-0.2 us): a B 1 round 27 -> ~11-14 us, ~55-65 us per DSA layer at 1 M x 1 (~0.6-0.7 ms per 45-layer step), small
 at B 16 (8 cores per lane). Validation: `_logs/mesh/chain_dsa_2.sh`.
 
+### RS1_SPLIT: the column scatter over both links (2026-11-15, MLA_REV 76, opt-in)
+
+At 1 M x 16 (probe, layer 3) RS1 is the largest share of the DSA chain: wait 305 us, send 308 us of 1,518 us. RSB /
+RSNP left it bytes-bound on link 1: the column's middle segment carries 16 blocks per direction per launch (4 sources
+below x 4 destinations above), 4.5 MiB at t 16, while link 0 of the column axis sits idle (AG1 is long done). The fabric
+has 2 routing planes per direction ("4 eth channels, but only 2 routing planes"), so there is no third link to take.
+
+`GLM53_DSA_SHARD_RS1_SPLIT=1` (8x4 only, composes with RS1_EARLY / RSB / RSNP / COMB): the block of source p for
+destination q goes on link 0 when p + q is odd (`shard_plan.rs1_split_link`), else on link 1. Every segment then
+carries ceil(half) of its blocks per link and direction: 8 of 16 on the middle one, 8 of 15 next to it
+(`rs1_split_link_load`). A receiver's link-L sources are the positions of one parity.
+
+- Lanes: rs1 (link 1, unchanged core, `subset=` = its half) and a fifth lane rs1a (axis 0, link 0) on the last free
+  core (the token lanes' index cores keep their placement). rs1a reads x_rs1 and lands in rs1's y_rs1, so the pages
+  and bytes are unchanged. The two share one sync tensor sharded over both cores (`sync_cores=`), so there is no extra
+  L1 per bank.
+- Link 0: rs1a is chained behind AG1 (`audit_links` mode "chained"). AG1's waiter signals its consumers only after it
+  closed link 0. Its consumer list gains the rs1a lane with SEM_FSW, which is rs1a's `after=`. rs1a's producers' gate
+  is SEM_FSA (the roots signal it with that id), and rs1a is never in an AR lane's release list (the audit raises).
+- Roots (att_dsa_shard_dm1.cpp `MLA_DSA_SHARD_RS1_SPLIT`, args sh + 20 .. 22 after x_rs2b / y_rs2b): every RS1 signal
+  (dense launch, RS1_EARLY's per-pass field, the late form) goes to both lanes. Round 1 is landed at RS_SEM >= 2 (both
+  waiters), round 2 at >= 3. The count stays ordinal: rs2's sends wait on rs2_sem, which a root raises only past its
+  round-1 wait.
+- Waiters (fs_send.cpp `FS_SRC_STRIDE`): the reserved runtime word is the stride, sources first_src, first_src + 2, ..
+  (`rs1_split_srcs`). The host checks that this set is exactly the chips that send that receiver a block on that link.
+
+Knob off: no define, argument, CB or semaphore changes. Every changed kernel line sits under `MLA_DSA_SHARD_RS1_SPLIT` /
+`FS_SRC_STRIDE`, and MLA_REV stays 75 (`mk_mla.mla_rev`: 76 on knob-on builds only). MLA_SRC (the source hash) moves
+with any kernel edit. Exact by construction: the same bytes land on the same y pages, and the roots land / combine in
+the same order once both halves are in. Expected: RS1 wait ~305 -> ~150-190 us per DSA layer at t 16 (~-1.2 to
+-1.6 ms per 45-layer step), proportionally less at t 4 / 8. Validation: `_logs/mesh/chain_rs1_1.sh`.
+
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 
 | users at 1 M each | 1 | 2 | 4 | 8 | 16 |

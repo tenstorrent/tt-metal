@@ -87,6 +87,29 @@ def test_streams_and_audits(R, C, t):
                 if st[name]["kind"] == "scatter":
                     assert sorted(q for q, _, _, _ in b["dsts"]) == [q for q in range(n_axis) if q != b["p"]]
                     assert all(h == abs(q - b["p"]) for q, _, _, h in b["dsts"])
+            if R == 8:  # rev 76 RS1 split: + rs1a on link 0 of the column axis, chained behind AG1 (never an AR lane's)
+                hs = g.holders(r, c, t, rs1s=True)
+                assert sorted(set(hs) - set(g.holders(r, c, t))) == sorted(
+                    ("rs1a", 0, d, "chained", "ag1") for d in g.directions(r, c, g.pair_axis)
+                )
+                aud = SP.audit_links(hs)
+                assert all(sorted(v) == ["ag1 gated", "ar_lane0 late", "rs1a chained"]
+                           for k, v in aud.items() if k.startswith("0:a0")), aud  # fmt: skip
+                hb = g.header_budget(r, c, t, rs1s=True)
+                assert hb.pop(("rs1a", "brisc")) == hb[("rs1", "brisc")] and hb == g.header_budget(r, c, t)
+                SP.audit_headers(g.header_budget(r, c, t, rs1s=True))
+    if R == 8:
+        assert g.release_lists(t, rs1s=True) == g.release_lists(t) == {0: ["ag1", "ag2"], 1: ["rs1", "rs2"]}
+        # the chain rules: a chained holder follows the gated one of its key, one releaser each, no stray / loop
+        late = [("ar_lane0", 0, "a0+", "late", None), ("ag1", 0, "a0+", "gated", "ar_lane0")]
+        SP.audit_links(late + [("rs1a", 0, "a0+", "chained", "ag1"), ("x", 0, "a0+", "chained", "rs1a")])
+        for bad in ([("rs1a", 0, "a0+", "chained", "ag1"), ("x", 0, "a0+", "chained", "ag1")],
+                    [("rs1a", 0, "a0+", "chained", "ag2")],
+                    [("rs1a", 0, "a0+", "chained", "x"), ("x", 0, "a0+", "chained", "rs1a")]):  # fmt: skip
+            with expect_error(ValueError, "link \\(0, 'a0\\+'\\): (chained streams need|the chained streams do not)"):
+                SP.audit_links(late + bad)
+        with expect_error(ValueError, "chained streams need the gated holder"):
+            SP.audit_links(late[:1] + [("rs1a", 0, "a0+", "chained", "ar_lane0")])
 
 
 @pytest.mark.parametrize("R,C", [(2, 4), (8, 4)])
@@ -787,7 +810,11 @@ def test_exchange_fold_matches_direct_and_pairwise():
 @pytest.mark.parametrize("t", [1, 4, 16])
 def test_rs1_early_plan(t):
     """RS1 early: every 8x4 chip's column scatter sends the other half first (pass 0's destinations: the tile pass 0
-    attends with), then its own half -- the same destinations, hops and directions as rev 64's order"""
+    attends with), then its own half -- the same destinations, hops and directions as rev 64's order. Rev 76 RS1 split:
+    rs1 (link 1) and rs1a (link 0) partition every chip's destinations (each block once, in the unsplit order, with
+    and without RS1 early and RSB; both halves non-empty and each with 2 of the 4 pass-0 destinations), a receiver's
+    sources on each link are one parity (the waiter's stride args) and are exactly the chips that send it a block on
+    that link, and the column's busiest link-direction carries 8 blocks instead of 16"""
     g = SP.Geometry(8, 4)
     for r in range(8):
         for c in range(4):
@@ -801,8 +828,30 @@ def test_rs1_early_plan(t):
             assert all(q // 4 == g.tile(rank) for q, _, _, _ in early["dsts"][4:])  # = pass 1's (own half, not self)
             assert {k: v for k, v in early.items() if k != "dsts"} == {k: v for k, v in base.items() if k != "dsts"}
             assert g.block("rs2", t, r, c, rs1_early=True) == g.block("rs2", t, r, c)
+            for kw in (dict(), dict(rs1_early=True), dict(rsb=True), dict(rs1_early=True, rsb=True)):
+                whole = g.block("rs1", t, r, c, **kw)
+                h1, h0 = g.block("rs1", t, r, c, rs1s=True, **kw), g.block("rs1a", t, r, c, rs1s=True, **kw)
+                assert h1["dsts"] and h0["dsts"] and sorted(h1["dsts"] + h0["dsts"]) == sorted(whole["dsts"])
+                for h, link in ((h1, 1), (h0, 0)):
+                    assert h["dsts"] == [d for d in whole["dsts"] if SP.rs1_split_link(r, d[0]) == link]
+                    assert {k: v for k, v in h.items() if k != "dsts"} == {
+                        k: v for k, v in whole.items() if k != "dsts"
+                    }
+                    if kw.get("rs1_early"):  # each half: its 2 pass-0 destinations first
+                        assert [d[0] for d in h["dsts"][:2]] == [q for q in first if SP.rs1_split_link(r, q) == link]
+                assert g.block("rs2", t, r, c, rs1s=True, **kw) == g.block("rs2", t, r, c, **kw)
+            for link in (0, 1):  # receiver r's waiter on each link: the sources sending it a block there
+                f0, n_src, stride = SP.rs1_split_srcs(r, 8, link)
+                assert [q for q in range(f0, f0 + n_src, stride) if q != r] == [
+                    q for q in range(8) if q != r and r in SP.rs1_split_dsts(q, 8, link)]  # fmt: skip
+    load, load0 = SP.rs1_split_link_load(8), SP.rs1_split_link_load(8, split=False)
+    assert max(load0.values()) == 16 and max(load.values()) == 8  # the middle segment, per direction
+    for (i, d, _), v in load0.items():  # every segment: half its blocks per link, rounded up
+        assert max(load.get((i, d, k), 0) for k in (0, 1)) == -(-v // 2), (i, d, v)
     with expect_error(AssertionError, "RS1 early: the 8x4 column scatter"):
         SP.Geometry(2, 4).block("rs1", 4, 0, 0, rs1_early=True)
+    with expect_error(AssertionError, "RS1 split: the 8x4 column scatter"):
+        SP.Geometry(2, 4).streams(t, rs1s=True)
 
 
 def test_rs1_early_gates_two_fields():
@@ -856,10 +905,20 @@ def test_rev65_knobs(monkeypatch):
     never more bytes than the 4-bit mailbox) and the merge message count are the kernels'; RSNP's data pages per slice
     (9 of 10 / 3 of 4) are the bytes the roots write and land (checked on the kernels' text)"""
     for k in ("GLM53_DSA_SHARD_COMB", "GLM53_DSA_SHARD_RS1_EARLY", "GLM53_DSA_SHARD_RSB", "GLM53_DSA_SHARD_R8",
-              "GLM53_DSA_SHARD_RSNP"):  # fmt: skip
+              "GLM53_DSA_SHARD_RSNP", "GLM53_DSA_SHARD_RS1_SPLIT"):  # fmt: skip
         monkeypatch.delenv(k, raising=False)
     assert not SP.shard_comb(8) and not SP.shard_rs1_early(8) and not SP.shard_rsb(8) and not SP.shard_r8(8)
-    assert not SP.shard_rsnp(8)
+    assert not SP.shard_rsnp(8) and not SP.shard_rs1_split(8)
+    # rev 76 GLM53_DSA_SHARD_RS1_SPLIT: on its own (no other knob), the 8x4 only, 0 / 1 only; the roots' / fs_send's /
+    # mk_mla's text agrees with the plan (rs1a args at sh + 20 .. 22, waits 2 / 3, the waiter's stride)
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_SPLIT", "1")
+    assert SP.shard_rs1_split(8) and not SP.shard_rs1_split(2)
+    assert not (SP.shard_comb(8) or SP.shard_rs1_early(8) or SP.shard_rsb(8) or SP.shard_r8(8))
+    SP.rs1_split_header_check()
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_SPLIT", "2")
+    with expect_error(ValueError, "GLM53_DSA_SHARD_RS1_SPLIT=2: 0 or 1"):
+        SP.shard_rs1_split(8)
+    monkeypatch.delenv("GLM53_DSA_SHARD_RS1_SPLIT")
     monkeypatch.setenv("GLM53_DSA_SHARD_R8", "1")
     assert SP.shard_r8(8) and not SP.shard_r8(2)  # on its own (the select / merge kernels and the mailbox only)
     assert not (SP.shard_comb(8) or SP.shard_rs1_early(8) or SP.shard_rsb(8) or SP.shard_agk(8))
@@ -1181,6 +1240,7 @@ def test_block_audits(t):
     for rsb in (False, True):
         for early in (False, True):
             SP.audit_rs_blocks(geo, t, rsb=rsb, rs1_early=early)
+            SP.audit_rs_blocks(geo, t, rsb=rsb, rs1_early=early, rs1s=True)  # rev 76: rs1 / rs1a halves
         a, st = SP.rs_stream_args(t, rsb=rsb), geo.streams(t, rsb=rsb)
         for name, ppc in (("rs1", SP.RS2_PPC), ("rs2", SP.RS2B_PPC)):
             assert (st[name]["chunks"], st[name]["width"]) == (a[name]["rows"] // 32, a[name]["width"])

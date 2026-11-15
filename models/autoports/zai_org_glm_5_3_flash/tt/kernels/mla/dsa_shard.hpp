@@ -227,6 +227,13 @@ static_assert(PAIR == 8 && LINE == 4, "RS1 early: the 8x4 column scatter");
 constexpr uint32_t RS1_PASS1_INC = 65536;  // = 1 << 16 (fs_read.cpp FS_WAIT2's field split; tt/fabric_stream.py)
 static_assert(T_MAX < 65536, "a gate's count fits its 16-bit field");
 #endif
+// rev 76, RS1 SPLIT (MLA_DSA_SHARD_RS1_SPLIT, GLM53_DSA_SHARD_RS1_SPLIT; the 8x4 only): the column scatter over BOTH
+// links -- block (source p, destination q) on link 0 when p + q is odd (a second lane, rs1a, opened after AG1's waiter
+// handed it link 0), else link 1 (tt/shard_plan.py rs1_split_link: the middle link's 16 blocks per direction -> 8 per
+// link). att_dsa_shard_dm1.cpp signals both lanes and waits for both waiters (RS_SEM 2, then 3 with round 2's)
+#if defined(MLA_DSA_SHARD_RS1_SPLIT)
+static_assert(PAIR == 8 && LINE == 4, "RS1 split: the 8x4 column scatter");
+#endif
 // rev 59, TP8: q_asm [2 x T x 32, 512] bf16 -- head tile g of token t assembled ONCE per chip (the index core's NCRISC,
 // behind the global merge) from the 4 pieces in y_ag; the owners read 16 whole pages per push
 inline uint32_t qasm_page(uint32_t T, uint32_t tile, uint32_t t, uint32_t d) { return (tile * T + t) * PPC + d; }

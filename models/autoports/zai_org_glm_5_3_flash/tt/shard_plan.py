@@ -203,13 +203,15 @@ class Geometry:
         """pages per x_rs2 / y_rs2 chunk: 8-row slices (2x4) RS2_PPC; 2-row slices (8x4) RS2B_PPC"""
         return RS2_PPC if self.rs2_rows == 8 else RS2B_PPC
 
-    def streams(self, t: int, agk: bool = False, agb: bool = False, rsb: bool = False) -> dict:
+    def streams(self, t: int, agk: bool = False, agb: bool = False, rsb: bool = False, rs1s: bool = False) -> dict:
         """name -> dict(axis, kind, chunks (per block), width, link, blocks_in_y, src_blocks_in_x); the 8x4's AG under
         GLM53_DSA_SHARD_AGK / _AGB (agk / agb): the chunks / width of ag_stream_args (AGB: ONE y chunk per block, so
         AG1's dst = blk, AG2's bundle = P chunks -- the fabric streams' row_base accounting); the 8x4's scatters: the
         chunks / width of rs_stream_args (GLM53_DSA_SHARD_RSB, rsb: ONE chunk per destination block, so RS1's / RS2's
-        dst = p and destination q's source base = q)"""
+        dst = p and destination q's source base = q); rev 76 rs1s (GLM53_DSA_SHARD_RS1_SPLIT, the 8x4): + "rs1a", RS1's
+        link-0 half (rs1_split_dsts) on its own lane, released_by = the stream whose waiter hands it link 0 (AG1)"""
         assert not rsb or self.P > 2, ("RSB: the 8x4 scatters", self.P)
+        assert not rs1s or self.P > 2, ("RS1 split: the 8x4 column scatter", self.P)
         ag1c, ag2c, agw = self.ag_chunks(t), self.P * self.ag_chunks(t), self.ag_width()
         rsa = rs_stream_args(t, rsb=rsb, P=self.P) if self.P > 2 else None
         if agk or agb:
@@ -237,17 +239,21 @@ class Geometry:
             rs2c, rs2w = (rsa["rs2"]["rows"] // 32, rsa["rs2"]["width"]) if rsa else (t, 32 * self.rs2_ppc)
             out["rs2"] = dict(axis=self.line_axis, kind="scatter", chunks=rs2c, width=rs2w, link=1,
                               y_blocks=self.L, x_blocks=self.L)  # fmt: skip
+        if rs1s:  # rev 76: RS1's link-0 half (same x / y / chunks; the destinations of rs1_split_dsts(p, P, 0))
+            out[RS1S_NAME] = dict(out["rs1"], link=0, released_by=RS1S_RELEASED_BY)
         return out
 
     def block(self, name: str, t: int, r: int, c: int, rs1_early: bool = False, agk: bool = False,
-              agb: bool = False, rsb: bool = False) -> dict:  # fmt: skip
+              agb: bool = False, rsb: bool = False, rs1s: bool = False) -> dict:  # fmt: skip
         """chip (r, c)'s block of stream `name`: src chunk base in x, dst chunk base in y (on the receivers: the same
         address on every chip), local copy, up / down multicast ranges (the scatter: the chips above / below), and the
         scatter's destinations [(position q, src chunk base, direction 0 up / 1 down, hops)]; rev 65 rs1_early (the
         8x4 column scatter): the other half's destinations first (rs1_early_first), then the own half's; rsb (the 8x4
-        scatters in block chunks): the chunk bases count destination blocks (1 chunk each)"""
+        scatters in block chunks): the chunk bases count destination blocks (1 chunk each); rev 76 rs1s (the column
+        scatter split over both links): rs1 / rs1a keep the destinations of their link (rs1_split_dsts), in that order
+        """
         assert not rs1_early or self.P > 2, "RS1 early: the 8x4 column scatter"
-        sp = self.streams(t, agk=agk, agb=agb, rsb=rsb)[name]
+        sp = self.streams(t, agk=agk, agb=agb, rsb=rsb, rs1s=rs1s)[name]
         p, line = self.axis_pos(r, c, sp["axis"])
         n = self.axis_len(sp["axis"])
         ch = sp["chunks"]
@@ -258,11 +264,14 @@ class Geometry:
             return dict(p=p, src=p * ch, dst=p * ch, local=False, up=up, dn=dn, dsts=[])
         if name == "rs1" and sp["kind"] == "rs2":  # the pair exchange: the peer's block of x_rs1 -> its y_rs1
             return dict(p=p, src=(1 - p) * ch, dst=0, local=False, up=up, dn=dn, dsts=[])
-        if name in ("rs1", "rs2"):  # per-destination unicast: x block q -> peer q's y block p
+        if name in ("rs1", "rs2", RS1S_NAME):  # per-destination unicast: x block q -> peer q's y block p
             dsts = [(q, q * ch, 0 if q > p else 1, abs(q - p)) for q in range(n) if q != p]
-            if rs1_early and name == "rs1":
+            if rs1_early and name in ("rs1", RS1S_NAME):
                 first = set(rs1_early_first(p, self.P))
                 dsts = [d for d in dsts if d[0] in first] + [d for d in dsts if d[0] not in first]
+            if rs1s and name in ("rs1", RS1S_NAME):  # rev 76: this link's half, in the order above
+                keep = set(rs1_split_dsts(p, n, sp["link"]))
+                dsts = [d for d in dsts if d[0] in keep]
             return dict(p=p, src=None, dst=p * ch, local=False, up=up, dn=dn, dsts=dsts)
         raise KeyError(name)
 
@@ -278,32 +287,38 @@ class Geometry:
         """tt/fabric_ar.py FabricPhase lane h: link h towards every neighbour (axis-0 up / down, axis-1 up / down)"""
         return [d for a in (0, 1) if self.axis_len(a) > 1 for d in self.directions(r, c, a)]
 
-    def holders(self, r: int, c: int, t: int) -> list:
+    def holders(self, r: int, c: int, t: int, rs1s: bool = False) -> list:
         """(name, link, direction, mode, released_by) per worker connection of chip (r, c)'s program, in the order of
         the design's link table: AG round 1, AG round 2, RS round 1, RS round 2 (gated: open after the AR lane of
         their link released it, closed before their consumers' signal), the o_proj AR lanes (late: hold the link only
-        at launch start for the deferred credit and again for their own round)"""
+        at launch start for the deferred credit and again for their own round); rev 76 rs1s: + RS1's link-0 half
+        (chained: opens after AG1's waiter -- AG1 closed link 0 -- signalled it, closes before its consumers' signal)"""
         out = []
-        for name, sp in self.streams(t).items():
+        for name, sp in self.streams(t, rs1s=rs1s).items():
             for d in self.directions(r, c, sp["axis"]):
-                out.append((name, sp["link"], d, "gated", f"ar_lane{sp['link']}"))
+                if sp.get("released_by"):
+                    out.append((name, sp["link"], d, "chained", sp["released_by"]))
+                else:
+                    out.append((name, sp["link"], d, "gated", f"ar_lane{sp['link']}"))
         for h in (0, 1):
             for d in self.ar_directions(r, c):
                 out.append((f"ar_lane{h}", h, d, "late", None))
         return out
 
-    def release_lists(self, t: int) -> dict:
-        """AR lane h -> the stream lanes it releases at launch start (FAR_LATE_OPEN: SEM_FSA += 1 on each)"""
+    def release_lists(self, t: int, rs1s: bool = False) -> dict:
+        """AR lane h -> the stream lanes it releases at launch start (FAR_LATE_OPEN: SEM_FSA += 1 on each); a chained
+        stream (rev 76 rs1a) is released by its released_by stream's waiter instead, never by an AR lane"""
         rel = {0: [], 1: []}
-        for name, sp in self.streams(t).items():
-            rel[sp["link"]].append(name)
+        for name, sp in self.streams(t, rs1s=rs1s).items():
+            if not sp.get("released_by"):
+                rel[sp["link"]].append(name)
         return rel
 
-    def header_budget(self, r: int, c: int, t: int) -> dict:
+    def header_budget(self, r: int, c: int, t: int, rs1s: bool = False) -> dict:
         """fabric packet headers allocated per (lane core, RISC) of chip (r, c): fs_send (BRISC) 4 per direction,
         lane_send (BRISC) 2 + 1 flag per direction; every other RISC of the program allocates none"""
         out = {}
-        for name, sp in self.streams(t).items():
+        for name, sp in self.streams(t, rs1s=rs1s).items():
             out[(name, "brisc")] = FS_NHDR * len(self.directions(r, c, sp["axis"]))
         for h in (0, 1):
             out[(f"ar_lane{h}", "brisc")] = FAR_NHDR * len(self.ar_directions(r, c))
@@ -317,7 +332,10 @@ def audit_links(holders: list) -> dict:
     released_by)] (or the pair's old [(name, link, mode)]): "hold" = open for the whole launch (alone on its key); "late"
     = an AR lane under FAR_LATE_OPEN; "gated" = a stream under FS_LATE_OPEN / FS_AFTER_SEM, which must be released by
     the late holder of the same key. Allowed per (link, direction): one "hold" alone, or one "late" + at most one
-    "gated" (released by that late holder)."""
+    "gated" (released by that late holder). Rev 76: + "chained" streams (FS_LATE_OPEN, released by the CONSUMERS'
+    signal of the gated / chained stream named in released_by -- its waiter signals after it closed the link): each
+    names a holder of the same key, no two the same one, and they form one chain from the gated holder (late ->
+    gated -> chained -> ..: never two connections open on the key)."""
     by = {}
     for h in holders:
         if len(h) == 3:
@@ -338,6 +356,17 @@ def audit_links(holders: list) -> dict:
         for n, m, rel in hs:
             if m == "gated" and rel is not None and rel not in late:
                 raise ValueError(f"link {key}: {n} is released by {rel}, but the late holder is {late}")
+        chained = [(n, rel) for n, m, rel in hs if m == "chained"]
+        if chained:  # rev 76: one chain from the gated holder through every chained holder
+            gated = [n for n, m, _ in hs if m == "gated"]
+            rels = [rel for _, rel in chained]
+            if not gated or len(set(rels)) != len(rels):
+                raise ValueError(f"link {key}: chained streams need the gated holder and distinct releasers: {hs}")
+            nxt, cur, walked = dict((rel, n) for n, rel in chained), gated[0], 0
+            while cur in nxt and walked <= len(chained):
+                cur, walked = nxt[cur], walked + 1
+            if walked != len(chained):
+                raise ValueError(f"link {key}: the chained streams do not form one chain from {gated[0]}: {hs}")
     return {f"{k[0]}{'' if k[1] == '*' else ':' + k[1]}": [f"{n} {m}" for n, m, _ in v] for k, v in sorted(by.items())}
 
 
@@ -1082,6 +1111,87 @@ def rs1_early_first(p: int, P: int) -> list:
     """the column positions chip p's pass-0 slices go to (the other half of the column: pass 0 attends with the other
     head tile, Geometry.pass_tile): the RS1 scatter's first destinations under RS1 early, in position order"""
     return [q for q in range(P) if q // (P // 2) != p // (P // 2)]
+
+
+# ------------------------------------------------------------------ rev 76: RS1 over both links (GLM53_DSA_SHARD_RS1_SPLIT)
+RS1S_NAME = "rs1a"  # the column scatter's link-0 half (tt/tp_dsa_shard.py: its own lane core, x_rs1 -> y_rs1 as rs1)
+RS1S_RELEASED_BY = "ag1"  # its link-0 / axis-0 connections open after AG1's waiter (AG1 closed them) signalled it
+
+
+def shard_rs1_split(pair: int) -> bool:
+    """rev 76 GLM53_DSA_SHARD_RS1_SPLIT (default 0): the 8x4 column scatter (RS1: the fp32 pass-0 / pass-1 slices, link
+    1, bytes-bound on the column's middle link) over BOTH ethernet links -- the block of source p for destination q
+    goes on link rs1_split_link(p, q): the rs1 lane keeps link 1's destinations, a second scatter lane (rs1a) sends
+    link 0's after AG1 (link 0's holder on the column axis) closed it. The roots signal both lanes (the same counts, the
+    rs1a lane's own semaphore id) and wait for both waiters before landing round 1 (att_dsa_shard_dm1.cpp
+    MLA_DSA_SHARD_RS1_SPLIT); the waiters take their sources with a stride (fs_send.cpp FS_SRC_STRIDE). Same y pages,
+    same bytes, the roots land / combine in the same order: bit-exact. The pair / the 2x4 never take it"""
+    return pair > 2 and _flag("GLM53_DSA_SHARD_RS1_SPLIT")
+
+
+def rs1_split_link(p: int, q: int) -> int:
+    """the link the (source p, destination q) block of the split column scatter takes: 0 when p + q is odd, else 1 --
+    every segment of the line carries <= ceil(half) of its blocks per link and direction (rs1_split_link_load: 8 of 16
+    on the 8-chip column's middle segment, 8 of 15 on its neighbours); symmetric, so a receiver's link-L sources are the
+    positions of one parity (rs1_split_srcs)"""
+    assert p != q, (p, q)
+    return 0 if (p + q) % 2 else 1
+
+
+def rs1_split_dsts(p: int, n: int, link: int) -> list:
+    """the destinations of source p (a line of n) whose blocks take `link`, in position order"""
+    return [q for q in range(n) if q != p and rs1_split_link(p, q) == link]
+
+
+def rs1_split_srcs(p: int, n: int, link: int) -> tuple:
+    """(first_src, n_src, stride): fs_send.cpp FS_SRC_STRIDE's waiter args of receiver p on `link` -- it waits for the
+    sources first_src, first_src + stride, .. < first_src + n_src, skipping p = exactly the q with
+    rs1_split_link(q, p) == link"""
+    first = (p + 1) % 2 if link == 0 else p % 2
+    got = [q for q in range(first, n, 2) if q != p]
+    assert got == [q for q in range(n) if q != p and rs1_split_link(q, p) == link], (p, n, link, got)
+    return first, n - first, 2
+
+
+def rs1_split_header_check() -> None:
+    """the RS1-split host plan vs the kernels' / builders' text: the roots read the rs1a lane (x, y, semaphore) at sh +
+    20 .. 22 = what tt/mk_mla.py appends after x_rs2b / y_rs2b (and audits as NoC words 20 / 21), signal it at every
+    RS1 signal and wait for 2 (round 1) / 3 (round 2) signals; fs_send.cpp's waiter steps its sources by the stride"""
+    with open(os.path.join(KDIR, "mla", "att_dsa_shard_dm1.cpp")) as f:
+        dm1 = f.read()
+    for line_ in ("const uint32_t rs1a_x = get_arg_val<uint32_t>(sh + 20), rs1a_y = get_arg_val<uint32_t>(sh + 21);",
+                  "const uint32_t rs1a_sem = get_arg_val<uint32_t>(sh + 22);",
+                  "noc_semaphore_wait_min(rsc, 2);  // rev 76: both column-scatter waiters",
+                  "noc_semaphore_wait_min(rsc, 3);  // rev 76: the two column-scatter waiters, then the row scatter's"):  # fmt: skip
+        assert line_ in dm1, ("att_dsa_shard_dm1.cpp RS1 split", line_)
+    # every RS1 signal of the 8x4 roots (the dense launch's two fields, RS1 early's per-pass one, the late form's)
+    assert dm1.count("get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem))") == 4, "att_dsa_shard_dm1.cpp rs1a signals"
+    with open(os.path.join(os.path.dirname(KDIR), "mk_mla.py")) as f:
+        mk = f.read()
+    for line_ in ('dm1_rt[xy] += [*shard["rs1a_lane"], int(shard["rs1a_sem"])]',
+                  'rs1a = [(20, 21)] if self._shard_now.get("rs1_split") else []',
+                  '[("MLA_DSA_SHARD_RS1_SPLIT", "1")] if rs1s else []'):  # fmt: skip
+        assert line_ in mk, ("mk_mla.py RS1 split", line_)
+    with open(os.path.join(KDIR, "fabric_stream", "fs_send.cpp")) as f:
+        fs = f.read()
+    for line_ in ("const uint32_t src_stride = get_arg_val<uint32_t>(a++);",
+                  "for (uint32_t q = first_src; q < first_src + n_src; q += src_stride) {"):  # fmt: skip
+        assert line_ in fs, ("fs_send.cpp FS_SRC_STRIDE", line_)
+
+
+def rs1_split_link_load(n: int = 8, split: bool = True) -> dict:
+    """(segment i -> i + 1, direction "up" / "dn", link) -> the blocks the column scatter puts on it per launch (every
+    source to every other position): unsplit everything rides link 1"""
+    out = {}
+    for p in range(n):
+        for q in range(n):
+            if q == p:
+                continue
+            link = rs1_split_link(p, q) if split else 1
+            for i in range(min(p, q), max(p, q)):
+                k = (i, "up" if q > p else "dn", link)
+                out[k] = out.get(k, 0) + 1
+    return out
 
 
 def shard_tl(t: int, lanes: int = 1, kph: int = 1) -> int:
@@ -2090,21 +2200,26 @@ def fs_stage(rows: int, width: int, extra: dict) -> dict:
     return dict(chunks=rows // 32, ppc=ppc, nb=nb, slots=slots, cb_bytes=slots * nb * TB, spc=spc, sub=sub)
 
 
-def fs_scatter_block(p: int, n: int, chunks: int, first: list | None = None) -> tuple:
+def fs_scatter_block(p: int, n: int, chunks: int, first: list | None = None, keep: list | None = None) -> tuple:
     """tt/fabric_stream.py FabricStreamScatter._block / _dsts (checked on their text): (dst chunk base = row_base, local
     write, up range, down range, destinations [(q, source chunk base of block q, direction 0 up / 1 down, hops)]) of the
-    chip at position p of a line of n, chunks = rows_local / 32; first= (RS1 early): those destinations first"""
+    chip at position p of a line of n, chunks = rows_local / 32; first= (RS1 early): those destinations first; keep=
+    (rev 76 subset=, the split RS1): only those destinations, in the order above"""
     with open(os.path.join(os.path.dirname(KDIR), "fabric_stream.py")) as f:
         src = f.read()
     for line_ in ("return 0, p * self.chunks, False, self.n - 1 - p, p",
                   "out = [(q, q * self.chunks, 0 if q > p else 1, abs(q - p)) for q in range(self.n) if q != p]",
                   "out = [d for d in out if d[0] in early] + [d for d in out if d[0] not in early]",
+                  "out = [d for d in out if d[0] in keep]",
                   "super().__init__(mesh, rows_local // 32, hidden, n * rows_local, **kw)"):  # fmt: skip
         assert line_ in src, ("fabric_stream.py FabricStreamScatter", line_)
     dsts = [(q, q * chunks, 0 if q > p else 1, abs(q - p)) for q in range(n) if q != p]
     if first is not None:
         early = set(first)
         dsts = [d for d in dsts if d[0] in early] + [d for d in dsts if d[0] not in early]
+    if keep is not None:
+        keep = set(keep)
+        dsts = [d for d in dsts if d[0] in keep]
     return p * chunks, False, n - 1 - p, p, dsts
 
 
@@ -2178,20 +2293,27 @@ def rs_stream_counts(t: int, rsb: bool = False, P: int = 8, L: int = 4, rsnp: bo
     return out
 
 
-def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, plan_knobs: dict | None = None) -> None:
+def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, plan_knobs: dict | None = None,
+                    rs1s: bool = False) -> None:  # fmt: skip
     """tt/tp_dsa_shard.py TPMlaShard._audits' block check for the 8x4 scatters, host-only: every chip's RS1 / RS2 block
     as FabricStreamScatter computes it from rs_stream_args (fs_scatter_block) == the plan's Geometry.block; raises the
     audit's ValueError. plan_knobs: the (rsb, rs1_early) the plan is asked with (default: the streams'), to reproduce a
-    stream / plan mismatch"""
+    stream / plan mismatch; rs1s (rev 76): + the link-0 half rs1a, rs1 / rs1a with their link's destinations"""
     assert geo.P > 2, ("the 8x4 scatters", geo.P)
     a = rs_stream_args(t, rsb=rsb, P=geo.P)
+    a[RS1S_NAME] = a["rs1"]
     pk = dict(rsb=rsb, rs1_early=rs1_early) if plan_knobs is None else plan_knobs
+    if rs1s and plan_knobs is None:
+        pk["rs1s"] = True
+    links = {"rs1": 1, RS1S_NAME: 0}
+    names = (("rs1", geo.pair_axis), ("rs2", geo.line_axis)) + (((RS1S_NAME, geo.pair_axis),) if rs1s else ())
     for r in range(geo.R):
         for c in range(geo.C):
-            for name, axis in (("rs1", geo.pair_axis), ("rs2", geo.line_axis)):
+            for name, axis in names:
                 p_, _ = geo.axis_pos(r, c, axis)
-                first = rs1_early_first(p_, geo.P) if (rs1_early and name == "rs1") else None
-                dst, local, up, dn, dsts = fs_scatter_block(p_, geo.axis_len(axis), a[name]["rows"] // 32, first)
+                first = rs1_early_first(p_, geo.P) if (rs1_early and name in links) else None
+                keep = rs1_split_dsts(p_, geo.P, links[name]) if (rs1s and name in links) else None
+                dst, local, up, dn, dsts = fs_scatter_block(p_, geo.axis_len(axis), a[name]["rows"] // 32, first, keep)
                 got = dict(p=p_, src=None, dst=dst, local=bool(local), up=up, dn=dn, dsts=dsts)
                 want = geo.block(name, t, r, c, **pk)
                 if got != {k: want[k] for k in got}:

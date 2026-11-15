@@ -31,7 +31,10 @@
 // it); an odd data count per chunk keeps its last sub-chunk's first pad page in the last pair. MK_PROBE_ARG
 // (tt/fabric_stream.py probe=, the shard phase probe: kernels/mk/probe.hpp): the probe pair after the scatter block
 // (before the fabric connections); marks: start, the first batch staged + the link opened, the sends done, closed
-// (DONE), the waiter's completion (lane 0) -> one row of the MkMla probe tensor.
+// (DONE), the waiter's completion (lane 0) -> one row of the MkMla probe tensor. FS_SRC_STRIDE (rev 76,
+// tt/fabric_stream.py FabricStreamScatter srcs=: GLM53_DSA_SHARD_RS1_SPLIT, the column scatter over both links): the
+// waiter's sources are first_src, first_src + stride, .. (the reserved word = the stride) -- the receiver's blocks on
+// this stream's link.
 #include <cstddef>
 #include <cstdint>
 
@@ -103,7 +106,12 @@ void kernel_main() {
     a++;                                                     // (the source chunk base: fs_read.cpp's)
     const uint32_t first_src = get_arg_val<uint32_t>(a++);   // waiter: the peers this chip receives from: [first_src,
     const uint32_t n_src = get_arg_val<uint32_t>(a++);       //   first_src + n_src) minus p
-    a++;                                                     // (reserved)
+#if defined(FS_SRC_STRIDE)  // rev 76: every stride-th source of that range (the split RS1: one parity per link)
+    const uint32_t src_stride = get_arg_val<uint32_t>(a++);
+    ASSERT(src_stride > 0);
+#else
+    a++;  // (reserved)
+#endif
     const uint32_t n_lane_ch0 = get_arg_val<uint32_t>(a++);  // waiter: chunks per lane (lane 0 / others) per source
     const uint32_t n_lane_ch1 = get_arg_val<uint32_t>(a++);
 #if defined(FS_CONS)  // tt/fabric_stream.py cons=: the waiter's consumers (count, semaphore id, (x, y) pairs)
@@ -284,7 +292,11 @@ void kernel_main() {
     if (waiter) {
         volatile tt_l1_ptr uint32_t* gen = fs::word(sync, fs::GEN);
         const uint32_t g = *gen + 1;
+#if defined(FS_SRC_STRIDE)
+        for (uint32_t q = first_src; q < first_src + n_src; q += src_stride) {
+#else
         for (uint32_t q = first_src; q < first_src + n_src; q++) {
+#endif
             if (q != p) {
                 for (uint32_t k = 0; k < lanes; k++) {
                     fs::wait_ge(fs::word(sync, fs::ARR + q * lanes + k), g * (k == 0 ? n_lane_ch0 : n_lane_ch1));

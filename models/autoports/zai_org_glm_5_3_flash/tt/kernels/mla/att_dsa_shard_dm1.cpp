@@ -38,6 +38,11 @@
 //   mailbox [, the lane] [, the o_T address]), then rank, C, peer block, x_ag, x_rs, y_rs addresses, the AG lane core
 //   (x, y) + its wait semaphore id, the RS lane core (x, y) + its wait semaphore id, the y_ag address (rev 59: the
 //   merge helpers) [, TP8: x_rs2, y_rs2 addresses, the RS2 lane core (x, y) + its wait semaphore id].
+// Rev 76, RS1 SPLIT (MLA_DSA_SHARD_RS1_SPLIT, GLM53_DSA_SHARD_RS1_SPLIT; the 8x4 only): the column scatter runs on two
+//   lanes, link 1 (the RS lane above) and link 0 (rs1a, after AG1 closed it), each sending its half of the
+//   destinations (tt/shard_plan.py rs1_split_link) -- after x_rs2b / y_rs2b the rs1a lane core (x, y) + its wait
+//   semaphore id (sh + 20 .. 22): the root raises both lanes' counts at every RS1 signal, and round 1 has landed once
+//   BOTH waiters signalled RS_SEM (round 2's signal: the third, still ordinal -- tt/tp_dsa_shard.py).
 
 #include <cstdint>
 
@@ -50,6 +55,11 @@
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mla/dsa_common.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mla/dsa_shard.hpp"
 #include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mla/mla_common.hpp"
+
+#if defined(MLA_DSA_SHARD_RS1_SPLIT) && \
+    !(defined(MLA_DSA_SHARD_LINE) && defined(MLA_DSA_SHARD_PAIR) && MLA_DSA_SHARD_PAIR > 2)
+#error "MLA_DSA_SHARD_RS1_SPLIT: the 8x4 column scatter (MLA_DSA_SHARD_LINE, MLA_DSA_SHARD_PAIR > 2)"
+#endif
 
 void kernel_main() {
     constexpr uint32_t CB_ARX = get_compile_time_arg_val(PH_CT0 + 0);
@@ -143,6 +153,10 @@ void kernel_main() {
 #if defined(MLA_DSA_SHARD_PAIR) && MLA_DSA_SHARD_PAIR > 2
     const auto xrs2b = TensorAccessor(xrs2b_args, get_arg_val<uint32_t>(sh + 18));  // 8x4 round 2 (2-row slices)
     const auto yrs2b = TensorAccessor(yrs2b_args, get_arg_val<uint32_t>(sh + 19));
+#if defined(MLA_DSA_SHARD_RS1_SPLIT)  // rev 76: the column scatter's link-0 lane (rs1a) + its wait semaphore id
+    const uint32_t rs1a_x = get_arg_val<uint32_t>(sh + 20), rs1a_y = get_arg_val<uint32_t>(sh + 21);
+    const uint32_t rs1a_sem = get_arg_val<uint32_t>(sh + 22);
+#endif
 #endif
     const uint32_t lpos = mlashard::line_pos(rank);  // this chip's column = its slice index in the row's head tile
 #endif
@@ -810,6 +824,12 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), mlashard::RS1_PASS1_INC);
 #endif
             noc_semaphore_inc(get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), 1);
+#if defined(MLA_DSA_SHARD_RS1_SPLIT)  // rev 76: the link-0 RS1 lane, the same counts
+#if defined(MLA_DSA_SHARD_RS1_EARLY)
+            noc_semaphore_inc(get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem)), mlashard::RS1_PASS1_INC);
+#endif
+            noc_semaphore_inc(get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem)), 1);
+#endif
 #if defined(MLA_DSA_SHARD_LINE)
             noc_semaphore_inc(
                 get_noc_addr(rs2_x, rs2_y, get_semaphore(rs2_sem)), 1);  // TP8: the round-2 scatter lane too
@@ -957,11 +977,19 @@ void kernel_main() {
                     {  // dsa_shard.hpp RS1 early: after each pass, into its own field of the lane's count (rev 67)
                         noc_semaphore_inc(
                             get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), pass == 0 ? 1u : mlashard::RS1_PASS1_INC);
+#if defined(MLA_DSA_SHARD_RS1_SPLIT)  // rev 76: the link-0 RS1 lane, the same field
+                        noc_semaphore_inc(
+                            get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem)),
+                            pass == 0 ? 1u : mlashard::RS1_PASS1_INC);
+#endif
                         noc_async_atomic_barrier();
                     }
 #else
                     if (pass == 1) {  // both passes' slices are in x_rs1: the RS1 scatter lane may send
                         noc_semaphore_inc(get_noc_addr(rs_x, rs_y, get_semaphore(rs_sem)), 1);
+#if defined(MLA_DSA_SHARD_RS1_SPLIT)  // rev 76: the link-0 RS1 lane too
+                        noc_semaphore_inc(get_noc_addr(rs1a_x, rs1a_y, get_semaphore(rs1a_sem)), 1);
+#endif
                         noc_async_atomic_barrier();
                     }
 #endif
@@ -1267,7 +1295,11 @@ void kernel_main() {
         // the column scatter's waiter: every column peer's slices landed in y_rs1. The row scatter signals the same
         // semaphore later (wait_min 2 below): its waiter runs on the rs2 lane BRISC after that lane's sends, which wait
         // on rs2_sem, raised by this root only past this wait -- so the count is ordinal (tp_dsa_shard.py, the streams)
+#if defined(MLA_DSA_SHARD_RS1_SPLIT)
+        noc_semaphore_wait_min(rsc, 2);  // rev 76: both column-scatter waiters (the link-1 and link-0 halves)
+#else
         noc_semaphore_wait_min(rsc, 1);
+#endif
         MK_MARK();                       // probe 6: RS round 1 landed (8x4 root)
         for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
 #if defined(MLA_DSA_SHARD_COMB)
@@ -1321,7 +1353,11 @@ void kernel_main() {
             }
         }
         MK_MARK();                       // probe: the row scatter shipped
+#if defined(MLA_DSA_SHARD_RS1_SPLIT)
+        noc_semaphore_wait_min(rsc, 3);  // rev 76: the two column-scatter waiters, then the row scatter's
+#else
         noc_semaphore_wait_min(rsc, 2);  // the row scatter's waiter: every row peer's 2-row slices landed in y_rs2b
+#endif
         MK_MARK();                       // probe: RS round 2 landed (8x4 root)
         for (uint32_t t = t0; t < t_rows; t += mlaatt::LANES) {
 #if defined(MLA_DSA_SHARD_COMB)

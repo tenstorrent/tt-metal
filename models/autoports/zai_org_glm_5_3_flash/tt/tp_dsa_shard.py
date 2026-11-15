@@ -20,6 +20,9 @@ TP8 on the 2x4 mesh (rank = 4 row + col; 4 stream instances, the design's link t
   RS2 (axis 1, link 1) FabricStreamScatter: x_rs2 block q (the 8-row slice of row peer q of the column-combined
       partial) -> peer q's y_rs2 block p; its waiter signals the owners (SEM_RSC, 2nd).
   The o_proj AR lanes run FAR_LATE_OPEN: lane 0 releases AG1 + AG2 (link 0), lane 1 RS1 + RS2 (link 1) at launch start.
+  Rev 76 (GLM53_DSA_SHARD_RS1_SPLIT, the 8x4): RS1 over both links -- rs1 (link 1) sends the blocks of source p for
+  destination q with p + q even, a fifth lane rs1a (axis 0, link 0) the odd ones, opened after AG1's waiter (AG1 has
+  closed link 0 by then) signalled it; the roots signal both lanes and land round 1 after both waiters.
 Token lanes (rev 60, W: t > 4 = native B=32 and widths 8 / 16; shard_tp8_design.md section 7): MkMla's att_lanes(t) = L
 lanes, one index core per lane (reserved here AFTER the stream lanes: the t <= 4 placement is unchanged): the AG waits
 for t (C / L + 1) + 1 producer increments and signals every lane index core (count-prefixed), the RS signals every lane
@@ -56,6 +59,7 @@ assert MK.SHARD_RS2_PPC == MK.SHARD_AG8_PPC
 
 
 _PREFILTER_LOGGED: list = []  # the TPMlaShard prefilter log line, once per process
+_RS1S_LOGGED: list = []  # rev 76: the TPMlaShard RS1-split log line, once per process (the chains assert it)
 
 
 class TPMlaShard(TPM.TPMla):
@@ -103,6 +107,24 @@ class TPMlaShard(TPM.TPMla):
         ex = list(lanes_extra or free[: len(self.names)])
         assert len(ex) == len(self.names), f"{len(self.names)} more free cores for the stream lanes ({ex})"
         self.lane_core = dict(zip(self.names, ex))
+        # rev 76 (GLM53_DSA_SHARD_RS1_SPLIT, the 8x4; shard_plan.shard_rs1_split): RS1's link-0 half on its own lane core
+        # -- the LAST free core (the token lanes' index cores below take the first ones: their placement is unchanged),
+        # or a sharer's (the MTP layer's MkMla may leave other cores free; SHARE_SYNC needs the same lane cores)
+        self.rs1s = SP.shard_rs1_split(self.P)
+        if self.rs1s:
+            SP.rs1_split_header_check()  # the roots' / fs_send's / mk_mla's halves of the protocol agree with the plan
+            taken = {tuple(e) for e in ex}
+            spare = [tuple(v) for v in free if tuple(v) not in taken]
+            own = (stream_share.lane_core.get(SP.RS1S_NAME) if stream_share is not None else None) or None
+            core = tuple(own) if own is not None and tuple(own) in spare else (spare[-1] if spare else None)
+            assert core is not None, "GLM53_DSA_SHARD_RS1_SPLIT: one more free core for the link-0 RS1 lane"
+            self.names.append(SP.RS1S_NAME)
+            ex.append(core)
+            self.lane_core[SP.RS1S_NAME] = core
+            if not _RS1S_LOGGED:  # one line per process: the chains assert the knob reached the build
+                logger.info(f"TPMlaShard: GLM53_DSA_SHARD_RS1_SPLIT active (RS1 over links 0 + 1, rs1a lane core {core}, "
+                            f"MLA_REV {MK.MLA_REV_RS1_SPLIT})")  # fmt: skip
+                _RS1S_LOGGED.append(True)
         self.ag_lane, self.rs_lane = self.lane_core["ag1"], self.lane_core["rs1"]
         # rev 60: the token lanes' index cores (t > 4), after the stream lanes (t <= 4 builds: no lane cores, the same
         # placement as rev 59); every lane holds the 2 LINE merge helpers
@@ -235,8 +257,13 @@ class TPMlaShard(TPM.TPMla):
             x_rs2b = z(self.L * rsa["rs2"]["rows"], rsa["rs2"]["width"])
             q_asm = z(2 * t * 32, HIDDEN)
             ag2_noc = self._noc(self.lane_core["ag2"])
+            # rev 76 (GLM53_DSA_SHARD_RS1_SPLIT): AG1's waiter -- past its close of link 0 on the column axis -- also
+            # releases the link-0 RS1 lane: SEM_FSW += 1 there is that lane's after= (its producers' gate is SEM_FSA)
+            rs1s = self.rs1s
+            rs1a_noc = self._noc(self.lane_core[SP.RS1S_NAME]) if rs1s else None
+            ag1_cons = [ag2_noc] + ([rs1a_noc] if rs1s else [])
             ag1 = FS.FabricStreamAG(mesh, rows1, WY, axis=geo.pair_axis, lanes=lane("ag1"), **sy("ag1"), local_copy=True,
-                                    wait=ag_wait, cons=(MK.SEM_FSW, [ag2_noc]), link_base=0, after=MK.SEM_FSA, **kp)  # fmt: skip
+                                    wait=ag_wait, cons=(MK.SEM_FSW, ag1_cons), link_base=0, after=MK.SEM_FSA, **kp)  # fmt: skip
             ag2 = FS.FabricStreamAG(mesh, chunks2, WY, axis=geo.line_axis, lanes=lane("ag2"), **sy("ag2"), bundle=True,
                                     y=ag1.y, wait=(MK.SEM_FSW, 1), cons=(MK.SEM_AGC, ix), link_base=0, after=MK.SEM_FSA,
                                     **nb2)  # fmt: skip
@@ -261,9 +288,16 @@ class TPMlaShard(TPM.TPMla):
                 )
                 _PREFILTER_LOGGED.append(True)
             split = dict(first=lambda p: SP.rs1_early_first(p, self.P), wait2=rs_wait[1]) if early else {}
+            # rev 76: RS1 over both links -- rs1 (link 1) keeps the blocks of source p for destination q with p + q
+            # even, rs1a (link 0, below) the odd ones; each waiter waits for the sources of its parity; one sync
+            # allocation sharded over both lane cores (no extra L1 per bank)
+            half = lambda link: dict(subset=lambda p: SP.rs1_split_dsts(p, self.P, link),  # noqa: E731
+                                     srcs=lambda p: SP.rs1_split_srcs(p, self.P, link))  # fmt: skip
+            rs1_sc = [self.lane_core["rs1"], self.lane_core[SP.RS1S_NAME]] if rs1s else None
+            rs1x = dict(**half(1), sync_cores=rs1_sc) if rs1s else {}
             rs1 = FS.FabricStreamScatter(mesh, rsa["rs1"]["rows"], rsa["rs1"]["width"], axis=geo.pair_axis, lanes=lane("rs1"),
                                          **sy("rs1"), wait=rs_wait, cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA,
-                                         **split, **rsa["rs1"]["extra"])  # fmt: skip
+                                         **split, **rsa["rs1"]["extra"], **rs1x)  # fmt: skip
             # both scatters signal the roots' SEM_RSC and the root reads it ordinally (wait_min 1 = round 1 landed,
             # 2 = round 2 landed): sound because rs2's waiter is its own lane BRISC, which signals after that lane's
             # sends, and those sends wait on rs2_sem, which the root raises only past its round-1 wait -- the second
@@ -272,6 +306,22 @@ class TPMlaShard(TPM.TPMla):
             rs2 = FS.FabricStreamScatter(mesh, rsa["rs2"]["rows"], rsa["rs2"]["width"], axis=geo.line_axis, lanes=lane("rs2"),
                                          **sy("rs2"), wait=rs_wait, cons=(MK.SEM_RSC, roots), link_base=1, after=MK.SEM_FSA,
                                          **rsa["rs2"]["extra"])  # fmt: skip
+            objs = dict(ag1=ag1, ag2=ag2, rs1=rs1, rs2=rs2)
+            xs = dict(ag1=x_ag, ag2=ag1.y, rs1=x_rs1, rs2=x_rs2b)
+            rs1s_keys = {}
+            if rs1s:  # rev 76: RS1's link-0 half -- x_rs1 -> y_rs1 as rs1, the destinations q with p + q odd
+                # its producers' gate is SEM_FSA (the roots signal it with that id: never in an AR lane's release list)
+                # and its link opens on SEM_FSW (AG1's consumers' signal, ag1_cons); it signals the roots' SEM_RSC like
+                # rs1: round 1 = 2 signals, then rs2's -- still ordinal (rs2's sends wait on the roots' rs2_sem, raised
+                # past the round-1 wait for both)
+                rs1a = FS.FabricStreamScatter(mesh, rsa["rs1"]["rows"], rsa["rs1"]["width"], axis=geo.pair_axis,
+                                              lanes=lane(SP.RS1S_NAME), sync=rs1.sync, sync_cores=rs1_sc, y=rs1.y,
+                                              wait=(MK.SEM_FSA, rs_wait[1]), cons=(MK.SEM_RSC, roots), link_base=0,
+                                              after=MK.SEM_FSW, **split, **rsa["rs1"]["extra"], **half(0))  # fmt: skip
+                rs1a.released_by = SP.RS1S_RELEASED_BY
+                assert rs1a.sub == rs1.sub and rs1a.y is rs1.y, (rs1a.sub, rs1.sub)
+                objs[SP.RS1S_NAME], xs[SP.RS1S_NAME] = rs1a, x_rs1
+                rs1s_keys = dict(rs1_split=True, rs1a_lane=rs1a.lane_noc()[0], rs1a_sem=MK.SEM_FSA)
             assert int(ag1.y.shape[-2]) == geo.n * rows1
             pages = lambda ten: int(ten.shape[-2]) * int(ten.shape[-1]) // 1024  # noqa: E731
             # the scatters' x / y hold the knob-off pages (RSB: the same page ids in block chunks)
@@ -286,8 +336,7 @@ class TPMlaShard(TPM.TPMla):
                         x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
                         ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],
                         ag2_lane=ag2_noc, rs2_lane=rs2.lane_noc()[0], t=t, lanes=nl, ag_wait=ag_wait[1],
-                        objs=dict(ag1=ag1, ag2=ag2, rs1=rs1, rs2=rs2),
-                        x=dict(ag1=x_ag, ag2=ag1.y, rs1=x_rs1, rs2=x_rs2b))  # fmt: skip
+                        objs=objs, x=xs, **rs1s_keys)  # fmt: skip
         # TP8: AG1 (axis 0) -> AG2 (axis 1, the bundles) -> merge; RS1 (axis 0) -> combine -> RS2 (axis 1 scatter)
         x_ag = z(t * 32, W8)
         x_rs = z(2 * rs_rows, W_RS)
@@ -321,26 +370,40 @@ class TPMlaShard(TPM.TPMla):
             assert o.after is not None, (name, "every stream is gated (FS_LATE_OPEN)")
             for h in range(len(o.lanes)):
                 for d in o.directions(r, c):
-                    holders.append((name, o.link_base + h, d, "gated", f"ar_lane{o.link_base + h}"))
+                    if o.released_by is not None:  # rev 76: released by that stream's consumers' signal
+                        holders.append((name, o.link_base + h, d, "chained", o.released_by))
+                    else:
+                        holders.append((name, o.link_base + h, d, "gated", f"ar_lane{o.link_base + h}"))
         ar_dirs = geo.ar_directions(r, c)
         for h in (0, 1):
             for d in ar_dirs:
                 holders.append((f"ar_lane{h}", h, d, "late", None))
+        rs1s = bool(st.get("rs1_split"))  # rev 76: the plan with RS1's link-0 half
         # rev 59 (review 5): every stream's block / destination offsets = the plan's (shard_plan.Geometry.block)
         for name, o in objs.items():
             p_, line = o._pos(r, c)
             src, dst, local, up, dn = o._block(p_, line)
             want = geo.block(name, st["t"], r, c, rs1_early=bool(st.get("rs1_early")), agk=bool(st.get("agk")),
-                             agb=bool(st.get("agb")), rsb=bool(st.get("rsb")))  # fmt: skip
+                             agb=bool(st.get("agb")), rsb=bool(st.get("rsb")), rs1s=rs1s)  # fmt: skip
             got = dict(p=p_, src=src if not o.scatter else None, dst=dst, local=bool(local), up=up, dn=dn,
                        dsts=list(o._dsts(p_)))  # fmt: skip
             if got != {k: want[k] for k in got}:
                 raise ValueError(f"chip {(r, c)} stream {name}: blocks {got} differ from the plan {want}")
-        plan = geo.holders(r, c, st["t"])
+        plan = geo.holders(r, c, st["t"], rs1s=rs1s)
         if sorted(holders) != sorted(plan):
             raise ValueError(f"chip {(r, c)}: link holders differ from the plan: {sorted(holders)} vs {sorted(plan)}")
         rel = {h: sorted(self._noc_names(late[h][1], st)) for h in late}
         for name, o in objs.items():  # every gated stream is released by the AR lane of its link
+            if o.released_by is not None:  # rev 76 (chained): never by an AR lane (SEM_FSA is its producers' gate) --
+                # by its releaser's consumers' signal on its after= semaphore, on the same link and axis
+                src_o = objs[o.released_by]
+                ok = (src_o.cons is not None and int(src_o.cons[0]) == int(o.after) and src_o.after is not None
+                      and tuple(o.lane_noc()[0]) in {tuple(v) for v in src_o.cons[1]}
+                      and (src_o.link_base, src_o.axis) == (o.link_base, o.axis))  # fmt: skip
+                if not ok or any(name in v for v in rel.values()):
+                    raise ValueError(f"chip {(r, c)}: {name} on link {o.link_base} is not released by {o.released_by} "
+                                     f"alone (its consumers {src_o.cons}, AR release lists {rel})")  # fmt: skip
+                continue
             if name not in rel[o.link_base]:
                 raise ValueError(f"chip {(r, c)}: {name} on link {o.link_base} is not released by ar_lane{o.link_base}")
         self.link_audit[f"{r},{c}"] = SP.audit_links(holders)
@@ -353,7 +416,7 @@ class TPMlaShard(TPM.TPMla):
         # fabric packet headers per (core, RISC): fs_send NHDR per direction, lane_send 2 + 1 flag per direction
         budget = {(n, "brisc"): o.headers(r, c) for n, o in objs.items()}
         budget.update({(f"ar_lane{h}", "brisc"): SP.FAR_NHDR * len(ar_dirs) for h in (0, 1)})
-        if budget != geo.header_budget(r, c, st["t"]):
+        if budget != geo.header_budget(r, c, st["t"], rs1s=rs1s):
             raise ValueError(f"chip {(r, c)}: header budget differs from the plan: {budget}")
         self.header_audit[f"{r},{c}"] = SP.audit_headers(budget)
 
@@ -530,15 +593,17 @@ class TPMlaShard(TPM.TPMla):
                             f"{n_cores.get(name)} (expected {len(want) if want is not None else 'all'})"
                         )
                 # the AR lanes hold their link only around their own round (FAR_LATE_OPEN): at launch start lane h
-                # closes and signals every stream lane borrowing link h (pair: AG / RS; TP8: AG1 + AG2 / RS1 + RS2)
-                late = {h: (MK.SEM_FSA, [tuple(o.lane_noc()[0]) for o in objs.values() if o.link_base == h])
+                # closes and signals every stream lane borrowing link h (pair: AG / RS; TP8: AG1 + AG2 / RS1 + RS2);
+                # rev 76: never a chained lane (rs1a: released by AG1's consumers' signal; SEM_FSA is its producers')
+                late = {h: (MK.SEM_FSA, [tuple(o.lane_noc()[0]) for o in objs.values()
+                                         if o.link_base == h and o.released_by is None])
                         for h in (0, 1)}  # fmt: skip
                 assert all(len(v[1]) == len(late[0][1]) for v in late.values()), late  # (same rt widths per lane)
                 lk, lcbs = fab.lane_parts(r, c, 1, n_readers, self.mk.owner_noc, cons_sem=MK.SEM_A, late_open=late)
                 sk, scbs, sems = [], [], list(desc.semaphores)
                 idx = {}
-                for nm in order:
-                    probe = (pa, SP.PROBE_LANE_ROW[nm]) if pa is not None else None
+                for nm in order:  # (rev 76: rs1a has no probe row -- rows 236..239 are the four streams')
+                    probe = (pa, SP.PROBE_LANE_ROW[nm]) if pa is not None and nm in SP.PROBE_LANE_ROW else None
                     assert probe is None or SP.PROBE_LANE_ROW[nm] < MK.PROBE_ROWS, (nm, MK.PROBE_ROWS)
                     k_, cb_, _, _ = objs[nm].parts(st["x"][nm], r, c, probe=probe)
                     idx[nm] = len(kernels) + len(lk) + len(sk)
@@ -558,7 +623,10 @@ class TPMlaShard(TPM.TPMla):
                         self._cb_report(prog, st)
                 m = ttnn.MeshCoordinate(r, c)
                 mpd[ttnn.MeshCoordinateRange(m, m)] = prog
-        extra = [objs[nm].sync for nm in order]
+        extra = []
+        for nm in order:  # (rev 76: rs1 / rs1a share one sync tensor -- listed once)
+            if not any(objs[nm].sync is e for e in extra):
+                extra.append(objs[nm].sync)
         return list(io) + fab.io() + extra, mpd
 
     def __call__(self, x, cache, page_table, cur_pos, *, t: int, dsa_state: dict | None = None, keep=None,
