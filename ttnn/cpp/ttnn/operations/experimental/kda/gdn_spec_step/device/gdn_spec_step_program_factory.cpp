@@ -103,6 +103,7 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
     const uint32_t Nk = a.num_key_heads;
     const uint32_t T = a.T;
     const uint32_t B = a.B;
+    const uint32_t M = a.max_users ? a.max_users : B;  // users the ctrl page is laid out for
     const uint32_t K = a.conv_kernel;
     const uint32_t Lw = K - 1 + T;
     const uint32_t BH = B * Nv;
@@ -373,7 +374,8 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"norm_eps_bits", float_bits(a.norm_epsilon)},
         {"ctrl_bytes", ctrl_bytes},
         {"hold_sentinel", kHoldSentinel},
-        {"VB", VB}};
+        {"VB", VB},
+        {"M", M}};
 
     // ---- writer
     m2::KernelSpec writer{
@@ -465,7 +467,8 @@ ttnn::device_operation::ProgramArtifacts GdnSpecStepProgramFactory::create_progr
         {"out_w_tiles", out_w_tiles},
         {"ctrl_bytes", ctrl_bytes},
         {"hold_sentinel", kHoldSentinel},
-        {"VB", VB}};
+        {"VB", VB},
+        {"M", M}};
 
     // ---- compute
     auto compute_hw = ttnn::to_compute_hardware_config(a.compute_kernel_config);

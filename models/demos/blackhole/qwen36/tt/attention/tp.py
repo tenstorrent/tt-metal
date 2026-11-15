@@ -820,18 +820,24 @@ class TPAttention:
         the per-user split alone, so the L1 table is keyed on it. Multi-user verify repeats the same
         split per user: groups = n_users * table_groups. Rows are user-major, so group g belongs to
         user g // table_groups and its Tg row-tiles are that user's candidates [j*Tg, (j+1)*Tg).
+
+        ``spec_sdpa_split_users`` (set by Qwen36Model.prepare_verify_trace to the decode width): a verify of fewer
+        users keeps the cores per group of that many, so each group's KV range is split and reduced as in the
+        full-width verify and its rows round the same way.
         """
-        key = (T, n_users)
+        split_users = max(int(n_users), int(getattr(self, "spec_sdpa_split_users", 0) or 0))
+        key = (T, n_users, split_users)
         if key not in self._spec_sdpa_cfg_cache:
             plan = None
             fit = self._SPEC_SDPA_L1_FIT.get(T)
             if fit is not None:
                 groups, max_cores, k_chunk = fit
                 grid = self.mesh.compute_with_storage_grid_size()
+                split_groups = groups * split_users
                 groups *= n_users
                 # The grid is divided across all groups (8 users at T=4: 110 // 8 = 13 cores/head),
                 # capped at the table's 1-user count, which is the one known to fit L1.
-                max_cores = min(max_cores, max(1, (grid.x * grid.y) // groups))
+                max_cores = min(max_cores, max(1, (grid.x * grid.y) // split_groups))
                 plan = (
                     ttnn.SDPAProgramConfig(
                         compute_with_storage_grid_size=(grid.x, grid.y),

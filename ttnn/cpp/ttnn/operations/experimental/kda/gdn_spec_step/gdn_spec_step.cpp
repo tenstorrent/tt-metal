@@ -46,8 +46,9 @@ ttnn::Tensor gdn_spec_step(
         "gdn_spec_step: qkvzab must be an allocated device tensor");
     TT_FATAL(hnew_depth == 2, "gdn_spec_step: hnew_depth must be 2 (got {})", hnew_depth);
     TT_FATAL(
-        max_users == 0 || max_users == B,
-        "gdn_spec_step: max_users must be 0 or B (got {}, B = {}); ring and ctrl are laid out for exactly B users",
+        max_users == 0 || max_users == B || (max_users > B && ring_page_idx.has_value()),
+        "gdn_spec_step: max_users must be 0, B, or with ring_page_idx larger than B (got {}, B = {}); without "
+        "ring_page_idx the ring is laid out for exactly B users",
         max_users,
         B);
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
@@ -87,6 +88,7 @@ ttnn::Tensor gdn_spec_step(
         fp32_state,
         value_blocks,
         kernel_opts,
+        max_users,
         ring_page_idx,
         ring_pool2,
         conv_hist);

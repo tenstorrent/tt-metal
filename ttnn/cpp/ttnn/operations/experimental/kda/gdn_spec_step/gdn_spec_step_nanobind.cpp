@@ -42,11 +42,11 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 token ``t`` of user ``u`` (KV = Dk*Dv/1024 pages, tile order as in ``[Dk, Dv]``), in place of ring
                 block ``t*B*Nv + u*Nv + h``. ``ring`` may then be any FLOAT32 tiled page pool (for example a view of
                 vLLM-owned cache blocks) of at least B*Nv blocks (a held head reads block u*Nv + h as a placeholder).
-                In this mode the ctrl word ``1 + B + u*Nv + h`` is the first FLOAT32 page of that head's start state
-                (any page, no block alignment), not a ring block index. Pages written for different
-                (user, token, head) triples must not overlap; a (user, head)'s writes may overlap its own start
-                pages. Read on device on every call, so a captured trace follows new pages when only the contents
-                change. Default None.
+                In this mode the ctrl word ``1 + M + u*Nv + h`` (M = max_users, or B) is the first FLOAT32 page of
+                that head's start state (any page, no block alignment), not a ring block index. Pages written for
+                different (user, token, head) triples must not overlap; a (user, head)'s writes may overlap its own
+                start pages. Read on device on every call, so a captured trace follows new pages when only the
+                contents change. Default None.
             ring_pool2 (ttnn.Tensor, optional): with ``ring_page_idx`` only. A second FLOAT32 tiled pool: a page
                 ``p >= P`` (P = page count of ``ring``) in ``ring_page_idx`` or in the ctrl start words addresses
                 page ``p - P`` of ``ring_pool2``, so a user's heads can be split over two buffers (for example the K
@@ -66,14 +66,17 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 value_blocks > 1: the head's blocks split the gate math); 128 = each value block normalizes / gates
                 only its own output columns; 1024 = narrow gate reads (with 2: the gate reads fetch only the face rows
                 they use). Bits that need value_blocks > 1 have no effect without it. All bits: 1274.
-            hnew_depth (int): must be 2. max_users (int): must be 0 or B.
+            hnew_depth (int): must be 2. max_users (int): default 0 (= B). The user count M the ctrl page is laid out
+                for; with ``ring_page_idx`` it can exceed B, and the op runs users 0 .. B-1 of that page: their start
+                words sit at ``1 + M + u*Nv + h`` (and, with conv_hist, ``1 + M + M*Nv + u*Nv + h``). So one ctrl page
+                serves a verify of any leading subset of its users; ``ring_page_idx`` keeps one row per user.
             conv_hist (ttnn.Tensor, optional): with ``ring_page_idx`` only, and ``conv_kernel`` 4. A BFLOAT16 TILE page
                 pool (for example the ``conv_hist`` view of a vLLM-owned cache block that gdn_decode_step reads) that
                 holds the convolution history in gdn_decode_step's packed format: 4 pages per value head, slot s >= 1 =
                 history row s - 1 (slot 3 the newest), channel chunk c of the head's [q | k | v] row in tile rows 2c
                 and 2c + 1. It replaces the window pair: ``win_a`` and ``win_b`` must be None, and the ctrl mi words
                 are not read. The ctrl page grows by B*Nv words: word
-                ``1 + B + B*Nv + u*Nv + h`` is the slot-0 page of (u, h)'s start history; ``ring_page_idx`` grows to
+                ``1 + M + M*Nv + u*Nv + h`` is the slot-0 page of (u, h)'s start history; ``ring_page_idx`` grows to
                 ``[>= B, 2*T*Nv]``: entry ``(u, T*Nv + t*Nv + h)`` is the slot-0 page that takes (u, h)'s history
                 after token t (slots 1..3 are written, slot 0 is not; rows 2c, 2c + 1 hold chunk c, the other rows 0).
                 Every block then holds a complete state that gdn_decode_step can continue. Default None.
