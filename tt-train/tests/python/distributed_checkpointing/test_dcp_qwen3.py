@@ -16,20 +16,18 @@ mesh skips that case: a loudbox has no 1x4 descriptor, and a QuietBox has four c
 """
 
 import os
-import re
 import sys
 
 import pytest
-import ttnn
+from dcp_driver import MESH_OPEN_FAILED
+from dcp_harness import MGD_DIR, output_lines, run_world
 
-import ttml
-from dcp_harness import run_world
+# As in test_dcp_cross_world: a hung child fails after 10 minutes, so one hang leaves a 25-minute CI leg the time to
+# report the tests after it.
+CHILD_TIMEOUT_S = 600
+pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(2 * CHILD_TIMEOUT_S + 60)]
 
-pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(3600)]
-
-MGD_DIR = os.path.normpath(os.path.join(os.path.dirname(ttml.__file__), "..", "..", "..", "configs", "mgd"))
 DRIVER = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcp_qwen3_driver.py")]
-MESH_OPEN_FAILED = 3  # dcp_qwen3_driver's exit status when this host cannot open the mesh
 
 WORLDS = {  # name: (mesh dp x tp, descriptor, devices needed)
     "tp2": ("1x2", "bh_1_2_line_line.textproto", 2),
@@ -51,30 +49,19 @@ CASES = [
     ("lora", "tp8", ()),
 ]
 
-_NOISE = re.compile(
-    r"nanobind|leaked (instance|type|function|keep_alive)|refleaks|skipped remainder|\| DEBUG |^Config\{"
-)
-
 
 def _world_args(name: str) -> list[str]:
     mesh, mgd, _ = WORLDS[name]
     return ["--mesh", mesh, "--mgd", os.path.join(MGD_DIR, mgd)]
 
 
-def _release_devices() -> None:
-    """The child processes open the chips; make sure this process holds none."""
-    for release in (ttml.close_device_mesh, ttml.core.distributed.release_metal_env):
-        try:
-            release()
-        except Exception:  # noqa: BLE001
-            pass
-
-
 def _run(args: list[str], what: str) -> str:
     env = dict(os.environ)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    proc = run_world(DRIVER + args, env, 1500)
-    lines = [ln for ln in (proc.stdout + proc.stderr).splitlines() if not _NOISE.search(ln)]
+    proc = run_world(DRIVER + args, env, CHILD_TIMEOUT_S)
+    lines = output_lines(proc)
+    # Only the descriptor-fabric mismatch (the QuietBox 1x4 ring on a loudbox) is a skip: the driver re-raises any
+    # other failure to open the mesh.
     if proc.returncode == MESH_OPEN_FAILED or any("MESH_OPEN_FAILED" in ln for ln in lines):
         reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
         pytest.skip(f"{what}: this host cannot open the mesh: {reason}")
@@ -96,12 +83,11 @@ def _saved_checkpoint(model: str, tmp_path_factory) -> str:
 
 
 @pytest.mark.parametrize("model,load_world,flags", CASES, ids=[f"{m}_tp2->{w}" for m, w, _ in CASES])
-def test_qwen3_checkpoint_loads_onto_another_tp_size(tmp_path_factory, model, load_world, flags):
-    needed = WORLDS[load_world][2]
-    available = ttnn.GetNumAvailableDevices()
-    if available < needed:
-        pytest.skip(f"{load_world} needs {needed} devices, {available} available")
-    _release_devices()
+def test_qwen3_checkpoint_loads_onto_another_tp_size(
+    tmp_path_factory, release_metal_env, skip_if_host_too_small, model, load_world, flags
+):
+    skip_if_host_too_small((WORLDS[load_world][2],), f"{model} on {load_world}")
+    release_metal_env()  # the children open the chips
     ckpt = _saved_checkpoint(model, tmp_path_factory)
     out = _run(["load", "--dir", ckpt, *_world_args(load_world), *flags], f"{model} load on {load_world}")
     assert "RESULT: OK" in out, out.splitlines()[-8:]
