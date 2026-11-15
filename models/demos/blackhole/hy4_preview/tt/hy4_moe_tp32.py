@@ -102,23 +102,25 @@ class Tp32Experts:
     @staticmethod
     def cb_bytes(T):
         R = 2 if T <= 2 else 4 if T <= 4 else 8
+        MT = 2 if T > 8 else 1
         nmax = 8 * T
         nj = (nmax + 7) // 8
         return {
-            "x": 24 * 64 * R,
+            "x": 24 * 64 * R * MT,
             "w": RING_TILES * TB4,
-            "p": 32 * 512,
-            "pr": nj * 32 * 512,
-            "sc": nj * 512,
-            "actl": 4 * 512,
-            "act": 2 * nmax * 64 * R,
-            "o": 24 * 512,
+            "p": 32 * 512 * MT,
+            "pr": nj * 32 * 512 * MT,
+            "sc": nj * 512 * MT,
+            "actl": 4 * 512 * MT,
+            "act": 2 * nmax * 64 * R * MT,
+            "o": 24 * 512 * MT,
             "meta": 64 + 64 * T,
             "rt": 64 * T,
         }
 
     def __call__(self, h, route, T, out=None):
-        assert 1 <= T <= 8
+        assert 1 <= T <= 16
+        MT = 2 if T > 8 else 1
         md = self.md
         R = 2 if T <= 2 else 4 if T <= 4 else 8
         NMAX = 8 * T
@@ -131,7 +133,7 @@ class Tp32Experts:
             )
         (CB_X, CB_W, CB_P, CB_PR, CB_PR16, CB_SC, CB_SC16, CB_ACTL, CB_ACTL16, CB_ACT, CB_O, CB_META, CB_RT) = range(13)
         cbs = [
-            SK._tiny_cb(core_set, CB_X, KB, rows=R),
+            SK._tiny_cb(core_set, CB_X, KB * MT, rows=R),
             ttnn.CBDescriptor(
                 total_size=RING_TILES * TB4,
                 core_ranges=core_set,
@@ -144,12 +146,12 @@ class Tp32Experts:
                     )
                 ],
             ),
-            SK._tiny_cb(core_set, CB_P, 32),
-            _alias_cb(core_set, CB_PR, CB_PR16, NJMAX * 32),
-            _alias_cb(core_set, CB_SC, CB_SC16, NJMAX),
-            _alias_cb(core_set, CB_ACTL, CB_ACTL16, 4),
-            SK._tiny_cb(core_set, CB_ACT, 2 * NMAX, rows=R),
-            SK._tiny_cb(core_set, CB_O, 24),
+            SK._tiny_cb(core_set, CB_P, 32 * MT),
+            _alias_cb(core_set, CB_PR, CB_PR16, NJMAX * 32 * MT),
+            _alias_cb(core_set, CB_SC, CB_SC16, NJMAX * MT),
+            _alias_cb(core_set, CB_ACTL, CB_ACTL16, 4 * MT),
+            SK._tiny_cb(core_set, CB_ACT, 2 * NMAX * MT, rows=R),
+            SK._tiny_cb(core_set, CB_O, 24 * MT),
             ttnn.CBDescriptor(
                 total_size=64 + 64 * T,
                 core_ranges=core_set,
@@ -216,6 +218,8 @@ class Tp32Experts:
                 _fb(-L),
                 _fb(-3.0e38),
                 self.dbg,
+                MT,
+                int(os.environ.get("HY4_TP32_DOWN_FP32", "0")),
             ],
             runtime_args=ttnn.RuntimeArgs(),
             common_runtime_args=[],
@@ -231,6 +235,7 @@ class Tp32Experts:
         prog.custom_program_hash = _hash(
             0x7C32,
             T,
+            int(os.environ.get("HY4_TP32_DOWN_FP32", "0")),
             R,
             self.dbg,
             self.w01.buffer_address(),

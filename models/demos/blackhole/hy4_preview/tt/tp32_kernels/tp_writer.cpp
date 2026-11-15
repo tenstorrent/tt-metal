@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t R = get_compile_time_arg_val(10);
     constexpr uint32_t NMAX = get_compile_time_arg_val(11);
     constexpr uint32_t NC = 8;
+    constexpr uint32_t MT = (T > 8) ? 2 : 1;  // row tiles of 8 rows
     constexpr uint32_t KB = 24;
     constexpr uint32_t TB = 64 * R;  // bytes of one in0 tile [R, 32] bf16
     constexpr uint32_t FB = 32 * R;  // bytes of one face [R, 16]
@@ -60,8 +61,8 @@ void kernel_main() {
 
     // the landing buffers are reserved up front: their addresses (identical on every core) are the NoC destinations of
     // the exchange
-    cbpr.reserve_back(NJMAX * NC * 4);
-    cbact.reserve_back(2 * NMAX);
+    cbpr.reserve_back(NJMAX * NC * 4 * MT);
+    cbact.reserve_back(2 * NMAX * MT);
     const uint32_t pr_base = cbpr.get_write_ptr();
     const uint32_t act_base = cbact.get_write_ptr();
 
@@ -84,17 +85,19 @@ void kernel_main() {
     // score tiles (16x16 view of an [8, 32] tile: face f element index f * 128 + r * 16 + c) of the experts this core
     // reduces
     if (nj > 0) {
-        cbsc.reserve_back(nj);
-        for (uint32_t j = 0; j < nj; ++j) {
+        cbsc.reserve_back(nj * MT);
+        for (uint32_t jm = 0; jm < nj * MT; ++jm) {
+            const uint32_t j = jm / MT, m = jm % MT;
             volatile tt_l1_ptr uint16_t* tile =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cbsc.get_write_ptr() + j * PNB);
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cbsc.get_write_ptr() + jm * PNB);
             const uint32_t e = active[me + NC * j];
             for (uint32_t r = 0; r < 8; ++r) {
                 uint16_t s = 0;
-                if (r < T) {
+                const uint32_t rg = 8 * m + r;
+                if (rg < T) {
                     for (uint32_t k = 0; k < 8; ++k) {
-                        if ((route[r * 16 + k] & 255u) == e) {
-                            s = (uint16_t)(route[r * 16 + 8 + k] & 0xFFFFu);
+                        if ((route[rg * 16 + k] & 255u) == e) {
+                            s = (uint16_t)(route[rg * 16 + 8 + k] & 0xFFFFu);
                         }
                     }
                 }
@@ -104,22 +107,31 @@ void kernel_main() {
                 }
             }
         }
-        cbsc.push_back(nj);
+        cbsc.push_back(nj * MT);
     }
 
     // x slice
-    cbx.reserve_back(KB);
-    for (uint32_t j = 0; j < KB; ++j) {
-        const uint32_t i = KB * me + j;
-        noc.async_read(x_acc, cbx, FB, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = j * TB});
-        noc.async_read(x_acc, cbx, FB, {.page_id = i, .offset_bytes = 512}, {.offset_bytes = j * TB + FB});
+    cbx.reserve_back(KB * MT);
+    for (uint32_t m = 0; m < MT; ++m) {
+        for (uint32_t j = 0; j < KB; ++j) {
+            const uint32_t i = KB * me + j;
+            // rows 8m .. 8m + R - 1 of the std tile: face 0 at 32 B per row, face 1 (cols 16..31) at 512 + same
+            noc.async_read(
+                x_acc, cbx, FB, {.page_id = i, .offset_bytes = 32 * 8 * m}, {.offset_bytes = (m * KB + j) * TB});
+            noc.async_read(
+                x_acc,
+                cbx,
+                FB,
+                {.page_id = i, .offset_bytes = 512 + 32 * 8 * m},
+                {.offset_bytes = (m * KB + j) * TB + FB});
+        }
     }
     noc.async_read_barrier();
-    cbx.push_back(KB);
+    cbx.push_back(KB * MT);
 
     if (DBG == 1) {
         for (uint32_t a = 0; a < na; ++a) {
-            cbp.wait_front(4);
+            cbp.wait_front(4 * MT);
             if (a < 6) {
                 for (uint32_t j = 0; j < 4; ++j) {
                     const uint32_t pg = ocol0 + 4 * a + j;
@@ -129,7 +141,7 @@ void kernel_main() {
                 }
                 noc.async_write_barrier();
             }
-            cbp.pop_front(4);
+            cbp.pop_front(4 * MT);
         }
         return;
     }
@@ -140,13 +152,13 @@ void kernel_main() {
     for (uint32_t g = 0; g < ng; ++g) {
         const uint32_t g0 = 8 * g;
         const uint32_t n = (na - g0 < 8) ? (na - g0) : 8;
-        cbp.wait_front(4 * n);
+        cbp.wait_front(4 * MT * n);
         const uint32_t src0 = cbp.get_read_ptr();
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t a = g0 + i;
             const uint32_t r = a & 7u, j = a >> 3;
-            const uint32_t dst = pr_base + ((j * NC + me) * 4) * PNB;
-            noc_async_write(src0 + i * 4 * PNB, get_noc_addr(nx(r), ny(r), dst), 4 * PNB);
+            const uint32_t dst = pr_base + ((j * NC + me) * 4 * MT) * PNB;
+            noc_async_write(src0 + i * 4 * MT * PNB, get_noc_addr(nx(r), ny(r), dst), 4 * MT * PNB);
         }
         noc_async_write_barrier();
         for (uint32_t i = 0; i < n; ++i) {
@@ -154,16 +166,16 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(nx(r), ny(r), sem_p_addr), 1);
         }
         noc_async_atomic_barrier();
-        cbp.pop_front(4 * n);
+        cbp.pop_front(4 * MT * n);
         if (g < nj) {
             noc_semaphore_wait_min(sem_p, NC * (g + 1));
-            cbpr.push_back(32);
-            cbactl.wait_front(2);
+            cbpr.push_back(32 * MT);
+            cbactl.wait_front(2 * MT);
             const uint32_t src = cbactl.get_read_ptr();
             const uint32_t a = me + NC * g;
             for (uint32_t d = 0; d < NC; ++d) {
-                for (uint32_t c = 0; c < 2; ++c) {
-                    const uint32_t dst = act_base + (a * 2 + c) * TB;
+                for (uint32_t c = 0; c < 2 * MT; ++c) {  // c = m * 2 + k ; act tile (expert a, m, k) = a * 2 MT + c
+                    const uint32_t dst = act_base + (a * 2 * MT + c) * TB;
                     if constexpr (R == 8) {
                         noc_async_write(src + c * PNB, get_noc_addr(nx(d), ny(d), dst), 512);
                     } else {  // [8, 32] source tile (face 1 at +256) -> [R, 32] in0 tile (face 1 at + 32 R)
@@ -177,13 +189,13 @@ void kernel_main() {
                 noc_semaphore_inc(get_noc_addr(nx(d), ny(d), sem_a_addr), 1);
             }
             noc_async_atomic_barrier();
-            cbactl.pop_front(2);
+            cbactl.pop_front(2 * MT);
         }
     }
     *sem_p = 0;
     noc_semaphore_wait(sem_a, na);
     *sem_a = 0;
-    cbact.push_back(2 * na);
+    cbact.push_back(2 * na * MT);
 
     if (DBG == 2) {
         cbact.wait_front(2 * na);
@@ -201,15 +213,18 @@ void kernel_main() {
     }
     // output
     for (uint32_t s = 0; s < 6; ++s) {
-        cbo.wait_front((s + 1) * 4);
-        for (uint32_t w = 0; w < 4; ++w) {
-            const uint32_t pg = ocol0 + s * 4 + w;
-            const uint32_t t_off = (s * 4 + w) * PNB;
-            noc.async_write(cbo, o_acc, FB, {.offset_bytes = t_off}, {.page_id = pg, .offset_bytes = 0});
-            noc.async_write(cbo, o_acc, FB, {.offset_bytes = t_off + 256}, {.page_id = pg, .offset_bytes = 512});
+        cbo.wait_front((s + 1) * 4 * MT);
+        for (uint32_t m = 0; m < MT; ++m) {
+            for (uint32_t w = 0; w < 4; ++w) {
+                const uint32_t pg = ocol0 + s * 4 + w;
+                const uint32_t t_off = ((s * MT + m) * 4 + w) * PNB;
+                noc.async_write(cbo, o_acc, FB, {.offset_bytes = t_off}, {.page_id = pg, .offset_bytes = 32 * 8 * m});
+                noc.async_write(
+                    cbo, o_acc, FB, {.offset_bytes = t_off + 256}, {.page_id = pg, .offset_bytes = 512 + 32 * 8 * m});
+            }
         }
     }
     noc.async_write_barrier();
-    cbo.pop_front(24);
+    cbo.pop_front(24 * MT);
     noc_async_atomic_barrier();
 }
