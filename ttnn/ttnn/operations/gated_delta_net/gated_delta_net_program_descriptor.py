@@ -49,6 +49,10 @@ DST_FULL_SYNC = False
 # R-BCAST (decode R-VSPLIT): of each key head's r * pieces cores, the first preps q (conv + L2 norm) and the
 # second k, once each, and multicast qn / kn to the others, which read and prep only their v columns.
 SHARE_QK_PREP = True
+# R-BCAST: place the units on a grid narrowed to a width dividing the key-head group, so each group's q / k multicast
+# covers one rectangle (a 12-core group on the 11-wide grid spans two rows). perf_decode_b1: send 1.28 -> 1.22 us, but the
+# 6-wide region reads later: 22.95 vs 22.49 us (median of 10), so off.
+BCAST_RECT_GROUPS = False
 # R-QKCORE (decode R-STEP, one tile row of sequences): per key head a q core and a k core convolve and L2-normalize the
 # key head's q (k) columns of every sequence of the tile row at once and multicast qn (kn) to the key head's pair cores,
 # which read and convolve only their v columns. Pair cores run consecutive sequences of one value head.
@@ -586,7 +590,17 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     num_units = num_pairs * pieces
     units_per_block = PAIRS_PER_BLOCK if pieces == 1 else 1  # R-VSPLIT: one unit per core
     num_blocks = (num_units + units_per_block - 1) // units_per_block
-    (_, all_cores, group_1, group_2, blocks_1, blocks_2) = ttnn.split_work_to_cores(grid, num_blocks, row_wise=True)
+    work_grid = grid
+    if BCAST_RECT_GROUPS and _share_qk(pieces, tokens):
+        # One unit per core, in row-major order over a grid whose width divides the multicast group: each key head's
+        # group is then one rectangle of whole rows (one multicast per channel instead of one per grid row it spans).
+        group = (value_heads // key_heads) * pieces
+        widths = [w for w in range(1, grid.x + 1) if group % w == 0 and -(-num_units // w) <= grid.y]
+        if widths:
+            work_grid = ttnn.CoreCoord(max(widths), grid.y)
+    (_, all_cores, group_1, group_2, blocks_1, blocks_2) = ttnn.split_work_to_cores(
+        work_grid, num_blocks, row_wise=True
+    )
 
     assignment = []  # (core, first_unit, unit_count)
     next_block = 0

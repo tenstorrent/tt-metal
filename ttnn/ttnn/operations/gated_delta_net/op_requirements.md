@@ -315,7 +315,7 @@ golden suite is green, no regression on `perf_decode_b1` and `model_prefill_4096
 
 **Outcome**: model_decode_b8 62.0 -> 49.9 us, model_decode_b16 132.2 -> 86.0 us (74.0 / 148.4 at bd772ee; goals 29.3 / 57.5) with R-QKCORE: 8 q / k cores prep qn / kn of every sequence once per key head and multicast them; pair cores (sequences of one value head, two per core at B=16) read only v, S0, z and gates; conv_state_out written as whole tiles by the q / k cores; per-unit inputs double-buffered, same-head weights copied locally, writer barriers deferred past the next unit's coefficients. perf_decode_b1 / fp32 B=1 / prefill guard set at parity (same-session A/B). What binds now: per pair a fixed compute chain of ~19 us (token step 10.8 us of fp32 HiFi4 matmuls for one valid row, RMS 5.4, d + kn^T 2.3) after a 14-17 us q / k chain, then the state writes of all cores at once (6.3 MB, 12.4 us at the DRAM rate) draining 15-30 us, slowest on the top grid rows (NOC 0 paths wrap the torus; a NOC 1 swap fixed their reads but slowed their writes, kept off). Next: overlap the state writes with compute (stream update batches to the writer instead of one push per pair), shorten the token step (both units of a B=16 core share kn / qn: one qk_finish, and the read matmul could carry both sequences' rows), and place the slow-row cores' writes on the NoC whose path does not wrap. Not done here: each needs its own measured pass, and the decode step's numerics (one-row matmuls) deserve a dedicated look.
 
-### [ ] Refinement 8 — Decode: shorten the q/k chain that every core waits for, and the one-row token step
+### [x] Refinement 8 — Decode: shorten the q/k chain that every core waits for, and the one-row token step
 
 **Type**: perf
 
@@ -346,6 +346,22 @@ is near the kernel-config size limit: remove superseded paths rather than add.
 
 **Done when**: measured device-ns on `perf_decode_b1` improves and moves toward 5.3 us, precision gates
 hold (state-carry cases at 0.002), the golden suite is green, no regression on the guard set.
+
+**Outcome**: perf_decode_b1 26.32 -> 22.59 us (device kernel, median of launches 2..11, same session; 4.7x the 4.8 us
+bound). Landed: the R-VSPLIT partial sum o^2 before the state update (gather overlaps the update, -1.1 us); decode
+window rows issued first on their own NoC transaction id with the weights / gates behind them (injector window
+6.0 -> 4.9 us); d = qn . kn as one [kn; qn] x kn^T matmul read as a scalar (receiver post-hand-off d + kn^T 2.5 -> 0.8
+us); the token vector u / o in one DEST window with o^2 packed alongside (shared-q/k builds); the q/k normalize
+batched per DEST window. Guard set improved or flat: B=8 49.98 -> 48.72, B=16 86.54 -> 85.36, fp32 B=1 33.69 -> 29.63,
+prefill T=96 168.7, batched B=2 T=40 222.5, model_prefill_4096 1.10 ms. Measured null, kept as a knob at off:
+`BCAST_RECT_GROUPS` (one-rectangle key-head groups: send 1.28 -> 1.22 us, reads later, 22.95 us). Where the time is
+now (zones, B=1): injector chain to the hand-off ~12 us (reads 4.9: 1.4 us issuing 10 staged requests, 1.5 us of 40
+local row copies; FPU conv of 4 q / k columns 1.8; L2 part 2.9; multicast of 16 KB per channel 1.2-1.5), then per core
+token step ~4 us (state read 0.7, token vector + partial 2.0, update 1.1) and the RMS combine ~2.5 us. Next: split
+each q / k part over 2-4 cores with partial L2 sums exchanged (halves the reads, conv and normalize on the chain),
+reader / writer split of the row copies, and half-tile hand-off payloads (faces 0-1 only for rows < 16). Not done
+here: each needs new roles or CB layouts, and the fp32 token-step builds sit ~80 B under the kernel-config text
+budget, so anything added to their compute or reader must be compiled out of them first.
 
 ### [ ] Refinement 9 — Decode B=8 / B=16: the state write-back drain and the merging read chain
 

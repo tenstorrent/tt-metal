@@ -19,3 +19,4 @@
 {"event":"fix_applied","what":"prescaled head blocks (state part without broadcasts), per-role CB allocation, inbox depth 8, unicast for one-core rects, PREP_MIN_TILE_ROWS=4, producer cap 32","perf":"model_prefill_4096 1.29 -> ~1.10 ms","tests":"unit 154/154, golden+regression 108/108","ts":"2026-11-15T04:05:07+00:00"}
 {"event":"test_run","refinement":7,"status":"pass","unit_dir":"165/165","golden":"108/108","perf_us":{"model_decode_b8":[62,49.9],"model_decode_b16":[132.2,86],"perf_decode_b1":[26.3,26.5]},"ts":"2026-11-15T04:56:32+00:00"}
 {"event":"test_run","status":"pass","test":"bcast+vsplit+perf","note":"R8 lever 1: osum partial before update; perf_decode_b1 26.2 -> 25.1 us","ts":"2026-11-15T05:15:12+00:00"}
+{"event":"test_run","status":"pass","test":"unit dir 165/165, golden -k loose or decode 34/34, regression 36/36","note":"R8 final: perf_decode_b1 26.32 -> 22.59 us median of 10","ts":"2026-11-15T06:00:09+00:00"}
