@@ -784,16 +784,26 @@ ALWI void qk_part_block(Buffers& bufs, bool is_q, RowScope scope) {
     l2_inverse_norm(bufs, 0, is_q ? Q_SCALE_BITS : ONE_BITS, scope);
     cb_wait_front(cb_rinv, 1);
     cb_reserve_back(cb_qk_stage, Kt);
-    for (uint32_t kt = 0; kt < Kt; ++kt) {
+    // rinv in DEST slot 0, up to DEST_AUTO_LIMIT - 1 column tiles after it per window.
+    constexpr uint32_t BATCH = ckl::DEST_AUTO_LIMIT - 1;
+    for (uint32_t kt0 = 0; kt0 < Kt; kt0 += BATCH) {
+        const uint32_t n = Kt - kt0 < BATCH ? Kt - kt0 : BATCH;
         tile_regs_acquire();
         begin_loads(cb_y_qk);
-        load(cb_y_qk, kt, 0);
-        load(cb_rinv, 0, 1);
+        load(cb_rinv, 0, 0);
+        for (uint32_t i = 0; i < n; ++i) {
+            load(cb_y_qk, kt0 + i, 1 + i);
+        }
         sfpu_bcast_col_init();
-        mul_bcast_col_scoped(0, 1, scope);
+        for (uint32_t i = 0; i < n; ++i) {
+            mul_bcast_col_scoped(1 + i, 0, scope);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_first(0, cb_qk_stage, kt);
+        pack_first(1, cb_qk_stage, kt0);
+        for (uint32_t i = 1; i < n; ++i) {
+            pack_at(1 + i, cb_qk_stage, kt0 + i);
+        }
         tile_regs_release();
     }
     cb_push_back(cb_qk_stage, Kt);
