@@ -40,6 +40,18 @@ namespace ttnn::experimental::deepseek {
 //   - ``[latent]`` (``[1, 1, 1, Dh]`` bfloat16 32x32 TILE DRAM) when ``cos`` and ``sin`` are omitted.
 //   - ``[latent, roped_row]`` (where ``roped_row`` is ``[1, 1, 1, Dh]`` bfloat16 ROW_MAJOR DRAM with
 //     interleaved RoPE applied to its trailing ``rope_dim`` channels) when ``cos`` and ``sin`` are provided.
+//
+// Block of R = 2 or 4 rows (DSpark verify, positions p .. p + R - 1 of one session): ``kv`` (and ``gate``) are
+// bfloat16 TILE ``[1, 1, R, W]`` with ``Tile((R, 32))`` (interleaved or WIDTH_SHARDED, ``kv_gate_interleave``
+// as for one row). The op does what R one-row calls at p .. p + R - 1 do, in one call:
+//   - ratio 1 (no window): every row closes a group, G = R;
+//   - ratio 2: the rows at odd positions close a group (``start_odd``: p is odd), G = R / 2. A closing row
+//     pools with the row before it, or (row 0) with the window's row at ``prev_slot`` (default
+//     ``1 - win_slot[0]``); then all R rows go into the window at ``win_slot[j]`` (INT32 ``[R]``), in order.
+// Per closed group g (in row order): ``cos`` / ``sin`` row g (TILE ``[1, 1, >=G, rope_dim]``, 32x32 or
+// (h, 32) tiles with h >= G), ``entry[g]`` / ``dense_entry[g]`` (INT32 ``[G]``), ``key_row`` row g
+// (``[1, 1, G, Dk]``). Outputs are ``[1, 1, G, Dh]`` (latent TILE, roped rows ROW_MAJOR).
+// ``start_odd``: a block starts at an odd position (ratio 2, see above).
 std::vector<Tensor> compress_pool_decode(
     const Tensor& kv,
     const Tensor& norm_weight,
@@ -62,6 +74,7 @@ std::vector<Tensor> compress_pool_decode(
     const std::optional<Tensor>& dense_kv = std::nullopt,
     const std::optional<Tensor>& dense_entry = std::nullopt,
     const std::optional<Tensor>& key_row = std::nullopt,
-    uint32_t kv_gate_interleave = 0);
+    uint32_t kv_gate_interleave = 0,
+    bool start_odd = false);
 
 }  // namespace ttnn::experimental::deepseek

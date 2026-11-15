@@ -24,8 +24,8 @@ using namespace ckernel;
 
 namespace {
 
-// stat_cb <- sum(src^2) over src_cb's front 1x32 tile.
-ALWI void push_sum_of_squares(uint32_t src_cb_id, uint32_t stat_cb_id) {
+// stat_cb <- sum(src^2) over src_cb's 1x32 tile tile_idx (from the front).
+ALWI void push_sum_of_squares(uint32_t src_cb_id, uint32_t stat_cb_id, uint32_t tile_idx = 0) {
     CircularBuffer stat_cb(stat_cb_id);
     reconfig_data_format(src_cb_id, src_cb_id);
     pack_reconfig_data_format(stat_cb_id);
@@ -35,7 +35,7 @@ ALWI void push_sum_of_squares(uint32_t src_cb_id, uint32_t stat_cb_id) {
     fill_tile(0, 0.0F);
     mul_reduce_scalar_init_fidelity<MathFidelity::HiFi4>(src_cb_id, src_cb_id);
     mul_reduce_scalar_tile_fidelity<MathFidelity::HiFi4, MathFidelity::HiFi4, true>(
-        src_cb_id, src_cb_id, stat_cb_id, 1, 1.0F, 0);
+        src_cb_id, src_cb_id, stat_cb_id, 1, 1.0F, tile_idx);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, stat_cb_id);
@@ -79,10 +79,15 @@ ALWI void push_rms_scale(uint32_t gather_cb_id, uint32_t scale_hub_cb_id, uint32
     scale_hub_cb.push_back(1);
 }
 
-// out_cb (and second_cb when given) <- src * scale * gamma, consuming the three fronts. The caller has
-// reserved out_cb / second_cb.
+// out_cb (and second_cb when given) <- src * scale * gamma, consuming the src and scale fronts (and gamma's
+// with pop_gamma). The caller has reserved out_cb / second_cb.
 ALWI void pack_rms_scaled(
-    uint32_t src_cb_id, uint32_t scale_cb_id, uint32_t gamma_cb_id, uint32_t out_cb_id, int32_t second_cb_id) {
+    uint32_t src_cb_id,
+    uint32_t scale_cb_id,
+    uint32_t gamma_cb_id,
+    uint32_t out_cb_id,
+    int32_t second_cb_id,
+    bool pop_gamma = true) {
     CircularBuffer gamma_cb(gamma_cb_id);
     CircularBuffer scale_cb(scale_cb_id);
     gamma_cb.wait_front(1);
@@ -107,7 +112,9 @@ ALWI void pack_rms_scaled(
         pack_tile(0, static_cast<uint32_t>(second_cb_id));
     }
     tile_regs_release();
-    gamma_cb.pop_front(1);
+    if (pop_gamma) {
+        gamma_cb.pop_front(1);
+    }
     scale_cb.pop_front(1);
     CircularBuffer(src_cb_id).pop_front(1);
 }
@@ -178,6 +185,8 @@ void kernel_main() {
     constexpr uint32_t cb_key_mm = get_compile_time_arg_val(26);
     constexpr uint32_t cb_key_gamma = get_compile_time_arg_val(27);
     constexpr uint32_t cb_key_out = get_compile_time_arg_val(28);
+    // Groups a block closes (1: the one-row step): each step below runs per group, the RMS scales per group.
+    constexpr uint32_t groups = get_compile_time_arg_val(29);
 
     const bool is_hub = get_arg_val<uint32_t>(0) != 0;
     const bool do_rope = get_arg_val<uint32_t>(1) != 0;
@@ -189,10 +198,12 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_kv, cb_kv, cb_out_latent);
 
-    kv_cb.wait_front(1);
-
     uint32_t src_cb_id = cb_kv;
-    if constexpr (has_window != 0) {
+    if constexpr (has_window == 0) {
+        kv_cb.wait_front(groups);
+    }
+    for (uint32_t g = 0; g < groups && has_window != 0; ++g) {
+        kv_cb.wait_front(1);
         CircularBuffer k0_cb(cb_k0);
         CircularBuffer gate_cb(cb_gate);
         CircularBuffer g0_cb(cb_g0);
@@ -240,34 +251,47 @@ void kernel_main() {
         tmp_cb.pop_front(1);
         kv_cb.pop_front(1);
 
-        pooled_cb.wait_front(1);
+        pooled_cb.wait_front(g + 1);
         src_cb_id = cb_pooled;
+        // 3. Local sum of squares -> cb_local_stat (group g's pooled tile is g from the front)
+        push_sum_of_squares(src_cb_id, cb_local_stat, g);
     }
-
-    // 3. Local sum of squares -> cb_local_stat[0][0]
-    push_sum_of_squares(src_cb_id, cb_local_stat);
+    if constexpr (has_window == 0) {
+        // 3. Local sum of squares -> cb_local_stat
+        for (uint32_t g = 0; g < groups; ++g) {
+            push_sum_of_squares(src_cb_id, cb_local_stat, g);
+        }
+    }
 
     // 4. Hub core sums per-core stats, scales by 1/Dh, and computes rsqrt(mean + eps)
     if (is_hub) {
+        // One elementwise pass: group g's stats are element g of every gathered tile.
         push_rms_scale<num_cores>(cb_gather_stats, cb_scale_hub, inv_n_bits, eps_bits);
     }
 
     // 5. Scale by rsqrt * norm_weight -> cb_out_latent (and cb_tmp if do_rope)
-    CircularBuffer tmp_cb(cb_tmp);
-    out_latent_cb.reserve_back(1);
-    const bool latent_rope = has_rope != 0 && do_rope;
-    if (latent_rope) {
-        tmp_cb.reserve_back(1);
-    }
-    pack_rms_scaled(src_cb_id, cb_scale, cb_gamma, cb_out_latent, latent_rope ? static_cast<int32_t>(cb_tmp) : -1);
-    out_latent_cb.push_back(1);
-    if (latent_rope) {
-        tmp_cb.push_back(1);
-    }
-
     // 6. Optional RoPE on trailing rope_tiles cores -> cb_out_rope
-    if (latent_rope) {
-        push_rope(cb_tmp, cb_cs, cb_out_rope);
+    CircularBuffer tmp_cb(cb_tmp);
+    const bool latent_rope = has_rope != 0 && do_rope;
+    for (uint32_t g = 0; g < groups; ++g) {
+        out_latent_cb.reserve_back(1);
+        if (latent_rope) {
+            tmp_cb.reserve_back(1);
+        }
+        pack_rms_scaled(
+            src_cb_id,
+            cb_scale,
+            cb_gamma,
+            cb_out_latent,
+            latent_rope ? static_cast<int32_t>(cb_tmp) : -1,
+            g == groups - 1);
+        out_latent_cb.push_back(1);
+        if (latent_rope) {
+            tmp_cb.push_back(1);
+        }
+        if (latent_rope) {
+            push_rope(cb_tmp, cb_cs, cb_out_rope);
+        }
     }
 
     // 7. Index key core n: (latent @ index_wk)[:, 32n : 32n + 32], RMS-normalized over the key_tiles
@@ -280,41 +304,74 @@ void kernel_main() {
             CircularBuffer key_mm_cb(cb_key_mm);
 
             // The latent phase left SrcA on 1x32 tiles; the matmul unpacks 32x32 in1 tiles into it.
+            // One row streams index_wk through key_w (popping each chunk); a block's groups keep it all.
             compute_kernel_hw_startup<SrcOrder::Reverse>(cb_key_in, cb_key_w, cb_key_mm);
-            key_in_cb.wait_front(num_cores);
-            key_mm_cb.reserve_back(1);
-            tile_regs_acquire();
-            fill_tile_init();
-            fill_tile(0, 0.0F);
-            matmul_block_init(cb_key_in, cb_key_w, false, 1, 1, num_cores);
-            for (uint32_t k0 = 0; k0 < num_cores; k0 += key_w_chunk) {
-                key_w_cb.wait_front(key_w_chunk);
-                for (uint32_t k = 0; k < key_w_chunk; ++k) {
-                    matmul_block(cb_key_in, cb_key_w, k0 + k, k, 0, false, 1, 1, num_cores);
+            key_in_cb.wait_front(groups * num_cores);
+            if constexpr (groups == 1) {
+                key_mm_cb.reserve_back(1);
+                tile_regs_acquire();
+                fill_tile_init();
+                fill_tile(0, 0.0F);
+                matmul_block_init(cb_key_in, cb_key_w, false, 1, 1, num_cores);
+                for (uint32_t k0 = 0; k0 < num_cores; k0 += key_w_chunk) {
+                    key_w_cb.wait_front(key_w_chunk);
+                    for (uint32_t k = 0; k < key_w_chunk; ++k) {
+                        matmul_block(cb_key_in, cb_key_w, k0 + k, k, 0, false, 1, 1, num_cores);
+                    }
+                    key_w_cb.pop_front(key_w_chunk);
                 }
-                key_w_cb.pop_front(key_w_chunk);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_key_mm);
+                tile_regs_release();
+                key_mm_cb.push_back(1);
+            } else {
+                // All groups in one pass down K: group g's K-tile k is key_in tile g * num_cores + k (rt stride
+                // num_cores), its output DEST tile g.
+                key_mm_cb.reserve_back(groups);
+                tile_regs_acquire();
+                fill_tile_init();
+                for (uint32_t g = 0; g < groups; ++g) {
+                    fill_tile(g, 0.0F);
+                }
+                matmul_block_init(cb_key_in, cb_key_w, false, 1, groups, num_cores);
+                for (uint32_t k0 = 0; k0 < num_cores; k0 += key_w_chunk) {
+                    key_w_cb.wait_front(k0 + key_w_chunk);
+                    for (uint32_t k = k0; k < k0 + key_w_chunk; ++k) {
+                        matmul_block(cb_key_in, cb_key_w, k, k, 0, false, 1, groups, num_cores);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t g = 0; g < groups; ++g) {
+                    pack_tile(g, cb_key_mm);
+                }
+                tile_regs_release();
+                key_mm_cb.push_back(groups);
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, cb_key_mm);
-            tile_regs_release();
-            key_mm_cb.push_back(1);
-            key_in_cb.pop_front(num_cores);
+            if constexpr (groups > 1) {
+                key_w_cb.pop_front(num_cores);
+            }
+            key_in_cb.pop_front(groups * num_cores);
 
             compute_kernel_hw_startup(cb_key_mm, cb_key_mm, cb_local_stat);
-            key_mm_cb.wait_front(1);
-            push_sum_of_squares(cb_key_mm, cb_local_stat);
+            key_mm_cb.wait_front(groups);
+            for (uint32_t g = 0; g < groups; ++g) {
+                push_sum_of_squares(cb_key_mm, cb_local_stat, g);
+            }
             if (is_key_hub) {
                 push_rms_scale<key_tiles>(cb_gather_stats, cb_scale_hub, inv_key_n_bits, eps_bits);
             }
 
             const uint32_t key_norm_cb = do_rope ? cb_tmp : cb_key_out;
             CircularBuffer key_norm(key_norm_cb);
-            key_norm.reserve_back(1);
-            pack_rms_scaled(cb_key_mm, cb_scale, cb_key_gamma, key_norm_cb, -1);
-            key_norm.push_back(1);
-            if (do_rope) {
-                push_rope(cb_tmp, cb_cs, cb_key_out);
+            for (uint32_t g = 0; g < groups; ++g) {
+                key_norm.reserve_back(1);
+                pack_rms_scaled(cb_key_mm, cb_scale, cb_key_gamma, key_norm_cb, -1, g == groups - 1);
+                key_norm.push_back(1);
+                if (do_rope) {
+                    push_rope(cb_tmp, cb_cs, cb_key_out);
+                }
             }
         }
     }
