@@ -195,7 +195,7 @@ def test_bare_base_and_mutated_file_rejected(contract):
         c.create()
     c.fixture["fusion"]["base"]["sha256"] = "b" * 64
     Path(c.fixture["assets"]["audio_vae"]["path"]).write_bytes(b"changed")
-    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
         c.create()
 
 
@@ -221,11 +221,11 @@ def test_runtime_override_rejected(contract, option):
 def test_inherited_overrides_and_post_creation_drift_rejected(contract, monkeypatch, name, value):
     pipe = contract.create()
     monkeypatch.setenv(name, value)
-    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
         contract.create()
-    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.generate_r2v("x", seed=1)
-    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.warmup_buffers()
     assert not contract.native.calls
 
@@ -273,7 +273,7 @@ def test_reference_mutation_fl2v_and_bad_endpoint(contract):
     with pytest.raises(ValueError, match="geometry"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.generate_r2v("x", seed=1, first_frame=first, last_frame=first)
     Image.new("RGB", (128, 128), "blue").save(c.fixture["reference"]["path"])
-    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only run excludes native conftest
+    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only contract  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.warmup_buffers()
 
 
@@ -656,7 +656,7 @@ def test_live_reference_switch_without_model_rebind(contract, monkeypatch):
     assert set(counts.values()) == {1}
     Image.new("RGB", (128, 128), "green").save(b)
     pipe.generate_r2v("updated", reference_path=b, seed=1)
-    with pytest.raises(ValueError, match="digest"):
+    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only contract
         pipe.generate_r2v("bad", reference_path=b, reference_sha256="0" * 64, seed=1)
     assert len(c.native.calls) == 4
 
@@ -689,4 +689,122 @@ def test_named_served_recipe(contract, monkeypatch, name, height, width, frames,
     assert c.native.factory["ref_num_frames"] == 121
     pipe.generate_r2v("recipe", seed=1)
     assert c.native.calls[-1][1]["fps"] == 24
+
+
+
+@pytest.mark.parametrize("field,value", [
+    ("num_frames", 153), ("ref_frames", 145), ("pin_s1_strength", 0.5), ("fps", 30),
+    ("quality_variant", "ltx25-ic-6s-unknown"),
+])
+def test_served_recipe_cannot_be_relabelled(contract, field, value):
+    c = contract
+    c.fixture["generation"] = c.module.generation_recipe("ltx25-ic-6s-720p")
+    c.fixture["generation"][field] = value
+    with pytest.raises(ValueError, match="recipe"):  # allow-pytest.raises: CPU-only contract
+        c.create()
+    assert not hasattr(c.native, "factory")
+
+
+@pytest.mark.parametrize("name,value", [
+    ("LTX_QUALITY", "fast"), ("LTX25_DIFFVAE", "1"), ("LTX_PIPELINE", "h3"),
+    ("LTX_LORAS", '[["other", 1]]'), ("LTX_CHECKPOINT", "/other/model"),
+    ("LTX_WORKER_SCRATCH", "relative/path"), ("LTX_TRACED", "True"),
+    ("LTX_TRACED", "0"), ("LTX_FAST", "1"), ("LTX_FUTURE_KNOB", "1"),
+])
+def test_worker_recipe_rejects_conflicts_and_drift(contract, monkeypatch, name, value):
+    pipe = contract.create(traced=True)
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract
+        pipe.generate_r2v("bad", seed=1)
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract
+        contract.create(traced=True)
+    assert not contract.native.calls
+
+
+@pytest.mark.parametrize("digest", ["f" * 63, "F" * 64, "g" * 64, "", 1, "0" * 64])
+def test_live_reference_digest_is_verified(contract, digest):
+    c = contract
+    pipe = c.create()
+    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only contract
+        pipe.generate_r2v("bad", reference_path=c.fixture["reference"]["path"], reference_sha256=digest, seed=1)
+    assert not c.native.calls
+    # Failure does not poison the serialization lock or the next valid call.
+    pipe.generate_r2v("good", seed=1)
+
+
+def test_live_reference_ignores_deleted_fixture_sheet(contract):
+    c = contract
+    pipe = c.create()
+    b = c.bind("replacement", True)["path"]
+    Path(c.fixture["reference"]["path"]).unlink()
+    pipe.generate_r2v("live", reference_path=b, seed=1)
+    with pytest.raises(FileNotFoundError):  # allow-pytest.raises: CPU-only contract
+        pipe.generate_r2v("legacy", seed=1)
+
+
+def test_live_native_cache_and_endpoint_updates_after_replay(contract, monkeypatch):
+    # Execute the real generate/encode_reference with native boundaries mocked.
+    # This tests wrapper -> native cache keys and encode dispatch, not device safety.
+    import torch
+
+    c = contract
+    helper_path = Path(__file__).with_name("test_ic_trace_generate.py")
+    spec = importlib.util.spec_from_file_location("iclora_native_shim", helper_path)
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    native, ns = helper._make_generate_pipe()
+    tree = ast.parse(helper.DISTILLED_PATH.read_text())
+    ref_pin = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "ref_with_frame0")
+    exec(compile(ast.Module(body=[ref_pin], type_ignores=[]), str(helper.DISTILLED_PATH), "exec"), ns)
+    native._load_conditioning_image = lambda path, h, w: torch.full(
+        (1, 3, 1, h, w), float(Image.open(path).getpixel((0, 0))[0])
+    )
+    c.fixture["generation"].update(height=64, width=64, num_frames=17, ref_frames=17)
+    for key in ("first_frame", "last_frame"):
+        binding = c.fixture["acceptance"][key]
+        Image.new("RGB", (64, 64), "red").save(binding["path"])
+        binding["sha256"] = c.module.file_digest(binding["path"])
+    built = []
+    monkeypatch.setattr(c.module, "_native_factory", lambda: lambda *a, **kw: (built.append(kw), native)[1])
+    pipe = c.create(traced=True)
+    a = c.fixture["reference"]["path"]
+    b = c.bind("blue", True)["path"]
+    Image.new("RGB", (128, 128), "blue").save(b)
+    cache = native._ref_latent_cache
+    for path, encodes in ((a, 2), (b, 4), (a, 4)):
+        pipe.generate_r2v("switch", reference_path=path, seed=1)
+        assert native.encode_image.call_count == encodes
+        assert native._ref_latent_cache is cache
+        assert len(cache) <= c.module.REFERENCE_CACHE_ENTRIES
+    first = c.fixture["acceptance"]["first_frame"]["path"]
+    last = c.fixture["acceptance"]["last_frame"]["path"]
+    pipe.generate_r2v("pins", reference_path=a, first_frame=first, last_frame=last, seed=1)
+    assert native.encode_image.call_count == 8
+    Image.new("RGB", (64, 64), "blue").save(last)
+    pipe.generate_r2v("fresh endpoint", reference_path=a, first_frame=first, last_frame=last, seed=1)
+    assert native.encode_image.call_count == 10
+    # Same path, changed bytes: old digest is never used for the new sheet.
+    Image.new("RGB", (128, 128), "green").save(b)
+    pipe.generate_r2v("fresh sheet", reference_path=b, seed=1)
+    assert native.encode_image.call_count == 12
+    for i in range(8):
+        Image.new("RGB", (128, 128), (i, 10, 20)).save(b)
+        pipe.generate_r2v("bounded", reference_path=b, seed=i)
+        assert len(cache) == c.module.REFERENCE_CACHE_ENTRIES
+    assert len(built) == 1
+    assert all(call.kwargs["trace_key"] in ("s1_ref", "s2_ref") for call in native._denoise_no_guidance.call_args_list)
+
+
+@pytest.mark.parametrize("name,expected", [("ltx25-ic-6s-1080p", True), ("ltx25-ic-10s-1080p", True), ("ltx25-ic-6s-720p", False), (None, False)])
+def test_served_stage2_settings_use_existing_registration(contract, monkeypatch, name, expected):
+    calls = []
+    monkeypatch.setitem(sys.modules, "ttnn", SimpleNamespace(CoreCoord=lambda *args: args))
+    monkeypatch.setitem(sys.modules, "models.tt_dit.utils.matmul", SimpleNamespace(
+        FusedMMRSConfig=lambda *args, **kw: (args, kw), register_fused_mmrs_configs=calls.append))
+    contract.module._prepare_served_recipe(name)
+    assert len(calls) == int(expected)
+    if expected:
+        rows = calls[0][(12, 10)]
+        assert set(rows) == {(m, 4096, 4096) for m in (8928, 10464, 12000)}
+        assert all(row == (((12, 8), 6, 4, 16, 2, 2, None, 1), {"mm_window_blocks": None}) for row in rows.values())
 

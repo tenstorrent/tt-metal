@@ -67,6 +67,27 @@ ENVIRONMENT = {
     "LTX25_TEXT_STACK": "gemma4",
     "RUN_I2V": "1",
 }
+# ltx-server e3c36e568dab8bb920286cb470ccd325cf9d25f5 config.py:
+# LENGTH_PRESETS, RESOLUTIONS, REF_PIXEL_FRAMES and build_worker_env. These are
+# source-supported contracts, not native/quality/performance qualification.
+SERVED_RECIPES = {
+    f"ltx25-ic-{length}-{resolution}": (height, width, frames, length != "10s")
+    for length, frames in (("6s", 145), ("10s", 241))
+    for resolution, height, width in (("720p", 704, 1280), ("1080p", 1088, 1920), ("iclora", 448, 768))
+}
+REFERENCE_CACHE_ENTRIES = 2
+# Worker routing/export metadata. These do not override explicit pipeline assets
+# or generation arguments. Unknown LTX knobs still fail closed.
+WORKER_PATH_ENV = frozenset({
+    "LTX25_ROOT", "LTX_MODEL_ROOT", "LTX_SERVER_SRC", "LTX_SERVED_TT_METAL",
+    "LTX_WORKER_SCRATCH", "LTX_WORKER_TOKEN_FILE", "LTX_I2V_IMAGE", "LTX_REF_LATENT_DIR",
+})
+WORKER_ENVIRONMENT = {
+    "LTX_PIPELINE": "ltx25", "LTX_QUALITY": "high", "LTX25_DIFFVAE": "0",
+    "LTX_LORAS": "[]", "LTX_FAST": "0", "LTX_RELEASE_TRACES": "0",
+    "LTX_DIT_PREFETCH": "1", "LTX_YUV_FRAMES": "1", "LTX_EXPORT_PROCESS": "1",
+    "LTX_IMAGE_ENCODE_CACHE": "1", "LTX_CLAIM_AHEAD": "1", "LTX_FUSE_GATE_ON_DEVICE": "0",
+}
 RUNTIME_OPTIONS = frozenset({"sp_axis", "tp_axis", "num_links", "dynamic_load", "topology", "is_fsdp", "traced"})
 
 
@@ -112,10 +133,59 @@ def _still_image(path, geometry=None):
         image.verify()
 
 
-def _environment():
+def generation_recipe(name, *, mode="r2v"):
+    """Return a fresh, explicit served high-quality recipe (H,W,frames fixed).
+
+    Keep the legacy full-reference baseline in its fixture. Lower-resolution and
+    shorter-reference variants are opt-in by name; no recipe is qualified here.
+    """
+    _require(name in SERVED_RECIPES, f"unknown served recipe: {name}")
+    _require(mode in ("r2v", "fl2v"), "mode must be r2v or fl2v")
+    height, width, frames, _ = SERVED_RECIPES[name]
+    return dict(mode=mode, quality_variant=name, height=height, width=width,
+                num_frames=frames, ref_frames=121, fps=24, reference_strength=1.0,
+                pin_s1_strength=1.0, pin_s2_strength=1.0,
+                sampler="deterministic_euler_s1_ref_s2_ref",
+                s1_sigmas=list(S1_SIGMAS), s2_sigmas=list(S2_SIGMAS))
+
+
+def _environment(fixture, traced=None):
+    expected = {**ENVIRONMENT, **WORKER_ENVIRONMENT}
     for name, value in os.environ.items():
-        if name.startswith(("LTX_", "LTX25_")) or name == "RUN_I2V":
-            _require(name in ENVIRONMENT and value == ENVIRONMENT[name], f"incompatible environment: {name}={value!r}")
+        if not (name.startswith(("LTX_", "LTX25_")) or name == "RUN_I2V"):
+            continue
+        if name in WORKER_PATH_ENV:
+            valid = bool(value) and Path(value).is_absolute()
+        elif name == "LTX_CHECKPOINT":
+            valid = Path(value).resolve() == Path(fixture["assets"]["transformer"]["path"])
+        elif name == "LTX_TRACED":
+            valid = value in ("0", "1") and (traced is None or value == str(int(traced)))
+        elif name == "LTX_MESH":
+            valid = value in ("bh_4x8sp1tp0_ring", "bh_2x4sp1tp0")
+        elif name == "LTX_EDGE_WORKER_URL":
+            from urllib.parse import urlsplit
+
+            parsed = urlsplit(value)
+            valid = parsed.scheme in ("http", "https") and bool(parsed.hostname) and not parsed.username
+        else:
+            valid = name in expected and value == expected[name]
+        # Do not echo possibly sensitive values from an unknown worker setting.
+        _require(valid, f"incompatible environment: {name}")
+
+
+def _prepare_served_recipe(name):
+    if name not in SERVED_RECIPES or not name.endswith("-1080p"):
+        return
+    # ltx-server worker.py _register_ic_s2_mmrs: long 1080p reference sequences
+    # need the DRAM FF2 handoff in both warmup/capture and generation. Reuse the
+    # native registration helper before any buffers/captures are created.
+    import ttnn
+    from models.tt_dit.utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs
+
+    register_fused_mmrs_configs({ttnn.CoreCoord(12, 10): {
+        (m, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 16, 2, 2, None, 1, mm_window_blocks=None)
+        for m in (8928, 10464, 12000)
+    }})
 
 
 def _native_factory():
@@ -132,11 +202,12 @@ def _native_factory():
     )
 
     class ReferencePipeline(LTX25DistilledPipeline):
-        def __init__(self, *args, ref_num_frames, **kwargs):
+        def __init__(self, *args, ref_num_frames, served_recipe=None, **kwargs):
             # The base constructor forces warmup when traced, including its cold
             # kernel-manifest pass. Bind the reference recipe before either pass
             # can allocate or capture the default base trace families.
             self._iclora_ref_num_frames = ref_num_frames
+            _prepare_served_recipe(served_recipe)
             super().__init__(*args, **kwargs)
 
         def warmup_buffers(self, *args, **kwargs):
@@ -258,6 +329,11 @@ def load_fixture(fixture_path):
                 == (512, 768, 121, 121, 24, 1, 1, 1, 1),
                 "changed recipe requires a separately named quality variant",
             )
+        if g["quality_variant"] in SERVED_RECIPES:
+            _require(g == generation_recipe(g["quality_variant"], mode=g["mode"]) and adapter["scale"] == 1,
+                     "changed served recipe requires a separately named quality variant")
+        elif g["quality_variant"].startswith("ltx25-ic-"):
+            raise ValueError("unknown served recipe")
         _require(fixture["environment"] == ENVIRONMENT, "unsupported fixture environment recipe")
         reference = fixture["reference"]
         _text(reference["permission"], "reference use permission")
@@ -286,19 +362,22 @@ def load_fixture(fixture_path):
             raise ValueError("quality_reference must bind primary_recipe or baseline_media")
     except (KeyError, TypeError) as error:
         raise ValueError(f"incomplete or malformed fixture: {error}") from error
-    _environment()
+    _environment(fixture)
     return fixture
 
 
 class LTX25ICLoRAPipeline:
-    """One immutable reference session; calls must be serialized by its owner.
+    """One asset/shape session with live references; calls must be serialized.
 
-    Only continuation endpoint caches are managed here. The underlying
-    digest-keyed reference cache and native trace lifecycle stay unchanged.
+    The native digest-keyed reference cache is reused, bounded to two sheets.
+    Reference and endpoint files must remain unchanged until the call returns.
+    Assets are verified only at creation; reference changes never reload weights.
     """
 
-    def __init__(self, pipeline, fixture):
+    def __init__(self, pipeline, fixture, *, traced=True):
         self._pipeline = pipeline
+        self._traced = traced
+        self._gate_folding = os.environ.get("LTX_FUSE_GATE_ON_DEVICE")
         self._fixture = copy.deepcopy(fixture)
         self._endpoint_digests = {}
         self._owned_endpoint_keys = set()
@@ -309,6 +388,13 @@ class LTX25ICLoRAPipeline:
         _require(not (set(runtime_options) - RUNTIME_OPTIONS), "unsupported runtime option overrides fixture bindings")
         fixture = load_fixture(fixture_path)
         g = fixture["generation"]
+        recipe = SERVED_RECIPES.get(g["quality_variant"])
+        if recipe is not None:
+            _require(runtime_options.get("traced", recipe[3]) is recipe[3], "traced conflicts with served recipe")
+            runtime_options["traced"] = recipe[3]
+        traced = runtime_options.get("traced", True)
+        _require(type(traced) is bool, "traced must be boolean")
+        _environment(fixture, traced)
         pipeline = _native_factory()(
             mesh_device,
             **{name: asset["path"] for name, asset in fixture["assets"].items()},
@@ -321,22 +407,25 @@ class LTX25ICLoRAPipeline:
             height=g["height"],
             width=g["width"],
             fps=g["fps"],
+            **({"served_recipe": g["quality_variant"]} if recipe else {}),
             **runtime_options,
         )
-        return cls(pipeline, fixture)
+        return cls(pipeline, fixture, traced=traced)
 
     @property
     def resolved_fixture(self):
         return copy.deepcopy(self._fixture)
 
     def _validate_session(self):
-        _environment()
-        _verify_file(self._fixture["reference"], Path("/"))
+        _environment(self._fixture, self._traced)
+        _require(os.environ.get("LTX_FUSE_GATE_ON_DEVICE") == self._gate_folding,
+                 "incompatible environment: LTX_FUSE_GATE_ON_DEVICE changed")
 
     def warmup_buffers(self):
         _require(self._call_lock.acquire(blocking=False), "concurrent session call")
         try:
             self._validate_session()
+            _verify_file(self._fixture["reference"], Path("/"))
             g = self._fixture["generation"]
             return self._pipeline.warmup_buffers(
                 num_frames=g["num_frames"],
@@ -348,14 +437,21 @@ class LTX25ICLoRAPipeline:
         finally:
             self._call_lock.release()
 
-    def generate_r2v(self, prompt, *, first_frame=None, last_frame=None, seed, output_path=None, output_type="rgb"):
+    def generate_r2v(self, prompt, *, reference_path=None, reference_sha256=None,
+                     first_frame=None, last_frame=None, seed, output_path=None, output_type="rgb"):
+        """Generate with a request's ingredient sheet and independent endpoint pins.
+
+        Omit reference_path to use the digest-bound legacy fixture sheet. A supplied
+        SHA256 is verified, never trusted as a cache key. Otherwise hash current
+        reference bytes; even overwrites at the same path get a fresh cache entry.
+        """
         _require(self._call_lock.acquire(blocking=False), "concurrent session call")
         try:
-            return self._generate(prompt, first_frame, last_frame, seed, output_path, output_type)
+            return self._generate(prompt, reference_path, reference_sha256, first_frame, last_frame, seed, output_path, output_type)
         finally:
             self._call_lock.release()
 
-    def _generate(self, prompt, first_frame, last_frame, seed, output_path, output_type):
+    def _generate(self, prompt, reference_path, reference_sha256, first_frame, last_frame, seed, output_path, output_type):
         self._validate_session()
         _text(prompt, "prompt")
         _require(type(seed) is int and 0 <= seed < 2**32, "seed must be uint32")
@@ -364,6 +460,21 @@ class LTX25ICLoRAPipeline:
         _require(
             g["mode"] != "fl2v" or (first_frame is not None and last_frame is not None), "FL2V requires both endpoints"
         )
+        if reference_path is None:
+            reference_path = self._fixture["reference"]["path"]
+            expected_digest = self._fixture["reference"]["sha256"]
+        else:
+            _require(isinstance(reference_path, (str, os.PathLike)) and bool(str(reference_path)), "invalid reference path")
+            expected_digest = reference_sha256
+        path = str(Path(reference_path).resolve(strict=True))
+        _still_image(path)
+        digest = file_digest(path)
+        for expected in (expected_digest, reference_sha256):
+            if expected is not None:
+                _hash(expected, "reference digest")
+                _require(digest == expected, "reference digest mismatch")
+        reference_key = (digest, g["ref_frames"], g["height"], g["width"])
+        reference_path = path
         images, active_digests, active_keys = [], {}, set()
         cache = self._pipeline._i2v_cond_cache
         for endpoint, index in ((first_frame, 0), (last_frame, g["num_frames"] - 1)):
@@ -380,6 +491,14 @@ class LTX25ICLoRAPipeline:
             active_digests[path] = digest
             active_keys.update(keys)
             images.append((path, index, g["pin_s1_strength"], g["pin_s2_strength"]))
+        # Host tensor cache, not trace IO: evict without releasing/reallocating any
+        # native trace buffers. Preserve the existing dict for serving cache hooks.
+        ref_cache = self._pipeline._ref_latent_cache
+        if reference_key in ref_cache:
+            ref_cache[reference_key] = ref_cache.pop(reference_key)
+        limit = REFERENCE_CACHE_ENTRIES - (reference_key not in ref_cache)
+        while len(ref_cache) > limit:
+            ref_cache.pop(next(iter(ref_cache)))
         self._owned_endpoint_keys.update(active_keys)
         success = False
         try:
@@ -388,7 +507,7 @@ class LTX25ICLoRAPipeline:
                 output_path=str(output_path) if output_path is not None else None,
                 output_type=output_type,
                 images=images or None,
-                reference_video=(self._fixture["reference"]["path"], g["reference_strength"]),
+                reference_video=(reference_path, g["reference_strength"]),
                 ref_frames=g["ref_frames"],
                 num_frames=g["num_frames"],
                 height=g["height"],
@@ -399,6 +518,8 @@ class LTX25ICLoRAPipeline:
             success = True
             return result
         finally:
+            if not success:
+                ref_cache.pop(reference_key, None)
             keep = active_keys if success else set()
             for key in self._owned_endpoint_keys - keep:
                 cache.pop(key, None)
