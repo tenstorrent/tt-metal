@@ -218,7 +218,19 @@ def test_a_checkpoint_two_ranks_wrote_on_one_mesh_loads_on_one_process(
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
     module = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_dcp_multirank.py")
     save = [TT_RUN, "--mesh-graph-descriptor", mgd, "--hosts", socket.gethostname(), "--mpi-args", "--tag-output"]
-    save += [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", module, "-k", "for_the_one_process_load"]
+    # "--" ends tt-run's own options: its -m would otherwise take "pytest" for a mesh graph descriptor.
+    save += [
+        "--",
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        module,
+        "-k",
+        "for_the_one_process_load",
+    ]
     proc = run_world(save, env, CHILD_TIMEOUT_S)
     tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-40:])
     assert proc.returncode == 0 and os.path.isfile(tmp_path / "shards_1.npz"), f"the dual-rank save failed:\n{tail}"
