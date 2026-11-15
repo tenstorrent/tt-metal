@@ -1,4 +1,4 @@
-# L1 ledger: gated_delta_net (regimes R-STEP, R-VSPLIT, R-CHUNK, R-BCAST, R-PREP and R-QKCORE)
+# L1 ledger: gated_delta_net (regimes R-STEP, R-VSPLIT, R-CHUNK, R-BCAST, R-PREP (+ q / k cores) and R-QKCORE)
 
 Refinement 3 (R-VSPLIT): a core runs one unit = one piece of a pair, owning `Vb = Vt / pieces` state
 columns (`v_block_tiles`; R-STEP is `Vb = Vt`). Every `Vt` below is the unit's `Vb`; capacities are
@@ -242,6 +242,29 @@ NoC per tile row and key head: r head blocks of 15 fp32 tiles (60 KB) unicast to
 r Vt o tiles back (48 KB), 2 r pieces grant / landed semaphore increments. Since Refinement 11 each group's state
 cores sit among its own prep cores (`PREP_CLUSTER`) and each prep core sends on the NoC with the shorter paths to
 them (`PREP_SEND_NOC` "auto").
+
+## R-PREP q / k cores (Refinement 14, PREP_SHARE_QK)
+
+Per (sequence, key head, stride position) a q core and a k core (role ROLE_PREP_QK) convolve and L2-normalize the key
+head's q (k) columns of the position's tile rows and write qn (kn) into cb_kq_rows of the position's prep cores (one per
+value-head group). Chosen by `_prep_estimate` on 2 to 16 tile rows (one value head per group); h = 3 calls keep
+the prep cores' own q / k part. Changes against the R-PREP prep plan:
+
+| Buffer | Role | Pages | Why / shares with |
+|---|---|---|---|
+| cb_kq_rows (+ f32 alias) | prep (remote, leads the region with cb_o_in) | `PREP_KQ_DEPTH * 2Kt` (2 rows) | written by the q / k cores at slot k % depth (qn half by the q core, kn half by the k core); the reader grants a slot on reserve and pushes it once both landed counters reach the row; not with cb_y_qk (gone on these cores) |
+| cb_y_qk, cb_sq, cb_rinv | prep | 0 | no q / k columns on a prep core |
+| cb_conv_w, cb_window, cb_hist_stage | prep | the heads' v columns only (Vt / group of Vt) | the q / k columns moved to the q / k cores |
+| cb_qk_stage | q / k (leads its region: its writer's base) | `PREP_KQ_DEPTH * Kt` | compute runs a row ahead of the writer's sends |
+| cb_conv_w, cb_window, cb_conv_acc, cb_y_qk, cb_sq, cb_rinv, cb_hist_stage | q / k | Kt columns; window `4 * Kt * WINDOW_DEPTH`; rinv 1 | the q / k core's whole plan |
+
+Footprints (model geometry, 2 pieces, D = 4): T = 128 / 512 bf16 state 432,256, prep 479,360, q / k 163,968 B;
+fp32 state 432,192, prep 673,856, q / k 305,216 B (budget 1,087,424). The prep plan shrinks by the q / k columns'
+conv weights, window and L2 buffers less the second cb_kq_rows row.
+
+Data movement: mixed_qkv / conv_state / conv_weight q / k columns are read once per (key head, tile row) instead of
+once per value head (r = 3 at the model geometry); adds per tile row and key head 2 Kt fp32 tiles of NoC writes to each
+of the r prep cores (qn and kn, 32 KB each at Kt = 4).
 
 ## R-QKCORE (Refinement 7)
 

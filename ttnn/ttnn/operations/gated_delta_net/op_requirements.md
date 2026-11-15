@@ -542,7 +542,7 @@ attributes, and on every hit the slow path re-applies all per-core runtime args 
 generic_op hit path that patches only common args (or the ProgramSpec path with tensor bindings); not done here
 because it is framework code, not this op.
 
-### [ ] Refinement 14 — Prefill: q / k preparation once per key head
+### [x] Refinement 14 — Prefill: q / k preparation once per key head
 
 **Type**: perf
 
@@ -560,6 +560,15 @@ cases at 0.002). Decode guard set unchanged.
 
 **Done when**: measured device-ns at T=128, T=512 and `model_prefill_4096` improve, the golden suite is
 green, no regression on the decode guard set.
+
+**Outcome**: q / k cores per (sequence, key head, stride position) feeding the value-head groups' prep cores
+(`PREP_SHARE_QK` auto). Device us before -> after: T=64 72.7 -> 49.2, T=128 82.3 -> 65.9, T=256 134 -> 99.6,
+T=512 196.4 -> 179.4; T=1024 299, T=2048 526 and model_prefill_4096 912.8 -> 910.2 unchanged (they keep h = 3, where
+one prep core already preps q / k once for all three value heads: measured shared at T=1024 341 vs 299). Decode guard
+unchanged. Bottleneck now: a shared prep core's tile row is 34-40 us (gates, v conv, head prep 7.4, head block 9.8,
+RMS), so T >= 32 tile rows stays prep-throughput bound and T=128 is the one-row fill (~45 us) plus 4 state steps. Next
+for T=4096: cut the head part itself (head prep / head block per value head, ~17 us), since sharing frees no work
+there; not attempted here because it is a different lever from this refinement's.
 
 ### [ ] Refinement 15 — Decode B=8 / B=16: state write-back on both RISCs and both NoCs
 

@@ -31,6 +31,9 @@ def test_prep_predicate(device):
     # Short calls (2 to 16 tile rows): one value head per prep group (Refinement 11).
     for tokens in (64, 96, 128, 512):
         assert gdn_pd._prep_layout(1, 12, 4, tokens, 4, 4, 2, True, ttnn.bfloat16, 86, budget)[2] == 1
+    # q / k cores (Refinement 14) on short calls, not where the three value heads already share them.
+    assert gdn_pd._prep_layout(1, 12, 4, 128, 4, 4, 2, True, ttnn.bfloat16, 84, budget)[3]
+    assert not gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 2, True, ttnn.bfloat16, 84, budget)[3]
     # Too few tile rows, not chunked, one piece per pair, or no idle core: local.
     assert gdn_pd._prep_layout(1, 12, 4, 32, 4, 4, 2, True, ttnn.bfloat16, 86, budget) is None
     assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 2, False, ttnn.bfloat16, 86, budget) is None
@@ -85,3 +88,35 @@ def test_prep_state_carry(device, monkeypatch):
         )
         hist, state = expected[1], expected[2]
         start += tokens
+
+
+@pytest.mark.parametrize("token_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 33, 256), (1, 3, 32, 64)), id="t33"),
+        pytest.param(((1, 200, 256), (1, 3, 32, 64)), id="t200"),
+        pytest.param(((1, 66, 256), (2, 3, 32, 64)), id="batched_b2_t33"),
+        pytest.param(((1, 128, 2560), (1, 12, 128, 128)), id="chip_t128"),
+        pytest.param(((1, 300, 2560), (1, 12, 128, 128)), id="chip_t300"),
+    ],
+)
+def test_prep_shared_qk(device, monkeypatch, inputs, token_dtype):
+    """Refinement 14: q / k cores (PREP_SHARE_QK) give the same bits as each prep core's own q / k part, at one value
+    head per prep group (the q / k part is then shared by the key head's groups)."""
+    from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_perf import _to_device
+
+    monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
+    monkeypatch.setattr(gdn_pd, "PREP_HEADS", 1)
+    torch.manual_seed(17)
+    tensors = make_inputs(inputs)
+    expected = reference(*(tensors[name] for name in ORDER))
+    results = {}
+    for shared in (True, False):
+        monkeypatch.setattr(gdn_pd, "PREP_SHARE_QK", shared)
+        returned = gated_delta_net(*_to_device(tensors, device, token_dtype), compute_kernel_config=compute_config())
+        if token_dtype == ttnn.float32:
+            check_call(returned, expected, inputs)
+        results[shared] = [ttnn.to_torch(t) for t in returned]
+    for got, ref, name in zip(results[True], results[False], ("output", "conv_state_out", "recurrent_state_out")):
+        assert torch.equal(got, ref), f"{name}: shared q / k differs from the prep cores' own"

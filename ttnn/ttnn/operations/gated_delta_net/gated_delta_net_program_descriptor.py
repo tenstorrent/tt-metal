@@ -95,6 +95,7 @@ PREP_HEADS = None
 # False, or "auto": where _prep_estimate models it faster (short calls, whose time is the pipeline fill).
 PREP_SHARE_QK = "auto"
 PREP_KQ_DEPTH = 2  # tile rows of landed qn / kn a prep core holds (slots of its cb_kq_rows)
+PREP_QK_GROUP_COLS = None  # q / k core columns per window hand-off (a divisor of Kt); None: as a prep core's
 # _prep_estimate cost model, device us at the model geometry (Kt = Vt = 4, bf16): a prep core's tile row is the q / k
 # part plus one part per value head, the state step one tile row (a base plus one part per state column tile of the
 # piece). Fits T = 64..4096: h = 1 wins to 16 tile rows per sequence (T=512 199 vs 214 us), h = 3 from 32 (T=1024
@@ -428,8 +429,11 @@ def _prep_unit_cols(Kt, Vt, heads, shared, role):
     return (0 if shared else 2 * Kt) + heads * Vt
 
 
-def _prep_group_cols(cols):
+def _prep_group_cols(cols, qk_core=False):
     """Columns per window hand-off of an R-PREP prep or q / k core with `cols` window columns."""
+    if qk_core and PREP_QK_GROUP_COLS is not None:
+        assert cols % PREP_QK_GROUP_COLS == 0, "PREP_QK_GROUP_COLS must divide Kt"
+        return PREP_QK_GROUP_COLS
     return cols if cols <= PREP_WINDOW_MAX_COLS else _largest_divisor_at_most(cols, WINDOW_GROUP_MAX_COLS)
 
 
@@ -471,7 +475,7 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False):
         group = _prep_group_cols(cols)
         prep.update({CB_CONV_W: taps * cols, CB_WINDOW: CONV_TAPS * group * WINDOW_DEPTH, CB_HIST_STAGE: 2 * group})
         prep.update({CB_Y_QK: 0, CB_SQ: 0, CB_RINV: 0, CB_KQ_ROWS: PREP_KQ_DEPTH * 2 * Kt})
-        group = _prep_group_cols(Kt)
+        group = _prep_group_cols(Kt, True)
         qk = {
             CB_QK_STAGE: PREP_KQ_DEPTH * Kt,
             CB_CONV_W: taps * Kt,
@@ -1214,7 +1218,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         role_pieces = 1 if role == ROLE_PREP else pieces
         group_cols = _window_group_cols(Kt, unit_v, role_pieces, role == ROLE_PREP)
         if role in (ROLE_PREP, ROLE_PREP_QK) and (shared or role == ROLE_PREP_QK):
-            group_cols = _prep_group_cols(_prep_unit_cols(Kt, Vt, heads, shared, role))
+            group_cols = _prep_group_cols(_prep_unit_cols(Kt, Vt, heads, shared, role), role == ROLE_PREP_QK)
         if qk_cores:
             group_cols = 1 if role == ROLE_QK else v_block_tiles  # q / k core: per column; pair core: per unit
         reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
@@ -1322,7 +1326,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         for core, kh_first, q, stride, role, dests in prep_qk_units:
             seq = kh_first // pieces // value_heads
             my_rows = len(range(q, _seq_tile_rows(seq, tokens), stride))
-            zero_slots, zero_slot_bytes = window_zeroing(Kt, _prep_group_cols(Kt), my_rows)
+            zero_slots, zero_slot_bytes = window_zeroing(Kt, _prep_group_cols(Kt, True), my_rows)
             rows = [q, stride, 1]
             dst_noc = [device.worker_core_from_logical_core(d) for d in dests]
             rts[0][core.x, core.y] = [kh_first, 1, tokens, role, zero_slots] + rows

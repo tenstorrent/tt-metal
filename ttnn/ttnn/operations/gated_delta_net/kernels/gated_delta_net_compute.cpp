@@ -1083,7 +1083,8 @@ ALWI void gram_block(Buffers& bufs) {
 // no token, so c is flat there and those rows neither decay nor write) and the gram tiles. row_last: tile-local
 // last token row. D, c, exp(c), exp(c_last - c), beta exp(c) -> cb_chunk_vec (every column of row s holds row s's
 // value); L, QD -> cb_chunk_mat (local) or, on a prep core, the head's block of cb_prep_send (head_block).
-ALWI void head_prep(uint32_t row_last) {
+// head_prep_vectors needs only the gates; head_prep_matrices then the gram tiles.
+ALWI void head_prep_vectors(uint32_t row_last) {
     cb_wait_front(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
     cb_reserve_back(cb_chunk_vec, 2);
     tile_regs_acquire();
@@ -1146,6 +1147,9 @@ ALWI void head_prep(uint32_t row_last) {
     }
     tile_regs_release();
     cb_push_back(cb_chunk_vec, GDN_CHUNK_VEC_PAGES - 2);
+}
+
+ALWI void head_prep_matrices() {
     cb_reserve_back(cb_chunk_mat, PREP ? 1 : GDN_CHUNK_MAT_PAGES);
 
     // L and QD: fp32 SFPU products of the gram tiles with D and beta.
@@ -1172,6 +1176,11 @@ ALWI void head_prep(uint32_t row_last) {
     tile_regs_release();
     cb_push_back(cb_chunk_mat, PREP ? 1 : GDN_CHUNK_MAT_PAGES);
     cb_wait_front(cb_chunk_vec, GDN_CHUNK_VEC_PAGES);
+}
+
+ALWI void head_prep(uint32_t row_last) {
+    head_prep_vectors(row_last);
+    head_prep_matrices();
 }
 
 // R-PREP prep core, after head_prep: the rest of value head `head`'s block. M = (I + L)^-1 (fp32 forward substitution
@@ -1621,17 +1630,22 @@ ALWI void prep_main(
             } else {
                 conv_block(full, cols, 0, cols.count());
             }
-            if constexpr (PREP_SHARED_QK) {
-                kn_transpose_block(bufs);  // on kn / qn as landed by the reader
-            } else {
-                l2norm_block(bufs, full);
-            }
-            gram_block(bufs);
             cb_wait_front(cb_tri_mask, 2);  // writer-built once (mask, identity), held for the kernel
             cb_wait_front(cb_v_prep, Vb);
 #pragma GCC unroll 1
             for (uint32_t head = 0; head < RATIO; ++head) {
-                head_prep(hi - 1 - base_row);
+                // The first head's chunk vectors need only the gates: under PREP_SHARE_QK they run while qn / kn are
+                // still on their way from the q / k cores.
+                head_prep_vectors(hi - 1 - base_row);
+                if (head == 0) {
+                    if constexpr (PREP_SHARED_QK) {
+                        kn_transpose_block(bufs);  // on kn / qn as landed by the reader
+                    } else {
+                        l2norm_block(bufs, full);
+                    }
+                    gram_block(bufs);
+                }
+                head_prep_matrices();
                 head_block(head);
             }
             cb_pop_front(cb_v_prep, Vb);

@@ -190,6 +190,15 @@ Each group's state cores are placed among its own prep cores (`PREP_CLUSTER`), e
 the shorter paths to them (`PREP_SEND_NOC`), head blocks are unicast (`PREP_MCAST` off) and streamed part by part in
 pack order [exp(c) | QD, M | kq | knT | v]; the prep core makes norm_weight (*) silu(z) before o returns.
 model_prefill_4096 0.91 ms, T=128 82 us (was 188).
+Refinement 14 (q / k cores, `PREP_SHARE_QK` "auto"): per (sequence, key head, stride position) a q core and a k core
+(ROLE_PREP_QK) run conv + L2 norm of the key head's q (k) columns once per tile row and write qn (kn) into cb_kq_rows
+of the position's prep cores of every value-head group (slot k % `PREP_KQ_DEPTH`; the prep core's reader grants the
+slot on one counter per destination at the q / k core and hands the row to compute once both landed counters reach
+it). Those prep cores convolve only their v columns, run the first head's chunk vectors while qn / kn are in flight,
+then kn^T, the gram tiles and the head blocks as before. `_prep_estimate` adds 2 cores per position and models the
+prep row as the head part plus `PREP_KQ_ROW_US`, the fill plus `PREP_QK_FILL_US`: chosen on 2 to 16 tile rows (T=128
+82 -> 66 us, T=512 196 -> 179), not from 32 (h = 3 already shares the q / k part on one core; moving it to other
+cores frees no work). Shared and own q / k are bit-identical (`test_prep_shared_qk`).
 Regime-pinned tests: `test_gated_delta_net_prep.py` (predicate; forced R-PREP vs local on one-tile-row, partial,
 batched and long calls, clean and inf padding; state carried over two R-PREP calls and a decode call).
 
