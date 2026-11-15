@@ -460,3 +460,98 @@ build of decode B=16 is 1,920 B over): if this needs code, first move roles into
 guard set.
 
 **Outcome**: device kernel time (model geometry, bf16, one fresh run of 3 launches each, same session), before -> after: T=32 67.5 -> 63.6 us (local chunk step kept: one tile row), T=64 118 -> 72.7, T=96 168.5 -> 77.6, T=128 188 -> 82.0 (2.3x, 96 cores; aim 80 not reached), T=256 220-239 -> 134, T=512 282-325 -> 196, T=1024 ~390 -> 298, model_prefill_4096 1.09 -> 0.91 ms; batched B=2 T=40 224 -> 126; decode guards unchanged (B=1 22.0, B=8 40.0, B=16 73.3). Landed: R-PREP from 2 tile rows on; prep groups of `PREP_HEADS` value heads (1 for short calls: one tile row's prep spread over 3x the cores) and the piece count (4 up to 5 tile rows, else 2) picked by a fitted cost model; each group's state cores placed among its prep cores with a per-core send NoC (also what moved T=4096); head blocks unicast and streamed part by part as compute packs them; norm_weight (*) silu(z) made before o lands; the triangular mask built on the writer; state cores read S0 before their first row lands. Measured worse and parked off: one window group per prep tile row (87.8 vs 82.7 us). What binds at T=128 now: the prep core's serial compute after its inputs land (~7 us): conv 17.6 (12 fp32 silu tiles), L2 norm 10, head prep 7.4, head block 9.8 us, then 4 state steps of 3.1 us and a ~6 us RMS + store tail. Next: share the q / k part per key head across cores (a q core and a k core per tile row feeding the value heads' prep cores, as R-QKCORE does for decode): about 22 of the prep core's 45 us is q / k work redone by every value head's prep core; not done here because it needs a new cross-core hand-off between prep cores. The compute kernel was not split per role: every addition compiles only into chunked (R-PREP) builds, so the decode builds near the kernel-config limit are unchanged.
+
+### [ ] Refinement 12 — L1 footprint: the op must run beside L1 tensors the caller holds
+
+**Goal**: in the model this op is for, a prefill call with T=2048 fails at dispatch (operator, at e3ba5fa,
+full model on four chips): `Statically allocated circular buffers in program 118 clash with L1 buffers on
+core range [2-2 - 2-2]. L1 buffer allocated at 1537792 and static circular buffer region ends at 1562688`.
+The op's static CB region reaches 1,562,688 B on that core, almost the whole L1, and overlaps by 24,896 B
+an L1 tensor the model keeps alive across the call (its residual stream is L1 width-sharded). Shorter
+calls (T=128) and decode run. Requirement: on every core it uses, for every shape in the golden INPUTS
+and for prefill T = 2048 and 4096 at the model geometry (Hk=4, Hv=12, K=V=128), the op's static CB
+region must end at or below 1,200,000 B, so that at least about 260 KB of L1 stay free for the caller's
+tensors; state this bound in l1_ledger.md and check it on the host (a RuntimeError that names the core
+role and its footprint if a shape cannot meet it; none of the shapes above may raise). Get there by
+sizing CBs to what each role needs (preparation cores, state cores, injectors, pieces: a role must not
+reserve the buffers of another role), by depth knobs, and by streaming instead of staging; not by
+giving up the regimes of Refinements 6 and 11.
+
+**Implementation skill**: /memory-budget-metal
+
+**Verifier notes**: add a unit test that allocates an L1 tensor of 256 KB per core on the whole grid
+(width- or block-sharded, kept alive) and then calls the op for decode B=1, B=16, prefill T=128,
+T=2048, T=4096: all must dispatch and match the default results. Guard set must not get slower:
+`perf_decode_b1` 22.2 us, `model_decode_b8` 39.6, `model_decode_b16` 72.7, `model_prefill_4096`
+0.912 ms, prefill T=128 81.9 us, T=512 196.1 us (operator, medians of 11 launches at e3ba5fa).
+
+**Done when**: the new unit test passes, the footprint bound is checked on the host and documented, the
+golden suite is green with 0 loud categories, no regression on the guard set.
+
+### [ ] Refinement 13 — Host cost per call: build the program once per shape
+
+**Type**: perf
+
+**Goal**: the model's prefill is not traced, so every call pays the op's Python: validation, the
+work split, and a program descriptor for 96 to 108 cores with per-core runtime arguments. Evidence
+(operator, full model on four chips at e3ba5fa): with this op the device kernel chain of a T=128
+prefill call got 68 us shorter per layer (90.3 against 158.5 us between the projections), yet the
+model's time to first token got worse, 51.6 -> 53.2 to 54.7 ms over 48 layers: about 30 to 60 us of
+host time per call more than the chain of ops it replaces. Measure first: wall time per call
+(time.perf_counter around the call plus ttnn.synchronize_device, 200 calls, first call excluded) for
+prefill T=128 and decode B=1 with fixed shapes, split into validation, descriptor build and dispatch.
+Then cut it: everything that depends only on shapes, dtypes, the grid and the config (work split, core
+roles, CB configs, kernel defines, compile-time args, core ranges) is computed once and cached under a
+key of exactly those inputs; a call with a known key only fills in buffer addresses and the runtime
+arguments that really change; merged core ranges per role instead of one range per core where the
+kernel and its compile-time args are the same; no per-call Python loops over cores where a vectorised
+or cached form exists. The cache must not hold tensors alive and must be correct when the same shape
+arrives with other tensors, another device, or in-place outputs.
+
+**Verifier notes**: results must be bit-identical to before (same kernels, same arguments). Add a
+unit test that calls two different shapes alternately (cache keys do not collide) and one that calls
+the same shape with different tensors and with in-place outputs. Device kernel time of the guard set
+unchanged.
+
+**Done when**: measured host wall time per call for prefill T=128 and decode B=1 drops by a large
+factor on repeat calls and the numbers before / after are in the Outcome, the golden suite is green,
+no regression on the guard set.
+
+### [ ] Refinement 14 — Prefill: q / k preparation once per key head
+
+**Type**: perf
+
+**Goal**: prefill at the model geometry. Measured (operator, medians of 11 launches at e3ba5fa): T=128
+81.9 us on 96 cores, T=512 196.1 us on 108 cores, `model_prefill_4096` 0.912 ms on 108 cores. By the
+Refinement 11 outcome a preparation core spends about 45 us per tile row after its inputs land (conv
+17.6, L2 norm 10, head prep 7.4, head block 9.8 us) and about 22 us of that is q / k work that every
+value head's preparation core repeats for the same key head (3 value heads per key head). Build the
+sharing that decode already has (R-QKCORE): per tile row a q core and a k core per key head run conv +
+L2 norm once and feed the value heads' preparation cores, which keep only v, the gates, the head
+block and the RMS part. Aim: T=128 toward 60 us, T=4096 below 0.8 ms. No SUPPORTED change.
+
+**Verifier notes**: within the L1 bound of Refinement 12. State precision as before (state-carry
+cases at 0.002). Decode guard set unchanged.
+
+**Done when**: measured device-ns at T=128, T=512 and `model_prefill_4096` improve, the golden suite is
+green, no regression on the decode guard set.
+
+### [ ] Refinement 15 — Decode B=8 / B=16: state write-back on both RISCs and both NoCs
+
+**Type**: perf
+
+**Goal**: `model_decode_b16` 72.7 us on 104 cores (1.41x the DRAM bank bound of 51.7 us, goal 57.5 us)
+and `model_decode_b8` 39.6 us (1.50x of 26.4 us, goal 29.3 us), operator medians of 11 launches at
+e3ba5fa. By the Refinement 9 outcome the state writes bind: 12.6 MB at B=16, starting when the first
+units' states are final (about 30 us in) and issued by one RISC per core on one NoC (16 us to issue a
+64 KB state under back-pressure), ending at 48 to 72 us with a gradient across the grid per NoC.
+Levers named there, by measurement: split each core's state write across both RISCs and both NoCs;
+choose each core's NoC by its path to the DRAM banks; start the write-back of a pair's state earlier
+(the per-unit token step is 10.3 us: its final tiles can leave as they are packed); the read side the
+same way if it helps. No SUPPORTED change.
+
+**Verifier notes**: in-place outputs (Refinement 10) must stay bit-identical to the default path:
+every read of a region before any write of it. Must not slow `perf_decode_b1` or prefill.
+
+**Done when**: measured device-ns on both cases improves toward the goals, in-place tests pass, the
+golden suite is green, no regression on the guard set.

@@ -1,0 +1,64 @@
+{
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[perf_decode_b1-1x1x2560_1x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]": {
+    "math_fidelity": "HiFi4",
+    "pcc_threshold": 0.995,
+    "output_rms_threshold": 0.04,
+    "state_pcc_threshold": 0.999,
+    "rms_threshold": 0.01,
+    "goal_kernel_ns": 5300,
+    "bound_kernel_ns": 4800,
+    "goal_basis": "Model profile: Qwen3.8-27B GDN layer, one chip of four: Hk=4, Hv=12, K=V=128, C=2560, B=1, T=1; per-token tensors and conv_state bfloat16, recurrent_state float32, DRAM interleaved, HiFi4, fp32_dest_acc_en=True. Goal: device kernel time <= (bytes read + bytes written over DRAM) / (0.9 x DRAM rate): 1392640 B read + 1048576 B written, 8 banks at 47.18 B/cycle each at 1350 MHz, 110 worker cores -> bound 4.8 us, goal 5.3 us (90 % of DRAM bandwidth). The state (786432 B) must cross DRAM once in and once out; everything else in the call is small.",
+    "perf_counts": "{'dram_bytes_once': 2441216, 'dram_bytes_read': 1392640, 'dram_bytes_written': 1048576, 'state_bytes_both_ways': 1572864, 'tiles_read': 488, 'tiles_written': 320, 'work_units': 12, 'priced_core_cycles': 29696, 'unpriced_vector_engine_tile_passes': 728}"
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_decode_b8-1x8x2560_8x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]": {
+    "math_fidelity": "HiFi4"
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_decode_b16-1x16x2560_16x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]": {
+    "math_fidelity": "HiFi4"
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_prefill_4096-1x4096x2560_1x12x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "math_fidelity": "HiFi4"
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_prefill_then_decode-1x72x2560_1x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "math_fidelity": "HiFi4",
+    "calls": "[64, 1, 1, 1, 1, 1, 1, 1, 1]"
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[prefill_then_decode_f32-1x72x2560_1x12x128x128-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "calls": "[64, 1, 1, 1, 1, 1, 1, 1, 1]",
+    "poison_state_padding": 10000.0
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[state_carry_f32-1x768x640_1x3x128x128-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "calls": "[512, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]",
+    "input_gen": "state_carry",
+    "seed": 0,
+    "rms_threshold": 0.002
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[state_carry_bf16-1x768x640_1x3x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "calls": "[512, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]",
+    "input_gen": "state_carry",
+    "seed": 0,
+    "rms_threshold": 0.002
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[state_carry_one_call_f32-1x4096x640_1x3x128x128-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "input_gen": "state_carry",
+    "seed": 0,
+    "rms_threshold": 0.002
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[softplus_switch_slow_decay-1x96x256_1x3x32x64-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "calls": "[32, 1, 31, 32]",
+    "input_gen": "softplus_switch",
+    "seed": 0
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[poison_decode_b3-1x3x256_3x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]": {
+    "poison_padding": 10000.0
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[poison_prefill_t33-1x33x256_1x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "poison_padding": 10000.0
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[poison_inf_decode_b3-1x3x256_3x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]": {
+    "poison_padding": Infinity
+  },
+  "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[poison_inf_prefill_t33-1x33x256_1x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]": {
+    "poison_padding": Infinity
+  }
+}
