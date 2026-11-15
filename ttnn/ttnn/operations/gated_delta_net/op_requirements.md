@@ -314,3 +314,63 @@ of the two pairs does not serialize their reads behind each other's compute. Mus
 golden suite is green, no regression on `perf_decode_b1` and `model_prefill_4096`.
 
 **Outcome**: model_decode_b8 62.0 -> 49.9 us, model_decode_b16 132.2 -> 86.0 us (74.0 / 148.4 at bd772ee; goals 29.3 / 57.5) with R-QKCORE: 8 q / k cores prep qn / kn of every sequence once per key head and multicast them; pair cores (sequences of one value head, two per core at B=16) read only v, S0, z and gates; conv_state_out written as whole tiles by the q / k cores; per-unit inputs double-buffered, same-head weights copied locally, writer barriers deferred past the next unit's coefficients. perf_decode_b1 / fp32 B=1 / prefill guard set at parity (same-session A/B). What binds now: per pair a fixed compute chain of ~19 us (token step 10.8 us of fp32 HiFi4 matmuls for one valid row, RMS 5.4, d + kn^T 2.3) after a 14-17 us q / k chain, then the state writes of all cores at once (6.3 MB, 12.4 us at the DRAM rate) draining 15-30 us, slowest on the top grid rows (NOC 0 paths wrap the torus; a NOC 1 swap fixed their reads but slowed their writes, kept off). Next: overlap the state writes with compute (stream update batches to the writer instead of one push per pair), shorten the token step (both units of a B=16 core share kn / qn: one qk_finish, and the read matmul could carry both sequences' rows), and place the slow-row cores' writes on the NoC whose path does not wrap. Not done here: each needs its own measured pass, and the decode step's numerics (one-row matmuls) deserve a dedicated look.
+
+### [ ] Refinement 8 — Decode: shorten the q/k chain that every core waits for, and the one-row token step
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES[0]` (`perf_decode_b1`, flagged PERF FOCUS; goal 5.3 us, DRAM bank bound
+4.8 us). Measured on this op at f756a3d (operator, device kernel duration, median of 11 launches): 26.2 us on
+48 cores, 5.5x the bound; DRAM 18% used, NoC not bound (static bound / measured 0.19). Per-core zones
+(captures generated/chip_runs/gdn_v02_d1_*): every core ends within 22.6 to 26.4 us; TRISC_0 sits in
+cb_wait_front 70% of its span, median 15.8 us (11 to 18 us across cores): the 44 piece cores wait for the
+q / k injector chain of 4 cores (their readers span 12 to 15 us with 235 NoC calls each; the other readers
+6 us); compute after the wait is 7 to 9 us with the engines busy 12% of the window (FPU instruction waits
+at the head of math 21%, other 67%). Two regions:
+(1) the injector chain, about 15 us on the critical path of all cores: its read (6.8 us by the changelog:
+make it one burst of large aligned requests issued at once, no request waiting for another's barrier),
+conv + L2 norm (5.4 us: split each q / k part over more cores with partial L2 sums combined, or run q and k
+of a key head on more cores in parallel; 62 cores are idle), the hand-off (1.3 to 2.9 us). And let the
+piece cores do everything that does not need qn / kn while they wait: their state read, the decay
+exp(g) S, the v / z / gate prep, so that only the two reads and the rank-1 update follow the hand-off.
+(2) the token step for one live row (10.8 us of fp32 HiFi4 matrix products at B=8/16 by the Refinement 7
+outcome, plus RMS 5.4 and d + kn^T 2.3): the products run on whole tiles for a single valid row; use the
+cheapest correct form for one row (row-scoped products, fewer phases with fused setup, o from the updated
+state so that d is not needed if the numerics hold: gate it with the state-carry cases).
+No SUPPORTED change.
+
+**Verifier notes**: the carried state and exp(g) stay float32; narrow operands only where the spec allows
+(sums over K, the increment). Guard set as in Refinement 5, including `model_prefill_4096` (1.13 ms at
+f756a3d), `model_decode_b8` (49.3 us), `model_decode_b16` (86.3 us): none may get slower. The compute kernel
+is near the kernel-config size limit: remove superseded paths rather than add.
+
+**Done when**: measured device-ns on `perf_decode_b1` improves and moves toward 5.3 us, precision gates
+hold (state-carry cases at 0.002), the golden suite is green, no regression on the guard set.
+
+### [ ] Refinement 9 — Decode B=8 / B=16: the state write-back drain and the merging read chain
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES[2]` and `[1]` (`model_decode_b16`, `model_decode_b8`). Measured on this
+op at f756a3d (operator, median of 11 launches): B=16 86.3 us on 104 cores, 1.67x the DRAM bank bound of
+51.7 us (goal 57.5 us); B=8 49.3 us on 104 cores, 1.87x of 26.4 us (goal 29.3 us). B=16 per-core spans
+min 15, median 74, max 88 us; compute waits for input 44%; busy-time balance 1.03. NoC trace
+(generated/chip_runs/gdn_v02_d16_noc_c0): CONGESTED (merging chain), static bound / measured 0.68; DRAM
+bank 0 at 68% of its rate; link NOC0 E(0,11) at 45% with up to 169 flows on one link; 27.98 MB over DRAM
+against 26.36 MB that the tensors hold (1.6 MB crosses twice). By the Refinement 7 outcome the state
+writes of all cores start at once (6.3 MB, 12.4 us at the DRAM rate) and drain 15 to 30 us, slowest on
+the top grid rows, after a 14 to 17 us q / k chain and a 19 us per-pair compute chain. So the call is
+three serial stretches where the bound assumes one overlapped stream. Levers, by measurement: (a) overlap:
+the state read of a pair can start at launch and its write-back as soon as a state tile is final (tile by
+tile during the update, not all cores at the end), so reads, compute and writes of different pairs
+overlap; with 2 pairs per core, the second pair's read behind the first pair's compute; (b) spread: reads
+on NOC0 and writes on NOC1 with requests staggered over the 8 DRAM banks so that no bank and no link
+carries most flows (`noc_placement`, bank stagger; a core's two pairs on different banks); (c) no byte
+twice: find the 1.6 MB that crosses DRAM twice; (d) the q / k chain as in Refinement 8.
+No SUPPORTED change.
+
+**Verifier notes**: must not slow `perf_decode_b1` or `model_prefill_4096`. Outputs stay new tensors;
+no write into an input.
+
+**Done when**: measured device-ns on both cases improves toward the goals, precision gates hold, the
+golden suite is green, no regression on `perf_decode_b1` and `model_prefill_4096`.
