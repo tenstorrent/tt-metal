@@ -1,11 +1,18 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// gated_delta_net compute (regimes R-STEP and R-VSPLIT, op_design.md).
+// gated_delta_net compute (regimes R-STEP, R-VSPLIT and R-CHUNK, op_design.md).
 //
 // Per unit (pair, piece of Vb state columns; R-STEP is one piece of Vt), per tile row: gates_block ->
-// conv_block -> l2norm_block -> recurrence_block (one token per step: read matmul, token vector, state
-// update) -> rmsnorm_gate_block.
+// conv_block -> l2norm_block -> recurrence_block -> rmsnorm_gate_block. recurrence_block is one token
+// per step (read matmul, token vector, state update), or with CHUNKED (R-CHUNK, multi-token calls) one
+// closed-form chunk step over the tile row (F1, math.md):
+//   c = cumsum(g), D[s, s'] = exp(c[s] - c[s']) (s' <= s), L = diag(beta) (D * Kn Kn^T) strictly lower,
+//   (I + L) U = diag(beta) (V - diag(exp(c)) Kn S),  O = diag(exp(c)) Qn S + ((Qn Kn^T) * D) U,
+//   S <- exp(c_last) S + Kn^T (diag(exp(c_last - c)) U).
+// c, D, the chunk vectors and the solve (triangle_solve_tile, forward substitution on the SFPU) are fp32;
+// the state decay is the fp32 SFPU scalar multiply of the token step; the products with the state and
+// with U run on the matrix engine like the token step's reads and increment.
 //
 // Helpers: matmul_block (read [kn; qn] x S) and reduce (row sums, Accurate fp32). Raw LLK where the
 // design names a custom block op, with the reasons:
@@ -46,6 +53,12 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/relu.h"
+#include "api/compute/cumsum.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/transpose_dest.h"
+#include "api/compute/triangle_solve.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -88,11 +101,30 @@ constexpr uint32_t cb_sq_o = GDN_CB_SQ_O;
 constexpr uint32_t cb_rinv_o = GDN_CB_RINV_O;
 constexpr uint32_t cb_osum_part = GDN_CB_OSUM_PART;
 constexpr uint32_t cb_osum_gather = GDN_CB_OSUM_GATHER;
+constexpr uint32_t cb_gram = GDN_CB_GRAM;
+constexpr uint32_t cb_chunk_vec = GDN_CB_CHUNK_VEC;
+constexpr uint32_t cb_chunk_mat = GDN_CB_CHUNK_MAT;
+constexpr uint32_t cb_uw = GDN_CB_UW;
+constexpr uint32_t cb_tri_mask = GDN_CB_TRI_MASK;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t COEF_ALPHA = 0;      // alpha_p in every row
 constexpr uint32_t COEF_BETA_SEL = 1;   // beta_p at row p, 0 elsewhere
 constexpr uint32_t COEF_ALPHA_SEL = 2;  // alpha_p at row p, 0 elsewhere
+// R-CHUNK pages. Chunk coefficients (writer, column 0, 0 on rows that are no token):
+constexpr uint32_t CHUNK_G = 0;     // g
+constexpr uint32_t CHUNK_BETA = 1;  // beta
+// Chunk vectors (compute), in push order:
+constexpr uint32_t CV_D = 0;    // D[s, s'] = exp(c[s] - c[s']) for s' <= s, else 0
+constexpr uint32_t CV_C = 1;    // c[s] in every column of row s
+constexpr uint32_t CV_EC = 2;   // exp(c[s])
+constexpr uint32_t CV_W = 3;    // exp(c_last - c[s])
+constexpr uint32_t CV_BEC = 4;  // beta[s] exp(c[s]) (column 0)
+static_assert(CV_BEC + 1 == GDN_CHUNK_VEC_PAGES, "chunk vector pages");
+// Chunk matrices (compute):
+constexpr uint32_t CM_L = 0;   // beta[s] D[s, s'] (kn[s] . kn[s']): the solve reads only its strict lower part
+constexpr uint32_t CM_QD = 1;  // (qn[s] . kn[s']) D[s, s']
+static_assert(CM_QD + 1 == GDN_CHUNK_MAT_PAGES, "chunk matrix pages");
 
 constexpr uint32_t ONE_BITS = 0x3f800000u;
 constexpr uint32_t SOFTPLUS_THRESHOLD_BITS = 0x41a00000u;  // 20.0f
@@ -107,6 +139,7 @@ constexpr uint32_t Q_SCALE_BITS = get_compile_time_arg_val(5);
 constexpr bool CONV_ON_FPU = get_compile_time_arg_val(6) != 0;
 constexpr uint32_t PIECES = get_compile_time_arg_val(7);             // column pieces per pair (R-VSPLIT when > 1)
 constexpr uint32_t WINDOW_GROUP_COLS = get_compile_time_arg_val(8);  // columns per cb_window hand-off
+constexpr bool CHUNKED = get_compile_time_arg_val(9) != 0;           // R-CHUNK: one chunk step per tile row
 
 constexpr uint32_t largest_divisor_at_most(uint32_t n, uint32_t cap) {
     uint32_t best = 1;
@@ -149,6 +182,11 @@ ALWI void pack_first(uint32_t dst, uint32_t cb, uint32_t idx) {
 
 ALWI void pack_at(uint32_t dst, uint32_t cb, uint32_t idx) { pack_tile<true>(dst, cb, idx); }
 
+// Word index of element (r, c) of an fp32 tile (four 16x16 faces).
+constexpr uint32_t elem_index(uint32_t r, uint32_t c) {
+    return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15);
+}
+
 ALWI void wait_sfpu_before_fpu() {
 #ifdef TRISC_MATH
     TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::WAIT_SFPU);
@@ -161,7 +199,12 @@ ALWI void wait_sfpu_before_fpu() {
 struct RowScope {
     uint32_t band;  // band index 0..7, or FULL_TILE
     static constexpr uint32_t FULL_TILE = 0xffffffffu;
+    // R-CHUNK runs whole tiles: its calls are prefill (tile rows mostly full), and dropping the band
+    // variants keeps the math thread's code inside the kernel-config text budget.
     static RowScope of(uint32_t row_lo, uint32_t row_hi) {
+        if constexpr (CHUNKED) {
+            return {FULL_TILE};
+        }
         return {(row_lo >> 2) == ((row_hi - 1) >> 2) ? (row_lo >> 2) : FULL_TILE};
     }
 };
@@ -359,6 +402,7 @@ struct Buffers {
 
 // ---------------------------------------------------------------- gates_block
 // alpha = exp(-exp(A_log) * softplus(a + dt_bias)), beta = sigmoid(b), on the token rows of the gate tile.
+// CHUNKED: g = -exp(A_log) * softplus(a + dt_bias) instead of alpha (the chunk step takes cumulative sums of g).
 ALWI void gates_block(RowScope scope) {
     cb_wait_front(cb_gate_in, 2);
     tile_regs_acquire();
@@ -373,7 +417,7 @@ ALWI void gates_block(RowScope scope) {
     softplus_scoped(0, scope);
     // Pass 0: exp(A_log), then g = -exp(A_log) * softplus; pass 1: alpha = exp(g). One exp call site.
 #pragma GCC unroll 1
-    for (uint32_t pass = 0; pass < 2; ++pass) {
+    for (uint32_t pass = 0; pass < (CHUNKED ? 1 : 2); ++pass) {
         exp_tile_init<false>();
         // A_log is a broadcast row (row 0 only); alpha is per token row.
         exp_scoped(pass == 0 ? 2 : 0, pass == 0 ? RowScope{0} : scope);
@@ -575,7 +619,9 @@ ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
 
     cb_wait_front(cb_rinv, 2);
     cb_reserve_back(cb_kq_rows, 2 * Kt);
-    cb_reserve_back(cb_sq, Kt);
+    if constexpr (!CHUNKED) {
+        cb_reserve_back(cb_sq, Kt);
+    }
     for (uint32_t kt = 0; kt < Kt; ++kt) {
         tile_regs_acquire();
         begin_loads(cb_y_qk);
@@ -586,21 +632,27 @@ ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
         sfpu_bcast_col_init();
         mul_bcast_col_scoped(0, 1, scope);  // qn
         mul_bcast_col_scoped(2, 3, scope);  // kn
-        mul_binary_tile_init();
-        binary_scoped<ckernel::BinaryOp::MUL>(0, 2, 1, scope);  // qn * kn
+        if constexpr (!CHUNKED) {
+            mul_binary_tile_init();
+            binary_scoped<ckernel::BinaryOp::MUL>(0, 2, 1, scope);  // qn * kn
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_first(2, cb_kq_rows, kt);
         pack_at(0, cb_kq_rows, Kt + kt);
-        pack_at(1, cb_sq, kt);
+        if constexpr (!CHUNKED) {
+            pack_at(1, cb_sq, kt);
+        }
         tile_regs_release();
     }
     cb_push_back(cb_kq_rows, 2 * Kt);
-    cb_push_back(cb_sq, Kt);
     cb_pop_front(cb_rinv, 2);
     cb_pop_front(cb_y_qk, 2 * Kt);
-
-    row_sum<cb_sq, cb_d>(bufs, bufs.sq, bufs.d, Kt, ckl::NoOp{});
+    if constexpr (!CHUNKED) {
+        // d = qn . kn per token (the token step's output term); the chunk step has it inside Qn Kn^T.
+        cb_push_back(cb_sq, Kt);
+        row_sum<cb_sq, cb_d>(bufs, bufs.sq, bufs.d, Kt, ckl::NoOp{});
+    }
 
     cb_wait_front(cb_kq_rows, 2 * Kt);
     cb_reserve_back(cb_knT, Kt);
@@ -621,19 +673,19 @@ ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
         tile_regs_release();
     }
     cb_push_back(cb_knT, Kt);
-    cb_wait_front(cb_d, 1);
+    if constexpr (!CHUNKED) {
+        cb_wait_front(cb_d, 1);
+    }
     cb_wait_front(cb_v, Vb);
     cb_wait_front(cb_knT, Kt);
 }
 
-// ---------------------------------------------------------------- one token step
-ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool first_in_row, RowScope scope) {
+// ---------------------------------------------------------------- state read / update (shared)
+// [rk; ro] = [kn; qn] x S_{in} -> cb_reads (2 x Vb tiles). S_in is S0 for the pair's first step.
+ALWI void read_state(Buffers& bufs, bool first_in_pair) {
     const uint32_t src = first_in_pair ? cb_state_in : cb_state;
     const uint32_t src_mm = first_in_pair ? cb_state_in_mm : cb_state_mm;
-    const uint32_t dst = last_in_pair ? cb_state_out : cb_state;
     DataflowBuffer& src_mm_buf = first_in_pair ? bufs.state_in_mm : bufs.state_mm;
-
-    // read (5a): [rk; ro] = [kn; qn] x S_{t-1}
     cb_wait_front(src, n_state);
     cb_wait_front(src_mm, n_state);
     ckl::matmul_block<
@@ -649,6 +701,64 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         bufs.reads,
         bufs.reads,
         ckl::MatmulBlockShape::of(2, Vb / MM_SUBBLOCK_W, 1, MM_SUBBLOCK_W, Kt, 1));
+}
+
+// S_out = decay S_in (SFPU, fp32 scalar) + kn^T x u_cb (matmul accumulated onto DEST); S_out goes to
+// cb_state_out after the pair's last step, else back into cb_state. Pops S_in.
+ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uint32_t decay_bits) {
+    const uint32_t src = first_in_pair ? cb_state_in : cb_state;
+    const uint32_t src_mm = first_in_pair ? cb_state_in_mm : cb_state_mm;
+    const uint32_t dst = last_in_pair ? cb_state_out : cb_state;
+    const bool in_place = (src == dst);
+    if (in_place) {
+        // One allocation of exactly n_state pages: after the pop the read pointer wraps back onto
+        // the same tiles, which are read by each batch before its packs overwrite them.
+        cb_pop_front(src, n_state);
+        cb_pop_front(src_mm, n_state);
+    }
+    cb_reserve_back(dst, n_state);
+    if (dst == cb_state) {
+        cb_reserve_back(cb_state_mm, n_state);
+    }
+    for (uint32_t first = 0; first < n_state; first += UPDATE_BATCH) {
+        const uint32_t count = (n_state - first) < UPDATE_BATCH ? (n_state - first) : UPDATE_BATCH;
+        tile_regs_acquire();
+        begin_loads(src);
+        for (uint32_t i = 0; i < count; ++i) {
+            load(src, first + i, i);
+        }
+        binop_with_scalar_tile_init();
+        for (uint32_t i = 0; i < count; ++i) {
+            mul_unary_tile(i, decay_bits);
+        }
+        wait_sfpu_before_fpu();
+        reconfig_data_format(u_cb, cb_knT);
+        matmul_init(cb_knT, u_cb);
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint32_t tile = first + i;
+            matmul_tiles(cb_knT, u_cb, tile / Vb, tile % Vb, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < count; ++i) {
+            pack_first(i, dst, first + i);
+        }
+        tile_regs_release();
+    }
+    cb_push_back(dst, n_state);
+    if (dst == cb_state) {
+        cb_push_back(cb_state_mm, n_state);
+    }
+    if (!in_place) {
+        cb_pop_front(src, n_state);
+        cb_pop_front(src_mm, n_state);
+    }
+}
+
+// ---------------------------------------------------------------- one token step
+ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool first_in_row, RowScope scope) {
+    // read (5a): [rk; ro] = [kn; qn] x S_{t-1}
+    read_state(bufs, first_in_pair);
     // token vector (5b): u = beta_sel (*)col (v - alpha rk); o = alpha_sel (*)col ro + d (*)col u
     cb_wait_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
     // alpha is one scalar per token (element (0, 0) of the alpha page): fp32 scalar SFPU multiplies
@@ -701,53 +811,206 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
     }
     cb_pop_front(cb_reads, 2 * Vb);
     // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
-    const bool in_place = (src == dst);
-    if (in_place) {
-        // One allocation of exactly n_state pages: after the pop the read pointer wraps back onto
-        // the same tiles, which are read by each batch before its packs overwrite them.
-        cb_pop_front(src, n_state);
-        cb_pop_front(src_mm, n_state);
-    }
-    cb_reserve_back(dst, n_state);
-    if (dst == cb_state) {
-        cb_reserve_back(cb_state_mm, n_state);
-    }
-    for (uint32_t first = 0; first < n_state; first += UPDATE_BATCH) {
-        const uint32_t count = (n_state - first) < UPDATE_BATCH ? (n_state - first) : UPDATE_BATCH;
-        tile_regs_acquire();
-        begin_loads(src);
-        for (uint32_t i = 0; i < count; ++i) {
-            load(src, first + i, i);
-        }
-        binop_with_scalar_tile_init();
-        for (uint32_t i = 0; i < count; ++i) {
-            mul_unary_tile(i, alpha_bits);
-        }
-        wait_sfpu_before_fpu();
-        reconfig_data_format(cb_u, cb_knT);
-        matmul_init(cb_knT, cb_u);
-        for (uint32_t i = 0; i < count; ++i) {
-            const uint32_t tile = first + i;
-            matmul_tiles(cb_knT, cb_u, tile / Vb, tile % Vb, i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < count; ++i) {
-            pack_first(i, dst, first + i);
-        }
-        tile_regs_release();
-    }
-    cb_push_back(dst, n_state);
-    if (dst == cb_state) {
-        cb_push_back(cb_state_mm, n_state);
-    }
-    if (!in_place) {
-        cb_pop_front(src, n_state);
-        cb_pop_front(src_mm, n_state);
-    }
+    update_state(first_in_pair, last_in_pair, cb_u, alpha_bits);
     cb_pop_front(cb_u, Vb);
     cb_pop_front(cb_u_f32, Vb);
     cb_pop_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
+}
+
+// ---------------------------------------------------------------- one chunk step (R-CHUNK)
+// Chunk vectors from g and beta (column 0 of the writer's coefficient pages, 0 on rows that are no token,
+// so c is flat there and those rows neither decay nor write). row_last: tile-local last token row.
+// Returns exp(c_last), the chunk's state decay.
+ALWI uint32_t chunk_vectors(uint32_t row_last) {
+    cb_wait_front(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
+    cb_reserve_back(cb_chunk_vec, 2);
+    tile_regs_acquire();
+    begin_loads(cb_tok_coef);
+    load(cb_tok_coef, CHUNK_G, 0);
+    load(cb_tri_mask, 0, 3);
+    cumsum_tile_init();
+    cumsum_tile(0, true);  // column 0: c[s] = sum_{s' <= s} g[s'] (fp32)
+    fill_tile_init();
+    fill_tile(1, 0.0f);
+    sfpu_bcast_col_init();
+    sfpu_add_bcast_col(1, 0);  // C[s, s'] = c[s]
+    copy_dest_values_init();
+    copy_dest_values<DataFormat::Float32>(1, 2);
+    wait_sfpu_before_fpu();
+    transpose_dest_init<true>(cb_tok_coef);
+    transpose_dest<true>(2);  // C^T[s, s'] = c[s']
+    sub_binary_tile_init();
+    sub_binary_tile(2, 1, 0);  // c[s'] - c[s]: >= 0 on and below the diagonal (g <= 0)
+    relu_tile_init();
+    relu_tile(0);  // the upper triangle (masked below) must not reach exp with a positive argument
+    negative_tile_init();
+    negative_tile(0);
+    exp_tile_init<false>();
+    exp_tile<false>(0);
+    mul_binary_tile_init();
+    mul_binary_tile(0, 3, 0);  // D
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_first(0, cb_chunk_vec, CV_D);
+    pack_at(1, cb_chunk_vec, CV_C);
+    tile_regs_release();
+    cb_push_back(cb_chunk_vec, 2);
+
+    cb_wait_front(cb_chunk_vec, 2);
+    const uint32_t c_last_bits = read_tile_value(cb_chunk_vec, CV_C, elem_index(row_last, 0));
+    cb_reserve_back(cb_chunk_vec, GDN_CHUNK_VEC_PAGES - 2);
+    tile_regs_acquire();
+    begin_loads(cb_chunk_vec);
+    load(cb_chunk_vec, CV_C, 0);
+    load(cb_chunk_vec, CV_C, 1);
+    load(cb_tok_coef, CHUNK_BETA, 2);
+    load(cb_chunk_vec, CV_C, 3);
+    binop_with_scalar_tile_init();
+    rsub_unary_tile(1, c_last_bits);  // c_last - c[s] (<= 0 on token rows)
+    exp_tile_init<false>();
+    exp_tile<false>(0);  // exp(c)
+    exp_tile<false>(1);  // exp(c_last - c)
+    exp_tile<false>(3);
+    sfpu_bcast_col_init();
+    sfpu_mul_bcast_col(3, 2);  // beta exp(c)
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_first(0, cb_chunk_vec, CV_EC - 2);
+    pack_at(1, cb_chunk_vec, CV_W - 2);
+    pack_at(3, cb_chunk_vec, CV_BEC - 2);
+    tile_regs_release();
+    cb_push_back(cb_chunk_vec, GDN_CHUNK_VEC_PAGES - 2);
+    cb_wait_front(cb_chunk_vec, GDN_CHUNK_VEC_PAGES);
+    return read_tile_value(cb_chunk_vec, CV_EC, elem_index(row_last, 0));
+}
+
+ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint32_t row_last) {
+    const uint32_t decay_bits = chunk_vectors(row_last);
+
+    // [Kn Kn^T; Qn Kn^T] (2 tiles), then L and QD (fp32 SFPU products with D and beta).
+    DataflowBuffer gram{cb_gram};
+    DataflowBuffer knT{cb_knT};
+    ckl::matmul_block<
+        false,
+        false,
+        ckl::LastBlockTarget::Out,
+        ckl::OutputCBLayout::TileRowMajor,
+        ckl::matmul_config::InitMode::Short,
+        ckl::InputPolicy::WaitAndRetainOnLastBlock,
+        ckl::InputPolicy::NoWaitNoPop>(bufs.kq_rows, knT, gram, gram, ckl::MatmulBlockShape::of(2, 1, 1, 1, Kt, 1));
+    cb_wait_front(cb_gram, 2);
+    cb_reserve_back(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
+    tile_regs_acquire();
+    begin_loads(cb_gram);
+    load(cb_gram, 0, 0);
+    load(cb_gram, 1, 1);
+    load(cb_chunk_vec, CV_D, 2);
+    load(cb_tok_coef, CHUNK_BETA, 3);
+    mul_binary_tile_init();
+    mul_binary_tile(0, 2, 0);
+    mul_binary_tile(1, 2, 1);
+    sfpu_bcast_col_init();
+    sfpu_mul_bcast_col(0, 3);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_first(0, cb_chunk_mat, CM_L);
+    pack_at(1, cb_chunk_mat, CM_QD);
+    tile_regs_release();
+    cb_push_back(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
+    cb_pop_front(cb_gram, 2);
+
+    read_state(bufs, first_in_pair);
+
+    // U = (I + L)^-1 (beta V - beta exp(c) Rk), one fp32 SFPU solve per column tile.
+    cb_wait_front(cb_reads, 2 * Vb);
+    cb_wait_front(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
+    cb_reserve_back(cb_u, Vb);
+    cb_reserve_back(cb_u_f32, Vb);
+    for (uint32_t vt = 0; vt < Vb; ++vt) {
+        tile_regs_acquire();
+        begin_loads(cb_v);
+        load(cb_v, vt, 0);
+        load(cb_reads, vt, 1);
+        load(cb_tok_coef, CHUNK_BETA, 2);
+        load(cb_chunk_vec, CV_BEC, 3);
+        sfpu_bcast_col_init();
+        sfpu_mul_bcast_col(0, 2);
+        sfpu_mul_bcast_col(1, 3);
+        sub_binary_tile_init();
+        sub_binary_tile(0, 1, 0);
+        triangle_solve_tile_init();
+        triangle_solve_tile<DataFormat::Float32>(cb_chunk_mat, CM_L, 0, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(1, cb_u, vt);
+        tile_regs_release();
+    }
+    cb_push_back(cb_u, Vb);
+    cb_push_back(cb_u_f32, Vb);
+    cb_wait_front(cb_u, Vb);
+    cb_wait_front(cb_u_f32, Vb);
+
+    // Uw = exp(c_last - c) (*)col U (the update operand) and O = exp(c) (*)col Rq + QD x U, in batches
+    // of DEST_AUTO_LIMIT - 1 column tiles plus the broadcast vector.
+    constexpr uint32_t VEC_BATCH = ckl::DEST_AUTO_LIMIT - 1;
+    cb_reserve_back(cb_uw, Vb);
+    for (uint32_t vt0 = 0; vt0 < Vb; vt0 += VEC_BATCH) {
+        const uint32_t n = (Vb - vt0) < VEC_BATCH ? (Vb - vt0) : VEC_BATCH;
+        tile_regs_acquire();
+        begin_loads(cb_u_f32);
+        for (uint32_t i = 0; i < n; ++i) {
+            load(cb_u_f32, vt0 + i, i);
+        }
+        load(cb_chunk_vec, CV_W, VEC_BATCH);
+        sfpu_bcast_col_init();
+        for (uint32_t i = 0; i < n; ++i) {
+            sfpu_mul_bcast_col(i, VEC_BATCH);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_uw, vt0);
+        for (uint32_t i = 1; i < n; ++i) {
+            pack_at(i, cb_uw, vt0 + i);
+        }
+        tile_regs_release();
+    }
+    cb_push_back(cb_uw, Vb);
+    for (uint32_t vt0 = 0; vt0 < Vb; vt0 += VEC_BATCH) {
+        const uint32_t n = (Vb - vt0) < VEC_BATCH ? (Vb - vt0) : VEC_BATCH;
+        tile_regs_acquire();
+        begin_loads(cb_reads);
+        for (uint32_t i = 0; i < n; ++i) {
+            load(cb_reads, Vb + vt0 + i, i);
+        }
+        load(cb_chunk_vec, CV_EC, VEC_BATCH);
+        sfpu_bcast_col_init();
+        for (uint32_t i = 0; i < n; ++i) {
+            sfpu_mul_bcast_col(i, VEC_BATCH);
+        }
+        wait_sfpu_before_fpu();
+        reconfig_data_format(cb_u, cb_chunk_mat);
+        matmul_init(cb_chunk_mat, cb_u);
+        for (uint32_t i = 0; i < n; ++i) {
+            matmul_tiles(cb_chunk_mat, cb_u, CM_QD, vt0 + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_o_acc, vt0);
+        for (uint32_t i = 1; i < n; ++i) {
+            pack_at(i, cb_o_acc, vt0 + i);
+        }
+        tile_regs_release();
+    }
+    cb_pop_front(cb_reads, 2 * Vb);
+
+    cb_wait_front(cb_uw, Vb);
+    update_state(first_in_pair, last_in_pair, cb_uw, decay_bits);
+    cb_pop_front(cb_uw, Vb);
+    cb_pop_front(cb_u, Vb);
+    cb_pop_front(cb_u_f32, Vb);
+    cb_pop_front(cb_chunk_mat, GDN_CHUNK_MAT_PAGES);
+    cb_pop_front(cb_chunk_vec, GDN_CHUNK_VEC_PAGES);
+    cb_pop_front(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
 }
 
 // ---------------------------------------------------------------- rmsnorm_gate_block
@@ -821,6 +1084,9 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_kq_rows, cb_state_mm, cb_reads);
     Buffers bufs;
+    if constexpr (CHUNKED) {
+        cb_wait_front(cb_tri_mask, 1);  // reader-built once, held for the kernel
+    }
 
     for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
         const uint32_t seq_lo = (unit / PIECES / Hv) * T;
@@ -847,13 +1113,18 @@ void kernel_main() {
             l2norm_block(bufs, scope);
 
             cb_reserve_back(cb_o_acc, Vb);
-            for (uint32_t row = lo; row < hi; ++row, ++token) {
-                token_step(bufs, token == 0, token == T - 1, row == lo, scope);
+            if constexpr (CHUNKED) {
+                chunk_step(bufs, token == 0, token + (hi - lo) == T, hi - 1 - base_row);
+                token += hi - lo;
+            } else {
+                for (uint32_t row = lo; row < hi; ++row, ++token) {
+                    token_step(bufs, token == 0, token == T - 1, row == lo, scope);
+                }
+                cb_pop_front(cb_d, 1);
             }
             cb_push_back(cb_o_acc, Vb);
             cb_pop_front(cb_kq_rows, 2 * Kt);
             cb_pop_front(cb_knT, Kt);
-            cb_pop_front(cb_d, 1);
             cb_pop_front(cb_v, Vb);
 
             rmsnorm_gate_block(bufs, v_eps_bits, scope);

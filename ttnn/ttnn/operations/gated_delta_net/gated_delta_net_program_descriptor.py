@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ProgramDescriptor for gated_delta_net (regimes R-STEP and R-VSPLIT, op_design.md).
+"""ProgramDescriptor for gated_delta_net (regimes R-STEP, R-VSPLIT and R-CHUNK, op_design.md).
 
 Work unit: one piece of one (sequence, value head) pair: the pair's state columns split into
 `pieces = Vt / v_block_tiles` column slices (R-STEP: one piece per pair). Units are split across the
@@ -9,6 +9,9 @@ grid with ttnn.split_work_to_cores(row_wise=True); each core walks a contiguous 
 state slice resident at a time, token rows in blocks of one tile row, one token per recurrence step.
 R-VSPLIT (pieces > 1) places one unit per core and all-gathers the per-piece partial sum o^2 of
 each tile row over the pair's piece cores (semaphore-counted unicast) before the RMS-norm rsqrt.
+R-CHUNK (multi-token calls) replaces the token steps of a tile row by one closed-form chunk step (F1): the
+chunk's decay matrix and unit-lower-triangular system are built and solved in fp32 on the SFPU, the
+state is carried in fp32 across chunks.
 """
 
 import struct
@@ -32,6 +35,9 @@ MAX_CORES = None  # optional grid cap; None = full compute grid
 # Conv taps on the FPU (row-broadcast ELWMUL accumulated in DEST) instead of the SFPU. Exact only for
 # bf16 token operands (srcA/srcB hold 19 bits), so "auto" enables it for bf16 tokens only.
 CONV_ON_FPU = "auto"
+# R-CHUNK: calls with at least this many tokens per sequence take one chunk step (F1) per tile row instead
+# of one recurrence step per token; decode (T = 1) keeps the token step. Needs the Blackhole SFPU solve.
+CHUNK_MIN_TOKENS = 2
 # Full-sync DEST (8 fp32 tiles per window, state update batches of 7). Measured slower on
 # perf_decode_b1 (54.5 vs 53.2 us: it loses math/pack overlap), so off; the kernels adapt to either.
 DST_FULL_SYNC = False
@@ -48,6 +54,9 @@ CONV_ACC_DEPTH = 1  # partial tap sum: compute-to-compute, one compute thread, s
 HISTORY = 3  # spec constant: conv_state rows per sequence
 CONV_TAPS = HISTORY + 1  # history rows + current token, not a knob
 TOK_COEF_PAGES = 3  # alpha (all rows), beta at row p, alpha at row p
+CHUNK_COEF_PAGES = 2  # R-CHUNK, per tile row: g and beta of the pair in column 0, 0 on rows that are no token
+CHUNK_VEC_PAGES = 5  # R-CHUNK: D, c, exp(c), exp(c_last - c), beta exp(c)
+CHUNK_MAT_PAGES = 2  # R-CHUNK: L (solve operand), (Qn Kn^T) * D (matmul operand)
 L1_BUDGET = 1460288  # usable L1 per Blackhole worker core (risks.md R11)
 
 # ---- CB indices ----
@@ -86,6 +95,11 @@ CB_WINDOW_ZEROED = 31
 CB_OSUM_PART = 32
 CB_OSUM_GATHER = 33
 CB_HIST_STAGE = 34
+CB_GRAM = 35
+CB_CHUNK_VEC = 36
+CB_CHUNK_MAT = 37
+CB_UW = 38
+CB_TRI_MASK = 39
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
@@ -110,13 +124,20 @@ TOKEN_CBS = (
 
 def _kernel_defines():
     """CB indices and spec constants for all three kernels (as GDN_<name>): defined here once, never restated."""
-    names = [n for n in globals() if n.startswith("CB_")] + ["HISTORY", "CONV_TAPS", "TOK_COEF_PAGES"]
+    names = [n for n in globals() if n.startswith("CB_")] + [
+        "HISTORY",
+        "CONV_TAPS",
+        "TOK_COEF_PAGES",
+        "CHUNK_COEF_PAGES",
+        "CHUNK_VEC_PAGES",
+        "CHUNK_MAT_PAGES",
+    ]
     return [(f"GDN_{n}", str(globals()[n])) for n in names]
 
 
 # Pages per CB; each entry is (index list sharing one allocation, pages). Vt here is the piece's column
-# block (v_block_tiles); pieces > 1 adds the partial-sum combine buffers.
-def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1):
+# block (v_block_tiles); pieces > 1 adds the partial-sum combine buffers, chunked the R-CHUNK buffers.
+def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False):
     n_state = Kt * Vt
     trb = TOKEN_TILE_ROWS_PER_BLOCK
     return [
@@ -140,7 +161,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1):
         ((CB_GATE_IN,), 2 * ROW_DEPTH),
         ((CB_GATE_W,), 2),
         ((CB_GATES,), 2 * trb),
-        ((CB_TOK_COEF,), TOK_COEF_PAGES * TOK_COEF_DEPTH),
+        ((CB_TOK_COEF,), (CHUNK_COEF_PAGES if chunked else TOK_COEF_PAGES) * TOK_COEF_DEPTH),
         ((CB_READS,), 2 * Vt),
         ((CB_U, CB_U_F32), Vt),
         ((CB_O_ACC,), Vt * trb),
@@ -154,6 +175,13 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1):
         # flight so a peer one tile row ahead never lands on a slot still being summed.
         ((CB_OSUM_PART,), trb if pieces > 1 else 0),
         ((CB_OSUM_GATHER,), 2 * pieces * trb if pieces > 1 else 0),
+        # R-CHUNK: [Kn Kn^T; Qn Kn^T]; chunk vectors / decay matrix; solve and output-matmul operands;
+        # U scaled by exp(c_last - c) (update operand); the lower-triangular mask (built once).
+        ((CB_GRAM,), 2 * trb if chunked else 0),
+        ((CB_CHUNK_VEC,), CHUNK_VEC_PAGES if chunked else 0),
+        ((CB_CHUNK_MAT,), CHUNK_MAT_PAGES if chunked else 0),
+        ((CB_UW,), Vt if chunked else 0),
+        ((CB_TRI_MASK,), 1 if chunked else 0),
     ]
 
 
@@ -179,6 +207,9 @@ U2D_CBS = (
     CB_Z,
     CB_NORM_W,
     CB_OSUM_GATHER,
+    CB_GRAM,
+    CB_CHUNK_VEC,
+    CB_TRI_MASK,
 )
 
 
@@ -206,13 +237,13 @@ def _row_stage_bytes(token_tile_bytes):
     return 0 if seg_bytes % align == 0 else (ROW_STAGE_SLOTS + 1) * align
 
 
-def l1_footprint_bytes(Kt, Vt, dtype, pieces=1):
+def l1_footprint_bytes(Kt, Vt, dtype, pieces=1, chunked=True):
     """Per-core footprint of one unit (Vt = the unit's column block). validate() checks R-STEP (the
     whole Vt); the descriptor re-checks the regime it selects."""
     token_bytes = _tile_bytes(dtype)
     cb_bytes = sum(
         pages * (token_bytes if indices[0] in TOKEN_CBS else FP32_TILE_BYTES)
-        for indices, pages in _cb_plan(Kt, Vt, _conv_on_fpu(dtype), pieces)
+        for indices, pages in _cb_plan(Kt, Vt, _conv_on_fpu(dtype), pieces, chunked)
     )
     return cb_bytes + BF16_TILE_BYTES + SIGNAL_PAGE_BYTES + _row_stage_bytes(token_bytes)
 
@@ -235,6 +266,11 @@ def _value_pieces(num_pairs, Vt, num_cores):
         return pieces
     fits = [d for d in range(1, min(Vt, MAX_PIECES) + 1) if Vt % d == 0 and num_pairs * d <= num_cores]
     return max(fits, default=1)
+
+
+def _chunked(tokens, device):
+    """R-CHUNK predicate: multi-token calls on Blackhole (the chunk solve is a Blackhole SFPU op)."""
+    return tokens >= CHUNK_MIN_TOKENS and ttnn.device.is_blackhole(device)
 
 
 def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config):
@@ -274,7 +310,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             assignment.append((core, first_unit, last_unit - first_unit))
             next_block += per_core
     assert pieces == 1 or all(count == 1 for _, _, count in assignment)
-    assert l1_footprint_bytes(Kt, v_block_tiles, mixed_qkv.dtype, pieces) <= L1_BUDGET
+    chunked = _chunked(tokens, device)
+    assert l1_footprint_bytes(Kt, v_block_tiles, mixed_qkv.dtype, pieces, chunked) <= L1_BUDGET
     # NoC coordinates of the core running each unit (R-VSPLIT peers).
     unit_noc = {}
     for core, first_unit, _ in assignment:
@@ -286,7 +323,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     token_tile_bytes = _tile_bytes(token_dtype)
     cbs = []
     conv_on_fpu = _conv_on_fpu(token_dtype)
-    for indices, pages in _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces):
+    for indices, pages in _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces, chunked):
         if pages == 0:
             continue
         is_token = indices[0] in TOKEN_CBS
@@ -355,13 +392,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     reader_ct.append(_window_group_cols(Kt, v_block_tiles, pieces))
     reader_ct.append(WINDOW_DEPTH)
     reader_ct.append(pieces)
+    reader_ct.append(int(chunked))
     for t in reader_tensors:
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     reader_addrs = [t.buffer_address() for t in reader_tensors]
 
     # ---- writer ----
     window_bytes = CONV_TAPS * _window_group_cols(Kt, v_block_tiles, pieces) * WINDOW_DEPTH * token_tile_bytes
-    writer_ct = [Kt, Vt, value_heads, *geometry_ct, window_bytes, pieces, OSUM_SEM_ID, WINDOW_DEPTH]
+    writer_ct = [Kt, Vt, value_heads, *geometry_ct, window_bytes, pieces, OSUM_SEM_ID, WINDOW_DEPTH, int(chunked)]
     for t in (output, recurrent_state_out):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     writer_addrs = [output.buffer_address(), recurrent_state_out.buffer_address()]
@@ -377,6 +415,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         int(conv_on_fpu),
         pieces,
         _window_group_cols(Kt, v_block_tiles, pieces),
+        int(chunked),
     ]
 
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()

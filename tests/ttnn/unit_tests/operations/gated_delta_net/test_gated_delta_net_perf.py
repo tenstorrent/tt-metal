@@ -43,6 +43,7 @@ def _to_device(tensors, device, token_dtype):
         pytest.param(((1, 1, 2560), (1, 12, 128, 128)), ttnn.float32, id="decode_b1_f32"),
         pytest.param(((1, 96, 2560), (1, 12, 128, 128)), ttnn.bfloat16, id="prefill_t96"),
         pytest.param(((1, 80, 2560), (2, 12, 128, 128)), ttnn.bfloat16, id="batched_b2_t40"),
+        pytest.param(((1, 4096, 2560), (1, 12, 128, 128)), ttnn.bfloat16, id="model_prefill_4096"),
     ],
 )
 def test_perf_decode(device, inputs, token_dtype):

@@ -38,6 +38,7 @@ constexpr uint32_t cb_scratch = GDN_CB_SCRATCH;
 constexpr uint32_t cb_row_stage = GDN_CB_ROW_STAGE;
 constexpr uint32_t cb_window_zeroed = GDN_CB_WINDOW_ZEROED;
 constexpr uint32_t cb_hist_stage = GDN_CB_HIST_STAGE;
+constexpr uint32_t cb_tri_mask = GDN_CB_TRI_MASK;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t TILE_BYTES = get_compile_time_arg_val(6);        // token-tensor tile (dtype-derived on host)
@@ -48,6 +49,7 @@ constexpr bool CONV_W_RAW = get_compile_time_arg_val(10) != 0;      // raw conv_
 constexpr uint32_t WINDOW_GROUP_COLS = get_compile_time_arg_val(11);  // column tiles per window hand-off
 constexpr uint32_t WINDOW_SLOTS = get_compile_time_arg_val(12);       // window groups held by cb_window
 constexpr uint32_t PIECES = get_compile_time_arg_val(13);             // column pieces per pair
+constexpr bool CHUNKED = get_compile_time_arg_val(14) != 0;           // R-CHUNK: chunk step per tile row
 constexpr uint32_t FACE_BYTES = TILE_BYTES / 4;                     // one 16x16 face
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;                     // one face row
 constexpr uint32_t CS_COLS_PER_FLUSH = TILE_ROWS / GDN_HISTORY;     // conv_state_out columns per scratch tile
@@ -188,7 +190,7 @@ void kernel_main() {
     constexpr uint32_t pair_cols = 2 * Kt + Vb;
     constexpr uint32_t conv_w_pages = CONV_W_RAW ? pair_cols : GDN_CONV_TAPS * pair_cols;
 
-    constexpr auto mixed_args = TensorAccessorArgs<14>();
+    constexpr auto mixed_args = TensorAccessorArgs<15>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
@@ -235,6 +237,22 @@ void kernel_main() {
 
     dataflow_kernel_lib::
         prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
+    if constexpr (CHUNKED) {
+        // Lower-triangular 0/1 mask (column <= row) of the chunk decay matrix, once per kernel: zeroed over
+        // the NoC, then only the 528 ones are stored.
+        CircularBuffer mask_buf(cb_tri_mask);
+        cb_reserve_back(cb_tri_mask, 1);
+        noc.async_write_zeros(mask_buf, STATE_TILE_BYTES, {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
+        volatile tt_l1_ptr uint32_t* mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tri_mask));
+        constexpr uint32_t ONE_BITS = 0x3f800000u;
+        for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+            for (uint32_t c = 0; c <= r; ++c) {
+                mask[((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15)] = ONE_BITS;
+            }
+        }
+        cb_push_back(cb_tri_mask, 1);
+    }
 
     for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
         const uint32_t pair = unit / PIECES;

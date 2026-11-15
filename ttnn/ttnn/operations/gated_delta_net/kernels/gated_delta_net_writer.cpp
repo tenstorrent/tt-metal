@@ -37,6 +37,7 @@ constexpr uint32_t WINDOW_BYTES = get_compile_time_arg_val(5);  // whole cb_wind
 constexpr uint32_t PIECES = get_compile_time_arg_val(6);        // column pieces per pair
 constexpr uint32_t OSUM_SEM_ID = get_compile_time_arg_val(7);   // peer partial sums landed (cumulative)
 constexpr uint32_t WINDOW_SLOTS = get_compile_time_arg_val(8);  // window groups held by cb_window
+constexpr bool CHUNKED = get_compile_time_arg_val(9) != 0;      // R-CHUNK: chunk coefficients per tile row
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
@@ -57,7 +58,7 @@ void kernel_main() {
     constexpr uint32_t n_state = Kt * Vb;
     constexpr uint32_t out_width_tiles = Hv * Vt;
 
-    constexpr auto out_args = TensorAccessorArgs<9>();
+    constexpr auto out_args = TensorAccessorArgs<10>();
     constexpr auto state_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     uint32_t arg = 0;
@@ -108,10 +109,24 @@ void kernel_main() {
             const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
-            // ---- per-token coefficient expansion ----
+            // ---- per-token coefficient expansion (R-CHUNK: per-tile-row g / beta columns) ----
             cb_wait_front(cb_gates, 2);
             volatile tt_l1_ptr uint32_t* gates = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_gates));
-            for (uint32_t row = lo; row < hi; ++row) {
+            if constexpr (CHUNKED) {
+                // Column 0 of page 0: g of the pair, of page 1: beta; exactly 0 on rows that are no token of
+                // the pair (no decay, no write), whatever the gate tile holds there.
+                cb_reserve_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
+                volatile tt_l1_ptr uint32_t* coef =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tok_coef));
+                for (uint32_t p = 0; p < TILE_ROWS; ++p) {
+                    const bool valid = p + base_row >= lo && p + base_row < hi;
+                    const uint32_t e = elem_index(p, 0);
+                    coef[e] = valid ? gates[elem_index(p, gate_col)] : 0u;
+                    coef[TILE_WORDS + e] = valid ? gates[TILE_WORDS + elem_index(p, gate_col)] : 0u;
+                }
+                cb_push_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
+            }
+            for (uint32_t row = lo; row < hi && !CHUNKED; ++row) {
                 const uint32_t p = row - base_row;
                 const uint32_t alpha = gates[elem_index(p, gate_col)];
                 const uint32_t beta = gates[TILE_WORDS + elem_index(p, gate_col)];
