@@ -39,7 +39,7 @@ def mt_cap(tt, ne=256):
     return (c + 1) // 2 * 2
 
 
-def build_plan(ids, scores, nc=110, ne=256, unit_cost=(10, 8), split=0):
+def build_plan(ids, scores, nc=110, ne=256, unit_cost=(10, 8), split=0, xl1=True):
     """ids [Tt, 8] int, scores [Tt, 8] float -> Plan. split>0: experts with more than `split` M-tiles are cut into units of <= split."""
     tt = ids.shape[0]
     assert tt % 32 == 0
@@ -64,7 +64,8 @@ def build_plan(ids, scores, nc=110, ne=256, unit_cost=(10, 8), split=0):
         r0 = start[e] * 32
         t = ps // 8
         j = ps % 8
-        gidx[r0 : r0 + c] = t.to(torch.int32)
+        tpc = (tt + nc - 1) // nc
+        gidx[r0 : r0 + c] = ((t // tpc) << 16 | (t % tpc)).to(torch.int32) if xl1 else t.to(torch.int32)
         dest[r0 : r0 + c] = ((t // 32) << 16 | (j << 8) | (t % 32)).to(torch.int32)
         scv[r0 : r0 + c] = scores.reshape(-1)[ps].float()
     # score tiles: element (r, 0) of tile mt = score of row mt * 32 + r

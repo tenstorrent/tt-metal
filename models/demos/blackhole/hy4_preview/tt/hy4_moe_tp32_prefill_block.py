@@ -23,33 +23,29 @@ class Hy4MoeTp32PrefillBlock:
         self.tt = n * self.rows
         self.ex = Tp32PrefillExperts(md, tpe.w01, tpe.w2, nc=nc)
         self.nc = nc
+        self.nl = int(os.environ.get("HY4_TP32PF_LINKS", "1"))
         self.repl = ttnn.ReplicateTensorToMesh(md)
         self.t_plan = 0.0
         self.last = None
 
     def _ag_rows(self, t, dim):
-        return ttnn.experimental.all_gather_async(
+        return ttnn.all_gather(
             t,
             dim=dim,
             cluster_axis=0,
-            mesh_device=self.md,
+            num_links=self.nl,
             topology=ttnn.Topology.Linear,
-            multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
-            num_links=self.ccl.num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            barrier_semaphore=self.ccl.get_barrier_semaphore(),
         )
 
     def _rs(self, t, dim, axis, topology):
-        return ttnn.experimental.reduce_scatter_minimal_async(
+        return ttnn.reduce_scatter(
             t,
             dim=dim,
-            multi_device_global_semaphore=self.ccl.get_rs_ping_pong_semaphore(),
-            num_links=self.ccl.num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=topology,
             cluster_axis=axis,
-            barrier_semaphore=self.ccl.get_barrier_semaphore(),
+            num_links=self.nl,
+            topology=topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def route(self, h):

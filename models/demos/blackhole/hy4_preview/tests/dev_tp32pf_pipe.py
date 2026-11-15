@@ -87,7 +87,7 @@ def main():
         ids = torch.stack([torch.multinomial(pop, 8, replacement=False) for _ in range(TT)])
         sc = torch.rand(TT, 8) + 0.1
         sc = sc / sc.sum(1, keepdim=True)
-        pl = build_plan(ids, sc, nc=NC)
+        pl = build_plan(ids, sc, nc=NC, xl1=bool(int(os.environ.get("TP32PF_XL1", "1"))))
         p("rep", rep, "mtiles", pl.mt_used, "maxload", pl.max_load, "maxexp", max(pl.mts))
         X = torch.randn(TT, HID).bfloat16()
         x = ttnn.from_torch(

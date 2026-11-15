@@ -65,6 +65,9 @@ class Tp32PrefillExperts:
         self.nown = nown
         self.dbg = int(os.environ.get("TP32PF_DBG", "0"))
         self.var = int(os.environ.get("TP32PF_VAR", "0"))
+        self.perf = int(os.environ.get("TP32PF_PERF", "0"))
+        self.xl1 = int(os.environ.get("TP32PF_XL1", "1"))
+        self.split = int(os.environ.get("TP32PF_SPLIT", "0"))
 
     def alloc(self, tt):
         cap = mt_cap(tt)
@@ -80,19 +83,24 @@ class Tp32PrefillExperts:
     # ------------------------------------------------------------------ K1b
     def k1(self, x, pt, act):
         cs, cores = self.cs, self.cores
-        CB_X, CB_W, CB_O, CB_META, CB_WS, CB_RM, CB_PART, CB_SC, CB_O2, CB_IX = range(10)
+        CB_X, CB_W, CB_O, CB_META, CB_WS, CB_RM, CB_PART, CB_SC, CB_O2, CB_IX, CB_XS, CB_RM1 = range(12)
+        tok = int(x.shape[2])
+        tpc = (tok + self.nc - 1) // self.nc
         cbs = [
             tile_cb(cs, CB_X, 48, ttnn.bfloat16),
             tile_cb(cs, CB_W, 2 * 768, ttnn.bfloat4_b, TB4),
             tile_cb(cs, CB_O, 4, ttnn.bfloat16),
             u32_cb(cs, CB_META, 2048),
-            u32_cb(cs, CB_WS, 2048),
-            tile_cb(cs, CB_RM, 96, ttnn.bfloat16),
+            u32_cb(cs, CB_WS, 4096),
+            tile_cb(cs, CB_RM, 48 if (self.xl1 or self.split) else 96, ttnn.bfloat16),
             tile_cb(cs, CB_PART, 8, ttnn.bfloat16),
             tile_cb(cs, CB_SC, 4, ttnn.bfloat16),
             tile_cb(cs, CB_O2, 8, ttnn.bfloat16),
             u32_cb(cs, CB_IX, 2048),
         ]
+        cbs.append(tile_cb(cs, CB_RM1, 48 if self.split else 1, ttnn.bfloat16))
+        if self.xl1:
+            cbs.append(tile_cb(cs, CB_XS, tpc * 6, ttnn.bfloat16))
         rt = ttnn.RuntimeArgs()
         for i, c in enumerate(cores):
             rt[c.x][c.y] = [i]
@@ -100,7 +108,20 @@ class Tp32PrefillExperts:
             kernel_source=f"{KDIR}/k1b_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=cs,
-            compile_time_args=[CB_W, CB_RM, CB_META, CB_IX, CB_SC]
+            compile_time_args=[
+                CB_W,
+                CB_RM,
+                CB_META,
+                CB_IX,
+                CB_SC,
+                self.perf,
+                self.xl1,
+                CB_XS,
+                0,
+                self.nc,
+                tpc,
+                self.split,
+            ]
             + _acc(pt.plan)
             + _acc(pt.gidx)
             + _acc(x)
@@ -112,16 +133,30 @@ class Tp32PrefillExperts:
                 pt.plan.buffer_address(),
                 pt.gidx.buffer_address(),
                 pt.sc.buffer_address(),
-            ],
+                tok,
+            ]
+            + [v for q in self.phys for v in (q.x, q.y)],
             config=ttnn.ReaderConfigDescriptor(),
         )
         wr = ttnn.KernelDescriptor(
             kernel_source=f"{KDIR}/k1b_writer.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=cs,
-            compile_time_args=[CB_O2, CB_WS] + _acc(pt.plan) + _acc(act),
+            compile_time_args=[CB_O2, CB_WS, CB_RM1, CB_XS, self.xl1, self.nc, tpc, self.split, 0, CB_W]
+            + _acc(pt.plan)
+            + _acc(act)
+            + _acc(pt.gidx)
+            + _acc(x),
             runtime_args=rt,
-            common_runtime_args=[pt.plan.buffer_address(), act.buffer_address()],
+            common_runtime_args=[
+                pt.plan.buffer_address(),
+                act.buffer_address(),
+                pt.gidx.buffer_address(),
+                x.buffer_address(),
+                tok,
+                self.w01.buffer_address(),
+            ]
+            + [v for q in self.phys for v in (q.x, q.y)],
             config=ttnn.WriterConfigDescriptor(),
         )
         L = self.limit
@@ -144,6 +179,9 @@ class Tp32PrefillExperts:
                 self.scale,
                 self.dbg,
                 self.var,
+                self.perf,
+                CB_RM1,
+                self.split,
             ],
             runtime_args=rt,
             common_runtime_args=[],
@@ -151,13 +189,21 @@ class Tp32PrefillExperts:
                 math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, math_approx_mode=True
             ),
         )
-        prog = ttnn.ProgramDescriptor(kernels=[rd, wr, cp], semaphores=[], cbs=cbs)
+        prog = ttnn.ProgramDescriptor(
+            kernels=[rd, wr, cp],
+            semaphores=[ttnn.SemaphoreDescriptor(id=0, core_ranges=cs, initial_value=0)],
+            cbs=cbs,
+        )
         prog.custom_program_hash = _hash(
             0x7F21,
+            self.xl1,
+            self.split,
+            tok,
             self.nc,
             self.scale,
             self.dbg,
             self.var,
+            self.perf,
             self.w01.buffer_address(),
             x.buffer_address(),
             pt.plan.buffer_address(),

@@ -15,7 +15,14 @@ void kernel_main() {
     constexpr uint32_t cb_meta = get_compile_time_arg_val(2);
     constexpr uint32_t cb_ix = get_compile_time_arg_val(3);
     constexpr uint32_t cb_sc = get_compile_time_arg_val(4);
-    constexpr auto p_args = TensorAccessorArgs<5>();
+    constexpr uint32_t PERF = get_compile_time_arg_val(5);
+    constexpr uint32_t XL1 = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_xs = get_compile_time_arg_val(7);
+    constexpr uint32_t sem_id = get_compile_time_arg_val(8);
+    constexpr uint32_t NC = get_compile_time_arg_val(9);
+    constexpr uint32_t SPLIT = get_compile_time_arg_val(11);
+    constexpr uint32_t TPC = get_compile_time_arg_val(10);
+    constexpr auto p_args = TensorAccessorArgs<12>();
     constexpr auto g_args = TensorAccessorArgs<p_args.next_compile_time_args_offset()>();
     constexpr auto x_args = TensorAccessorArgs<g_args.next_compile_time_args_offset()>();
     constexpr auto s_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -26,6 +33,7 @@ void kernel_main() {
     const uint32_t paddr = get_common_arg_val<uint32_t>(2);
     const uint32_t gaddr = get_common_arg_val<uint32_t>(3);
     const uint32_t saddr = get_common_arg_val<uint32_t>(4);
+    const uint32_t ttok = get_common_arg_val<uint32_t>(5);
 
     const auto pa = TensorAccessor(p_args, paddr, 2048);
     const auto ga = TensorAccessor(g_args, gaddr, 256);
@@ -43,28 +51,31 @@ void kernel_main() {
     const uint32_t ixl = get_write_ptr(cb_ix);
     volatile tt_l1_ptr uint32_t* ix = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ixl);
 
-    auto issue_w = [&](uint32_t e) {
-        cb_reserve_back(cb_w, 768);
-        const uint32_t wr = get_write_ptr(cb_w);
-        noc_async_read_set_trid(1);
-        for (uint32_t j = 0; j < 8; ++j) {
-            const uint32_t b = (j + me) & 7;
-            const uint64_t base = get_noc_addr_from_bank_id<true>(b, w01 + e * BLK);
-            noc_async_read_one_packet_set_state<true>(base, PA, (j + me) & 3);
-            for (uint32_t i = 0; i < 4; ++i) {
-                noc_async_read_one_packet_with_state_with_trid(base, i * PA, wr + b * BLK + i * PA, 1);
+    uint32_t xs = 0;
+    uint32_t tres = 0, tiss = 0, tbar = 0, npairs = 0;
+    const uint32_t t_start = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);
+    if (XL1) {
+        // stage this core's TPC token rows of x_all in L1, then wait until every core did (all-to-all semaphore)
+        cb_reserve_back(cb_xs, TPC * 6);
+        xs = get_write_ptr(cb_xs);
+        for (uint32_t i = 0; i < TPC; ++i) {
+            const uint32_t t = me * TPC + i;
+            if (t < ttok) {
+                noc_async_read(xa.get_noc_addr(t), xs + i * ROW, ROW);
             }
         }
-    };
-    if (nu > 0) {
-        issue_w(plan[1]);
-    }
-    for (uint32_t u = 0; u < nu; ++u) {
-        noc_async_read_barrier_with_trid(1);
-        cb_push_back(cb_w, 768);
-        if (u + 1 < nu) {
-            issue_w(plan[1 + 3 * (u + 1)]);
+        noc_async_read_barrier();
+        const uint32_t sem_l1 = get_semaphore(sem_id);
+        for (uint32_t q = 0; q < NC; ++q) {
+            noc_semaphore_inc(
+                get_noc_addr(get_common_arg_val<uint32_t>(6 + 2 * q), get_common_arg_val<uint32_t>(7 + 2 * q), sem_l1),
+                1);
         }
+        noc_async_atomic_barrier();
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_l1), NC);
+    }
+
+    for (uint32_t u = 0; u < nu; ++u) {
         const uint32_t mt0 = plan[2 + 3 * u], mtc = plan[3 + 3 * u];
         for (uint32_t pr = 0; pr < mtc / 2; ++pr) {
             const uint32_t mt = mt0 + 2 * pr;
@@ -83,33 +94,81 @@ void kernel_main() {
                 noc_async_read_one_packet_with_state_with_trid((uint32_t)na, 0, scl + m * 2048, 3);
             }
             noc_async_read_barrier_with_trid(3);
-            if (me == 0 && u == 0 && pr == 0) {
-                DPRINT(
-                    "K1b core0 u0 e={} mt0={} mtc={} ix0={} ix1={} ix63={}\n",
-                    (uint32_t)plan[1],
-                    mt0,
-                    mtc,
-                    (uint32_t)ix[0],
-                    (uint32_t)ix[1],
-                    (uint32_t)ix[63]);
-            }
             cb_push_back(cb_sc, 2);
             for (uint32_t j = 0; j < 8; ++j) {
                 const uint32_t b = (j + me) & 7;
-                for (uint32_t h = 0; h < 2; ++h) {
+                for (uint32_t h = 0; h < (SPLIT ? 1 : 2); ++h) {
+                    const uint32_t tA = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);
                     cb_reserve_back(cb_rm, 24);
+                    const uint32_t tB = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);
                     const uint32_t xw = get_write_ptr(cb_rm);
                     noc_async_read_set_trid(2);
-                    for (uint32_t i = 0; i < 32; ++i) {
-                        const uint64_t na = xa.get_noc_addr(ix[32 * h + i], b * SEG);
+                    if (PERF & 16) {
+                        const uint32_t o = (me + 1) % NC;
+                        for (uint32_t q = 0; q < 3; ++q) {
+                            const uint64_t na = get_noc_addr(
+                                get_common_arg_val<uint32_t>(6 + 2 * o),
+                                get_common_arg_val<uint32_t>(7 + 2 * o),
+                                xs + q * 16384);
+                            noc_async_read_one_packet_set_state<true>(na, 16384, q & 3);
+                            noc_async_read_one_packet_with_state_with_trid((uint32_t)na, 0, xw + q * 16384, 2);
+                        }
+                    }
+                    if (PERF & 32) {
+                        // timing probe: 8 reads of 6144 B (same bytes as 32 x 1536 B) from random owners
+                        for (uint32_t i = 0; i < 8; ++i) {
+                            const uint32_t g = ix[4 * i];
+                            const uint32_t o = g >> 16, tl = g & 0xFFFF;
+                            const uint64_t na = XL1 ? get_noc_addr(
+                                                          get_common_arg_val<uint32_t>(6 + 2 * o),
+                                                          get_common_arg_val<uint32_t>(7 + 2 * o),
+                                                          xs + tl * ROW)
+                                                    : xa.get_noc_addr(g);
+                            noc_async_read_one_packet_set_state<true>(na, 6144, i & 3);
+                            noc_async_read_one_packet_with_state_with_trid((uint32_t)na, 0, xw + i * 6144, 2);
+                        }
+                    }
+                    for (uint32_t i = 0; i < ((PERF & 49) ? 0 : 32); ++i) {
+                        const uint32_t g = ix[32 * h + i];
+                        uint64_t na;
+                        if (XL1) {
+                            uint32_t o = g >> 16, tl = g & 0xFFFF;
+                            if (PERF & 4) {
+                                o = me;
+                                tl = i % TPC;
+                            }
+                            if (PERF & 8) {
+                                o = (me + 1) % NC;
+                                tl = i % TPC;
+                            }
+                            na = get_noc_addr(
+                                get_common_arg_val<uint32_t>(6 + 2 * o),
+                                get_common_arg_val<uint32_t>(7 + 2 * o),
+                                xs + tl * ROW + b * SEG);
+                        } else {
+                            na = xa.get_noc_addr(g, b * SEG);
+                        }
                         noc_async_read_one_packet_set_state<true>(na, SEG, i & 3);
                         noc_async_read_one_packet_with_state_with_trid((uint32_t)na, 0, xw + i * SEG, 2);
                     }
+                    const uint32_t tC = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);
                     noc_async_read_barrier_with_trid(2);
+                    const uint32_t tD = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);
+                    tres += tB - tA;
+                    tiss += tC - tB;
+                    tbar += tD - tC;
                     cb_push_back(cb_rm, 24);
                 }
             }
         }
     }
     noc_async_read_barrier();
+    DPRINT(
+        "K1b core {} nu={} total={} reserve={} issue={} barrier={}\n",
+        me,
+        nu,
+        *reinterpret_cast<volatile uint32_t*>(0xFFB121F0) - t_start,
+        tres,
+        tiss,
+        tbar);
 }

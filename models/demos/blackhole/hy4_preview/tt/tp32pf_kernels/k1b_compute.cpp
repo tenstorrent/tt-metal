@@ -34,6 +34,9 @@ void kernel_main() {
     constexpr uint32_t SCALE = get_compile_time_arg_val(11);
     constexpr uint32_t DBG = get_compile_time_arg_val(12);
     constexpr uint32_t VAR = get_compile_time_arg_val(13);
+    constexpr uint32_t PERF = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_rm1 = get_compile_time_arg_val(15);
+    constexpr uint32_t SPLIT = get_compile_time_arg_val(16);
     const uint32_t me = get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_o);
     cb_wait_front(cb_meta, 1);
@@ -71,15 +74,22 @@ void kernel_main() {
                     continue;
                 }
                 reconfig_data_format_srca(cb_w, cb_rm);
-                tilize_init(cb_rm, 24, cb_x);
-                for (uint32_t h = 0; h < 2; ++h) {
-                    cb_wait_front(cb_rm, 24);
-                    cb_reserve_back(cb_x, 24);
-                    tilize_block(cb_rm, 24, cb_x);
-                    cb_push_back(cb_x, 24);
-                    cb_pop_front(cb_rm, 24);
+                if (!(PERF & 2)) {
+                    tilize_init(cb_rm, 24, cb_x);
                 }
-                tilize_uninit(cb_rm, cb_x);
+                for (uint32_t h = 0; h < 2; ++h) {
+                    const uint32_t cbh = (SPLIT && h == 1) ? cb_rm1 : cb_rm;
+                    cb_wait_front(cbh, 24);
+                    cb_reserve_back(cb_x, 24);
+                    if (!(PERF & 2)) {
+                        tilize_block(cbh, 24, cb_x);
+                    }
+                    cb_push_back(cb_x, 24);
+                    cb_pop_front(cbh, 24);
+                }
+                if (!(PERF & 2)) {
+                    tilize_uninit(cb_rm, cb_x);
+                }
                 cb_wait_front(cb_x, 48);
                 if (DBG == 1) {
                     if (j == 0) {
