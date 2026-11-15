@@ -79,13 +79,26 @@ def route_tensor(md, ids, scores):
 
 
 class Tp32Experts:
-    def __init__(self, md, w0=None, w1=None, w2=None, w01_t=None, w2_t=None, limit=LIMIT, remap=None, chip0=0):
-        """chip0: first chip rank of this mesh (a 1x8 slot test holds ranks chip0 .. chip0 + 7 of the 32)."""
+    def __init__(
+        self, md, w0=None, w1=None, w2=None, w01_t=None, w2_t=None, limit=LIMIT, remap=None, chip0=0, layer=None
+    ):
+        """chip0: first chip rank of this mesh (a 1x8 slot test holds ranks chip0 .. chip0 + 7 of the 32). layer: layer id, enables the HY4_TP32_CACHE_DIR cache lookup (w0/w1/w2 may then be None)."""
         self.md = md
         self.dbg = int(os.environ.get("HY4_TP32_DBG", "0"))
         rows, cols = tuple(md.shape)
         self.limit = float(limit)
+        self.from_cache = False
+        if (
+            w01_t is None and layer is not None
+        ):  # HY4_TP32_CACHE_DIR: packed per-chip shards from the dump (keys checked in hy4_tp32_cache), no checkpoint packing
+            from models.demos.blackhole.hy4_preview.tt import hy4_tp32_cache as _C
+
+            ld = _C.load_layer(md, layer, chip0=chip0)
+            if ld is not None:
+                w01_t, w2_t = ld
+                self.from_cache = True
         if w01_t is None:
+            assert w0 is not None, "TP32 weights: no cache for this layer and no checkpoint tensors given"
             chips = [chip0 + i for i in range(rows * cols)]
             t01, t2 = pack_chips(w0, w1, w2, chips)
             self.t01, self.t2 = t01, t2  # kept for the CPU reference of the tests

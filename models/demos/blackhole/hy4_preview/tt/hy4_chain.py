@@ -258,11 +258,28 @@ class Hy4ChainLayer:
             if (
                 os.environ.get("HY4_MOE_TP32", "0") == "1" and not self.mtp
             ):  # kernel-track: TP32 routed experts for decode (second weight copy; prefill keeps the ring layout)
+                from models.demos.blackhole.hy4_preview.tt import hy4_tp32_cache as _TC
                 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32 import Tp32Experts
                 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_block import Hy4MoeTp32Block
 
-                Wf = load_moe_layer(L, W=ch.W, experts=list(range(256)))
-                tpe = Tp32Experts(md, Wf["w0"][0], Wf["w1"][0], Wf["w2"][0])
+                _root = _TC.cache_root()
+                Wf = None
+                if not (
+                    _root and _TC.check_layer(_root, L) is not None
+                ):  # no TP32 dump for this layer: pack from the checkpoint
+                    Wf = load_moe_layer(L, W=ch.W, experts=list(range(256)))
+                if (
+                    os.environ.get("HY4_MOE_TP32_IMPL", "24") == "24"
+                ):  # tp24: 24-core variant (T up to 16), W2 layout v1
+                    from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp24 import (  # noqa: F811
+                        Tp24Experts as Tp32Experts,
+                    )
+
+                tpe = (
+                    Tp32Experts(md, layer=L)
+                    if Wf is None
+                    else Tp32Experts(md, Wf["w0"][0], Wf["w1"][0], Wf["w2"][0], layer=L)
+                )
                 del Wf
                 self.blk_tp = Hy4MoeTp32Block(
                     md, ch.ccl, self.blk.gate, tpe, int(os.environ.get("HY4_MOE_TP32_T", "1"))
