@@ -465,7 +465,9 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
             has_bias=False,
             shard_dim=shard_dim,
         )
-        # The padded extent depends on the TP size; the logical row count lets checkpoints reshard across it.
+        # Tied to the embedding, the head is padded to a multiple of 32 * tp_size rows, so its padded extent depends on
+        # the TP size and the logical row count lets checkpoints reshard across it. Untied it is not padded, and the
+        # declaration is a no-op.
         self.lm_head.weight.checkpoint_layout = {"logical_extent": (2, config.vocab_size)}
 
         self.model = DistributedQwen3Model(
