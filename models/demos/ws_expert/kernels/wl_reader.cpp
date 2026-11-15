@@ -204,6 +204,12 @@ void kernel_main() {
             if (u == 0 && cred[(d * 3 + s2) * 4] < k2) {
                 continue;
             }
+            if (!mux[d].edm_has_space_for_packet()) {  // (never block this RISC: its x / h queues feed the group)
+                continue;
+            }
+            // (the previous send's header and payload must have left L1 before the header is reused: flushed here
+            // rather than right after each send, so the payload drains while this RISC serves its other queues)
+            noc_async_writes_flushed();
             fabric_unicast_noc_fused_unicast_with_atomic_inc(
                 &mux[d],
                 hdr[d],
@@ -213,7 +219,6 @@ void kernel_main() {
                 CHT * wtile,
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                     get_noc_addr(mex, mey, slot_addr(s2, u)), get_noc_addr(mex, mey, warr_addr + s2 * 16), 1, true});
-            noc_async_writes_flushed();  // (the header may be reused)
             ++sent[s][d];
             ++n_fwd;
             rr = rr + t + 1;
@@ -233,12 +238,15 @@ void kernel_main() {
                 continue;
             }
             const uint32_t nk = (en[0] >> 20) & 3, next = occ[s] + 1;
+            if (nk >= 2 && !mux[1 - (nk - 2)].edm_has_space_for_packet()) {
+                continue;
+            }
+            noc_async_writes_flushed();  // (every forward of the slot has left L1 before it is refilled)
             if (nk == 1) {
                 freew[s * 4] = next;  // (the BRISC reads the chip's own next expert into it)
             } else if (nk >= 2) {
                 // next occupant arrives on direction d = nk - 2 from the previous chip in d: through mux 1 - d
                 const uint32_t d = nk - 2;
-                noc_async_writes_flushed();  // (the credit header may be reused)
                 fabric_unicast_noc_unicast_inline_write(
                     &mux[1 - d],
                     hcr,

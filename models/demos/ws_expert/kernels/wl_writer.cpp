@@ -168,11 +168,9 @@ void kernel_main() {
             o_issued = o_landed = 0;
         }
         const uint32_t s = o_s, k = o_k[s];
-        if (o_landed < o_issued) {
+        if (o_landed < o_issued) {  // (retired only once done: a barrier would stall this RISC's x / h queues)
             const uint32_t trid = 1 + o_landed % D;
-            if (o_issued - o_landed >= D || o_issued >= PK ||
-                ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
-                noc_async_read_barrier_with_trid(trid);
+            if (ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
                 ++o_landed;
                 warr[s * 4] = PK * k + o_landed;
                 did = true;

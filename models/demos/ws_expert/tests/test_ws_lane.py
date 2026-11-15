@@ -273,6 +273,16 @@ def chip_time(cfg, Ms, T, X, st_chip):
     return span / done, ops * 16 / (NC * span), (s[:, 40:44].double().mean(dim=0) / 1000).round().tolist()
 
 
+def risc_report(cfg, st_chip):
+    """Per chip, means over the group cores (K cycles): NCRISC loop time in weights (QW / QF / QR) / x multicast /
+    x ring / h ring, BRISC loop time in x multicast / x gather / h out / h leader / outputs; packets forwarded, credits
+    sent, own experts read a core."""
+    s = (ttnn.to_torch(st_chip).to(torch.int64) & 0xFFFFFFFF).reshape(cfg.G * cfg.GC, -1).double()
+    k = lambda a, b: (s[:, a:b].mean(dim=0) / 1000).round().tolist()
+    return dict(nc=k(470, 474), br=k(50, 55), fwd=float(s[:, 58].mean()), cred=float(s[:, 59].mean()),
+                own=float(s[:, 56].mean()))
+
+
 def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
     shape = tuple(mesh.shape)
     N = mesh.get_num_devices()
@@ -312,7 +322,10 @@ def run(mesh, cfg: GCfg, lc: LCfg, Ms, tag, warm=WARM, meas=MEAS):
         if i == warm + meas - 1:
             outs = ttnn.get_device_tensors(dev["out_t"])
             pcs = {ci: chip_pcc(refs, ci, cfg.G, outs[ci]) for ci in chips}
-            del outs
+            sts = ttnn.get_device_tensors(st)
+            for ci in (0, N - 1):
+                logger.info(f"WSL {tag} chip {ci} riscs: {risc_report(cfg, sts[ci])}")
+            del outs, sts
         del mpd, io, st
     we = 3 * cfg.H * cfg.I * 576 / 1024
     for ci in chips:
