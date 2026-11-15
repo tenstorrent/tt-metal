@@ -58,6 +58,11 @@ SHARE_QK_PREP = True
 # covers one rectangle (a 12-core group on the 11-wide grid spans two rows). perf_decode_b1: send 1.28 -> 1.22 us, but the
 # 6-wide region reads later: 22.95 vs 22.49 us (median of 10), so off.
 BCAST_RECT_GROUPS = False
+# R-BCAST: NOC 1 moves only toward lower x / y and starts a rectangle multicast at its highest corner (NOC 0 the
+# opposite), so a sender at a group's first core sent every multicast around the torus, across every other group's.
+# On: the q injector is the group's first core and sends on NOC 0 (its reader and writer swap NoCs), the k injector
+# its last core on NOC 1: each path starts at the sender and q and k never share a NoC.
+BCAST_SPLIT_NOCS = True
 # R-QKCORE (decode R-STEP, one tile row of sequences): per key head a q core and a k core convolve and L2-normalize the
 # key head's q (k) columns of every sequence of the tile row at once and multicast qn (kn) to the key head's pair cores,
 # which read and convolve only their v columns. Pair cores run consecutive sequences of one value head.
@@ -946,7 +951,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     units_per_block = PAIRS_PER_BLOCK if pieces == 1 else 1  # R-VSPLIT: one unit per core
     num_blocks = (num_units + units_per_block - 1) // units_per_block
     work_grid = grid
-    if BCAST_RECT_GROUPS and _share_qk(pieces, tokens):
+    if (BCAST_RECT_GROUPS or BCAST_SPLIT_NOCS) and _share_qk(pieces, tokens):
         # One unit per core, in row-major order over a grid whose width divides the multicast group: each key head's
         # group is then one rectangle of whole rows (one multicast per channel instead of one per grid row it spans).
         group = (value_heads // key_heads) * pieces
@@ -1072,6 +1077,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     # are consecutive cores in row-major order: one multicast group each, with the q injector its first core
     # and the k injector its second (two channels, one sender each).
     qk_group = (value_heads // key_heads) * pieces
+    k_sender = qk_group - 1 if BCAST_SPLIT_NOCS else 1  # the k injector's index in its group
     qk_channels = []
     if _share_qk(pieces, tokens):
         order = [(core.y, core.x) for core, _, _, _ in assignment]
@@ -1079,17 +1085,17 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         # One round per channel per call: no handshake (each receiver's landing CB is untouched before it) and a
         # flag signal linked behind the payload (a counter would wait a write barrier per rectangle). The
         # injectors' writers send on the writer's NoC (WriterConfigDescriptor: NOC 1, the DRAM-write NoC).
-        config = ttnn.McastConfig(noc=ttnn.NOC.RISCV_1_default, handshake=False, data_ready=ttnn.McastDataReady.Flag)
+        q_noc = ttnn.NOC.NOC_0 if BCAST_SPLIT_NOCS else ttnn.NOC.NOC_1
         qk_channels = [
             ttnn.Mcast(
                 device,
-                config,
+                ttnn.McastConfig(noc=noc, handshake=False, data_ready=ttnn.McastDataReady.Flag),
                 all_cores,
                 qk_group,
                 ttnn.McastFixedSenderConfig(sender_index=sender),
                 ttnn.McastCoreOrder.RowMajor,
             )
-            for sender in (0, 1)
+            for sender, noc in ((0, q_noc), (k_sender, ttnn.NOC.NOC_1))
         ]
 
     if qk_cores:
@@ -1113,7 +1119,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             return QK_RECEIVER
         if not qk_channels:
             return QK_OWN
-        return {0: QK_Q_INJECTOR, 1: QK_K_INJECTOR}.get(unit % qk_group, QK_RECEIVER)
+        return {0: QK_Q_INJECTOR, k_sender: QK_K_INJECTOR}.get(unit % qk_group, QK_RECEIVER)
 
     token_tile_bytes = _tile_bytes(token_dtype)
 
@@ -1475,6 +1481,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             # and y, NOC 1 toward lower, both around the torus); the reader takes the other one.
             on_noc0 = [c for c in cores if prep_send_noc0[c.x, c.y]]
             kernel_groups += [(role, on_noc0, True), (role, [c for c in cores if not prep_send_noc0[c.x, c.y]], False)]
+        elif role == ROLE_LOCAL and qk_channels and BCAST_SPLIT_NOCS:
+            # The q injectors send on NOC 0 from the writer: their reader and writer swap NoCs.
+            q_inj = [c for c in cores if roles[role][3][c.x, c.y][4] == QK_Q_INJECTOR]
+            rest = [c for c in cores if roles[role][3][c.x, c.y][4] != QK_Q_INJECTOR]
+            kernel_groups += [(role, q_inj, True), (role, rest, False)]
         elif role == ROLE_LOCAL and qk_channels and SPLIT_BCAST_GROUPS:
             # R-BCAST: one kernel group per qk role (q injectors, k injectors, receivers), each compiling its role in.
             core_role = {(c.x, c.y): roles[role][3][c.x, c.y][4] for c in cores}

@@ -343,12 +343,15 @@ void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t
             k_channel.optional_sender(noc)->send(stage, kn_dst, part_bytes);
         }
         cb_pop_front(cb_qk_stage, Kt);
+        GDN_MARK("m_wr_sent");
     }
     if (!q_injector && receive) {
         q_channel.optional_receiver(noc)->receive();
+        GDN_MARK("m_wr_q");
     }
     if (!k_injector && receive) {
         k_channel.optional_receiver(noc)->receive();
+        GDN_MARK("m_wr_k");
     }
     cb_push_back(cb_kq_rows, 2 * Kt);
     cb_push_back(cb_kq_rows_f32, 2 * Kt);
@@ -564,6 +567,14 @@ void kernel_main() {
             const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
+            // An injector sends its qn / kn first: its compute makes the gates after them.
+            const bool lands = !CHUNKED && qk_role != GDN_QK_OWN && !(hold_qk && unit_idx > 0);
+            const bool injector = qk_role == GDN_QK_Q_INJECTOR || qk_role == GDN_QK_K_INJECTOR;
+            if (lands && injector) {
+                land_qk_rows(q_channel, k_channel, qk_role, Kt, unit_idx == 0);
+                GDN_MARK("m_wr_landed");
+            }
+
             // ---- per-token coefficient expansion (R-CHUNK: per-tile-row g / beta columns) ----
             if constexpr (!STATE) {
                 cb_wait_front(cb_gates, 2);
@@ -589,10 +600,12 @@ void kernel_main() {
                     cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
                 }
                 cb_pop_front(cb_gates, 2);
+                GDN_MARK("m_wr_coef");
             }
 
-            if (!CHUNKED && qk_role != GDN_QK_OWN && !(hold_qk && unit_idx > 0)) {
+            if (lands && !injector) {
                 land_qk_rows(q_channel, k_channel, qk_role, Kt, unit_idx == 0);
+                GDN_MARK("m_wr_landed");
             }
 
             // ---- partial sum o^2 all-gather (R-VSPLIT) ----
@@ -623,6 +636,7 @@ void kernel_main() {
                 Noc noc;
                 Semaphore<> osum_landed(OSUM_SEM_ID);
                 cb_wait_front(cb_osum_part, 1);
+                GDN_MARK("m_wr_osum_part");
                 cb_reserve_back(cb_osum_gather, PIECES);
                 const uint32_t part = get_read_ptr(cb_osum_part);
                 const uint32_t slot = get_write_ptr(cb_osum_gather) + piece * STATE_TILE_BYTES;
@@ -639,6 +653,7 @@ void kernel_main() {
                 ++rows_combined;
                 osum_landed.wait_min(rows_combined * (PIECES - 1));
                 cb_push_back(cb_osum_gather, PIECES);
+                GDN_MARK("m_wr_osum");
             }
 
             // The state is final after the last tile row's update, before compute's RMS norm produces the output
@@ -693,4 +708,5 @@ void kernel_main() {
         retiring = true;
     }
     retire();
+    GDN_MARK("m_wr_done");
 }

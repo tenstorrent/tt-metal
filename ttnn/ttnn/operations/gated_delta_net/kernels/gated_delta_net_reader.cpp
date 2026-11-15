@@ -791,6 +791,7 @@ void kernel_main() {
                             const bool split_flush = prefetch && group_first == 0;
                             if (split_flush) {
                                 noc_async_read_barrier_with_trid(WINDOW_TRID);
+                                GDN_MARK("m_rd_win");
                                 noc_async_read_set_trid(
                                     WINDOW_TRID);  // the row copies, so the inputs barrier skips them
                             } else {
@@ -829,6 +830,7 @@ void kernel_main() {
                             }
                             if (split_flush) {
                                 noc_async_read_barrier_with_trid(INPUTS_TRID);  // weights and gate rows
+                                GDN_MARK("m_rd_inputs");
                                 noc_async_read_set_trid(0);
                                 rows.finish_staged();
                             }
@@ -863,6 +865,7 @@ void kernel_main() {
                                 noc_async_read_barrier();
                             }
                             cb_push_back(cb_window, group_tiles);
+                            GDN_MARK("m_rd_window_pushed");
                         }
                         // History rows are read in the sequence's first tile row only.
                         if (CS_IN_PLACE && tr == first_tr && unit_idx == cs_signal_unit) {
@@ -886,6 +889,7 @@ void kernel_main() {
                         }
                         cb_push_back(cb_state_in, n_state);
                         cb_push_back(cb_state_in_mm, n_state);
+                        GDN_MARK("m_rd_s0");
                     }
 
                     if constexpr (STATE || PREP_QK) {
@@ -900,6 +904,7 @@ void kernel_main() {
                     }
                     rows.finish();
                     cb_push_back(cb_z, Vb);
+                    GDN_MARK("m_rd_z");
                     if (kq_landing) {
                         ++kq_rows_landed;
                         Semaphore<>(QN_LANDED_SEM_ID).wait_min(kq_rows_landed);

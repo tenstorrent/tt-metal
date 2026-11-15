@@ -85,6 +85,11 @@
 #else
 #define GDN_ZONE(name)
 #endif
+// A point in time: an empty zone.
+#define GDN_MARK(name)  \
+    do {                \
+        GDN_ZONE(name); \
+    } while (0)
 
 namespace ckl = compute_kernel_lib;
 
@@ -725,7 +730,9 @@ ALWI void row_sum(Buffers& bufs, DataflowBuffer& sq_buf, DataflowBuffer& out_buf
 // rsqrt(sum of squares of the Kt tiles of cb_y_qk at `base` + 1e-6) * post_mul -> cb_rinv.
 ALWI void l2_inverse_norm(Buffers& bufs, uint32_t base, uint32_t post_mul_bits, RowScope scope) {
     square_block<cb_y_qk, cb_sq>(base, Kt, scope);
+    GDN_MARK("m_sq");
     row_sum<cb_sq, cb_rinv>(bufs, bufs.sq, bufs.rinv, Kt, RsqrtPost{L2_EPS_BITS, post_mul_bits, scope});
+    GDN_MARK("m_rowsum");
 }
 
 ALWI void kn_transpose_block(Buffers& bufs);

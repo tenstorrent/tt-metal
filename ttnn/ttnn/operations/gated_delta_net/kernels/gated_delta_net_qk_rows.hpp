@@ -19,6 +19,11 @@
 #else
 #define GDN_ZONE(name)
 #endif
+// A point in time: an empty zone.
+#define GDN_MARK(name)  \
+    do {                \
+        GDN_ZONE(name); \
+    } while (0)
 
 namespace gdn {
 

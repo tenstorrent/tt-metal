@@ -24,6 +24,7 @@ ALWI void token_step(
     uint32_t rot = 0) {
     // read (5a): [rk; ro] = [kn; qn] x S_{t-1}
     read_state<cb_kq_rows>(bufs, first_in_pair);
+    GDN_MARK("m_read");
     // token vector (5b): w = v - alpha rk, u = beta (sel (*)col w), o = sel (*)col (alpha ro) + d u, with sel the
     // row-p selector and alpha, beta, d fp32 scalars of token p. Shared-q/k builds (the decode regimes) run one DEST
     // window per column tile and, for a tile row with this token alone, also pack o^2 (the RMS-norm square); the
@@ -141,7 +142,9 @@ ALWI void token_step(
         }
     }
     // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
+    GDN_MARK("m_tokvec");
     update_state<cb_knT>(first_in_pair, last_in_pair, cb_u, alpha_bits, rot);
+    GDN_MARK("m_update");
     cb_pop_front(cb_u, Vb);
     cb_pop_front(cb_u_f32, Vb);
     cb_pop_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
@@ -205,7 +208,6 @@ void kernel_main() {
             const RowScope scope = RowScope::of(lo - base_row, hi - base_row);
             {
                 GDN_ZONE("gdn_prep");  // gates, conv, q / k norms
-                gates_block(scope);
                 if constexpr (qk_shared) {
                     // An injector convolves and normalizes its q/k part before its v columns: the part is what every
                     // core of the key head waits for.
@@ -219,14 +221,21 @@ void kernel_main() {
                         } else {
                             conv_block(scope, cols, first, last);
                         }
+                        GDN_MARK("m_conv");
                         if (pass == 0 && cols.qk_cols != 0) {
                             qk_part_block(bufs, qk_role == GDN_QK_Q_INJECTOR, scope);
+                            GDN_MARK("m_qk_norm");
                         }
                     }
+                    // After an injector's q / k part, which the key head waits for; only the token step needs them.
+                    gates_block(scope);
+                    GDN_MARK("m_gates");
                     if (!hold_qk || unit_idx == 0) {
                         qk_finish_block(bufs);
+                        GDN_MARK("m_finish");
                     }
                 } else {
+                    gates_block(scope);
                     if constexpr (CONV_ON_FPU) {
                         conv_block_fpu(scope, cols, 0, cols.count());
                     } else {
@@ -280,6 +289,7 @@ void kernel_main() {
             GDN_ZONE("gdn_rmsnorm");
             rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(
                 bufs, v_eps_bits, scope, QK_SHARED && hi - lo == 1);  // token_step's square_o
+            GDN_MARK("m_rms");
         }
         cb_pop_front(cb_conv_w, conv_w_pages);
         cb_pop_front(cb_gate_w, 2);
