@@ -24,6 +24,7 @@ import tempfile
 
 import pytest
 import ttnn
+from dcp_harness import ranks_in_step
 from dcp_shards import assert_same, optimizer_state, param_shards
 from tp_block import TPBlock, make_adamw, train_step
 
@@ -87,7 +88,12 @@ def two_meshes():
         ttml.close_device_mesh()
 
 
-def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
+@pytest.fixture(autouse=True)
+def _ranks_in_step(request, two_meshes):
+    ranks_in_step(request.node.nodeid)
+
+
+def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes, expect_error):
     rank, local, root = two_meshes
     ctx = ttml.autograd.AutoContext.get_instance()
     # The same seeds on both ranks for the shared layer, including ttml.init's own generator (seeded from OS entropy
@@ -136,7 +142,9 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
 
     # A rank whose model wants a key no rank saved fails strictly, and takes every rank with it.
     model3 = _Pipeline(DIM, [f"stage{rank}"] + (["extra"] if rank == 1 else []), stage_seed=300 + rank)
-    with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(
+        dcp.MissingKeyError, r"planning the load failed on rank\(s\) \[1\] of 2: rank 1: MissingKeyError: .*extra"
+    ):
         dcp.load(path, model=model3)
     ttnn.distributed_context_barrier()
 

@@ -7,6 +7,10 @@
 import os
 import signal
 import subprocess
+import zlib
+
+import pytest
+import ttnn
 
 TIMED_OUT = -9  # the harness's own exit code for a world it had to terminate
 
@@ -31,3 +35,13 @@ def run_world(command: list[str], env: dict, timeout: int) -> subprocess.Complet
             command, TIMED_OUT, out + f"\n[harness] the world ran for {timeout} s and was terminated\n", err
         )
     return subprocess.CompletedProcess(command, proc.returncode, out, err)
+
+
+def ranks_in_step(where: str) -> None:
+    """Fail unless every rank of a tt-run module is at ``where`` (an allgather of its hash). A rank whose test failed
+    early skips the collectives the other ranks are still in; without this check its next test's collectives would
+    pair with theirs, and the module would report the wrong errors or hang."""
+    mine = zlib.crc32(where.encode("utf-8")) & 0x7FFFFFFF
+    values = [int(v) for v in ttnn.distributed_context_allgather_int(mine)]
+    if any(v != mine for v in values):
+        pytest.fail(f"the ranks are out of step at {where}: {values}")

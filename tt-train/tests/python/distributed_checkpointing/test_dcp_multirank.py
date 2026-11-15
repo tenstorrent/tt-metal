@@ -25,6 +25,7 @@ import pytest
 import torch
 import ttnn
 from dcp_oracle import Loader
+from dcp_harness import ranks_in_step
 from dcp_shards import assert_same, optimizer_state, param_shards
 from tp_block import TPBlock, fresh_tp, train_step
 
@@ -67,6 +68,11 @@ def two_ranks():
             shutil.rmtree(root, ignore_errors=True)
     finally:
         ttml.close_device_mesh()
+
+
+@pytest.fixture(autouse=True)
+def _ranks_in_step(request, two_ranks):
+    ranks_in_step(request.node.nodeid)
 
 
 def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ranks):
@@ -140,19 +146,19 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
     ttnn.distributed_context_barrier()
 
 
-def test_a_rank_failing_mid_save_stops_every_rank_and_leaves_no_checkpoint(two_ranks):
+def test_a_rank_failing_mid_save_stops_every_rank_and_leaves_no_checkpoint(two_ranks, expect_error):
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "refused")
-    if rank == 1:
-        # A model that disagrees with rank 0's description of the same key: the merge refuses it on every rank.
-        other = TPBlock(DIM * 2)
-        other.parameters()  # materializes the weights
-        with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
-            dcp.save(path, model=other)
-    else:
-        with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
-            dcp.save(path, model=model)
+    # On rank 1 a model that disagrees with rank 0's description of the same keys: rank 0's merge refuses it, and
+    # every rank raises with rank 0's message.
+    other = TPBlock(DIM * 2) if rank == 1 else model
+    other.parameters()  # materializes the weights
+    with expect_error(
+        dcp.CheckpointError,
+        r"merging the plan parts failed on rank\(s\) \[0\] of 2: rank 0: CheckpointError: .* rank 1 describes it",
+    ):
+        dcp.save(path, model=other)
     ttnn.distributed_context_barrier()
     assert not os.path.exists(path) and not any(n.startswith("refused.partial-") for n in os.listdir(root))
     ttnn.distributed_context_barrier()
