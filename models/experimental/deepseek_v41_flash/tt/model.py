@@ -2099,6 +2099,33 @@ class DeepSeekV41Model(DeepSeekV4Model):
             total = term if total is None else ttnn.add(total, term)
         return ttnn.typecast(total, ttnn.bfloat16)
 
+    def _collapse_row(self, streams: ttnn.Tensor, pre_mix: ttnn.Tensor) -> ttnn.Tensor:
+        """:meth:`_collapse_streams` of one row (``streams [1, 1, hc, D]``, ``pre_mix [1, 1, 1, hc]`` TILE) as one
+        ``[1, hc] @ [hc, D]`` matmul accumulated in fp32, as the hyper-connection op collapses: tilizing pads the
+        streams with zero rows, so ``pre_mix``'s padding columns add nothing."""
+        if (
+            tuple(streams.shape)[:2] != (1, 1)
+            or tuple(pre_mix.shape)[:3] != (1, 1, 1)
+            or pre_mix.layout != ttnn.TILE_LAYOUT
+        ):
+            return self._collapse_streams(streams, pre_mix)
+        if streams.layout != ttnn.TILE_LAYOUT:
+            if streams.is_sharded():
+                streams = ttnn.to_memory_config(streams, ttnn.DRAM_MEMORY_CONFIG)
+            streams = ttnn.to_layout(streams, ttnn.TILE_LAYOUT)
+        return ttnn.matmul(
+            pre_mix,
+            streams,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                streams.device().arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
+
     def _decode_submesh_static(
         self,
         sm: dict,
@@ -2203,7 +2230,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select, two_level, split, dense),
             )
             if is_last:
-                hidden = self.norm(self._collapse_streams(streams, pre_mix))
+                hidden = self.norm(self._collapse_row(streams, pre_mix))
                 if self.device_sampler is not None:
                     hidden = self.device_sampler(self._lm_head_traced.linear(hidden))
                 elif self._lm_head_traced is not None:
