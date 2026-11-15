@@ -218,6 +218,13 @@ struct Conv2dParams {
     bool config_tensors_in_dram = false;
     uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
+    // Per output channel sum and sum of squares into the epilogue_stats tensor: core k of the slice writes pages
+    // [page_base + 2 * k * n, page_base + 2 * (k + 1) * n), n = per_core_out_matrix_width_ntile.
+    bool epilogue_stats = false;
+    uint32_t epilogue_stats_slice_stride = 0;
+    // Left out of the program hash: every DRAM slice writes its own pages from the same program, and
+    // Conv2dShardedProgramFactory::override_runtime_arguments writes it on a cache hit.
+    uint32_t epilogue_stats_page_base = 0;
 
     static constexpr auto attribute_names = std::make_tuple(
         "sliding_window_config",
@@ -237,7 +244,9 @@ struct Conv2dParams {
         "full_inner_dim",
         "enable_activation_reuse",
         "config_tensors_in_dram",
-        "force_split_reader");
+        "force_split_reader",
+        "epilogue_stats",
+        "epilogue_stats_slice_stride");
 
     auto attribute_values() const {
         return std::make_tuple(
@@ -258,7 +267,9 @@ struct Conv2dParams {
             this->full_inner_dim,
             this->enable_activation_reuse,
             this->config_tensors_in_dram,
-            this->force_split_reader);
+            this->force_split_reader,
+            this->epilogue_stats,
+            this->epilogue_stats_slice_stride);
     }
 };
 
@@ -286,6 +297,7 @@ struct Conv2dInputs {
     Tensor a;
     Tensor b;
     std::optional<Tensor> bias;
+    std::optional<Tensor> epilogue_stats;
 };
 
 // Both CB and tensor allocation sizes are per per tensix core and in bytes.

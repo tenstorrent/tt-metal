@@ -63,6 +63,10 @@ struct Conv2dFusedOps {
     // sliding_window::ExternalHaloSpec describes. Height-sharded conv; on the DRAM path, an explicit DRAM_WIDTH slice
     // config.
     std::optional<Tensor> halo_boundary;
+    // FLOAT32 TILE interleaved with conv2d_epilogue_stats_num_pages pages: gets the per output channel sum and sum of
+    // squares of the output (row 0 of 2 * C / 32 tiles per core and slice). Height-sharded conv, TILE output. A conv
+    // writes only its own cores' pages: zero the tensor before each conv.
+    std::optional<Tensor> epilogue_stats;
 };
 
 // ttnn::conv2d with fused_ops.
@@ -89,6 +93,9 @@ Conv2dResultWithOptions conv2d_fused(
     bool return_output_dim,
     bool return_weights_and_bias,
     const Conv2dFusedOps& fused_ops);
+
+// Pages of the epilogue_stats tensor for a conv with out_channels outputs run in num_slices DRAM slices (1 unsliced).
+uint32_t conv2d_epilogue_stats_num_pages(MeshDevice* device, uint32_t out_channels, uint32_t num_slices = 1);
 
 }  // namespace ttnn
 

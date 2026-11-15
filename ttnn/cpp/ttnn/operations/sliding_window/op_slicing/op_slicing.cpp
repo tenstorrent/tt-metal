@@ -365,6 +365,7 @@ void run_sliced_op(
         for (auto& this_output_tensor : output_tensors) {
             this_output_tensor.get().deallocate(true);
         }
+        op_slice_attr->start_slice(0);
         auto op_output_tensors = op_slice_attr->run_L1_op(input_tensor, {0, 0}, {output_height, output_width});
         for (uint32_t i = 0; i < num_output_tensors; i++) {
             output_tensors[i].get() = ttnn::to_memory_config(
@@ -493,6 +494,7 @@ void run_sliced_op(
             prologue_scale,
             prologue_shift);
 
+        op_slice_attr->start_slice(slice_index);
         auto sliced_output_tensors = op_slice_attr->run_L1_op(
             sliced_input_tensor,
             {output_slice_height_start, output_slice_width_start},
