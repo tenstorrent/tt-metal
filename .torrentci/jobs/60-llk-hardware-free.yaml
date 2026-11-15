@@ -32,9 +32,15 @@ jobs:
           run:
             - mkdir -p "$HOME"
             - python3 --version
+            - echo "T venv-start 1001 27 100 113 1001date +%s.%N)"
             - python3 -m venv /tmp/venv
+            - echo "T venv-end 1001 27 100 113 1001date +%s.%N)"
             - /tmp/venv/bin/pip install -q -r tt_metal/tt-llk/tests/requirements.txt
+            - echo "T install-end 1001 27 100 113 1001date +%s.%N)"
+            - /tmp/venv/bin/pip freeze --all | sort > /tmp/freeze.txt && cat /tmp/freeze.txt
+            - echo "T freeze-end 1001 27 100 113 1001date +%s.%N)"
             - . /tmp/venv/bin/activate && cd tt_metal/tt-llk/tests && ./setup_testing_env.sh
+            - echo "T sfpi-end 1001 27 100 113 1001date +%s.%N)"
       - id: hardware-free
         kind: shell
         shell:
