@@ -227,18 +227,20 @@ class FSDPState:
         reduce_dtype = ttml.core.distributed.resolve_reduce_dtype(self.reduce_dtype)
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
-            if not param_tensor.is_grad_initialized():
-                continue
             # Swap m_value back to the cached shard and free the gathered
             # weight before the grad's reduce-scatter, the peak of this hook:
             # nothing reads the weight from here on, and set_value doesn't
             # check shapes. Freed explicitly, since Python GC may keep the
-            # full-size buffer around for too long.
+            # full-size buffer around for too long. Every managed parameter
+            # was gathered in backward_pre, so one this backward didn't reach
+            # is swapped back too.
             gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
             shard = self._cached_shards.get(id(param_tensor))
             if shard is not None:
                 param_tensor.set_value(shard)
             ttnn.deallocate(gathered_value)
+            if not param_tensor.is_grad_initialized():
+                continue
 
             # The gathered grad is still installed until set_grad below, but
             # nothing reads it after the reduce-scatter's input is made: the

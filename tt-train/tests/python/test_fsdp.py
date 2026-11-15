@@ -581,5 +581,81 @@ class TestFSDPEquivalence:
         np.testing.assert_allclose(synced_grad, ref_grad, **tol)
 
 
+# ---------------------------------------------------------------------------
+# A managed parameter that a backward doesn't reach
+# ---------------------------------------------------------------------------
+
+
+class _TwoBranch(AbstractModuleBase):
+    """``b`` runs only while ``use_b`` is set, so a backward can leave its weight without a gradient."""
+
+    def __init__(self, features: int) -> None:
+        super().__init__()
+        self.a = LinearLayer(features, features, has_bias=False)
+        self.b = LinearLayer(features, features, has_bias=False)
+        self.use_b = True
+
+    def forward(self, x):
+        y = self.a(x)
+        return self.b(y) if self.use_b else y
+
+
+@pytest.mark.parametrize(
+    "optimizer_config",
+    [{"type": "SGD", "lr": 0.1, "momentum": 0.9}, {"type": "AdamW", "lr": 0.01}],
+    ids=["sgd_momentum", "adamw"],
+)
+def test_a_managed_parameter_without_a_gradient_is_resharded(fsdp_mesh, optimizer_config):
+    """``backward_post`` swaps the shard back for every managed parameter, also one the backward didn't reach, so the
+    optimizer step and the next backward see shard-shaped values. SGD's momentum still moves that parameter."""
+    features = 64
+    rng = np.random.default_rng(3)
+    model = _TwoBranch(features)
+    for _, tensor in sorted(model.named_parameters()):
+        _set_param_replicated(tensor, rng.standard_normal(tuple(tensor.shape())).astype(np.float32) * 0.1)
+    model.train()
+    ttml.fsdp.fully_shard(model)
+    optimizer = ttml.optimizers.create_optimizer(optimizer_config, model.parameters())
+    b_weight = model.b.weight.tensor
+    mapper = _replicated_mapper()
+
+    def value_shapes() -> dict:
+        native = ttml.autograd.PreferredPrecision.NATIVE
+        return {name: tuple(tensor.get_value(native).shape) for name, tensor in model.named_parameters()}
+
+    def backward(*, use_b: bool, seed: int) -> None:
+        model.use_b = use_b
+        input_np = np.random.default_rng(seed).standard_normal((2, 1, 32, features)).astype(np.float32) * 0.1
+        x = ttml.autograd.Tensor.from_numpy(input_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+        ttml.ops.unary.mean(model(x)).backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    shard_shapes = value_shapes()
+    b_shard_shape = tuple(b_weight.get_value(ttml.autograd.PreferredPrecision.NATIVE).shape)
+
+    backward(use_b=True, seed=10)
+    optimizer.step()
+    optimizer.zero_grad()
+
+    backward(use_b=False, seed=11)
+    assert not b_weight.is_grad_initialized()
+    assert value_shapes() == shard_shapes
+    b_before = _read_replicated_to_numpy(b_weight, fsdp_mesh)  # rank 0's shard
+    optimizer.step()
+    assert value_shapes() == shard_shapes
+    b_after = _read_replicated_to_numpy(b_weight, fsdp_mesh)
+    if optimizer_config["type"] == "SGD":
+        assert not np.array_equal(b_before, b_after), "the momentum of step 1 still moves b"
+    else:
+        np.testing.assert_array_equal(b_before, b_after)
+    optimizer.zero_grad()
+
+    backward(use_b=True, seed=12)
+    assert b_weight.is_grad_initialized()
+    assert tuple(b_weight.get_grad().shape) == b_shard_shape
+    optimizer.step()
+    assert value_shapes() == shard_shapes
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
