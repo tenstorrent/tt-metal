@@ -48,7 +48,7 @@ class LCfg:
     D: int = 4  # own-expert chunk reads in flight
     keep: int = 1  # schedule: slots an owner leaves free when it injects
     out_all: bool = False  # every expert's down rows to DRAM (WL_OUT_ALL), not only each group's last
-    wpoll: int = 1  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
+    wpoll: int = 2  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
 
 
 def lane_cores(g):

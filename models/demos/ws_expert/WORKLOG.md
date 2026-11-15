@@ -396,3 +396,41 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
 - ws_sf_f1, 640 experts torus, one lane a group, D 5, CRB 6, arr_noflush, down outputs on NOC1: first measured launch
   35.5-36.4% a chip (warm-up 20 done), then launch 22 hung (device timeout at 21:59:39) and host MMIO reads to device
   27 timed out at 22:01:27; the watcher cancelled the step and the node stopped answering new job steps.
+
+### Design B: lanes with in-core forwarding (ws_lane.py, ws_lane_sched.py, kernels wl_*.cpp)
+- Group g's experts travel lane g (one Hamiltonian cycle x one link, both directions); no forwarder cores. Group core
+  j sends its slice of an expert one hop, 15 packets of 24 bfp4 tiles, into core j of the next chip through the
+  group's mux core of that direction (fabric_mux, 20 full-size channels, 2 buffers each), straight into a weight
+  slot (fused write + arrival increment). 3 slots a core: 0 takes experts arriving on direction 0, 1 on direction 1,
+  2 any, including the chip's own experts (read from DRAM by the core's BRISC). An expert's down rows drain before
+  the next expert starts, so a slot frees once its expert is computed and forwarded.
+- Static schedule (ws_lane_sched.lane_sched): a lock-step model of one lane with typed slots and owner hold-back
+  (keep 1) records per chip and slot the experts it holds in turn and per chip the compute order; the device follows
+  only these orders: occupant k of a slot is sent (or read) once the receiving slot freed occupant k - 1 (credit:
+  inline write one hop back through the other direction's mux, or a local word for own experts).
+- Layout: groups in columns (1,2), (4,5), (7,8), (10,11), their two mux cores at rows 4 / 5 of the column just west
+  (0, 3, 6, 9): core -> mux traffic (NOC1: north, then west) stays out of other groups' columns. The token-row ring
+  shrinks to BK 20, NX 9, LOOK 18 so that the third slot fits; MMAX = T (no multi-pass for any M).
+- Host checks (test_lane_tables): the schedule completes under random timing (model util 0.563 / 0.597 / 0.557 for
+  tray E 16 / tray E 32 / torus E 160; random timing 0.516 / 0.556 / 0.482), and the tables drive a model of the
+  device queues (own reads, weight pushes, compute, forwards with fabric delays, releases) to completion, never
+  landing a packet in a slot that still holds another expert.
+- Tray (hold 213824, c10u20, chips 0-7, sub_2x4, FABRIC_2D; row snake x 2 links = 2 lanes, G 2, 32 experts, T 8192):
+  first hardware run correct: PCC 0.99994 on all 8 chips for each group's last expert and for every expert
+  (out_all), M 0 and M 5 pass, dynamic M (per chip counts 0 / 1 / 31 .. 8192 = T, every expert of chips 1 and 0)
+  min PCC 0.99993. Performance (20 warm-up + 5 measured, util tile median over chips and launches):
+| reader / writer | M 586 | M 2048 | M 5 (weights only) |
+|---|---|---|---|
+| first version (blocking fabric sends, flush after each send, own-read barriers) | 34.2% | 52.4% | 3.1% (1 launch) |
+| non-blocking sends (mux space checked), flush before the next send, own reads retired without barriers | 41.6% | 59.2% | 3.2% |
+| + slots polled from registers | 44.0% | 64.8% | |
+| + weight queues every 2nd loop turn (wpoll 2, now the default) | 44.1% | 66.7% | |
+| + weight queues every 4th loop turn (wpoll 4) | 43.5% | 68.0% | |
+  The store-and-forward tray best was 34.1% / 78.3%. M 5 is weight-bound: 82.6 K cycles a chip-expert = 122 us an
+  expert a lane, i.e. 11.3 model steps of 276 KB at 24 GB/s - the lane model's transfer bound (11.3 steps an expert
+  at C 1) at the mux bench rate. At M 586 the remaining waits a core are x (0.87 M cycles of 3.5 M) and weights
+  (0.55 M); 4 mux buffers a channel instead of 2: no change. The reader's loop spends most of its time in the
+  weight queues (QW / QF / QR), which delays the x / h queues on the same RISC; serving them less often helps
+  M 2048, not M 586 (chip 0 47%, the tray's slowest chips 41-43%).
+- Lane model vs tray at M 586: lock-step 0.563, random timing 0.516; measured 44%. Torus (E 160 a lane): lock-step
+  0.557, random timing 0.482.
