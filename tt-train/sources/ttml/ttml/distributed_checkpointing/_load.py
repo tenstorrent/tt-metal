@@ -221,7 +221,7 @@ def load(
     index: Index = read_index(ckpt_dir)
     header = read_header_json(ckpt_dir)
     world_rank = world_record()["ranks"][0]["world_rank"]
-    train_state = header.get(TRAIN_STATE_KEY, {})
+    train_state = header[TRAIN_STATE_KEY]
     missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
     if strict and missing_state:
         raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
