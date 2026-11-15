@@ -5545,7 +5545,85 @@
   "waiting": null
  },
  "P.68": {
-  "waiting": "the 'before' side of P.68 (ab.before) is not measured and the tree already holds changes under its paths (models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/state.chunks/0001.json): revert them or measure 'before' on a clean tree first"
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "592203d1364e20d30b11e752804d818787b5365a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "2073bbce-da85-43fe-b310-ecb6ffe18395"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 2.3,
+  "history": [
+   {
+    "reused": [
+     "P.68#test_ladder",
+     "P.68#test_profile",
+     "P.68#test_decoder_skip_decode",
+     "P.68#test_determinism",
+     "P.68#test_contract",
+     "P.68#test_adapter_acks",
+     "P.68#test_determinism.7.0",
+     "P.68#test_moe_prev_replicas"
+    ],
+    "s": 2.3,
+    "status": "PASS",
+    "t": "2026-11-15T09:12:13"
+   }
+  ],
+  "last_run": "2026-11-15T09:12:11",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/moe_replication/logs/P.68.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "P.68#test_ladder",
+    "P.68#test_profile",
+    "P.68#test_decoder_skip_decode",
+    "P.68#test_determinism",
+    "P.68#test_contract",
+    "P.68#test_adapter_acks",
+    "P.68#test_determinism.7.0",
+    "P.68#test_moe_prev_replicas"
+   ],
+   "units": {
+    "P.68#test_adapter_acks": "37165d0b8c7f3587",
+    "P.68#test_contract": "c5bddf29e6375492",
+    "P.68#test_decoder_skip_decode": "547817c4970c8ba0",
+    "P.68#test_determinism": "ebbd48ffaa3dc7a0",
+    "P.68#test_determinism.7.0": "ebbd48ffaa3dc7a0",
+    "P.68#test_ladder": "7325548bfbdc6e3d",
+    "P.68#test_moe_prev_replicas": "b8563238a760eaa6",
+    "P.68#test_profile": "cfdda2fe16f0d6fb"
+   }
+  },
+  "started": "2026-11-15T09:12:08",
+  "status": "PASS",
+  "units": {
+   "P.68#test_adapter_acks": "PASS",
+   "P.68#test_contract": "PASS",
+   "P.68#test_decoder_skip_decode": "PASS",
+   "P.68#test_determinism": "PASS",
+   "P.68#test_determinism.7.0": "PASS",
+   "P.68#test_ladder": "PASS",
+   "P.68#test_moe_prev_replicas": "PASS",
+   "P.68#test_profile": "PASS"
+  },
+  "waiting": null
  },
  "P.7": {
   "agent": {

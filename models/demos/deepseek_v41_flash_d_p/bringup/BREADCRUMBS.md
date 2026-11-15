@@ -2120,3 +2120,26 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
 - Step 3: both defaults back to on.
 - Cost of legacy vs on (test_moe_prev_replicas, chunks 1..10 mean, shipped prev lean path, host / wall / device ms):
   see the table below (legacy: env DS41_ATTN_FUSE=legacy DS41_CHEAP_CCL=legacy; on: the gate's unit, same code).
+
+## P.68 (perf, attempt 1): this branch rebuilt as model_bringup + expert replication (owner 2026-11-15)
+- Expected saving a chunk (written before measuring): device ~0 ms, host ~0 ms (within noise). The code against
+  before (b9a45fb0b80) adds FIX.32 (SnapshotSend program cache keyed by pattern + geometry: ~+4 us a snapshot call,
+  last chunk only; DS41-277), the framework changes model_bringup carries, and nothing else on the per-chunk path.
+  The point is correctness (the P.65 snapshot race is gone) and the branch shape, not speed.
+- Done: `git merge -s ours --no-commit dnijemcevic/model_bringup`; `git restore --source=0e397ef379a --staged
+  --worktree -- . ':!models/demos/deepseek_v41_flash_d_p/bringup/ledgers'` (also deletes what the target lacks);
+  1f12f2ce34b's orchestrator.py + selftest/test_agent_gate_wait.py applied (its supervision.md is a ledger file: not
+  taken); committed as merge 4bbf6e516cd (parents a129bba4bf2, 8b2b9df34dd), since a pending MERGE_HEAD would block
+  the gate's commit (orchestrator commit_preflight). ./build_metal.sh rc 0.
+- Diff proof: `git diff dnijemcevic/model_bringup HEAD -- . ':!<ledgers>'` is byte-identical to
+  `git diff ba3edbdc7ef ba3edbdc7ef^ -- . ':!<ledgers>'` (95 files, 15023 diff lines; cmp equal). No other file.
+  Against the pre-P.68 tip (a129bba4bf2), the code diff is 58 files, which includes paths outside this task's allowed
+  list (scripts/run_safe_pytest.sh, scripts/lib/tt_safe_run.sh, bringup/hooks.py, bringup/serving_contract.md,
+  bringup/results/knowledge_use/*): all from the target code, as the owner asked.
+- Defaults: MOE_REPLICAS=prev, ENGRAM_TABLE=resident (both as at 0e397ef379a).
+- Gate `gate P.68 --check`: PASS, every unit (ladder err_final_hidden 0.132 / 0.242, top5 1.0; profile wall 158.3 ms,
+  device 143.87 ms; decoder skip served_bytes_differ 0; determinism 0; contract 0; acks 0; replica test).
+- measure --task P.68 (on side): quick 158.6 ms (spread 3.1), p51200 166.6 ms (spread 37.7), determinism 0,
+  host_transfers_per_layer 0. Before (b9a45fb0b80, P.66's recorded result): quick 159.4 ms (spread 5.5). As expected:
+  flat. The orchestrator's A/B runs the before side itself.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.68 --spec <spec> --check` (detached via devjob).

@@ -1,0 +1,56 @@
+{
+ "used": [
+  {
+   "id": "DS41-277",
+   "how": "the before side (b9a45fb0b80) still has the pattern-only SnapshotSend key; the rebuilt code takes FIX.32's geometry key, so served_bytes_differ is expected 0",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-275",
+   "how": "A/B judged with the task's ab.env on both sides (DS41_ENGRAM_TABLE=resident), via orchestrator measure, not by hand",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how a perf-role task that rebuilds a branch (merge -s ours + commit) squares with 'do not commit' and the allowed-paths diff (scripts/, bringup/hooks.py, serving_contract.md, bringup/results/ come from the target code)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or padding change; code is 0e397ef379a + 1f12f2ce34b"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the code is model_bringup's prepared ops plus the replica pieces as at 0e397ef379a"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suites run; only the P.68 gate units and the measure A/B"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.68",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-15T09:03:40",
+  "head": "4bbf6e516cd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.68.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.68_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.68_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.68_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.68.perf.1.json"
+  ]
+ }
+}
