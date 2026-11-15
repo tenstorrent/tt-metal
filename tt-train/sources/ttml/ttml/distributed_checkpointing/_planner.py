@@ -35,11 +35,9 @@ from ._errors import (
     CheckpointError,
     CoverageError,
     DtypeMismatchError,
-    MissingKeyError,
     RoleMismatchError,
     ShapeMismatchError,
     TopologyError,
-    UnexpectedKeyError,
 )
 from ._index import ChunkRecord, Entry, Index
 from ._layouts import Compose, Pad, Transform
@@ -407,16 +405,17 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
 def create_load_plan(
     index: Index,
     infos: Iterable[TensorInfo],
-    strict: bool = True,
     roles: Iterable[str] | None = None,
     local_coords: set[tuple[int, ...]] | None = None,
 ) -> LoadPlan:
     """A ``KeyPlan`` per live tensor. Live names resolve through the entries' recorded live keys.
 
-    What is restored is decided by ``infos``: every live tensor passed is planned. ``roles`` only scopes the
-    unexpected-key report: entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported
-    as unexpected, so a model alone loads from a checkpoint that also holds optimizer state. ``None`` means every
-    role. A live tensor that resolves to an entry of another role is a ``RoleMismatchError``.
+    What is restored is decided by ``infos``: every live tensor passed is planned. The plan lists the live tensors
+    without an entry (``missing``) and the entries without a live tensor (``unexpected``); ``load`` judges them under
+    ``strict``, over the union of the ranks for the unexpected ones. ``roles`` only scopes the unexpected-key report:
+    entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported as unexpected, so a model
+    alone loads from a checkpoint that also holds optimizer state. ``None`` means every role. A live tensor that
+    resolves to an entry of another role is a ``RoleMismatchError``.
     """
     infos = list(_by_key(infos, "loaded").values())
     live_map = index.live_key_map()
@@ -442,12 +441,7 @@ def create_load_plan(
             )
         used.add(entry_key)
         plans[info.key] = plan_key(entry, info, local_coords)
-    unexpected = unexpected_keys(index, used, wanted)
-    if strict and missing:
-        raise MissingKeyError(f"{len(missing)} live tensor(s) have no entry in the checkpoint: {missing[:5]}")
-    if strict and unexpected:
-        raise UnexpectedKeyError(f"{len(unexpected)} checkpoint entr(ies) have no live tensor: {unexpected[:5]}")
-    return LoadPlan(plans, missing, unexpected)
+    return LoadPlan(plans, missing, unexpected_keys(index, used, wanted))
 
 
 def unexpected_keys(index: Index, used: set[str], wanted: set[str] | None) -> list[str]:

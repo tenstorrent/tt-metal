@@ -300,7 +300,7 @@ def load(
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
 
     def plan_locally() -> LoadPlan:
-        plan = create_load_plan(index, [lt.info for lt in live], strict=False, roles=roles, local_coords=local)
+        plan = create_load_plan(index, [lt.info for lt in live], roles=roles, local_coords=local)
         if strict and plan.missing:
             raise MissingKeyError(
                 f"{len(plan.missing)} live tensor(s) have no entry in the checkpoint: {plan.missing[:5]}"
