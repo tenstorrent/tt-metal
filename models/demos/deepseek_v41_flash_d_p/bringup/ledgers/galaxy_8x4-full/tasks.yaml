@@ -4550,6 +4550,36 @@ tasks:
     gate_tasks:
     - P.68
     - P.69
+- id: P.71
+  title: Measured end-to-end prefill 0 -> 1M with replicas (FIX.35 test; owner 2026-11-15)
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.70
+  gate:
+    cmd: DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py
+    metrics:
+      e2e_wall_s_p1024000: '> 0'
+      e2e_tok_s_p1024000: '> 0'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  brief:
+    details: 'OWNER 2026-11-15: the MEASURED end-to-end prefill 0 -> 1M on the REPLICA branch, the same test as model_bringup''s
+      FIX.35 (bf9e3fbbbe4), so the two compare. STEP 1: git merge -s ours --no-commit dnijemcevic/model_bringup, then git
+      checkout bf9e3fbbbe4 -- models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py (plus any helper file that test
+      imports which is new on model_bringup since 81eb0ffce32, and FIX.35''s BREADCRUMBS section); no other change; commit.
+      Do not edit the test except to add replica counters outside every timed region (ready x/20 per chunk, copies), as P.69
+      did. Replicas on (branch default). STEP 2: the gate runs it. Report the same tables as FIX.35 and beside them model_bringup''s
+      FIX.35 numbers (results/FIX.35.json on dnijemcevic/model_bringup) with differences: cumulative wall and tok/s at 51200..1024000,
+      host ms / device ms / gap per chunk, host-bound and host>=device chunk counts, the verdict. SAFETY: a hang or a reset
+      need: STOP and report, never reset. Report plainly, short.'
+    gate_tasks:
+    - P.70
 - id: P.68
   title: 'Rebuild this branch as model_bringup + expert replication (owner 2026-11-15): take model_bringup @ 8b2b9df34dd''s code with FIX.33''s replica removal undone (= 0e397ef379a + 1f12f2ce34b); ledger stays this branch''s'
   step: perf
