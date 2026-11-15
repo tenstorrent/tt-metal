@@ -614,7 +614,8 @@ trainer = GRPOTrainer(..., optimizer_dict=raw["training_config"]["optimizer"], p
 The trainer applies it once, right after it builds the model and before the weights or a trainer checkpoint load, so
 fp32 master weights resume from a checkpoint bit for bit and the optimizer state follows the stored dtype. Qwen3 under
 eager FSDP loads the HF weights into the replicated model and converts after sharding, so no device holds the whole
-model in fp32; the HF weights are bf16, so the values are the same. `None` (default) means no block: the parameters
+model in fp32; that keeps the values when the HF file is bf16. When the file is fp32 and the block asks for fp32 master
+weights, or a trainer checkpoint loads, the conversion comes first. `None` (default) means no block: the parameters
 keep their dtype and no reduce dtype is stored. fp32 master weights (`master_dtype: float32`) need `"type": "AdamW"`,
 because `MorehAdamW` takes bf16 parameters only. `reduce_dtype: float32` works with either optimizer and also adds up
 the micro-batches' gradients in fp32.

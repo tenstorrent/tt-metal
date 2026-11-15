@@ -560,6 +560,46 @@ def test_grpo_trainer_rejects_a_whole_config_as_optimizer_dict(expect_error):
         )
 
 
+def _write_safetensors(directory, stored_dtype: str) -> None:
+    """A one-tensor ``model.safetensors`` whose header says ``stored_dtype`` (the header is all the trainer reads)."""
+    size = {"BF16": 2, "F16": 2, "F32": 4}[stored_dtype]
+    header = json.dumps({"w": {"dtype": stored_dtype, "shape": [2], "data_offsets": [0, 2 * size]}}).encode()
+    with open(directory / "model.safetensors", "wb") as f:
+        f.write(len(header).to_bytes(8, "little") + header + bytes(2 * size))
+
+
+@pytest.mark.parametrize(
+    "stored_dtype, precision, after_the_shard",
+    [
+        ("BF16", FP32_PRECISION, True),
+        ("F16", FP32_PRECISION, True),
+        ("F32", FP32_PRECISION, False),
+        ("F32", {"master_dtype": ttnn.DataType.FLOAT32}, False),
+        ("F32", {"reduce_dtype": "float32"}, True),
+        ("F32", None, True),
+        (None, FP32_PRECISION, False),
+    ],
+)
+def test_eager_fsdp_converts_first_when_fp32_values_would_be_rounded(
+    tmp_path, stored_dtype, precision, after_the_shard
+):
+    """Qwen3's eager FSDP build converts after the shard to save memory, which keeps the values only if the HF file
+    holds nothing wider than bf16. An fp32 file with fp32 master weights asked for, or a directory whose dtype can't be
+    read, is converted before it loads. No device needed."""
+    if stored_dtype is not None:
+        _write_safetensors(tmp_path, stored_dtype)
+    assert grpo_ttml_model._converts_after_the_shard(str(tmp_path), precision) is after_the_shard
+
+
+def test_eager_fsdp_converts_before_a_trainer_checkpoint_loads(tmp_path):
+    """A trainer checkpoint may hold fp32 master weights, so the block is applied before it loads whatever the HF file
+    next to it holds. No device needed."""
+    _write_safetensors(tmp_path, "BF16")
+    assert grpo_ttml_model._converts_after_the_shard(str(tmp_path), FP32_PRECISION)
+    (tmp_path / grpo_ttml_model.CHECKPOINT_FILE).write_bytes(b"")
+    assert not grpo_ttml_model._converts_after_the_shard(str(tmp_path), FP32_PRECISION)
+
+
 @pytest.mark.requires_device
 def test_policy_forward_is_causal(patch_llama_weight_loading):
     """A change to the last token changes no earlier -log pi; full attention would change them."""
