@@ -856,3 +856,40 @@ launch 1), or the timeline shows the q / k hand-off no longer holds any state co
 binds; golden green, no regression on the guard set.
 
 **Outcome**: device kernel us (median of launches 2..12, before -> after): model_decode_b8 39.27 -> 39.06, model_decode_b16 69.77 -> 69.26 (both within noise; targets 35 / 64 not met), in-place b16 69.75, perf_decode_b1 12.63 -> 12.44, decode_b1_f32 20.5 -> 19.8; guard set unchanged (prefill_t96 54.3, batched_b2_t40 125.2, model_prefill_4096 910.3). Landed: two-stage raw hand-off on the B > 1 plan, q / k cores placed after their key head's pair cores (`QK_CORES_AFTER_GROUP`), window slots zeroed while the staging reads fly. Timeline before -> after (GDN_PROFILE_ZONES=2, us). B=8: y landed 12.3-14.9 -> 8.1-10.5 (median 13.4 -> 9.4), inverse norms 10.0-11.9, first / last S0 landed 6.1 / 19.6 -> 5.7 / 19.0, first / last update done 23.8 / 29.7 -> 20.3 / 29.9, first state write issued at the first update, last write done 39.4 -> 38.1. B=16: y 16-19 -> 11.5-14.8, inverse norms 12.9-16.2, last-unit S0 15-38, updates done 38-49, writes done 46-69 (unchanged). What binds: on every core the S0 reads (6 MB / 12 MB, last landing at ~19 / ~38 us) and then ~10 us of state compute per unit (token vector 4.4 us and update 4.4 us at Vb = 4, RMS 4 us), then the 64 KB state write-back queued at the DRAM banks behind other cores' traffic; the earliest-S0 cores (S0 at 6-8 us at B=8) still wait 2-3 us for y but finish at ~26 us, off the wall. Early write-back rechecked: STATE_READER_EARLY_UNITS 84.6 us, STATE_SPLIT=4 80.0 us at B=16 (early writes still push the late S0 reads back). Not done: more q / k cores (6 idle cores of 110 at B=8 / B=16, not one per key head and role), y_k^T from the k core and sequence ordering (the hand-off is off the critical path, nothing to gain); per-column gather is NoC-issue bound (~24 one-packet local reads in 0.7 us per RISC), q reader share 70 / 85 % measured worse. Next: the state cores' token vector and update (one DEST window over Vb tiles instead of per-tile init chains), which is now the per-unit term after S0.
+
+### [ ] Refinement 22 — Decode: state-core compute per unit (token vector, update, RMS)
+
+**Type**: perf
+
+**Goal**: the same term now binds all three decode cases. Refinement 18 (B=1, 12.4 us against a bound
+of 4.8): about 6 to 7.5 us of serial compute on the state cores after y lands (y_k^T + d 1.3, read
+matmul + token vector 2.5, update 0.8, o^2 gather 0.5, RMS 1.5, writes 0.8). Refinement 21 (B=8 39.1
+us, B=16 69.3 us against bounds of 26.4 / 51.7): after its S0 has landed every core spends about 10 us
+per unit (token vector 4.4 us and update 4.4 us at Vb = 4, RMS 4 us) before its 64 KB write-back can
+be issued, and the last S0 lands at about 19 / 38 us, so compute plus write-back after the last S0 is
+what sets the wall. Cut the per-unit compute: (1) what refinement 21 names: one DEST window over the
+Vb tiles for the token vector and for the update instead of per-tile init / unpack / pack chains;
+count the LLK calls and tile round trips per unit before and after; (2) fuse the passes over the
+state: S_t = exp(g) S + k u^T and o = q^T S_t read the same tiles (one unpack of each state tile, the
+decayed read k^T S, the rank-1 update and the q^T S_t accumulation from the same DEST contents where
+the LLK allows it; refinement 9 fused the step with the RMS norm, check what is still separate at
+Vb = 4); (3) anything that depends only on k, q, v, gates (u's v part, scaled q, beta v) is done while
+S0 is still in flight, so that after S0 lands only state-dependent work remains; (4) RMS norm and the
+silu(z) gate: the sum of squares accumulated as o is produced, the z part precomputed before S0
+lands; (5) pack the updated state straight into the CB the writer drains, tile by tile, so that the
+write-back of a unit starts while its later tiles are still being computed (per-tile or per-half
+writes only if the NoC trace shows they do not delay other cores' S0, see refinements 15 and 21);
+(6) at B=16 two units per core run in sequence: order the unit whose S0 lands first first, and
+overlap unit 1's state-independent part with unit 0's update. Measure with the zone timeline per B
+before and after: per-unit compute after S0, time from the last S0 to the last write done.
+
+**Verifier notes**: none of B=1 / B=8 / B=16 may regress while another improves; guard set prefill
+T=128, model_prefill_4096, decode fp32, batched B=2 T=40 unchanged. Accuracy within the existing
+gates (state-carry at 0.002; a fused pass may change rounding, so compare against the golden, not
+bit-identity, and report the worst state-carry error before and after). In place correct;
+next-program test green; traced builds under the kernel text limit.
+
+**Done when**: per-unit state compute after S0 drops by at least 30 % with model_decode_b1 below 11
+us, model_decode_b8 below 37 us and model_decode_b16 below 66 us (median of 11 after launch 1), or
+the timeline shows which LLK step cannot be shortened and why; golden green, no regression on the
+guard set.
