@@ -33,6 +33,8 @@ from models.demos.blackhole.qwen36.tests.test_spec_chain_host import (  # noqa: 
     _chained_verify,
     _host_verify,
     _propose,
+    _sampled_predecessor,
+    _sampling,
     _walk,
     chained,
 )
@@ -212,6 +214,23 @@ def test_a_chained_verify_takes_the_bucket_of_its_own_rows(chained):
     out1 = _propose(eng, succ.p0.where(succ.active, torch.tensor(-1)).tolist(), committed1, counts1)
     assert out1.num_valid.tolist() == [K, 0, 0, 0] and eng.one_enqueue_host_proposes == 0
     assert eng.verify_bucket_steps == {1: 1, 2: 1}
+
+
+def test_a_sampled_chained_verify_replays_the_full_width_trace(chained):
+    """A device-sampled chained verify draws from logits, which a bucket trace does not make: it replays the B-user
+    trace even when its live rows (0 and 1) fit the captured bucket 2."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    eng.model._vfy_bucket_traces = {1: "v1", 2: "v2"}
+    res0, tokens0, starts0, nv0 = _sampled_predecessor(eng, state)
+    assert "bucket" not in log["enqueue"][-1].kw
+    state["ids"] += [torch.zeros(B, T, dtype=torch.int64)]
+    state["draws"] += [torch.zeros(B * T, dtype=torch.int64)]
+    upper = [s + T if s >= 0 else -1 for s in starts0]
+    _chained_verify(eng, res0, upper, [K] * B, rows=[True, True, False, False], sampling=_sampling())
+    e = log["enqueue"][-1]
+    assert e.kw["step_staged"] is True and e.kw["sample_plan"] is not None and "bucket" not in e.kw
+    assert eng.chained_steps == 1 and eng.verify_bucket_steps == {B: 2}
 
 
 def test_the_engine_prepares_the_buckets_below_its_width(bucket_engine):

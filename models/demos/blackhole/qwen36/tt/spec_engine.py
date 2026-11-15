@@ -2575,7 +2575,7 @@ class MTPBlockEngine(MTPSpecEngine):
         if self._acc_pt_staged is None or not torch.equal(self._acc_pt_staged, pt_rows):
             self._accept.stage_pt_rows(pt_rows)
             self._acc_pt_staged = pt_rows
-        bucket = self._verify_bucket(active)
+        bucket = self._verify_bucket(active, sample_plan=sample_plan)
         ttnn.execute_trace(self.mesh, self._chain_trace, cq_id=0, blocking=False)
         blocks.ctrl_written()
         sampler = getattr(model, "_vfy_sampler", None)
