@@ -64,7 +64,14 @@ CASES = {
         _world("1x4", "dp,fsdp", ("--fsdp",), "bh_qb_1_4_ring_ring.textproto"),
         4,
     ),
-    # The fused qkv bias and LoRA's fused lora_B, trained, from TP2 onto one device.
+    # Two-device cases, which a 2-chip CI host can run. TP1 -> TP2: the fused rows spread over the shards and the vocab
+    # padding grows from 160 to 192 rows.
+    "1x2_fsdp->1x2_tp": (
+        _world("1x2", "dp,fsdp", ("--fsdp",), "bh_1_2_line_line.textproto"),
+        _world("1x2", "dp,tp", ("--tp",), "bh_1_2_line_line.textproto"),
+        2,
+    ),
+    # TP2 -> one device, with the fused qkv bias and LoRA's fused lora_B trained.
     "1x2_tp_bias_lora->single": (
         _world("1x2", "dp,tp", ("--tp", "--bias", "--lora"), "bh_1_2_line_line.textproto"),
         _world("1x1", "dp,tp", ("--bias", "--lora"), None),
