@@ -128,7 +128,7 @@ jobs:
       test-result: ${{ steps.run-test.outcome }}
     steps:
       - name: Checkout repository
-        uses: tenstorrent/.github/actions/cachew-checkout@79635adabbfe239ef095ad1e5777f0ad87011958 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@aeb7c855462b93f4dd7955ffe671c7266e6d647d # cachew checkout
         timeout-minutes: 20
 
       - name: Setup multihost job
