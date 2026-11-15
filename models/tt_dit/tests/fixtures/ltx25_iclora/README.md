@@ -138,6 +138,8 @@ Source: ltx-server `e3c36e568dab8bb920286cb470ccd325cf9d25f5`, `config.py`
 matmul helper before construction/capture for both 1080p variants. The 10s
 variants preserve the worker's eager DiT setting; warm once explicitly. These
 contracts are CPU/source supported and **not native or streaming qualified**.
+The acceptance collector reads `pipe.traced`, records the actual setting and
+performs that one explicit warmup only for eager sessions.
 Sulphur owns server routing and its disabled per-box adoption switch. Before
 adoption, verify each selected recipe's real-weight construction/warmup, A/B/A
 and changed-path bytes, fresh endpoints after replay, bounded memory, retained

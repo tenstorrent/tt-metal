@@ -57,7 +57,6 @@ def test_ltx25_iclora_output_dependent_collection(
         topology=topology,
         is_fsdp=is_fsdp,
         dynamic_load=dynamic_load,
-        traced=True,
     )
     fixture = pipe.resolved_fixture
     if fixture["generation"]["mode"] != "r2v":
@@ -71,7 +70,7 @@ def test_ltx25_iclora_output_dependent_collection(
                 topology=str(topology),
                 is_fsdp=is_fsdp,
                 dynamic_load=dynamic_load,
-                traced=True,
+                traced=pipe.traced,
             ),
             indent=2,
         )
@@ -79,9 +78,10 @@ def test_ltx25_iclora_output_dependent_collection(
     )
     (target / "resolved-fixture.json").write_text(json.dumps(fixture, indent=2) + "\n")
     acceptance = fixture["acceptance"]
-    # traced=True already completed the reference-family warmup in construction,
-    # including eager audio initialization and capture. Only metadata was read/written
-    # since then: another full warmup repeats the same recipe and device state.
+    # Traced construction already warmed the reference family. Eager served recipes
+    # skip constructor warmup and require exactly one explicit warmup here.
+    if not pipe.traced:
+        pipe.warmup_buffers()
     first = acceptance["first_frame"]["path"]
     for index, seed in enumerate(acceptance["seeds"]):
         row = {

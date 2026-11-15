@@ -452,6 +452,11 @@ class LTX25ICLoRAPipeline:
     def resolved_fixture(self):
         return copy.deepcopy(self._fixture)
 
+    @property
+    def traced(self):
+        """The validated session setting, also used by acceptance collectors."""
+        return self._traced
+
     def _validate_session(self):
         _environment(self._fixture, self._traced)
         _require(
