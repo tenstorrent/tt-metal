@@ -309,11 +309,11 @@ def test_a_load_that_fails_after_placing_says_the_model_is_partly_restored(
     real_place = _load._place
     calls = []
 
-    def place_then_fail(live, arrays, device):
+    def place_then_fail(live, *args):
         calls.append(live.key)
         if len(calls) == 2:
             raise RuntimeError("simulated device out of memory")
-        real_place(live, arrays, device)
+        real_place(live, *args)
 
     model2, _, opt2 = fresh_tp(DIM)
     monkeypatch.setattr(_load, "_place", place_then_fail)
@@ -323,7 +323,7 @@ def test_a_load_that_fails_after_placing_says_the_model_is_partly_restored(
     ):
         dcp.load(path, model=model2, optimizer=opt2)
 
-    def fail(live, arrays, device):
+    def fail(live, *args):
         raise RuntimeError("simulated device out of memory")
 
     monkeypatch.setattr(_load, "_place", fail)

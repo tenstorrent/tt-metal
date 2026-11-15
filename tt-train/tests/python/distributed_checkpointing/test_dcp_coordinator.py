@@ -465,9 +465,9 @@ def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset():
         def get_state_dict(self):
             return self.state
 
-    check_param_groups(_Opt(["shared/w", "stage1/w"]), index.scalars)  # each rank holds part of the union
+    check_param_groups(_Opt(["shared/w", "stage1/w"]), index.scalars, strict=True)  # each rank holds part of the union
     with pytest.raises(CheckpointError, match="holds params the checkpoint's group 0 does not"):
-        check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars)
+        check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars, strict=True)
 
 
 def test_the_group_of_one_runs_phases_directly_and_keeps_error_types():
