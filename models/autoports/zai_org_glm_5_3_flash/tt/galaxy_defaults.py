@@ -17,6 +17,7 @@ KNOBS = {
     "GLM53_STACK_DSA": "1",  # the DSA indexer in the decode stack (sparse attention past 2,051 rows)
     "GLM53_STACK_PREFILL": "tp",  # the TP prefill (tt/prefill_tp.py) ...
     "GLM53_PF_DSA": "1",  # ... with the DSA indexer (the sharded pool's writer)
+    "GLM53_PF_SPARSE_RESHARD": "a2a",  # heads all-to-all in the sparse prefill (no 16x head pad): -13..-27 % per chunk, exact
     "GLM53_DSA_SHARD": "1",  # the sequence-sharded DSA pool: unit u of a slot on chip u % 32 (tt/tp_dsa_shard.py)
     "GLM53_DSA_SHARD_LANES_T4": "1",  # token lanes for the t <= 4 streams too
     "GLM53_DSA_SHARD_SHARE_SYNC": "1",  # one stream sync set per row count, shared by the layers
