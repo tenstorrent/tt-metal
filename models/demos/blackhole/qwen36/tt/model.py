@@ -2120,7 +2120,7 @@ class Qwen36Model:
             raise ValueError("verify_traced(sample_plan=...) needs a verify trace prepared with sample=True")
         trace_id = self._vfy_trace_id if bucket is None or int(bucket) == B else None
         if trace_id is None:
-            trace_id = self._vfy_bucket_trace(int(bucket), inactive, sample_plan)
+            trace_id = self._vfy_bucket_trace(int(bucket), inactive, sample_plan, read_logits)
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
         assert all(len(t) == T for t in tokens), f"expected {T} tokens per user"
         assert len(positions) == B and len(mi_prev) == B, "one position and one mi per user"
@@ -2174,14 +2174,17 @@ class Qwen36Model:
         if sample_plan is not None:
             ttnn.execute_trace(dev, self._vfy_sample_trace_id, cq_id=0, blocking=False)
 
-    def _vfy_bucket_trace(self, bucket, inactive, sample_plan):
+    def _vfy_bucket_trace(self, bucket, inactive, sample_plan, read_logits=False):
         """The trace of verify row bucket ``bucket``, or ValueError when the step needs more: a live user at or past
-        ``bucket`` (the bucket would leave it unverified, its ids stale), or the sampler's logits."""
+        ``bucket`` (the bucket would leave it unverified, its ids stale), or logits for the sampler or a read (the
+        logits traces gather the vocab shard that only the B-user trace writes)."""
         traces = getattr(self, "_vfy_bucket_traces", None) or {}
         if bucket not in traces:
             raise ValueError(f"no verify row bucket of {bucket} users (captured: {sorted(traces)})")
         if sample_plan is not None:
             raise ValueError("a verify row bucket makes no logits for the device sampler")
+        if read_logits:
+            raise ValueError("a verify row bucket makes no logits to read")
         if inactive is None or not all(bool(x) for x in list(inactive)[bucket:]):
             raise ValueError(f"the verify row bucket of {bucket} users leaves out a live user at or past row {bucket}")
         return traces[bucket]

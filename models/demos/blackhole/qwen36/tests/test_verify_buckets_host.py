@@ -257,6 +257,7 @@ def test_the_model_refuses_a_bucket_that_leaves_a_live_user_or_logits_out(replay
         (dict(inactive=None, bucket=2), "leaves out a live user at or past row 2"),
         (dict(inactive=[False, True, True, True], bucket=8), r"no verify row bucket of 8 users \(captured: \[1, 2\]\)"),
         (dict(inactive=[False, True, True, True], bucket=1, sample_plan=plan), "no logits for the device sampler"),
+        (dict(inactive=[False, True, True, True], bucket=1, read_logits=True), "makes no logits to read"),
     ]:
         with expect_error(ValueError, msg):
             m.verify_enqueue(tokens, [10, 20, 0, 0], [0] * 4, page_tables=pt, **kw)
