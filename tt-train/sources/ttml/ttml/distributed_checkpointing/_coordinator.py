@@ -30,9 +30,10 @@ checking that the ranks describe every key they share alike and together hold ev
 so a box held by several ranks (a replica across hosts, or the same key on several meshes) is written by exactly one of
 them, the hash of the key choosing among them in rank order; rank 0 broadcasts the election; every rank writes the boxes
 it owns into its own files; the result parts (files, chunk records, checksums, this rank's generators) are gathered;
-rank 0 merges them into ``index.json`` and ``header.json``, checking that every elected box was written once, checks
-every data file's size through the shared filesystem, and finalizes the directory. Its phases: collecting the live
-tensors, checking the target directory, merging the plan parts, writing the shards, merging the index and finalizing.
+rank 0 merges them into ``index.json`` and ``header.json``, checking that the ranks report one chunk per elected box,
+checks every data file's size through the shared filesystem, and finalizes the directory. Its phases: collecting the
+live tensors, checking the target directory, merging the plan parts, writing the shards, merging the index and
+finalizing.
 
 Load. Every rank reads the index and restores the shards of the coordinates it holds. ``strict`` is judged over the
 union of the ranks' live tensors, since on a multi-mesh world no single rank holds every key. Its phases: checking the
@@ -42,6 +43,7 @@ and placing the shards, restoring the scalars and the train state.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -50,11 +52,12 @@ import ttnn
 
 from . import _errors
 from ._errors import CheckpointError, CheckpointFatalError
-from ._index import Entry, FileRecord, Index, _entry_from_json, _entry_to_json
+from ._index import FORMAT, VERSION, Entry, FileRecord, Index, _entry_from_json, _entry_to_json
 from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
 from ._state_dict import is_structural_scalar
 from ._topology import Chunk, Label, crc31, owner
+from ._train_state import RNG_FORMAT
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
 # other user of ttnn's point-to-point calls (tag 0 by default; tt-train's GRPO rollout uses 22010-22013 and
@@ -63,6 +66,8 @@ DCP_TAG = 0x7DC0
 # The largest payload one transfer can carry: its length travels through distributed_context_allgather_int, a C int,
 # and MPI_Send / MPI_Recv take an int count (ttnn's MPI context throws past INT_MAX).
 MAX_PAYLOAD = (1 << 31) - 1
+# The writer version an index records.
+WRITER_VERSION = "0.2"
 # How much of a failing rank's message reaches the other ranks.
 MESSAGE_LIMIT = 4096
 
@@ -297,9 +302,9 @@ def info_from_json(value: dict) -> TensorInfo:
         label=Label.from_json(value["label"]),
         local_shape=tuple(int(n) for n in value["local_shape"]),
         transform=transform_from_json(value["transform"]),
-        live_keys=tuple(value.get("live_keys", ())),
-        param_ref=value.get("param_ref"),
-        state_path=tuple(value.get("state_path", ())),
+        live_keys=tuple(value["live_keys"]),
+        param_ref=value["param_ref"],
+        state_path=tuple(value["state_path"]),
     )
 
 
@@ -360,7 +365,7 @@ class PlanPart:
         return PlanPart(
             RankRecord.from_json(value["record"]),
             [info_from_json(i) for i in value["infos"]],
-            int(value.get("train_state_hash", 0)),
+            int(value["train_state_hash"]),
         )
 
 
@@ -456,7 +461,8 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
                 if not _same_description(infos[info.key], info):
                     raise CheckpointError(
                         f"{info.key}: rank {part.record.rank} describes it differently from rank "
-                        f"{first_rank[info.key]} (label, per-device shape, dtype or transform)"
+                        f"{first_rank[info.key]} (role, dtype, label, per-device shape, transform, or an optimizer "
+                        f"state's parameter or state path)"
                     )
             else:
                 infos[info.key] = info
@@ -525,18 +531,16 @@ class ResultPart:
             record,
             files,
             entries,
-            dict(value.get("rng", {})),
-            dict(value.get("scalars", {})),
-            dict(value.get("header", {})),
-            dict(value.get("train_state", {})),
+            dict(value["rng"]),
+            dict(value["scalars"]),
+            dict(value["header"]),
+            dict(value["train_state"]),
         )
 
 
 def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: str) -> tuple[Index, dict]:
     """Rank 0's merge: one file table, one entry per key with every rank's chunks (exactly one per elected box), the
     world record, and the header (rank 0's user header and scheduler/dataloader state, every rank's generators)."""
-    from ._index import FORMAT, VERSION
-
     parts = sorted(parts, key=lambda p: p.record.rank)
     files: list[FileRecord] = []
     entries: dict[str, Entry] = {}
@@ -544,16 +548,7 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
         base = len(files)
         files.extend(part.files)
         for key, entry in part.entries.items():
-            chunks = [
-                type(c)(
-                    box=c.box,
-                    file=c.file + base,
-                    data_offset=c.data_offset,
-                    nbytes=c.nbytes,
-                    crc32=c.crc32,
-                )
-                for c in entry.chunks
-            ]
+            chunks = [dataclasses.replace(c, file=c.file + base) for c in entry.chunks]
             if key in entries:
                 have = entries[key]
                 if (
@@ -583,7 +578,7 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
             rng_ranks[rank_key] = block
     train_state = dict(rank0.train_state)
     if rng_ranks:
-        train_state["rng"] = {"format": int(rank0.rng.get("format", 1)), "ranks": rng_ranks}
+        train_state["rng"] = {"format": RNG_FORMAT, "ranks": rng_ranks}
     world = {"group_size": len(parts), "ranks": [p.record.to_json() for p in parts]}
     scalars = dict(rank0.scalars)
     # A param group's member list is per rank (each rank's optimizer holds the parameters of its own mesh); the index
@@ -601,7 +596,7 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
         files=files,
         entries=entries,
         scalars=scalars,
-        writer_software={"ttml_distributed_checkpointing": "0.2"},
+        writer_software={"ttml_distributed_checkpointing": WRITER_VERSION},
     )
     header = {
         "format": FORMAT,
