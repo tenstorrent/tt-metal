@@ -31,7 +31,7 @@ void bind_deepseek_moe_reduce_scatter(nb::module_& mod) {
         Keyword Args:
             num_links (int, optional): the number of links to use for the reduce-scatter operation. Defaults to `None`, for which the number of links is determined automatically.
             cluster_axis (int, optional): the cluster axis to reduce across. Defaults to `None`.
-            topology (ttnn.Topology, optional): fabric topology. Defaults to `None`.
+            topology (ttnn.Topology, optional): fabric topology. Defaults to `ttnn.Topology.Ring`.
 
         Returns:
             ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape (the logical input shape) for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
