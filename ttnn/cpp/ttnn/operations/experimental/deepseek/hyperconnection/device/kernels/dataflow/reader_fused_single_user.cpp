@@ -69,8 +69,12 @@ void kernel_main() {
     constexpr bool fuse_norm = get_compile_time_arg_val(28) != 0;
     constexpr uint32_t cb_norm_gamma = get_compile_time_arg_val(29);
     constexpr uint32_t norm_row_bytes = get_compile_time_arg_val(30);
+    // A block of rows > 1 rows (FusedSingleUserParams): see the rows branches below.
+    constexpr uint32_t rows = get_compile_time_arg_val(31);
+    [[maybe_unused]] constexpr uint32_t num_w_tiles = get_compile_time_arg_val(32);
+    [[maybe_unused]] constexpr uint32_t gamma_page_bytes = get_compile_time_arg_val(33);
 
-    constexpr auto pre_bias_args = TensorAccessorArgs<31>();
+    constexpr auto pre_bias_args = TensorAccessorArgs<34>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto comb_bias_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
     constexpr auto pre_mix_args = TensorAccessorArgs<comb_bias_args.next_compile_time_args_offset()>();
@@ -131,7 +135,139 @@ void kernel_main() {
     constexpr bool with_post = role == 1;
     constexpr bool with_pre = (role == 0 && !use_pre_mix) || (role == 1 && use_pre_mix);
 
-    if constexpr (role == 0) {
+    if constexpr (role == 0 && rows > 1) {
+        // A block: the streams, the sublayer output, collapsed and the gain are (rows x 32)-tiled, read as the
+        // compute's virtual tiles (hc_rows_sfpu.h). Each row has its own pre_mix / mix_comb / mix_post tile; the
+        // compute takes them as per-row weight vectors (vector v's sub-row lr holds its weight for the block row
+        // that sub-row is), laid out here in cb_mix_w's 32x32 tiles.
+        CircularBuffer cb_h(cb_hidden);
+        cb_h.reserve_back(hidden_pages);
+        cb_h.push_back(hidden_pages);
+
+        // Bytes [start, start + num_bytes) of a tensor read as one flat byte stream of page_bytes pages.
+        auto read_flat =
+            [&](const auto& acc, uint32_t page_bytes, uint32_t start, uint32_t num_bytes, CircularBuffer& cb) {
+                uint32_t pos = start;
+                uint32_t dst = 0;
+                while (pos < start + num_bytes) {
+                    const uint32_t in_page = pos % page_bytes;
+                    uint32_t n = page_bytes - in_page;
+                    if (n > start + num_bytes - pos) {
+                        n = start + num_bytes - pos;
+                    }
+                    noc.async_read(
+                        acc, cb, n, {.page_id = pos / page_bytes, .offset_bytes = in_page}, {.offset_bytes = dst});
+                    pos += n;
+                    dst += n;
+                }
+            };
+        CircularBuffer cb_g(cb_norm_gamma);
+        if constexpr (fuse_norm) {
+            const auto gamma = TensorAccessor(norm_gamma_args, get_arg_val<uint32_t>(6));
+            cb_g.reserve_back(row_chunks);
+            read_flat(gamma, gamma_page_bytes, get_arg_val<uint32_t>(7), norm_row_bytes, cb_g);
+        }
+
+        // Stage: pre_mix row j at byte 64 j; mix_comb / mix_post tile j's first H face rows at 512 / 1536 + 128 j.
+        constexpr uint32_t comb_stage = 512;
+        constexpr uint32_t post_stage = 1536;
+        constexpr uint32_t face_rows_bytes = num_streams * 16 * sizeof(uint16_t);
+        static_assert(
+            rows == 1 || (face_rows_bytes <= 128 && rows <= 8), "a block's stage holds 8 rows of at most 4 streams");
+        CircularBuffer cb_stg(cb_mix_stage);
+        CircularBuffer cb_w(cb_mix_w);
+        CircularBuffer cb_s(cb_mix_sub);
+        cb_stg.reserve_back(2);
+        cb_w.reserve_back(num_w_tiles);
+        const auto pre_mix = TensorAccessor(pre_mix_args, pre_mix_addr);
+        for (uint32_t j = 0; j < rows; ++j) {
+            noc.async_read(pre_mix, cb_stg, 64, {.page_id = j}, {.offset_bytes = 64 * j});
+        }
+        if constexpr (use_mix) {
+            const auto mix_post = TensorAccessor(mix_post_args, get_arg_val<uint32_t>(8));
+            const auto mix_comb = TensorAccessor(mix_comb_args, get_arg_val<uint32_t>(9));
+            const auto mix_sub = TensorAccessor(mix_sub_args, get_arg_val<uint32_t>(10));
+            const uint32_t col_start = get_arg_val<uint32_t>(11);
+            for (uint32_t j = 0; j < rows; ++j) {
+                noc.async_read(
+                    mix_comb, cb_stg, face_rows_bytes, {.page_id = j}, {.offset_bytes = comb_stage + 128 * j});
+                noc.async_read(
+                    mix_post, cb_stg, face_rows_bytes, {.page_id = j}, {.offset_bytes = post_stage + 128 * j});
+            }
+            // This core's columns of every row: in the block's byte order, out_tiles (rows x 32) tiles from tile
+            // col_start / 32 on.
+            cb_s.reserve_back(row_chunks);
+            constexpr uint32_t row_tile_bytes = rows * 32 * sizeof(uint16_t);
+            read_flat(
+                mix_sub,
+                sub_elems_per_page * sizeof(uint16_t),
+                (col_start / 32) * row_tile_bytes,
+                out_tiles * row_tile_bytes,
+                cb_s);
+        }
+        noc.async_read_barrier();
+
+        const auto* stg = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_stg.get_write_ptr());
+        auto pre_at = [&](uint32_t j, uint32_t r) -> uint32_t { return stg[32 * j + r]; };
+        constexpr uint32_t num_q = use_mix ? num_streams * (num_streams + 1) + num_streams : num_streams;
+        auto weight = [&](uint32_t q, uint32_t j) -> uint32_t {
+            if constexpr (!use_mix) {
+                return pre_at(j, q);
+            } else {
+                constexpr uint32_t mix_q = num_streams * (num_streams + 1);
+                if (q >= mix_q) {
+                    return pre_at(j, q - mix_q);
+                }
+                const uint32_t r = q / (num_streams + 1);
+                const uint32_t k = q % (num_streams + 1);
+                if (k < num_streams) {
+                    // comb[k][r]: tile j, face row k, column r.
+                    return stg[(comb_stage + 128 * j) / 2 + 16 * k + r];
+                }
+                // post[r]: tile j, face row r, column 0.
+                return stg[(post_stage + 128 * j) / 2 + 16 * r];
+            }
+        };
+        constexpr uint32_t G = rows > 4 ? 2 : 1;
+        constexpr uint32_t num_vectors = num_q * G;
+        static_assert(rows == 1 || num_vectors <= 32 * num_w_tiles, "the per-row weights overflow cb_mix_w");
+        auto* w32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w.get_write_ptr());
+        // Vectors v and v + 1 share a face and its four rows (columns of parity 0 / 1): one word per column pair.
+        for (uint32_t v = 0; v < num_vectors; v += 2) {
+            const uint32_t i = v % 32;
+            const uint32_t base = (v / 32) * 512 + (i / 8) * 128 + ((i % 8) / 2) * 4 * 8;
+            for (uint32_t lr = 0; lr < 4; ++lr) {
+                const uint32_t j0 = G == 2 ? 4 * (v % G) + lr : lr % rows;
+                const uint32_t j1 = G == 2 ? 4 * ((v + 1) % G) + lr : lr % rows;
+                const uint32_t lo = weight(v / G, j0);
+                const uint32_t hi = v + 1 < num_vectors ? weight((v + 1) / G, j1) : 0u;
+                const uint32_t word = lo | (hi << 16);
+                volatile tt_l1_ptr uint32_t* dst = w32 + base + lr * 8;
+#pragma GCC unroll 8
+                for (uint32_t cc = 0; cc < 8; ++cc) {
+                    dst[cc] = word;
+                }
+            }
+        }
+        cb_w.push_back(num_w_tiles);
+        if constexpr (use_mix) {
+            cb_s.push_back(row_chunks);
+        }
+        if constexpr (fuse_norm) {
+            cb_g.push_back(row_chunks);
+        }
+        if constexpr (use_mix) {
+            // The fn dot reads the mixed shard as soon as it is packed.
+            CircularBuffer cb_m(cb_mixed);
+            cb_m.wait_front(hidden_pages);
+            const uint32_t num_dests = get_arg_val<uint32_t>(12);
+            Semaphore<> mixed_ready(mix_sem);
+            for (uint32_t i = 0; i < num_dests; ++i) {
+                mixed_ready.up(noc, get_arg_val<uint32_t>(13 + 2 * i), get_arg_val<uint32_t>(14 + 2 * i), 1);
+            }
+            noc.async_atomic_barrier();
+        }
+    } else if constexpr (role == 0) {
         // The hidden shard is consumed in place: 32x32 tiles, or -- ROW_MAJOR -- each stream's row
         // read as consecutive h x 32 tiles, whose faces are exactly consecutive runs of the row.
         CircularBuffer cb_h(cb_hidden);
@@ -261,7 +397,37 @@ void kernel_main() {
 
         auto* prm = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_prm.get_write_ptr());
         const auto* stg = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_stg.get_write_ptr());
-        if constexpr (role == 0 && hidden_row_major) {
+        // A block's fused_w is one (rows x 32) tile: row j's value q in face q / 16, face row j.
+        [[maybe_unused]] auto fw_row = [&](uint32_t j, uint32_t q) -> uint16_t {
+            return fw[(q / 16) * rows * 16 + j * 16 + (q % 16)];
+        };
+        if constexpr (rows > 1 && role == 1) {
+            static_assert(rows == 1 || use_pre_mix, "a block's post core also returns pre");
+            // Stream k of block row j at (row k, column j) of every face: post_w, post_b, pre_w, pre_b.
+            for (uint32_t j = 0; j < rows; ++j) {
+                for (uint32_t k = 0; k < num_streams; ++k) {
+                    prm[tile_face_index(k, j)] = fw_row(j, num_streams + k);
+                    prm[tile_face_index(k, 16 + j)] = stg[k];
+                    prm[tile_face_index(16 + k, j)] = fw_row(j, k);
+                    prm[tile_face_index(16 + k, 16 + j)] = stg[pre_bias_stage_offset / sizeof(uint16_t) + k];
+                }
+            }
+        } else if constexpr (rows > 1 && role == 2) {
+            // comb_w / comb_b (r, c) of block row j at face row r + 4 * (c / 2), face column 2 j + c % 2 of faces 0 /
+            // 1 (see hc_comb_sinkhorn_rows).
+            constexpr uint32_t comb_base = 2u * num_streams;
+            for (uint32_t j = 0; j < rows; ++j) {
+                for (uint32_t r = 0; r < num_streams; ++r) {
+                    for (uint32_t c = 0; c < num_streams; ++c) {
+                        const uint32_t fr = r + 4 * (c >> 1);
+                        const uint32_t fc = 2 * j + (c & 1);
+                        prm[tile_face_index(fr, fc)] = fw_row(j, comb_base + r * num_streams + c);
+                        prm[tile_face_index(fr, 16 + fc)] =
+                            stg[comb_bias_flat ? r * num_streams + c : tile_face_index(r, c)];
+                    }
+                }
+            }
+        } else if constexpr (role == 0 && hidden_row_major) {
             // An h x 32 tile like the hidden ones: row 0 interleaves pre_w[k] and pre_b[k].
             for (uint32_t k = 0; k < num_streams; ++k) {
                 prm[2 * k] = fused_w_at(k);

@@ -4,6 +4,7 @@
 
 #include "fused_single_user_program_factory.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cstdlib>
 #include <initializer_list>
@@ -44,6 +45,8 @@ constexpr uint32_t kFsCbMixStage = tt::CBIndex::c_11;
 constexpr uint32_t kFsCbMixW = tt::CBIndex::c_12;
 constexpr uint32_t kFsCbMixSub = tt::CBIndex::c_13;
 constexpr uint32_t kFsCbMixedStreams = tt::CBIndex::c_14;
+// A block of rows: the post / comb writers' per-row output tiles.
+constexpr uint32_t kFsCbRowsScratch = tt::CBIndex::c_15;
 // The fused collapsed RMSNorm, on the collapse cores: the gain's D/8 columns (h x 32 tiles, as the collapsed row),
 // the core's sum of squares, every collapse core's (gathered here by the norm writer), the scale rsqrt(mean + eps),
 // and the normed row the writer sends to DRAM.
@@ -52,6 +55,8 @@ constexpr uint32_t kFsCbNormStat = tt::CBIndex::c_17;
 constexpr uint32_t kFsCbNormGather = tt::CBIndex::c_18;
 constexpr uint32_t kFsCbNormScale = tt::CBIndex::c_19;
 constexpr uint32_t kFsCbNormOut = tt::CBIndex::c_20;
+// A block of rows: the norm's sum(x^2) carried between Dst batches.
+constexpr uint32_t kFsCbNormCarry = tt::CBIndex::c_21;
 
 constexpr char kFsReaderKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
@@ -65,6 +70,9 @@ constexpr char kFsWriterKernelPath[] =
 constexpr char kFsNormWriterKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
     "writer_hc_collapse_norm.cpp";
+constexpr char kFsRowsParamWriterKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
+    "writer_hc_rows_params.cpp";
 constexpr char kFsReplicaWriterKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
     "writer_hc_collapse_replica.cpp";
@@ -89,6 +97,18 @@ uint32_t row_tile_height(uint32_t row_tiles) {
         }
     }
     return 1;
+}
+
+// A block of rows: the height Hv of the virtual tiles a core's columns of one row block are read as (see
+// hc_rows_sfpu.h) -- 16 or 4 (8-row faces gave wrong results on device), a multiple of rows whose Hv / rows
+// (rows x 32) tiles divide the core's d_tiles_per_core.
+uint32_t block_tile_height(uint32_t rows, uint32_t d_tiles_per_core) {
+    for (const uint32_t h : {16u, 4u}) {
+        if (h >= rows && h % rows == 0 && d_tiles_per_core % (h / rows) == 0) {
+            return h;
+        }
+    }
+    TT_THROW("a block of {} rows needs D / 8 / 32 = {} divisible by {}", rows, d_tiles_per_core, 16 / rows);
 }
 
 }  // namespace fused_single_user_detail
@@ -167,12 +187,17 @@ FusedSingleUserSharedVariables build_single_user_hc(
     // The fn dot's root pushes its ROW_MAJOR [1, N] result.
     const bool fused_w_row_major = fused_w_source.pushed || tensor_args.fused_w->layout() == Layout::ROW_MAJOR;
     const uint32_t fused_w_cb = fused_w_source.pushed ? fused_w_source.cb_index : kFsCbFusedW;
-    const bool hidden_row_major = hidden_streams.layout() == Layout::ROW_MAJOR;
+    // A block of rows (hc_block_rows) runs the row-major path on its (rows x 32)-tiled shards, read as virtual tiles.
+    const uint32_t rows = hc_block_rows(hidden_streams);
+    const bool block = rows > 1;
+    const bool hidden_row_major = hidden_streams.layout() == Layout::ROW_MAJOR || block;
     const uint32_t d_tiles = static_cast<uint32_t>(hidden_streams.padded_shape()[-1]) / constants::TILE_WIDTH;
     const uint32_t d_tiles_per_core = d_tiles / kCollapseCoreCount;
     const uint32_t num_streams = operation_attributes.num_streams;
-    const uint32_t row_tile_h = hidden_row_major ? row_tile_height(d_tiles_per_core) : constants::TILE_HEIGHT;
-    const uint32_t row_chunks = hidden_row_major ? d_tiles_per_core / row_tile_h : 0;
+    const uint32_t row_tile_h = block              ? block_tile_height(rows, d_tiles_per_core)
+                                : hidden_row_major ? row_tile_height(d_tiles_per_core)
+                                                   : constants::TILE_HEIGHT;
+    const uint32_t row_chunks = hidden_row_major ? rows * d_tiles_per_core / row_tile_h : 0;
     const uint32_t hidden_pages = hidden_row_major ? num_streams * row_chunks : d_tiles_per_core;
     const uint32_t collapse_tiles = hidden_row_major ? row_chunks : d_tiles_per_core;
 
@@ -193,6 +218,19 @@ FusedSingleUserSharedVariables build_single_user_hc(
     make_cb(kFsCbPostOut, post_cores);
     make_cb(kFsCbPreOut, post_cores);
     make_cb(kFsCbCombOut, comb_cores);
+    if (block) {
+        // Post and pre: rows tiles each; comb: rows tiles.
+        CreateCircularBuffer(
+            program,
+            post_cores,
+            CircularBufferConfig(2 * rows * tile_size_bytes, {{kFsCbRowsScratch, param_format}})
+                .set_page_size(kFsCbRowsScratch, tile_size_bytes));
+        CreateCircularBuffer(
+            program,
+            comb_cores,
+            CircularBufferConfig(rows * tile_size_bytes, {{kFsCbRowsScratch, param_format}})
+                .set_page_size(kFsCbRowsScratch, tile_size_bytes));
+    }
 
     // The hidden shard and the collapsed output shard are consumed / produced in place.
     const auto hidden_format = datatype_to_dataformat_converter(hidden_streams.dtype());
@@ -229,7 +267,8 @@ FusedSingleUserSharedVariables build_single_user_hc(
     }
     // A ROW_MAJOR collapsed output is the collapsed row itself: its h x 32 chunks are packed straight
     // into the output shard, with no 32x32 tiles to scatter it into.
-    const bool collapsed_row_major = collapsed_out.layout() == Layout::ROW_MAJOR;
+    // A block's (rows x 32)-tiled collapsed is, like a ROW_MAJOR row, the compute's chunks themselves.
+    const bool collapsed_row_major = collapsed_out.layout() == Layout::ROW_MAJOR || block;
     CBHandle collapsed_output_cb = 0;
     if (!collapsed_row_major && !fuse_norm) {
         auto config = CircularBufferConfig(
@@ -255,10 +294,32 @@ FusedSingleUserSharedVariables build_single_user_hc(
 
     CBHandle mixed_streams_cb = 0;
     uint32_t mix_sub_page_elems = 0;
+    // A block's per-row weights (see hc_rows_sfpu.h): one vector per weight and lane group, 32 to a 32x32 tile.
+    const uint32_t block_weights = use_mix ? num_streams * (num_streams + 1) + num_streams : num_streams;
+    const uint32_t num_w_tiles = block ? (block_weights * (rows > 4 ? 2 : 1) + 31) / 32 : 1;
+    if (block) {
+        TT_FATAL(
+            (use_mix ? num_streams + 1 : num_streams) + num_w_tiles <= 8,
+            "a block's streams, sublayer output and {} weight tiles overflow Dst",
+            num_w_tiles);
+        // The stage holds every row's pre_mix / mix_comb / mix_post rows.
+        CreateCircularBuffer(
+            program,
+            collapse_cores,
+            CircularBufferConfig(2 * tile_size_bytes, {{kFsCbMixStage, param_format}})
+                .set_page_size(kFsCbMixStage, tile_size_bytes));
+        CreateCircularBuffer(
+            program,
+            collapse_cores,
+            CircularBufferConfig(num_w_tiles * tile_size_bytes, {{kFsCbMixW, param_format}})
+                .set_page_size(kFsCbMixW, tile_size_bytes));
+    }
     if (use_mix) {
         TT_FATAL(hidden_row_major, "the folded mix step works on ROW_MAJOR streams");
-        make_cb(kFsCbMixStage, collapse_cores);
-        make_cb(kFsCbMixW, collapse_cores);
+        if (!block) {
+            make_cb(kFsCbMixStage, collapse_cores);
+            make_cb(kFsCbMixW, collapse_cores);
+        }
         const uint32_t page_bytes = row_tile.get_tile_size(param_format);
         CreateCircularBuffer(
             program,
@@ -275,8 +336,9 @@ FusedSingleUserSharedVariables build_single_user_hc(
                 .set_tile_dims(kFsCbMixedStreams, row_tile)
                 .set_globally_allocated_address(*mixed_buffer));
         const auto& sub = *tensor_args.mix_sublayer_out;
-        mix_sub_page_elems = sub.shard_spec().has_value() ? static_cast<uint32_t>(sub.shard_spec()->shape[1])
-                                                          : static_cast<uint32_t>(sub.logical_shape()[-1]);
+        mix_sub_page_elems = block                          ? sub.buffer()->page_size() / sizeof(uint16_t)
+                             : sub.shard_spec().has_value() ? static_cast<uint32_t>(sub.shard_spec()->shape[1])
+                                                            : static_cast<uint32_t>(sub.logical_shape()[-1]);
         TT_FATAL(
             mixed_readers->readers.size() == kCollapseCoreCount,
             "the mixed streams need a reader list per collapse core, got {}",
@@ -284,8 +346,10 @@ FusedSingleUserSharedVariables build_single_user_hc(
     }
 
     uint32_t norm_sem = 0;
-    const uint32_t norm_row_bytes = d_tiles_per_core * constants::TILE_WIDTH * sizeof(uint16_t);
-    const tt::tt_metal::Tile stat_tile({1, constants::TILE_WIDTH});
+    // The core's columns of every row: a block's are its rows x 32 tiles in order.
+    const uint32_t norm_row_bytes = rows * d_tiles_per_core * constants::TILE_WIDTH * sizeof(uint16_t);
+    // A block's statistics are (max(rows, 4) x 32) tiles, row r holding block row r % rows's in every column.
+    const tt::tt_metal::Tile stat_tile({block ? std::max(rows, 4u) : 1u, constants::TILE_WIDTH});
     const uint32_t stat_tile_bytes = stat_tile.get_tile_size(DataFormat::Float32);
     if (fuse_norm) {
         TT_FATAL(hidden_row_major, "the fused collapsed RMSNorm works on ROW_MAJOR streams");
@@ -305,7 +369,11 @@ FusedSingleUserSharedVariables build_single_user_hc(
         for (const auto& [index, bytes] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
                  {kFsCbNormStat, stat_cb_bytes},
                  {kFsCbNormGather, kCollapseCoreCount * stat_tile_bytes},
-                 {kFsCbNormScale, stat_tile_bytes}}) {
+                 {kFsCbNormScale, stat_tile_bytes},
+                 {kFsCbNormCarry, block ? stat_tile_bytes : 0u}}) {
+            if (bytes == 0) {
+                continue;
+            }
             CreateCircularBuffer(
                 program,
                 collapse_cores,
@@ -355,6 +423,9 @@ FusedSingleUserSharedVariables build_single_user_hc(
             fuse_norm ? 1u : 0u,
             kFsCbNormGamma,
             norm_row_bytes,
+            rows,
+            num_w_tiles,
+            fuse_norm && block ? norm_gamma_buffer->page_size() : 0u,
         };
         TensorAccessorArgs(pre_bias.buffer()).append_to(args);
         TensorAccessorArgs(post_bias.buffer()).append_to(args);
@@ -371,8 +442,8 @@ FusedSingleUserSharedVariables build_single_user_hc(
         return ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = true,
-            // The mix holds H + 1 fp32 tiles in Dst, past half of it.
-            .dst_full_sync_en = use_mix && role == kRoleCollapse,
+            // The mix holds H + 1 fp32 tiles in Dst, past half of it, and a block's collapse its weight tiles too.
+            .dst_full_sync_en = (use_mix || block) && role == kRoleCollapse,
             .math_approx_mode = false,
             .compile_args = {
                 role,
@@ -405,6 +476,10 @@ FusedSingleUserSharedVariables build_single_user_hc(
                 std::bit_cast<uint32_t>(1.0F / static_cast<float>(d_tiles * constants::TILE_WIDTH)),
                 std::bit_cast<uint32_t>(operation_attributes.collapsed_norm_epsilon),
                 kCollapseCoreCount,
+                rows,
+                num_w_tiles,
+                kFsCbNormCarry,
+                row_tile_h,
             }};
     };
 
@@ -436,22 +511,42 @@ FusedSingleUserSharedVariables build_single_user_hc(
     shared.comb_reader_kernel_id = CreateKernel(
         program, kFsReaderKernelPath, comb_cores, ReaderDataMovementConfig(reader_compile_args(kRoleComb)));
     shared.comb_compute_kernel_id = CreateKernel(program, kFsComputeKernelPath, comb_cores, compute_config(kRoleComb));
-    shared.comb_writer_kernel_id = CreateKernel(
-        program,
-        kFsWriterKernelPath,
-        comb_cores,
-        WriterDataMovementConfig(
-            writer_compile_args(kRoleComb, kFsCbCombOut, kFsCbCombOut, false, comb_out.buffer(), comb_out.buffer())));
+    auto rows_writer_args = [&](uint32_t role, uint32_t cb_in, const Buffer* out, const Buffer* out2) {
+        std::vector<uint32_t> args = {role, cb_in, kFsCbRowsScratch, rows, num_streams};
+        TensorAccessorArgs(out).append_to(args);
+        TensorAccessorArgs(out2).append_to(args);
+        return args;
+    };
+    shared.comb_writer_kernel_id =
+        block ? CreateKernel(
+                    program,
+                    kFsRowsParamWriterKernelPath,
+                    comb_cores,
+                    WriterDataMovementConfig(
+                        rows_writer_args(kRoleComb, kFsCbCombOut, comb_out.buffer(), comb_out.buffer())))
+              : CreateKernel(
+                    program,
+                    kFsWriterKernelPath,
+                    comb_cores,
+                    WriterDataMovementConfig(writer_compile_args(
+                        kRoleComb, kFsCbCombOut, kFsCbCombOut, false, comb_out.buffer(), comb_out.buffer())));
 
     shared.post_reader_kernel_id = CreateKernel(
         program, kFsReaderKernelPath, post_cores, ReaderDataMovementConfig(reader_compile_args(kRolePost)));
     shared.post_compute_kernel_id = CreateKernel(program, kFsComputeKernelPath, post_cores, compute_config(kRolePost));
-    shared.post_writer_kernel_id = CreateKernel(
-        program,
-        kFsWriterKernelPath,
-        post_cores,
-        WriterDataMovementConfig(
-            writer_compile_args(kRolePost, kFsCbPostOut, kFsCbPreOut, use_pre_mix, post_out.buffer(), pre_out_buffer)));
+    shared.post_writer_kernel_id =
+        block ? CreateKernel(
+                    program,
+                    kFsRowsParamWriterKernelPath,
+                    post_cores,
+                    WriterDataMovementConfig(
+                        rows_writer_args(kRolePost, kFsCbPostOut, post_out.buffer(), pre_out_buffer)))
+              : CreateKernel(
+                    program,
+                    kFsWriterKernelPath,
+                    post_cores,
+                    WriterDataMovementConfig(writer_compile_args(
+                        kRolePost, kFsCbPostOut, kFsCbPreOut, use_pre_mix, post_out.buffer(), pre_out_buffer)));
 
     shared.collapse_reader_kernel_id = CreateKernel(
         program, kFsReaderKernelPath, collapse_cores, ReaderDataMovementConfig(reader_compile_args(kRoleCollapse)));

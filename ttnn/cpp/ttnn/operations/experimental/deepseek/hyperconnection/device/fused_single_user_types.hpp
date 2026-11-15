@@ -38,6 +38,27 @@ struct FusedSingleUserParams {
 // The mixed streams' place in the outputs: the mix step comes with pre_mix.
 inline constexpr uint32_t kMixedOutputIndex = 4;
 
+// A block of rows (DSpark verify): rows consecutive tokens of one session in one program. Everything per token is then
+// a (rows x 32)-tiled block, rows in {2, 4, 8} (pad the block up to one):
+//   hidden_streams / the mixed streams: TILE (rows, 32) [1, 1, H * rows, D] (row = stream * rows + j), WIDTH_SHARDED
+//     on the 8 collapse cores, shard [H * rows, D / 8];
+//   pre_mix [1, rows, 1, H], mix_post [1, rows, H, 1], mix_comb [1, rows, H, H] and the post / comb / pre outputs:
+//     32x32 TILE, one tile per row (dim 1);
+//   mix_sublayer_out and collapsed_norm_weight: TILE (rows, 32) [1, 1, rows, D], or ROW_MAJOR [1, 1, 1, rows * D] with
+//     the block's bytes (tile_rows order); the norm's gain is one row repeated rows times;
+//   collapsed: TILE (rows, 32) [1, 1, rows, D] WIDTH_SHARDED [rows, D / 8] on the collapse cores, or with the fused
+//   norm
+//     to DRAM, ROW_MAJOR [1, 1, 1, rows * D] interleaved (one page, the block's bytes);
+//   the replica: TILE (rows, 32) [1, 1, cores * rows, D] HEIGHT_SHARDED [rows, D] on collapsed_replica_grid.
+// A block needs fn_weight and pre_mix. The row count is the streams' tile height; 1 is the single-token program.
+inline uint32_t hc_block_rows(const Tensor& hidden_streams) {
+    if (hidden_streams.layout() != Layout::TILE) {
+        return 1;
+    }
+    const uint32_t h = hidden_streams.tensor_spec().tile().get_height();
+    return h < 32 ? h : 1;
+}
+
 struct FusedSingleUserInputs {
     // [1,1,1,(2+H)*H], WIDTH_SHARDED on core 0: the fn projection, already computed. Exactly one of fused_w /
     // fn_weight is given.
