@@ -64,15 +64,6 @@ CASES = {
 }
 
 
-def _release_devices() -> None:
-    """The child processes open the chips; make sure this process holds none."""
-    for release in (ttml.close_device_mesh, ttml.core.distributed.release_metal_env):
-        try:
-            release()
-        except Exception:  # noqa: BLE001
-            pass
-
-
 _NOISE = re.compile(
     r"nanobind|leaked (instance|type|function|keep_alive)|refleaks|skipped remainder|\| DEBUG |^Config\{"
 )
@@ -84,7 +75,7 @@ def _run(args: list[str], what: str) -> str:
     proc = subprocess.run(DRIVER + args, capture_output=True, text=True, timeout=1500, env=env)
     # The interpreter's exit prints a long nanobind leak report after any traceback; keep the lines that matter.
     lines = [ln for ln in (proc.stdout + proc.stderr).splitlines() if not _NOISE.search(ln)]
-    if proc.returncode == MESH_OPEN_FAILED:  # e.g. the QuietBox 1x4 ring descriptor on a loudbox
+    if proc.returncode == MESH_OPEN_FAILED:  # only the descriptor-fabric mismatch: the QuietBox 1x4 ring on a loudbox
         reason = next((ln for ln in lines if ln.startswith("MESH_OPEN_FAILED")), "no reason given")
         pytest.skip(f"{what}: this host cannot open the mesh: {reason}")
     tail = "\n".join(lines[-60:])
@@ -106,7 +97,7 @@ def _saved_checkpoint(save_world: list[str], tmp_path_factory, what: str) -> str
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_checkpoint_loads_onto_another_world(tmp_path_factory, case):
+def test_checkpoint_loads_onto_another_world(tmp_path_factory, release_metal_env, case):
     save_world, load_world, needed = CASES[case]
     available = ttnn.GetNumAvailableDevices()
     if available < needed:
@@ -114,17 +105,17 @@ def test_checkpoint_loads_onto_another_world(tmp_path_factory, case):
     for args in (save_world, load_world):
         if "--mgd" in args and not os.path.isfile(args[args.index("--mgd") + 1]):
             pytest.skip(f"{case}: no descriptor {args[args.index('--mgd') + 1]}")
-    _release_devices()
+    release_metal_env()  # the children open the chips
     ckpt = _saved_checkpoint(save_world, tmp_path_factory, f"{case} save")
     out = _run(["load", "--dir", ckpt, "--steps", "2", *load_world], f"{case} load")
 
     assert "RESULT: OK" in out, out.splitlines()[-5:]
 
 
-def test_same_world_through_the_driver_matches_exactly(tmp_path):
+def test_same_world_through_the_driver_matches_exactly(tmp_path, release_metal_env):
     if ttnn.GetNumAvailableDevices() < 2:
         pytest.skip("needs two devices")
-    _release_devices()
+    release_metal_env()
     world = _world("1x2", "dp,tp", ("--tp",), "bh_1_2_line_line.textproto")
     ckpt = str(tmp_path / "step_0000002")
     _run(["save", "--dir", ckpt, "--steps", "2", *world], "save")

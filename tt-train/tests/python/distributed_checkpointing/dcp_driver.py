@@ -51,6 +51,10 @@ TINY = dict(
 )
 SEQ_LEN = 32  # a whole tile: the SDPA kernel wants the sequence dimension unpadded
 MESH_OPEN_FAILED = 3  # exit status when this host cannot open the requested mesh; the tests skip on it
+# The one mesh-open failure that means "this host cannot open the mesh" rather than a bug: a descriptor asking for
+# ethernet links this host's fabric does not have (the QuietBox 1x4 ring on a loudbox). Any other failure to open a
+# mesh the host has the devices for fails the test.
+DESCRIPTOR_MISMATCH = "connected_eth_cores.size() >= edge.connected_chip_ids.size()"
 
 
 def parse_mesh(text: str) -> tuple[int, ...]:
@@ -358,7 +362,9 @@ def main(argv=None) -> int:
         )
     try:
         open_world(mesh_shape, axes, args.tp, args.mgd)
-    except RuntimeError as err:  # the descriptor does not fit this host's fabric, too few devices, ...
+    except RuntimeError as err:
+        if DESCRIPTOR_MISMATCH not in str(err):
+            raise
         print(f"MESH_OPEN_FAILED: {str(err).splitlines()[0]}")
         return MESH_OPEN_FAILED
     try:

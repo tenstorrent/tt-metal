@@ -192,6 +192,16 @@ def _fresh_device_mesh(
 
 
 @pytest.fixture(scope="session")
+def release_metal_env():
+    """``release_metal_env()`` closes this process's device mesh and releases its ``MetalEnv`` if it holds them (see
+    ``_release_metal_env``), for a test whose child processes open the chips.
+
+    Session-scoped so fixtures of any scope can request it.
+    """
+    return _release_metal_env_quietly
+
+
+@pytest.fixture(scope="session")
 def fresh_device_mesh():
     """``with fresh_device_mesh(shape, axis_names, what=...) as mesh:`` -- see ``_fresh_device_mesh``.
 
