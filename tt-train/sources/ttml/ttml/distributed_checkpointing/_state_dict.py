@@ -451,11 +451,8 @@ def local_coords() -> list[tuple[int, ...]]:
 
 
 def mesh_id() -> int:
-    """The id the control plane gave this process's mesh (0 on a single mesh)."""
-    try:
-        return int(mesh_device().get_system_mesh_id())
-    except Exception:  # noqa: BLE001  (no control plane: a plain single-host mesh has no system mesh id)
-        return 0
+    """The id the control plane gave this process's mesh; a plain single-host mesh reports 0."""
+    return int(mesh_device().get_system_mesh_id())
 
 
 def rank_record(rank: int, world_rank: int) -> dict:
