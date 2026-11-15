@@ -88,6 +88,9 @@ void kernel_main() {
     uint32_t t_cb = 0, t_send = 0, t_cred = 0;
     const uint32_t tstart = wall();
 
+#ifdef WS_DIAG
+    uint32_t dg_cr = 0;
+#endif
     // one slice: expert e's for target a's core
     auto send_slice = [&](uint32_t e, uint32_t a) {
         const uint32_t g = e % G, n = e / G;
@@ -103,6 +106,14 @@ void kernel_main() {
                 do {
                     drain();
                     invalidate_l1_cache();
+#ifdef WS_DIAG
+                    // (hang post-mortem: CB 3 pushed = slices landed, popped = 256 slices landed + the credit seen)
+                    const uint32_t seen = *cr;
+                    if (seen > dg_cr) {
+                        cb_pop_front(3, seen - dg_cr);
+                        dg_cr = seen;
+                    }
+#endif
                 } while (*cr < n - 1);
             }
             t_cred += wall() - a0;
@@ -164,6 +175,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < ni; ++i) {
         const uint32_t it = get_arg_val<uint32_t>(9 + nt + i);
         send_slice(it >> 8, get_arg_val<uint32_t>(8 + (it & 0xFF)));
+#ifdef WS_DIAG
+        cb_push_back(3, 1);
+        cb_pop_front(3, 256 - dg_cr);  // (popped back on a multiple of 256)
+        dg_cr = 0;
+#endif
     }
 #else
     for (uint32_t e = own; e < NEXP; e += NCHIP) {

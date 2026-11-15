@@ -70,8 +70,30 @@ void kernel_main() {
     };
     next_inj();
     next_land();
+#ifdef WS_DIAG
+    // progress counters for a hang post-mortem (CB 5 / 6 pushed / popped): CB 5 pushed = landing table index, popped
+    // = packets landed; CB 6 pushed = INJ table index, popped = 256 (slice starts landed) + the slot credit seen by
+    // the next slice start
+    uint32_t dg[4] = {0, 0, 0, 0}, cseen = 0, nsl = 0;
+    auto diag = [&]() {
+        const uint32_t v[4] = {il, k, ii, 256 * nsl + cseen};
+        for (uint32_t q = 0; q < 4; ++q) {
+            if (v[q] > dg[q]) {
+                if (q % 2 == 0) {
+                    cb_push_back(5 + q / 2, v[q] - dg[q]);
+                } else {
+                    cb_pop_front(5 + q / 2, v[q] - dg[q]);
+                }
+                dg[q] = v[q];
+            }
+        }
+    };
+#endif
     while (ii < len || il < len || pushed < issued) {
         const uint32_t a0 = wall();
+#ifdef WS_DIAG
+        diag();
+#endif
         bool did = false;
         // INJ: retire the oldest read once it is done (or when D are in flight), issue the next one when CB 0 has room
         if (pushed < issued) {
@@ -117,12 +139,21 @@ void kernel_main() {
                 }
                 continue;
             }
+#ifdef WS_DIAG
+            cseen = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icred + p.c * 16);
+#endif
             if (p.u == 0 && n >= 2 && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icred + p.c * 16) < n - 1) {
                 if (!did) {
                     t_gc += wall() - a0;
                 }
                 continue;
             }
+#ifdef WS_DIAG
+            if (p.u == 0) {
+                ++nsl;
+                cseen = 0;
+            }
+#endif
             const uint32_t t = get_arg_val<uint32_t>(TGT + p.c);
             const uint32_t tx = (t >> 8) & 0xFF, ty = (t >> 16) & 0xFF;
             const uint32_t u0 = p.u * CHT;

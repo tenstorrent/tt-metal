@@ -177,6 +177,7 @@ def run(mesh, cfg: GCfg, rc: RCfg, Ms, dev, refs, tag, warm=WARM, meas=MEAS):
     nf = len(rings(tuple(mesh.shape), rc))
     rows, fw = [], None
     for i in range(warm + meas):
+        logger.debug(f"WSS {tag} launch {i + 1} of {warm + meas}")
         mpd, io, st, sst = build_sf(
             mesh, cfg, rc, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], dev["out_t"], tabs
         )

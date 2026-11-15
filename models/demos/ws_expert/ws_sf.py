@@ -62,6 +62,7 @@ class RCfg:
     cycles: tuple = None  # Hamiltonian cycles (mesh coordinates in ring order); default: the row snake
     own_slices: bool = False  # each chip's slices tensor holds only the slices it owns (WS_OWN_SLICES)
     spread: bool = True  # owners per slice, spread round the cycles (owner_table); False: chip e % N owns expert e
+    diag: bool = False  # progress counters in spare CBs for a hang post-mortem (WS_DIAG)
 
 
 def snake(shape):
@@ -350,7 +351,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
         noc=ttnn.NOC.RISCV_0_default if risc == 0 else ttnn.NOC.RISCV_1_default,
     )
     tab_t, TL, meta = tabs["tab_t"], tabs["TL"], tabs["meta"]
-    sdefs = [("SST_ADDR", str(sst.buffer_address()))]
+    sdefs = [("SST_ADDR", str(sst.buffer_address()))] + ([("WS_DIAG", "1")] if rc.diag else [])
     odefs = [("WS_OWN_SLICES", "1")] if rc.own_slices else []
     ct_ring = [cfg.nexp, KT, KTD, DC, rc.CHT, cfg.G, cfg.GC, NCHIP, rc.S, words.buffer_address()]
     ct_send = [cfg.nexp, KT, KTD, DC, rc.CHT, cfg.G, cfg.GC]
@@ -439,6 +440,8 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
                 cb(1, cfg.w_dt, rc.S * rc.CHT, crs(fcores)),
                 cb(2, ttnn.uint32, TL, crs(fcores), page=4),
             ]
+            if rc.diag:  # (counters only: never written)
+                cbs += [cb(i, ttnn.uint32, 4, crs(land), page=16) for i in (3, 4, 5, 6)]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=list(gprog.semaphores), cbs=cbs)
             for lane, d, cyc, l in rl:
                 x, y = fcore(lane, d)

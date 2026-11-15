@@ -68,7 +68,25 @@ void kernel_main() {
     uint32_t t_arr = 0, t_dcred = 0, t_cb = 0, t_send = 0, t_drain = 0, n_relay = 0, t_first = 0, t_last = 0;
     const uint32_t tstart = wall();
 
-    uint32_t k_in = 0, ndone = 0, sent = 0, free_sent = 0, relayed = 0;
+    uint32_t k_in = 0, ndone = 0, sent = 0, free_sent = 0, relayed = 0, ti = 0;
+#ifdef WS_DIAG
+    // progress counters for a hang post-mortem, readable as CB 3 / 4 pushed / popped (triage dumps CB counters):
+    // CB 3 pushed = table entries done, popped = packets sent; CB 4 pushed = W_DFREE seen, popped = W_ARR seen
+    uint32_t dg[4] = {0, 0, 0, 0};
+    auto diag = [&](uint32_t dfree, uint32_t arrv) {
+        const uint32_t v[4] = {ti, sent, dfree, arrv};
+        for (uint32_t q = 0; q < 4; ++q) {
+            if (v[q] > dg[q]) {
+                if (q % 2 == 0) {
+                    cb_push_back(3 + q / 2, v[q] - dg[q]);
+                } else {
+                    cb_pop_front(3 + q / 2, v[q] - dg[q]);
+                }
+                dg[q] = v[q];
+            }
+        }
+    };
+#endif
     auto update_free = [&]() {
         const uint32_t landed = rd(wr::W_LANDED);
         const uint32_t f = landed < ndone ? landed : ndone;
@@ -79,6 +97,9 @@ void kernel_main() {
     };
     auto service = [&](bool idle) {
         update_free();
+#ifdef WS_DIAG
+        diag(rd(wr::W_DFREE), rd(wr::W_ARR));
+#endif
         const uint32_t r = rd(wr::W_RELAY);
         if (r > relayed && (idle || r - relayed >= CRB || r == pair_in)) {
             noc_async_writes_flushed();  // (the credit header's previous packet has left L1)
@@ -120,7 +141,7 @@ void kernel_main() {
     while (rd(wr::W_TABLE) == 0) {
     }
     volatile tt_l1_ptr uint32_t* T = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(2));
-    for (uint32_t i = 0; i < len; ++i) {
+    for (uint32_t i = 0; i < len; ++i, ti = i) {
         const uint32_t kind = T[i] & 3;
         if (kind == wr::INJ) {
             const uint32_t a0 = wall();
