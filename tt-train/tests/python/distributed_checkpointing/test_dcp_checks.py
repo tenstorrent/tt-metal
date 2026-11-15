@@ -24,6 +24,7 @@ from ttml.distributed_checkpointing._state_dict import (
     fsdp_gate,
 )
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
+from ttml.modules.parameter import Parameter
 
 
 def _label(placements, dist_shape) -> Label:
@@ -172,3 +173,22 @@ def test_a_cpp_fused_projection_loads_only_split_the_way_it_was_saved(expect_err
         LayoutError, r"kv_linear/weight .*saved split \[1, 1, 2, 1\] ways per dim and would load split \[1, 1, 4, 1\]"
     ):
         check_undeclared_fusion(live(tp4), tp2)
+
+
+class _Declaring:
+    """A Python module whose one parameter declares ``declaration``."""
+
+    def __init__(self, declaration):
+        self.w = Parameter(object())
+        self.w.checkpoint_layout = declaration
+
+    def named_modules(self):
+        yield "", self
+
+
+def test_an_unknown_layout_declaration_is_refused(expect_error):
+    _, declarations = _python_parameters(_Declaring({"fused": (2, (64, 32, 32))}), {"Root/w": 0})
+    assert list(declarations.values()) == [{"fused": (2, (64, 32, 32))}]
+    # A misspelt key used to leave the weight undeclared: an identity layout that scrambles a cross-TP load.
+    with expect_error(LayoutError, r"Root/w: checkpoint_layout declares \['fused_segments'\]"):
+        _python_parameters(_Declaring({"fused_segments": (2, (64, 32, 32))}), {"Root/w": 0})

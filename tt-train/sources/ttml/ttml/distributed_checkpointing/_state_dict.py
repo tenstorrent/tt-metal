@@ -29,7 +29,7 @@ import ttml
 from ttml.modules.parameter import Parameter
 
 from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
-from ._layouts import Identity, declared_transform
+from ._layouts import DECLARATIONS, Identity, declared_transform
 from ._planner import TensorInfo
 from ._topology import Label, Placement, global_shape
 
@@ -150,6 +150,12 @@ def _python_parameters(model, params) -> tuple[dict[int, list[str]], dict[int, d
             names.setdefault(id(tensor), []).append(fqn)
             declaration = getattr(value, "checkpoint_layout", None)
             if declaration:
+                unknown = sorted(set(declaration) - set(DECLARATIONS))
+                if unknown:
+                    raise LayoutError(
+                        f"{fqn}: checkpoint_layout declares {unknown}; the declarations are 'fused' (dim, segment "
+                        f"sizes) and 'logical_extent' (dim, logical rows)"
+                    )
                 declarations[id(tensor)] = dict(declaration)
     return names, declarations
 

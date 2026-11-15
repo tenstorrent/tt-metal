@@ -265,6 +265,29 @@ def transform_from_json(value: dict) -> Transform:
     raise LayoutError(f"unknown transform kind {kind!r}")
 
 
+# The keys a Parameter's ``checkpoint_layout`` may declare; see ``declared_transform``.
+DECLARATIONS = ("fused", "logical_extent")
+
+
+def check_fused_segments(sizes: Sequence[int], extent: int, shards: int) -> tuple[int, ...]:
+    """``sizes`` as ints, checked as the segments of a fused dim of ``extent`` rows split across ``shards`` TP shards:
+    positive, summing to ``extent``, and each divisible by ``shards``, since every shard holds an equal piece of every
+    segment. The one check of a fused declaration, run where the fusing layer is built and again when a checkpoint is
+    planned."""
+    sizes = tuple(int(s) for s in sizes)
+    if not sizes or shards < 1 or any(s <= 0 for s in sizes):
+        raise LayoutError(f"fused_segments: bad sizes {sizes} or shard count {shards}")
+    if sum(sizes) != extent:
+        raise LayoutError(f"fused_segments {sizes} sum to {sum(sizes)} but the fused dim has {extent} rows")
+    for s in sizes:
+        if s % shards:
+            raise LayoutError(
+                f"fused_segments: segment size {s} is not divisible by the {shards} shards; every shard holds an equal "
+                f"piece of every segment"
+            )
+    return sizes
+
+
 def fused_segments(dim: int, sizes: Sequence[int], shards: int) -> Transform:
     """The transform of a fused weight whose canonical segments of global ``sizes`` are each split evenly across
     ``shards`` TP shards, shard ``j`` holding piece ``j`` of every segment in segment order.
@@ -272,14 +295,9 @@ def fused_segments(dim: int, sizes: Sequence[int], shards: int) -> Transform:
     With ``sizes = (Q, K, V)`` and two shards the device rows are ``[Q_0; K_0; V_0; Q_1; K_1; V_1]`` and the
     canonical rows ``[Q; K; V]``. One shard is the identity.
     """
-    sizes = tuple(int(s) for s in sizes)
-    if shards < 1 or any(s <= 0 for s in sizes):
-        raise LayoutError(f"fused_segments: bad sizes {sizes} or shard count {shards}")
+    sizes = check_fused_segments(sizes, sum(int(s) for s in sizes), shards)
     if shards == 1:
         return Identity()
-    for s in sizes:
-        if s % shards:
-            raise LayoutError(f"fused_segments: segment size {s} is not divisible by the {shards} shards")
     total = sum(sizes)
     per_shard = total // shards
     canonical_starts = [sum(sizes[:g]) for g in range(len(sizes))]
@@ -351,11 +369,6 @@ def declared_transform(
             raise LayoutError(f"{where}{err}") from None
     if fused is not None:
         dim, sizes = fused
-        if sum(sizes) != global_shape[dim]:
-            raise LayoutError(
-                f"{where}fused_segments {tuple(sizes)} sum to {sum(sizes)} but the weight has {global_shape[dim]} rows "
-                f"on dim {dim}"
-            )
         axes = label.shard_axes(dim)
         if len(axes) > 1:
             raise LayoutError(
@@ -364,6 +377,7 @@ def declared_transform(
                 f"Shard this weight with FSDP along another dim (fully_shard's default picks one)"
             )
         try:
+            sizes = check_fused_segments(sizes, int(global_shape[dim]), label.shard_count(dim))
             steps.append(fused_segments(dim, sizes, label.shard_count(dim)))
         except LayoutError as err:
             raise LayoutError(f"{where}{err}") from None

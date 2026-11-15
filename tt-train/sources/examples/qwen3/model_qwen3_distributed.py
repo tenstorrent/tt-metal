@@ -73,6 +73,7 @@ from ttml.models.qwen3 import (
 from model_qwen3 import linear
 from utils.memory import memory_snapshot
 from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for callers
+from ttml.distributed_checkpointing._layouts import check_fused_segments
 from ttml.models.qwen3.weights import (
     unpermute_proj_rows,
     unpermute_norm_weights,
@@ -144,13 +145,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         # A fused weight ([K | V]) is laid out per TP shard, so its global row order depends on the TP size; the
         # global segment sizes let ttml.distributed_checkpointing reshard it across TP sizes.
         if fused_segments is not None:
-            fused_segments = tuple(int(s) for s in fused_segments)
-            tp_size = get_tp_size(shard_dim)
-            if sum(fused_segments) != out_features or any(s <= 0 or s % tp_size for s in fused_segments):
-                raise ValueError(
-                    f"fused_segments {fused_segments} must be positive, sum to out_features={out_features} and each "
-                    f"divide by the TP size {tp_size}"
-                )
+            fused_segments = check_fused_segments(fused_segments, out_features, get_tp_size(shard_dim))
             self.weight.checkpoint_layout = {"fused": (2, fused_segments)}
             if self.col_bias is not None:
                 self.col_bias.checkpoint_layout = {"fused": (3, fused_segments)}

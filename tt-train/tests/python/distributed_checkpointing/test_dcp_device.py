@@ -226,7 +226,7 @@ def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
         assert infos[f"{head}/weight"].transform == Pad(2, 100, 128)
         assert infos[f"{head}/lora_B"].transform == Pad(2, 100, 128), head
     # A segment that does not split evenly over the TP shards is refused when the layer is built, not at the first save.
-    with expect_error(ValueError, "must each divide"):
+    with expect_error(dcp.LayoutError, "segment size 63 is not divisible by the 2 shards"):
         ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(63, 33))
 
 
