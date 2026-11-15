@@ -987,17 +987,17 @@ class _MockPrefixBackend(_MockStackBackend):
         super().decode(io, kv, width)
 
 
-def _prefix_adapter(monkeypatch):
+def _prefix_adapter(monkeypatch, backend_cls=None):
     """the adapter under GLM53_STACK_PREFIX=1 (read at import: the module flag) on the prefix-capable mock"""
     monkeypatch.setattr(gvs, "PREFIX_CACHE", True)
-    backend = _MockPrefixBackend(B)
+    backend = (backend_cls or _MockPrefixBackend)(B)
     gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
     ad = GLM53StackForCausalLM(gen, B, SEQ)
     kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
     ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
     ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
     assert ad.prefix is not None and gen.shared_pages and gen.dsa_shard_map(kv) is not None
-    assert ad.prefix.grid == 128 and ad.prefix.store.device_entries == 3
+    assert ad.prefix.grid == 128 and ad.prefix.store.device_entries == backend.snapshot_entries
     return ad, backend, gen, kv
 
 
@@ -3633,4 +3633,378 @@ def test_stack_build_b_served_multi_user_spec_on_spare_slots():
     for i in range(B):
         ad.release_request(i)
     assert gen.live_slots(kv) == [] and backend.spec.counters.get("aborts") is None
+    assert "ttnn" not in sys.modules
+
+
+# ------------------------------------------------------------------- F27: no prefill piece past the last resumable start
+_F27_CHILD = r"""
+import sys
+from types import SimpleNamespace
+from unittest import mock
+
+sys.modules["ttnn"] = mock.MagicMock()  # prefill_tp's module-level ttnn import only: nothing below calls it
+from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
+from models.autoports.zai_org_glm_5_3_flash.tt import prefill_tp as PT
+from models.autoports.zai_org_glm_5_3_flash.tt.config import SPARSE_DSA
+
+SEQ = 1 << 20
+tp = object.__new__(PT.TPPrefill)  # the served 8x4 TP prefill's PLANNING state only (no device, no trace)
+tp.buckets, tp.max_seq, tp.ndev = (2048, 8192), SEQ, 32  # galaxy_defaults: GLM53_PREFILL_BUCKETS 2048,8192
+tp.sparse_ts = tuple(int(v) for v in GD.sparse_t(SEQ).split(","))  # the captured sparse windows
+tp.dsa, tp.layers, tp.shard = True, [SimpleNamespace(kind=SPARSE_DSA)], object()  # the sharded sparse_dsa pool
+tp.start_align, tp.slice_rule, tp.mla_form = 128, True, "mla"
+assert max(tp.sparse_ts) == SEQ
+
+
+def covers(start, n, pieces):
+    s = start
+    for c in pieces:
+        assert tp._plan_ok(s, c), ("a piece without a captured key", s, c, pieces)
+        s += c
+    assert s == start + n, ("the pieces do not cover the chunk", start, n, pieces)
+
+
+# the engine kill's replay: 7,999 tokens at 1,040,512 -- the greedy full-bucket walk alone (2,048 x 3) leaves 1,855 rows
+# at 1,046,656, past the last start with a key; tail first: the tail at the latest start that plans, the head before it
+pieces = tp.clamp_lengths(1040512, 7999)
+assert pieces == [2048, 2048, 1920, 1983], pieces
+covers(1040512, 7999, pieces)
+lens, branch = tp.slice_plan(1040512, 7999, 128)  # (the generator's per-chunk rule: the clamp, then each piece's)
+assert lens == pieces and branch == "clamp", (lens, branch)
+# slice_plan's guard: the slice rule's [front, rest] split of a chunk whose last row sits on a chip slice boundary would
+# start its rest where no key holds it -- the chunk stays whole (it plans); away from the top the split is kept
+lens, branch = tp.slice_plan(1040384, 2305, 128)
+assert (lens, branch) == ([2305], "unavoidable"), (lens, branch)
+covers(1040384, 2305, lens)
+lens, branch = tp.slice_plan(65536, 2305, 128)
+assert (lens, branch) == ([128, 2177], "split"), (lens, branch)
+covers(65536, 2305, lens)
+# the last resumable start: the top window - the smallest sequence-parallel bucket (the adapter keeps every start there)
+assert tp.resume_max() == SEQ - 2048 == 1046528
+assert tp._plan_ok(1046528, 2048) and not tp._plan_ok(1046656, 1)
+assert not tp._plan_ok(1046912, 87)  # the served exact split's 87-row tail: no bucket has a key there
+print("F27_OK")
+"""
+
+
+def _stub_child(code: str, ok: str):
+    """run `code` in a child python with a stub ttnn (MagicMock: the module-level imports only; this process stays
+    ttnn-free) from the repository root; assert it printed `ok`"""
+    root = Path(__file__).resolve().parents[4]
+    env = dict(os.environ, PYTHONPATH=str(root))
+    for k in [k for k in env if k.startswith("GLM53_")]:
+        env.pop(k)
+    r = subprocess.run([sys.executable, "-c", code], cwd=str(root), env=env, capture_output=True, text=True,
+                       timeout=300)  # fmt: skip
+    assert r.returncode == 0 and ok in r.stdout, (r.returncode, r.stdout[-2000:], r.stderr[-4000:])
+    return r
+
+
+def test_f27_prefill_planning_never_starts_a_piece_past_resume_max():
+    """F27 (2026-11-14, the served 1 M engine kill: 'chunk [1046912, 1048960) past the captured sparse windows'):
+    TPPrefill's planning on the served 8x4 state (buckets 2,048 / 8,192, the 1 M window ladder, 32 chips) -- the
+    replay of 7,999 tokens at 1,040,512 is planned tail-first into pieces that all have a captured key and cover the
+    chunk exactly; slice_plan keeps a chunk whole when its slice-rule split would start the rest without a key;
+    resume_max = the top window - the smallest sequence-parallel bucket. prefill_tp imports ttnn at module level: a
+    child with a stub ttnn runs it"""
+    _stub_child(_F27_CHILD, "F27_OK")
+    assert "ttnn" not in sys.modules
+
+
+class _MockPrefixResumeBackend(_MockPrefixBackend):
+    """+ StackBackend.prefill_resume_max (TPPrefill.resume_max, F27): the last plannable prefill chunk start"""
+
+    def prefill_resume_max(self):
+        return 300
+
+
+def test_prefix_cache_caps_at_the_last_resumable_start(monkeypatch):
+    """F27, the adapter's caps (generator_vllm_stack.StackPrefixCache): with the backend's prefill_resume_max (300 ->
+    256 on the snapshot grid) no snapshot is taken past it (snapshots_unresumable: a hit there would leave a
+    continuation no bucket plans), a confirmed hit is capped at it (confirm_capped: vLLM's 384 -> the entry at 256,
+    then attached), an exact split's tail starts at it (exact_capped: 256, not 384); below it nothing changes"""
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch, _MockPrefixResumeBackend)
+    pc = ad.prefix
+    assert pc.resume_max == 256
+    a = _prompt(450, 11)
+    row_a = _blocks(0, len(a))
+    assert _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, 384, len(a)]) == (a[-1] + 1) % VOCAB
+    assert sorted(e.n_tokens for e in pc.store.entries.values()) == [128, 256]  # nothing at 384 (> 256)
+    assert pc.stats["snapshots_unresumable"] == 1 and pc.stats["snapshots"] == 2
+    ad.release_request(0)
+    b = a[:400] + _prompt(30, 40)
+    assert ad.confirm_prefix_cache_hit(b, [], 384) == 256 and pc.stats["confirm_capped"] == 1
+    assert ad.confirm_prefix_cache_hit(b, [], 255) == 128 and pc.stats["confirm_capped"] == 1  # (below: as before)
+    assert ad.confirm_prefix_cache_hit(b, [], 384) == 256
+    row_b = row_a[:4] + _blocks(1, len(b))[4:]
+    n = len(backend.state_io)
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[1], sampling_params=_greedy(1))  # fmt: skip
+    g = ad._alias[1]
+    assert backend.state_io[n][1:3] == (256, pc.store.entries[pc.store.key(a, 256)].device_entry)  # attached at 256
+    assert kv.state[g] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB and pc.stats["attaches"] == 1
+    ad.release_request(1)
+    pc.exact, pc.exact_min = True, 64
+    assert pc.exact_splits([128], [450]) == {0: 256} and pc.stats["exact_capped"] == 1  # (the tail [256, 450))
+    assert pc.exact_splits([0], [200]) == {0: 128} and pc.stats["exact_capped"] == 1
+    assert "ttnn" not in sys.modules
+
+
+# ------------------------------------------------------------------- keep-prev (GLM53_STACK_PREFIX_KEEP_PREV)
+def test_prefix_keep_prev_attach_makes_the_kept_snapshot_ordinary(monkeypatch):
+    """GLM53_STACK_PREFIX_KEEP_PREV: a kept (superseded) snapshot that a new turn attaches is that turn's base, no
+    longer a kept previous -- kept_prev cleared, its chain link dropped -- so after the turn it is an LRU entry: not the
+    next device victim ahead of an older entry (the eviction order: dominated, kept, then least recently used)"""
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch)
+    pc = ad.prefix
+    pc.head, pc.keep_prev = 128, True
+    e1 = _prompt(300, 101)
+    row_e = [1 + 3 * BPS + j for j in range(8)]
+    _prefill_steps(ad, kv, e1, row_e, slot=3, ends=[128, 256, len(e1)])
+    ad.release_request(3)
+    k128, k256 = pc.store.key(e1, 128), pc.store.key(e1, 256)
+    e2 = e1 + _prompt(150, 7)  # its next turn: attaches 256, snapshots 384 -> the 256 is KEPT
+    assert ad.confirm_prefix_cache_hit(e2, [], 256) == 256
+    start = 256
+    for end in (384, len(e2)):
+        ad.prefill_forward(_history([e2[:end]]), page_table=_table([row_e[: -(-end // BLOCK_SIZE)]], 1), kv_cache=kv,
+                           prompt_lens=[end], start_pos=[start], empty_slots=[3],
+                           sampling_params=_greedy(1) if end == len(e2) else None)  # fmt: skip
+        start = end
+    ad.release_request(3)
+    e256 = pc.store.entries[k256]
+    assert e256.kept_prev and pc.prev_of == {pc.store.key(e2, 384): k256}
+    # a turn that rewrites e2's tail (shares 300 < 384 tokens) resumes at the kept 256 and ends below the next grid
+    # boundary (no snapshot of its own): the 256 is its base now
+    e3 = e2[:300] + _prompt(60, 111)
+    row_e3 = row_e[:4] + [1 + 3 * BPS + 20 + j for j in range(4)]
+    assert ad.confirm_prefix_cache_hit(e3, [], 256) == 256
+    out = ad.prefill_forward(_history([e3]), page_table=_table([row_e3[: -(-len(e3) // BLOCK_SIZE)]], 1), kv_cache=kv,
+                             prompt_lens=[len(e3)], start_pos=[256], empty_slots=[3], sampling_params=_greedy(1))  # fmt: skip
+    assert int(out[0][0, 0]) == (e3[-1] + 1) % VOCAB and pc.stats["keep_prev_hits"] == 1
+    assert not e256.kept_prev and k256 not in pc.prev_of.values()
+    ad.release_request(3)
+    # the pool (3 entries: 128, 384, 256) is full: the next victim is the least recently used (the head's 128), not the
+    # 256 the last turn read
+    victim = pc.store._device_victim()
+    assert victim.key == k128 and not any(e.kept_prev or e.dominated for e in pc.store.entries.values())
+    ent = pc.store.reserve_device()
+    assert ent is not None and k128 not in pc.store.entries and k256 in pc.store.entries
+    pc.store.unreserve(ent)
+    assert "ttnn" not in sys.modules
+
+
+class _MockPrefix5Backend(_MockPrefixBackend):
+    snapshot_entries = 5
+
+
+def test_prefix_keep_prev_tail_path_releases_two_back(monkeypatch):
+    """GLM53_STACK_PREFIX_KEEP_PREV on the TAIL path (one long prompt's own chunk-end snapshots above the head): each
+    commit keeps the snapshot it supersedes (not evicted: tail_superseded 0) and releases the one kept two back
+    (dominated: keep_prev_released) -- the chain holds ONE prev_of link; the victim order is the released one first,
+    then the kept one"""
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch, _MockPrefix5Backend)
+    pc = ad.prefix
+    pc.head, pc.keep_prev = 128, True
+    d = _prompt(512, 61) + _prompt(12, 70)
+    _prefill_steps(ad, kv, d, _blocks(0, len(d)), slot=0, ends=[128, 256, 384, 512, len(d)])
+    k = {n: pc.store.key(d, n) for n in (128, 256, 384, 512)}
+    ent = pc.store.entries
+    assert all(k[n] in ent for n in k) and pc.stats["snapshots"] == 4
+    assert pc.stats["keep_prev_kept"] == 2 and pc.stats["keep_prev_released"] == 1 and pc.stats["tail_superseded"] == 0
+    assert pc.prev_of == {k[512]: k[384]}  # one link: 384 kept for 512; the 256 kept for 384 was released
+    assert ent[k[384]].kept_prev and not ent[k[384]].dominated
+    assert ent[k[256]].dominated and not ent[k[128]].kept_prev and not ent[k[128]].dominated
+    assert pc.tail == {ad._alias[0]: k[512]}
+    ad.release_request(0)
+    assert pc.store._device_victim().key == k[256]  # the released (dominated) one, then the kept one
+    pc.store.evict(k[256])
+    assert pc.store._device_victim().key == k[384]
+    assert "ttnn" not in sys.modules
+
+
+def test_prefix_cache_fast_hash_round_trip(monkeypatch):
+    """GLM53_PREFIX_FAST_HASH: confirm hashes an int64 copy of the plugin's prompt list, plan / commit hash the int32
+    rows of the prefill's token tensor (_ids: the row view) -- the same int32 bytes, the same keys: the snapshot /
+    confirm / attach round trip hits exactly as under the text keys (and the two schemes' keys differ)"""
+    monkeypatch.setenv("GLM53_PREFIX_FAST_HASH", "1")
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch)
+    pc = ad.prefix
+    assert pc.store.fast
+    doc = _prompt(256, 5)
+    a, b = doc + _prompt(40, 50), doc + _prompt(30, 20)
+    t32 = _history([a])[0]
+    assert t32.dtype == torch.int32 and pc._ids(t32[:256]) is not None
+    k32 = pc.store.key(pc._ids(t32[:256]), 256)
+    assert k32 == pc.store.key(torch.tensor(a, dtype=torch.int64)[:256], 256) == pc.store.key(a, 256)
+    from models.autoports.zai_org_glm_5_3_flash.tt.prefix_cache import prefix_key
+
+    assert k32 != prefix_key(a, 256, pc.store.sig, pc.store.boundary, fast=False)
+    row_a = _blocks(0, len(a))
+    _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, len(a)])
+    assert pc.stats["snapshots"] == 2 and k32 in pc.store.entries
+    ad.release_request(0)
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256 and ad.confirm_prefix_cache_hit(b, [], 200) == 128
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256
+    row_b = row_a[:4] + _blocks(1, len(b))[4:]
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[2], sampling_params=_greedy(1))  # fmt: skip
+    g = ad._alias[2]
+    assert backend.state_io[-1] == (g, 256, pc.store.entries[k32].device_entry, None)  # attached, the suffix only
+    assert kv.state[g] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
+    assert pc.stats["attaches"] == 1 and pc.stats["fallbacks"] == 0 and pc.report()["hits"] == 1
+    assert "ttnn" not in sys.modules
+
+
+# ------------------------------------------------------------------- GLM53_PF_TAIL_SPLIT (Glm53Generator._tail_split)
+def test_prefill_tail_split_pieces(monkeypatch):
+    """GLM53_PF_TAIL_SPLIT on the TP prefill's buckets 2,048 / 8,192: "auto" splits a 4,150-token chunk at 64 K into
+    2,048-row pieces (cheaper than one 8,192 replay there by the cost table) and keeps it whole at 1 M (the pieces cost
+    more); a k cap splits the LAST chunk only; the F27 guard keeps a chunk whole when a piece would start past the
+    backend's prefill_resume_max; every split covers its chunk exactly (starts, offsets, lengths, padded lengths). The
+    knobs are checked when the generator is built"""
+    from models.autoports.zai_org_glm_5_3_flash.tt.generator import ChunkPlan, round_up
+
+    backend = _MockStackBackend(B)
+    backend.tpp = SimpleNamespace(buckets=(2048, 8192))
+    rmax = [1046528]  # (TPPrefill.resume_max at 1 M: the top window - 2,048)
+    backend.prefill_resume_max = lambda: rmax[0]
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+
+    def chunk(start, n, off=7):
+        return ChunkPlan(start=start, offset=off, n_valid=n, physical=round_up(n, backend.prefill_align))
+
+    def covers(c, pieces):
+        assert (
+            pieces[0].start == c.start and pieces[0].offset == c.offset and sum(p.n_valid for p in pieces) == c.n_valid
+        )
+        for p, q in zip(pieces, pieces[1:]):
+            assert q.start == p.start + p.n_valid and q.offset == p.offset + p.n_valid and p.n_valid == 2048
+        assert all(p.physical == round_up(p.n_valid, backend.prefill_align) for p in pieces)
+
+    monkeypatch.setenv("GLM53_PF_TAIL_SPLIT", "auto")
+    c64 = chunk(65536, 4150)
+    out = gen._tail_split([c64])
+    assert [p.n_valid for p in out] == [2048, 2048, 54] and gen.counters["prefill_tail_splits"] == 1
+    covers(c64, out)
+    assert gen.counters["prefill_split_ms_saved"] > 0
+    c1m = chunk(1040384, 4150)  # 3 x 2,048 at ~1 M (~3.0 s) lose to one 8,192 replay (~2.5 s)
+    assert gen._tail_split([c1m]) == [c1m] and gen.counters["prefill_tail_splits"] == 1
+    assert gen._tail_split([chunk(65536, 2000)]) == [chunk(65536, 2000)]  # (fits the smallest bucket: whole)
+    out = gen._tail_split([c64, chunk(69686, 4150, off=4157)])  # auto: every chunk of the call
+    assert [p.n_valid for p in out] == [2048, 2048, 54] * 2
+    covers(c64, out[:3])
+    monkeypatch.setenv("GLM53_PF_TAIL_SPLIT", "2")  # a k cap: the LAST chunk only, at most k pieces
+    tail = chunk(65536, 2100)
+    out = gen._tail_split([c64, tail])
+    assert out[0] == c64 and [p.n_valid for p in out[1:]] == [2048, 52]
+    covers(tail, out[1:])
+    assert gen._tail_split([c64]) == [c64]  # (3 pieces > k 2)
+    # the F27 guard: a 2,100-token tail resumed at 1,046,400 -- its second piece would start at 1,048,448, past
+    # resume_max (no bucket has a key there): kept whole (TPPrefill.clamp_lengths plans it tail-first)
+    near = chunk(1046400, 2100)
+    assert gen._tail_split([near]) == [near]
+    rmax[0] = None  # (a backend without the bound: split)
+    assert [p.n_valid for p in gen._tail_split([near])] == [2048, 52]
+    monkeypatch.setenv("GLM53_PF_TAIL_SPLIT", "0")
+    assert gen._tail_split([c64]) == [c64]
+    # the knobs are validated at construction (a typo stops the launch, not its first long prefill)
+    for knob, bad in (("GLM53_PF_TAIL_SPLIT", "on"), ("GLM53_PF_TAIL_SPLIT", "-2"),
+                      ("GLM53_PF_SPLIT_COSTS", "2048:0=x"), ("GLM53_PF_SPLIT_COSTS", "2048:0")):  # fmt: skip
+        monkeypatch.setenv(knob, bad)
+        with expect_error(ValueError, knob):
+            Glm53Generator(_MockStackBackend(B), tokenizer=None, max_batch=B, max_seq_len=SEQ)
+        monkeypatch.delenv(knob)
+    monkeypatch.setenv("GLM53_PF_SPLIT_COSTS", "2048:0=10,1000000=20;8192:0=15")
+    g2 = Glm53Generator(_MockStackBackend(B), tokenizer=None, max_batch=B, max_seq_len=SEQ)
+    assert g2._split_cost_ms(2048, 500000) == 15.0 and g2._split_cost_ms(1024, 0) is None
+    assert "ttnn" not in sys.modules
+
+
+# ------------------------------------------------------------------- AllocPool / SpecSwitch (stub-ttnn children)
+_POOL_SPEC_CHILD = r"""
+import sys
+from types import SimpleNamespace
+from unittest import mock
+
+sys.modules["ttnn"] = mock.MagicMock()  # mk_stack / spec_mtp / stack_model module-level ttnn imports only
+from models.autoports.zai_org_glm_5_3_flash.tt import mk_stack as MS
+from models.autoports.zai_org_glm_5_3_flash.tt import spec_mtp as SM
+from models.autoports.zai_org_glm_5_3_flash.tt import stack_model as STM
+
+# ---- AllocPool: frozen after the first capture -- a later build of the same programs allocates nothing; a program
+#      first built after it allocates (not refused), logged once and counted
+pool = MS.AllocPool()
+made = []
+pool.orig = lambda shape, *a, **kw: made.append(tuple(shape)) or SimpleNamespace(shape=tuple(shape))
+with pool:
+    x, y = pool((1, 1, 32, 64), "bf16", "tile"), pool((1, 1, 32, 64), "bf16", "tile")
+child = pool.child()
+assert len(made) == 2 and not pool.frozen and not child.frozen
+pool.freeze()
+assert pool.frozen and child.frozen and pool.post_capture_allocs == 0
+with pool:
+    assert pool((1, 1, 32, 64), "bf16", "tile") is x and pool((1, 1, 32, 64), "bf16", "tile") is y
+assert len(made) == 2 and pool.post_capture_allocs == 0 and not MS._POST_CAPTURE_LOGGED
+with pool:
+    pool((1, 1, 32, 128), "bf16", "tile")
+    pool((1, 1, 32, 256), "bf16", "tile")
+assert len(made) == 4 and pool.post_capture_allocs == 2 and MS._POST_CAPTURE_LOGGED == [True]
+p2 = MS.AllocPool()
+p2.freeze()
+assert p2.child().frozen  # (a child made after the freeze)
+
+
+# ---- SpecSwitch: every step captured, all or nothing
+class Step:
+    def __init__(self, fail=False):
+        self.groups, self.traces, self.fail, self.released = 4, {}, fail, 0
+
+    def capture(self):
+        if self.fail:
+            raise RuntimeError("trace region full")
+        self.traces = {"step": ("mock", lambda: None), "boot": ("mock", lambda: None)}
+        return self.traces
+
+    def release(self):
+        self.released += 1
+        self.traces = {}
+
+
+a, b = Step(), Step(fail=True)
+sw = SM.SpecSwitch([a, b])
+try:
+    sw.capture()
+    raise AssertionError("SpecSwitch.capture swallowed a step's failure")
+except RuntimeError:
+    pass
+assert a.traces == {} and a.released == 1 and b.released == 1 and not sw.captured()
+b.fail = False
+assert sw.capture() is a.traces and sw.captured()
+# StackBackend._capture_spec: a switch whose CURRENT step is captured but another is not -> captures the rest
+a2, b2 = Step(), Step()
+a2.capture()
+sw2 = SM.SpecSwitch([a2, b2])
+assert sw2.traces and not sw2.captured()
+STM.StackBackend._capture_spec(SimpleNamespace(spec=sw2, mesh=None))
+assert b2.traces and sw2.captured()
+STM.StackBackend._capture_spec(SimpleNamespace(spec=sw2, mesh=None))  # (captured: nothing)
+assert a2.released == b2.released == 0
+# SpecMTP._replay before any capture: a LAZY capture -- counted, warned once (no assert)
+fake = SimpleNamespace(traces={}, counters={}, K=3, groups=4, ran=[])
+fake.capture = lambda: fake.traces.setdefault("step", ("mock", lambda: fake.ran.append(1))) and fake.traces
+SM.SpecMTP._replay(fake, "step")
+SM.SpecMTP._replay(fake, "step")
+assert fake.counters == {"lazy_captures": 1} and fake.ran == [1, 1] and SM._LAZY_CAPTURE_LOGGED == [True]
+print("POOL_SPEC_OK")
+"""
+
+
+def test_alloc_pool_frozen_and_spec_switch_capture():
+    """mk_stack.AllocPool.freeze (StackBackend._capture): after the first trace capture a pool tensor allocated by a
+    program first built then is logged once and counted (not refused: unvalidated on device). spec_mtp.SpecSwitch:
+    capture is all or nothing (a step's failure releases every step and re-raises), captured() needs EVERY step, and
+    StackBackend._capture_spec captures a switch whose current step alone holds traces; SpecMTP._replay before any
+    capture counts / warns a lazy capture. The modules import ttnn at module level: a child with a stub ttnn"""
+    _stub_child(_POOL_SPEC_CHILD, "POOL_SPEC_OK")
     assert "ttnn" not in sys.modules

@@ -1363,6 +1363,8 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert GD.KNOBS["GLM53_DSA_SHARD_RSNP"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_LOCAL_ALL"] == "1"
     assert GD.KNOBS["GLM53_DSA_SHARD_SEL2"] == "1"
+    # rev 75 / 76 (6e2be954194): the exact merge pre-filter and RS1 over both fabric links
+    assert GD.KNOBS["GLM53_DSA_SHARD_PREFILTER"] == "1" and GD.KNOBS["GLM53_DSA_SHARD_RS1_SPLIT"] == "1"
     assert all(
         GD.KNOBS[k] == "1"
         for k in ("GLM53_DSA_POOL_BORROW", "GLM53_STACK_DEFER", "GLM53_MK_MOE_DEFER_INV", "GLM53_MHC_MS1")
@@ -1392,6 +1394,9 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)
     assert got["GLM53_DSA_SHARD_LOCAL_ALL"] == "1" and SP.shard_local_all(8)
     assert got["GLM53_DSA_SHARD_SEL2"] == "1" and SP.shard_sel2(8)
+    assert got["GLM53_DSA_SHARD_PREFILTER"] == "1" and SP.shard_prefilter(8)
+    assert got["GLM53_DSA_SHARD_RS1_SPLIT"] == "1" and SP.shard_rs1_split(8)
+    assert not SP.shard_prefilter(2) and not SP.shard_rs1_split(2)  # (the pair / the 2x4 never take them)
     assert all(
         got[k] == "1" for k in ("GLM53_DSA_POOL_BORROW", "GLM53_STACK_DEFER", "GLM53_MK_MOE_DEFER_INV", "GLM53_MHC_MS1")
     )
@@ -1420,6 +1425,64 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert "GLM53_DSA_SHARD_RSB" not in got and not SP.shard_rsb(8)
     assert "GLM53_DSA_SHARD_RSNP" not in got and not SP.shard_rsnp(8)  # no RSNP-needs-RSB error
     assert got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_R8"] == "1"
+
+
+def test_rs1_split_build_refusals(monkeypatch):
+    """rev 76 build-time refusals (tt/tp_dsa_shard.py, tt/mk_mla.py): GLM53_DSA_DENSE_WINDOW with the split RS1 (in an
+    all-dense launch nothing orders rs1a's close of link 0 before the o_proj AR lane 0 reopens it: a hang class) -- the
+    message names both knobs; and the rs1a lane core may never lower the DSA token-lane count (dsa_lane_count =
+    MkMla.reserve_lane_cores' rule) below the knob-off build's (one more free core)"""
+    import os
+
+    with expect_error(ValueError, "GLM53_DSA_SHARD_RS1_SPLIT=1 .* GLM53_DSA_DENSE_WINDOW=1"):
+        SP.rs1_split_window_check(True, True)
+    SP.rs1_split_window_check(True, False)
+    SP.rs1_split_window_check(False, True)  # (the window alone: as before)
+    monkeypatch.setenv("GLM53_DSA_DENSE_WINDOW", "1")
+    with expect_error(ValueError, "link 0"):
+        SP.rs1_split_window_check(True)  # (the knob: tt/prefill_tp.py dsa_dense_window's)
+    monkeypatch.delenv("GLM53_DSA_DENSE_WINDOW")
+    SP.rs1_split_window_check(True)
+    env = {}
+    # want = GLM53_MLA_DSA_LANES (8) as a power of two <= chunks / helpers; p also <= the free cores
+    assert SP.dsa_lane_count(20, 4, 32, env) == (8, 8) and SP.dsa_lane_count(7, 4, 32, env) == (4, 8)
+    assert SP.dsa_lane_count(20, 8, 32, env) == (4, 4) and SP.dsa_lane_count(0, 4, 32, env) == (1, 8)
+    assert SP.dsa_lane_count(20, 4, 32, {"GLM53_MLA_DSA_LANES": "2"}) == (2, 2)
+    assert SP.rs1_split_lane_check(8, 4, 32, env) == 8  # 9 free with the split off: 8 lanes either way
+    assert SP.rs1_split_lane_check(12, 4, 32, env) == 8 and SP.rs1_split_lane_check(5, 4, 32, env) == 4
+    with expect_error(ValueError, "7 free cores .* 4 lanes vs 8 with the split off"):
+        SP.rs1_split_lane_check(7, 4, 32, env)  # (the knob-off build's 8th free core taken: 8 -> 4 lanes)
+    with expect_error(ValueError, "3 free cores"):
+        SP.rs1_split_lane_check(3, 4, 32, env)
+    # the builders call them where the protocol is built (a refactor that drops a call fails here)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "tp_dsa_shard.py")) as fh:
+        tds = fh.read()
+    assert (
+        "SP.rs1_split_window_check(True)" in tds
+        and "SP.rs1_split_lane_check(len(rest), helpers, self.mk.chunks)" in tds
+    )
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_mla.py")) as fh:
+        mk = fh.read()
+    assert "SP.rs1_split_window_check(True, True)" in mk and "SP.dsa_lane_count(len(free), helpers, self.chunks)" in mk
+
+
+def test_sel2_capacity_bound():
+    """rev 73 SEL2's packed 16-bit sums count a chip's closed local pools (one per KPOOL = 4 tokens): exact up to 65,535
+    -- the 1 M cache on the 32-chip shard holds 8,192 per chip (ShardMap.local_cap); past ~8.4 M tokens the cache is
+    refused where it is built (tt/stack_model.py allocate_kv_cache)"""
+    import os
+
+    from models.autoports.zai_org_glm_5_3_flash.tt.dsa_shard import ShardMap
+
+    sm = ShardMap(32)
+    assert SP.sel2_capacity_check(sm.local_cap(1 << 20)) == 8192
+    assert SP.sel2_capacity_check(65535 * 4) == 65535
+    with expect_error(ValueError, "65536 local pools per chip"):
+        SP.sel2_capacity_check(65536 * 4)
+    with expect_error(ValueError, "GLM53_DSA_SHARD_SEL2"):
+        SP.sel2_capacity_check(sm.local_cap(9 << 20))
+    with open(os.path.join(os.path.dirname(SP.KDIR), "stack_model.py")) as fh:
+        assert "SP.sel2_capacity_check(page_tokens)" in fh.read()
 
 
 @pytest.mark.parametrize("lanes", [1, 4, 8])
