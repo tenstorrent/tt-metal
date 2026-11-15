@@ -42,6 +42,8 @@ from ttml.models import WeightTyingType  # noqa: E402
 from ttml.models.qwen3 import Qwen3Config  # noqa: E402
 
 from dcp_driver import (
+    DESCRIPTOR_MISMATCH,
+    MESH_OPEN_FAILED,
     RESUME,
     assemble,
     compare,
@@ -56,7 +58,6 @@ from utils.lora import LORA_TARGETS_ALL, inject_adapter_in_model  # noqa: E402
 
 SEQ_LEN = 32
 T_MAX = 16
-MESH_OPEN_FAILED = 3
 SIZES = dict(hidden=256, intermediate=512, layers=2, heads=8, kv_heads=8, head_dim=64)
 
 
@@ -297,6 +298,8 @@ def main(argv=None) -> int:
     try:
         open_world(dp, tp, args.mgd)
     except RuntimeError as err:
+        if DESCRIPTOR_MISMATCH not in str(err):
+            raise
         print(f"MESH_OPEN_FAILED: {str(err).splitlines()[0]}")
         return MESH_OPEN_FAILED
     try:
