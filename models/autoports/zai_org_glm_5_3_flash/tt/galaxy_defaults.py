@@ -55,6 +55,15 @@ KNOBS = {
     # quota chunks; host proof test_sel2_matches_the_rounds): coordinator round 27.0 -> 9.1 us at B 1; e2e 128 K x 1
     # 18.6 -> 18.1 ms, 1 M x 1 18.7 -> 18.2 ms; every user's ids identical (128 K x 1, 128 K x 4, 1 M x 1)
     "GLM53_DSA_SHARD_SEL2": "1",
+    # GLM53_DSA_SHARD_PREFILTER (rev 75): the merge helpers drop candidate keys that cannot reach the global top-512
+    # before the radix rounds (the same records, quotas and tie order): full 45-layer step at 1 M -0.55 ms (8 rows) /
+    # -1.05 ms (16 rows); ids identical at 32 K x 16, 1 M x 1 and 32 K x 4 spec
+    "GLM53_DSA_SHARD_PREFILTER": "1",
+    # GLM53_DSA_SHARD_RS1_SPLIT (rev 76): RS1 over both fabric links (block p -> q on link 0 when p + q is odd: the
+    # middle segment carries 8 of 16 blocks per link and direction; the rs1a lane opens after AG1 closes link 0): full
+    # 45-layer step at 1 M 31.73 -> 29.83 ms (8 rows) / 36.07 -> 34.16 ms (16 rows); ids identical at 32 K x 4 spec and
+    # the 1 M warm turn (B attached == B_cold); served 1 M x 2 / 4 / 8 decode +4.3 / +6.4 / +7.1 %, 1-user text unchanged
+    "GLM53_DSA_SHARD_RS1_SPLIT": "1",
     # the routed-expert phase reads x one tile face at a time instead of one 32-B row (kernels/mkx/xa.cpp; the same bytes
     # at the same addresses): 4 K x 16 40.8 -> 38.0 ms, 32 K x 4 22.8 -> 22.0 ms with ids and text identical
     "GLM53_MKX_XROWS_COAL": "1",
