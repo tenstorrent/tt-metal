@@ -181,9 +181,11 @@ void kernel_main() {
     // -------------------------------------------------------------------- planner (prev_planner.hpp)
     constexpr uint32_t RING0 = 10;
     // (args: counts (0: folded - the own row from the landing rows, a plan only when one is pending), landing, global
-    // state, layer state, router bias, gate/up, down, directions; 8 the position (MESH1: unused - the table of
-    // positions by fabric chip id follows the ring args), 9 the arrival counter, 10 .. the ring)
-    const uint32_t me = MESH1 ? arg_byte(RING0 + (RINGPG ? 1 : W), my_dev()) : get_arg_val<uint32_t>(8);
+    // state, layer state, router bias, gate/up, down, directions; 8 the position in its low 16 bits (MESH1: unused -
+    // the table of positions by fabric chip id follows the ring args) and the plan's period in its high 16 (0 = NCALL:
+    // DS41-280, P.70), 9 the arrival counter, 10 .. the ring)
+    const uint32_t a8 = get_arg_val<uint32_t>(8);
+    const uint32_t me = MESH1 ? arg_byte(RING0 + (RINGPG ? 1 : W), my_dev()) : (a8 & 0xFFFFu);
     const Io io{
         .cnt = get_arg_val<uint32_t>(0),
         .land = get_arg_val<uint32_t>(1),
@@ -197,6 +199,7 @@ void kernel_main() {
         .sem = get_arg_val<uint32_t>(9),
         .ring = get_arg_val<uint32_t>(RING0),
         .ring_arg0 = RING0,
-        .base = base};
+        .base = base,
+        .ncall = a8 >> 16};
     (void)plan(io);
 }

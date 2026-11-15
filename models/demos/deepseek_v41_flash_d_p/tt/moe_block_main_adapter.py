@@ -271,6 +271,7 @@ def prev_on() -> bool:
 
 
 _PREV: dict = {}  # id(resources) -> (resources, expert_prev.PrevReplicas): MOE_REPLICAS=prev (P.56)
+_CALLS: dict = {}  # id(mesh) -> (mesh, the layers the current chunk calls): DS41-280, prev_chunk
 
 
 def _prev_of(layer, res):
@@ -286,7 +287,24 @@ def _prev_of(layer, res):
         mine = [m for m in _MAIN_LAYERS if m.mesh is layer.mesh and m.block().resources is res]
         hit = _PREV[id(res)] = (res, PrevReplicas(layer, res, len(mine)))
         hit[1].last_layer = max(m.layer for m in mine)  # (P.62b: the chunk's last MoE call plans at once)
+        calls = _CALLS.get(id(layer.mesh))
+        if calls is not None and calls[0] is layer.mesh:  # (DS41-280: this chunk's call plan, told before the block)
+            hit[1].set_chunk([m.layer for m in mine if m.layer in calls[1]])
     return hit[1]
+
+
+def prev_chunk(mesh, layers) -> None:
+    """MOE_REPLICAS=prev (DS41-280, P.70): before a chunk (tt/model.py begin_chunk), the layers it calls with their
+    full block (the model's call plan: DECODER_SKIP=decode's not-last chunks only layers 0-19). Every block on the mesh
+    takes its MoE layers among them as the chunk's calls (expert_prev.PrevReplicas.set_chunk: the plans' period, the
+    folded planner's last call); a block made later takes them at its creation (_prev_of)."""
+    calls = frozenset(int(i) for i in layers)
+    _CALLS[id(mesh)] = (mesh, calls)
+    for res, pr in list(_PREV.values()):
+        if pr.mesh is mesh:
+            pr.set_chunk(
+                [m.layer for m in _MAIN_LAYERS if m.mesh is mesh and m.block().resources is res and m.layer in calls]
+            )
 
 
 def prev_reset(mesh) -> None:
@@ -422,6 +440,7 @@ class TtMoEBlockMainLayer:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
         self._prev_ord, self._prev_dirty, self._prev_off_rb, self._prev_used = None, False, None, False
+        self._prev_n = 0  # (DS41-280: the period of the layer's last plan - its next call is ready at _prev_ord + it)
         self._prev_fold = False  # (P.62b MOE_PLANNER=folded: this call's plan rides the next head; set every call)
         self._pre_done = False  # (MOE_TRACE=moe, P.61: pre_call() already ran this call's guard)
         self.dims, self.act = block_dims(cfg, slots=rows * cols * self.spc)
@@ -1100,7 +1119,7 @@ class TtMoEBlockMainLayer:
             pr = _prev_of(self, blk.resources)
             if pr.mode != "device" or self._fold_ok(pr, blk):
                 return None  # (P.62b folded: the chunk's last layer plans with a launch after() makes - not traced)
-            mode = pr.mode
+            mode = (pr.mode, pr.period)  # (DS41-280: the captured planner launch carries the chunk's period)
         elif self.replicas and settings.get("MOE_REPLICAS") != "prev":
             return None  # (runtime / exact: host-chosen fill per call)
         return (

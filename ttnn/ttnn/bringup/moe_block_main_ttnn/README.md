@@ -126,7 +126,8 @@ each default off (= the source's program):
   `fused_head/device/kernels/prev_planner.hpp` - DeepSeek-V4.1's replica planner (MOE_REPLICAS=prev) for the previous
   MoE call - with compile args `ct` (PP_CT0 order), its L1 `l1` bytes of the arena past the head's own bytes on the
   watcher core (`fused_head_tail_core(resources, dtypes, accumulators, l1_free)` -> (x, y, offset)), the pending
-  layer's buffers from `tail_desc` (one 64 B uint32 DRAM page a chip, its address patched per call). No core added (the
+  layer's buffers from `tail_desc` (one 64 B uint32 DRAM page a chip, its address patched per call; word 9 the plan's
+  period, the MoE calls of its chunk, 0 = the compile arg NCALL: P.70, DS41-280). No core added (the
   head holds every core of the 11 x 10 grid at the 110-core cap). Tail programs keep their own patch store (their
   watcher has one more address arg).
 - `fused_head(..., cached_slots=False)`, `routed_experts_combine(..., cached_slots=False)` (P.63; default False = the

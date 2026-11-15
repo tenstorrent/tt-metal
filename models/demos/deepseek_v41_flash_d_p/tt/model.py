@@ -1429,6 +1429,10 @@ class TtDS41Model:
                 prev_reset(self.mesh)
         self._tail_mode = self.replay and last is True
         self._tail_at = None
+        if settings.get("MOE_REPLICAS") == "prev":  # (DS41-280: the layers this chunk calls in full, the plans' period)
+            from .moe_block_main_adapter import prev_chunk
+
+            prev_chunk(self.mesh, self.called_layers())
         st = self.state
         if self._tail_mode:
             self.build_tail()
@@ -1460,6 +1464,14 @@ class TtDS41Model:
                 st.tail[i] = new_tail
             _free(self._engram_dev.pop(i, None))
             self._engram_dev[i] = dev
+
+    def called_layers(self) -> list:
+        """The loaded layers this chunk runs in full (``layer`` below, after begin_chunk): not the decoder on a chunk
+        that skips it (DECODER_SKIP exact / replay128 / decode, last=False: layer 20 only its KV head) nor on replay128's
+        last chunk (the decoder tail model runs it), not DEEP_LAYERS=tail's deep layers. Host only (DS41-280: the MoE
+        calls a chunk makes, MOE_REPLICAS=prev's period)."""
+        dec = self._skip or self._tail_mode
+        return [i for i in self.layers if i not in self._deep_set and not (dec and i in self._decoder_set)]
 
     def _window_policy(self, st: DS41DeviceState, start: int, replay: bool) -> None:
         """WINDOW_KV_KEEP=ring | none (P.32), before the chunk at ``start`` (host only): every layer whose window this

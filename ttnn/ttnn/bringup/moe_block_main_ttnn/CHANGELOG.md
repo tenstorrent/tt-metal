@@ -356,3 +356,18 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
 - Tests: none added to tests/ (host-only, same values: the model's tests/test_moe_prev_replicas.py and the ladder check
   outputs; tests/test_mesh_program_probe.py in the model measures the host us a call); fork suites not run on the 8x4
   (OV-25: task F.1).
+
+### prev planner: the plan's period at runtime (2026-11-15, deepseek_v41_flash_d_p P.70, DS41-280)
+- What: `prev_planner.hpp` `pp::Io.ncall` (the MoE calls of the chunk the plan is made in): the fill window
+  (calls g + 1 .. g + ncall - 2), the fence (g + ncall - 1) and a kept receiver's readiness (`ready <= g + ncall`) use
+  it instead of the compile arg NCALL; 0 (or a value above NCALL) = NCALL, the behaviour before. The watcher tail
+  (`xg_watcher.cpp` W_PREV) reads it from word 9 of `tail_desc` (zero in every descriptor made before: unchanged). The
+  ring (W) and the planner's L1 stay sized by NCALL. No new program variant: the value is data (the descriptor) or a
+  frozen runtime arg of the model's own planner programs.
+- Why: under DECODER_SKIP=decode a chunk calls 20 of the 40 MoE layers built; plans fenced at g + 40 were never usable
+  (P.69: ready 0 of 20 at every point) while their copies were still planned and carried.
+- Needed by: deepseek_v41_flash_d_p P.70 (tt/expert_prev.py PrevReplicas.set_chunk, `_desc` word 9).
+- Files: fused_head/device/kernels/prev_planner.hpp, fused_head/device/kernels/dataflow/xg_watcher.cpp, README.md.
+- Tests: none added to tests/ (the planner is the model's kernel: the model's tests/test_moe_prev_replicas.py (off,
+  host mirror at P = 40) and tests/test_moe_prev_decode.py (decode, host mirror at P = 20) check it word for word);
+  fork suites not run on the 8x4 (OV-25: task F.1).

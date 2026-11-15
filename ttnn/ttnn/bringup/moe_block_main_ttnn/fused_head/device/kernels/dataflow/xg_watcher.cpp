@@ -69,7 +69,8 @@ void kernel_main() {
 #ifdef W_PREV
     {  // (the previous MoE call's replica plan, after the watch: args the pending layer's descriptor (DRAM, one 64 B
        // page: its state, router bias, gate/up, down, then the landing rows, global state, directions, the arrival
-       // counter's address on this core, the job ring), the planner's L1 (the arena past the head's bytes), my chip)
+       // counter's address on this core, the job ring; word 9 the plan's period, 0 = NCALL: DS41-280), the planner's L1
+       // (the arena past the head's bytes), my chip)
         const uint32_t desc = get_arg_val<uint32_t>(W_PREV_A), l1 = get_arg_val<uint32_t>(W_PREV_A + 1);
         const uint32_t me = get_arg_val<uint32_t>(W_PREV_A + 2);
         pp::read_page(desc, 64, 0, l1, 64);
@@ -89,7 +90,8 @@ void kernel_main() {
             .sem = d[7],
             .ring = d[8],
             .ring_arg0 = 0,
-            .base = l1 + 64};
+            .base = l1 + 64,
+            .ncall = d[9]};
         if (d[15] == 0x50364232u) {  // ('P62B': a descriptor; anything else - nothing pending ever, no read past it)
             (void)pp::plan(io);
         }

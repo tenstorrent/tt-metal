@@ -1,0 +1,83 @@
+{
+ "used": [
+  {
+   "id": "DS41-280",
+   "how": "the step's subject: NCALL replaced by the per-chunk period P from the model's call plan, the guard per plan (layer._prev_n)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-265",
+   "how": "no second fused-head tail variant: the period travels as data (descriptor word 9), so the tail's one patch store stays valid",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-243",
+   "how": "the new decode test is BATCH_SHARED and switches decode with use_decoder_skip on the loaded model, no reload",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "noted that test_skip_positions runs random ids; the steady gain is read from the guard counters + experts time, not assumed",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "under DECODER_SKIP=decode the resumed (write_start > start) chunk is a request start: prev_reset empties the replica state, so its ready is 0 by design (P.56's no-crossing rule)"
+ ],
+ "overseer": [
+  {
+   "id": "P.70",
+   "answer": "done",
+   "evidence": "Guarantees analysed in BREADCRUMBS P.70 (fill window g+1..g+P-2, fence g+P-1, guard o >= g+P per plan, receiver readiness, ring W=NCALL+4 >= P+4). P per chunk from TtDS41Model.called_layers (20 decode / 40 off). tests/test_moe_prev_decode.py PASS: ready 20/20 chunks 1-5, prev vs off 0.0, mirror 0/136. Gate P.70 --check 9/9 PASS (moe_prev_replicas maxdiff 0, determinism 0, decode-skip pass). Steady ready 20/20 at every point, wall -10..-13.5 ms vs FIX.34; resumed 0/20 by design (request reset)."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work; the planner's window only narrows"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the planner programs stay prepared (ttnn.bringup.prepare_program / run_prepared), one per period (expert_prev._plan_pp key (mode, lean, period), _fold_pps); the folded tail takes the period from its descriptor (no new program)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run on the 8x4; only the new model test and the gate"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.70",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-15T10:55:32",
+  "head": "38e318f7880",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.70.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.70_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.70_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.70_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.70.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_decode.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_prev.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kernels/moe_prev_planner.cpp",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/xg_watcher.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/prev_planner.hpp"
+  ]
+ }
+}

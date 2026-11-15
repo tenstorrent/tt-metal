@@ -2234,3 +2234,84 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   The largest deltas (128k device +3.8 / +3.9, all in experts 49.9 / 48.6 vs 46.2 / 46.0) are single profiled runs on
   random ids. Determinism 0.0.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.69 --spec <spec> --check` (devjob, ~13 min).
+
+## P.70 (overseer, owner-delegated 2026-11-15): DS41-280 fixed - MOE_REPLICAS=prev's period from the MoE calls a chunk makes
+
+Why the guard needs NCALL (what it fences). A plan is made right after layer L's call at ordinal g, for L's next call.
+The period P (before P.70 always NCALL = every MoE layer built, 40) sets four things, on the device
+(fused_head/device/kernels/prev_planner.hpp) and on the host (tt/expert_prev.py):
+1. Fill window and fence: a new copy's pieces ride calls g+1 .. g+P-2. Call g+P-1 is the fence: its start barrier
+   follows the pieces' routes, so every piece has landed before call g+P. The copy's ready ordinal is last+2 <= g+P.
+2. Guard (host, PrevReplicas.before): L's plan is used only when its next call o >= g + P. Otherwise the call runs
+   off (the empty map is copied back), so a spare slot whose copy may still be landing is never read.
+3. Receiver choice: a kept receiver needs ready <= g+P (ready by the planned call). A fresh copy may overwrite a
+   spare slot only when its previous copy has landed (ready <= g). While a copy lands, L is either not called
+   (o >= g+P) or called off (guard), so nothing reads the slot.
+4. Ring: W = NCALL + 4 page sets, slot o mod W. A plan writes only ordinals g+1 .. g+P-2, fewer than W apart, so no
+   slot is written for two live ordinals. The stamps (G[16+s] == o) tell a live budget from one W ordinals old. The
+   page headers of call g are zeroed after it (next use g+W). The folded planner plans call g inside call g+1's head,
+   before g+1's combine reads its slot.
+
+The new count keeps every guarantee. P = the main-block MoE layers the chunk calls (PrevReplicas.set_chunk, from
+TtDS41Model.called_layers() in begin_chunk). That is 40 under off, 20 on decode's not-last chunks, 20 on replay128's
+last chunk, whose decoder runs on the tail model's views and does not plan. P <= NCALL is asserted.
+- 1 and 3: the same arithmetic with P in place of NCALL (kernel Io.ncall; host plan_host(ncall=), default
+  geo.period).
+- 2: the guard uses the plan's OWN period (layer._prev_n, stored at after_host), not the current chunk's. So a chunk
+  whose call set differs cannot break it. A sooner call (o < g+P) runs off, as before. A later call is safe: the
+  copies landed earlier. Safety never depends on the prediction being right; only the use rate does.
+- 4: W stays NCALL+4 and P <= NCALL, so the window is no wider than before. The ports' ring arg (W) is unchanged
+  (no set_fill rewrite), and the L1 stays sized by NCALL.
+- Folded last-call rule: last_layer is the chunk's last called MoE layer (19 under decode), so nothing is pending at a
+  chunk's end. A pending plan that does cross a chunk (a caller that skips the predicted last layer) is planned with
+  its own _prev_n: head_tail picks the descriptor of (layer, period).
+
+How P reaches the device (no new head variant, no host transfer per chunk, OV-23):
+- Folded head tail: word 9 of the layer's 64 B descriptor, one descriptor per (layer, period), made at its first use.
+  0 means NCALL (the fork option's default: a descriptor made before P.70 has 0 there).
+- Model planner kernel (tt/kernels/moe_prev_planner.cpp, ROLE 0): runtime arg 8's high 16 bits (the position stays in
+  the low 16).
+- Prepared programs are keyed by period: launch path (mode, lean, period), folded standalone one per period.
+  MOE_TRACE=moe's trace key includes the period.
+- Fork change: CHANGELOG entry "prev planner: the plan's period at runtime".
+
+Checks (8x4):
+- New tests/test_moe_prev_decode.py. The model runs as decode (use_decoder_skip), 6 back-to-back chunks of the novel
+  prompt with last=False, prev vs off in the loaded model.
+  - The blocks took period 20.
+  - Ready 0/20 on chunk 0 (a request's first chunk), then 20/20 on chunks 1-5.
+  - Layer 19's output: prev vs off max |diff| 0.0 (two passes); off repeat 0.0.
+  - Host mirror at P = 20: 0 mismatches over 136 checks (states, maps, global state, pending job pages).
+  - 414 s with the load.
+- Gate P.70 --check PASS, 9/9 units.
+  - test_moe_prev_replicas (DECODER_SKIP=off, P = 40, all three host paths): maxdiff 0.0, mirror 0 mismatches,
+    plans identical across paths.
+  - determinism 0.0 (also under decoder skip); decode-skip, contract and acks pass; top5 1.0.
+
+Measurement: test_skip_positions (unchanged), DECODER_SKIP=decode, P.70 vs FIX.34 (results/FIX.34.json on
+dnijemcevic/model_bringup).
+
+| point | kind | wall ms P.70 / FIX.34 (diff) | device ms (diff) | experts ms (diff) | tok/s (diff) | ready/calls; new copies (timed) |
+|---|---|---|---|---|---|---|
+| 51200 | steady | 94.5 / 106.7 (-12.2) | 69.92 / 81.6 (-11.7) | 34.93 / 46.92 (-12.0) | 54180 / 47985 (+6195) | 20/20; 2 |
+| 51200 | resumed | 112.0 / 107.2 (+4.8) | 82.47 / 81.43 (+1.0) | 46.75 / 45.92 (+0.8) | 44571 / 46567 (-1996) | 0/20; 76 |
+| 128000 | steady | 94.1 / 107.6 (-13.5) | 70.6 / 82.43 (-11.8) | 34.49 / 46.24 (-11.8) | 54410 / 47584 (+6827) | 20/20; 1 |
+| 128000 | resumed | 110.1 / 109.4 (+0.7) | 85.65 / 82.76 (+2.9) | 48.01 / 46.0 (+2.0) | 45341 / 45631 (-290) | 0/20; 84 |
+| 256000 | steady | 96.5 / 106.4 (-9.9) | 73.21 / 85.69 (-12.5) | 35.05 / 47.39 (-12.3) | 53057 / 48120 (+4937) | 20/20; 2 |
+| 256000 | resumed | 111.6 / 112.9 (-1.3) | 85.57 / 85.05 (+0.5) | 46.34 / 46.13 (+0.2) | 44731 / 44216 (+515) | 0/20; 74 |
+| 512000 | steady | 100.4 / 112.5 (-12.1) | 77.04 / 88.5 (-11.5) | 34.58 / 46.18 (-11.6) | 50996 / 45511 (+5485) | 20/20; 3 |
+| 512000 | resumed | 114.8 / 114.3 (+0.5) | 90.03 / 89.53 (+0.5) | 46.58 / 47.11 (-0.5) | 43484 / 43674 (-190) | 0/20; 77 |
+| 768000 | steady | 104.6 / 115.7 (-11.1) | 81.15 / 92.98 (-11.8) | 34.43 / 46.47 (-12.0) | 48948 / 44252 (+4696) | 20/20; 2 |
+| 768000 | resumed | 119.6 / 120.3 (-0.7) | 94.6 / 95.31 (-0.7) | 46.99 / 47.29 (-0.3) | 41739 / 41496 (+243) | 0/20; 82 |
+| 1024000 | steady | 110.1 / 120.4 (-10.3) | 85.83 / 99.08 (-13.2) | 34.94 / 47.52 (-12.6) | 46503 / 42525 (+3978) | 20/20; 2 |
+| 1024000 | resumed | 124.2 / 125.5 (-1.3) | 99.32 / 97.95 (+1.4) | 47.35 / 46.19 (+1.2) | 40193 / 39777 (+416) | 0/20; 75 |
+
+- Steady: ready 20/20 at every point. Experts fall about 12 ms (47 -> 35); wall -10..-13.5 ms, tok/s +8..+14 %.
+- Resumed: 0/20, by design. The timed chunk is a request's first chunk (write_start = p + 128 is a replay), and
+  begin_chunk resets the replica state there (P.56, owner: nothing crosses requests). So it runs off and plans for its
+  next chunk. Its deltas (+4.8 .. -1.3 ms wall) are run noise plus the planning and carrying of ~75-84 new copies.
+  Making it > 0 would need plans to carry across requests. That is an owner decision, not done.
+- The points use random ids (DS41-228), yet the steady gain is real: the guard counters and experts time agree at every
+  point.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.70 --spec <spec> --check` (devjob, ~38 min),
+  and `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_decode.py`.

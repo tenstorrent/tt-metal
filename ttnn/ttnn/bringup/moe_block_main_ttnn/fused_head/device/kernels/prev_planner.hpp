@@ -101,9 +101,11 @@ inline void write_page(uint32_t base, uint32_t page_bytes, uint32_t page, uint32
 // The planner's inputs: the counts (0: folded, see above), the landing rows, the global state, the layer's state,
 // router bias, gate/up and down buffers, the directions + empty map page, this chip's position, the arrival counter (an
 // L1 word on this core), the job ring (RINGPG: its one address; else the runtime arg ring_arg0 + slot holds each
-// slot's), and the L1 the planner may use from base (expert_prev.Geometry.l1_bytes).
+// slot's), and the L1 the planner may use from base (expert_prev.Geometry.l1_bytes). ncall (DS41-280, P.70): the MoE
+// calls of the chunk this plan is made in (its layer's next call is planned at g + ncall); 0 = NCALL (every MoE layer
+// built; the behaviour before P.70). A value above NCALL is taken as NCALL (the ring and the L1 are sized for NCALL).
 struct Io {
-    uint32_t cnt, land, gst, sta, rb, gu, dw, cst, me, sem, ring, ring_arg0, base;
+    uint32_t cnt, land, gst, sta, rb, gu, dw, cst, me, sem, ring, ring_arg0, base, ncall;
 };
 
 inline uint32_t ring_at(const Io& io, uint32_t s) {
@@ -119,6 +121,9 @@ inline uint32_t ring_page(uint32_t s, uint32_t pg) { return RINGPG ? s * RINGPG 
 inline bool plan(const Io& io) {
     const uint32_t cnt = io.cnt, land = io.land, gst = io.gst, sta = io.sta, rb = io.rb, gu = io.gu, dw = io.dw;
     const uint32_t cst = io.cst, me = io.me, sem = io.sem, base = io.base;
+    // the period of this plan (DS41-280): the copies ride calls g + 1 .. g + NPER - 2, call g + NPER - 1 fences them,
+    // the layer's next call is planned at g + NPER (the host guard uses the same NPER: expert_prev.PrevReplicas.before)
+    const uint32_t NPER = (io.ncall != 0 && io.ncall < NCALL) ? io.ncall : NCALL;
     // L1: counts page, landing rows, global state, layer state, directions, map tile, header / job staging, work
     const uint32_t l_cnt = base, l_land = al64(l_cnt + CPAGE), l_g = al64(l_land + NC * SPW * 4);
     const uint32_t l_st = al64(l_g + GW * 4), l_dir = al64(l_st + SW * 4), l_map = al64(l_dir + NC * NC * 4);
@@ -243,13 +248,13 @@ inline bool plan(const Io& io) {
         share[b] = load[b];
     }
     uint32_t nrec = 0, nreuse = 0, nnew = 0, ndrop = 0, pieces = 0;
-    // fill: copy (h -> k) of home slot `tab` in the coming calls g + 1 .. g + NCALL - 2 (the last one before the
+    // fill: copy (h -> k) of home slot `tab` in the coming calls g + 1 .. g + NPER - 2 (the last one before the
     // layer's next call is a fence: its start barrier on the same routes lands the pieces); on success the last call
     // that carries a piece, else 0 (nothing changed)
     auto alloc = [&](uint32_t h, uint32_t k, uint32_t tab) -> uint32_t {
         const uint32_t p = dir[h * NC + k];
         uint32_t room = 0;
-        for (uint32_t o = g + 1; o + 2 <= g + NCALL; ++o) {
+        for (uint32_t o = g + 1; o + 2 <= g + NPER; ++o) {
             const uint32_t s = o % W;
             const uint32_t v = G[GSTAMP + s] == o ? G[GBUD + (s * NC + h) * 4 + p] : 0u;
             if ((v >> 16) < MAXJ && (v & 0xFFFF) < BUD) {
@@ -260,7 +265,7 @@ inline bool plan(const Io& io) {
             return 0;
         }
         uint32_t rem = PCS, p0 = 0, last = 0, ns = 0;
-        for (uint32_t o = g + 1; o + 2 <= g + NCALL && rem; ++o) {
+        for (uint32_t o = g + 1; o + 2 <= g + NPER && rem; ++o) {
             const uint32_t s = o % W;
             if (G[GSTAMP + s] != o) {
                 G[GSTAMP + s] = o;
@@ -330,7 +335,7 @@ inline bool plan(const Io& io) {
             if (k == h || used[k]) {
                 continue;
             }
-            if (st[SHOLD + k] == b && st[SREADY + k] <= g + NCALL && (kr == NO_EXPERT || T[k] < T[kr])) {
+            if (st[SHOLD + k] == b && st[SREADY + k] <= g + NPER && (kr == NO_EXPERT || T[k] < T[kr])) {
                 kr = k;
             }
             if (!fail[k] && st[SREADY + k] <= g && nnew < MAXNEW && (kn == NO_EXPERT || T[k] < T[kn])) {
