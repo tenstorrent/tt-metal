@@ -43,12 +43,6 @@ RNG_FORMAT = 1
 _MT19937_TOKENS = 625
 
 
-def _json(name: str, value: Any) -> Any:
-    """``value`` as plain JSON types (tuples become lists), or a ``CheckpointError`` naming the component and the first
-    value that would not read back as written (a non-string key, a non-finite float, a type JSON has no form for)."""
-    return check_json(f"{name} state", value)
-
-
 def _hex_u32(words) -> str:
     return np.asarray(words, dtype="<u4").tobytes().hex()
 
@@ -240,9 +234,9 @@ def capture_train_state(*, scheduler=None, dataloader=None, rng: bool = True, wo
     are asked for."""
     state: dict[str, Any] = {}
     if scheduler is not None:
-        state["scheduler"] = _json("scheduler", scheduler.get_state_dict())
+        state["scheduler"] = check_json("scheduler state", scheduler.get_state_dict())
     if dataloader is not None:
-        state["dataloader"] = _json("dataloader", dataloader.get_state_dict())
+        state["dataloader"] = check_json("dataloader state", dataloader.get_state_dict())
     if rng:
         state["rng"] = capture_rng(world_rank)
     return state

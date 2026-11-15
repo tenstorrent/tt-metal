@@ -220,17 +220,12 @@ def load(
         )
     index: Index = read_index(ckpt_dir)
     header = read_header_json(ckpt_dir)
+    world_rank = world_record()["ranks"][0]["world_rank"]
     train_state = header.get(TRAIN_STATE_KEY, {})
     missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
     if strict and missing_state:
         raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
-    check_train_state(
-        train_state,
-        scheduler=scheduler,
-        dataloader=dataloader,
-        rng=rng,
-        world_rank=world_record()["ranks"][0]["world_rank"],
-    )
+    check_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
 
     fsdp_states = fsdp_gate(model, reshard_fsdp)
     # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
@@ -337,11 +332,7 @@ def load(
             _raise_partly_restored(err, "the optimizer scalars", placed, len(placed))
     # After the optimizer scalars: a scheduler writes its last LRs back into the optimizer and has the last word.
     restored = restore_train_state(
-        train_state,
-        scheduler=scheduler,
-        dataloader=dataloader,
-        rng=rng,
-        world_rank=world_record()["ranks"][0]["world_rank"],
+        train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank
     )
     stats["total_s"] = time.perf_counter() - t0
     return LoadResult(

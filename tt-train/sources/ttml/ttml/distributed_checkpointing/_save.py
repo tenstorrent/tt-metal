@@ -141,7 +141,12 @@ def save(
     check_threads(threads)
     if int(max_inflight_bytes) <= 0:
         raise ValueError(f"max_inflight_bytes must be positive, got {max_inflight_bytes}")
-    header = check_json("header", header or {})  # before any device read or file write
+    # The JSON state is checked before any device read (fsdp_gate may reshard) or file write.
+    header = check_json("header", header or {})
+    world = world_record()
+    train_state = capture_train_state(
+        scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world["ranks"][0]["world_rank"]
+    )
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
     fsdp_gate(model, reshard_fsdp)
@@ -151,10 +156,6 @@ def save(
         state_live, scalars = collect_optimizer(optimizer, live)
         live.extend(state_live)
     by_key = {lt.key: lt for lt in live}
-    world = world_record()
-    train_state = capture_train_state(
-        scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world["ranks"][0]["world_rank"]
-    )
     stats["collect_s"] = time.perf_counter() - t0
 
     ckpt_dir = os.path.abspath(ckpt_dir)
