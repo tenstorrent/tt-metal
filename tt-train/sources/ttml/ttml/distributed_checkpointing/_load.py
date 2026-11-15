@@ -39,6 +39,7 @@ from ._state_dict import (
     mesh_device,
     restore_scalars,
 )
+from ._topology import chunk_boxes
 
 
 @dataclass
@@ -123,13 +124,11 @@ def _same_spec(a, b) -> bool:
     )
 
 
-def _place(live: LiveTensor, plan: KeyPlan, arrays: dict[tuple, np.ndarray], device) -> None:
+def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device) -> None:
     """Assemble the destination shards under the live label, move them to the device and install them in place."""
     value = live.tensor.get_value(NATIVE)
     shards = {}
     hosts = {group: _host_shard(arr, live.info.dtype) for group, arr in arrays.items()}
-    from ._topology import chunk_boxes
-
     for chunk in chunk_boxes(live.info.label, live.info.local_shape):
         shards[ttnn.MeshCoordinate(list(chunk.mesh_coord))] = hosts[chunk.group]
     assembled = ttnn.from_local_host_shards(shards, device, value.tensor_topology())
@@ -223,9 +222,6 @@ def load(
                 info = kplan.info
                 carrier = NUMPY_CARRIERS[info.dtype]
                 arrays = {group: np.zeros(box.sizes, dtype=carrier) for group, box in kplan.boxes.items()}
-                for fill in kplan.fills:
-                    if fill.fill != "zeros":
-                        raise CheckpointError(f"{kplan.key}: unsupported padding fill {fill.fill!r}")
                 by_chunk: dict[int, list[ReadItem]] = {}
                 for r in kplan.reads:
                     by_chunk.setdefault(r.chunk, []).append(r)
@@ -255,7 +251,7 @@ def load(
                     bytes_read += future.result()
                 t_read_done = time.perf_counter()
                 pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
-                _place(by_key[key], kplan, arrays, device)
+                _place(by_key[key], arrays, device)
                 read_s += t_read_done - t_key
                 place_s += time.perf_counter() - t_read_done
                 reads += len(futures)

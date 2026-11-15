@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -66,7 +66,6 @@ class LiveTensor:
     key: str
     tensor: Any  # ttml.autograd.Tensor
     info: TensorInfo
-    declaration: dict = field(default_factory=dict)
 
 
 def label_of(value) -> Label:
@@ -202,7 +201,7 @@ def collect_model(model) -> list[LiveTensor]:
         _lint_fusion(key, label, declaration, tensor)
         live_keys = tuple(sorted({key, *(f"model/{n}" for n in names.get(id(tensor), []))}))
         info = TensorInfo(key, "param", dtype_name(value), layout_name(value), label, local_shape, transform, live_keys)
-        live.append(LiveTensor(key, tensor, info, declaration))
+        live.append(LiveTensor(key, tensor, info))
     return live
 
 
