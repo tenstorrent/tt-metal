@@ -355,7 +355,8 @@ def test_the_bucket_body_never_slices_a_table_whole(monkeypatch):
 
 def test_the_verify_body_takes_the_given_tables_and_stops_at_the_shard_ids(monkeypatch, expect_error):
     """tables replace the persistent page tables in every attention layer; logits=False takes the ids from the fused
-    per-shard argmax with no vocab all-gather and no untilize."""
+    per-shard argmax with no vocab all-gather and no untilize. The full-width verify with those ids ends at the vocab
+    shard as well, and keeps it for the logits traces."""
     log = []
     for name in ("slice", "typecast", "reshape", "to_memory_config"):
         monkeypatch.setattr(ttnn, name, lambda t, *a, **kw: FT((4,), "t"))
@@ -389,8 +390,8 @@ def test_the_verify_body_takes_the_given_tables_and_stops_at_the_shard_ids(monke
     with expect_error(RuntimeError, "needs the fused per-shard argmax"):
         m._forward_verify_bucket_tp(n_users=1, tables=("r", "u", "g"), logits=False)
     log.clear()
-    m._spec_tail_ids = lambda x, shard_ids: ("logits", "feed", "ids")
-    assert m._forward_verify_bucket_tp(n_users=2) == ("logits", "feed", "ids", "u") and "untilize" in log
+    m._spec_tail_ids = lambda x, shard_ids: ("shard", "feed", "ids")
+    assert m._forward_verify_bucket_tp(n_users=2) == ("shard", "feed", "ids", None) and "untilize" not in log
     attn = next(kw for e, full, kw in (x for x in log if x[0] == "layer") if full)
     assert (attn["page_table"], attn["spec_user_page_table"], attn["spec_page_table"]) == ("rows8", "users8", "groups8")
 
@@ -405,8 +406,8 @@ def test_the_lm_head_without_logits_frees_the_shard_once_it_has_the_ids(monkeypa
     assert m._lm_head_ids("normed", lambda s: "ids", logits=False) == (None, "ids")
     assert freed == ["shard"] and gathered == []
     assert m._lm_head_ids("normed", lambda s: None, logits=False) == ("logits", None), "no shard ids: gather"
-    assert m._lm_head_ids("normed", lambda s: "ids") == ("logits", "ids")
-    assert gathered == ["shard", "shard"]
+    assert m._lm_head_ids("normed", lambda s: "ids") == ("shard", "ids"), "with logits the caller keeps the shard"
+    assert gathered == ["shard"] and freed == ["shard"]
 
 
 # ----------------------------------------------------------------------------------------- GDN rows of a bucket
