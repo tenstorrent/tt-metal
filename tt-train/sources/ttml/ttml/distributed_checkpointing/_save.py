@@ -60,6 +60,7 @@ from ._state_dict import (
     collect_model,
     collect_optimizer,
     fsdp_gate,
+    is_structural_scalar,
     rank_record,
 )
 from ._train_state import capture_train_state
@@ -243,11 +244,13 @@ def save(
     Under ``tt-run`` with several ranks the call is collective: every rank calls it at the same point with the same
     ``ckpt_dir``; each rank writes the shards of the coordinates it holds into its own files in a shared directory, and
     rank 0 merges the ranks' parts into one index (``_coordinator``). The ranks' scheduler and dataloader states must be
-    equal, since the checkpoint stores one copy; their generators are stored per rank. A failure on any rank, the local
-    work included, makes every rank raise the same error class, and no point-to-point MPI traffic between the ranks may
-    be outstanding when save is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``) on the world
-    communicator while it runs: the ranks' metadata travels under it. The result on each rank lists that rank's files
-    and bytes; ``keys`` counts the whole checkpoint. A single process is the group of one and takes the same path.
+    equal, and so must their optimizers' scalars (steps, learning rates; every rank passes an optimizer or none), since
+    the checkpoint stores one copy; their generators are stored per rank. The user header stored is rank 0's. A failure
+    on any rank, the local work included, makes every rank raise the same error class, and no point-to-point MPI traffic
+    between the ranks may be outstanding when save is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``)
+    on the world communicator while it runs: the ranks' metadata travels under it. The result on each rank lists that
+    rank's files and bytes; ``keys`` counts the whole checkpoint. A single process is the group of one and takes the
+    same path.
     """
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
@@ -279,11 +282,13 @@ def save(
         shared_state = {k: v for k, v in train_state.items() if k != "rng"}
         record = RankRecord.from_json(rank_record(rank, world_rank))
         part = PlanPart(record, [lt.info for lt in live], state_hash(shared_state)).to_bytes()
-        return target, live, scalars, user_header, train_state, record, checked_payload(part, "this rank's plan part")
+        progress = state_hash({k: v for k, v in scalars.items() if not is_structural_scalar(k)})
+        payload = checked_payload(part, "this rank's plan part")
+        return target, live, scalars, progress, user_header, train_state, record, payload
 
     # Even the local work runs inside a phase: on a multi-rank world a rank that fails here stops every rank instead
     # of leaving the others waiting in the first collective. On a single process the phase just runs it.
-    ckpt_dir, live, scalars, user_header, train_state, record, part = group.phase(
+    ckpt_dir, live, scalars, progress, user_header, train_state, record, part = group.phase(
         "collecting the live tensors", collect
     )
     name = os.path.basename(ckpt_dir)
@@ -291,6 +296,11 @@ def save(
     stats["collect_s"] = time.perf_counter() - t0
     group.agree("the checkpoint directory", name_hash(ckpt_dir))
     group.agree("overwrite", int(bool(overwrite)))
+    # The index holds one copy of the optimizer's scalars, rank 0's; a rank whose optimizer differs (or that has none)
+    # would load rank 0's steps and learning rates without a word. A param group's member list is per rank (a rank of
+    # a multi-mesh world holds its own parameters) and is merged instead.
+    group.agree("whether an optimizer is saved", int(optimizer is not None))
+    group.agree("the optimizer's scalars (steps, learning rates, ...)", progress)
     nonce = group.allgather(secrets.randbits(31))[0]
     staging = staging_dir(ckpt_dir, nonce)
 
@@ -328,8 +338,16 @@ def save(
             ]
             shared_state = dict(train_state)
             generators = shared_state.pop("rng", {})
+            # The header and the scheduler and dataloader state stored are rank 0's (the latter two agree, by hash).
+            first = group.is_coordinator
             result = ResultPart(
-                record, files, plan.entries(crcs), generators, plan.bytes_written, scalars, user_header, shared_state
+                record,
+                files,
+                plan.entries(crcs),
+                generators,
+                scalars,
+                user_header if first else {},
+                shared_state if first else {},
             )
             return plan, checked_payload(result.to_bytes(), "this rank's result part")
 

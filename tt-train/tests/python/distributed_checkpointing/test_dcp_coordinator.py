@@ -127,7 +127,6 @@ def _result(rank, files, entries, rng_text):
         files,
         entries,
         {"format": 1, "ranks": {str(rank): {"ttml": rng_text}}},
-        sum(f.nbytes for f in files),
         scalars={"optimizer/steps": 3} if rank == 0 else {},
         header={"step": 3} if rank == 0 else {},
         train_state={"scheduler": {"m_last_step": 3}} if rank == 0 else {},

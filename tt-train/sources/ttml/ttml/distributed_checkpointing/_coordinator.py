@@ -512,13 +512,13 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
 
 @dataclass
 class ResultPart:
-    """What one rank wrote: its files, its chunk records per key, its generators and its bytes."""
+    """What one rank wrote: its files, its chunk records per key, its generators and its optimizer scalars; on rank 0
+    also the user header and the scheduler and dataloader state, the one copy stored."""
 
     record: RankRecord
     files: list[FileRecord]
     entries: dict[str, Entry]
     rng: dict
-    bytes_written: int
     scalars: dict = field(default_factory=dict)
     header: dict = field(default_factory=dict)
     train_state: dict = field(default_factory=dict)
@@ -530,7 +530,6 @@ class ResultPart:
                 "files": [{"path": f.path, "nbytes": f.nbytes, "coord": list(f.coord)} for f in self.files],
                 "entries": {k: _entry_to_json(e) for k, e in self.entries.items()},
                 "rng": self.rng,
-                "bytes_written": self.bytes_written,
                 "scalars": self.scalars,
                 "header": self.header,
                 "train_state": self.train_state,
@@ -551,7 +550,6 @@ class ResultPart:
             files,
             entries,
             dict(value.get("rng", {})),
-            int(value.get("bytes_written", 0)),
             dict(value.get("scalars", {})),
             dict(value.get("header", {})),
             dict(value.get("train_state", {})),

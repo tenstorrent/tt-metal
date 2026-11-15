@@ -168,3 +168,20 @@ def test_a_rank_called_with_a_bad_argument_stops_every_rank(two_ranks, expect_er
     ttnn.distributed_context_barrier()
     assert not os.path.exists(os.path.join(root, "bad_argument"))
     ttnn.distributed_context_barrier()
+
+
+def test_ranks_whose_optimizers_differ_are_refused(two_ranks, expect_error):
+    """The index holds one copy of the optimizer's scalars, rank 0's. Ranks whose learning rates differ, or of which
+    one passes no optimizer, are refused on every rank, where each rank used to load rank 0's values silently."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "optimizers_differ")
+    if rank == 1:
+        opt.set_group_lrs([5e-4])
+    with expect_error(dcp.CheckpointError, r"the ranks disagree on the optimizer's scalars"):
+        dcp.save(path, model=model, optimizer=opt)
+    with expect_error(dcp.CheckpointError, r"the ranks disagree on whether an optimizer is saved"):
+        dcp.save(path, model=model, optimizer=opt if rank == 0 else None)
+    ttnn.distributed_context_barrier()
+    assert not os.path.exists(path) and not any(n.startswith("optimizers_differ.partial-") for n in os.listdir(root))
+    ttnn.distributed_context_barrier()
