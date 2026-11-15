@@ -7,8 +7,9 @@ MoE-LLaVA-Qwen-1.8B-4e Integration and Device PCC Tests
 Validates the MoE-LLaVA port with CPU integration tests and hardware-gated
 device PCC tests. CPU tests avoid downloading the full checkpoint:
 
-    1. ModelArgs reads the MoE config (num_experts, moe_layer_ids, use_hf_rope,
-       Qwen1's half-intermediate 5504) from Qwen1-1.8B-moe/config.json
+    1. ModelArgs reads the dense architecture (Qwen1's half-intermediate 5504)
+       and load_qwen_moe_config reads num_experts / moe_layer_ids / use_hf_rope
+       from Qwen1-1.8B-moe/config.json
     2. The checkpoint converter splits dense/MoE layers correctly
     3. extract_qwen_moe_state_dict_from_llava handles the real
        `transformer.*` checkpoint layout (vision tower / projector skipped)
@@ -26,11 +27,11 @@ Device tests cover the dense block, single MoE layer, full prefill, and decode
 PCC gates. They require a healthy n150 or n300 mesh.
 
 Usage:
-    python -m pytest models/demos/llava/tests/test_moe_llava.py -v
+    python -m pytest models/experimental/llava/tests/test_moe_llava.py -v
 
 Reference:
-    - models/demos/llava/tt/qwen1_moe_checkpoint.py
-    - models/demos/llava/tt/llm_wrapper.py (extract_qwen_moe_state_dict_from_llava)
+    - models/experimental/llava/tt/qwen1_moe_checkpoint.py
+    - models/experimental/llava/tt/llm_wrapper.py (extract_qwen_moe_state_dict_from_llava)
 """
 
 import os
@@ -41,11 +42,11 @@ import torch
 from loguru import logger
 
 # Compatibility shim for ttnn builds lacking ttnn.tools.trace_allocation_tracker
-import models.demos.llava.ttnn_tools_shim  # noqa: F401
-from models.demos.llava.tt.llava_model import build_moe_llava_prompt
-from models.demos.llava.tt.llm_wrapper import extract_qwen_moe_state_dict_from_llava
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta, qwen_mlp_to_meta
+import models.experimental.llava.ttnn_tools_shim  # noqa: F401
+from models.experimental.llava.tt.llava_model import build_moe_llava_prompt
+from models.experimental.llava.tt.llm_wrapper import extract_qwen_moe_state_dict_from_llava
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta, qwen_mlp_to_meta
 
 QWEN1_MOE_CONFIG_DIR = str(
     Path(__file__).resolve().parents[4] / "models" / "tt_transformers" / "model_params" / "Qwen1-1.8B-moe"
@@ -102,11 +103,32 @@ def _no_tokenizer(monkeypatch):
 
 
 def test_model_args_reads_moe_config(_no_tokenizer):
-    """ModelArgs must pick up MoE fields + Qwen1 quirks from Qwen1-1.8B-moe/config.json."""
+    """ModelArgs reads the dense architecture; load_qwen_moe_config reads the MoE fields.
+
+    tt_transformers ModelArgs on main does not parse num_experts / moe_layer_ids /
+    use_hf_rope from config.json, so the MoE-LLaVA wrapper reads them itself and
+    passes use_hf_rope into ModelArgs explicitly.
+    """
     os.environ["HF_MODEL"] = QWEN1_MOE_CONFIG_DIR
+    from models.experimental.llava.tt.llm_wrapper import load_qwen_moe_config
     from models.tt_transformers.tt.model_config import ModelArgs
 
-    args = ModelArgs(mesh_device=None, instruct=True, dummy_weights=False, max_batch_size=1, max_seq_len=1024)
+    moe_cfg = load_qwen_moe_config(QWEN1_MOE_CONFIG_DIR)
+    assert moe_cfg == {
+        "num_experts": NUM_EXPERTS,
+        "num_experts_per_tok": 2,
+        "moe_layer_ids": MOE_LAYER_IDS,
+        "use_hf_rope": True,
+    }
+
+    args = ModelArgs(
+        mesh_device=None,
+        instruct=True,
+        dummy_weights=False,
+        max_batch_size=1,
+        max_seq_len=1024,
+        use_hf_rope=moe_cfg["use_hf_rope"],
+    )
 
     # Architecture (matches LanguageBind/MoE-LLaVA-Qwen-1.8B-4e config.json)
     assert args.dim == 2048
@@ -121,11 +143,10 @@ def test_model_args_reads_moe_config(_no_tokenizer):
     # effective 5504 so args.hidden_dim matches the checkpoint weights.
     assert args.hidden_dim == I_HALF, "hidden_dim must be Qwen1's half-intermediate 5504"
 
-    # MoE fields (Phase 1.1 fix — previously lost in rebase)
-    assert args.is_mixture_of_experts is True
-    assert args.num_experts == NUM_EXPERTS
+    # The shared Mixtral MoE path must stay off: MoE is attached per layer by
+    # QwenMoeTransformerBlock (tt/qwen_moe_ffn.py).
+    assert not getattr(args, "is_mixture_of_experts", False)
     assert args.num_experts_per_tok == 2
-    assert args.moe_layer_ids == MOE_LAYER_IDS
 
     # Qwen1 weights stay in HF layout (converter does no QKV permute) → HF rope
     assert args.use_hf_rope is True
@@ -257,7 +278,7 @@ def test_qwen_swiglu_remap_numeric():
 
 
 def _make_llava_model(llava_state_dict, llm_backbone, tmp_path):
-    from models.demos.llava.tt.llava_model import LlavaModel
+    from models.experimental.llava.tt.llava_model import LlavaModel
 
     args = VisionModelArgs(mesh_device=None, max_batch_size=1, llm_backbone=llm_backbone)
     return LlavaModel(
@@ -336,7 +357,9 @@ def test_qwen_tokenizer_hub_load():
     """The Qwen1 tokenizer loads from the hub repo (remote code via Qwen/Qwen-1_8B) and round-trips."""
     from transformers import AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained("LanguageBind/MoE-LLaVA-Qwen-1.8B-4e", trust_remote_code=True)
+    from models.experimental.llava.hub_revisions import remote_code_kwargs
+
+    tok = AutoTokenizer.from_pretrained("LanguageBind/MoE-LLaVA-Qwen-1.8B-4e", **remote_code_kwargs())
     assert type(tok).__name__ == "QWenTokenizer"
     text = "A chat between a curious user and an artificial intelligence assistant."
     ids = tok(text, add_special_tokens=False)["input_ids"]
@@ -373,7 +396,9 @@ def _load_real_checkpoint():
 
     from huggingface_hub import snapshot_download
 
-    path = snapshot_download(MOE_LLAVA_CKPT, allow_patterns=["*.bin", "*.json", "qwen.tiktoken"])
+    from models.experimental.llava.hub_revisions import checkpoint_kwargs
+
+    path = snapshot_download(MOE_LLAVA_CKPT, allow_patterns=["*.bin", "*.json", "qwen.tiktoken"], **checkpoint_kwargs())
     sd = {}
     for f in sorted(glob.glob(f"{path}/pytorch_model*.bin")):
         sd.update(torch.load(f, map_location="cpu", weights_only=True))
@@ -381,22 +406,65 @@ def _load_real_checkpoint():
     return sd
 
 
-def _reference_logits(n_layers, tokens):
-    """Last-token logits from the CPU PyTorch reference, truncated to n_layers."""
-    from models.demos.llava.reference.qwen_moe_reference import load_model as load_moe_reference_model
+# The fp32 CPU reference of MoE-LLaVA-Qwen-1.8B-4e (~3B params incl. experts) needs ~12 GB of
+# host RAM on its own. CI VMs without that headroom were OOM-killed (exit 137), which takes the
+# whole pytest session down; skip with a clear reason instead.
+_REFERENCE_HOST_GB = 16
 
+
+def _available_host_gb():
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except OSError:
+        pass
+    return None
+
+
+def _require_reference_host_memory():
+    avail = _available_host_gb()
+    if avail is not None and avail < _REFERENCE_HOST_GB:
+        pytest.skip(f"CPU MoE reference needs ~{_REFERENCE_HOST_GB} GB free host RAM, only {avail:.1f} GB available")
+
+
+def _reference_logits(n_layers, token_batches, decode_step=False):
+    """Last-token logits from the CPU PyTorch reference, truncated to n_layers.
+
+    Takes a list of token tensors so one reference load serves several forwards. The
+    reference is freed before returning, so callers should run this BEFORE loading the
+    checkpoint for the device model to keep peak host memory to one copy of the weights.
+
+    With decode_step=True (single token batch), returns (next_token [1, 1], next_logits):
+    the greedy next token of the prompt and the logits after appending it.
+    """
+    import gc
+
+    from models.experimental.llava.reference.qwen_moe_reference import load_model as load_moe_reference_model
+
+    _require_reference_host_memory()
     model, _config = load_moe_reference_model(MOE_LLAVA_CKPT, dtype=torch.float32)
     if n_layers is not None and n_layers < len(model.transformer.h):
         model.transformer.h = model.transformer.h[:n_layers]
+    results = []
     with torch.no_grad():
-        out = model(input_ids=tokens)
-    return out.logits[0, -1, :].float()
+        for tokens in token_batches:
+            results.append(model(input_ids=tokens).logits[0, -1, :].float().clone())
+        if decode_step:
+            (prompt,) = token_batches
+            next_token = torch.argmax(results[0]).view(1, 1)
+            next_logits = model(input_ids=torch.cat([prompt, next_token], dim=1)).logits[0, -1, :].float().clone()
+            results = [next_token, next_logits]
+    del model
+    gc.collect()
+    return results
 
 
 def _device_prefill_logits(mesh_device, moe_sd, n_layers, tokens):
     """Build the TTNN Qwen1-MoE model and run chunked prefill; return host logits."""
     import ttnn
-    from models.demos.llava.tt.llm_wrapper import create_qwen_moe_llm
+    from models.experimental.llava.tt.llm_wrapper import create_qwen_moe_llm
 
     llm_dtype = ttnn.bfloat8_b
     tt_model, tt_model_args, tt_kv_cache, page_table = create_qwen_moe_llm(
@@ -516,9 +584,9 @@ def test_moe_llava_qwen_prefill_pcc(mesh_device):
 
     torch.manual_seed(0)
     tokens = torch.randint(1000, 100000, (1, _SEQ_LEN))
-    moe_sd = _load_real_checkpoint()
 
-    ref_logits = _reference_logits(None, tokens)
+    (ref_logits,) = _reference_logits(None, [tokens])  # before the checkpoint load: bounds peak host RAM
+    moe_sd = _load_real_checkpoint()
     tt_model, tt_kv_cache, _page_table, dev_logits = _device_prefill_logits(mesh_device, moe_sd, None, tokens)
     del tt_model, tt_kv_cache
 
@@ -537,13 +605,14 @@ def test_moe_llava_qwen_decode_pcc(mesh_device):
 
     torch.manual_seed(0)
     tokens = torch.randint(1000, 100000, (1, _SEQ_LEN))
+
+    # Take the decode token from the reference (not the device) so both reference forwards
+    # happen in one load, before the checkpoint is loaded for the device model.
+    next_token, ref_next = _reference_logits(None, [tokens], decode_step=True)
+
     moe_sd = _load_real_checkpoint()
-
-    tt_model, tt_kv_cache, page_table, prefill_logits = _device_prefill_logits(mesh_device, moe_sd, None, tokens)
-    next_token = torch.argmax(prefill_logits.flatten()).view(1, 1)
+    tt_model, tt_kv_cache, page_table, _prefill_logits = _device_prefill_logits(mesh_device, moe_sd, None, tokens)
     current_pos = torch.tensor([tokens.shape[1]], dtype=torch.int32)
-
-    ref_next = _reference_logits(None, torch.cat([tokens, next_token], dim=1))
     dev_next = _device_decode_logits(tt_model, tt_kv_cache, page_table, next_token, current_pos, mesh_device)
     del tt_model, tt_kv_cache
 
@@ -567,9 +636,9 @@ def test_moe_layer_single_block_pcc(mesh_device):
 
     torch.manual_seed(0)
     tokens = torch.randint(1000, 100000, (1, _SEQ_LEN))
-    moe_sd = _load_real_checkpoint()
 
-    ref_logits = _reference_logits(2, tokens)
+    (ref_logits,) = _reference_logits(2, [tokens])  # before the checkpoint load: bounds peak host RAM
+    moe_sd = _load_real_checkpoint()
     tt_model, tt_kv_cache, _page_table, dev_logits = _device_prefill_logits(mesh_device, moe_sd, 2, tokens)
     del tt_model, tt_kv_cache
 

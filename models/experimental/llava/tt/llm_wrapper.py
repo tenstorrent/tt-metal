@@ -286,7 +286,7 @@ def extract_qwen_moe_state_dict_from_llava(llava_state_dict, moe_layer_ids, n_la
     Returns:
         state_dict in Meta format (layers.*, embed_tokens, norm, lm_head)
     """
-    from models.demos.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta
+    from models.experimental.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta
 
     # Keep only the LLM keys (skip vision tower + projector), then hand a copy
     # to the converter (it consumes keys via pop()).
@@ -343,11 +343,12 @@ def create_qwen_moe_llm(
     n_layers=None,
 ):
     """
-    Create a TTNN Qwen1-MoE Transformer on n300 from MoE-LLaVA-Qwen-1.8B-4e weights.
+    Create a TTNN Qwen1-MoE Transformer on n150 or n300 from MoE-LLaVA-Qwen-1.8B-4e weights.
 
-    The MoE FFN is expert-parallel across the 2 n300 chips (2 experts per chip,
-    gate columns swapped so each chip's top-k sees its local experts first,
-    followed by a 2-chip all-reduce) — see models/tt_transformers/tt/mixtral_moe.py.
+    MoE layers use the LLaVA-local TtQwenMoeFFN (tt/qwen_moe_ffn.py), not the shared
+    Mixtral TtMoeLayer, which needs 8 devices and applies MoE to every layer.
+    Experts are split across chips (n300: 2 per chip, n150: all 4), then
+    all-reduced. Dense (odd) layers use the standard tt_transformers MLP.
     Attention/hidden stay tensor-parallel via ShardTensor2dMesh like the LLaMA path.
 
     Args:
@@ -364,42 +365,52 @@ def create_qwen_moe_llm(
     """
     import os
 
+    from models.experimental.llava.tt.qwen_moe_ffn import QwenMoeTransformerBlock, TtQwenMoeFFN
     from models.tt_transformers.tt.common import PagedAttentionConfig
     from models.tt_transformers.tt.model_config import ModelArgs
 
     # Set HF_MODEL to the Qwen1-MoE config directory
-    llava_config_dir = str(
+    llava_config_dir = (
         Path(__file__).resolve().parents[4] / "models" / "tt_transformers" / "model_params" / model_config
     )
-    os.environ["HF_MODEL"] = llava_config_dir
+    os.environ["HF_MODEL"] = str(llava_config_dir)
 
-    logger.info(f"Creating MoE-LLaVA Qwen LLM on n300 (config: {model_config})")
+    logger.info(f"Creating MoE-LLaVA Qwen LLM on {mesh_device.get_num_devices()} chip(s) (config: {model_config})")
 
-    # Create ModelArgs — reads MoE fields (num_experts, moe_layer_ids,
-    # use_hf_rope) from our Qwen1-1.8B-moe config.json
+    # ModelArgs does not read MoE fields or use_hf_rope from config.json, so read them here.
+    moe_cfg = load_qwen_moe_config(llava_config_dir)
+
+    # The Qwen1 checkpoint converter keeps Q/K in HF layout (no Meta permute), so HF RoPE is required.
     model_args = ModelArgs(
         mesh_device=mesh_device,
         instruct=True,
         dummy_weights=False,
         max_batch_size=1,
         max_seq_len=max_seq_len,
+        use_hf_rope=moe_cfg["use_hf_rope"],
     )
     if n_layers is not None and n_layers != model_args.n_layers:
         model_args.n_layers = n_layers
-        model_args.moe_layer_ids = [l for l in model_args.moe_layer_ids if l < n_layers]
+    moe_layer_ids = [l for l in moe_cfg["moe_layer_ids"] if l < model_args.n_layers]
 
-    # Verify the MoE config was loaded correctly
-    assert model_args.is_mixture_of_experts, "Qwen1-1.8B-moe config missing MoE fields"
-    assert model_args.num_experts == 4, f"Expected 4 experts, got {model_args.num_experts}"
-    assert model_args.moe_layer_ids == [
-        l for l in range(0, model_args.n_layers, 2)
-    ], f"Expected even MoE layers, got {model_args.moe_layer_ids}"
-    assert model_args.hidden_dim == 5504, f"Expected Qwen1 half-intermediate 5504, got {model_args.hidden_dim}"
+    # MoE is attached per layer by QwenMoeTransformerBlock. Leave the shared flag off so the
+    # base TransformerBlock never builds the Mixtral-only TtMoeLayer.
+    model_args.is_mixture_of_experts = False
+    model_args.qwen_moe_layer_ids = moe_layer_ids
+    model_args.qwen_num_experts = moe_cfg["num_experts"]
+    model_args.qwen_num_experts_per_tok = moe_cfg["num_experts_per_tok"]
+
+    if moe_cfg["num_experts"] % model_args.num_devices != 0:
+        raise ValueError(
+            f"{moe_cfg['num_experts']} experts cannot be split evenly across {model_args.num_devices} devices"
+        )
+    if model_args.hidden_dim != 5504:
+        raise ValueError(f"Expected Qwen1 half-intermediate 5504, got {model_args.hidden_dim}")
 
     # Extract and convert the Qwen1 MoE weights to Meta format
     state_dict = extract_qwen_moe_state_dict_from_llava(
         moe_llava_state_dict,
-        moe_layer_ids=model_args.moe_layer_ids,
+        moe_layer_ids=moe_layer_ids,
         n_layers=model_args.n_layers,
         num_heads=model_args.n_heads,
         head_dim=model_args.head_dim,
@@ -417,15 +428,13 @@ def create_qwen_moe_llm(
         state_dict=state_dict,
         weight_cache_path=weight_cache_path,
         paged_attention_config=paged_attention_config,
+        block_class=QwenMoeTransformerBlock,
     )
 
     # Sanity-check the per-layer MoE/dense split actually built
-    from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
-
-    moe_layers = [l for l in model.layers if isinstance(l.feed_forward, TtMoeLayer)]
-    assert len(moe_layers) == len(
-        model_args.moe_layer_ids
-    ), f"Expected {len(model_args.moe_layer_ids)} MoE layers, built {len(moe_layers)}"
+    moe_layers = [l for l in model.layers if isinstance(l.feed_forward, TtQwenMoeFFN)]
+    if len(moe_layers) != len(moe_layer_ids):
+        raise RuntimeError(f"Expected {len(moe_layer_ids)} MoE layers, built {len(moe_layers)}")
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers]
     page_table = torch.arange(0, paged_attention_config.max_num_blocks, dtype=torch.int32).unsqueeze(0)
@@ -434,6 +443,39 @@ def create_qwen_moe_llm(
         f"MoE-LLaVA Qwen LLM created: {model_args.n_layers} layers "
         f"({len(moe_layers)} MoE), dim={model_args.dim}, hidden={model_args.hidden_dim}"
     )
-    logger.info(f"Expert parallelism: {model_args.num_experts} experts / {model_args.num_devices} chips")
+    logger.info(f"Expert parallelism: {model_args.qwen_num_experts} experts / {model_args.num_devices} chip(s)")
 
     return model, model_args, tt_kv_cache, page_table
+
+
+def load_qwen_moe_config(config_dir):
+    """Read the MoE-specific fields of a Qwen1-MoE config.json.
+
+    tt_transformers ModelArgs ignores these keys, so MoE-LLaVA reads them itself.
+    Validates them against the MoE-LLaVA-Qwen-1.8B-4e layout instead of assuming it.
+    """
+    import json
+
+    with open(Path(config_dir) / "config.json") as f:
+        cfg = json.load(f)
+
+    num_layers = cfg["num_hidden_layers"]
+    num_experts = cfg.get("num_experts", cfg.get("num_local_experts"))
+    if not num_experts:
+        raise ValueError(f"{config_dir}/config.json has no num_experts / num_local_experts")
+    num_experts_per_tok = cfg.get("num_experts_per_tok", 2)
+
+    moe_layer_ids = cfg.get("moe_layer_ids")
+    if moe_layer_ids is None:
+        step = cfg.get("decoder_sparse_step", 1)
+        moe_layer_ids = list(range(0, num_layers, step))
+    moe_layer_ids = sorted(int(l) for l in moe_layer_ids)
+    if any(l < 0 or l >= num_layers for l in moe_layer_ids):
+        raise ValueError(f"moe_layer_ids {moe_layer_ids} out of range for {num_layers} layers")
+
+    return {
+        "num_experts": int(num_experts),
+        "num_experts_per_tok": int(num_experts_per_tok),
+        "moe_layer_ids": moe_layer_ids,
+        "use_hf_rope": bool(cfg.get("use_hf_rope", False)),
+    }

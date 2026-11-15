@@ -16,10 +16,10 @@ arithmetic), tests focus on:
     5. Single-chip (n150) and dual-chip (n300) compatibility
 
 Usage:
-    scripts/run_safe_pytest.sh models/demos/llava/tests/test_token_handlers.py -v
+    scripts/run_safe_pytest.sh models/experimental/llava/tests/test_token_handlers.py -v
 
 Reference:
-    - models/demos/llava/tests/test_vision_encoders.py (test patterns)
+    - models/experimental/llava/tests/test_vision_encoders.py (test patterns)
     - LLaVA/llava/model/llava_arch.py:prepare_inputs_labels_for_multimodal
 """
 
@@ -28,9 +28,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.llava.reference.llava_reference import StandardInterleaver as PyTorchInterleaver
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.token_handlers.standard_interleaver import StandardInterleaver as TTNNInterleaver
+from models.experimental.llava.reference.llava_reference import StandardInterleaver as PyTorchInterleaver
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.token_handlers.standard_interleaver import StandardInterleaver as TTNNInterleaver
 
 IMAGE_TOKEN_INDEX = -200
 IGNORE_INDEX = -100
@@ -239,7 +239,7 @@ def test_interleaver_multi_image(mesh_device):
     # Input: [t1, <image>, t2, <image>, t3]
     input_ids = torch.tensor([[100, IMAGE_TOKEN_INDEX, 101, IMAGE_TOKEN_INDEX, 102]])
     text_embeds = torch.randn(1, 5, HIDDEN_SIZE)
-    image_features = torch.randn(1, NUM_PATCHES, HIDDEN_SIZE)  # Same features for both
+    image_features = torch.randn(2, NUM_PATCHES, HIDDEN_SIZE)  # One feature block per <image>
 
     ttnn_interleaver = TTNNInterleaver(args)
     result = ttnn_interleaver(input_ids, text_embeds, image_features)
@@ -259,7 +259,39 @@ def test_interleaver_multi_image(mesh_device):
     assert torch.allclose(output[0, 577, :].float(), text_embeds[0, 2, :], atol=0.05), "t2 mismatch"
     assert torch.allclose(output[0, 1154, :].float(), text_embeds[0, 4, :], atol=0.05), "t3 mismatch"
 
+    # Each <image> must receive its own features, in order
+    assert torch.allclose(output[0, 1:577, :].float(), image_features[0], atol=0.05), "image 0 misplaced"
+    assert torch.allclose(output[0, 578:1154, :].float(), image_features[1], atol=0.05), "image 1 misplaced"
+
     logger.info("✅ Multi-image test passed!")
+
+
+def test_interleaver_batched_rows_use_distinct_images():
+    """Regression: each batch row gets its own image (the index used to restart at 0 per row)."""
+    from types import SimpleNamespace
+
+    hidden = 8
+    patches = 3
+    interleaver = TTNNInterleaver(SimpleNamespace(mesh_device=None))
+
+    input_ids = torch.tensor([[IMAGE_TOKEN_INDEX, 100], [IMAGE_TOKEN_INDEX, 101]])
+    text_embeds = torch.randn(2, 2, hidden)
+    image_features = torch.stack([torch.full((patches, hidden), 1.0), torch.full((patches, hidden), 2.0)])
+
+    embeds, _mask, _pos, _labels = interleaver._interleave_host(input_ids, text_embeds, image_features)
+
+    assert torch.equal(embeds[0, :patches], image_features[0]), "row 0 should get image 0"
+    assert torch.equal(embeds[1, :patches], image_features[1]), "row 1 should get image 1, not image 0"
+
+
+def test_interleaver_rejects_missing_image_features(expect_error):
+    """More <image> tokens than features must fail loudly instead of reusing the last image."""
+    from types import SimpleNamespace
+
+    interleaver = TTNNInterleaver(SimpleNamespace(mesh_device=None))
+    input_ids = torch.tensor([[IMAGE_TOKEN_INDEX, 100, IMAGE_TOKEN_INDEX]])
+    with expect_error(ValueError, "more image tokens than image features"):
+        interleaver._interleave_host(input_ids, torch.randn(1, 3, 8), torch.randn(1, 3, 8))
 
 
 @pytest.mark.parametrize(
@@ -353,4 +385,4 @@ def test_interleaver_single_chip(mesh_device):
 if __name__ == "__main__":
     logger.info("Token Handler Tests - Direct execution mode")
     logger.info("For proper testing, use pytest:")
-    logger.info("  scripts/run_safe_pytest.sh models/demos/llava/tests/test_token_handlers.py -v")
+    logger.info("  scripts/run_safe_pytest.sh models/experimental/llava/tests/test_token_handlers.py -v")

@@ -539,14 +539,16 @@ class StandardInterleaver(nn.Module):
 
         label_dtype = labels_list[0].dtype if labels_list is not None else torch.long
 
-        # Handle single image_features tensor [B, num_patches, hidden_size]
-        # Convert to list of per-batch features
+        # image_features: [num_images, num_patches, hidden_size] -> list per image. Images are
+        # consumed in order across ALL batch rows (LLaVA's cur_image_idx in
+        # prepare_inputs_labels_for_multimodal), so the leading dim is the image count.
         if isinstance(image_features, torch.Tensor) and image_features.dim() == 3:
-            image_features_list = [image_features[i] for i in range(batch_size)]
+            image_features_list = [image_features[i] for i in range(image_features.shape[0])]
         elif isinstance(image_features, list):
             image_features_list = image_features
         else:
             image_features_list = [image_features]
+        cur_image_idx = 0
 
         new_input_embeds = []
         new_labels = []
@@ -596,11 +598,13 @@ class StandardInterleaver(nn.Module):
 
                 # Add image features (if not last segment)
                 if i < num_images:
-                    img_idx = i  # Assume images are in order
-                    if img_idx < len(image_features_list):
-                        img_feat = image_features_list[img_idx]
-                    else:
-                        img_feat = image_features_list[0]  # fallback
+                    if cur_image_idx >= len(image_features_list):
+                        raise ValueError(
+                            f"Found more image tokens than image features ({len(image_features_list)}) "
+                            f"at batch row {batch_idx}"
+                        )
+                    img_feat = image_features_list[cur_image_idx]
+                    cur_image_idx += 1
                     cur_new_embeds.append(img_feat)
                     if labels_list is not None:
                         # Image positions get IGNORE_INDEX

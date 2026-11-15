@@ -18,16 +18,16 @@ The LLM runs on CPU using Qwen2-1.5B-Instruct (non-gated, ~3GB).
 
 Usage:
     # Recommended: use wrapper script (handles env setup automatically)
-    bash models/demos/llava/run_demo.sh --image /path/to/image.jpg --question "What color is the sky?"
+    bash models/experimental/llava/run_demo.sh --image /path/to/image.jpg --question "What color is the sky?"
 
     # Direct: from tt-metal root
-    MESH_DEVICE=N300 python models/demos/llava/demo/demo_llava_full.py
+    MESH_DEVICE=N300 python models/experimental/llava/demo/demo_llava_full.py
 
     # Direct: from anywhere (script auto-configures environment)
-    python /path/to/tt-metal/models/demos/llava/demo/demo_llava_full.py --image img.jpg
+    python /path/to/tt-metal/models/experimental/llava/demo/demo_llava_full.py --image img.jpg
 
     # On n150 (single chip)
-    MESH_DEVICE=N150 python models/demos/llava/demo/demo_llava_full.py
+    MESH_DEVICE=N150 python models/experimental/llava/demo/demo_llava_full.py
 """
 
 import atexit
@@ -39,9 +39,9 @@ from pathlib import Path
 # Environment Bootstrap — allows running from any directory without manual setup
 # =============================================================================
 _SCRIPT_DIR = Path(__file__).resolve().parent
-_TT_METAL_ROOT = _SCRIPT_DIR.parents[3]  # demo/ -> llava/ -> demos/ -> models/ -> tt-metal/
+_TT_METAL_ROOT = _SCRIPT_DIR.parents[3]  # demo/ -> llava/ -> experimental/ -> models/ -> tt-metal/
 
-# Add tt-metal root to sys.path so `from models.demos...` works
+# Add tt-metal root to sys.path so `from models.experimental...` works
 if str(_TT_METAL_ROOT) not in sys.path:
     sys.path.insert(0, str(_TT_METAL_ROOT))
 
@@ -89,16 +89,16 @@ import torch
 from loguru import logger
 
 # Compatibility shim for ttnn builds lacking ttnn.tools.trace_allocation_tracker
-# (see models/demos/llava/ttnn_tools_shim.py; a no-op unless trace-alloc
+# (see models/experimental/llava/ttnn_tools_shim.py; a no-op unless trace-alloc
 # tracking is explicitly enabled).
-import models.demos.llava.ttnn_tools_shim  # noqa: F401
+import models.experimental.llava.ttnn_tools_shim  # noqa: F401
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.llava.demo.demo_utils import download_sample_image, preprocess_image
-from models.demos.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
-from models.demos.llava.tt.llava_model import enable_fabric_if_needed, release_mesh_device
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
+from models.experimental.llava.demo.demo_utils import download_sample_image, preprocess_image
+from models.experimental.llava.reference.llava_reference import create_clip_encoder as create_clip_encoder_pytorch
+from models.experimental.llava.tt.llava_model import enable_fabric_if_needed, release_mesh_device
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.vision_encoders.clip_encoder import create_clip_encoder as create_clip_encoder_ttnn
 
 IMAGE_TOKEN_INDEX = -200
 
@@ -194,7 +194,11 @@ def load_moe_llava_model(model_name="LanguageBind/MoE-LLaVA-Qwen-1.8B-4e"):
 
     logger.info(f"Loading MoE-LLaVA model: {model_name}")
 
-    model_path = snapshot_download(model_name, allow_patterns=["*.bin", "*.json", "qwen.tiktoken"])
+    from models.experimental.llava.hub_revisions import checkpoint_kwargs, remote_code_kwargs
+
+    model_path = snapshot_download(
+        model_name, allow_patterns=["*.bin", "*.json", "qwen.tiktoken"], **checkpoint_kwargs()
+    )
 
     # Load all pytorch_model-*.bin shards (this checkpoint has no safetensors)
     bin_files = sorted(glob.glob(f"{model_path}/pytorch_model*.bin"))
@@ -202,10 +206,15 @@ def load_moe_llava_model(model_name="LanguageBind/MoE-LLaVA-Qwen-1.8B-4e"):
     state_dict = {}
     if bin_files:
         for f in bin_files:
+            # weights_only=True only: never fall back to full unpickling, which can execute
+            # arbitrary code from a tampered checkpoint.
             try:
                 sd = torch.load(f, map_location="cpu", weights_only=True)
-            except Exception:
-                sd = torch.load(f, map_location="cpu", weights_only=False)
+            except Exception as e:
+                raise RuntimeError(
+                    f"{os.path.basename(f)} cannot be loaded with torch.load(weights_only=True). "
+                    "Refusing to unpickle it with weights_only=False."
+                ) from e
             state_dict.update(sd)
             logger.info(f"  Loaded {len(sd)} weights from {os.path.basename(f)}")
     else:
@@ -216,7 +225,7 @@ def load_moe_llava_model(model_name="LanguageBind/MoE-LLaVA-Qwen-1.8B-4e"):
 
     # Qwen1 tokenizer from the hub (remote code via Qwen/Qwen-1_8B; qwen.tiktoken
     # vocab comes with the snapshot download above)
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, **remote_code_kwargs())
 
     # Extract projector weights (transformer.mm_projector.image_spatial_proj.*)
     proj_sd = {
@@ -393,7 +402,7 @@ def run_full_demo(
     }
 
     # Create TTNN projector (runs on n300)
-    from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+    from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
 
     ttnn_projector = create_mlp_projector_ttnn(
         args=args,
@@ -488,7 +497,8 @@ def run_full_demo(
             pad_token_id=tokenizer.eos_token_id,
         )
 
-    # Decode generated text (skip the input tokens)
+    # Decode generated text (skip the input tokens). input_ids is passed alongside inputs_embeds
+    # here, so generate() returns prompt + new tokens and the prompt prefix must be sliced off.
     generated_tokens = output_ids[0][total_len:]
     generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
@@ -527,7 +537,7 @@ def run_full_demo_ttnn_llm(
     """
     Run LLaVA demo with ALL components on n300 using load/unload pattern.
 
-    Thin wrapper around ``LlavaModel`` (see ``models/demos/llava/tt/llava_model.py``)
+    Thin wrapper around ``LlavaModel`` (see ``models/experimental/llava/tt/llava_model.py``)
     which encapsulates the full pipeline:
         CLIP (TTNN) → Projector (TTNN) → Interleaver (host) → LLM (TTNN)
 
@@ -555,7 +565,7 @@ def run_full_demo_ttnn_llm(
     Returns:
         Generated text
     """
-    from models.demos.llava.tt.llava_model import LlavaModel
+    from models.experimental.llava.tt.llava_model import LlavaModel
 
     logger.info("=" * 80)
     logger.info(f"LLaVA Full Demo - ALL ON n300 (load/unload pattern, {llm_backbone})")
@@ -687,7 +697,7 @@ def run_full_demo_moe(
     logger.info(f"  CLIP output: {clip_features.shape}  (PCC: {pcc:.4f})")
 
     # Step 2: TTNN MLP projector (trained weights, 1024 → 2048 → 2048)
-    from models.demos.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
+    from models.experimental.llava.tt.projectors.mlp_projector import create_mlp_projector as create_mlp_projector_ttnn
 
     proj_sd = {
         "mm_projector.0.weight": projector.linear_1.weight.data,
@@ -701,7 +711,7 @@ def run_full_demo_moe(
     logger.info(f"  Projector output: {projected.shape}  (on device)")
 
     # Step 3: Tokenize with the MoE-LLaVA phi-style conversation template and interleave
-    from models.demos.llava.tt.llava_model import build_moe_llava_prompt
+    from models.experimental.llava.tt.llava_model import build_moe_llava_prompt
 
     prompt_text = build_moe_llava_prompt(question)
     text_parts = prompt_text.split("<image>")
@@ -714,7 +724,7 @@ def run_full_demo_moe(
     logger.info(f"  Prompt tokens: {input_ids.shape[1]} (includes 576 image placeholders)")
 
     # Step 4: Load MoE-LLaVA on CPU (DeepSpeed stubbed out — pure top-2 routing)
-    from models.demos.llava.reference.qwen_moe_reference import load_model as load_moe_reference_model
+    from models.experimental.llava.reference.qwen_moe_reference import load_model as load_moe_reference_model
 
     logger.info("Loading MoE-LLaVA-Qwen-1.8B-4e on CPU (DeepSpeed-stubbed reference)...")
     cpu_llm, moe_config = load_moe_reference_model("LanguageBind/MoE-LLaVA-Qwen-1.8B-4e", dtype=torch.float32)
@@ -723,8 +733,10 @@ def run_full_demo_moe(
     with torch.no_grad():
         all_embeds = cpu_llm.transformer.wte(input_ids)
     input_embeds = all_embeds.clone()
-    placeholder_indices = torch.where(input_ids[0] == PLACEHOLDER_ID)[0][:576]
-    input_embeds[0, placeholder_indices, :] = projected[0].to(input_embeds.dtype)
+    # Image block starts right after the text before <image>. Use the explicit offset: matching
+    # PLACEHOLDER_ID would also hit any real token 0 in the text.
+    image_start = ids_before.shape[1]
+    input_embeds[0, image_start : image_start + 576, :] = projected[0].to(input_embeds.dtype)
 
     attention_mask = torch.ones(1, input_embeds.shape[1], dtype=torch.long)
     total_len = input_embeds.shape[1]
@@ -740,8 +752,12 @@ def run_full_demo_moe(
             pad_token_id=tokenizer.eos_token_id,
         )
 
-    generated_tokens = output_ids[0][total_len:]
+    # generate() called with inputs_embeds only (no input_ids) returns just the new tokens,
+    # so there is no prompt prefix to slice off. Slicing by total_len discarded the response.
+    generated_tokens = output_ids[0]
     generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+    if not generated_text.strip():
+        raise RuntimeError("CPU MoE-LLaVA produced an empty response")
 
     logger.info("\n" + "=" * 80)
     logger.info("Multimodal Response (TTNN vision + CPU MoE-LLaVA):")

@@ -13,7 +13,7 @@ the SigLIP code itself succeeds once the device is responsive.
 
 Usage:
     source <path to llava_env.sh>
-    MESH_DEVICE=N300 python models/demos/llava/tests/siglip_shape_smoke.py
+    MESH_DEVICE=N300 python models/experimental/llava/tests/siglip_shape_smoke.py
 """
 
 import sys
@@ -23,9 +23,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.llava.reference.llava_reference import create_siglip_encoder as create_siglip_encoder_pytorch
-from models.demos.llava.tt.model_config import VisionModelArgs
-from models.demos.llava.tt.vision_encoders.siglip_encoder import create_siglip_encoder as create_siglip_encoder_ttnn
+from models.experimental.llava.reference.llava_reference import create_siglip_encoder as create_siglip_encoder_pytorch
+from models.experimental.llava.tt.model_config import VisionModelArgs
+from models.experimental.llava.tt.vision_encoders.siglip_encoder import (
+    create_siglip_encoder as create_siglip_encoder_ttnn,
+)
 
 
 def main():

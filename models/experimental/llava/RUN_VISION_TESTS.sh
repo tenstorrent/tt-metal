@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # LLaVA CLIP Encoder Test Runner
 # Run this after tt-metal build completes successfully
 #
@@ -76,7 +80,7 @@ echo "  TT_METAL_HOME: $TT_METAL_HOME"
 echo "  MESH_DEVICE: $MESH_DEVICE"
 echo ""
 
-set -e  # Exit on error (disabled inside run_test for exit code capture)
+set -eo pipefail  # Exit on error (disabled inside run_test for exit code capture)
 
 # Navigate to tt-metal directory
 cd "$TT_METAL_ROOT"
@@ -87,23 +91,27 @@ cd "$TT_METAL_ROOT"
 echo "Preparing device for testing..."
 echo ""
 
-echo "⚙️  Resetting n300 device..."
-if tt-smi -r --no_reinit; then
-    echo "✅ Device reset complete"
-else
-    echo "⚠️  Device reset command failed, continuing anyway..."
+echo ""
+# Device reset and kernel-cache clearing are opt-in (they affect the whole machine):
+#   LLAVA_RESET_DEVICE=1        run `tt-smi -r --no_reinit` before the tests
+#   LLAVA_CLEAR_KERNEL_CACHE=1  delete ~/.cache/tt-metal-cache/ before the tests
+if [ "${LLAVA_RESET_DEVICE:-0}" = "1" ]; then
+    echo "⚙️  Resetting device (LLAVA_RESET_DEVICE=1)..."
+    if tt-smi -r --no_reinit; then
+        echo "✅ Device reset complete"
+    else
+        echo "⚠️  Device reset command failed, continuing anyway..."
+    fi
+    sleep 2
+    echo ""
 fi
-sleep 2
 
-echo ""
-echo "⚙️  Clearing kernel cache for fresh JIT compilation..."
-if [ -d ~/.cache/tt-metal-cache/ ]; then
-    rm -rf ~/.cache/tt-metal-cache/
+if [ "${LLAVA_CLEAR_KERNEL_CACHE:-0}" = "1" ] && [ -d "$HOME/.cache/tt-metal-cache" ]; then
+    echo "⚙️  Clearing kernel cache (LLAVA_CLEAR_KERNEL_CACHE=1)..."
+    rm -rf -- "$HOME/.cache/tt-metal-cache"
     echo "✅ Cache cleared"
-else
-    echo "ℹ️  Cache directory doesn't exist (fresh state)"
+    echo ""
 fi
-echo ""
 
 echo "============================================"
 echo ""
@@ -137,7 +145,7 @@ echo "Test 1/4: Output Shape Validation"
 echo "This test verifies the encoder produces correct output dimensions"
 echo ""
 run_test "Shape Test" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_output_shape" || {
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_output_shape" || {
     echo "⚠️  Shape test failed. This is critical - debug before continuing."
     exit 1
 }
@@ -148,7 +156,7 @@ echo "This test compares TTNN output vs PyTorch reference"
 echo "Target: PCC >= 0.90"
 echo ""
 run_test "PCC Test" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc" || {
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_pcc" || {
     echo "⚠️  PCC test failed. This may require iteration."
     echo "   - Check PCC value in output"
     echo "   - If PCC < 0.90, debug QuickGELU or attention"
@@ -160,7 +168,7 @@ echo "Test 3/4: Determinism Validation"
 echo "This test verifies reproducibility (same input → same output)"
 echo ""
 run_test "Determinism Test" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_deterministic" || {
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_deterministic" || {
     echo "⚠️  Determinism test failed. Check for random operations."
 }
 
@@ -170,7 +178,7 @@ echo "This test verifies encoder works on single-chip n150"
 echo ""
 export MESH_DEVICE=N150
 run_test "Single Chip Test" \
-  "models/demos/llava/tests/test_vision_encoders.py::test_clip_encoder_single_chip" || {
+  "models/experimental/llava/tests/test_vision_encoders.py::test_clip_encoder_single_chip" || {
     echo "⚠️  Single chip test failed. Check tensor replication logic."
 }
 

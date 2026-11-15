@@ -251,8 +251,8 @@ def demo_roundtrip_smoke_test():
     num_heads=8, 1 MoE layer with 2 experts, 1 dense layer), runs the converter,
     and asserts every Meta-format key exists with the expected shape.
 
-    Run as `python -m models.demos.llava.tt.qwen1_moe_checkpoint` or directly:
-        python models/demos/llava/tt/qwen1_moe_checkpoint.py
+    Run as `python -m models.experimental.llava.tt.qwen1_moe_checkpoint` or directly:
+        python models/experimental/llava/tt/qwen1_moe_checkpoint.py
     """
     H = 64
     n_layers = 2
