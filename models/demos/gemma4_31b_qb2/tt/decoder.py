@@ -150,6 +150,7 @@ class Decoder:
             if q <= (128 if self.sliding else 256)
         }
         self.pref_sdpa_selections = {}
+        self.pref_weights = {}  # the interleaved prefill weights shared by the chunks of one prefill_forward call
         prefix = f"model.language_model.layers.{layer_idx}."
         sd = {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
         if not sd:
@@ -538,8 +539,9 @@ class Decoder:
     def _pref_linear(self, x, name, activation=None, weight=None):
         import math
 
-        owned = weight is None
-        weight = self._prefill_weight(name) if owned else weight
+        shared = weight is None and name in self.pref_weights
+        owned = weight is None and not shared
+        weight = self.pref_weights[name] if shared else self._prefill_weight(name) if owned else weight
         grid = (8, 8) if self.sliding and name in ("qkv", "qk") else (11, 8) if self.sliding else (11, 10)
         wide_qkv = (
             self.sliding
@@ -691,11 +693,13 @@ class Decoder:
 
     def _prefill_mlp(self, x):
         n = self._input_norm(x, "pre_feedforward_layernorm", False)
-        gate_w, up_w = self._prefill_weight("gate_up")
+        shared = "gate_up" in self.pref_weights
+        gate_w, up_w = self.pref_weights["gate_up"] if shared else self._prefill_weight("gate_up")
         gate = self._pref_linear(n, "gate", "gelu_tanh", weight=gate_w)
         up = self._pref_linear(n, "up", weight=up_w)
-        ttnn.deallocate(gate_w)
-        ttnn.deallocate(up_w)
+        if not shared:
+            ttnn.deallocate(gate_w)
+            ttnn.deallocate(up_w)
         del n
         product = ttnn.multiply(gate, up)
         del gate, up
@@ -905,7 +909,24 @@ class Decoder:
             chunks.append(dict(fill=fill, start=chunk_start))
         return chunks
 
-    def prefill_forward(
+    def prefill_forward(self, x, **kwargs):
+        """Prefill a page-aligned span (see _prefill_chunks). A span of several chunks rebuilds the layer's interleaved
+        prefill weights once and shares them between its chunks (they are the same values for every chunk)."""
+        self.pref_weights = self._rebuild_weights_once(x.shape[0] * -(-x.shape[2] // self.PREFILL_CHUNK))
+        try:
+            return self._prefill_chunks(x, **kwargs)
+        finally:
+            for weight in self.pref_weights.values():
+                for part in weight if isinstance(weight, tuple) else (weight,):
+                    ttnn.deallocate(part)
+            self.pref_weights = {}
+
+    def _rebuild_weights_once(self, chunks):
+        if chunks < 2:
+            return {}
+        return {name: self._prefill_weight(name) for name in ("qkv" if self.sliding else "qk", "o", "gate_up", "down")}
+
+    def _prefill_chunks(
         self,
         x,
         *,
