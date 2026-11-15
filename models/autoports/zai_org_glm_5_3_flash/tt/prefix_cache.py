@@ -164,6 +164,9 @@ class Entry:
     #: a longer snapshot of the same prompt chain exists (the request that attached this entry snapshotted past it:
     #: a conversation's previous turn). Evicted first, never spilled -- the next turn resumes from the longer one
     dominated: bool = False
+    #: GLM53_STACK_PREFIX_KEEP_PREV: a superseded snapshot kept for a turn that rewrites its successor's tail. The next
+    #: device victim after the dominated ones; spilled to the host tier only from ``PrefixStore.keep_prev_min`` tokens
+    kept_prev: bool = False
     tick: int = 0  # LRU
     created: float = field(default_factory=time.time)
 
@@ -189,6 +192,8 @@ class PrefixStore:
         #: the host tier takes an evicted device entry only from this many tokens on (a shorter one re-prefills in about
         #: the time its export + import take); 0: every entry
         self.spill_min = 0
+        #: a kept_prev entry evicted from the device is spilled only from this many tokens on (else dropped)
+        self.keep_prev_min = 0
         self._tick = 0
         self.stats = {k: 0 for k in ("registered", "hits", "misses", "attached", "evicted_device", "evicted_host",
                                      "spilled", "invalidated", "trailing_snapshots", "trailing_committed",
@@ -243,12 +248,13 @@ class PrefixStore:
         return self.free_device.pop(0)
 
     def _device_victim(self) -> Optional["Entry"]:
-        """the device entry to give up: an unread dominated one first (oldest first), else the least recently used
-        unread one (``entries`` keeps LRU order: attach / register move an entry to the end)"""
+        """the device entry to give up: an unread dominated one first (oldest first), then an unread kept_prev one,
+        else the least recently used unread one (``entries`` keeps LRU order: attach / register move an entry to the
+        end)"""
         cand = [e for e in self.entries.values() if e.tier == "device" and e.readers == 0]
         if not cand:
             return None
-        return next((e for e in cand if e.dominated), cand[0])
+        return next((e for e in cand if e.dominated), None) or next((e for e in cand if e.kept_prev), cand[0])
 
     def dominate(self, key: str) -> bool:
         """a longer snapshot of `key`'s prompt chain now exists (the request that attached it snapshotted past it): the
@@ -269,8 +275,9 @@ class PrefixStore:
         unless it is dominated (a longer snapshot of its prompt exists) or shorter than ``spill_min`` tokens."""
         if self.host_bytes <= 0 or self.spill_fn is None:
             return False
-        if victim.dominated or victim.n_tokens < self.spill_min:
-            k = "dropped_dominated" if victim.dominated else "dropped_short"
+        short_kept = victim.kept_prev and victim.n_tokens < self.keep_prev_min
+        if victim.dominated or victim.n_tokens < self.spill_min or short_kept:
+            k = "dropped_dominated" if victim.dominated else "dropped_short" if not short_kept else "dropped_kept_prev"
             self.stats[k] = self.stats.get(k, 0) + 1
             return False
         try:
@@ -287,6 +294,8 @@ class PrefixStore:
         except ValueError:  # the host tier cannot take it (too small / full of entries with readers)
             self.stats["spill_failed"] = self.stats.get("spill_failed", 0) + 1
             return False
+        if victim.kept_prev:
+            self.stats["spilled_kept_prev"] = self.stats.get("spilled_kept_prev", 0) + 1
         return True
 
     def unreserve(self, entry: int) -> None:

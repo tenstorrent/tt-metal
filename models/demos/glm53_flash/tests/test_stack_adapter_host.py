@@ -1163,6 +1163,25 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     assert pc.exact_splits([512], [600]) == {} and pc.exact_splits([512], [700]) == {0: 640}
     pc.exact_min = 256
     assert pc.exact_splits([512], [700]) == {}  # 640 gains 128 < 256 over the grid snapshot at 512
+    # F44 (GLM53_STACK_PREFIX_EXACT_UNCUT, default on): a last chunk the scheduler leaves uncut across the grid
+    # ([384, 700) over 512) has no snapshot at 512 -- the gain is measured over its start (640 - 384 = 256: split);
+    # the pre-F44 rule (over 512: 128 < 256) left that turn without any snapshot
+    assert pc.exact_splits([384], [700]) == {0: 640} and pc.stats["exact_uncut_splits"] == 1
+    pc.exact_uncut = False
+    assert pc.exact_splits([384], [700]) == {} and pc.stats["exact_uncut_splits"] == 1
+    pc.exact_uncut = True
+    # ... end to end: G's chunks [0, 384) (snapshot at 384) and the uncut [384, 700) -> split at 640, snapshot there;
+    #     G's next turn resumes at 640 (pre-F44: at 384)
+    gp = _prompt(700, 37)
+    row_g = [1 + 16 + j for j in range(-(-len(gp) // BLOCK_SIZE))]  # unused blocks of request 0's pool
+    n = len(backend.state_io)
+    first_g = _prefill_steps(ad, kv, gp, row_g, slot=3, ends=[384, len(gp)])
+    g = ad._alias[3]
+    assert [r[1] for r in backend.state_io[n:]] == [0, 384, 640]
+    assert [r[3] is not None for r in backend.state_io[n:]] == [True, True, False]  # snapshots at 384 and 640
+    assert kv.state[g] == gp and first_g == (gp[-1] + 1) % VOCAB and pc.stats["exact_uncut_splits"] == 2
+    ad.release_request(3)
+    assert ad.confirm_prefix_cache_hit(gp + _prompt(30, 95), [], 640) == 640
 
 
 class _MockHostTierBackend(_MockPrefixBackend):
@@ -1257,6 +1276,55 @@ def test_prefix_cache_host_tier_spill_restore_and_dominated(monkeypatch):
     pc.store.unreserve(ent)
     rep = ad.prefix.report()
     assert rep["host_used"] > 0 and rep["spilled"] == pc.stats["spills"] and rep["restores"] == 1
+    # ---- GLM53_STACK_PREFIX_KEEP_PREV (F44): E's next turn supersedes the 256 it attached -> KEPT (not dominated);
+    #      a turn that rewrites E2's tail (shares 300 < 384 tokens) resumes at the kept 256 instead of the head 128
+    pc.keep_prev = True
+    e1 = _prompt(300, 101)
+    row_e = [1 + 3 * BPS + 12 + j for j in range(8)]  # unused blocks of request 3's pool
+    _prefill_steps(ad, kv, e1, row_e, slot=3, ends=[128, 256, len(e1)])
+    ad.release_request(3)
+    ke256 = pc.store.key(e1, 256)
+    e2 = e1 + _prompt(150, 7)
+    assert ad.confirm_prefix_cache_hit(e2, [], 256) == 256
+    start = 256
+    for end in (384, len(e2)):
+        ad.prefill_forward(_history([e2[:end]]), page_table=_table([row_e[: -(-end // BLOCK_SIZE)]], 1), kv_cache=kv,
+                           prompt_lens=[end], start_pos=[start], empty_slots=[3],
+                           sampling_params=_greedy(1) if end == len(e2) else None)  # fmt: skip
+        start = end
+    ad.release_request(3)
+    e256 = pc.store.entries[ke256]
+    assert e256.kept_prev and not e256.dominated and pc.stats["keep_prev_kept"] == 1
+    assert pc.prev_of == {pc.store.key(e2, 384): ke256}
+    e3 = e2[:300] + _prompt(150, 111)  # the rewritten tail: vLLM proposes its 4 shared full blocks (256)
+    row_e3 = row_e[:4] + [1 + 3 * BPS + 20 + j for j in range(4)]
+    assert ad.confirm_prefix_cache_hit(e3, [], 256) == 256
+    n = len(backend.state_io)
+    start = 256
+    for end in (384, len(e3)):
+        out = ad.prefill_forward(_history([e3[:end]]), page_table=_table([row_e3[: -(-end // BLOCK_SIZE)]], 1),
+                                 kv_cache=kv, prompt_lens=[end], start_pos=[start], empty_slots=[3],
+                                 sampling_params=_greedy(1) if end == len(e3) else None)  # fmt: skip
+        start = end
+    g = ad._alias[3]
+    assert backend.state_io[n][1] == 256 and backend.state_io[n][2] is not None  # attached the kept 256
+    assert kv.state[g] == e3 and int(out[0][0, 0]) == (e3[-1] + 1) % VOCAB and pc.stats["keep_prev_hits"] == 1
+    ad.release_request(3)
+    # one kept snapshot per chain: E3's 384 keeps the 256 again; E2's 384 (the abandoned tail) stays an LRU entry
+    assert pc.prev_of[pc.store.key(e3, 384)] == ke256 and pc.stats["keep_prev_kept"] == 2
+    # the device victim order: unread dominated, then unread kept, then LRU; a kept one below keep_prev_min is
+    # dropped (no export), from it on spilled
+    victim = pc.store._device_victim()
+    assert victim.dominated or victim.kept_prev
+    pc.store.keep_prev_min = 1 << 30
+    n_exp, held = len(backend.exports), []
+    while ke256 in pc.store.entries and pc.store.entries[ke256].tier == "device":
+        held.append(pc.store.reserve_device())
+        assert held[-1] is not None
+    assert ke256 not in pc.store.entries and pc.store.stats["dropped_kept_prev"] == 1
+    assert len(backend.exports) == n_exp  # (dominated victims are dropped too: no export)
+    for ent in held:
+        pc.store.unreserve(ent)
 
 
 def test_prefix_cache_no_host_tier_without_the_env(monkeypatch):

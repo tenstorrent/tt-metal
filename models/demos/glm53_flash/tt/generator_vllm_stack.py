@@ -118,6 +118,25 @@ PREFIX_HEAD = int(os.environ.get("GLM53_STACK_PREFIX_HEAD", "16384"))
 # then resumes off the chunk grid, so its text can move at a near-tie vs a cold prefill (chunk boundaries differ).
 PREFIX_EXACT = os.environ.get("GLM53_STACK_PREFIX_EXACT", "0") == "1"
 PREFIX_EXACT_MIN = int(os.environ.get("GLM53_STACK_PREFIX_EXACT_MIN", "2048"))
+# GLM53_STACK_PREFIX_EXACT_UNCUT (default 1; F44 C3 fix): the exact split's gain is measured over the last position
+# the request actually holds a snapshot of before its last chunk -- the chunk's start. The plugin's scheduler cuts only
+# a PARTIAL chunk on the snapshot grid (vllm_tt_plugin scheduler._align_prefill_chunk_end leaves the chunk that
+# finishes the prompt whole) and plan() snapshots chunk ends only, so a last chunk that starts below a grid boundary and
+# ends past it leaves no snapshot at that boundary. =0: the pre-F44 rule (gain over that boundary): such a turn kept no
+# snapshot at all and its next turn re-prefilled from the chunk's start (AgentX c16 2026-11-15: 110 requests, ~2.9 K
+# tokens each).
+PREFIX_EXACT_UNCUT = os.environ.get("GLM53_STACK_PREFIX_EXACT_UNCUT", "1") == "1"
+# GLM53_STACK_PREFIX_KEEP_PREV=1 (default off; F44 B): above the head a request's superseded snapshot (the entry it
+# attached, or its own previous chunk-end snapshot) is KEPT as its chain's one previous snapshot instead of being
+# dominated / evicted, so a turn that rewrites the tail of the previous prompt (AgentX: a short side call, then the
+# main thread resends the shared prefix with another tail) resumes there instead of at the head (c16: 10 requests
+# re-prefilled 80-320 K tokens each). StackPrefixCache's docstring has the policy; GLM53_STACK_PREFIX_KEEP_PREV_MIN
+# (default 262,144 tokens): a kept snapshot evicted from the device pool is spilled to the host tier from that many
+# tokens on, dropped below it -- an export costs ~0.9-1.7 s on the worker thread and most kept snapshots are never read
+# (F44 CPU replay of AgentX c8 / c16: kept-hits 27 / 18 an hour; vs 65,536: 0.10 / 0.24 pt less hit rate with 46 / 52 %
+# fewer exports; device-only keeping (no spill) gains nothing: the pool evicts the kept snapshots before they are read).
+PREFIX_KEEP_PREV = os.environ.get("GLM53_STACK_PREFIX_KEEP_PREV", "0") == "1"
+PREFIX_KEEP_PREV_MIN = int(os.environ.get("GLM53_STACK_PREFIX_KEEP_PREV_MIN", "262144"))
 SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
 SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
 # GLM53_SPEC_MULTI=1 (default off; design doc/perf/mtp_multi_user_design.md): every live user speculates on a B 16
@@ -769,6 +788,18 @@ class StackPrefixCache:
     Image requests (GLM53StackForConditionalGeneration) take no part: the key hashes token ids, which carry no pixels
     (every image row is the same ``<|image|>`` id), so ``confirm`` refuses a prompt with mm items and ``plan`` neither
     attaches nor snapshots the rows its caller names in ``skip`` (rows holding vision tokens).
+    Exact split (GLM53_STACK_PREFIX_EXACT): a prompt's last chunk is split at its last 128 boundary P when P gains
+    ``exact_min`` tokens over the chunk's start -- the last snapshot the request holds: the scheduler never cuts that
+    chunk on the grid, so a grid boundary inside it has no snapshot (GLM53_STACK_PREFIX_EXACT_UNCUT=0: the pre-F44
+    gain over that boundary, which left such a turn with no snapshot).
+    Keep-prev (GLM53_STACK_PREFIX_KEEP_PREV=1, opt-in): when a request's snapshot above the head supersedes another of
+    its chain (the entry it attached, or its own previous chunk-end snapshot), the superseded one is not dominated /
+    evicted but KEPT (``Entry.kept_prev``): a next turn that rewrites the previous prompt's tail shares a prefix
+    ending between the two and resumes at the kept one. Bounds: one kept snapshot per chain -- keeping a newer one
+    releases (dominates) the one kept before it (``prev_of``: snapshot -> the snapshot kept for it); the device pool
+    is not grown (GLM53_PREFIX_DEVICE_ENTRIES): a kept entry is the next device victim after the dominated ones, so
+    it never displaces a latest snapshot, and it leaves the device to the host tier (spilled from
+    GLM53_STACK_PREFIX_KEEP_PREV_MIN tokens, else dropped; the host tier's own LRU bounds the bytes).
     ``confirm`` runs on vLLM's scheduler thread, the rest on the worker's: one lock around the store."""
 
     def __init__(self, gen, kv, max_batch: int):
@@ -796,20 +827,60 @@ class StackPrefixCache:
         self.head = PREFIX_HEAD  # snapshots at or below it are kept; above it one (the latest) per request
         self.tail: dict = {}  # generator slot -> the key of its request's latest snapshot above the head
         self.exact, self.exact_min = PREFIX_EXACT, PREFIX_EXACT_MIN  # GLM53_STACK_PREFIX_EXACT(_MIN)
+        self.exact_uncut = PREFIX_EXACT_UNCUT  # GLM53_STACK_PREFIX_EXACT_UNCUT: the split gain over the chunk start
+        self.keep_prev = PREFIX_KEEP_PREV  # GLM53_STACK_PREFIX_KEEP_PREV: one kept superseded snapshot per chain
+        self.prev_of: dict = {}  # keep-prev: a snapshot's key -> the key of the superseded snapshot kept for it
+        self._first: set = set()  # the new paths' first-use log lines, once each
         self.stats = {
             k: 0
             for k in ("confirmed", "confirmed_tokens", "not_resident", "attaches", "fallbacks", "snapshots",
                       "snapshots_skipped", "mm_excluded", "tail_superseded", "exact_splits", "dominated",
-                      "confirmed_host", "spills", "restores", "restore_failed")  # fmt: skip
+                      "confirmed_host", "spills", "restores", "restore_failed", "exact_uncut_splits",
+                      "keep_prev_kept", "keep_prev_released", "keep_prev_hits")  # fmt: skip
         }
         self.stats.update(spill_s=0.0, restore_s=0.0)
         self.base: dict = {}  # generator slot -> the key of the entry its request attached (dominated past it)
         self.host = self._host_tier(int(os.environ.get(HOST_BYTES_ENV, "0") or 0))
+        self.store.keep_prev_min = PREFIX_KEEP_PREV_MIN  # (only kept entries read it)
+        logger.info(
+            f"GLM53 stack prefix: policy head {self.head}, exact split {'on' if self.exact else 'off'} (min gain "
+            f"{self.exact_min}, uncut-grid rule {'on' if self.exact_uncut else 'off'}), keep-prev "
+            f"{'on' if self.keep_prev else 'off'} (host spill from {PREFIX_KEEP_PREV_MIN} tokens)"
+        )
 
     @property
     def grid(self) -> int:
         """the snapshot grid: the backend's prefill chunk (the TP prefill's largest bucket: known after the warm-up)"""
         return int(self.gen.backend.prefill_chunk_tokens)
+
+    def _once(self, what: str, msg: str) -> None:
+        """a new path's first use: one grep-able log line per process (a knob absent from a tree logs nothing)"""
+        if what not in self._first:
+            self._first.add(what)
+            logger.info(msg)
+
+    def _keep_prev(self, old: str, new: str) -> None:
+        """GLM53_STACK_PREFIX_KEEP_PREV (self.lock held): ``old``, superseded by ``new`` of the same chain, stays
+        registered as the chain's kept previous snapshot; the snapshot kept for ``old`` itself (two back) is released
+        -- dominated: the first device victim, dropped -- unless another chain keeps it too"""
+        e = self.store.entries.get(old)
+        if e is None:
+            return
+        e.kept_prev = True
+        self.prev_of[new] = old
+        self.stats["keep_prev_kept"] += 1
+        self._once(
+            "keep_prev",
+            f"GLM53 stack prefix: keep-prev: kept the superseded snapshot [0, {e.n_tokens}) for a rewritten-tail turn "
+            "(first use)",
+        )
+        older = self.prev_of.pop(old, None)
+        if older is not None and older != old and older not in self.prev_of.values():
+            if self.store.entries.get(older) is not None and self.store.dominate(older):
+                self.stats["keep_prev_released"] += 1
+        if len(self.prev_of) > 8 * max(self.store.device_entries, 1):  # links whose entries are gone
+            live = self.store.entries
+            self.prev_of = {k: v for k, v in self.prev_of.items() if k in live and v in live}
 
     # ---- the host tier (GLM53_PREFIX_HOST_BYTES)
     def _host_tier(self, nbytes: int) -> bool:
@@ -978,6 +1049,13 @@ class StackPrefixCache:
                     if e.n_tokens > self.head:  # a conversation's own snapshot: dominated once this request passes it
                         self.base[g] = key
                     self.stats["attaches"] += 1
+                    if e.kept_prev:  # GLM53_STACK_PREFIX_KEEP_PREV: a superseded snapshot serves this turn
+                        self.stats["keep_prev_hits"] += 1
+                        self._once(
+                            "keep_prev_hit",
+                            f"GLM53 stack prefix: keep-prev hit: generator slot {g} resumes at the kept superseded "
+                            f"snapshot {s0} (first use)",
+                        )
                     logger.info(
                         f"GLM53 stack prefix: generator slot {g} attaches snapshot entry {e.device_entry} at {s0}"
                         + (" (restored from the host tier)" if host else "")
@@ -1036,8 +1114,11 @@ class StackPrefixCache:
     def exact_splits(self, starts: list, ends: list, skip=()) -> dict:
         """GLM53_STACK_PREFIX_EXACT: {row: P} for the rows to split -- a chunk that ends off the snapshot grid (a
         prompt's last: vLLM cuts every other chunk on the grid) and not on the 128 boundary, whose last boundary P
-        gains >= exact_min tokens over the snapshot the grid policy leaves (its last grid boundary, or the chunk's
-        start). Rows in ``skip`` (image requests) are never split."""
+        gains >= exact_min tokens over the last snapshot the request holds: the chunk's start s0 -- the scheduler
+        never cuts this chunk on the grid and plan() snapshots chunk ends only, so a grid boundary inside it has no
+        snapshot (a last chunk after earlier ones starts on the grid: s0 is that grid snapshot). exact_uncut False
+        (GLM53_STACK_PREFIX_EXACT_UNCUT=0): the pre-F44 gain over max(the grid boundary, s0). Rows in ``skip``
+        (image requests) are never split."""
         if not self.exact:
             return {}
         b, g, out = self.store.boundary, self.grid, {}
@@ -1050,8 +1131,16 @@ class StackPrefixCache:
             if rmax is not None and pos > rmax:  # F27: the tail [pos, end) would start where no bucket has a key
                 pos = rmax
                 self.stats["exact_capped"] = self.stats.get("exact_capped", 0) + 1
-            if pos > s0 and pos - max(end // g * g, s0) >= self.exact_min:
+            grid = end // g * g  # a grid boundary inside the chunk (> s0) holds no snapshot: the chunk is uncut
+            if pos > s0 and pos - (s0 if self.exact_uncut else max(grid, s0)) >= self.exact_min:
                 out[i] = pos
+                if pos - max(grid, s0) < self.exact_min:  # a split only the F44 rule makes
+                    self.stats["exact_uncut_splits"] += 1
+                    self._once(
+                        "exact_uncut",
+                        f"GLM53 stack prefix: exact split at {pos} of the uncut last chunk [{s0}, {end}) across the "
+                        f"grid boundary {grid} (F44 uncut-grid rule, first use)",
+                    )
         if out:
             self.stats["exact_splits"] += len(out)
         return out
@@ -1064,15 +1153,21 @@ class StackPrefixCache:
                 self.stats["snapshots"] += 1
                 base = self.base.get(g)  # the snapshot this request attached: its next turn resumes from this one
                 if base is not None and base != key and self.store.entries.get(base) is not None:
-                    if self.store.entries[base].n_tokens < n and self.store.dominate(base):
-                        self.stats["dominated"] += 1
+                    if self.store.entries[base].n_tokens < n:
+                        if self.keep_prev:  # kept for a rewritten-tail turn instead of dominated
+                            self._keep_prev(base, key)
+                        elif self.store.dominate(base):
+                            self.stats["dominated"] += 1
                     self.base.pop(g, None)
                 if n > self.head:  # the request's previous tail snapshot is superseded (free unless read / pinned)
                     prev = self.tail.get(g)
                     old = self.store.entries.get(prev) if prev is not None and prev != key else None
                     if old is not None and old.readers == 0 and old.n_tokens > self.head:
-                        self.store.evict(prev)
-                        self.stats["tail_superseded"] += 1
+                        if self.keep_prev:  # kept for a rewritten-tail turn instead of evicted
+                            self._keep_prev(prev, key)
+                        else:
+                            self.store.evict(prev)
+                            self.stats["tail_superseded"] += 1
                     self.tail[g] = key
                 logger.info(
                     f"GLM53 stack prefix: snapshot of tokens [0, {n}) in entry {ent} "
