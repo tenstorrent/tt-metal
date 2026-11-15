@@ -44,11 +44,11 @@ constexpr uint32_t cb_row_stage = GDN_CB_ROW_STAGE;
 constexpr uint32_t cb_window_zeroed = GDN_CB_WINDOW_ZEROED;
 constexpr uint32_t cb_hist_stage = GDN_CB_HIST_STAGE;
 constexpr uint32_t cb_tri_mask = GDN_CB_TRI_MASK;
-constexpr uint32_t cb_kq_rows = GDN_CB_KQ_ROWS;
-constexpr uint32_t cb_knT = GDN_CB_KNT;
-constexpr uint32_t cb_v = GDN_CB_V;
-constexpr uint32_t cb_chunk_vec = GDN_CB_CHUNK_VEC;
-constexpr uint32_t cb_chunk_mat = GDN_CB_CHUNK_MAT;
+constexpr uint32_t cb_in_kq = GDN_CB_IN_KQ;
+constexpr uint32_t cb_in_knt = GDN_CB_IN_KNT;
+constexpr uint32_t cb_in_mat = GDN_CB_IN_MAT;
+constexpr uint32_t cb_in_vec = GDN_CB_IN_VEC;
+constexpr uint32_t cb_in_v = GDN_CB_IN_V;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t TILE_BYTES = get_compile_time_arg_val(6);        // token-tensor tile (dtype-derived on host)
@@ -256,7 +256,7 @@ void kernel_main() {
     const uint32_t tr_stride = get_arg_val<uint32_t>(arg++);
     // R-PREP state core: NoC (x, y) of its group's prep cores; tile row i of the sequence comes from prep core
     // i % producers into inbox slot i % INBOX_SLOTS.
-    constexpr uint32_t MAX_PRODUCERS = STATE ? 64 : 1;
+    constexpr uint32_t MAX_PRODUCERS = STATE ? GDN_MAX_PREP_CORES_PER_GROUP : 1;
     uint32_t producers = 0;
     uint32_t producer_x[MAX_PRODUCERS];
     uint32_t producer_y[MAX_PRODUCERS];
@@ -383,35 +383,35 @@ void kernel_main() {
             if constexpr (STATE) {
                 // ---- R-PREP inbox: grant each tile row's slot to its prep core as soon as compute has freed it (up to
                 // INBOX_SLOTS rows ahead, so the prep cores' writes overlap the chunk steps), then hand row i to
-                // compute once it has landed. Compute pops cb_v last of the inbox buffers, so a free cb_v slot frees
-                // the row's.
+                // compute once it has landed. Compute pops cb_in_v last of the inbox buffers, so a free cb_in_v slot
+                // frees the row's.
                 const uint32_t i = tr - first_tr;
                 const uint32_t n_rows = last_tr - first_tr + 1;
                 volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                     get_semaphore(GDN_LANDED_FIRST_SEM_ID + i % INBOX_SLOTS));
                 Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
                 auto grant_free_slots = [&]() {
-                    while (granted_rows < n_rows && cb_pages_reservable_at_back(cb_v, (granted_rows - i + 1) * Vb)) {
+                    while (granted_rows < n_rows && cb_pages_reservable_at_back(cb_in_v, (granted_rows - i + 1) * Vb)) {
                         granted.up(noc, producer_x[granted_rows % producers], producer_y[granted_rows % producers], 1);
                         ++granted_rows;
                     }
                 };
                 if (granted_rows == i) {
-                    cb_reserve_back(cb_v, Vb);  // row i's slot: freed once compute pops row i - INBOX_SLOTS
+                    cb_reserve_back(cb_in_v, Vb);  // row i's slot: freed once compute pops row i - INBOX_SLOTS
                 }
                 do {
                     grant_free_slots();
                 } while (*landed < i / INBOX_SLOTS + 1);
-                cb_reserve_back(cb_kq_rows, 2 * Kt);
-                cb_reserve_back(cb_knT, Kt);
-                cb_reserve_back(cb_v, Vb);
-                cb_reserve_back(cb_chunk_vec, GDN_STATE_VEC_PAGES);
-                cb_reserve_back(cb_chunk_mat, GDN_HEAD_PACK_PAGES - GDN_STATE_VEC_PAGES);
-                cb_push_back(cb_kq_rows, 2 * Kt);
-                cb_push_back(cb_knT, Kt);
-                cb_push_back(cb_v, Vb);
-                cb_push_back(cb_chunk_vec, GDN_STATE_VEC_PAGES);
-                cb_push_back(cb_chunk_mat, GDN_HEAD_PACK_PAGES - GDN_STATE_VEC_PAGES);
+                cb_reserve_back(cb_in_kq, 2 * Kt);
+                cb_reserve_back(cb_in_knt, Kt);
+                cb_reserve_back(cb_in_mat, GDN_IN_MAT_PAGES);
+                cb_reserve_back(cb_in_vec, GDN_IN_VEC_PAGES);
+                cb_reserve_back(cb_in_v, Vb);
+                cb_push_back(cb_in_kq, 2 * Kt);
+                cb_push_back(cb_in_knt, Kt);
+                cb_push_back(cb_in_mat, GDN_IN_MAT_PAGES);
+                cb_push_back(cb_in_vec, GDN_IN_VEC_PAGES);
+                cb_push_back(cb_in_v, Vb);
             } else {
                 // ---- gate inputs: token rows of the b, a tiles of the gate column ----
                 cb_reserve_back(cb_gate_in, 2);

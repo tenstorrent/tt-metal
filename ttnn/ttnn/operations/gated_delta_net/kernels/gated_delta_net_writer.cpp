@@ -37,10 +37,11 @@ constexpr uint32_t cb_kq_rows = GDN_CB_KQ_ROWS;
 constexpr uint32_t cb_kq_rows_f32 = GDN_CB_KQ_ROWS_F32;
 constexpr uint32_t cb_qk_stage = GDN_CB_QK_STAGE;
 constexpr uint32_t cb_prep_send = GDN_CB_PREP_SEND;
-constexpr uint32_t cb_knT = GDN_CB_KNT;
-constexpr uint32_t cb_v = GDN_CB_V;
-constexpr uint32_t cb_chunk_vec = GDN_CB_CHUNK_VEC;
-constexpr uint32_t cb_chunk_mat = GDN_CB_CHUNK_MAT;
+constexpr uint32_t cb_in_kq = GDN_CB_IN_KQ;
+constexpr uint32_t cb_in_knt = GDN_CB_IN_KNT;
+constexpr uint32_t cb_in_mat = GDN_CB_IN_MAT;
+constexpr uint32_t cb_in_vec = GDN_CB_IN_VEC;
+constexpr uint32_t cb_in_v = GDN_CB_IN_V;
 constexpr uint32_t cb_o_acc = GDN_CB_O_ACC;
 constexpr uint32_t cb_o_in = GDN_CB_O_IN;
 
@@ -91,16 +92,22 @@ void store_rows(const Accessor& out_acc, uint32_t n, uint32_t first_page, uint32
     cb_pop_front(cb_out_rows, n);
 }
 
-// One multicast write per rectangle of the runtime-arg list at `arg` (count, then x_lo, y_lo, x_hi, y_hi, cores each);
-// the sender lies outside every rectangle. NOC 1 takes the corners in the opposite order.
+// One multicast write per rectangle of the runtime-arg list at `arg` (count, then x_lo, y_lo, x_hi, y_hi, cores each),
+// a unicast write for a one-core rectangle; the sender lies outside every rectangle. NOC 1 takes the corners in the
+// opposite order.
 FORCE_INLINE void mcast_rects(uint32_t arg, uint32_t src, uint32_t dst, uint32_t bytes) {
     const uint32_t rects = get_arg_val<uint32_t>(arg++);
     for (uint32_t r = 0; r < rects; ++r, arg += 5) {
         const uint32_t x_lo = get_arg_val<uint32_t>(arg), y_lo = get_arg_val<uint32_t>(arg + 1);
         const uint32_t x_hi = get_arg_val<uint32_t>(arg + 2), y_hi = get_arg_val<uint32_t>(arg + 3);
+        const uint32_t cores = get_arg_val<uint32_t>(arg + 4);
+        if (cores == 1) {
+            noc_async_write(src, get_noc_addr(x_lo, y_lo, dst), bytes);
+            continue;
+        }
         const uint64_t dst_noc = noc_index == 0 ? get_noc_multicast_addr(x_lo, y_lo, x_hi, y_hi, dst)
                                                 : get_noc_multicast_addr(x_hi, y_hi, x_lo, y_lo, dst);
-        noc_async_write_multicast(src, dst_noc, bytes, get_arg_val<uint32_t>(arg + 4));
+        noc_async_write_multicast(src, dst_noc, bytes, cores);
     }
 }
 
@@ -120,10 +127,11 @@ FORCE_INLINE void push_chunk_coefs(
 }
 
 // R-PREP prep core. Unit = (sequence, key head); tile rows i = offset, offset + stride, ... of the sequence. The row's
-// prepped tiles arrive in cb_prep_send as [v of the r heads (r Vt)][kn, qn (2 Kt)][kn^T (Kt)][head pack x r] and go
-// to the group's state cores (unit order: head j, piece p) at inbox slot i % INBOX_SLOTS of cb_v (the piece's Vb v
-// tiles), cb_kq_rows, cb_knT (all), cb_chunk_vec, cb_chunk_mat (the head's pieces). Every core has the same CB
-// layout, so this core's base addresses of those buffers are the state cores'. The state cores write the row's o
+// prepped tiles arrive in cb_prep_send as one block per value head j, [kq (2 Kt) | knT (Kt) | M, QD | exp(c) | v (Vt)]
+// (descriptor IN_MAT_PAGES), and go to the head's state cores (unit order: head j, piece p) at inbox slot
+// i % INBOX_SLOTS of cb_in_kq, cb_in_knt, cb_in_mat, cb_in_vec (multicast to the head's pieces) and cb_in_v (the
+// piece's Vb columns). Every core has the same CB layout, so this core's base addresses of those buffers are the
+// state cores'. The state cores write the row's o
 // back into slot k % GDN_O_IN_DEPTH of cb_o_in (k: this core's row count), which compute RMS-normalizes one row later
 // (after its next row's prep); this writer then stores the output rows.
 template <uint32_t Kt, uint32_t Vt, uint32_t Hv, typename Accessor>
@@ -132,28 +140,24 @@ void prep_writer(
     constexpr uint32_t Vb = Vt / PIECES;
     constexpr uint32_t GROUP = RATIO * PIECES;
     constexpr uint32_t T_BYTES = STATE_TILE_BYTES;
-    constexpr uint32_t ROW_PAGES = RATIO * Vt + 3 * Kt + RATIO * GDN_HEAD_PACK_PAGES;
+    constexpr uint32_t HEAD_PAGES = 3 * Kt + GDN_IN_MAT_PAGES + GDN_IN_VEC_PAGES + Vt;
     uint32_t cons_x[GROUP];
     uint32_t cons_y[GROUP];
     for (uint32_t c = 0; c < GROUP; ++c) {
         cons_x[c] = get_arg_val<uint32_t>(arg++);
         cons_y[c] = get_arg_val<uint32_t>(arg++);
     }
-    // Multicast rectangles: the group's, then each head's pieces' (host _mcast_rects).
-    const uint32_t group_rects = arg;
+    // Multicast rectangles of each head's pieces (host _mcast_rects).
     uint32_t head_rects[RATIO];
-    arg += 1 + 5 * get_arg_val<uint32_t>(arg);
     for (uint32_t j = 0; j < RATIO; ++j) {
         head_rects[j] = arg;
         arg += 1 + 5 * get_arg_val<uint32_t>(arg);
     }
-    const uint32_t v_base = get_write_ptr(cb_v);
-    const uint32_t kq_base = get_write_ptr(cb_kq_rows);
-    const uint32_t knT_base = get_write_ptr(cb_knT);
-    const uint32_t vec_base = get_write_ptr(cb_chunk_vec);
-    const uint32_t mat_base = get_write_ptr(cb_chunk_mat);
-    constexpr uint32_t VEC_PAGES = GDN_STATE_VEC_PAGES;
-    constexpr uint32_t MAT_PAGES = GDN_HEAD_PACK_PAGES - GDN_STATE_VEC_PAGES;
+    const uint32_t v_base = get_write_ptr(cb_in_v);
+    const uint32_t kq_base = get_write_ptr(cb_in_kq);
+    const uint32_t knT_base = get_write_ptr(cb_in_knt);
+    const uint32_t mat_base = get_write_ptr(cb_in_mat);
+    const uint32_t vec_base = get_write_ptr(cb_in_vec);
 
     Noc noc;
     Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
@@ -171,8 +175,18 @@ void prep_writer(
     auto store = [&](uint32_t tr) {
         store_rows(out_acc, O_PAGES, tr * out_width_tiles + head0 * Vt, tr * TILE_ROWS, row_lo(tr), row_hi(tr));
     };
+    // Row k's o lands (and its output is stored) during later rows, so that nothing ties the next row's preparation
+    // to the state cores' progress: iteration k expands row k's coefficients, lands row k - 1's o, stores row k - 2,
+    // then sends row k once it is granted.
+    auto land_o = [&](uint32_t row_count) {
+        // Every state core writes its o of a row once; a row is sent only after the previous row's o has landed
+        // everywhere, so the cumulative count identifies the row.
+        o_landed.wait_min(row_count * GROUP);
+        cb_push_back(cb_o_in, O_PAGES);
+    };
+    const uint32_t first_row = first_tr + tr_offset;
     uint32_t sent = 0;
-    for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride, ++sent) {
+    for (uint32_t tr = first_row; tr <= last_tr; tr += tr_stride, ++sent) {
         const uint32_t base_row = tr * TILE_ROWS;
         const uint32_t lo = row_lo(tr);
         const uint32_t hi = row_hi(tr);
@@ -182,6 +196,12 @@ void prep_writer(
             push_chunk_coefs(gates, (head0 + j) % TILE_ROWS, base_row, lo, hi);
         }
         cb_pop_front(cb_gates, 2);
+        if (sent >= 1) {
+            land_o(sent);
+        }
+        if (sent >= 2) {
+            store(tr - 2 * tr_stride);
+        }
 
         // Every state core of the group grants each of its rows once, in order; this core's next row is granted
         // only after this one has landed (stride >= inbox slots), so the cumulative count identifies the row.
@@ -189,45 +209,39 @@ void prep_writer(
         // The row's o slot is free (compute has normalized the row that used it), so the row may be sent.
         cb_reserve_back(cb_o_in, O_PAGES);
         const uint32_t slot = (tr - first_tr) % INBOX_SLOTS;
-        cb_wait_front(cb_prep_send, ROW_PAGES);
-        const uint32_t src = get_read_ptr(cb_prep_send);
-        const uint32_t kq_src = src + RATIO * Vt * T_BYTES;
-        // kn, qn (cb_kq_rows) and kn^T (cb_knT) are contiguous in the send block: two multicasts per row run.
-        mcast_rects(group_rects, kq_src, kq_base + slot * 2 * Kt * T_BYTES, 2 * Kt * T_BYTES);
-        mcast_rects(group_rects, kq_src + 2 * Kt * T_BYTES, knT_base + slot * Kt * T_BYTES, Kt * T_BYTES);
+        // One head block at a time, as compute packs it (the send buffer holds a tile row of them at most).
         for (uint32_t j = 0; j < RATIO; ++j) {
-            const uint32_t head_src = kq_src + (3 * Kt + j * GDN_HEAD_PACK_PAGES) * T_BYTES;
-            mcast_rects(head_rects[j], head_src, vec_base + slot * VEC_PAGES * T_BYTES, VEC_PAGES * T_BYTES);
+            cb_wait_front(cb_prep_send, HEAD_PAGES);
+            const uint32_t head_src = get_read_ptr(cb_prep_send);
+            const uint32_t mat_src = head_src + 3 * Kt * T_BYTES;
+            const uint32_t vec_src = mat_src + GDN_IN_MAT_PAGES * T_BYTES;
+            const uint32_t v_src = vec_src + GDN_IN_VEC_PAGES * T_BYTES;
+            mcast_rects(head_rects[j], head_src, kq_base + slot * 2 * Kt * T_BYTES, 2 * Kt * T_BYTES);
+            mcast_rects(head_rects[j], head_src + 2 * Kt * T_BYTES, knT_base + slot * Kt * T_BYTES, Kt * T_BYTES);
             mcast_rects(
-                head_rects[j],
-                head_src + VEC_PAGES * T_BYTES,
-                mat_base + slot * MAT_PAGES * T_BYTES,
-                MAT_PAGES * T_BYTES);
+                head_rects[j], mat_src, mat_base + slot * GDN_IN_MAT_PAGES * T_BYTES, GDN_IN_MAT_PAGES * T_BYTES);
+            mcast_rects(
+                head_rects[j], vec_src, vec_base + slot * GDN_IN_VEC_PAGES * T_BYTES, GDN_IN_VEC_PAGES * T_BYTES);
+            for (uint32_t p = 0; p < PIECES; ++p) {
+                const uint32_t c = j * PIECES + p;
+                noc_async_write(
+                    v_src + p * Vb * T_BYTES,
+                    get_noc_addr(cons_x[c], cons_y[c], v_base + slot * Vb * T_BYTES),
+                    Vb * T_BYTES);
+            }
+            noc_async_write_barrier();
+            cb_pop_front(cb_prep_send, HEAD_PAGES);
         }
-        for (uint32_t c = 0; c < GROUP; ++c) {
-            const uint32_t j = c / PIECES;
-            const uint32_t p = c % PIECES;
-            noc_async_write(
-                src + (j * Vt + p * Vb) * T_BYTES,
-                get_noc_addr(cons_x[c], cons_y[c], v_base + slot * Vb * T_BYTES),
-                Vb * T_BYTES);
-        }
-        noc_async_write_barrier();
-        cb_pop_front(cb_prep_send, ROW_PAGES);
         for (uint32_t c = 0; c < GROUP; ++c) {
             Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
             landed.up(noc, cons_x[c], cons_y[c], 1);
         }
-        // Every state core writes its o of the row once; a row is sent only after the previous row's o has
-        // landed everywhere, so the cumulative count identifies the row.
-        o_landed.wait_min((sent + 1) * GROUP);
-        cb_push_back(cb_o_in, O_PAGES);
-        if (sent > 0) {
-            store(tr - tr_stride);
-        }
     }
-    if (sent > 0) {
-        store(first_tr + tr_offset + (sent - 1) * tr_stride);
+    if (sent >= 1) {
+        land_o(sent);
+    }
+    for (uint32_t k = sent >= 2 ? sent - 2 : 0; k < sent; ++k) {
+        store(first_row + k * tr_stride);
     }
 }
 
@@ -306,7 +320,7 @@ void kernel_main() {
     }
     uint32_t rows_combined = 0;
     // R-PREP state core: NoC (x, y) of its group's prep cores; tile row i's o goes back to prep core i % producers.
-    constexpr uint32_t MAX_PRODUCERS = STATE ? 64 : 1;
+    constexpr uint32_t MAX_PRODUCERS = STATE ? GDN_MAX_PREP_CORES_PER_GROUP : 1;
     uint32_t producers = 0;
     uint32_t producer_x[MAX_PRODUCERS];
     uint32_t producer_y[MAX_PRODUCERS];
