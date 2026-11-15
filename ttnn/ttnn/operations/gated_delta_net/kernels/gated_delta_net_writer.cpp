@@ -65,24 +65,24 @@ void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t
     cb_reserve_back(cb_kq_rows_f32, 2 * Kt);
     const uint32_t kn_dst = get_write_ptr(cb_kq_rows);
     const uint32_t qn_dst = kn_dst + part_bytes;
-    if (qk_role == GDN_QK_Q_INJECTOR || qk_role == GDN_QK_K_INJECTOR) {
-        const bool is_q = qk_role == GDN_QK_Q_INJECTOR;
-        const uint32_t dst = is_q ? qn_dst : kn_dst;
+    // One call site per pipe face keeps the writer's text small (it shares the kernel-config budget).
+    const bool q_injector = qk_role == GDN_QK_Q_INJECTOR;
+    const bool k_injector = qk_role == GDN_QK_K_INJECTOR;
+    if (q_injector || k_injector) {
         cb_wait_front(cb_qk_stage, Kt);
         const uint32_t stage = get_read_ptr(cb_qk_stage);
-        if (is_q) {
-            q_channel.optional_sender(noc)->send(stage, dst, part_bytes);
-        } else {
-            k_channel.optional_sender(noc)->send(stage, dst, part_bytes);
+        if (q_injector) {
+            q_channel.optional_sender(noc)->send(stage, qn_dst, part_bytes);
+        }
+        if (k_injector) {
+            k_channel.optional_sender(noc)->send(stage, kn_dst, part_bytes);
         }
         cb_pop_front(cb_qk_stage, Kt);
-        if (is_q) {
-            k_channel.optional_receiver(noc)->receive();
-        } else {
-            q_channel.optional_receiver(noc)->receive();
-        }
-    } else {
+    }
+    if (!q_injector) {
         q_channel.optional_receiver(noc)->receive();
+    }
+    if (!k_injector) {
         k_channel.optional_receiver(noc)->receive();
     }
     cb_push_back(cb_kq_rows, 2 * Kt);

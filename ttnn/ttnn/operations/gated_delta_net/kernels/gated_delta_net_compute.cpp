@@ -215,12 +215,17 @@ struct RowScope {
     static constexpr uint32_t FULL_TILE = 0xffffffffu;
     // R-CHUNK runs whole tiles: its calls are prefill (tile rows mostly full), and dropping the band
     // variants keeps the math thread's code inside the kernel-config text budget.
+    // R-BCAST is decode (one token row per tile row): always one band, so its builds drop the whole-tile variants.
     static RowScope of(uint32_t row_lo, uint32_t row_hi) {
         if constexpr (CHUNKED) {
             return {FULL_TILE};
         }
+        if constexpr (QK_SHARED) {
+            return {row_lo >> 2};
+        }
         return {(row_lo >> 2) == ((row_hi - 1) >> 2) ? (row_lo >> 2) : FULL_TILE};
     }
+    bool full() const { return !QK_SHARED && band == FULL_TILE; }
 };
 
 // One SFPU body of ITERATIONS=2 (one 4-row band, both column parities) on `band` of both faces of its half.
@@ -243,7 +248,7 @@ ALWI void sfpu_band(uint32_t dst, uint32_t band, Body body) {
 }
 
 ALWI void silu_scoped(uint32_t dst, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         silu_tile(dst);
     } else {
 #ifdef TRISC_MATH
@@ -254,7 +259,7 @@ ALWI void silu_scoped(uint32_t dst, RowScope scope) {
 
 // Row-local unary SFPU ops on the scope's rows (full-tile API call when unscoped).
 ALWI void softplus_scoped(uint32_t dst, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         softplus_tile(dst, ONE_BITS, ONE_BITS, SOFTPLUS_THRESHOLD_BITS);
     } else {
 #ifdef TRISC_MATH
@@ -266,7 +271,7 @@ ALWI void softplus_scoped(uint32_t dst, RowScope scope) {
 }
 
 ALWI void exp_scoped(uint32_t dst, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         exp_tile<false>(dst);
     } else {
 #ifdef TRISC_MATH
@@ -276,7 +281,7 @@ ALWI void exp_scoped(uint32_t dst, RowScope scope) {
 }
 
 ALWI void negative_scoped(uint32_t dst, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         negative_tile(dst);
     } else {
 #ifdef TRISC_MATH
@@ -286,7 +291,7 @@ ALWI void negative_scoped(uint32_t dst, RowScope scope) {
 }
 
 ALWI void sigmoid_scoped(uint32_t dst, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         sigmoid_tile(dst);
     } else {
 #ifdef TRISC_MATH
@@ -296,7 +301,7 @@ ALWI void sigmoid_scoped(uint32_t dst, RowScope scope) {
 }
 
 ALWI void square_scoped(uint32_t dst, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         square_tile(dst);
     } else {
 #ifdef TRISC_MATH
@@ -307,7 +312,7 @@ ALWI void square_scoped(uint32_t dst, RowScope scope) {
 
 template <int BINOP_MODE>
 ALWI void binop_scalar_scoped(uint32_t dst, uint32_t scalar_bits, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         if constexpr (BINOP_MODE == ADD_UNARY) {
             add_unary_tile(dst, scalar_bits);
         } else {
@@ -323,7 +328,7 @@ ALWI void binop_scalar_scoped(uint32_t dst, uint32_t scalar_bits, RowScope scope
 }
 
 ALWI void rsqrt_scoped(uint32_t dst, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         rsqrt_tile(dst);
     } else {
 #ifdef TRISC_MATH
@@ -335,7 +340,7 @@ ALWI void rsqrt_scoped(uint32_t dst, RowScope scope) {
 // fp32 SFPU binary (DEST[d0] op DEST[d1] -> DEST[out]) on the scope's rows.
 template <ckernel::BinaryOp OP>
 ALWI void binary_scoped(uint32_t d0, uint32_t d1, uint32_t out, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         if constexpr (OP == ckernel::BinaryOp::ADD) {
             add_binary_tile(d0, d1, out);
         } else if constexpr (OP == ckernel::BinaryOp::SUB) {
@@ -354,7 +359,7 @@ ALWI void binary_scoped(uint32_t d0, uint32_t d1, uint32_t out, RowScope scope) 
 // DEST[data] *= column 0 of DEST[col] (broadcast along the row), on the scope's rows.
 // Band path: the LLK's own per-band body of sfpu_mul_bcast_col (needs sfpu_bcast_col_init).
 ALWI void mul_bcast_col_scoped(uint32_t data, uint32_t col, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         sfpu_mul_bcast_col(data, col);
     } else {
 #ifdef TRISC_MATH
@@ -373,7 +378,7 @@ ALWI void mul_bcast_col_scoped(uint32_t data, uint32_t col, RowScope scope) {
 // Band path: the LLK's own per-band body of sfpu_*_bcast_row (needs sfpu_bcast_row_init).
 template <ckernel::BinaryOp OP>
 ALWI void bcast_row_scoped(uint32_t data, uint32_t row, RowScope scope) {
-    if (scope.band == RowScope::FULL_TILE) {
+    if (scope.full()) {
         if constexpr (OP == ckernel::BinaryOp::ADD) {
             sfpu_add_bcast_row(data, row);
         } else {
