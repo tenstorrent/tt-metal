@@ -257,7 +257,14 @@ class Hy4ChainLayer:
                 md,
                 W,
                 batch_per_device=1,
-                buffers=ch.moe_buffers if os.environ.get("HY4_SHARE_MOE_BUF", "1") == "1" else None,
+                buffers=(
+                    ch.moe_buffers
+                    if os.environ.get("HY4_SHARE_MOE_BUF", "1") == "1"
+                    and not (
+                        self.mtp and os.environ.get("HY4_TP32_ONLY", "0") == "1"
+                    )  # the TP32-only layers share weightless scratch: the MTP ring layer allocates its own
+                    else None
+                ),
                 tp32_only=tp32_only,
             )
             if ch.moe_buffers is None:
