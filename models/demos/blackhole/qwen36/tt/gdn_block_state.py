@@ -140,6 +140,16 @@ def _free_copy(view, source):
         ttnn.deallocate(view)
 
 
+def _trace_region_bytes(mesh):
+    """Bytes of the trace region in use on each device, or None when the allocator does not report them; never
+    raises (a log line only)."""
+    try:
+        view = ttnn.get_memory_view(mesh, ttnn.BufferType.TRACE)
+        return int(view.total_bytes_allocated_per_bank) * int(view.num_banks)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _dram_banks(mesh):
     grid = mesh.dram_grid_size()
     return int(grid.x * grid.y)
@@ -642,10 +652,14 @@ class GdnBlockState:
         phase. Idempotent."""
         if self._zero_trace is not None or not self._warmed:
             return
+        before = _trace_region_bytes(self.mesh)
         tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
         self._zero_body()
         ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
         self._zero_trace = tid
+        after = _trace_region_bytes(self.mesh)
+        size = "unknown" if None in (before, after) else f"{(after - before) / 2**20:.2f} MiB"
+        logger.info(f"KV cache block zeroing captured: {2 * len(self.kv_caches)} fills per replay, trace region {size}")
 
     def release(self):
         """Release the captured zeroing and unbind the GDN layers from the blocks, before the K and V buffers are
