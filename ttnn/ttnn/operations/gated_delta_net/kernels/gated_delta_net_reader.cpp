@@ -3,7 +3,8 @@
 
 // gated_delta_net reader (NCRISC).
 //
-// Per pair (b, h) of this core's contiguous range:
+// Per unit (pair (b, h), piece) of this core's contiguous range; a piece owns Vb = Vt / PIECES of the
+// pair's v / state columns (R-VSPLIT; R-STEP is PIECES = 1) and every q/k column of its key head:
 //   load_pair_block: conv_weight tiles (raw for the FPU conv, else row j -> row 0 of tap tile j), A_log / dt_bias
 //                    gate-column tiles, norm_weight tiles.
 //   per tile row of the pair: b/a gate tiles, the conv window (4 tap tiles per column tile, rows
@@ -36,6 +37,7 @@ constexpr uint32_t cb_reduce_scaler = GDN_CB_REDUCE_SCALER;
 constexpr uint32_t cb_scratch = GDN_CB_SCRATCH;
 constexpr uint32_t cb_row_stage = GDN_CB_ROW_STAGE;
 constexpr uint32_t cb_window_zeroed = GDN_CB_WINDOW_ZEROED;
+constexpr uint32_t cb_hist_stage = GDN_CB_HIST_STAGE;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t TILE_BYTES = get_compile_time_arg_val(6);        // token-tensor tile (dtype-derived on host)
@@ -45,6 +47,7 @@ constexpr uint32_t STAGE_SLOTS = get_compile_time_arg_val(9);       // 0: face r
 constexpr bool CONV_W_RAW = get_compile_time_arg_val(10) != 0;      // raw conv_weight tiles (FPU conv)
 constexpr uint32_t WINDOW_GROUP_COLS = get_compile_time_arg_val(11);  // column tiles per window hand-off
 constexpr uint32_t WINDOW_SLOTS = get_compile_time_arg_val(12);       // window groups held by cb_window
+constexpr uint32_t PIECES = get_compile_time_arg_val(13);             // column pieces per pair
 constexpr uint32_t FACE_BYTES = TILE_BYTES / 4;                     // one 16x16 face
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;                     // one face row
 constexpr uint32_t CS_COLS_PER_FLUSH = TILE_ROWS / GDN_HISTORY;     // conv_state_out columns per scratch tile
@@ -105,6 +108,33 @@ private:
     uint32_t staged_dst_[SLOT_ARRAY];
 };
 
+// Rows [row_lo, row_hi) of a tensor page into the same rows of an L1 tile, for buffers whose other rows
+// are never consumed (weights read by row index, gate tiles read per token row): each face-row span is
+// widened to DRAM read alignment and read in place, so no staging copy is needed. Whole tile when every
+// row is wanted. Completed by the next barrier / RowReader::finish().
+template <typename Accessor>
+__attribute__((noinline)) void read_row_span(
+    const Accessor& acc, uint32_t page, uint32_t row_lo, uint32_t row_hi, uint32_t dst) {
+    if (row_hi - row_lo == TILE_ROWS) {
+        noc_async_read(acc.get_noc_addr(page), dst, TILE_BYTES);
+        return;
+    }
+    constexpr uint32_t FACE_ROWS = TILE_ROWS / 2;
+    for (uint32_t face_row0 = 0; face_row0 < TILE_ROWS; face_row0 += FACE_ROWS) {
+        const uint32_t lo = row_lo > face_row0 ? row_lo : face_row0;
+        const uint32_t hi = row_hi < face_row0 + FACE_ROWS ? row_hi : face_row0 + FACE_ROWS;
+        if (lo >= hi) {
+            continue;
+        }
+        const uint32_t begin = row_offset(lo) & ~(READ_ALIGN - 1);
+        const uint32_t end = align_power_of_2(row_offset(hi - 1) + SEG_BYTES, READ_ALIGN);
+        for (uint32_t half = 0; half < 2; ++half) {
+            const uint32_t off = begin + half * FACE_BYTES;
+            noc_async_read(acc.get_noc_addr(page, off), dst + off, end - begin);
+        }
+    }
+}
+
 __attribute__((noinline)) void copy_local_row(
     uint32_t src_tile, uint32_t src_row, uint32_t dst_tile, uint32_t dst_row) {
     const uint32_t src = src_tile + row_offset(src_row);
@@ -152,12 +182,13 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(4);
     constexpr uint32_t Gt = get_compile_time_arg_val(5);
     constexpr uint32_t ratio = Hv / Hk;
-    constexpr uint32_t n_state = Kt * Vt;
+    constexpr uint32_t Vb = Vt / PIECES;  // v / state column tiles of one piece
+    constexpr uint32_t n_state = Kt * Vb;
     constexpr uint32_t z_width_tiles = Hv * Vt;
-    constexpr uint32_t pair_cols = 2 * Kt + Vt;
+    constexpr uint32_t pair_cols = 2 * Kt + Vb;
     constexpr uint32_t conv_w_pages = CONV_W_RAW ? pair_cols : GDN_CONV_TAPS * pair_cols;
 
-    constexpr auto mixed_args = TensorAccessorArgs<13>();
+    constexpr auto mixed_args = TensorAccessorArgs<14>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
@@ -181,8 +212,8 @@ void kernel_main() {
     const auto dt_bias = TensorAccessor(dt_bias_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
     const auto norm_w = TensorAccessor(norm_w_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
     const auto conv_state_out = TensorAccessor(conv_state_out_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const uint32_t first_pair = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_pairs = get_arg_val<uint32_t>(arg++);
+    const uint32_t first_unit = get_arg_val<uint32_t>(arg++);
+    const uint32_t num_units = get_arg_val<uint32_t>(arg++);
     const uint32_t T = get_arg_val<uint32_t>(arg++);
 
     Noc noc;
@@ -198,17 +229,20 @@ void kernel_main() {
         dirty_hi[slot] = 0;
     }
     uint32_t window_slot = 0;
-    bool window_zeroing = true;
+    uint32_t zero_tokens = WINDOW_SLOTS;  // the writer zeroes slot k and then sends token k
+    const uint32_t hist_stage = get_write_ptr(cb_hist_stage);
     RowReader rows(STAGE_SLOTS == 0 ? 0 : get_write_ptr(cb_row_stage));
 
     dataflow_kernel_lib::
         prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
 
-    for (uint32_t pair = first_pair; pair < first_pair + num_pairs; ++pair) {
+    for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
+        const uint32_t pair = unit / PIECES;
+        const uint32_t v_first = (unit % PIECES) * Vb;  // first v / state column tile of the piece
         const uint32_t seq = pair / Hv;
         const uint32_t head = pair % Hv;
         const uint32_t key_head = head / ratio;
-        // Column tiles of the pair in channel-group order: q (Kt), k (Kt), v (Vt).
+        // Column tiles of the unit in channel-group order: q (Kt), k (Kt), v (Vb).
         auto pair_col = [&](uint32_t idx) -> uint32_t {
             if (idx < Kt) {
                 return key_head * Kt + idx;
@@ -216,36 +250,35 @@ void kernel_main() {
             if (idx < 2 * Kt) {
                 return Hk * Kt + key_head * Kt + (idx - Kt);
             }
-            return 2 * Hk * Kt + head * Vt + (idx - 2 * Kt);
+            return 2 * Hk * Kt + head * Vt + v_first + (idx - 2 * Kt);
         };
 
         // ---- load_pair_block ----
         cb_reserve_back(cb_conv_w, conv_w_pages);
         cb_reserve_back(cb_gate_w, 2);
-        cb_reserve_back(cb_norm_w, Vt);
+        cb_reserve_back(cb_norm_w, Vb);
         const uint32_t conv_w_base = get_write_ptr(cb_conv_w);
         for (uint32_t idx = 0; idx < pair_cols; ++idx) {
             const uint32_t ct = pair_col(idx);
             if constexpr (CONV_W_RAW) {
                 // Tap j stays at row j; compute broadcasts it by row index.
-                noc_async_read(conv_w.get_noc_addr(ct), conv_w_base + idx * TILE_BYTES, TILE_BYTES);
+                read_row_span(conv_w, ct, 0, GDN_CONV_TAPS, conv_w_base + idx * TILE_BYTES);
             } else {
                 for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
                     rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * idx + tap) * TILE_BYTES, 0);
                 }
             }
         }
+        // Rank-1 weights: compute broadcasts row 0.
         const uint32_t gate_w_base = get_write_ptr(cb_gate_w);
-        noc_async_read(a_log.get_noc_addr(head / TILE_ROWS), gate_w_base, TILE_BYTES);
-        noc_async_read(dt_bias.get_noc_addr(head / TILE_ROWS), gate_w_base + TILE_BYTES, TILE_BYTES);
+        read_row_span(a_log, head / TILE_ROWS, 0, 1, gate_w_base);
+        read_row_span(dt_bias, head / TILE_ROWS, 0, 1, gate_w_base + TILE_BYTES);
         const uint32_t norm_w_base = get_write_ptr(cb_norm_w);
-        for (uint32_t vt = 0; vt < Vt; ++vt) {
-            noc_async_read(norm_w.get_noc_addr(vt), norm_w_base + vt * TILE_BYTES, TILE_BYTES);
+        for (uint32_t vt = 0; vt < Vb; ++vt) {
+            read_row_span(norm_w, v_first + vt, 0, 1, norm_w_base + vt * TILE_BYTES);
         }
-        rows.finish();
-        cb_push_back(cb_conv_w, conv_w_pages);
-        cb_push_back(cb_gate_w, 2);
-        cb_push_back(cb_norm_w, Vt);
+        // Completed by the first window group's flush (one DRAM round trip for weights, gates and window).
+        bool weights_pending = true;
 
         const uint32_t seq_lo = seq * T;
         const uint32_t seq_hi = seq_lo + T;
@@ -256,14 +289,13 @@ void kernel_main() {
             const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
-            // ---- gate inputs: b, a tiles of the gate column ----
+            // ---- gate inputs: token rows of the b, a tiles of the gate column ----
             cb_reserve_back(cb_gate_in, 2);
             const uint32_t gate_in_base = get_write_ptr(cb_gate_in);
             const uint32_t gate_page = tr * Gt + head / TILE_ROWS;
-            noc_async_read(b_acc.get_noc_addr(gate_page), gate_in_base, TILE_BYTES);
-            noc_async_read(a_acc.get_noc_addr(gate_page), gate_in_base + TILE_BYTES, TILE_BYTES);
-            noc_async_read_barrier();
-            cb_push_back(cb_gate_in, 2);
+            read_row_span(b_acc, gate_page, lo - base_row, hi - base_row, gate_in_base);
+            read_row_span(a_acc, gate_page, lo - base_row, hi - base_row, gate_in_base + TILE_BYTES);
+            bool gates_pending = true;  // pushed after the first window group's flush
 
             // ---- conv window: X_j[p] = xx[row(p) + j - 3], WINDOW_GROUP_COLS column tiles per hand-off ----
             // Per group: one zero fill, one flush of every DRAM row read (current rows + history rows),
@@ -274,11 +306,11 @@ void kernel_main() {
             for (uint32_t group_first = 0; group_first < pair_cols; group_first += group_cols) {
                 cb_reserve_back(cb_window, group_tiles);
                 const uint32_t win = get_write_ptr(cb_window);
-                if (window_zeroing) {
-                    // The writer zeroes the whole buffer at kernel start, off this RISC's critical path.
+                if (zero_tokens != 0) {
+                    // The writer zeroes the buffer slot by slot at kernel start, off this RISC's critical path.
                     cb_wait_front(cb_window_zeroed, 1);
                     cb_pop_front(cb_window_zeroed, 1);
-                    window_zeroing = false;
+                    --zero_tokens;
                 }
                 // Rows outside [lo, hi) are other sequences or padding: zero, never sourced.
                 const uint32_t row_lo = lo - base_row;
@@ -290,11 +322,27 @@ void kernel_main() {
                 dirty_lo[window_slot] = row_lo;
                 dirty_hi[window_slot] = row_hi;
                 window_slot = window_slot + 1 == WINDOW_SLOTS ? 0 : window_slot + 1;
+                // History rows n = t + tap (t = row - seq_lo) all lie in conv_state rows
+                // [HISTORY * seq, HISTORY * seq + HISTORY): read that span once per column into a staging
+                // tile in place (one aligned read per face half) and copy rows out after the flush. A span
+                // crossing a tile row is read row by row instead.
+                const uint32_t hist_row0 = GDN_HISTORY * seq;
+                const bool hist_needed = lo < seq_lo + GDN_HISTORY;
+                const bool hist_staged = hist_needed && (hist_row0 % TILE_ROWS) + GDN_HISTORY <= TILE_ROWS;
                 for (uint32_t col = 0; col < group_cols; ++col) {
                     const uint32_t ct = pair_col(group_first + col);
                     const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
                     read_tile_rows(
                         rows, mixed, tr * Ct + ct, base_row, lo, hi, col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
+                    if (hist_staged) {
+                        const uint32_t r0 = hist_row0 % TILE_ROWS;
+                        read_row_span(
+                            conv_state,
+                            (hist_row0 / TILE_ROWS) * Ct + ct,
+                            r0,
+                            r0 + GDN_HISTORY,
+                            hist_stage + col * TILE_BYTES);
+                    }
                     for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
                         const uint32_t shift = GDN_HISTORY - tap;  // source row = row - shift
                         const uint32_t remote_hi = hi < lo + shift ? hi : lo + shift;
@@ -304,17 +352,40 @@ void kernel_main() {
                             if (row >= seq_lo + shift) {
                                 const uint32_t src = row - shift;
                                 rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
-                            } else {
-                                // History row n = t + tap of sequence seq (t = row - seq_lo).
-                                const uint32_t src = GDN_HISTORY * seq + (row - seq_lo) + tap;
+                            } else if (!hist_staged) {
+                                const uint32_t src = hist_row0 + (row - seq_lo) + tap;
                                 rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
                             }
                         }
                     }
                 }
                 rows.finish();
-                if (hi - lo > 1) {
+                if (hist_staged) {
                     for (uint32_t col = 0; col < group_cols; ++col) {
+                        const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
+                        for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
+                            const uint32_t shift = GDN_HISTORY - tap;
+                            const uint32_t remote_hi = hi < lo + shift ? hi : lo + shift;
+                            for (uint32_t row = lo; row < remote_hi && row < seq_lo + shift; ++row) {
+                                const uint32_t src = hist_row0 % TILE_ROWS + (row - seq_lo) + tap;
+                                copy_local_row(
+                                    hist_stage + col * TILE_BYTES, src, col_win + tap * TILE_BYTES, row - base_row);
+                            }
+                        }
+                    }
+                }
+                if (weights_pending) {
+                    cb_push_back(cb_conv_w, conv_w_pages);
+                    cb_push_back(cb_gate_w, 2);
+                    cb_push_back(cb_norm_w, Vb);
+                    weights_pending = false;
+                }
+                if (gates_pending) {
+                    cb_push_back(cb_gate_in, 2);
+                    gates_pending = false;
+                }
+                if (hi - lo > 1 || hist_staged) {
+                    for (uint32_t col = 0; col < group_cols && hi - lo > 1; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
                         const uint32_t cur_tap = col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES;
                         for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
@@ -329,36 +400,37 @@ void kernel_main() {
                 }
                 cb_push_back(cb_window, group_tiles);
             }
-            // ---- S0 of the pair, after the first tile row's prep inputs ----
+            // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs ----
             if (tr == first_tr) {
                 cb_reserve_back(cb_state_in, n_state);
                 cb_reserve_back(cb_state_in_mm, n_state);
                 const uint32_t state_base = get_write_ptr(cb_state_in);
                 for (uint32_t i = 0; i < n_state; ++i) {
-                    noc_async_read(
-                        state.get_noc_addr(pair * n_state + i), state_base + i * STATE_TILE_BYTES, STATE_TILE_BYTES);
+                    const uint32_t page = pair * Kt * Vt + (i / Vb) * Vt + v_first + i % Vb;
+                    noc_async_read(state.get_noc_addr(page), state_base + i * STATE_TILE_BYTES, STATE_TILE_BYTES);
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_state_in, n_state);
                 cb_push_back(cb_state_in_mm, n_state);
             }
 
-            // ---- z columns of the head ----
-            cb_reserve_back(cb_z, Vt);
+            // ---- z columns of the piece ----
+            cb_reserve_back(cb_z, Vb);
             const uint32_t z_base = get_write_ptr(cb_z);
-            for (uint32_t vt = 0; vt < Vt; ++vt) {
-                read_tile_rows(
-                    rows, z_acc, tr * z_width_tiles + head * Vt + vt, base_row, lo, hi, z_base + vt * TILE_BYTES);
+            for (uint32_t vt = 0; vt < Vb; ++vt) {
+                const uint32_t page = tr * z_width_tiles + head * Vt + v_first + vt;
+                read_tile_rows(rows, z_acc, page, base_row, lo, hi, z_base + vt * TILE_BYTES);
             }
             rows.finish();
-            cb_push_back(cb_z, Vt);
+            cb_push_back(cb_z, Vb);
         }
 
         // ---- copy_conv_state_block: conv_state_out[3b + n] = xx[b, T + n] ----
         // Columns are staged HISTORY rows apiece in the rows of one scratch tile: one read flush and one
         // write barrier per CS_COLS_PER_FLUSH columns.
         const uint32_t scratch = get_write_ptr(cb_scratch);
-        const uint32_t first_idx = (head % ratio == 0) ? 0 : 2 * Kt;  // q/k columns written by one head per key head
+        // q/k columns are written by one unit per key head (first head, first piece).
+        const uint32_t first_idx = (head % ratio == 0 && v_first == 0) ? 0 : 2 * Kt;
         for (uint32_t flush_first = first_idx; flush_first < pair_cols; flush_first += CS_COLS_PER_FLUSH) {
             const uint32_t flush_end =
                 pair_cols < flush_first + CS_COLS_PER_FLUSH ? pair_cols : flush_first + CS_COLS_PER_FLUSH;

@@ -1,14 +1,16 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ProgramDescriptor for gated_delta_net (regime R-STEP, op_design.md).
+"""ProgramDescriptor for gated_delta_net (regimes R-STEP and R-VSPLIT, op_design.md).
 
-Work unit: one (sequence, value head) pair. Pairs are split across the grid with
-ttnn.split_work_to_cores(row_wise=True); each core walks a contiguous pair range, one pair
-state resident at a time, token rows in blocks of one tile row, one token per recurrence step.
+Work unit: one piece of one (sequence, value head) pair: the pair's state columns split into
+`pieces = Vt / v_block_tiles` column slices (R-STEP: one piece per pair). Units are split across the
+grid with ttnn.split_work_to_cores(row_wise=True); each core walks a contiguous unit range, one
+state slice resident at a time, token rows in blocks of one tile row, one token per recurrence step.
+R-VSPLIT (pieces > 1) places one unit per core and all-gathers the per-piece partial sum o^2 of
+each tile row over the pair's piece cores (semaphore-counted unicast) before the RMS-norm rsqrt.
 """
 
-import math
 import struct
 from pathlib import Path
 
@@ -22,7 +24,10 @@ BF16_TILE_BYTES = 2048
 # ---- Blocking-model knobs (op_design.md, Blocking Model) ----
 PAIRS_PER_BLOCK = 1  # pairs per work-split unit
 TOKEN_TILE_ROWS_PER_BLOCK = 1  # prep / norm block along t (tile rows); only 1 is built
-V_BLOCK_TILES = None  # state column block; None = Vt (R-VSPLIT deferred)
+# State column block per piece. None = auto: the smallest block (most pieces, at most MAX_PIECES) whose
+# units still fit one per core (R-VSPLIT), else Vt (R-STEP). An int forces it (must divide Vt).
+V_BLOCK_TILES = None
+MAX_PIECES = 4  # the partial-sum combine adds every piece's tile in one fp32 half-sync DEST window
 MAX_CORES = None  # optional grid cap; None = full compute grid
 # Conv taps on the FPU (row-broadcast ELWMUL accumulated in DEST) instead of the SFPU. Exact only for
 # bf16 token operands (srcA/srcB hold 19 bits), so "auto" enables it for bf16 tokens only.
@@ -33,6 +38,7 @@ DST_FULL_SYNC = False
 
 # ---- Buffer-depth knobs ----
 WINDOW_DEPTH = 2  # window groups of tap tiles in flight
+WINDOW_GROUP_MAX_COLS = 4  # column tiles per window hand-off (one DRAM flush each), upper bound
 TOK_COEF_DEPTH = 2  # tokens of coefficient pages in flight
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 STATE_IN_DEPTH = 1  # pair states (S0) in flight
@@ -77,15 +83,29 @@ CB_SQ_O = 28
 CB_RINV_O = 29
 CB_ROW_STAGE = 30
 CB_WINDOW_ZEROED = 31
+CB_OSUM_PART = 32
+CB_OSUM_GATHER = 33
+CB_HIST_STAGE = 34
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
+OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
 
 # Rows staged per flush when a token face row is narrower than the DRAM read alignment (bf16 on
 # Blackhole): each half-row is read as one aligned chunk into staging, then copied L1-to-L1.
 ROW_STAGE_SLOTS = 32
 
 # Buffers carrying token-tensor bytes (the tensor dtype); every other CB is a Float32 intermediate.
-TOKEN_CBS = (CB_CONV_W, CB_WINDOW, CB_GATE_IN, CB_GATE_W, CB_Z, CB_NORM_W, CB_OUT_ROWS, CB_SCRATCH)
+TOKEN_CBS = (
+    CB_CONV_W,
+    CB_WINDOW,
+    CB_GATE_IN,
+    CB_GATE_W,
+    CB_Z,
+    CB_NORM_W,
+    CB_OUT_ROWS,
+    CB_SCRATCH,
+    CB_HIST_STAGE,
+)
 
 
 def _kernel_defines():
@@ -94,8 +114,9 @@ def _kernel_defines():
     return [(f"GDN_{n}", str(globals()[n])) for n in names]
 
 
-# Pages per CB; each entry is (index list sharing one allocation, pages, page bytes, unpack-to-dest).
-def _cb_plan(Kt, Vt, conv_on_fpu=False):
+# Pages per CB; each entry is (index list sharing one allocation, pages). Vt here is the piece's column
+# block (v_block_tiles); pieces > 1 adds the partial-sum combine buffers.
+def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1):
     n_state = Kt * Vt
     trb = TOKEN_TILE_ROWS_PER_BLOCK
     return [
@@ -103,7 +124,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False):
         ((CB_STATE, CB_STATE_MM), n_state),
         ((CB_STATE_OUT,), n_state * STATE_OUT_DEPTH),
         ((CB_CONV_W,), (1 if conv_on_fpu else CONV_TAPS) * (2 * Kt + Vt)),
-        ((CB_WINDOW,), CONV_TAPS * _window_group_cols(Kt, Vt) * WINDOW_DEPTH),
+        ((CB_WINDOW,), CONV_TAPS * _window_group_cols(Kt, Vt, pieces) * WINDOW_DEPTH),
         ((CB_CONV_ACC,), 0 if conv_on_fpu else CONV_ACC_DEPTH),
         ((CB_Y_QK,), 2 * Kt * trb),
         ((CB_V,), Vt * trb),
@@ -127,6 +148,12 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False):
         ((CB_NORM_W,), Vt),
         ((CB_OUT_ROWS,), Vt * ROW_DEPTH),
         ((CB_SCRATCH,), 1),
+        # conv_state history rows of one window group, read as one aligned span per column (reader-local).
+        ((CB_HIST_STAGE,), _window_group_cols(Kt, Vt, pieces)),
+        # Own partial sum o^2 (compute -> writer); gathered partials of every piece, two tile rows in
+        # flight so a peer one tile row ahead never lands on a slot still being summed.
+        ((CB_OSUM_PART,), trb if pieces > 1 else 0),
+        ((CB_OSUM_GATHER,), 2 * pieces * trb if pieces > 1 else 0),
     ]
 
 
@@ -151,12 +178,17 @@ U2D_CBS = (
     CB_O_ACC,
     CB_Z,
     CB_NORM_W,
+    CB_OSUM_GATHER,
 )
 
 
-def _window_group_cols(Kt, Vt):
-    """Column tiles per conv-window hand-off: the largest size that tiles q, k and v groups evenly."""
-    return math.gcd(Kt, Vt)
+def _window_group_cols(Kt, Vt, pieces):
+    """Column tiles per conv-window hand-off: a divisor of the unit's 2Kt + Vt columns, so every
+    reservation stays contiguous in cb_window (compute consumes per column, so a group may straddle the
+    q / k / v boundaries). R-STEP: the largest one up to WINDOW_GROUP_MAX_COLS. R-VSPLIT: all of them,
+    since a piece's reader is bound by serial DRAM round trips and its state slice leaves L1 room."""
+    cols = 2 * Kt + Vt
+    return cols if pieces > 1 else _largest_divisor_at_most(cols, WINDOW_GROUP_MAX_COLS)
 
 
 def _conv_on_fpu(dtype):
@@ -174,11 +206,13 @@ def _row_stage_bytes(token_tile_bytes):
     return 0 if seg_bytes % align == 0 else (ROW_STAGE_SLOTS + 1) * align
 
 
-def l1_footprint_bytes(Kt, Vt, dtype):
+def l1_footprint_bytes(Kt, Vt, dtype, pieces=1):
+    """Per-core footprint of one unit (Vt = the unit's column block). validate() checks R-STEP (the
+    whole Vt); the descriptor re-checks the regime it selects."""
     token_bytes = _tile_bytes(dtype)
     cb_bytes = sum(
         pages * (token_bytes if indices[0] in TOKEN_CBS else FP32_TILE_BYTES)
-        for indices, pages in _cb_plan(Kt, Vt, _conv_on_fpu(dtype))
+        for indices, pages in _cb_plan(Kt, Vt, _conv_on_fpu(dtype), pieces)
     )
     return cb_bytes + BF16_TILE_BYTES + SIGNAL_PAGE_BYTES + _row_stage_bytes(token_bytes)
 
@@ -191,6 +225,18 @@ def _largest_divisor_at_most(n, cap):
     return max(d for d in range(1, min(n, cap) + 1) if n % d == 0)
 
 
+def _value_pieces(num_pairs, Vt, num_cores):
+    """Pieces per pair (Vt / v_block_tiles). R-VSPLIT needs one unit per core: the pieces of a pair
+    exchange partial sums once per tile row, so every core must run exactly one unit in lockstep."""
+    if V_BLOCK_TILES is not None:
+        assert Vt % V_BLOCK_TILES == 0, "V_BLOCK_TILES must divide Vt"
+        pieces = Vt // V_BLOCK_TILES
+        assert pieces <= MAX_PIECES and (pieces == 1 or num_pairs * pieces <= num_cores)
+        return pieces
+    fits = [d for d in range(1, min(Vt, MAX_PIECES) + 1) if Vt % d == 0 and num_pairs * d <= num_cores]
+    return max(fits, default=1)
+
+
 def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config):
     mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight = inputs
     output, conv_state_out, recurrent_state_out = outputs
@@ -200,38 +246,47 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     rows, channels = int(mixed_qkv.shape[1]), int(mixed_qkv.shape[2])
     tokens = rows // batch
     Kt, Vt = key_dim // TILE, value_dim // TILE
-    v_block_tiles = Vt if V_BLOCK_TILES is None else V_BLOCK_TILES
-    assert v_block_tiles == Vt, "R-VSPLIT (V_BLOCK_TILES < Vt) is not built"
     key_heads = (channels - value_heads * value_dim) // (2 * key_dim)
     Ct = channels // TILE
     Gt = (value_heads + TILE - 1) // TILE
 
-    # ---- work split: pairs in blocks of PAIRS_PER_BLOCK ----
+    # ---- work split: units (pair, piece); R-STEP blocks of PAIRS_PER_BLOCK pairs ----
     device = mixed_qkv.device()
     grid = device.compute_with_storage_grid_size()
     if MAX_CORES is not None:
         grid = ttnn.CoreCoord(grid.x, max(1, min(grid.y, MAX_CORES // grid.x)))
     num_pairs = batch * value_heads
-    num_blocks = (num_pairs + PAIRS_PER_BLOCK - 1) // PAIRS_PER_BLOCK
+    pieces = _value_pieces(num_pairs, Vt, grid.x * grid.y)
+    v_block_tiles = Vt // pieces
+    num_units = num_pairs * pieces
+    units_per_block = PAIRS_PER_BLOCK if pieces == 1 else 1  # R-VSPLIT: one unit per core
+    num_blocks = (num_units + units_per_block - 1) // units_per_block
     (_, all_cores, group_1, group_2, blocks_1, blocks_2) = ttnn.split_work_to_cores(grid, num_blocks, row_wise=True)
 
-    assignment = []  # (core, first_pair, pair_count)
+    assignment = []  # (core, first_unit, unit_count)
     next_block = 0
     for group, per_core in ((group_1, blocks_1), (group_2, blocks_2)):
         if per_core == 0:
             continue
         for core in ttnn.corerange_to_cores(group, row_wise=True):
-            first_pair = next_block * PAIRS_PER_BLOCK
-            last_pair = min(num_pairs, (next_block + per_core) * PAIRS_PER_BLOCK)
-            assignment.append((core, first_pair, last_pair - first_pair))
+            first_unit = next_block * units_per_block
+            last_unit = min(num_units, (next_block + per_core) * units_per_block)
+            assignment.append((core, first_unit, last_unit - first_unit))
             next_block += per_core
+    assert pieces == 1 or all(count == 1 for _, _, count in assignment)
+    assert l1_footprint_bytes(Kt, v_block_tiles, mixed_qkv.dtype, pieces) <= L1_BUDGET
+    # NoC coordinates of the core running each unit (R-VSPLIT peers).
+    unit_noc = {}
+    for core, first_unit, _ in assignment:
+        noc_core = device.worker_core_from_logical_core(core)
+        unit_noc[first_unit] = (noc_core.x, noc_core.y)
 
     # ---- circular buffers ----
     token_dtype = mixed_qkv.dtype
     token_tile_bytes = _tile_bytes(token_dtype)
     cbs = []
     conv_on_fpu = _conv_on_fpu(token_dtype)
-    for indices, pages in _cb_plan(Kt, Vt, conv_on_fpu):
+    for indices, pages in _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces):
         if pages == 0:
             continue
         is_token = indices[0] in TOKEN_CBS
@@ -254,10 +309,10 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 ],
             )
         )
-    # Writer-to-reader token: the window buffer has been zeroed.
+    # Writer-to-reader tokens: one per cb_window slot, as each slot has been zeroed.
     cbs.append(
         ttnn.CBDescriptor(
-            total_size=SIGNAL_PAGE_BYTES,
+            total_size=SIGNAL_PAGE_BYTES * WINDOW_DEPTH,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -297,15 +352,16 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
     reader_ct.append(ROW_STAGE_SLOTS if row_stage_bytes else 0)
     reader_ct.append(int(conv_on_fpu))
-    reader_ct.append(_window_group_cols(Kt, Vt))
+    reader_ct.append(_window_group_cols(Kt, v_block_tiles, pieces))
     reader_ct.append(WINDOW_DEPTH)
+    reader_ct.append(pieces)
     for t in reader_tensors:
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     reader_addrs = [t.buffer_address() for t in reader_tensors]
 
     # ---- writer ----
-    window_bytes = CONV_TAPS * _window_group_cols(Kt, Vt) * WINDOW_DEPTH * token_tile_bytes
-    writer_ct = [Kt, Vt, value_heads, *geometry_ct, window_bytes]
+    window_bytes = CONV_TAPS * _window_group_cols(Kt, v_block_tiles, pieces) * WINDOW_DEPTH * token_tile_bytes
+    writer_ct = [Kt, Vt, value_heads, *geometry_ct, window_bytes, pieces, OSUM_SEM_ID, WINDOW_DEPTH]
     for t in (output, recurrent_state_out):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     writer_addrs = [output.buffer_address(), recurrent_state_out.buffer_address()]
@@ -313,19 +369,24 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     # ---- compute ----
     compute_ct = [
         Kt,
-        Vt,
+        v_block_tiles,
         value_heads,
-        _largest_divisor_at_most(Vt, 4),  # read-matmul subblock width (fp32 half-sync DEST: 4 tiles)
+        _largest_divisor_at_most(v_block_tiles, 4),  # read-matmul subblock width (fp32 half-sync DEST: 4 tiles)
         _float_bits(value_dim**0.5),
         _float_bits(key_dim**-0.5),
         int(conv_on_fpu),
+        pieces,
+        _window_group_cols(Kt, v_block_tiles, pieces),
     ]
 
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    for core, first_pair, count in assignment:
-        reader_rt[core.x][core.y] = reader_addrs + [first_pair, count, tokens]
-        writer_rt[core.x][core.y] = writer_addrs + [first_pair, count, tokens]
-        compute_rt[core.x][core.y] = [first_pair, count, tokens, _float_bits(value_dim * epsilon)]
+    for core, first_unit, count in assignment:
+        reader_rt[core.x][core.y] = reader_addrs + [first_unit, count, tokens]
+        # R-VSPLIT: NoC coordinates of the pair's piece cores, in piece order.
+        group_first = first_unit - first_unit % pieces
+        peers = [c for s in range(pieces) for c in unit_noc[group_first + s]] if pieces > 1 else []
+        writer_rt[core.x][core.y] = writer_addrs + [first_unit, count, tokens] + peers
+        compute_rt[core.x][core.y] = [first_unit, count, tokens, _float_bits(value_dim * epsilon)]
 
     modes = list(getattr(compute_kernel_config, "unpack_to_dest_mode", []) or [])
     if len(modes) < NUM_CB_SLOTS:
@@ -364,4 +425,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             config=compute_kernel_config,
         ),
     ]
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+    semaphores = []
+    if pieces > 1:
+        semaphores.append(ttnn.SemaphoreDescriptor(id=OSUM_SEM_ID, core_ranges=all_cores, initial_value=0))
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)

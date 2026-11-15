@@ -150,7 +150,7 @@ computed from them, never restated.
 |--------|--------|-----------|-------|------------------------------------------------------------------------------|--------------------------|
 | R-STEP: state of one pair resident, token steps (F3) | built | every call (all INPUTS) | pair state Kt x Vt resident; prep/norm block = 1 tile row x pair columns; step = 1 token | recurrent_state 1 in / 1 out (minimum); output, z, conv_state_out 1 (minimum); v columns of mixed_qkv/conv_state/conv_weight 1; q,k columns r times (one read per value head): `(2HkK*r + HvV)/C` = 1.8 at the chip geometry; gate/A_log/dt_bias segments Hv times (tiny); token tensors read row-granular, so decode reads only the pair's own rows (no B-fold tile re-read) | tile-row block: one set of conv/gate/norm inits, one window assembly and one W expansion amortized over up to 32 tokens; per-token fixed cost is init churn of the update batches (intended: once per DEST batch) |
 | R-BCAST: kn/qn of a key head computed once, multicast to the r pair cores of that key head | deferred: the stepping stone (each pair core reads q/k columns from DRAM) is built and the multicast layers onto it (`ttnn.Mcast` + `McastArgs`, kn/qn tile rows = 2Kt fp32 tiles per tile row, one injector per (b, hk) group); positive reason: the bytes it saves are 64 KiB per decode call at the chip geometry against 1.5 MiB of state, and 33.5 MB on a prefill call that is bound by 4096 ordered steps, so neither Phase 0 profile is bound by them | same as R-STEP | mixed_qkv/conv_state/conv_weight 1.8 -> 1.0 crossings; adds one multicast of 2Kt tiles per tile row per key head | same |
-| R-VSPLIT: state columns split across `Vt / v_block_tiles` cores per pair, partial sum of o^2 combined across the group for M13 | deferred: raises decode occupancy x(Vt/v_block_tiles) (12 -> 48 cores at decode B=1) but, without R-BCAST, multiplies q/k column reads by Vt/v_block_tiles (6.5 MB vs 2.4 MB at decode B=1 fp32); it is built on top of R-STEP + R-BCAST (same per-pair loop on a column slice; the combine is one column-0 fp32 tile per tile row per piece, all-gather over the group by semaphore-gated unicast) | `v_block_tiles < Vt` (future); also the regime that serves `footprint(Kt, Vt) > L1_BUDGET` | pair state Kt x v_block_tiles | adds the combine; with R-BCAST, token tensors at minimum | per-core state update work / (Vt/v_block_tiles) |
+| R-VSPLIT: state columns split across `Vt / v_block_tiles` cores per pair, partial sum of o^2 combined across the group for M13 | built (Refinement 3), without R-BCAST: each piece reads and preps the pair's q/k columns itself (q/k reads x pieces); the combine is one column-0 fp32 tile per tile row per piece, all-gathered by unicast NoC writes into the same L1 slot on every piece core plus a cumulative semaphore count; weights / gate tiles read as aligned row spans to offset the replicated reads | `_value_pieces`: pieces = largest divisor of Vt (<= MAX_PIECES = 4) with `B*Hv*pieces <= grid cores` (one unit per core, lockstep tile rows); `V_BLOCK_TILES` forces it | pair state Kt x v_block_tiles | adds the combine; q/k token columns x pieces | per-core state update work / pieces |
 | R-CHUNK: F1 chunk of 32 tokens per tile row (closed form inside the chunk, state carried across chunks) | deferred: replaces the 32 token steps of `recurrence_block` with one chunk step on the same tile-row prep and the same resident state (stepping stone is R-STEP; decode T=1 needs R-STEP regardless); needs a unit-lower-triangular solve (`triangle_solve_tile`, Blackhole only, `tt_metal/hw/inc/api/compute/triangle_solve.h:50`) or F5 products, a triangular mask (G3) and padded-token handling inside a chunk | prefill tile rows with >= 2 valid tokens (future) | 32 tokens x pair state | state touched 4x per chunk instead of 2x per token in L1; DRAM unchanged | per-chunk matrix products replace 32 x (2 Kt Vt matmuls + Kt Vt updates) |
 | R-SEG: T split across cores by F4 segment pairs (P, H), combined in order | deferred: the only way to put more than B*Hv cores on a prefill call; costs a K x K factor per pair (2x state work per token) and a second pass over mixed_qkv unless segment rows stay resident; the per-segment output pass is `recurrence_block` unchanged | prefill with `B*Hv` much smaller than the grid (future) | segment of tile rows x pair | mixed_qkv up to 2 crossings; pair combine 128 KiB per pair per boundary over NoC | - |
 | R-GROUP: the r value heads of a key head on one core (`pairs_per_block = r`, ordered by key head) | rejected: superseded by R-BCAST, which reaches the same 1.0 crossing of mixed_qkv while keeping B*Hv cores busy instead of B*Hk | - | r pair states | mixed_qkv 1.0 | - |
@@ -158,10 +158,10 @@ computed from them, never restated.
 | R-PREP-SPLIT: conv/gates/norms on separate cores, y handed to the pair cores | rejected: prep is a small fraction of a tile row's work next to 32 token steps over Kt*Vt state tiles; the only redundancy it removes (kn/qn r-fold) is removed by R-BCAST without a y hand-off | - | - | adds y traffic (2Kt+Vt fp32 tiles per tile row per pair) | - |
 | R-STREAM-STATE: state not resident, read/written per token | rejected: violates "state crosses DRAM once in and once out" (T crossings each way) | - | - | - | - |
 
-Single-regime note (Phase 0 builds R-STEP only, so no selection predicate is needed): R-STEP covers
-every call; it is the only built regime because every other row either layers on it (R-BCAST,
-R-VSPLIT, R-CHUNK, R-SEG) or is superseded. Regime-pinned tests are required when a second regime
-is built.
+Regime selection (Refinement 3): R-VSPLIT when `_value_pieces(B*Hv, Vt, grid cores) > 1` (decode B=1/2,
+prefill B=1, small-geometry shapes with few pairs), else R-STEP (pairs already fill the grid, e.g. decode
+B=8/16). Regime-pinned tests: `test_gated_delta_net_vsplit.py` (host predicate; forced V_BLOCK_TILES
+1 / 2 / auto on decode, multi-tile-row prefill and batched prefill, clean and inf padding).
 
 ### Traffic ranking
 
@@ -269,10 +269,12 @@ Deferred inter-Tensix contracts (kept reachable by this structure):
   (`ttnn.Mcast` + `McastArgs`, data_ready semaphore per tile row); receivers skip `conv_block` and
   `l2norm_block` for the q/k groups. Requires the r pairs of a key head on distinct, co-scheduled
   cores: the pair-to-core map orders pairs by `(b, hk, h % r)`.
-- R-VSPLIT: per pair, pieces own state columns `[s*v_block, (s+1)*v_block)`; after the token
-  loop of a tile row each piece computes `sum_m o^2` over its columns (column-0 fp32 tile) and
-  unicasts it to the other pieces (semaphore-counted), each sums the partials before the rsqrt of
-  `rmsnorm_gate_block`.
+- R-VSPLIT (built, Refinement 3): per pair, pieces own state columns `[s*v_block, (s+1)*v_block)`;
+  after the token loop of a tile row each piece reduces `sum_m o^2` over its columns into cb_osum_part,
+  its writer NoC-writes that tile into slot `s` of cb_osum_gather on every piece core (same address
+  everywhere), increments the peers' semaphore and waits for a cumulative count of
+  `rows * (pieces - 1)`; compute adds the `pieces` slots in piece order (identical rsqrt on every
+  piece) before the rsqrt of `rmsnorm_gate_block`.
 
 Physical sharding: TARGET has no memory_layout axis, so no sharded scheme is in scope. If one is
 added, the (b, h) work split is a logical height-shard of recurrent_state (independent: a placement
@@ -288,16 +290,15 @@ SUPPORTED + tests). `dtype: bfloat16` is a knob-turn on CB page formats for the 
 
 | Field | Value |
 |-------|-------|
-| Work unit | one pair `(b, h)`, index `pair = b*Hv + h` (block = 1 pair) |
+| Work unit | one piece of a pair, `unit = pair * pieces + s`, `pair = b*Hv + h` (R-STEP: pieces = 1, block = PAIRS_PER_BLOCK pairs; R-VSPLIT: one unit per core) |
 | Grid | `device.compute_with_storage_grid_size()`, optionally capped by host const `MAX_CORES` (default None = full grid); never a constant |
 | Split | `ttnn.split_work_to_cores(grid, B*Hv, row_wise=True)` -> `(num_cores, all_cores, core_group_1, core_group_2, pairs_per_core_1, pairs_per_core_2)`; each core gets RT args `first_pair`, `num_pairs_this_core` (contiguous range) |
 | Per-core work | `num_pairs_this_core` pairs; per pair `ceil`-based tile rows `(b*T)//32 .. (b*T+T-1)//32` and `hi - lo` token steps per tile row |
 | Remainder | handled by the two core groups of `split_work_to_cores`; ragged token rows by `[lo, hi)`; tile counts always `ceil`: `TRn = ceil(N/32)`, conv_state tile rows `ceil(3B/32)`, `Gt = ceil(Hv/32)` |
-| Cores used (INPUTS) | decode B=1 chip: 12; decode B=16 chip: 110 (192 pairs); prefill chip: 12; small geometry decode B=40: 110 (120 pairs) |
+| Cores used (INPUTS) | decode B=1 chip: 48 (R-VSPLIT, 4 pieces); decode B=8: 96, B=16: 110 (R-STEP); prefill chip B=1: 48; small geometry decode B=40: 110 (120 pairs, R-STEP) |
 | L1 predicate | `footprint(Kt, Vt, depths) <= L1_BUDGET` from l1_ledger.md, checked on host; RuntimeError otherwise (no INPUTS shape reaches it) |
 
-Single regime: no selection predicate. Unused cores get no kernels (the program's core ranges are
-`all_cores`).
+Unused cores get no kernels (the program's core ranges are `all_cores`).
 
 ## Circular Buffers
 

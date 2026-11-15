@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// gated_delta_net compute (regime R-STEP, op_design.md).
+// gated_delta_net compute (regimes R-STEP and R-VSPLIT, op_design.md).
 //
-// Per pair, per tile row: gates_block -> conv_block -> l2norm_block -> recurrence_block (one
-// token per step: read matmul, token vector, state update) -> rmsnorm_gate_block.
+// Per unit (pair, piece of Vb state columns; R-STEP is one piece of Vt), per tile row: gates_block ->
+// conv_block -> l2norm_block -> recurrence_block (one token per step: read matmul, token vector, state
+// update) -> rmsnorm_gate_block.
 //
 // Helpers: matmul_block (read [kn; qn] x S) and reduce (row sums, Accurate fp32). Raw LLK where the
 // design names a custom block op, with the reasons:
@@ -22,6 +23,9 @@
 // DEST discipline in the raw windows: every unpack-to-DEST load of a window is issued before its
 // first SFPU op (an unpack-to-DEST load may run ahead of SFPU work on the math thread), and the
 // math thread waits for the SFPU before the FPU accumulates onto SFPU results.
+// R-VSPLIT combine: the RMS-norm sum of o^2 over V is the sum of the pieces' partial row sums, which the
+// writer all-gathers; the PIECES partial tiles are added in one SFPU window in piece order, so every
+// piece of a pair derives the same rsqrt.
 
 #include <cstdint>
 
@@ -82,6 +86,8 @@ constexpr uint32_t cb_u_f32 = GDN_CB_U_F32;
 constexpr uint32_t cb_conv_acc = GDN_CB_CONV_ACC;
 constexpr uint32_t cb_sq_o = GDN_CB_SQ_O;
 constexpr uint32_t cb_rinv_o = GDN_CB_RINV_O;
+constexpr uint32_t cb_osum_part = GDN_CB_OSUM_PART;
+constexpr uint32_t cb_osum_gather = GDN_CB_OSUM_GATHER;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t COEF_ALPHA = 0;      // alpha_p in every row
@@ -93,20 +99,36 @@ constexpr uint32_t SOFTPLUS_THRESHOLD_BITS = 0x41a00000u;  // 20.0f
 constexpr uint32_t L2_EPS_BITS = 0x358637bdu;              // 1e-6f
 
 constexpr uint32_t Kt = get_compile_time_arg_val(0);
-constexpr uint32_t Vt = get_compile_time_arg_val(1);
+constexpr uint32_t Vb = get_compile_time_arg_val(1);  // v / state column tiles of this core's piece
 constexpr uint32_t Hv = get_compile_time_arg_val(2);
 constexpr uint32_t MM_SUBBLOCK_W = get_compile_time_arg_val(3);
 constexpr uint32_t SQRT_V_BITS = get_compile_time_arg_val(4);
 constexpr uint32_t Q_SCALE_BITS = get_compile_time_arg_val(5);
 constexpr bool CONV_ON_FPU = get_compile_time_arg_val(6) != 0;
+constexpr uint32_t PIECES = get_compile_time_arg_val(7);             // column pieces per pair (R-VSPLIT when > 1)
+constexpr uint32_t WINDOW_GROUP_COLS = get_compile_time_arg_val(8);  // columns per cb_window hand-off
+
+constexpr uint32_t largest_divisor_at_most(uint32_t n, uint32_t cap) {
+    uint32_t best = 1;
+    for (uint32_t d = 1; d <= n && d <= cap; ++d) {
+        if (n % d == 0) {
+            best = d;
+        }
+    }
+    return best;
+}
+// FPU conv columns per DEST window: a divisor of the window group, so a batch never straddles the
+// cb_window wrap (tiles are addressed by index from the read pointer).
+constexpr uint32_t CONV_BATCH = largest_divisor_at_most(WINDOW_GROUP_COLS, ckl::DEST_AUTO_LIMIT);
+static_assert(PIECES <= ckl::DEST_AUTO_LIMIT, "the partial-sum combine holds every piece in one DEST window");
 // FPU conv reads raw conv_weight tiles (tap j at row j); the SFPU conv one row-0 tile per tap.
-constexpr uint32_t conv_w_pages = CONV_ON_FPU ? (2 * Kt + Vt) : GDN_CONV_TAPS * (2 * Kt + Vt);
-constexpr uint32_t n_state = Kt * Vt;
-constexpr uint32_t pair_cols = 2 * Kt + Vt;
+constexpr uint32_t conv_w_pages = CONV_ON_FPU ? (2 * Kt + Vb) : GDN_CONV_TAPS * (2 * Kt + Vb);
+constexpr uint32_t n_state = Kt * Vb;
+constexpr uint32_t pair_cols = 2 * Kt + Vb;
 // State tiles per update batch: every DEST slot of a window.
 constexpr uint32_t UPDATE_BATCH = ckl::DEST_AUTO_LIMIT < n_state ? ckl::DEST_AUTO_LIMIT : n_state;
 static_assert(ckl::DEST_AUTO_LIMIT >= 4, "raw windows use 4 DEST slots");
-static_assert(Vt % MM_SUBBLOCK_W == 0, "read-matmul subblock must divide Vt");
+static_assert(Vb % MM_SUBBLOCK_W == 0, "read-matmul subblock must divide Vb");
 
 // Unpack setup for a run of copy_tile loads: issued once per run of CBs that share a data format and
 // unpack-to-DEST mode (descriptor TOKEN_CBS / U2D_CBS), not per CB.
@@ -394,7 +416,7 @@ ALWI void conv_two_taps(uint32_t col, uint32_t tap0) {
 // y = silu(sum_j X_j (*)row W_j) per column tile of the pair; q, k -> cb_y_qk, v -> cb_v.
 ALWI void conv_block(RowScope scope) {
     cb_reserve_back(cb_y_qk, 2 * Kt);
-    cb_reserve_back(cb_v, Vt);
+    cb_reserve_back(cb_v, Vb);
     for (uint32_t col = 0; col < pair_cols; ++col) {
         cb_wait_front(cb_window, GDN_CONV_TAPS);
         cb_reserve_back(cb_conv_acc, 1);
@@ -428,37 +450,48 @@ ALWI void conv_block(RowScope scope) {
         cb_pop_front(cb_conv_acc, 1);
     }
     cb_push_back(cb_y_qk, 2 * Kt);
-    cb_push_back(cb_v, Vt);
+    cb_push_back(cb_v, Vb);
 }
 
 // ---------------------------------------------------------------- conv_block_fpu
 // Same contract as conv_block: DEST = sum_j X_j (*)row W_j by FPU ELWMUL accumulation (DEST is zero
 // after acquire), then silu in the same window. Exact for bf16 operands; products accumulate in fp32.
+// CONV_BATCH columns per window: one init / reconfig / sync per batch, not per column.
 ALWI void conv_block_fpu(RowScope scope) {
     cb_reserve_back(cb_y_qk, 2 * Kt);
-    cb_reserve_back(cb_v, Vt);
-    for (uint32_t col = 0; col < pair_cols; ++col) {
-        cb_wait_front(cb_window, GDN_CONV_TAPS);
+    cb_reserve_back(cb_v, Vb);
+    static_assert(pair_cols % CONV_BATCH == 0, "window groups tile the unit's columns");
+    constexpr uint32_t n = CONV_BATCH;
+    for (uint32_t col0 = 0; col0 < pair_cols; col0 += n) {
+        cb_wait_front(cb_window, GDN_CONV_TAPS * n);
         tile_regs_acquire();
         reconfig_data_format(cb_window, cb_conv_w);
         mul_bcast_rows_init(cb_window, cb_conv_w);
-        for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
-            mul_tiles_bcast_rows(cb_window, cb_conv_w, tap, col, 0, tap);
+        for (uint32_t i = 0; i < n; ++i) {
+            for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
+                mul_tiles_bcast_rows(cb_window, cb_conv_w, GDN_CONV_TAPS * i + tap, col0 + i, i, tap);
+            }
         }
         silu_tile_init();
-        silu_scoped(0, scope);
+        for (uint32_t i = 0; i < n; ++i) {
+            silu_scoped(i, scope);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        if (col < 2 * Kt) {
-            pack_first(0, cb_y_qk, col);
-        } else {
-            pack_first(0, cb_v, col - 2 * Kt);
+        pack_reconfig_data_format(cb_y_qk);  // cb_y_qk and cb_v are both Float32
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t col = col0 + i;
+            if (col < 2 * Kt) {
+                pack_at(i, cb_y_qk, col);
+            } else {
+                pack_at(i, cb_v, col - 2 * Kt);
+            }
         }
         tile_regs_release();
-        cb_pop_front(cb_window, GDN_CONV_TAPS);
+        cb_pop_front(cb_window, GDN_CONV_TAPS * n);
     }
     cb_push_back(cb_y_qk, 2 * Kt);
-    cb_push_back(cb_v, Vt);
+    cb_push_back(cb_v, Vb);
 }
 
 // Squares of `count` tiles of an fp32 buffer starting at `base` (the input is kept) -> sq_cb, DEST_AUTO_LIMIT
@@ -573,17 +606,23 @@ ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
     cb_reserve_back(cb_knT, Kt);
     reconfig_data_format_srca(cb_kq_rows);
     transpose_init(cb_kq_rows);
-    for (uint32_t kt = 0; kt < Kt; ++kt) {
+    for (uint32_t kt0 = 0; kt0 < Kt; kt0 += ckl::DEST_AUTO_LIMIT) {
+        const uint32_t n = (Kt - kt0) < ckl::DEST_AUTO_LIMIT ? (Kt - kt0) : ckl::DEST_AUTO_LIMIT;
         tile_regs_acquire();
-        transpose_tile(cb_kq_rows, kt, 0);
+        for (uint32_t i = 0; i < n; ++i) {
+            transpose_tile(cb_kq_rows, kt0 + i, i);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_first(0, cb_knT, kt);
+        pack_first(0, cb_knT, kt0);
+        for (uint32_t i = 1; i < n; ++i) {
+            pack_at(i, cb_knT, kt0 + i);
+        }
         tile_regs_release();
     }
     cb_push_back(cb_knT, Kt);
     cb_wait_front(cb_d, 1);
-    cb_wait_front(cb_v, Vt);
+    cb_wait_front(cb_v, Vb);
     cb_wait_front(cb_knT, Kt);
 }
 
@@ -609,16 +648,16 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         src_mm_buf,
         bufs.reads,
         bufs.reads,
-        ckl::MatmulBlockShape::of(2, Vt / MM_SUBBLOCK_W, 1, MM_SUBBLOCK_W, Kt, 1));
+        ckl::MatmulBlockShape::of(2, Vb / MM_SUBBLOCK_W, 1, MM_SUBBLOCK_W, Kt, 1));
     // token vector (5b): u = beta_sel (*)col (v - alpha rk); o = alpha_sel (*)col ro + d (*)col u
     cb_wait_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
     // alpha is one scalar per token (element (0, 0) of the alpha page): fp32 scalar SFPU multiplies
     // here and in the state decay, with no broadcast tile in DEST.
     const uint32_t alpha_bits = read_tile_value(cb_tok_coef, COEF_ALPHA, 0);
-    cb_wait_front(cb_reads, 2 * Vt);
-    cb_reserve_back(cb_u, Vt);
-    cb_reserve_back(cb_u_f32, Vt);
-    for (uint32_t vt = 0; vt < Vt; ++vt) {
+    cb_wait_front(cb_reads, 2 * Vb);
+    cb_reserve_back(cb_u, Vb);
+    cb_reserve_back(cb_u_f32, Vb);
+    for (uint32_t vt = 0; vt < Vb; ++vt) {
         tile_regs_acquire();
         begin_loads(cb_reads);
         load(cb_reads, vt, 0);
@@ -635,14 +674,14 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         pack_first(2, cb_u, vt);
         tile_regs_release();
     }
-    cb_push_back(cb_u, Vt);
-    cb_push_back(cb_u_f32, Vt);
-    cb_wait_front(cb_u, Vt);
-    cb_wait_front(cb_u_f32, Vt);
-    for (uint32_t vt = 0; vt < Vt; ++vt) {
+    cb_push_back(cb_u, Vb);
+    cb_push_back(cb_u_f32, Vb);
+    cb_wait_front(cb_u, Vb);
+    cb_wait_front(cb_u_f32, Vb);
+    for (uint32_t vt = 0; vt < Vb; ++vt) {
         tile_regs_acquire();
         begin_loads(cb_reads);
-        load(cb_reads, Vt + vt, 0);
+        load(cb_reads, Vb + vt, 0);
         load(cb_tok_coef, COEF_ALPHA_SEL, 1);
         load(cb_u_f32, vt, 2);
         load(cb_d, 0, 3);
@@ -660,7 +699,7 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         pack_reconfig_l1_acc(0);
         tile_regs_release();
     }
-    cb_pop_front(cb_reads, 2 * Vt);
+    cb_pop_front(cb_reads, 2 * Vb);
     // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
     const bool in_place = (src == dst);
     if (in_place) {
@@ -689,7 +728,7 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         matmul_init(cb_knT, cb_u);
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t tile = first + i;
-            matmul_tiles(cb_knT, cb_u, tile / Vt, tile % Vt, i);
+            matmul_tiles(cb_knT, cb_u, tile / Vb, tile % Vb, i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -706,21 +745,45 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         cb_pop_front(src, n_state);
         cb_pop_front(src_mm, n_state);
     }
-    cb_pop_front(cb_u, Vt);
-    cb_pop_front(cb_u_f32, Vt);
+    cb_pop_front(cb_u, Vb);
+    cb_pop_front(cb_u_f32, Vb);
     cb_pop_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
 }
 
 // ---------------------------------------------------------------- rmsnorm_gate_block
 // out = ((o (*)col rsqrt(mean o^2 + eps)) (*)row w) * silu(z), with
-// rsqrt(mean o^2 + eps) = sqrt(V) * rsqrt(sum o^2 + V eps).
+// rsqrt(mean o^2 + eps) = sqrt(V) * rsqrt(sum o^2 + V eps); sum over the whole V (all pieces).
 ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope) {
-    square_block<cb_o_acc, cb_sq_o>(0, Vt, scope);
-    row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, Vt, RsqrtPost{v_eps_bits, SQRT_V_BITS, scope});
+    square_block<cb_o_acc, cb_sq_o>(0, Vb, scope);
+    const RsqrtPost rsqrt_post{v_eps_bits, SQRT_V_BITS, scope};
+    if constexpr (PIECES == 1) {
+        row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, Vb, rsqrt_post);
+    } else {
+        DataflowBuffer osum_part{cb_osum_part};
+        row_sum<cb_sq_o, cb_osum_part>(bufs, bufs.sq_o, osum_part, Vb, ckl::NoOp{});
+        cb_wait_front(cb_osum_gather, PIECES);
+        cb_reserve_back(cb_rinv_o, 1);
+        tile_regs_acquire();
+        begin_loads(cb_osum_gather);
+        for (uint32_t s = 0; s < PIECES; ++s) {
+            load(cb_osum_gather, s, s);
+        }
+        add_binary_tile_init();
+        for (uint32_t s = 1; s < PIECES; ++s) {
+            binary_scoped<ckernel::BinaryOp::ADD>(0, s, 0, scope);
+        }
+        rsqrt_post(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_rinv_o, 0);
+        tile_regs_release();
+        cb_push_back(cb_rinv_o, 1);
+        cb_pop_front(cb_osum_gather, PIECES);
+    }
     cb_wait_front(cb_rinv_o, 1);
-    cb_wait_front(cb_z, Vt);
-    cb_reserve_back(cb_out_rows, Vt);
-    for (uint32_t vt = 0; vt < Vt; ++vt) {
+    cb_wait_front(cb_z, Vb);
+    cb_reserve_back(cb_out_rows, Vb);
+    for (uint32_t vt = 0; vt < Vb; ++vt) {
         tile_regs_acquire();
         begin_loads(cb_o_acc);
         load(cb_o_acc, vt, 0);
@@ -742,31 +805,31 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope)
         pack_first(0, cb_out_rows, vt);
         tile_regs_release();
     }
-    cb_push_back(cb_out_rows, Vt);
-    cb_pop_front(cb_o_acc, Vt);
-    cb_pop_front(cb_z, Vt);
+    cb_push_back(cb_out_rows, Vb);
+    cb_pop_front(cb_o_acc, Vb);
+    cb_pop_front(cb_z, Vb);
     cb_pop_front(cb_rinv_o, 1);
 }
 
 }  // namespace
 
 void kernel_main() {
-    const uint32_t first_pair = get_arg_val<uint32_t>(0);
-    const uint32_t num_pairs = get_arg_val<uint32_t>(1);
+    const uint32_t first_unit = get_arg_val<uint32_t>(0);
+    const uint32_t num_units = get_arg_val<uint32_t>(1);
     const uint32_t T = get_arg_val<uint32_t>(2);
     const uint32_t v_eps_bits = get_arg_val<uint32_t>(3);  // V * epsilon
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_kq_rows, cb_state_mm, cb_reads);
     Buffers bufs;
 
-    for (uint32_t pair = first_pair; pair < first_pair + num_pairs; ++pair) {
-        const uint32_t seq_lo = (pair / Hv) * T;
+    for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
+        const uint32_t seq_lo = (unit / PIECES / Hv) * T;
         const uint32_t seq_hi = seq_lo + T;
         const uint32_t first_tr = seq_lo / TILE_ROWS;
         const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
         cb_wait_front(cb_conv_w, conv_w_pages);
         cb_wait_front(cb_gate_w, 2);
-        cb_wait_front(cb_norm_w, Vt);
+        cb_wait_front(cb_norm_w, Vb);
 
         uint32_t token = 0;
         for (uint32_t tr = first_tr; tr <= last_tr; ++tr) {
@@ -783,20 +846,20 @@ void kernel_main() {
             }
             l2norm_block(bufs, scope);
 
-            cb_reserve_back(cb_o_acc, Vt);
+            cb_reserve_back(cb_o_acc, Vb);
             for (uint32_t row = lo; row < hi; ++row, ++token) {
                 token_step(bufs, token == 0, token == T - 1, row == lo, scope);
             }
-            cb_push_back(cb_o_acc, Vt);
+            cb_push_back(cb_o_acc, Vb);
             cb_pop_front(cb_kq_rows, 2 * Kt);
             cb_pop_front(cb_knT, Kt);
             cb_pop_front(cb_d, 1);
-            cb_pop_front(cb_v, Vt);
+            cb_pop_front(cb_v, Vb);
 
             rmsnorm_gate_block(bufs, v_eps_bits, scope);
         }
         cb_pop_front(cb_conv_w, conv_w_pages);
         cb_pop_front(cb_gate_w, 2);
-        cb_pop_front(cb_norm_w, Vt);
+        cb_pop_front(cb_norm_w, Vb);
     }
 }

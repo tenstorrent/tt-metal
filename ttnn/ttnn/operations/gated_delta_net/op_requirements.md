@@ -125,7 +125,7 @@ history-row reads (3 contiguous rows per face in one aligned read), and fuse the
 Not done here: R-VSPLIT is its own queued refinement, and the remaining per-window costs are now
 fixed init/unpack overheads that a cross-core split divides directly.
 
-### [ ] Refinement 3 — R-VSPLIT: spread each pair's state columns across cores for perf_decode_b1
+### [x] Refinement 3 — R-VSPLIT: spread each pair's state columns across cores for perf_decode_b1
 
 **Type**: perf
 
@@ -151,6 +151,27 @@ fill the grid, e.g. decode B=16) with regime-pinned tests for both. The unused c
 **Done when**: measured device-ns on `perf_decode_b1` improves over the Refinement 2 result and
 moves toward 5.3 us, its precision gates hold, the golden suite is green, and no regression across
 the config-spanning guard set (as in Refinement 2, plus one decode B=16 representative on R-STEP).
+
+**Outcome**: perf_decode_b1 (bf16) 42.1 -> 33.9 us device kernel time on 48 cores (R-VSPLIT, 4 pieces,
+Vb = 1); guard set all faster: decode B=8 87.3 -> 74.9, B=16 172.0 -> 150.4 (both R-STEP, gaining from the
+shared reader changes), fp32 decode B=1 62.6 -> 52.6, bf16 prefill T=96 1714 -> 589 (48 cores),
+batched B=2 T=40 833 -> 367 us (96 cores). Built: host predicate `_value_pieces` (pieces = largest divisor
+of Vt <= 4 with one unit per core), the o^2 partial all-gather (unicast into the same slot on every piece
+core + cumulative semaphore, two tile rows of slots), per-piece state / z / output / norm_weight slices.
+Levers added to make the split pay off: aligned row-span reads of conv_weight taps, A_log / dt_bias /
+norm_weight row 0 and gate token rows; the weights, gates and first window group completed by one DRAM
+flush; one window group per unit in R-VSPLIT (was gcd(Kt, Vb) = 1, i.e. 9 flushes); history rows read
+as one aligned span per column; window zeroed slot by slot; FPU conv and kn transposes batched per DEST
+window. Measured: pieces = 2 is slower (36.2 vs 34.5 us decode, 940 vs 633 us prefill T=96, with
+zones); row-granular *staged* weight reads were slower than whole tiles (request count, not bytes,
+binds). Where the time is now (per-core zones, B=1): the reader's single flush completes ~11 us in,
+bound by DRAM request rate (48 cores x ~70 small requests; ~80 ns per issued read), dominated by the
+q/k window columns every piece re-reads (8 of 9 columns, 12 cores per key head); then a serial compute
+chain of conv 4.1, L2 norm 8.2 (inverse norms 4.0, scale 2.3, d 1.0, transposes 1.0), token step 2.9,
+RMS norm + combine 3.9, writer drain 2.7 us. Next: share the q/k prep (R-BCAST, or split the q/k conv
+and L2 partial sums across the pieces of a pair and all-gather kn/qn), which removes 8/9 of the reader
+requests and the replicated 12 us of conv + L2 norm. Not done here: it is a second cross-core topology
+(kn/qn tile rows, 3Kt fp32 tiles per tile row per pair) on top of this one.
 
 ### [ ] Refinement 4 — Chunked recurrence for prefill (model_prefill_4096)
 

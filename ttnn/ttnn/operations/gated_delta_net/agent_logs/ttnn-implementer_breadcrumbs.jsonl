@@ -5,3 +5,6 @@
 {"event":"test_run","status":"pass","test":"golden decode 1x1x256 bf16","ts":"2026-11-15T00:12:48+00:00"}
 {"event":"test_run","status":"pass","test":"golden -k BFLOAT16 (35/35), unit dir 51/51, bf16 watcher sanitizer 10/10","ts":"2026-11-15T00:16:14+00:00"}
 {"event":"test_run","refinement":2,"status":"pass","perf_decode_b1_ns":42130,"baseline_ns":101619,"unit":"53/53","golden_slice":"33/33","regression":"36/36","ts":"2026-11-15T00:55:17+00:00"}
+{"event":"test_run","refinement":3,"result":"pass","detail":"R-VSPLIT first build: perf test 6/6 after fixing unit-block assignment; decode b1 40.0 us (from 42.1)","ts":"2026-11-15T01:19:31+00:00"}
+{"event":"device_print_observation","refinement":3,"detail":"zones: reader flush bound by DRAM request rate (~80 ns per issued read, 48 cores); window group gcd(Kt,Vb)=1 gave 9 flushes; row-granular staged weight reads slower than whole tiles","ts":"2026-11-15T01:19:31+00:00"}
+{"event":"fix_applied","refinement":3,"detail":"aligned in-place row-span reads for weights/gates, one flush for weights+gates+window, one window group per unit, history span staging, slot-wise window zeroing, batched FPU conv/transposes: 33.9 us","ts":"2026-11-15T01:19:31+00:00"}
