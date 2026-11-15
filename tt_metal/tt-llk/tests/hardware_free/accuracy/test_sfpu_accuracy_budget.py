@@ -1102,11 +1102,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         "exponent above it (#54770, closed because ELU/SELU/CELU feed it only x < 0; "
         "the test-only calculate_expm1_cw wrapper is the one caller that reaches it)"
     ),
-    (MathOperation.I0, None, None, None, None): (
-        "a finite answer to an infinite golden from |x| ~ 92 up, measured on the bare "
-        "Taylor series the two-region kernel replaced (#50465). That kernel answers +inf "
-        "past 88.5, so re-emitting its rows on hardware retires this entry"
-    ),
     (MathOperation.I1, None, None, None, None): (
         "saturates at +-1.16e37 where i1 overflows fp32, half the format: the input is "
         "clamped at 88.5 (#52174, under #52178)"
@@ -1194,7 +1189,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         None,
     ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 15,
-    (MathOperation.I0, None, None, None, None): 10,
     (MathOperation.I1, None, None, None, None): 10,
     (MathOperation.Lgamma, None, None, None, None): 1,
     (MathOperation.Polygamma, None, None, None, None): 11,
