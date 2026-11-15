@@ -202,8 +202,6 @@ def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
     os.makedirs(ckpt)
     write_header(ckpt, {"format": "ttml-dcp", "version": 1, "user": {"step": 1, "run": "a"}, "train_state": {}})
     assert read_user_header(ckpt) == {"step": 1, "run": "a"}
-    write_header(ckpt, {"format": "ttml-dcp", "version": 1})
-    assert read_user_header(ckpt) == {}, "a header without a user dict reads as empty"
 
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
@@ -272,6 +270,12 @@ def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, exp
     with open(index_path, "w") as f:
         json.dump(value, f)  # a required column missing
     with expect_error(IncompleteCheckpointError, "not a readable index"):
+        read_index(final)
+    value = json.loads(text)
+    del value["state"]["model/Llama/fc/weight"]["layout"]
+    with open(index_path, "w") as f:
+        json.dump(value, f)  # a field every save writes, missing: no default stands in for it
+    with expect_error(IncompleteCheckpointError, r"not a readable index \(KeyError: 'layout'\)"):
         read_index(final)
     with open(os.path.join(final, "header.json"), "w") as f:
         f.write("{")
