@@ -17,7 +17,9 @@ persistent ``state_page_idx`` tensor, which names the pages of the block of each
   a chunk boundary, or in an earlier chunk, is the workspace written into its block (write_state) between two parts
   of the prefill (prefill_segments). The start block is only read. Writes use paged_fill_cache: the views have one
   page or one half value head per dim-0 slice, so a persistent page table names the destination; the block id never
-  reaches a program hash, and no request compiles a program.
+  reaches a program hash, and no request compiles a program. Once captured (record_traces), a write of the
+  workspace, or of the checkpoint that a captured prefill trace computed, replays one trace over all GDN layers: each
+  MambaSpec group's page tables are restaged for its block before the replay, and the host does not wait.
 * Decode runs gdn_decode_step on the blocks directly. The adapter rewrites the page index whenever vLLM moves a row
   or gives a row another request (set_decode_blocks), so moving a row moves no state. The index tensors keep their
   addresses, so a captured decode trace reads the new index on its next replay. A row whose start block differs from
@@ -79,6 +81,17 @@ class RowBlocks:
     dest: tuple  # block that takes the end state
     checkpoint: tuple | None  # block that takes the state after checkpoint_pos tokens, or None
     checkpoint_pos: int  # token count of the prefill checkpoint, 0 for none
+
+
+def table_groups(per_layer_specs):
+    """{GDN layer index: k}, k the layer's rank among the GDN layers of its layer slot (layer order): vLLM's MambaSpec
+    group k holds the k-th GDN layer of every layer slot (its groups hold one layer per slot, filled in layer order)."""
+    groups, seen = {}, {}
+    for i, entry in enumerate(per_layer_specs):
+        if is_mamba_entry(entry):
+            groups[i] = seen.get(entry[2], 0)
+            seen[entry[2]] = groups[i] + 1
+    return groups
 
 
 def row_blocks(mamba_state, row):
@@ -259,6 +272,31 @@ class GdnBlockState:
             for t in self.layout.write_tables(0)
         ]
         self._write_refs = []
+        # The page tables of the captured writes: per variant (False: the workspace, True: the checkpoint buffers of
+        # a captured prefill) one set per table group, so that one replay writes each MambaSpec group into its own
+        # block. They start at the null block 0, which warmup writes.
+        self._write_group = table_groups(per_layer_specs)  # GDN layer index -> table group
+        self._trace_tables = {
+            variant: [
+                [
+                    ttnn.from_torch(
+                        torch.tensor([ids], dtype=torch.int32),
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.mesh,
+                        mesh_mapper=rep,
+                    )
+                    for ids in self.layout.write_tables(0)
+                ]
+                for _ in range(max(self._write_group.values()) + 1)
+            ]
+            for variant in (False, True)
+        }
+        self._trace_staged = {}  # (variant, table group, part) -> (host page ids its device table holds, host tensor)
+        self._write_traces = {}  # variant -> trace id
+        self._trace_sources = {}  # variant -> the tensors its trace reads
+        self._warmed_variants = ()
+        self._write_order = None  # (mamba_state group names, [table group of each group] or None)
         self._unpack_table = ttnn.from_torch(
             unpack_history_rows(self.dims).reshape(1, -1).to(torch.int32),
             dtype=ttnn.uint32,
@@ -298,12 +336,7 @@ class GdnBlockState:
         layer per slot, filled in layer order); set_verify_blocks checks that against mamba_state."""
         T, rows = self.verify_tokens, self.bmax
         rep = ttnn.ReplicateTensorToMesh(self.mesh)
-        seen = {}
-        self._verify_group = {}  # GDN layer index -> group whose tables it reads
-        for i, entry in enumerate(per_layer_specs):
-            if is_mamba_entry(entry):
-                self._verify_group[i] = seen.get(entry[2], 0)
-                seen[entry[2]] = self._verify_group[i] + 1
+        self._verify_group = table_groups(per_layer_specs)  # GDN layer index -> group whose tables it reads
         ctrl0, idx0 = self.layout.verify_tables([], torch.zeros(0, T), self.num_blocks, rows)
 
         def table(host, dtype):
@@ -493,19 +526,130 @@ class GdnBlockState:
         self._write_groups(mamba_state, blocks, checkpoint=True)
 
     def _write_groups(self, mamba_state, blocks, checkpoint):
+        groups = list(zip(self.groups(mamba_state), blocks, strict=True))
+        for _, block in groups:
+            if block <= 0:
+                raise ValueError(f"a prefill row has the null block {block} as its GDN state block")
+        if self._replay_write(mamba_state, blocks, checkpoint):
+            return
         # paged_fill_cache may read the host page tables after it returns; hold them until the device is idle.
         if self._write_refs:
             ttnn.synchronize_device(self.mesh)
             self._write_refs = []
-        for (layers, _), block in zip(self.groups(mamba_state), blocks, strict=True):
-            if block <= 0:
-                raise ValueError(f"a prefill row has the null block {block} as its GDN state block")
+        for (layers, _), block in groups:
             self._set_write_tables(block)
             for dn in layers:
                 if checkpoint:
                     self._write_checkpoint(dn)
                 else:
                     self._write_state(dn)
+
+    def _write_trace_sources(self, checkpoint):
+        """The tensors that the write of variant ``checkpoint`` reads: every GDN layer's batch-1 workspace, or the
+        buffers that a captured prefill trace copies its checkpoint into."""
+        if checkpoint:
+            return tuple(t for dn in self.layers.values() for t in (dn.prefill_checkpoint_buffers or (None, None)))
+        return tuple(t for dn in self.layers.values() for t in (dn.rec_state, dn.conv_carry))
+
+    def _write_trace_variants(self):
+        """The writes that can be captured: the workspace, and the checkpoint when every GDN layer has the buffers of a
+        captured checkpoint (Qwen36Model.prepare_prefill_traces_masked allocates them)."""
+        if all(dn.prefill_checkpoint_buffers is not None for dn in self.layers.values()):
+            return (False, True)
+        return (False,)
+
+    def _write_trace_body(self, checkpoint):
+        """The captured write: every GDN layer's workspace, or (``checkpoint``) its checkpoint buffers, into the block
+        that the page tables of its table group name."""
+        tables = self._trace_tables[checkpoint]
+        for i, dn in self.layers.items():
+            rec, carry = dn.prefill_checkpoint_buffers if checkpoint else (None, None)
+            self._write_state(dn, rec, carry, tables[self._write_group[i]])
+
+    def _table_order(self, mamba_state):
+        """The table group of each MambaSpec group of ``mamba_state``, or None when a group does not hold exactly the
+        k-th GDN layer of every layer slot (then no trace serves its writes)."""
+        self.groups(mamba_state)
+        if self._write_order is None or self._write_order[0] != self._group_names:
+            order = []
+            for group in mamba_state.groups:
+                layers = {layer_index(name) for name in group.layer_names}
+                ks = {self._write_group[i] for i in layers}
+                k = ks.pop() if len(ks) == 1 else None
+                if k is None or layers != {i for i, kk in self._write_group.items() if kk == k}:
+                    order = None
+                    break
+                order.append(k)
+            self._write_order = (self._group_names, order)
+        return self._write_order[1]
+
+    def _replay_write(self, mamba_state, blocks, checkpoint):
+        """Write by replaying the captured write of variant ``checkpoint``: stage the page tables of each MambaSpec
+        group's block ``blocks[g]`` and replay, without waiting. False, and nothing written, when no trace serves the
+        write: none captured, another GDN workspace bound, a checkpoint that an eager forward computed, or MambaSpec
+        groups that are not the k-th GDN layer of every layer slot."""
+        tid = self._write_traces.get(checkpoint)
+        if tid is None:
+            return False
+        sources = zip(self._write_trace_sources(checkpoint), self._trace_sources[checkpoint], strict=True)
+        if any(a is not b for a, b in sources):
+            return False
+        if checkpoint and any(
+            dn.prefill_checkpoint is None or dn.prefill_checkpoint[0] is not dn.prefill_checkpoint_buffers[0]
+            for dn in self.layers.values()
+        ):
+            return False
+        order = self._table_order(mamba_state)
+        if order is None:
+            return False
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        for k, block in zip(order, blocks, strict=True):
+            for part, (ids, dev) in enumerate(zip(self.layout.write_tables(block), self._trace_tables[checkpoint][k])):
+                key = (checkpoint, k, part)
+                if key in self._trace_staged and self._trace_staged[key][0] == ids:
+                    continue
+                host = ttnn.from_torch(
+                    torch.tensor([ids], dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=rep,
+                )
+                ttnn.copy_host_to_device_tensor(host, dev)
+                # The copy may read the host tensor after it returns; it is held until this table is staged again.
+                self._trace_staged[key] = (ids, host)
+        ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=False)
+        if checkpoint:
+            for dn in self.layers.values():
+                dn.release_prefill_checkpoint(*dn.take_prefill_checkpoint())
+        return True
+
+    def record_traces(self):
+        """Capture the block writes that warmup compiled on the trace page tables (_write_trace_body), one trace per
+        variant; later writes replay them (_replay_write). Only intermediates are allocated, and freed, inside a
+        capture. After warmup, in the traced warmup phase. Idempotent."""
+        if self._write_traces or not self._warmed_variants:
+            return
+        for checkpoint in self._warmed_variants:
+            tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self._write_trace_body(checkpoint)
+            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+            self._write_traces[checkpoint] = tid
+            self._trace_sources[checkpoint] = self._write_trace_sources(checkpoint)
+        logger.info(
+            f"GDN block writes captured: {len(self._write_traces)} trace(s) of {len(self.layers)} GDN layer writes "
+            f"(workspace{', checkpoint' if True in self._write_traces else ''})"
+        )
+
+    def release_write_traces(self):
+        """Release the captured writes; later writes run eagerly."""
+        if not self._write_traces:
+            return
+        ttnn.synchronize_device(self.mesh)
+        for tid in self._write_traces.values():
+            ttnn.release_trace(self.mesh, tid)
+        self._write_traces = {}
+        self._trace_sources = {}
+        self._trace_staged = {}
 
     def restore(self, mamba_state, blocks):
         """Load the full state that block ``blocks[g]`` holds into the batch-1 workspace of every GDN layer of
@@ -576,16 +720,18 @@ class GdnBlockState:
         self._write_state(dn, rec_state, conv_carry)
         dn.release_prefill_checkpoint(rec_state, conv_carry)
 
-    def _write_state(self, dn, rec_state=None, conv_carry=None):
-        """Write a GDN state of ``dn`` into the block that the write tables name: ``rec_state`` [1, Nv, Dk, Dv] float32
-        and ``conv_carry`` [1, K - 1, C] bfloat16, by default its batch-1 workspace."""
+    def _write_state(self, dn, rec_state=None, conv_carry=None, tables=None):
+        """Write a GDN state of ``dn`` into the block that the write tables (``tables``, by default _write_tables) name:
+        ``rec_state`` [1, Nv, Dk, Dv] float32 and ``conv_carry`` [1, K - 1, C] bfloat16, by default its batch-1
+        workspace."""
         lay, nv, dk, dv = self.layout, self.dims.nv, self.dims.dk, self.dims.dv
         sb = dn.state_blocks
         rec_state = dn.rec_state if rec_state is None else rec_state
         conv_carry = dn.conv_carry if conv_carry is None else conv_carry
+        tables = self._write_tables if tables is None else tables
         # [1, Nv, Dk, Dv] as rows of half heads; the tiles keep their order.
         rec = ttnn.reshape(rec_state, (1, 1, nv * dk, dv))
-        for (pool, _, lo, hi), table in zip(lay.state_writes(0), self._write_tables):
+        for (pool, _, lo, hi), table in zip(lay.state_writes(0), tables):
             whole = lo == 0 and hi == 2 * nv
             src = rec if whole else ttnn.slice(rec, (0, 0, lo * dk // 2, 0), (1, 1, hi * dk // 2, dv))
             ttnn.experimental.paged_fill_cache(sb.rec_k if pool == 0 else sb.rec_v, src, table, batch_idx=0)
@@ -600,7 +746,7 @@ class GdnBlockState:
         _free_copy(rows, carry)
         ttnn.deallocate(carry)
         tiles = ttnn.reshape(packed, (1, 1, nv * HIST_SLOTS * 32, 32))
-        ttnn.experimental.paged_fill_cache(sb.hist, tiles, self._write_tables[-1], batch_idx=0)
+        ttnn.experimental.paged_fill_cache(sb.hist, tiles, tables[-1], batch_idx=0)
         _free_copy(tiles, packed)
         ttnn.deallocate(packed)
 
@@ -628,15 +774,17 @@ class GdnBlockState:
         self._zero_refs = refs
 
     def release(self):
-        """Unbind the GDN layers from the blocks, before the K and V buffers are freed."""
+        """Release the captured writes and unbind the GDN layers from the blocks, before the K and V buffers are freed."""
+        self.release_write_traces()
         for dn in self.layers.values():
             dn.state_blocks = None
         self.layers = {}
 
     def warmup(self):
         """Compile the block write, read, copy and zero programs on the null block 0, before any trace is captured,
-        and the write of a prefill checkpoint when the GDN layers hold one (Qwen36Model._warmup_prefill_checkpoints).
-        The reads leave the null block's bytes in the batch-1 workspace, which every prefill zeroes or restores."""
+        the write of a prefill checkpoint when the GDN layers hold one (Qwen36Model._warmup_prefill_checkpoints), and
+        the writes that record_traces captures. The reads leave the null block's bytes in the batch-1 workspace,
+        which every prefill zeroes or restores."""
         if self._warmed:
             return
         self._set_write_tables(0)
@@ -646,6 +794,10 @@ class GdnBlockState:
                 self._write_checkpoint(dn)
             self._read_state(dn, 0)
             self._copy_state(dn, 0, 0)
+        # A capture must find every program compiled: run the captured writes once on their own sources and tables.
+        self._warmed_variants = self._write_trace_variants()
+        for checkpoint in self._warmed_variants:
+            self._write_trace_body(checkpoint)
         self.zero_blocks([0])
         ttnn.synchronize_device(self.mesh)
         self._warmed = True
