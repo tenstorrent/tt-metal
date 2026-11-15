@@ -95,10 +95,6 @@ pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evalua
 ```
 pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_retrieval_evaluation_dp
 ```
-- Semantic Textual Similarity task evaluation:
-```
-pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_sts_evaluation_dp
-```
 
 ##  Details
 - The entry point to the BGE model is located at: `models/demos/bge_large_en/ttnn/ttnn_bge_model.py`

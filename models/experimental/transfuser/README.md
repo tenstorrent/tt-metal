@@ -212,7 +212,6 @@ pytest models/experimental/transfuser/tests/test_gpt.py
 pytest models/experimental/transfuser/tests/test_self_attention.py
 pytest models/experimental/transfuser/tests/test_bottleneck.py
 pytest models/experimental/transfuser/tests/test_stages.py
-pytest models/experimental/transfuser/tests/test_head.py
 pytest models/experimental/transfuser/tests/test_topdown.py
 ```
 
