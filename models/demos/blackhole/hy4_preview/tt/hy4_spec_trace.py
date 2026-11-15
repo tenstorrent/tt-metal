@@ -273,13 +273,31 @@ class Hy4SpecRunner:
         )
         ly.attn.init_pool(ctx, self.mtp_kv, self.mtp_keys)
         self.sampling = sampling
+        self.samp_obj = (
+            sampling  # kept for the variant switch (product serving: a greedy AND a sampled trace share all state)
+        )
+        self.default_variant = "S" if sampling is not None else "G"
+        self.traces = {}
         self.tail = MTPRoundTail(ch, mtp, self.sd, ctx, k, greedy, sampling=sampling)
         dec.tok = self.tail.tok  # the verify input IS the tail's next-round token tensor
         self.greedy = greedy
         self.trace = None
 
-    def body(self):
+    def _set_variant(self, v):
+        """'G' = greedy round, 'S' = lossless sampled round (needs ``samp_obj``): the persistent state (pos / tok / drafts / cap / a_out) is shared by both traces."""
+        if v is None:
+            v = self.default_variant
+        assert (
+            v == "G" or self.samp_obj is not None
+        ), "sampled round requested but the runner was built without SpecSampling"
+        smp = self.samp_obj if v == "S" else None
+        self.sampling = smp
+        self.tail.sampling = smp
+        return v
+
+    def body(self, variant=None):
         dec, tail = self.dec, self.tail
+        self._set_variant(variant)
         self.sd.derive(tail.pos)
         hn, logits = dec.step_verify()
         a_tok = (
@@ -290,15 +308,19 @@ class Hy4SpecRunner:
         ttnn.deallocate(hn)
         ttnn.deallocate(a_tok)
 
-    def capture(self):
-        """eager warm round (compiles every program; it is a REAL round: its result is returned, the state has advanced), then the trace capture (records, executes nothing)."""
-        self.body()
+    def capture(self, variant=None):
+        """eager warm round (compiles every program; it is a REAL round: its result is returned, the state has advanced), then the trace capture (records, executes nothing). One trace per variant ('G' / 'S')."""
+        v = self._set_variant(variant)
+        self.body(v)
         ttnn.synchronize_device(self.dec.md)
         warm = self.read()
-        self.trace = ttnn.begin_trace_capture(self.dec.md, cq_id=0)
-        self.body()
-        ttnn.end_trace_capture(self.dec.md, self.trace, cq_id=0)
+        tr = ttnn.begin_trace_capture(self.dec.md, cq_id=0)
+        self.body(v)
+        ttnn.end_trace_capture(self.dec.md, tr, cq_id=0)
         ttnn.synchronize_device(self.dec.md)
+        self.traces[v] = tr
+        if self.trace is None or v == self.default_variant:
+            self.trace = tr
         return warm
 
     def load(self, pending, pos, drafts, cap=None):
@@ -312,7 +334,9 @@ class Hy4SpecRunner:
         tok = torch.zeros(R, S, dtype=torch.int32)
         tok[:, 0] = torch.tensor(pending, dtype=torch.int32)
         for r in range(R):
-            tok[r, 1:] = torch.tensor(drafts[r][:k], dtype=torch.int32)
+            tok[r, 1:] = torch.tensor(
+                [max(int(x), 0) for x in drafts[r][:k]], dtype=torch.int32
+            )  # -1 = no draft: a valid token id for the embedding, the draft row d_row keeps -1 (never accepted)
         cp(tok, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.tail.tok)
         cp(torch.tensor([float(p) for p in pos]).reshape(R, 1, 1, 1), ttnn.float32, ttnn.TILE_LAYOUT, self.tail.pos)
         d = torch.full((R, 1, 1, W16), -1.0)
@@ -326,8 +350,48 @@ class Hy4SpecRunner:
         )
         cp(c, ttnn.float32, ttnn.TILE_LAYOUT, self.tail.cap)
 
-    def submit(self):
-        ttnn.execute_trace(self.dec.md, self.trace, cq_id=0, blocking=False)
+    def submit(self, variant=None):
+        tr = self.trace if variant is None else self.traces[variant]
+        ttnn.execute_trace(self.dec.md, tr, cq_id=0, blocking=False)
+
+    def set_cap(self, cap):
+        """per user max accepted drafts of the next round (host -> persistent device tensor, 4 floats)."""
+        md = self.dec.md
+        R = int(md.shape[0])
+        mp = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape))
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor([float(x) for x in cap]).reshape(R, 1, 1, 1),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mp,
+            ),
+            self.tail.cap,
+        )
+
+    def read_state(self):
+        """-> per user row dict(a=[a_0..a_k], m, pos, tok=[x_P', d_1..d_k], drafts=[d_1..d_k]) of the round just run: the small round outputs and the next-round state, read with ONE sync (non-blocking copies)."""
+        md, S, k = self.dec.md, self.S, self.k
+        R, c = int(md.shape[0]), int(md.shape[1])
+        t = self.tail
+        hs = [ttnn.from_device(x, blocking=False) for x in (t.a_out, t.m_out, t.pos, t.d_row, t.tok)]
+        ttnn.synchronize_device(md)
+        g = [ttnn.get_device_tensors(h) for h in hs]
+        out = []
+        for r in range(R):
+            val = lambda i: ttnn.to_torch(g[i][r * c]).reshape(-1)
+            a, m, p, d, tk = val(0), val(1), val(2), val(3), val(4)
+            mv = int(round(float(m[0])))
+            out.append(
+                dict(
+                    a=[int(round(float(x))) for x in a[:S].tolist()],
+                    m=mv,
+                    pos=int(round(float(p[0]))),
+                    drafts=[int(round(float(x))) for x in d[:k].tolist()],
+                    tok=[int(x) for x in tk[:S].tolist()],
+                )
+            )
+        return out
 
     def read(self):
         """-> per user row (emitted tokens a_0..a_m, m, new P): blocking read of the small per-round outputs."""

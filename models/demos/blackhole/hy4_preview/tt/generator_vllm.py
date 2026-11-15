@@ -1,40 +1,36 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""vLLM (tt-vllm-plugin) adapter of Hy4-Preview on the 4x8 Blackhole galaxy: TIER 0 serving (early quality signal), built on the chain model (``hy4_chain`` + ``hy4_decode``).
+"""vLLM (tt-vllm-plugin) adapter of Hy4-Preview on the 4x8 Blackhole galaxy, PRODUCT version (task product-integ): ``Hy4Engine`` (tt/hy4_serve_engine.py) = sequence-sharded SCALED_FP8 pool (1M tokens per
+mesh row), DIRECT-TO-POOL chunked prefill (any prompt length up to the pool, MTP prompt KV written per chunk), device speculative rounds through the model's MTP head, device sampling.
 
-Registered with the plugin as ``TTHYV4ForCausalLM`` through ``../vllm_metadata.json`` (``arch`` HYV4ForCausalLM; the plugin prefixes ``TT``; ``EXTRA_MODELS_DIR`` must point at
-``models/demos/blackhole``). Contract: vllm-tt-plugin ``docs/MODEL_*.md`` (a8962b0). Lifted from the DSV4.1 adapter (``deepseek_v41_flash/tt/generator_vllm.py``): same slot protocol,
-same host-sampling return convention, none of its machinery (no APC, no spec decode, no interleaved prefill, no device sampler).
+Registered with the plugin as ``TTHYV4ForCausalLM`` through ``../vllm_metadata.json`` (``EXTRA_MODELS_DIR`` = ``models/demos/blackhole``). Model environment: HY4_POOL=1 HY4_POOL_PF=1 HY4_KV_FMT=scaled_fp8
+HY4_OPT=all HY4_IHC_FUSED=1 HY4_FUSE=sparse,xchg HY4_XM_NSPLIT=8 HY4_SKINNY=shared,router,oproj,hproj HY4_PF_OPT=all,moeall MOE_RING_FAST=1 (tests/run_product_server.sh sets them).
 
-SCOPE (v0, deliberately small, every limit explicit)
-  * Context: <= ``HY4_SERVE_TCAP`` (default and maximum 2048) KEYS per request, prompt + generated: the chain decode path (``hy4_decode.Hy4Decoder``) is dense attention over a persistent
-    TILE bf16 cache of Tcap rows per layer (ids = arange(pos+1) built on the host, stock sparse_sdpa; no decode indexer / top-k, no pool, no SCALED_FP8 rows). ``max_model_len`` MUST be
-    <= 2048 (checked at load). GSM8K chain-of-thought fits, GPQA thinking-ON (tens of thousands of tokens) does NOT.
-  * Batch: max_num_seqs <= 4. The decode trace always runs 4 users, ONE PER MESH ROW (a free row computes a dummy token at position 0). The mesh row of a request is its PHYSICAL slot.
-  * Prefill: whole prompts in one ``prefill_forward`` call (no chunked prefill, no interleaving: ``supports_chunked_prefill`` False, so ``max_num_batched_tokens`` must be >= max_model_len).
-    The call runs the chain prefill in chunks of 512 rows on all four mesh rows (the new prompts on their physical rows, PAD tokens elsewhere), reads the last-token logits of every new
-    row, then hands the concat-grown prefill caches over into the persistent decode caches for the NEW rows only (a per-row blend: the decode caches of running requests are untouched).
-    ``prefill_chunk_alignment`` 512 is declared for the day chunked prefill is wired (inactive while chunked prefill is off). Prefill is eager (not traced): seconds per chunk.
-  * Decode: ``Hy4Decoder`` traced step (T=1 token per device, 78 layers), host loop: set inputs, replay, full-vocabulary logits read back (201 ms/step measured in the chain task).
-  * Sampling: HOST. ``supports_sample_on_device`` False: the plugin runs vLLM's own sampler on the fp32 logits [B, 1, V] returned by prefill and decode (temperature / top_p / top_k /
-    penalties / logprobs all work; generation_config of the checkpoint: temperature 0.9, top_p 1, top_k -1). TODO(Tier 1): in-trace sampler, device argmax.
-  * KV bookkeeping: vLLM blocks are accounting only (``allocate_kv_cache`` returns placeholders; the model owns the persistent caches); ``get_max_tokens_all_users`` = max_model_len x max_num_seqs.
-  * Slots: ``empty_slots`` (prefill) and ``slot_remap`` (decode) are handled on the HOST: a logical slot maps to a physical mesh row, a remap permutes that map, no device state moves.
-  * No prefix caching (APC is OFF for this task), no speculative decoding (MTP layer not even loaded), no structured-output device grammar, no images (text-only model).
+MODES (decided at construction from the server's own command line / HY4_SPEC_K)
+  * SPEC (``--speculative-config '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter","num_speculative_tokens":3}' --no-async-scheduling``): the plugin's model-owned drafter contract
+    (docs/SPEC_DECODE_CONTRACT.md), the same shape as the DSV4.1 adapter: EVERY decode step is a verify block [B, 1+K] (no narrow decode). The device runs one traced ROUND per verify (verify S = K+1 rows through
+    the 78 layers, accept, MTP draft of the next K tokens, all state resident); the adapter returns the emitted ids a_0..a_K as ``argmax_ids`` (the plugin's greedy walk reaches the same accept count m as the
+    device) and hands the drafts of the round out in ``propose_draft_tokens``. A request with temperature > 0 is served by the lossless SAMPLED round (draft-from-q rejection sampling, temperature only; the
+    plugin capability ``supports_sampled_verify``: the returned ids have the shape of the greedy walk: a rejected draw never equals its draft). Penalties / logprobs / grammar are refused by the plugin
+    (not speculable, no narrow decode).
+  * PLAIN (no speculative config, or HY4_SPEC_K=0): ``Hy4PoolDecoder`` S=1 + the device decode loop (resident state, in-trace sampler, one trace per sampler variant); host sampling is NOT available (refused).
+  Prefill (both): direct-to-pool, whole prompts per call (no chunked prefill / no prefix cache), the first token is sampled on the host from the last-prompt logits row.
+
+LIMITS: prompt + generation <= max_model_len (<= 1,048,576), max_num_seqs <= 4 (one user per mesh row); a prefill call blocks the decode of the other rows (no interleaving); top_k / top_p are ignored by the sampled
+spec round (temperature only: generation_config default top_p 1, top_k -1); sampled rounds also serve the greedy rows of a mixed batch (temperature ~0).
 """
+import json
 import os
-import time
+import sys
 
 import torch
 from loguru import logger
 
-HOST_LOOP = (
-    os.environ.get("HY4_HOST_LOOP", "0") == "1"
-)  # 1 = the old bring-up loop (set_inputs + full-logit read-back + host sampling): A/B reference only
-PAD_TOKEN = 120002  # <｜hy_pad:opensource｜>
+PAD_TOKEN = 120002
 ROWS = 4
 CHUNK = 512
-TCAP_MAX = 2048
+MAX_MODEL_LEN = 1048576
+PAGE = 512
 
 try:
     from vllm_tt_plugin.platform import TTRequestError
@@ -42,6 +38,32 @@ except Exception:  # noqa: BLE001  (demo / unit tests without the plugin)
 
     class TTRequestError(ValueError):
         pass
+
+
+def configured_spec_k():
+    """Draft length of the server's ``speculative_config`` (0 = plain). The loader hands ``initialize_vllm_model`` no vLLM config: the server's own command line is read (sys.argv survives the engine-core
+    spawn); HY4_SPEC_K is an explicit override."""
+    env = os.environ.get("HY4_SPEC_K")
+    if env not in (None, ""):
+        return int(env)
+    argv = sys.argv
+    for i, a in enumerate(argv):
+        flag, eq, val = a.partition("=")
+        if flag.replace("_", "-") != "--speculative-config":
+            continue
+        if not eq:
+            val = argv[i + 1] if i + 1 < len(argv) else "{}"
+        try:
+            cfg = json.loads(val)
+        except ValueError:
+            return 0
+        if cfg.get("method") == "custom_class":
+            return int(cfg.get("num_speculative_tokens", 0))
+    return 0
+
+
+_SPEC_K = configured_spec_k()
+_SAMPLED = os.environ.get("HY4_SPEC_SAMPLED", "1") == "1"
 
 
 class _Slots:
@@ -67,28 +89,32 @@ def _col(x, n, default):
 
 
 class _Step:
-    """one submitted decode step: the physical rows of its logical rows at submission time (slots can be remapped before the result is read)."""
+    """one submitted plain decode step: the physical rows of its logical rows at submission time."""
 
-    def __init__(self, rows, W, host_logits=None):
-        self.rows, self.W, self.host_logits = rows, W, host_logits
+    def __init__(self, rows, W):
+        self.rows, self.W = rows, W
 
 
 class HYV4ForCausalLM:
     """tt-vllm-plugin model class (see the module docstring)."""
 
-    # decode reload contract (plugin docs DECODE_RELOAD_CONTRACT.md): token / position / sampling state stay RESIDENT on device between steady decodes
-    decode_input_update_contract = 0 if HOST_LOOP else 1
+    decode_input_update_contract = 1
 
     model_capabilities = {
-        "supports_prefix_caching": False,  # APC off for this task
-        "supports_chunked_prefill": False,  # whole-prompt prefill calls (v0)
-        "prefill_chunk_alignment": CHUNK,  # forced to 0 by the platform while chunked prefill is off; kept for the integ track
-        "supports_async_decode": not HOST_LOOP,  # split submit / read-back + resident inputs (device loop)
-        "supports_sample_on_device": not HOST_LOOP,  # in-trace sampler: exact fp32 greedy / full-vocabulary threshold sampler (top_k off: the generation_config default) / exact top-k
-        "supports_device_penalties": False,  # presence / frequency / repetition penalties, logit_bias, bad_words: the plugin routes such batches to HOST sampling (logits [W,1,V] returned, the old slow loop)
-        "supports_spec_decode": False,
+        "supports_prefix_caching": False,
+        "supports_chunked_prefill": False,  # whole-prompt prefill calls
+        "prefill_chunk_alignment": CHUNK,
+        "supports_async_decode": _SPEC_K
+        == 0,  # plain: split submit / read-back + resident inputs; spec: synchronous verify (--no-async-scheduling)
+        "supports_sample_on_device": True,
+        "supports_device_penalties": False,
+        "supports_spec_decode": _SPEC_K > 0,
+        "spec_requirements": ["device_propose"] if _SPEC_K > 0 else [],
+        "spec_hidden_handoff": [],
         "fabric_config": None,  # opened by additional_config tt.fabric_config (FABRIC_1D_RING)
     }
+    if _SPEC_K > 0 and _SAMPLED:
+        model_capabilities["supports_sampled_verify"] = True
 
     # ---- construction ------------------------------------------------------------------------------------------------------------------------
     @classmethod
@@ -102,55 +128,52 @@ class HYV4ForCausalLM:
             raise TTRequestError("Hy4-Preview does not support data parallelism")
         if max_batch_size > ROWS:
             raise TTRequestError(
-                f"Hy4 serving v0 supports max_num_seqs <= {ROWS} (one user per mesh row), got {max_batch_size}"
+                f"Hy4 serving supports max_num_seqs <= {ROWS} (one user per mesh row), got {max_batch_size}"
             )
-        tcap = int(os.environ.get("HY4_SERVE_TCAP", str(TCAP_MAX)))
-        if tcap % 32 or tcap > TCAP_MAX or tcap % CHUNK:
-            raise TTRequestError(f"HY4_SERVE_TCAP={tcap} must be a multiple of {CHUNK} and <= {TCAP_MAX}")
-        if max_seq_len > tcap:
-            raise TTRequestError(
-                f"Hy4 serving v0 decodes at most {tcap} keys per request (chain decode path: dense attention, no decode indexer): "
-                f"max_model_len {max_seq_len} is too large; launch with --max-model-len <= {tcap}"
+        if max_seq_len > MAX_MODEL_LEN or max_seq_len < 1:
+            raise TTRequestError(f"Hy4 serving supports max_model_len <= {MAX_MODEL_LEN}, got {max_seq_len}")
+        return cls(mesh_device, max_batch_size, max_seq_len)
+
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
+        """Plugin admission of ``speculative_config``: the engine is built for K = the launch's draft length (a verify round is S = K + 1 rows per user, T = 4 (K + 1) <= 16 token rows on the mesh -> K <= 3)."""
+        from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
+
+        if int(max_num_seqs) > ROWS:
+            return SpecReject(f"max_num_seqs {max_num_seqs} > {ROWS} mesh rows", (1, 2, 3))
+        if int(requested_k) < 1 or int(requested_k) > 3:
+            return SpecReject(
+                "a verify round runs 4 x (K + 1) <= 16 token rows: num_speculative_tokens must be 1..3", (1, 2, 3)
             )
-        return cls(mesh_device, max_batch_size, max_seq_len, tcap)
+        if _SPEC_K != int(requested_k):
+            return SpecReject(
+                f"the engine is built for K={_SPEC_K} (HY4_SPEC_K / --speculative-config at the server start), requested {requested_k}",
+                (_SPEC_K,) if _SPEC_K else (),
+            )
+        return SpecPlan(
+            effective_k=int(requested_k),
+            lanes_per_request=1,
+            extra_bytes_per_seq=0,
+            extra_bytes_per_token=0,
+            accept_modes=("argmax_ids",),
+            drafter_state="internal",
+            supports_narrow_decode=False,  # every step of a speculating launch is a verify block
+        )
 
-    def __init__(
-        self, mesh_device, max_num_seqs, max_seq_len, tcap, *, vllm_config=None
-    ):  # vllm_config: vLLM's text-generation protocol check wants the keyword
-        import ttnn
-        from models.demos.blackhole.hy4_preview.tt.hy4_chain import Hy4Chain, dram_view
-        from models.demos.blackhole.hy4_preview.tt.hy4_decode import Hy4Decoder
-        from models.demos.gpt_oss.config import mesh_4x8
-        from models.demos.gpt_oss.tt.ccl import CCLManager
+    def __init__(self, mesh_device, max_num_seqs, max_seq_len, *, vllm_config=None):
+        from models.demos.blackhole.hy4_preview.tt.hy4_serve_engine import Hy4Engine
 
-        self.ttnn = ttnn
         self.md = mesh_device
-        self.max_num_seqs, self.max_seq_len, self.tcap = max_num_seqs, max_seq_len, tcap
-        ckpt = os.environ.get("HY4_CKPT", "/ckpt")
-        nl = int(os.environ.get("HY4_SERVE_LAYERS", "78"))  # < 78 only for adapter debugging
-        t0 = time.time()
-        mc, ccl = mesh_4x8(), CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
-        self.ch = Hy4Chain(mesh_device, mc, ccl, ckpt=ckpt)
-        self.ch.add_layers(0, nl, log=lambda s: logger.info(s))
-        self.ch.build_head()
-        self.vocab = int(self.ch.cfg.vocab_size)
-        logger.info(f"Hy4 model built: {nl} layers, {time.time() - t0:.0f} s, dram {dram_view(mesh_device)}")
-        if not HOST_LOOP:
-            os.environ[
-                "HY4_HEAD_FP32"
-            ] = "1"  # fp32 logits out of the lm_head (D12-1): the sampler and the host-sampling fallback read them
-        self.dec = Hy4Decoder(self.ch, tcap)
-        self.dl = None
-        if not HOST_LOOP:
-            from models.demos.blackhole.hy4_preview.tt.hy4_device_loop import DeviceLoop
-
-            self.dl = DeviceLoop(self.dec)
-            self.loop_variants = os.environ.get("HY4_LOOP_VARIANTS", "G,Fp,F").split(",")
-            self._variant, self._seeds = "G", [0] * ROWS
+        self.max_num_seqs, self.max_seq_len = max_num_seqs, max_seq_len
+        self.eng = Hy4Engine(mesh_device, max_num_seqs, max_seq_len, k=_SPEC_K)
+        self.vocab = self.eng.vocab
+        self.pages = self.eng.pages
         self.slots = _Slots(max_num_seqs)
-        self.warm = False
         self.steps = 0
-        self._ones = None
+        self._active = [0] * ROWS
+        self._variant, self._seeds, self._samp_set = "G", [0] * ROWS, False
+        self._warned_topk = False
+        self._ttnn = None
 
     # vLLM inspects this protocol (``is_text_generation_model``) while building the ModelConfig, BEFORE the plugin loads the model.
     def embed_input_ids(self, input_ids):
@@ -166,74 +189,18 @@ class HYV4ForCausalLM:
     def get_max_tokens_all_users(
         cls, model_name="", num_devices=1, tt_data_parallel=1, max_model_len=None, max_num_seqs=None, **kwargs
     ):
-        return int(max_model_len or TCAP_MAX) * int(max_num_seqs or 1)
+        return int(max_model_len or MAX_MODEL_LEN) * int(max_num_seqs or 1)
 
     # ---- KV cache (accounting only) ---------------------------------------------------------------------------------------------------------
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         logger.info(
-            f"Hy4 vLLM: kv_cache_shape {tuple(kv_cache_shape)} x {num_layers} layers is accounting only; the model owns the persistent decode caches "
-            f"(Tcap {self.tcap} rows per layer and mesh row)"
+            f"Hy4 vLLM: kv_cache_shape {tuple(kv_cache_shape)} x {num_layers} layers is accounting only; the model owns the SCALED_FP8 pool "
+            f"({self.pages} pages of {PAGE} tokens per mesh row)"
         )
         self.kv_cache = [(torch.empty(0), torch.empty(0)) for _ in range(num_layers)]
         return self.kv_cache
 
     # ---- prefill -----------------------------------------------------------------------------------------------------------------------------
-    def _last_logits(self, x4, local_pos_by_phys, sample=None):
-        """x4 [1,4,512,D] of one chunk -> {phys row: fp32 logits [V]} for the rows whose last prompt token sits at local position p of this chunk.
-        ``sample`` {phys: (T, top_k, top_p, seed, pos)}: the FIRST token of the request is sampled ON DEVICE from that logits row (greedy / threshold sampler of the device loop, same RNG convention as decode) -> {phys: id}.
-        """
-        ttnn = self.ttnn
-        out = {}
-        for phys, p in local_pos_by_phys.items():
-            xs = ttnn.slice(x4, [0, 0, p, 0], [1, x4.shape[1], p + 1, x4.shape[3]])
-            hn, lg = self.ch.head(xs)
-            ttnn.deallocate(xs)
-            ttnn.deallocate(hn)
-            if sample is not None:
-                tk = self.dl.sample_first(lg, *sample[phys])
-                ttnn.synchronize_device(self.md)
-                out[phys] = int(ttnn.to_torch(ttnn.get_device_tensors(tk)[phys * 8]).reshape(-1)[0])
-                ttnn.deallocate(tk)
-                ttnn.deallocate(lg)
-                continue
-            t = ttnn.to_torch(
-                lg, mesh_composer=ttnn.ConcatMesh2dToTensor(self.md, dims=(0, 3), mesh_shape=tuple(self.md.shape))
-            )
-            ttnn.deallocate(lg)
-            out[phys] = t.reshape(ROWS, -1)[phys].float()
-        return out
-
-    def _prefill_rows(self, prompts_by_phys, sample=None):
-        """prompts_by_phys {phys row: list[int] tokens} -> ({phys: logits[V]}, seconds). Leaves the decode caches of the OTHER rows untouched."""
-        ttnn = self.ttnn
-        lens = {p: len(t) for p, t in prompts_by_phys.items()}
-        nch = max(-(-n // CHUNK) for n in lens.values())
-        ids = torch.full((ROWS, nch * CHUNK), PAD_TOKEN, dtype=torch.long)
-        for p, t in prompts_by_phys.items():
-            ids[p, : len(t)] = torch.tensor(t, dtype=torch.long)
-        logits = {}
-        self.ch.reset()
-        t0 = time.perf_counter()
-        for c in range(nch):
-            x4, ids_by = self.ch.prefill(ids[:, c * CHUNK : (c + 1) * CHUNK], start=c * CHUNK)
-            fin = {p: (n - 1) - c * CHUNK for p, n in lens.items() if c * CHUNK <= n - 1 < (c + 1) * CHUNK}
-            if fin:
-                logits.update(self._last_logits(x4, fin, sample))
-            ttnn.deallocate(x4)
-            for v in ids_by.values():
-                ttnn.deallocate(v)
-            ttnn.synchronize_device(self.md)
-        t_pf = time.perf_counter() - t0
-        t1 = time.perf_counter()
-        self.dec.load_prefill_cache_rows(sorted(prompts_by_phys))
-        self.ch.reset()  # free the concat-grown prefill caches and key caches
-        ttnn.synchronize_device(self.md)
-        logger.info(
-            f"HY4 prefill call: rows={len(prompts_by_phys)} lens={sorted(lens.values())} chunks={nch} total={time.perf_counter() - t0:.2f}s "
-            f"chunks_s={t_pf:.2f} handoff_s={time.perf_counter() - t1:.2f}"
-        )
-        return logits
-
     def prefill_forward(
         self,
         tokens,
@@ -246,50 +213,48 @@ class HYV4ForCausalLM:
         sampling_params=None,
         **kwargs,
     ):
-        """tokens [B, T] (prompt from position 0), prompt_lens [B] = prompt length, empty_slots [B] = destination logical slot. Returns fp32 logits [B, 1, V] of the last prompt token."""
+        """tokens [B, T] (prompt from position 0), prompt_lens [B], empty_slots [B] = destination logical slot. Returns the first token ids [B] int32 (sampled on the host from the last prompt position's logits row)
+        when ``sampling_params`` is given, else fp32 logits [B, 1, V] (host sampling)."""
+        import secrets
+
         B = int(tokens.shape[0])
         starts = [0] * B if start_pos is None else [int(x) for x in start_pos]
         lens = [int(tokens.shape[1])] * B if prompt_lens is None else [int(x) for x in prompt_lens]
         if any(s != 0 for s in starts):
             raise TTRequestError(
-                "Hy4 serving v0 prefills whole prompts (start_pos must be 0: no chunked prefill, no prefix cache)"
+                "Hy4 serving prefills whole prompts (start_pos must be 0: no chunked prefill, no prefix cache)"
             )
-        if any(n > self.tcap for n in lens) or any(n < 1 for n in lens):
-            raise TTRequestError(f"prompt length {max(lens)} exceeds the {self.tcap} keys the Hy4 decode path holds")
+        if any(n < 1 for n in lens) or any(n > self.max_seq_len for n in lens):
+            raise TTRequestError(f"prompt length {max(lens)} outside 1..max_model_len {self.max_seq_len}")
         slots = list(range(B)) if empty_slots is None else [int(s) for s in empty_slots]
         if len(set(slots)) != B:
             raise RuntimeError(f"duplicate prefill slots {slots}")
         phys = [self.slots.phys[s] for s in slots]
         prompts = {p: [int(x) for x in tokens[i, : lens[i]].tolist()] for i, p in enumerate(phys)}
-        if self.dl is not None and sampling_params is not None:
-            import secrets
-
+        sampling = {}
+        if sampling_params is not None:
             if any(bool(x) for x in _col(getattr(sampling_params, "enable_log_probs", None), B, False)):
-                raise TTRequestError("Hy4 device sampling does not support logprobs yet")
-            temps, ks, ps = (
-                _col(getattr(sampling_params, "temperature", None), B, 0.0),
-                _col(getattr(sampling_params, "top_k", None), B, -1),
-                _col(getattr(sampling_params, "top_p", None), B, 1.0),
-            )
+                raise TTRequestError("Hy4 device sampling does not support logprobs")
+            temps = _col(getattr(sampling_params, "temperature", None), B, 0.0)
+            ks = _col(getattr(sampling_params, "top_k", None), B, -1)
+            ps = _col(getattr(sampling_params, "top_p", None), B, 1.0)
             sds = _col(getattr(sampling_params, "seed", None), B, None)
-            sample = {
-                p: (
-                    float(temps[i]),
+            for i, p in enumerate(phys):
+                sampling[p] = (
+                    float(temps[i] or 0.0),
                     int(ks[i]),
                     float(ps[i]),
                     (int(sds[i]) & 0x7FFFFFFF) if sds[i] is not None else secrets.randbits(31),
-                    lens[i] - 1,
                 )
-                for i, p in enumerate(phys)
-            }
-            first = self._prefill_rows(prompts, sample)
-            self._samp_set = False  # the device sampler state was clobbered by the first-token draws: the next decode reloads it (the plugin commands it after a prefill)
-            return torch.tensor([first[p] for p in phys], dtype=torch.int32).reshape(B)
-        lg = self._prefill_rows(prompts)
-        out = torch.zeros(B, 1, self.vocab, dtype=torch.float32)
-        for i, p in enumerate(phys):
-            out[i, 0] = lg[p]
-        return out
+        else:
+            raise TTRequestError(
+                "Hy4 product server: host sampling is not available (the plugin must sample on device)"
+            )
+        first = self.eng.prefill(prompts, sampling)
+        for p in phys:
+            self._seeds[p] = sampling[p][3]
+        self._samp_set = False  # plain mode: the decode reload contract re-uploads tokens / positions / sampling state after a prefill
+        return torch.tensor([first[p] for p in phys], dtype=torch.int32).reshape(B)
 
     # ---- decode ------------------------------------------------------------------------------------------------------------------------------
     def decode_forward(
@@ -306,73 +271,134 @@ class HYV4ForCausalLM:
         reload_page_table=False,
         reload_sampling_params=False,
         reset_sampling_state=False,
+        num_valid_drafts=None,
+        accepted_counts=None,
+        spec_mode=None,
         **kwargs,
     ):
-        """tokens [W, 1], start_pos [W] (position of the fed token, -1 = padding row), slot_remap [max_num_seqs] optional.
-        Device sampling (``sampling_params`` given, device loop on): ONE non-blocking pair of trace replays (derive + model + head + sampler + epilogue), nothing uploaded unless the plugin commands a reload
-        (reload_inputs: tokens / positions of all rows; reload_sampling_params / reset_sampling_state: params and seeds); returns a step handle, ``read_decode_output`` / ``process_decode_output_host`` give the ids [W,1] int32.
-        Host sampling (penalties, logit_bias, bad_words: the plugin's choice): the old loop, fp32 logits [W, 1, V]."""
         if slot_remap is not None:
             self.slots.remap(
                 slot_remap
             )  # device state is per PHYSICAL row (nothing moves): the logical -> physical map is all a remap changes
-        W = int(tokens.shape[0])
-        if self.dl is not None and sampling_params is not None:
-            return self._decode_device(
-                tokens,
-                start_pos,
-                sampling_params,
-                read_from_device,
-                reload_inputs,
-                reload_sampling_params,
-                reset_sampling_state,
+        if spec_mode is not None or num_valid_drafts is not None:
+            if not self.eng.spec:
+                raise ValueError(
+                    "a speculative verify call arrived but the server runs plain decode (no speculative_config)"
+                )
+            return self._verify(tokens, start_pos, num_valid_drafts, sampling_params)
+        if self.eng.spec:
+            raise ValueError(
+                "an ordinary [B,1] decode call arrived in a speculating launch (the engine declares no narrow decode)"
             )
-        tok = [PAD_TOKEN] * ROWS
-        pos = [0] * ROWS
-        rows = []
+        return self._decode_plain(
+            tokens,
+            start_pos,
+            sampling_params,
+            read_from_device,
+            reload_inputs,
+            reload_sampling_params,
+            reset_sampling_state,
+        )
+
+    # -- spec ---------------------------------------------------------------------------------------------------------------------------------
+    def _verify(self, tokens, start_pos, num_valid_drafts, sp):
+        from vllm_tt_plugin.spec_decode import VerifyOutput
+
+        eng, K = self.eng, self.eng.K
+        W, n = int(tokens.shape[0]), int(tokens.shape[1])
+        if n != K + 1:
+            raise ValueError(f"verify block width {n} != 1 + K ({1 + K})")
+        nv = num_valid_drafts.reshape(-1).tolist()
+        sp0 = start_pos.reshape(W, -1)[:, 0].tolist()
+        caps, block, rows = [0] * ROWS, {}, []
         for i in range(W):
-            p = int(start_pos[i])
-            if p < 0:
+            if sp0[i] < 0:
                 continue
-            if p >= self.tcap:
-                raise TTRequestError(f"position {p} beyond the {self.tcap} keys of the Hy4 decode path")
             ph = self.slots.phys[i]
-            tok[ph], pos[ph] = int(tokens[i, 0]), p
+            if not eng.live[ph]:
+                raise RuntimeError(f"verify of logical slot {i} (mesh row {ph}) that was never prefilled")
+            caps[ph] = max(0, min(int(nv[i]), K))
+            block[ph] = (tokens[i].tolist(), int(sp0[i]))
             rows.append((i, ph))
-        t0 = time.perf_counter()
-        self.dec.set_inputs(tok, pos)
-        out = self.dec.run()
-        _, lgs = self.dec.read_argmax(out)
-        res = torch.zeros(W, 1, self.vocab, dtype=torch.float32)
+        want, temps, seeds = False, list(eng.temp), list(eng.seeds)
+        if sp is not None:
+            T = _col(getattr(sp, "temperature", None), W, 0.0)
+            ks = _col(getattr(sp, "top_k", None), W, -1)
+            ps = _col(getattr(sp, "top_p", None), W, 1.0)
+            sd = _col(getattr(sp, "seed", None), W, None)
+            for i, ph in rows:
+                temps[ph] = float(T[i] or 0.0)
+                if sd[i] is not None:
+                    seeds[ph] = int(sd[i]) & 0x7FFFFFFF
+                if temps[ph] > 0:
+                    want = True
+                    if (int(ks[i]) > 1 or float(ps[i]) < 1.0) and not self._warned_topk:
+                        self._warned_topk = True
+                        logger.warning("Hy4 sampled spec round: top_k / top_p are ignored (temperature only)")
+        st = eng.round(caps, want, temps, seeds, plugin_block=block)
+        out = torch.zeros(W, n, dtype=torch.int32)
         for i, ph in rows:
-            res[i, 0] = lgs[ph]
+            out[i] = torch.tensor(st[ph]["a"], dtype=torch.int32)
         self.steps += 1
         if self.steps % 50 == 1:
-            logger.info(f"HY4 decode step {self.steps}: rows={len(rows)} ms={(time.perf_counter() - t0) * 1e3:.1f}")
-        return res
+            ms = eng.t_round / max(eng.rounds, 1) * 1e3
+            logger.info(
+                f"HY4 spec round {self.steps}: rows={len(rows)} m={[st[ph]['m'] for _, ph in rows]} round_ms_avg={ms:.1f} sampled={want}"
+            )
+        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out)
 
-    def _decode_device(
+    def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
+        """Hand out the drafts the last round / the seed round produced (they live in the engine's mirror). A row whose committed last token / position is not the engine's pending token / position is offered
+        nothing (its next verify reloads the plugin's block)."""
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        eng, K = self.eng, self.eng.K
+        W = int(committed_tokens.shape[0])
+        ids = torch.zeros(W, int(num_drafts), dtype=torch.int32)
+        nv = torch.zeros(W, dtype=torch.int32)
+        ct, cp, cn = committed_tokens.tolist(), committed_positions.tolist(), accepted_counts.tolist()
+        for i in range(W):
+            if cp[i][0] < 0:
+                continue
+            ph = self.slots.phys[i]
+            if not eng.live[ph]:
+                continue
+            j = max(int(cn[i]), 1) - 1
+            if int(ct[i][j]) == eng.pend[ph] and int(cp[i][j]) == eng.pos[ph]:
+                k = min(K, int(num_drafts))
+                ids[i, :k] = torch.tensor([max(int(x), 0) for x in eng.drafts[ph][:k]], dtype=torch.int32)
+                nv[i] = k
+            else:
+                logger.warning(
+                    f"HY4 propose: row {i} (mesh row {ph}) committed ({int(ct[i][j])}, pos {int(cp[i][j])}) != engine pending ({eng.pend[ph]}, pos {eng.pos[ph]}): no drafts"
+                )
+        return DraftOutput(draft_token_ids=ids, num_valid=nv)
+
+    # -- plain --------------------------------------------------------------------------------------------------------------------------------
+    def _decode_plain(
         self, tokens, start_pos, sp, read_from_device, reload_inputs, reload_sampling_params, reset_sampling_state
     ):
         import secrets
 
-        dl = self.dl
+        if sp is None:
+            raise TTRequestError(
+                "Hy4 product server: host sampling (penalties, logit_bias, bad_words) is not available"
+            )
+        dl = self.eng.dl
         W = int(tokens.shape[0])
         if any(bool(x) for x in _col(getattr(sp, "enable_log_probs", None), W, False)):
-            raise TTRequestError(
-                "Hy4 device sampling does not support logprobs yet (use host sampling: no device grammar / logprobs in this build)"
-            )
+            raise TTRequestError("Hy4 device sampling does not support logprobs")
         rows = [(i, self.slots.phys[i]) for i in range(W) if int(start_pos[i]) >= 0]
         if reload_inputs:
             tok, pos, act = [PAD_TOKEN] * ROWS, [0] * ROWS, [0] * ROWS
             for i, ph in rows:
                 p = int(start_pos[i])
-                if p >= self.tcap:
-                    raise TTRequestError(f"position {p} beyond the {self.tcap} keys of the Hy4 decode path")
+                if p >= self.pages * PAGE:
+                    raise TTRequestError(f"position {p} beyond the {self.pages * PAGE} tokens of the Hy4 pool")
                 tok[ph], pos[ph], act[ph] = int(tokens[i, 0]), p, 1
             dl.load_inputs(tok, pos, act)
             self._active = act
-        if reload_sampling_params or reset_sampling_state or getattr(self, "_samp_set", False) is False:
+        if reload_sampling_params or reset_sampling_state or not self._samp_set:
             T, K, P = [0.0] * ROWS, [1] * ROWS, [1.0] * ROWS
             temps, ks, ps = (
                 _col(getattr(sp, "temperature", None), W, 0.0),
@@ -384,9 +410,9 @@ class HYV4ForCausalLM:
                 T[ph], K[ph], P[ph] = float(temps[i]), int(ks[i]), float(ps[i])
                 if sds[i] is not None:
                     self._seeds[ph] = int(sds[i]) & 0x7FFFFFFF
-                elif reset_sampling_state or not getattr(self, "_samp_set", False):
-                    self._seeds[ph] = secrets.randbits(31)
-            self._variant = dl.set_sampling(T, K, P, self._seeds, active=getattr(self, "_active", None))
+                elif reset_sampling_state or not self._samp_set:
+                    self._seeds[ph] = self._seeds[ph] or secrets.randbits(31)
+            self._variant = dl.set_sampling(T, K, P, self._seeds, active=self._active)
             self._samp_set = True
         dl.submit(self._variant)
         self.steps += 1
@@ -397,7 +423,8 @@ class HYV4ForCausalLM:
         return step
 
     def _tokens_tensor(self, step, handle, sync=True):
-        ttnn = self.ttnn
+        import ttnn
+
         if sync:
             ttnn.synchronize_device(self.md)
         ts = ttnn.get_device_tensors(handle)
@@ -407,64 +434,31 @@ class HYV4ForCausalLM:
         return out
 
     def read_decode_output(self, tt_out, async_read=True, sample_rows=None):
-        """plugin split read-back: enqueue the 4-id read behind the sampler trace (same CQ: ordered), return (handles, events)."""
+        import ttnn
+
         if not isinstance(tt_out, _Step):
-            return tt_out, []  # already host logits (host-sampling step)
-        h = self.dl.read_async()
-        return (tt_out, h), [self.ttnn.record_event(self.md, 0)]
+            return tt_out, []
+        h = self.eng.dl.read_async()
+        return (tt_out, h), [ttnn.record_event(self.md, 0)]
 
     def process_decode_output_host(self, handles, is_tokens=True, sample_rows=None):
         if isinstance(handles, tuple) and len(handles) == 2 and isinstance(handles[0], _Step):
             step, h = handles
-            return self._tokens_tensor(
-                step, h, sync=False
-            )  # the plugin already waited for the read event of THIS step; a device sync would also wait for the step in flight
+            return self._tokens_tensor(step, h, sync=False)
         return handles
 
     def release_request(self, slot):
-        """Nothing to free: the cache rows of a mesh row are rewritten by the next prefill into it."""
-        return
+        """the request of this logical slot finished: the engine parks its mesh row (pad token, position 0). The pool pages are rewritten by the next prefill into the row."""
+        try:
+            self.eng.release(self.slots.phys[int(slot)])
+        except (IndexError, ValueError):
+            pass
 
     # ---- warm-up -----------------------------------------------------------------------------------------------------------------------------
-    def warm_serving(self):
-        """Compile every prefill chunk shape (starts 0..Tcap-512) with a synthetic 4 x Tcap prompt, hand over, capture the decode trace. Allocates nothing persistent afterwards."""
-        if self.warm:
-            return
-        self.warm = True
-        t0 = time.perf_counter()
-        g = torch.Generator().manual_seed(0)
-        prompts = {p: torch.randint(1000, 100000, (self.tcap,), generator=g).tolist() for p in range(ROWS)}
-        self._prefill_rows(prompts)
-        t1 = time.perf_counter()
-        self.dec.set_inputs([PAD_TOKEN] * ROWS, [self.tcap // 2] * ROWS)
-        self.dec.capture()
-        logger.info(
-            f"HY4 warm-up: prefill {t1 - t0:.1f} s (compile incl.), decode trace capture {time.perf_counter() - t1:.1f} s; "
-            f"second prefill call timing follows"
-        )
-        if self.dl is not None:
-            t2 = time.perf_counter()
-            self.dl.capture(
-                self.loop_variants
-            )  # one trace per sampler variant: derive + step + head + sampler + epilogue
-            for T, K, P in (
-                (0.0, 1, 1.0),
-                (0.9, -1, 1.0),
-                (0.9, 50, 0.9),
-            ):  # compile the eager first-token samplers (prefill) of every variant
-                self._prefill_rows(
-                    {p: prompts[p][:512] for p in range(ROWS)}, {p: (T, K, P, 1, 511) for p in range(ROWS)}
-                )
-            self._samp_set = False
-            logger.info(
-                f"HY4 warm-up: device loop traces {self.loop_variants} captured in {time.perf_counter() - t2:.1f} s"
-            )
-        # one more (compiled) prefill call: its timing is the steady prefill cost; rows are overwritten by real requests later
-        self._prefill_rows({p: prompts[p][:1024] for p in range(ROWS)})
+    def warmup_model_prefill(self, kv_cache=None, enable_trace=True, *args, **kwargs):
+        self.eng.warm()
         self.slots = _Slots(self.max_num_seqs)
 
-    def warmup_model_prefill(self, kv_cache=None, enable_trace=True, *args, **kwargs):
-        self.warm_serving()
-
     def warmup_model_decode(self, *args, **kwargs):
-        self.warm_serving()
+        self.eng.warm()
+        self.slots = _Slots(self.max_num_seqs)

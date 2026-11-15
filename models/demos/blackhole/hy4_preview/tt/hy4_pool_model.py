@@ -349,4 +349,12 @@ class Hy4PoolDecoder(Hy4Decoder):
             )  # ONE dispatch / combine scratch set at the new size shared by all layers (``for_batch`` allocates a new set when ``buffers`` is None)
             if self.blk_buffers is None:
                 self.blk_buffers = nb.decode.buffers
+            if getattr(ly, "blk_tp", None) is not None:
+                # HY4_MOE_TP32=1 (+ HY4_TP32_CACHE_DIR): TP32 (tp24 kernel) routed experts for the S verify rows too: same expert copy as the S = 1 block, a block at T = S tokens per mesh row
+                # (tp24: T * 4 <= 16 tokens on the mesh), the router of the batch-S block. Untested at S > 1 on the model path (product-integ): default OFF with the flag.
+                from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_block import Hy4MoeTp32Block
+
+                assert self.S * int(self.md.shape[0]) <= 16, "TP32 verify block: S * 4 <= 16 tokens"
+                self._blks.append(Hy4MoeTp32Block(self.md, self.ch.ccl, nb.gate, ly.blk_tp.tpe, self.S))
+                continue
             self._blks.append(nb)

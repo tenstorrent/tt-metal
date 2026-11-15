@@ -157,6 +157,28 @@ class SpecSampling:
             self.seed,
         )
 
+    def load_onehot(self, drafts):
+        """host (transition only): make the persistent q rows / draft column describe POINT-MASS drafts: q_j = one-hot at d_{j+1}, d_col = the drafts. Used when the drafts of the next round were not sampled from q
+        by a sampled round (the greedy seed round after a prefill, a greedy round before this one): accept w.p. min(1, p(d)/1) and a residual draw from norm(max(p - onehot, 0)) is exactly lossless for a
+        deterministic draft. drafts: per user row a list of k ints (-1 = none)."""
+        md, s, k, S = self.ops.s.md, self.s, self.k, self.S
+        R, cols, PR, shard = int(md.shape[0]), int(md.shape[1]), s.PR, s.shard
+        q = torch.zeros(R * S, cols, PR, 32)
+        d = torch.zeros(R, 1, S, 1)
+        for r in range(R):
+            for j in range(k):
+                t = int(drafts[r][j])
+                if t < 0:
+                    continue
+                c, loc = divmod(t, shard)
+                q[r * S + j, c, loc // 32, loc % 32] = 1.0
+                d[r, 0, j, 0] = float(t)
+        cp = lambda t, tgt, mapper: ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper), tgt
+        )
+        cp(q, self.q_persist, ttnn.ShardTensor2dMesh(md, dims=(0, 1), mesh_shape=tuple(md.shape)))
+        cp(d, self.d_col, ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape)))
+
     def draw_u(self, pos_col, stream):
         """pos_col fp32 [1,1,n,1] -> u fp32 [1,1,n,1] in [0,1) (24 bits)."""
         pu = ttnn.typecast(pos_col, ttnn.uint32)

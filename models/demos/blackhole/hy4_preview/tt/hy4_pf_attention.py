@@ -87,13 +87,21 @@ class Hy4AttentionPF(Hy4AttentionPool):
         )
 
     # ------------------------------------------------------------------ write path (C)
+    def _wr_colid(self):
+        """(colid tensor, slice_copy kernel) of the pool writes. ``ctx.pf_wr_colid`` (set by Hy4PoolPrefill when it serves a batch with LIVE decode rows: colid element 2 = 1 on the rows that must NOT be
+        written) selects the masked kernel (slice_copy_masked.cpp: copies nothing on a skipped row); otherwise the stock kernel and colid.
+        """
+        w = getattr(self.ctx, "pf_wr_colid", None)
+        return (self.ctx.colid, "slice_copy.cpp") if w is None else (w, "slice_copy_masked.cpp")
+
     def _pf_write_kv(self, lat, k_pe, p):
         """latent / rope rows of the chunk (replicated over the columns) -> SCALED_FP8 packed rows -> this column's 64-row slice of pool page p."""
         dp = ttnn.experimental.deepseek_prefill
         f8, sc = dp.per_token_cast_to_fp8(lat, round_scale_to_power_of_two=True)
         rope_rm = ttnn.to_layout(k_pe, ttnn.ROW_MAJOR_LAYOUT)
         packed = dp.pack_scaled_fp8_kv_cache(f8, sc, rope_rm)
-        HP.slice_copy(packed, self.kv_pool, self.ctx.colid, 64, HP.ROWB, 1, dst_page0=p)
+        cid, kern = self._wr_colid()
+        HP.slice_copy(packed, self.kv_pool, cid, 64, HP.ROWB, 1, dst_page0=p, kernel=kern)
         for t in (f8, sc, rope_rm, packed):
             ttnn.deallocate(t)
 
@@ -105,7 +113,8 @@ class Hy4AttentionPF(Hy4AttentionPool):
         k = ix._rot(k, icos, isin)
         kb = ttnn.typecast(k, ttnn.bfloat8_b)
         ttnn.deallocate(k)
-        HP.slice_copy(kb, self.key_view, self.ctx.colid, 8, HP.KEYTILE, 1, dst_page0=p)
+        cid, kern = self._wr_colid()
+        HP.slice_copy(kb, self.key_view, cid, 8, HP.KEYTILE, 1, dst_page0=p, kernel=kern)
         ttnn.deallocate(kb)
 
     # ------------------------------------------------------------------ indexer on the pool (B)

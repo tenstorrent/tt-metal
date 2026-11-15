@@ -83,6 +83,29 @@ class Hy4PoolPrefill:
         self.mem_min_free_per_bank = 1 << 62
         for ly in self.ch.layers:
             assert hasattr(ly.attn, "_pf_chunk512"), "chain not built with HY4_POOL=1 HY4_POOL_PF=1"
+        # serving: a prefill may run while OTHER mesh rows hold live decode users. All four rows always compute (lock step); the pool writes of the rows that are not being prefilled are suppressed with the masked
+        # slice_copy kernel (colid element 2 = 1 on a skipped row). The tensor is persistent: allocated here, before any decode trace is captured, and rewritten on the host (set_keep).
+        from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
+        from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
+
+        self._HP = HP
+        self.wr_mask = upload(
+            self.md, HP.colid_masked_host([]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, shard_dim=1, row_dim=0
+        )
+        self.set_keep(None)
+        self.mesh_map = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=tuple(self.md.shape))
+
+    def set_keep(self, keep_rows):
+        """rows whose pool pages this prefill may write (None = all). The masked write path is active from the first call on (``ctx.pf_wr_colid``)."""
+        skip = [] if keep_rows is None else [r for r in range(self.rows) if r not in set(keep_rows)]
+        host = ttnn.from_torch(
+            self._HP.colid_masked_host(skip),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, 1), mesh_shape=tuple(self.md.shape)),
+        )
+        ttnn.copy_host_to_device_tensor(host, self.wr_mask)
+        self.dec.ctx.pf_wr_colid = self.wr_mask
 
     def pages_needed(self, max_len):
         return (-(-max_len // self.pf_rows)) * self.pf_rows // 512
@@ -92,9 +115,46 @@ class Hy4PoolPrefill:
         devs = ttnn.get_device_tensors(t)
         return torch.stack([ttnn.to_torch(devs[r * self.cols]).float() for r in range(self.rows)])
 
-    def prefill(self, prompts, keep_hidden=False, keep_logits=False, sync_every_chunk=True):
-        """prompts: list (<= rows) of token-id lists (a missing / empty user is a pad prompt). Returns PrefillResult."""
+    def mtp_prompt_chunk(self, mtp, hn, c, prompts, PF):
+        """MTP layer prompt KV of chunk c: row t of user r = pair (h_t [post model.norm hidden of the main model], token t + 1) at position c * PF + t, written into the MTP layer's pool pair by the layer's own
+        PF attention (outputs discarded: only the KV / key rows matter; +1/79 of a prefill chunk). The pair of the last prompt position (token = the first generated token) is NOT known yet: its row is written by the
+        seed round (the next token of a row beyond the prompt is PAD: junk rows at positions >= the prompt length are overwritten before they are read).
+        """
+        from models.demos.blackhole.hy4_preview.tt.hy4_chain import rms_exact
+
+        ly = mtp.ly
+        nxt = torch.full((self.rows, PF), PAD, dtype=torch.long)
+        for r in range(self.rows):
+            seg = prompts[r][c * PF + 1 : (c + 1) * PF + 1]
+            if seg:
+                nxt[r, : len(seg)] = torch.tensor(seg)
+        tt_tok = ttnn.from_torch(
+            nxt.to(torch.int32),
+            device=self.md,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self.mesh_map,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        e = mtp.embed(tt_tok)
+        ttnn.deallocate(tt_tok)
+        x = mtp.pre(e, hn)
+        ttnn.deallocate(e)
+        h1 = rms_exact(x, ly.w_in32, mtp.eps)
+        ttnn.deallocate(x)
+        o, ids = ly.attn.prefill_chunk(h1, c * PF)
+        for t in (h1, o):
+            ttnn.deallocate(t)
+        if ids is not None:
+            ttnn.deallocate(ids)
+
+    def prefill(self, prompts, keep_hidden=False, keep_logits=False, sync_every_chunk=True, mtp=None, keep_rows=None):
+        """prompts: list (<= rows) of token-id lists (a missing / empty user is a pad prompt). Returns PrefillResult.
+        mtp: an Hy4MTP -> the MTP layer prompt KV is written per chunk (``mtp_prompt_chunk``). keep_rows: the mesh rows being prefilled (the pool writes of the others are suppressed: live decode users).
+        """
         ch, md, PF = self.ch, self.md, self.pf_rows
+        if keep_rows is not None:
+            self.set_keep(keep_rows)
         prompts = [list(p) for p in prompts] + [[PAD]] * (self.rows - len(prompts))
         assert len(prompts) == self.rows
         lens = [max(len(p), 1) for p in prompts]
@@ -122,8 +182,15 @@ class Hy4PoolPrefill:
                 ) == 0  # sampling slows the host ~5x: only every mem_every-th chunk is sampled (its time is not representative)
             x4, ids_by_layer = ch.prefill(ids, start=c * PF, ids_by_layer=ids_by_layer)
             enders = [r for r in range(self.rows) if c * PF <= lens[r] - 1 < (c + 1) * PF]
+            if mtp is not None and not enders:
+                hn, logits = ch.head(x4)
+                ttnn.deallocate(logits)
+                self.mtp_prompt_chunk(mtp, hn, c, prompts, PF)
+                ttnn.deallocate(hn)
             if enders:
                 hn, logits = ch.head(x4)
+                if mtp is not None:
+                    self.mtp_prompt_chunk(mtp, hn, c, prompts, PF)
                 lg = ttnn.to_torch(
                     logits, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))
                 ).reshape(self.rows, PF, -1)
