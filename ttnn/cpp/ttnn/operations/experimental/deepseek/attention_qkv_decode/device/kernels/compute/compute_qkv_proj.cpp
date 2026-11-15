@@ -18,6 +18,8 @@
 #include "api/compute/tile_move_copy.h"
 #endif
 
+// BLOCK_ROWS: tokens is a block of `rows` token rows and every tile below is (rows x 32); the RMSNorm is per row.
+//
 // tokens @ w, one 1x32 tile, for the reader to gather on the hub: a kv core's as x, a q_a core's as
 // x and then x times this core's tile of q_a_norm's gamma.
 //
@@ -110,6 +112,22 @@ void kernel_main() {
     CircularBuffer tmp_cb(tmp_cb_id);
     CircularBuffer out_cb(out_cb_id);
 
+#ifdef BLOCK_ROWS
+    // Several rows: a per-row statistic, and gamma comes replicated over the rows.
+    constexpr uint32_t rows = get_arg(args::rows);
+    row_cb.wait_front(row_tiles);
+    gamma_cb.wait_front(1);
+    rms_scale_rows<rows, inv_n_bits>(
+        row_cb_id, dfb::sq, dfb::ones, dfb::stat, scale_cb_id, kv_first_tile, kv_tiles, eps_bits);
+    compute_kernel_hw_startup(row_cb_id, gamma_cb_id, out_cb_id);
+    scale_cb.wait_front(1);
+    const uint32_t norm_cb_id = do_rope ? tmp_cb_id : out_cb_id;
+    CircularBuffer norm_cb(norm_cb_id);
+    norm_cb.reserve_back(1);
+    scale_rows_tiles<1, true>(row_cb_id, kv_first_tile + kv_index, scale_cb_id, gamma_cb_id, norm_cb_id);
+    norm_cb.push_back(1);
+#else
+    constexpr uint32_t rows = 1;
     // custom_mm_block_uninit leaves a 32x32 packer stride behind; reprogram for 1x32 tiles.
     compute_kernel_hw_startup(row_cb_id, gamma_cb_id, out_cb_id);
     row_cb.wait_front(row_tiles);
@@ -121,9 +139,10 @@ void kernel_main() {
     norm_cb.reserve_back(1);
     scale_tiles<1, true>(row_cb_id, kv_first_tile + kv_index, scale_cb_id, gamma_cb_id, norm_cb_id);
     norm_cb.push_back(1);
+#endif
     if (do_rope) {
         out_cb.reserve_back(1);
-        rope_tiles_to<1>(tmp_cb_id, dfb::cs, out_cb_id);
+        rope_tiles_to<1, rows>(tmp_cb_id, dfb::cs, out_cb_id);
         out_cb.push_back(1);
     }
     scale_cb.pop_front(1);

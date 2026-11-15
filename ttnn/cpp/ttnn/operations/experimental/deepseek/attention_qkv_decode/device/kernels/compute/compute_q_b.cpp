@@ -13,6 +13,8 @@
 #include "experimental/kernel_args.h"
 #include "qkv_epilogue.hpp"
 
+// BLOCK_ROWS: every tile is (rows x 32), one token per row, and each row takes its own RMSNorm scale.
+//
 // q = rms_scale(q_a) * ((q_a * gamma) @ w), Nc tiles, the head's trailing rope tiles rotated (do_rope).
 //
 // The row carries q_a unnormalized, and q_a times gamma from scaled_q_a_first: the RMSNorm scale, one
@@ -80,6 +82,12 @@ void kernel_main() {
     }
 #endif
 
+#ifdef BLOCK_ROWS
+    // The per-row statistic needs only the row: work it out while the weight slab may still be streaming in.
+    row_cb.wait_front(row_tiles);
+    rms_scale_rows<get_arg(args::rows), inv_n_bits>(
+        row_cb_id, dfb::sq, dfb::ones, dfb::stat, scale_cb_id, 0, q_lora_tiles, eps_bits);
+#endif
     compute_kernel_hw_startup<SrcOrder::Reverse>(row_cb_id, w_cb_id, mm_out_cb_id);
     row_cb.wait_front(row_tiles);
     w_cb.wait_front(q_lora_tiles * nc_tiles);
@@ -96,25 +104,43 @@ void kernel_main() {
     mm_out_cb.push_back(nc_tiles);
     w_cb.pop_front(q_lora_tiles * nc_tiles);
 
+#ifdef BLOCK_ROWS
+    // Several rows: each row's own RMSNorm scale, an elementwise multiply.
+    constexpr uint32_t rows = get_arg(args::rows);
+    row_cb.pop_front(row_tiles);
+    compute_kernel_hw_startup(mm_out_cb_id, mm_out_cb_id, out_cb_id);
+#define SCALE_TILES scale_rows_tiles
+#else
+    constexpr uint32_t rows = 1;
     // custom_mm_block_uninit leaves a 32x32 packer stride behind; reprogram for 1x32 tiles.
     compute_kernel_hw_startup(row_cb_id, mm_out_cb_id, out_cb_id);
     rms_scale(row_cb_id, dfb::stat, scale_cb_id, 0, q_lora_tiles, inv_n_bits, eps_bits);
     row_cb.pop_front(row_tiles);
+#define SCALE_TILES scale_tiles
+#endif
 
     scale_cb.wait_front(1);
     mm_out_cb.wait_front(nc_tiles);
     out_cb.reserve_back(nc_tiles);
     const uint32_t plain_tiles = do_rope ? nc_tiles - rope_tiles : nc_tiles;
     for (uint32_t t = 0; t < plain_tiles; t += 2) {
-        scale_tiles<2, false>(mm_out_cb_id, t, scale_cb_id, 0, out_cb_id);
+        SCALE_TILES<2, false>(mm_out_cb_id, t, scale_cb_id, 0, out_cb_id);
     }
+#ifdef BLOCK_ROWS
+    // The writer rearranges the plain tiles' rows while the rope tiles are rotated.
+    out_cb.push_back(plain_tiles);
+#endif
     if (do_rope) {
         tmp_cb.reserve_back(rope_tiles);
-        scale_tiles<rope_tiles, false>(mm_out_cb_id, nc_tiles - rope_tiles, scale_cb_id, 0, tmp_cb_id);
+        SCALE_TILES<rope_tiles, false>(mm_out_cb_id, nc_tiles - rope_tiles, scale_cb_id, 0, tmp_cb_id);
         tmp_cb.push_back(rope_tiles);
-        rope_tiles_to<rope_tiles>(tmp_cb_id, dfb::cs, out_cb_id);
+        rope_tiles_to<rope_tiles, rows>(tmp_cb_id, dfb::cs, out_cb_id);
     }
+#ifdef BLOCK_ROWS
+    out_cb.push_back(nc_tiles - plain_tiles);
+#else
     out_cb.push_back(nc_tiles);
+#endif
     mm_out_cb.pop_front(nc_tiles);
     scale_cb.pop_front(1);
 }

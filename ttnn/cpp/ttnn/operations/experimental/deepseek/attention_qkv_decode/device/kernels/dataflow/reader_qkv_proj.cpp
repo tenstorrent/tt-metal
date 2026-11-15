@@ -10,6 +10,9 @@
 #include "api/dataflow/prefetcher_pipe.h"
 #include "api/semaphore.h"
 #include "experimental/kernel_args.h"
+#ifdef BLOCK_ROWS
+#include "rope_table_rows.hpp"
+#endif
 
 // A q_a or kv core: this core's [K, 32] weight slab from DRAM (or W_PIPE: its prefetcher ring), then its one-tile
 // result into slot `slot` of the hub's qkv_row -- and a q_a core its tile times gamma into slot scaled_q_a_first +
@@ -53,10 +56,18 @@ void kernel_main() {
     in0_cb.push_back(k_tiles);
 
 #ifndef IS_KV
-    // gamma is resident in the tensor it borrows.
     CircularBuffer q_a_gamma_cb(dfb::q_a_gamma);
+#ifdef BLOCK_ROWS
+    // gamma's tile, one copy per row of the block.
+    const auto q_a_gamma = TensorAccessor(tensor::q_a_gamma);
+    read_gamma_rows(q_a_gamma, get_arg(args::shard_id), get_arg(args::rows), q_a_gamma_cb);
+    noc.async_read_barrier();
+    q_a_gamma_cb.push_back(1);
+#else
+    // gamma is resident in the tensor it borrows.
     q_a_gamma_cb.reserve_back(1);
     q_a_gamma_cb.push_back(1);
+#endif
 #endif
 
 #ifdef W_PIPE

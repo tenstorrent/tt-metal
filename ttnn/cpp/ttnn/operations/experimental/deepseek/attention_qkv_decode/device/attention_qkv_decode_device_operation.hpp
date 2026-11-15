@@ -46,6 +46,12 @@ inline CoreRangeSet weight_role_cores(WeightRole role) {
 
 // Indices into the q_b cores (row-major over their 8x8 rectangle) of the n compressor-column cores, spread
 // evenly over it.
+// Rows per call: 1 for today's one-token ROW_MAJOR tokens, else the height h (2, 4 or 8) of the (h x 32) tiles of
+// a TILE tokens block.
+inline uint32_t block_rows(const Tensor& tokens) {
+    return tokens.layout() == Layout::TILE ? tokens.tensor_spec().tile().get_height() : 1;
+}
+
 inline std::vector<uint32_t> comp_core_indices(uint32_t n) {
     std::vector<uint32_t> indices(n);
     for (uint32_t i = 0; i < n; ++i) {
