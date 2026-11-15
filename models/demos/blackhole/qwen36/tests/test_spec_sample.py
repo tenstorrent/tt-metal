@@ -202,8 +202,8 @@ def test_a_chained_seeded_row_draws_what_an_unchained_verify_draws(mesh_device):
     """The chain program (spec_chain.ChainInputs.body) writes a chained verify's sampler seeds, each user's picked by
     the predecessor's count from the host's candidates (spec_sample.chained_sampling_plan). Over the same logits a
     seeded user then draws, token for token, what an unchained verify whose column 0 sits at that count's position
-    draws: the float32 pick, the uint32 typecast, the 1-D copy into the sampler's seeds and manual_seed's user-id match
-    lose no bit. An unseeded user draws support tokens."""
+    draws: the chain kernel's pick, its write into the sampler's 1-D seeds and manual_seed's user-id match lose no
+    bit. An unseeded user draws support tokens."""
     from models.demos.blackhole.qwen36.tests.test_spec_accept_host import ROWS
     from models.demos.blackhole.qwen36.tests.test_spec_chain_host import _chain_case, _ctrl_words
     from models.demos.blackhole.qwen36.tt.spec_chain import ChainInputs

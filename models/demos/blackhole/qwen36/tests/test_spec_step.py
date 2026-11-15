@@ -7,9 +7,14 @@
 * test_the_drafter_inputs_are_the_staged_values: MTPSpecEngine._drafter_inputs over a drafter pack: tokens, KV
   positions, cos / sin of the real rows and the anchor one-hot equal the per-buffer values the drafter staged before;
   the anchor matmul picks the exact feed rows also when B * T < 32 and the feed's tile padding holds data.
-* test_the_step_trace_writes_the_host_pack_and_reseed_table: spec_accept.StepAccept.body, eager and replayed from a
-  trace on fresh inputs, writes the drafter pack and reseed table of spec_accept.step_accept_reference (the plugin's
-  greedy walk on the merged ids, the host's drafter pack); and the replay time.
+* test_the_step_trace_writes_the_host_pack_and_reseed_table: spec_accept.StepAccept.body (the kernel
+  kernels/step_accept.cpp), eager and replayed from a trace on fresh inputs, writes the drafter pack and reseed table
+  of spec_accept.step_accept_reference (the plugin's greedy walk on the merged ids, the host's drafter pack); and the
+  replay time.
+* test_the_step_kernel_writes_the_op_graph_words_and_replays_faster: the step kernel and the op graph it replaced
+  (tests/spec_op_graphs.py OpGraphStepAccept) on the same inputs, every acceptance count, greedy and drawn rows, a
+  reseed table of two column chunks: every word of the drafter pack and the reseed table is equal (outputs filled
+  with a marker before each run), eager and replayed from traces; the kernel's trace replays faster.
 
     MESH_DEVICE=P150x8 pytest models/demos/blackhole/qwen36/tests/test_spec_step.py
 """
@@ -232,4 +237,105 @@ def test_the_step_trace_writes_the_host_pack_and_reseed_table(mesh_device, B):
     ttnn.release_trace(mesh_device, trace)
     acc.release()
     for t in (step_dev, pack_dev, rs_dev, draws_dev, ids_dev):
+        ttnn.deallocate(t)
+
+
+def _replay_us(mesh, trace, n=50):
+    """Mean wall time per non-blocking replay of ``trace`` over ``n`` replays, after a synchronize."""
+    for _ in range(5):
+        ttnn.execute_trace(mesh, trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh)
+    t0 = time.perf_counter()
+    for _ in range(n):
+        ttnn.execute_trace(mesh, trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh)
+    return (time.perf_counter() - t0) / n * 1e6
+
+
+def _capture(mesh, body):
+    """A trace of ``body`` captured with program-cache misses refused (body ran eagerly before)."""
+    mesh.set_program_cache_misses_allowed(False)
+    try:
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh):
+            trace = ttnn.begin_trace_capture(mesh, cq_id=0)
+            body()
+            ttnn.end_trace_capture(mesh, trace, cq_id=0)
+    finally:
+        mesh.set_program_cache_misses_allowed(True)
+    return trace
+
+
+@torch.no_grad()
+@_parametrize
+@pytest.mark.parametrize("sampled", [False, True], ids=["greedy", "sampled"])
+@pytest.mark.parametrize("B", [1, 8])
+def test_the_step_kernel_writes_the_op_graph_words_and_replays_faster(mesh_device, B, sampled):
+    from models.demos.blackhole.qwen36.tests.spec_op_graphs import OpGraphStepAccept
+    from models.demos.blackhole.qwen36.tests.test_spec_accept_host import ROWS, _lanes, _step_buffer
+    from models.demos.blackhole.qwen36.tests.test_spec_kernels_host import _accept_case
+    from models.demos.blackhole.qwen36.tt.spec_accept import StepAccept, step_accept_reference
+    from models.demos.blackhole.qwen36.tt.spec_step import drafter_pack_rows
+
+    K, nb, scratch = 3, 257, 999  # 257 words: two column chunks of the reseed table
+    T, R = K + 1, B * (K + 1)
+    W = pack_width(R)
+    rng = random.Random(10 * B + sampled)
+    cases, seen = [], set()
+    while len(cases) < 22 or seen != set(range(T)):
+        ids, draws, tokens, acc, counts = _accept_case(rng, B, K, sampled)
+        step = _step_buffer(tokens.reshape(-1), list(range(R)), list(range(R)), acc, B, T)
+        pt = torch.randint(1, 900, (B, nb), dtype=torch.int32)
+        want = step_accept_reference(ids.reshape(-1), tokens.reshape(-1), acc, pt, scratch, K, ROWS, draws=draws)
+        cases.append(SimpleNamespace(ids=ids, draws=draws, pt=pt, step=step, pack=want[2], rs=want[3]))
+        seen |= set(counts)
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def copy_in(host, dev, dtype):
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(host.to(torch.int32), dtype=dtype, mesh_mapper=rep), dev)
+
+    def stage(case):
+        copy_in(_lanes(case.ids), ids_dev, ttnn.uint32)
+        if sampled:
+            copy_in(case.draws.reshape(1, 1, 1, R), draws_dev, ttnn.uint32)
+        copy_in(case.step, step_dev, ttnn.uint32)
+        acc.stage_pt_rows(case.pt.repeat_interleave(T, dim=0))
+
+    def run(case, outs, go):
+        """Fill ``outs`` with markers, run ``go``, return the (pack, reseed table) it wrote."""
+        copy_in(torch.full((drafter_pack_rows(K), W), 0x5EEDBEEF), outs[0], ttnn.uint32)
+        copy_in(torch.full((R, nb), -7), outs[1], ttnn.int32)
+        go()
+        return [_host(t).to(torch.int64) for t in outs]
+
+    def check(case, got, ref):
+        assert torch.equal(got[0], ref[0]) and torch.equal(got[0], case.pack.to(torch.int64)), "drafter pack"
+        assert torch.equal(got[1], ref[1]) and torch.equal(got[1], case.rs.to(torch.int64)), "reseed table"
+
+    step_dev = _rep(mesh_device, cases[0].step, ttnn.uint32)
+    outs = [_rep(mesh_device, torch.zeros(drafter_pack_rows(K), W, dtype=torch.int32), ttnn.uint32)]
+    outs.append(_rep(mesh_device, torch.zeros(R, nb, dtype=torch.int32), ttnn.int32))
+    ref_outs = [_rep(mesh_device, torch.zeros(drafter_pack_rows(K), W, dtype=torch.int32), ttnn.uint32)]
+    ref_outs.append(_rep(mesh_device, torch.zeros(R, nb, dtype=torch.int32), ttnn.int32))
+    draws_dev = _rep(mesh_device, torch.zeros(1, 1, 1, R, dtype=torch.int32), ttnn.uint32) if sampled else None
+    ids_dev = _rep(mesh_device, torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32)
+    acc = StepAccept(mesh_device, B, K, nb, ROWS, scratch, step_dev, outs[0], outs[1], draws=draws_dev)
+    acc.bind_ids(ids_dev)
+    ref = OpGraphStepAccept(acc, ROWS, scratch, pack=ref_outs[0], rs_pt=ref_outs[1])
+    stage(cases[0])
+    check(cases[0], run(cases[0], outs, acc.body), run(cases[0], ref_outs, ref.body))
+    traces = [_capture(mesh_device, acc.body), _capture(mesh_device, ref.body)]
+    replay = lambda trace: lambda: ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
+    for case in cases[1:]:
+        stage(case)
+        check(case, run(case, outs, replay(traces[0])), run(case, ref_outs, replay(traces[1])))
+    kernel_us, graph_us = (_replay_us(mesh_device, t) for t in traces)
+    logger.info(
+        f"[step trace] B={B} K={K} draws={sampled}: kernel {kernel_us:.1f} us, op graph {graph_us:.1f} us per replay"
+    )
+    assert kernel_us < graph_us
+    for t in traces:
+        ttnn.release_trace(mesh_device, t)
+    acc.release()
+    ref.release()
+    for t in (step_dev, ids_dev, *outs, *ref_outs, *([draws_dev] if sampled else [])):
         ttnn.deallocate(t)
