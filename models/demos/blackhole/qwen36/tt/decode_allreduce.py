@@ -6,7 +6,8 @@ Without it, the decode residual is fractured ([1, 1, R, dim / tp] per device): e
 sublayer reduce-scatters its row-parallel output back into it, then adds the residual (2 collectives and 1 add per
 sublayer). With it, the residual is replicated full width in L1, width-sharded over a 10x4 core grid ("RES40",
 shard [32, dim / 40]); norms run locally on it, and each sublayer's row-parallel output goes through one
-all_reduce_async that also adds the residual (one_shot=True, residual_tensor=).
+all_reduce_async that also adds the residual (one_shot=True, residual_tensor=). The attention wo and the GDN
+out-projection write their partial in RES40 directly (out_matmul), so only the MLP down's partial is resharded.
 
 Only the shape the operation was tested at takes this path: a (1, 8) mesh on a 1D fabric (one_shot routes by hop
 count), dim 5120, dense MLP, at most one tile of rows. Prefill and the plain decode keep the fractured residual; the
@@ -16,6 +17,7 @@ residual layout stays private to each forward.
 from loguru import logger
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
 RES40_GRID = (10, 4)
 SUPPORTED_MESH_SHAPE = (1, 8)
@@ -32,6 +34,9 @@ class ResidualAllReduce:
 
     def all_reduce(self, partial):
         return self.owner.all_reduce(partial, self.residual)
+
+    def out_matmul(self, x, weight, compute_cfg):
+        return self.owner.out_matmul(x, weight, compute_cfg)
 
 
 class DecodeResidualAllReduce:
@@ -70,6 +75,7 @@ class DecodeResidualAllReduce:
             block_w=block_w,
             inplace=False,
         )
+        self._out_progcfgs = {}
         # all_reduce_async stages every device's partial here: tp x the output shard on the output's cores.
         self.buffer = ttnn.empty(
             [1, 1, ttnn.TILE_SIZE, self.dim * self.tp],
@@ -122,12 +128,42 @@ class DecodeResidualAllReduce:
         """The all-reduce a sublayer whose input is ``residual`` ends with; its output is the next residual."""
         return ResidualAllReduce(self, residual)
 
+    def out_progcfg(self, k):
+        """The 1D decode matmul program of a [32, k] x [k, dim] out-projection on the RES40 grid: 4 output tiles per
+        core, so its width-sharded output is the RES40 layout. Built by create_matmul_1d_decode_progcfg, like
+        attn_wo_decode_1d_progcfg and gdn_out_decode_1d_progcfg, so in0_block_w is theirs: every output tile runs the
+        same K loop, and only the split of N over the cores differs."""
+        pc = self._out_progcfgs.get(k)
+        if pc is None:
+            ncores = RES40_GRID[0] * RES40_GRID[1]
+            pc = tpc.create_matmul_1d_decode_progcfg(
+                ttnn.TILE_SIZE, k, self.dim, num_cores=ncores, grid_w=RES40_GRID[0]
+            )
+            self._out_progcfgs[k] = pc
+        return pc
+
+    def out_matmul(self, x, weight, compute_cfg):
+        """A sublayer's row-parallel out-projection ``x`` [.., R, k] x ``weight`` [k, dim] (interleaved), written as the
+        RES40 partial [1, 1, R, dim] that all_reduce takes without a reshard. None when ``x`` is sharded, has more than
+        one tile of rows, or ``weight`` does not end in dim: the caller then runs its own matmul."""
+        rows, k = x.shape[-2], x.shape[-1]
+        if rows > ttnn.TILE_SIZE or weight.shape[-1] != self.dim or x.is_sharded():
+            return None
+        x4 = x if len(x.shape) == 4 else ttnn.reshape(x, (1, 1, rows, k))
+        return ttnn.linear(
+            x4,
+            weight,
+            program_config=self.out_progcfg(k),
+            compute_kernel_config=compute_cfg,
+            memory_config=self.res_mem,
+        )
+
     def all_reduce(self, partial, residual):
         """Sum the per-device row-parallel ``partial`` [.., R, dim] over the TP axis and add ``residual`` (RES40).
 
-        The partial is resharded to RES40 and cast to bfloat16 (the residual's dtype) first. one_shot gives the same
-        bytes as the default mode and lets back-to-back calls share the one persistent buffer (each device starts call
-        n + 1 only after every owner has read its slots of call n)."""
+        The partial is resharded to RES40 (unless out_matmul wrote it there) and cast to bfloat16 (the residual's dtype)
+        first. one_shot gives the same bytes as the default mode and lets back-to-back calls share the one persistent
+        buffer (each device starts call n + 1 only after every owner has read its slots of call n)."""
         shape = list(partial.shape)
         rows = shape[-2]
         if len(shape) != 4 or shape[0] != 1 or shape[1] != 1:
@@ -137,7 +173,9 @@ class DecodeResidualAllReduce:
                 f"the residual must be the RES40 tensor [1, 1, {rows}, {self.dim}], got {list(residual.shape)} in "
                 f"{residual.memory_config()}"
             )
-        packed = ttnn.to_memory_config(partial, self.res_mem)
+        # out_matmul's partial is already RES40. It skips ttnn.to_memory_config, which would return a second handle to
+        # the same buffer, and the deallocate below would then free the buffer the all-reduce reads.
+        packed = partial if partial.memory_config() == self.res_mem else ttnn.to_memory_config(partial, self.res_mem)
         if packed is not partial:
             ttnn.deallocate(partial)
         if packed.dtype != ttnn.bfloat16:
