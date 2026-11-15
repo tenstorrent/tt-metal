@@ -819,3 +819,38 @@ per call on the q core: not built, because at B=1 the state cores finish their g
 (5.3 us), so it would not move the wall. Lever (2), a cross-core S0 gate, is moot: no small read is left on the state
 cores. Next: shorten the q / k chain (one conv window of the Kt columns instead of per-column row gathers, y_k^T from
 the k core) so the early-S0 cores start computing, and writing, while the late rows still read.
+
+### [ ] Refinement 21 — Decode B=8 / B=16: q / k chain as fast as at B=1
+
+**Type**: perf
+
+**Goal**: after refinement 20 the harness has model_decode_b8 39.1 us (bound 26.4, target 29.3) and
+model_decode_b16 69.7 us (bound 51.7, target 57.5). Its timeline names what binds: the state cores
+whose S0 lands early (from 5 to 6 us) are held by qn / kn, which the q / k cores send only at 12 to 15
+us (B=8) and 16 to 19 us (B=16), against 6.8 us at B=1; so compute and with it the state write-back
+of every core crowd into the last 12 to 20 us of the call, on top of the late rows' reads. Per q / k
+core today: window gather about 1.2 to 1.5 us per column, L2 norm about 4.5 us, send about 1.5 us, and
+one q / k core serves every sequence of its key head in turn. Bring the q / k hand-off at B=8 / B=16
+to where B=1 has it (y by about 5 us, inverse norms by about 7 us for EVERY sequence): (1) one conv
+window of the 4 history columns per q / k core instead of per-column row gathers (also named by
+refinements 18 and 20); (2) more q / k cores when B > 1: the q / k work of a key head split over
+sequences (or sequence ranges) on the cores that are idle (16 of 120 at B=8 / B=16 today; if none
+are free, measure whether giving up state-piece cores for q / k cores pays), each multicasting to
+its sequences' state cores, with the small inputs of refinement 20 staying once per key head;
+(3) two-stage hand-off as at B=1 (`QK_RAW_HANDOFF`: y at once, inverse norms after) on the B > 1 plan
+if it is not there yet; (4) y_k^T sent with y_k from the k core so that state cores drop their
+transposes; (5) order: the sequences whose state cores get S0 first are served first. Then, with the
+early cores finishing early, let each core start its state write-back as soon as its own update is
+done (check with the NoC trace that early writes no longer delay the late rows' S0 reads now that the
+small reads are gone; refinement 15 measured that they did when the small reads were still there).
+
+**Verifier notes**: none of B=1 / B=8 / B=16 may regress while another improves; guard set prefill
+T=128, model_prefill_4096, decode fp32, batched B=2 T=40 unchanged. Bit-identical or within the
+accuracy gates (state-carry at 0.002); in place correct and bit-identical to the default path;
+next-program test green on every new kernel path; traced builds under the kernel text limit
+(`kernel_text_sizes.py`). Put the timeline before / after (y sent, inverse norms sent, first and last
+S0 landed, first and last update done, first and last state write issued, per B) in the Outcome.
+
+**Done when**: model_decode_b16 is below 64 us and model_decode_b8 below 35 us (median of 11 after
+launch 1), or the timeline shows the q / k hand-off no longer holds any state core and names what
+binds; golden green, no regression on the guard set.
