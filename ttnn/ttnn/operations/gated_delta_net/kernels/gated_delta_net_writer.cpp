@@ -412,6 +412,14 @@ void kernel_main() {
     constexpr auto state_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto state_in_args =
         TensorAccessorArgs<state_out_args.next_compile_time_args_offset()>();
+    // SMALL_MCAST: the small inputs a q core reads for its key head's state cores.
+    [[maybe_unused]] constexpr auto a_log_args = TensorAccessorArgs<state_in_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto dt_bias_args = TensorAccessorArgs<a_log_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto b_args = TensorAccessorArgs<dt_bias_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto norm_w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
+    constexpr auto small_channel = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("qks_ct_offset"), get_named_compile_time_arg_val("qks_rt_offset")>();
 
     // Buffer addresses are common runtime args (see the reader).
     const auto out_acc = TensorAccessor(out_args, get_common_arg_val<uint32_t>(0), OUT_TILE_BYTES);
@@ -531,12 +539,42 @@ void kernel_main() {
         // Window: per column, zero its slot, copy the history rows from history_split(B) on, hand it to the reader.
         GDN_ZONE("gdn_wr_qk");
         Noc noc;
+        // SMALL_MCAST (q core): the key head's gate column tile of A_log, dt_bias, b and a, then norm_weight, read now
+        // (before the state cores' S0 reads queue at the banks) and multicast once landed.
+        const bool small_sender = GDN_SMALL_MCAST && qk_role == GDN_QK_Q_INJECTOR;
+        const uint32_t small_base = GDN_SMALL_MCAST ? get_write_ptr(GDN_CB_SMALL_IN) : 0;
+        constexpr uint32_t small_bytes = (GDN_SMALL_IN_GATE_PAGES + Vt) * OUT_TILE_BYTES;
+        if constexpr (GDN_SMALL_MCAST) {
+            if (small_sender) {
+                const uint32_t gate_page = first_unit * RATIO / TILE_ROWS;  // decode: tile row 0
+                const uint64_t gate_srcs[GDN_SMALL_IN_GATE_PAGES] = {
+                    TensorAccessor(a_log_args, get_common_arg_val<uint32_t>(3), OUT_TILE_BYTES).get_noc_addr(gate_page),
+                    TensorAccessor(dt_bias_args, get_common_arg_val<uint32_t>(4), OUT_TILE_BYTES)
+                        .get_noc_addr(gate_page),
+                    TensorAccessor(b_args, get_common_arg_val<uint32_t>(5), OUT_TILE_BYTES).get_noc_addr(gate_page),
+                    TensorAccessor(a_args, get_common_arg_val<uint32_t>(6), OUT_TILE_BYTES).get_noc_addr(gate_page)};
+                uint32_t dst = small_base;
+                for (const uint64_t src : gate_srcs) {
+                    noc_async_read(src, dst, OUT_TILE_BYTES);
+                    dst += OUT_TILE_BYTES;
+                }
+                const auto norm_w = TensorAccessor(norm_w_args, get_common_arg_val<uint32_t>(7), OUT_TILE_BYTES);
+                for (uint32_t vt = 0; vt < Vt; ++vt, dst += OUT_TILE_BYTES) {
+                    noc_async_read(norm_w.get_noc_addr(vt), dst, OUT_TILE_BYTES);
+                }
+            }
+        }
         CircularBuffer window_buf(cb_window);
         const uint32_t batch = num_units;
         const uint32_t cs_tiles = (GDN_HISTORY * batch + TILE_ROWS - 1) / TILE_ROWS;
         const uint32_t cs_stage = get_write_ptr(cb_hist_stage) + Kt * OUT_TILE_BYTES;
         const uint32_t win = get_write_ptr(cb_window);
         constexpr uint32_t slot_bytes = GDN_CONV_TAPS * OUT_TILE_BYTES;
+        if (small_sender) {
+            noc_async_read_barrier();
+            small_channel.optional_sender(noc)->send(small_base, small_base, small_bytes);
+            GDN_MARK("m_wr_small_sent");
+        }
         cb_wait_front(cb_scratch, 1);  // staging landed
         for (uint32_t col = 0; col < Kt; ++col) {
             noc.async_write_zeros(window_buf, slot_bytes, {.offset_bytes = col * slot_bytes});

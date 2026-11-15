@@ -183,6 +183,11 @@ S0_WRITER_AFTER_INPUTS = True
 S0_WRITER_KEEP_NOC = False
 # S0_WRITER: the logical rows whose pair cores take it (None: every row).
 S0_WRITER_ROWS = None
+# R-QKCORE (decode): each key head's q core reads A_log, dt_bias, the b / a gate tile and norm_weight once per call and
+# multicasts them to the key head's state cores, which copy them from L1 instead of reading DRAM: page 0 of every small
+# tensor sits in one bank, where the state cores' reads queued behind the other cores' S0 (Refinement 19). Needs every
+# value head of a key head in one gate column tile.
+SMALL_INPUTS_MCAST = True
 # Finished pair states awaiting the writer, at most unit_depth: the writer issues a core's non-last state after the next
 # unit's coefficients, so compute's next update must not wait for it.
 STATE_OUT_DEPTH = 2
@@ -279,6 +284,10 @@ CB_ZW = 50  # R-PREP prep core: norm_weight (*)row silu(z) of its rows, ahead of
 CB_STATE_DONE = 51  # STATE_SPLIT: reader-to-writer token per final state, once the reader's tiles of it have left
 CB_RINV_IN = 52  # QK_RAW_HANDOFF: the landed inverse norms of k (tile 0) and q (tile 1), column 0 per token row
 CB_S0_GO = 53  # S0_WRITER_AFTER_INPUTS: reader-to-writer token, the first unit's weights and gate rows have landed
+# SMALL_INPUTS_MCAST: the q core's reads of the small inputs, multicast to the same address on the state cores. Tiles:
+# A_log, dt_bias, b, a (each the gate column tile of the key head), then norm_weight's Vt.
+CB_SMALL_IN = 54
+SMALL_IN_GATE_PAGES = 4
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
@@ -329,6 +338,7 @@ TOKEN_CBS = (
     CB_OUT_ROWS,
     CB_SCRATCH,
     CB_HIST_STAGE,
+    CB_SMALL_IN,
 )
 
 
@@ -350,6 +360,7 @@ def _kernel_defines():
         "IN_MAT_PAGES",
         "IN_VEC_PAGES",
         "LANDED_FIRST_SEM_ID",
+        "SMALL_IN_GATE_PAGES",
         "O_IN_DEPTH",
         "MAX_PREP_CORES_PER_GROUP",
         "ROLE_LOCAL",
@@ -417,6 +428,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_
         # R-BCAST injector: its qn or kn (compute -> writer, multicast source).
         ((CB_QK_STAGE,), Kt if _share_qk(pieces, tokens) else 0),
         ((CB_RINV_IN,), 0),  # QK_RAW_HANDOFF (sized by the R-QKCORE plan)
+        ((CB_SMALL_IN,), 0),  # SMALL_INPUTS_MCAST (sized by the R-QKCORE plan)
         # R-PREP prep core: prepped tile rows awaiting its writer; the state cores' chunk outputs o of its tile rows
         # (sized by _prep_cb_plan).
         ((CB_PREP_SEND,), 0),
@@ -932,9 +944,14 @@ def reader_addresses(inputs, outputs):
     return [t.buffer_address() for t in inputs] + [outputs[1].buffer_address(), outputs[2].buffer_address()]
 
 
+WRITER_INPUTS = (5, 7, 8, 2, 3, 9)  # recurrent_state, A_log, dt_bias, b, a, norm_weight
+
+
 def writer_addresses(inputs, outputs):
-    # recurrent_state last: read by the writer under S0_WRITER.
-    return [outputs[0].buffer_address(), outputs[2].buffer_address(), inputs[5].buffer_address()]
+    # recurrent_state: read by the writer under S0_WRITER; then A_log, dt_bias, b, a, norm_weight (SMALL_INPUTS_MCAST).
+    return [outputs[0].buffer_address(), outputs[2].buffer_address()] + [
+        inputs[i].buffer_address() for i in WRITER_INPUTS
+    ]
 
 
 def _mcast_rects(device, cores):
@@ -1064,6 +1081,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     state_cores = [core for core, _, _, _ in assignment]
     state_set = {(c.x, c.y) for c in state_cores}
     qk_raw = bool(qk_cores) and pieces > 1 and QK_RAW_HANDOFF
+    small_mcast = (
+        bool(qk_cores)
+        and SMALL_INPUTS_MCAST
+        and all(hk * ratio // TILE == (hk * ratio + ratio - 1) // TILE for hk in range(key_heads))
+    )
     # Who writes conv_state_out: 0 the pair cores (one unit per key head also the q / k columns), 1 the q / k cores
     # (whole tiles: every sequence's rows of a column at once), 2 (QK_CORES_VSPLIT) the q / k cores their own columns
     # and every state core its own v columns, each a column only that core reads, so in place needs no signal.
@@ -1098,6 +1120,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 CB_HIST_STAGE: max(2 * v_block_tiles, Kt * (1 + cs_tiles), 1 + 2 * cs_tiles),
                 CB_QK_STAGE: Kt,
                 CB_RINV_IN: 2 if qk_raw else 0,
+                CB_SMALL_IN: SMALL_IN_GATE_PAGES + Vt if small_mcast else 0,
                 CB_O_ACC: v_block_tiles * lag_units,
                 CB_SQ_O: v_block_tiles * lag_units,
             }
@@ -1191,6 +1214,17 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             )
             for role, noc in ((QK_Q_INJECTOR, q_noc), (QK_K_INJECTOR, ttnn.NOC.NOC_1)) * (2 if qk_raw else 1)
         ]
+    # SMALL_INPUTS_MCAST: the q core's writer sends the small inputs, the state cores' readers receive them.
+    small_channel = None
+    if small_mcast:
+        small_channel = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=q_noc, handshake=False, data_ready=ttnn.McastDataReady.Flag),
+            _core_ranges(state_cores),
+            cores_per_kh,
+            ttnn.McastExplicitFixedSenderConfig([core for core, _, r in qk_cores if r == QK_Q_INJECTOR]),
+            ttnn.McastCoreOrder.RowMajor,
+        )
 
     def qk_role(unit):
         if qk_cores:
@@ -1385,7 +1419,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     reader_accessor_ct = [arg for t in reader_tensors for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
     writer_accessor_ct = [
         arg
-        for t in (output, recurrent_state_out, inputs[5])
+        for t in (output, recurrent_state_out, *(inputs[i] for i in WRITER_INPUTS))
         for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()
     ]
 
@@ -1550,6 +1584,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     defines = _kernel_defines() + [
         ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
         ("GDN_QK_RAW", str(int(qk_raw))),
+        ("GDN_SMALL_MCAST", str(int(small_mcast))),
         ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
         ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
         ("GDN_STATE_SPLIT", str(int(state_split))),
@@ -1566,6 +1601,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     defines += [(f"GDN_OFFSET_{name}", str(remote.get(idx, 0))) for name, idx in REMOTE_CB_NAMES.items()]
     kernels = []
     writers = []
+    readers = []
+    # SMALL_INPUTS_MCAST: the kernels on its channel (the q / k cores' writers send, the state cores' readers receive).
+    small_kernels = []
 
     def runtime_args(args, cores):
         rt = ttnn.RuntimeArgs()
@@ -1651,18 +1689,21 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             config=writer_config,
         )
         writers.append(writer)
+        reader = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "gated_delta_net_reader.cpp"),
+            opt_level=_dataflow_opt_level(),
+            core_ranges=ranges,
+            compile_time_args=reader_ct,
+            runtime_args=reader_rt,
+            common_runtime_args=reader_addresses(inputs, outputs),
+            named_compile_time_args=role_label,
+            defines=group_defines,
+            config=reader_config,
+        )
+        readers.append(reader)
+        small_kernels.append(writer if role == ROLE_QK else reader)
         kernels += [
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "gated_delta_net_reader.cpp"),
-                opt_level=_dataflow_opt_level(),
-                core_ranges=ranges,
-                compile_time_args=reader_ct,
-                runtime_args=reader_rt,
-                common_runtime_args=reader_addresses(inputs, outputs),
-                named_compile_time_args=role_label,
-                defines=group_defines,
-                config=reader_config,
-            ),
+            reader,
             writer,
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / COMPUTE_SOURCES[role]),
@@ -1696,6 +1737,12 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         else:
             channel.attach(descriptor, prefix, writers, next_sem)
             next_sem = channel.next_semaphore_id()
+    if small_channel is not None:
+        small_channel.attach(descriptor, "qks", small_kernels, next_sem)
+        next_sem = small_channel.next_semaphore_id()
+    for kernel in readers + writers:
+        if small_channel is None or all(kernel is not k for k in small_kernels):
+            ttnn.attach_absent_mcast(kernel, "qks")
     descriptor.kernels = kernels
     return descriptor
 

@@ -26,6 +26,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "gated_delta_net_qk_rows.hpp"
 
 namespace {
@@ -485,6 +486,13 @@ void kernel_main() {
     // S0_WRITER: the writer reads this core's S0 (every unit's) on its own NoC, this RISC none.
     const bool s0_by_writer = GDN_S0_WRITER && get_arg_val<uint32_t>(arg++) != 0;
 
+    // SMALL_MCAST: A_log, dt_bias, b, a and norm_weight land from the key head's q core (host SMALL_INPUTS_MCAST) and
+    // are copied from there into the unit's slots, under INPUTS_TRID before the inputs flush.
+    constexpr bool SMALL_MCAST = GDN_SMALL_MCAST != 0;
+    constexpr auto small_channel = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("qks_ct_offset"), get_named_compile_time_arg_val("qks_rt_offset")>();
+    const uint32_t small_base = SMALL_MCAST ? get_write_ptr(GDN_CB_SMALL_IN) : 0;
+    bool small_landed = false;
     uint32_t kq_rows_landed = 0;  // PREP_SHARE_QK prep core: tile rows of qn / kn handed to compute
     uint32_t prev_head = 0xffffffffu;
     uint32_t prev_norm_w = 0;
@@ -543,6 +551,8 @@ void kernel_main() {
                 }
             };
             const bool prefetch = DECODE && !STATE && pass == 0;
+            // SMALL_MCAST: slots awaiting their landed small inputs (0: none).
+            uint32_t small_norm_w_dst = 0, small_gate_w_dst = 0, small_gate_in_dst = 0;
             const bool early_s0 = EARLY_S0 && !PREP && prefetch && !s0_by_writer;
             if (prefetch) {
                 noc_async_read_set_trid(WINDOW_TRID);
@@ -567,7 +577,10 @@ void kernel_main() {
                 if constexpr (!STATE && !PREP_QK) {
                     cb_reserve_back(cb_norm_w, norm_w_pages);
                     const uint32_t norm_w_base = get_write_ptr(cb_norm_w);
-                    for (uint32_t vt = 0; vt < norm_w_pages && !reuse; ++vt) {
+                    if (SMALL_MCAST && !reuse) {
+                        small_norm_w_dst = norm_w_base;
+                    }
+                    for (uint32_t vt = 0; vt < norm_w_pages && !reuse && !SMALL_MCAST; ++vt) {
                         read_row_span(norm_w, v_first + vt, 0, 1, norm_w_base + vt * TILE_BYTES);
                     }
                     if (reuse) {
@@ -600,7 +613,9 @@ void kernel_main() {
                         }
                     }
                     // Rank-1 weights: compute broadcasts row 0.
-                    if (!reuse && !PREP_QK) {
+                    if (SMALL_MCAST && !reuse) {
+                        small_gate_w_dst = gate_w_base;
+                    } else if (!reuse && !PREP_QK) {
                         read_row_span(a_log, head / TILE_ROWS, 0, 1, gate_w_base);
                         read_row_span(dt_bias, head / TILE_ROWS, 0, 1, gate_w_base + TILE_BYTES);
                     }
@@ -681,6 +696,8 @@ void kernel_main() {
                             const bool shared_gates = T == 1 && unit_stride == Hv * PIECES;
                             if (reuse && shared_gates) {
                                 noc_async_read(get_noc_addr(prev_gate_in), gate_in_base, 2 * TILE_BYTES);
+                            } else if (SMALL_MCAST) {
+                                small_gate_in_dst = gate_in_base;
                             } else {
                                 uint32_t gate_hi = hi - base_row;
                                 if (shared_gates) {
@@ -827,6 +844,29 @@ void kernel_main() {
                                 }
                             }
                             if (split_flush) {
+                                if (SMALL_MCAST && (small_norm_w_dst | small_gate_w_dst | small_gate_in_dst) != 0) {
+                                    if (!small_landed) {
+                                        small_channel.optional_receiver(noc)->receive();
+                                        small_landed = true;
+                                        GDN_MARK("m_rd_small");
+                                    }
+                                    noc_async_read_set_trid(INPUTS_TRID);
+                                    if (small_gate_w_dst != 0) {  // A_log, dt_bias
+                                        noc_async_read(get_noc_addr(small_base), small_gate_w_dst, 2 * TILE_BYTES);
+                                    }
+                                    if (small_gate_in_dst != 0) {  // b, a
+                                        noc_async_read(
+                                            get_noc_addr(small_base + 2 * TILE_BYTES),
+                                            small_gate_in_dst,
+                                            2 * TILE_BYTES);
+                                    }
+                                    if (small_norm_w_dst != 0) {
+                                        noc_async_read(
+                                            get_noc_addr(small_base + (GDN_SMALL_IN_GATE_PAGES + v_first) * TILE_BYTES),
+                                            small_norm_w_dst,
+                                            Vb * TILE_BYTES);
+                                    }
+                                }
                                 noc_async_read_barrier_with_trid(INPUTS_TRID);  // weights and gate rows
                                 GDN_MARK("m_rd_inputs");
                                 noc_async_read_set_trid(0);
