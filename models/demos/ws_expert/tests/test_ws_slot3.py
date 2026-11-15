@@ -84,13 +84,7 @@ def bench(device, cfg: GCfg, Ms, tag, check=True):
     rows = []
     for i in range(WARM + MEAS):
         args = [dev[k] for k in ("x_t", "idx_t", "counts_t", "wgu_t", "wd_t", "out_t")]
-        prog, io, st, _ = build(device, cfg, *args)
-        if i == 0:
-            l1 = [t for t in io if t.memory_config().buffer_type == ttnn.BufferType.L1]
-            logger.info(
-                f"WS3 {tag}: L1 tensors (address, bytes a core) "
-                f"{sorted((t.buffer_address(), t.memory_config().shard_spec.shape[0] * t.memory_config().shard_spec.shape[1] * (4 if t.dtype == ttnn.uint32 else 2)) for t in l1 if t.memory_config().shard_spec)}"
-            )
+        prog, io, st, ex = build(device, cfg, *args)
         mpd = ttnn.MeshProgramDescriptor()
         mc = ttnn.MeshCoordinate(0, 0)
         mpd[ttnn.MeshCoordinateRange(mc, mc)] = prog
@@ -98,7 +92,7 @@ def bench(device, cfg: GCfg, Ms, tag, check=True):
         ttnn.synchronize_device(device)
         if i >= WARM:
             rows.append(measure(cfg, Ms, st))
-        del prog, mpd, io, st
+        del prog, mpd, io, st, ex  # (this launch's L1 tensors go before the next build allocates its own)
     out = ttnn.to_torch(ttnn.get_device_tensors(dev["out_t"])[0]).float()
     pcs = []
     for g, (e, ref) in enumerate(refs):

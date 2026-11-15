@@ -225,6 +225,12 @@ void kernel_main() {
             }
         }
         cb_pop_front(w_cb, WGU);  // this expert's gate/up weights are done
+        // Down rows of earlier experts run one per gate/up row of this one; an expert with fewer rows than the lag
+        // (M = 0 at the extreme) leaves them pending, and the next expert reuses their weight slot: finish them now.
+        while (consumed < e_start) {
+            down_row();
+            pop_finished_down(n);
+        }
         pop_finished_down(n);
         PACK(stamps[1 + n] = wall());
     }
