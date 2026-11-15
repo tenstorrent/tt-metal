@@ -9,6 +9,8 @@ an all-gather along the TP axis puts the whole ``[..., V]`` logits row back on e
 output a replicated :class:`~models.experimental.deepseek_v4_flash.tt.layers.Linear` gives.
 """
 
+import os
+
 import torch
 import ttnn
 
@@ -20,6 +22,15 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import _CachePath
 
 # Candidates each rank keeps for its draw: one tile of ttnn.sampling's top-k.
 SAMPLE_K = 32
+# The rank's top-SAMPLE_K candidates (values scaled, indices offset, both padded) as one decode_sample_candidates
+# program instead of ttnn.topk and the ops that lay its output out for ttnn.sampling.
+# ``DEEPSEEK_V41_FUSED_SAMPLE_CANDIDATES=0``: ttnn.topk.
+FUSED_SAMPLE_CANDIDATES = os.environ.get("DEEPSEEK_V41_FUSED_SAMPLE_CANDIDATES", "1") not in (
+    "0",
+    "",
+    "false",
+    "False",
+)
 
 
 class DeepSeekV41LMHead(DeepSeekV4Module):
@@ -86,6 +97,13 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
         self.out_words = pcie_alignment // 4
         replicate = ttnn.ReplicateTensorToMesh(device)
         offsets = torch.arange(self.tp_size, dtype=torch.int32).reshape(-1, 1, 1, 1) * local_vocab
+        self.index_offset = ttnn.from_torch(
+            offsets,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+        )
         self.offsets = ttnn.from_torch(
             offsets.expand(-1, 1, 1, SAMPLE_K).contiguous(),
             dtype=ttnn.int32,
@@ -143,11 +161,18 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
         ttnn.manual_seed(seed, device=self.device)
 
     def forward(self, logits: ttnn.Tensor) -> ttnn.Tensor:
-        vals, idx = ttnn.topk(logits, SAMPLE_K, dim=-1, largest=True, sorted=True)
-        idx = ttnn.add(ttnn.typecast(idx, ttnn.int32), self.offsets, dtype=ttnn.int32)
-        idx = ttnn.to_layout(ttnn.concat([idx, self.fill_idx], dim=-1), ttnn.ROW_MAJOR_LAYOUT)
-        vals = ttnn.multiply(vals, self.inv_temp)
-        token = ttnn.sampling(ttnn.concat([vals, self.fill_vals], dim=-1), idx, k=self.k, p=self.p, temp=self.one)
+        if FUSED_SAMPLE_CANDIDATES:
+            # [top-K * inv_temp | fill] and [top-K + offset | 0]; the fill adds nothing to the log-partition below.
+            vals, idx = ttnn.experimental.deepseek.decode_sample_candidates(
+                logits, self.inv_temp, self.index_offset, k=SAMPLE_K, fill_value=_MASK_NEG
+            )
+            token = ttnn.sampling(vals, idx, k=self.k, p=self.p, temp=self.one)
+        else:
+            vals, idx = ttnn.topk(logits, SAMPLE_K, dim=-1, largest=True, sorted=True)
+            idx = ttnn.add(ttnn.typecast(idx, ttnn.int32), self.offsets, dtype=ttnn.int32)
+            idx = ttnn.to_layout(ttnn.concat([idx, self.fill_idx], dim=-1), ttnn.ROW_MAJOR_LAYOUT)
+            vals = ttnn.multiply(vals, self.inv_temp)
+            token = ttnn.sampling(ttnn.concat([vals, self.fill_vals], dim=-1), idx, k=self.k, p=self.p, temp=self.one)
         if self.tp_size > 1:
             scaled = ttnn.typecast(vals, ttnn.float32)
             top = ttnn.max(scaled, dim=-1, keepdim=True)
