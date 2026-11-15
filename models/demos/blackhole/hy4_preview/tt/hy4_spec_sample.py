@@ -55,6 +55,25 @@ class SpecSampleOps:
         loc = s._row(ttnn.sum(ttnn.multiply(p4, hit), dim=[2, 3], keepdim=True))
         return s._allsum(loc)
 
+    def _row1(self, x):
+        """[T,1,1,1] -> [1,1,T,1] without a tiny TILE reshape (tiny TILE reshapes / gathers hang under trace: Hy4DeviceSampler._RM_CCL, tt-triage)."""
+        from models.demos.blackhole.hy4_preview.tt.hy4_sampler import _RM_CCL
+
+        return self.s._row(x) if _RM_CCL else ttnn.reshape(x, [1, 1, self.T, 1])
+
+    def _cols(self, x):
+        """x [1,1,T,1] (one value per row and device) -> [1,1,T,cols] (the values of the 8 mesh columns): ROW_MAJOR dim-2 all-gather + view + transpose (no tiny TILE dim-3 gather)."""
+        from models.demos.blackhole.hy4_preview.tt.hy4_sampler import _RM_CCL
+
+        s = self.s
+        if not _RM_CCL:
+            return s.mc.allgather(x, s.ccl, axis=1, dim=3)
+        g = s.mc.allgather(
+            ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), s.ccl, axis=1, dim=2
+        )  # [1,1,cols*T,1] RM, device-major blocks of T rows
+        g = ttnn.to_layout(ttnn.reshape(g, [1, s.cols, s.T, 1]), ttnn.TILE_LAYOUT)
+        return ttnn.transpose(g, 1, 3)  # [1,1,T,cols]
+
     def draw_from_weights(self, w4, u):
         """w4 [T,1,PR,32] non-negative weights over this column's slice, u [1,1,T,1] fp32 in [0,1) -> token ids [1,1,T,1] fp32 (identical on every device)."""
         s, T, cols, shard, PR = self.s, self.T, self.s.cols, self.s.shard, self.s.PR
@@ -62,8 +81,8 @@ class SpecSampleOps:
         R = ttnn.slice(P, [0, 0, 0, 31], [T, 1, PR, 32])
         offs = ttnn.transpose(ttnn.matmul(ttnn.transpose(R, 2, 3), s.ustrict, compute_kernel_config=s.ckc), 2, 3)
         cs = ttnn.add(P, offs)
-        tot_c = ttnn.reshape(ttnn.slice(cs, [0, 0, PR - 1, 31], [T, 1, PR, 32]), [1, 1, T, 1])
-        tot_all = s.mc.allgather(tot_c, s.ccl, axis=1, dim=3)  # [1,1,T,cols]
+        tot_c = self._row1(ttnn.slice(cs, [0, 0, PR - 1, 31], [T, 1, PR, 32]))  # [1,1,T,1]
+        tot_all = self._cols(tot_c)  # [1,1,T,cols]
         total = ttnn.sum(tot_all, dim=-1, keepdim=True)
         incl = ttnn.matmul(tot_all, s.tri, compute_kernel_config=s.ckc)
         tgt = ttnn.multiply(u, total)
@@ -72,10 +91,10 @@ class SpecSampleOps:
             ttnn.multiply(ttnn.eq(s.col_ids, colsel), ttnn.subtract(incl, tot_all)), dim=-1, keepdim=True
         )
         local_t = ttnn.subtract(tgt, excl_sel)
-        cnt = ttnn.reshape(ttnn.sum(ttnn.le(cs, s._v4(local_t)), dim=[2, 3], keepdim=True), [1, 1, T, 1])
+        cnt = self._row1(ttnn.sum(ttnn.le(cs, s._v4(local_t)), dim=[2, 3], keepdim=True))  # [1,1,T,1]
         cnt = ttnn.minimum(cnt, float(shard - 1))
         mine = ttnn.add(ttnn.multiply(s.own_col, float(shard)), cnt)
-        cand = s.mc.allgather(mine, s.ccl, axis=1, dim=3)
+        cand = self._cols(mine)
         return ttnn.sum(ttnn.multiply(ttnn.eq(s.col_ids, colsel), cand), dim=-1, keepdim=True)
 
     # ---------------------------------------------------------------------------------------------- round pieces

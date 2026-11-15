@@ -11,6 +11,7 @@ import time
 
 import torch
 
+import ttnn
 from models.demos.blackhole.hy4_preview.tests.dev_common import close_mesh, open_mesh
 
 K = int(os.environ.get("K", "3"))
@@ -73,6 +74,48 @@ def main():
             res(event="done", tag=tag, m_hist=hist, streams={r: st[r][:24] for r in range(R)})
             return st
 
+        if K == 0:
+            # plain device loop (no MTP): prefill via the engine, then load_inputs / submit / read; the masked scenario prefills row 2 while the others decode
+            dl = eng.dl
+
+            def plain(tag, mid=None):
+                first = eng.prefill(P)
+                tok = [first[r] for r in range(R)]
+                pos = [len(P[r]) for r in range(R)]
+                st = {r: [first[r]] for r in range(R)}
+                dl.load_inputs(tok, pos, [1] * R)
+                v = dl.set_sampling([0.0] * R, [1] * R, [1.0] * R, [1, 2, 3, 4], active=[1] * R)
+                for n in range(NR):
+                    if mid is not None and n == 3:
+                        row, toks = mid
+                        f2 = eng.prefill({row: toks})
+                        ttnn.synchronize_device(md)
+                        # the plugin's reload contract after a prefill: tokens / positions of ALL rows re-uploaded (the live rows continue where they are)
+                        tok = [st[r][-1] for r in range(R)]
+                        pos = [len(P[r]) + len(st[r]) - 1 for r in range(R)]
+                        st[row] = [f2[row]]
+                        tok[row], pos[row] = f2[row], len(toks)
+                        dl.load_inputs(tok, pos, [1] * R)
+                    t1 = time.perf_counter()
+                    dl.submit(v)
+                    h = dl.read_async()
+                    out = dl.tokens(h)
+                    dt = time.perf_counter() - t1
+                    for r in range(R):
+                        if mid is not None and r == mid[0] and n < 3:
+                            continue
+                        st[r].append(out[r])
+                    res(event="plain_step", tag=tag, n=n, ms=round(dt * 1e3, 1))
+                res(event="done", tag=tag, streams={r: st[r][:24] for r in range(R)})
+                return st
+
+            b = plain("plain")
+            sm = plain("plain_masked", mid=(2, prompts_for(7, [900] * R)[2]))
+            for r in (0, 1, 3):
+                n = min(len(b[r]), len(sm[r]))
+                res(event="masked_vs_basic", row=r, n=n, equal=b[r][:n] == sm[r][:n])
+            res(event="finished")
+            return
         if "basic" in SCEN:
             streams["basic"] = run("basic")
         if "cap0" in SCEN:
