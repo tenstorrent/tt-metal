@@ -151,7 +151,7 @@ computed from them, never restated.
 | SFPU broadcast reads column 0 / row 0 only (`tt_metal/hw/inc/api/compute/sfpu_binary_bcast.h:48-61, 309-325`) | per-token scalars, conv tap rows, norm weight rows | writer writes alpha/beta/select into column 0 of per-token tiles; reader writes tap row j of conv_weight into row 0 of tap tile j | wrong tap / wrong head used |
 | Recurrence order (M10..M12) | token step within a pair | one token per step, valid rows only (`lo <= row < hi`) | wrong state; padded rows taken as tokens |
 | Row-granular DRAM transfers: a tile row of fp32 is two 64 B face-row segments | row-segment reads/writes of the token tensors and conv_state_out | Phase 0 dtype fp32 only (64 B segments); bf16 (32 B segments) is gated behind the dtype refinement (Key Risks) | sub-alignment write corrupts a neighbouring sequence's row |
-| L1 per core | Kt, Vt (state and weight residency) | host predicate `footprint(Kt, Vt) <= L1_BUDGET` (l1_ledger.md); true for K, V <= 128 (all INPUTS) | launch failure; above the predicate the deferred R-VSPLIT serves the shape |
+| L1 per core | Kt, Vt (state and weight residency) | host predicate `footprint(Kt, Vt) <= l1_cb_budget(device)` (static CB region end <= 1,200,000 B, Refinement 12; l1_ledger.md); true for K, V <= 128 (all INPUTS) | launch failure; above the predicate the deferred R-VSPLIT serves the shape |
 | `ttnn.split_work_to_cores` | cores used | `min(B*Hv, grid cores)` | - |
 
 ### Regimes
@@ -344,7 +344,7 @@ SUPPORTED + tests). `dtype: bfloat16` is a knob-turn on CB page formats for the 
 | Per-core work | `num_pairs_this_core` pairs; per pair `ceil`-based tile rows `(b*T)//32 .. (b*T+T-1)//32` and `hi - lo` token steps per tile row |
 | Remainder | handled by the two core groups of `split_work_to_cores`; ragged token rows by `[lo, hi)`; tile counts always `ceil`: `TRn = ceil(N/32)`, conv_state tile rows `ceil(3B/32)`, `Gt = ceil(Hv/32)` |
 | Cores used (INPUTS) | decode B=1 chip: 48 (R-VSPLIT, 4 pieces); decode B=8: 96, B=16: 110 (R-STEP); prefill chip B=1: 48; small geometry decode B=40: 110 (120 pairs, R-STEP) |
-| L1 predicate | `footprint(Kt, Vt, depths) <= L1_BUDGET` from l1_ledger.md, checked on host; RuntimeError otherwise (no INPUTS shape reaches it) |
+| L1 predicate | `footprint(role plan) <= l1_cb_budget(device)` (CB region end <= 1,200,000 B) from l1_ledger.md, checked on host per core role; RuntimeError naming the role otherwise (no INPUTS shape reaches it) |
 
 Unused cores get no kernels (the program's core ranges are `all_cores`).
 

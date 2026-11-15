@@ -24,17 +24,18 @@ from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net impor
 )
 
 
-def test_prep_predicate():
+def test_prep_predicate(device):
+    budget = gdn_pd.l1_cb_budget(device)
     # model_prefill_4096 (bf16): 2 pieces, every idle core preps, the key head's 3 value heads per prep group.
-    assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 2, True, ttnn.bfloat16, 110 - 24)[2] == 3
+    assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 2, True, ttnn.bfloat16, 110 - 24, budget)[2] == 3
     # Short calls (2 to 16 tile rows): one value head per prep group (Refinement 11).
     for tokens in (64, 96, 128, 512):
-        assert gdn_pd._prep_layout(1, 12, 4, tokens, 4, 4, 2, True, ttnn.bfloat16, 86)[2] == 1
+        assert gdn_pd._prep_layout(1, 12, 4, tokens, 4, 4, 2, True, ttnn.bfloat16, 86, budget)[2] == 1
     # Too few tile rows, not chunked, one piece per pair, or no idle core: local.
-    assert gdn_pd._prep_layout(1, 12, 4, 32, 4, 4, 2, True, ttnn.bfloat16, 86) is None
-    assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 2, False, ttnn.bfloat16, 86) is None
-    assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 1, True, ttnn.bfloat16, 98) is None
-    assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 2, True, ttnn.bfloat16, 3) is None
+    assert gdn_pd._prep_layout(1, 12, 4, 32, 4, 4, 2, True, ttnn.bfloat16, 86, budget) is None
+    assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 2, False, ttnn.bfloat16, 86, budget) is None
+    assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 1, True, ttnn.bfloat16, 98, budget) is None
+    assert gdn_pd._prep_layout(1, 12, 4, 4096, 4, 4, 2, True, ttnn.bfloat16, 3, budget) is None
 
 
 @pytest.mark.parametrize("offload", [True, False], ids=["prep", "local"])

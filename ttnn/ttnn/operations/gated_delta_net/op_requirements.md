@@ -461,7 +461,7 @@ guard set.
 
 **Outcome**: device kernel time (model geometry, bf16, one fresh run of 3 launches each, same session), before -> after: T=32 67.5 -> 63.6 us (local chunk step kept: one tile row), T=64 118 -> 72.7, T=96 168.5 -> 77.6, T=128 188 -> 82.0 (2.3x, 96 cores; aim 80 not reached), T=256 220-239 -> 134, T=512 282-325 -> 196, T=1024 ~390 -> 298, model_prefill_4096 1.09 -> 0.91 ms; batched B=2 T=40 224 -> 126; decode guards unchanged (B=1 22.0, B=8 40.0, B=16 73.3). Landed: R-PREP from 2 tile rows on; prep groups of `PREP_HEADS` value heads (1 for short calls: one tile row's prep spread over 3x the cores) and the piece count (4 up to 5 tile rows, else 2) picked by a fitted cost model; each group's state cores placed among its prep cores with a per-core send NoC (also what moved T=4096); head blocks unicast and streamed part by part as compute packs them; norm_weight (*) silu(z) made before o lands; the triangular mask built on the writer; state cores read S0 before their first row lands. Measured worse and parked off: one window group per prep tile row (87.8 vs 82.7 us). What binds at T=128 now: the prep core's serial compute after its inputs land (~7 us): conv 17.6 (12 fp32 silu tiles), L2 norm 10, head prep 7.4, head block 9.8 us, then 4 state steps of 3.1 us and a ~6 us RMS + store tail. Next: share the q / k part per key head across cores (a q core and a k core per tile row feeding the value heads' prep cores, as R-QKCORE does for decode): about 22 of the prep core's 45 us is q / k work redone by every value head's prep core; not done here because it needs a new cross-core hand-off between prep cores. The compute kernel was not split per role: every addition compiles only into chunked (R-PREP) builds, so the decode builds near the kernel-config limit are unchanged.
 
-### [ ] Refinement 12 — L1 footprint: the op must run beside L1 tensors the caller holds
+### [x] Refinement 12 — L1 footprint: the op must run beside L1 tensors the caller holds
 
 **Goal**: in the model this op is for, a prefill call with T=2048 fails at dispatch (operator, at e3ba5fa,
 full model on four chips): `Statically allocated circular buffers in program 118 clash with L1 buffers on
@@ -487,6 +487,14 @@ T=2048, T=4096: all must dispatch and match the default results. Guard set must 
 
 **Done when**: the new unit test passes, the footprint bound is checked on the host and documented, the
 golden suite is green with 0 loud categories, no regression on the guard set.
+
+**Outcome**: static CB region end, largest role (bf16): T=2048 / 4096 1,562,688 -> 1,101,888 B (prep core: no longer
+holds the state cores' inbox), T=128 895,040 -> 632,896, decode B=16 950,336 -> 917,568 (fp32 1,454,080 -> 1,191,936:
+R-QKCORE conv weights sized per role); every golden INPUTS shape and T=2048 / 4096 at the model geometry ends at or
+below 1,200,000 B (table in l1_ledger.md). Guard set on this box, same session, before / after (device us, median of 3):
+decode B=1 21.7 / 21.7, B=8 41.2 / 41.0, B=16 73.7 / 73.5, model_prefill_4096 912.3 / 914.3, T=128 82.5 / 82.2, T=512
+196.5 / 196.2, T=2048 527.0 / 527.0. Remaining sharing: R-QKCORE q / k cores hold the pair cores' plan (they are not the
+largest role).
 
 ### [ ] Refinement 13 — Host cost per call: build the program once per shape
 

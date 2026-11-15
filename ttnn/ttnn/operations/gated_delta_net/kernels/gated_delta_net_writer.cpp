@@ -70,6 +70,13 @@ constexpr uint32_t STATE_STAGGER = GDN_STATE_STAGGER;  // compute's rotation of 
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 constexpr uint32_t ONE_BITS = 0x3f800000u;  // 1.0f
 
+// R-PREP: base of this core's CB region, i.e. of its role's first buffer (host STATE_REMOTE_CBS / PREP_REMOTE_CBS).
+// A buffer the other role owns is at that base plus its GDN_OFFSET_* on every core of that role.
+FORCE_INLINE uint32_t cb_region_base(uint32_t first_cb) {
+    const auto& cb = get_local_cb_interface(first_cb);
+    return cb.fifo_limit - cb.fifo_size;
+}
+
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
 
 // Output face-row segments are written directly: Tensix-to-DRAM writes need only L1 alignment.
@@ -142,8 +149,8 @@ FORCE_INLINE void push_chunk_coefs(
 // prepped tiles arrive in cb_prep_send as one block per value head j, [exp(c) | QD, M | kq (2 Kt) | knT (Kt) | v (Vt)]
 // (descriptor IN_MAT_PAGES), part by part, and go to the head's state cores (unit order: head j, piece p) at inbox slot
 // i % INBOX_SLOTS of cb_in_kq, cb_in_knt, cb_in_mat, cb_in_vec (multicast to the head's pieces) and cb_in_v (the
-// piece's Vb columns). Every core has the same CB layout, so this core's base addresses of those buffers are the
-// state cores'. The state cores write the row's o
+// piece's Vb columns). Those buffers lead the state cores' CB region, cb_o_in leads this core's, so their addresses
+// are this core's region base plus their offsets. The state cores write the row's o
 // back into slot k % GDN_O_IN_DEPTH of cb_o_in (k: this core's row count), which compute RMS-normalizes one row later
 // (after its next row's prep); this writer then stores the output rows.
 template <uint32_t Kt, uint32_t Vt, uint32_t Hv, typename Accessor>
@@ -166,11 +173,12 @@ void prep_writer(
         head_rects[j] = arg;
         arg += 1 + 5 * get_arg_val<uint32_t>(arg);
     }
-    const uint32_t v_base = get_write_ptr(cb_in_v);
-    const uint32_t kq_base = get_write_ptr(cb_in_kq);
-    const uint32_t knT_base = get_write_ptr(cb_in_knt);
-    const uint32_t mat_base = get_write_ptr(cb_in_mat);
-    const uint32_t vec_base = get_write_ptr(cb_in_vec);
+    const uint32_t region = cb_region_base(cb_o_in);
+    const uint32_t v_base = region + GDN_OFFSET_IN_V;
+    const uint32_t kq_base = region + GDN_OFFSET_IN_KQ;
+    const uint32_t knT_base = region + GDN_OFFSET_IN_KNT;
+    const uint32_t mat_base = region + GDN_OFFSET_IN_MAT;
+    const uint32_t vec_base = region + GDN_OFFSET_IN_VEC;
 
     Noc noc;
     Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
@@ -526,8 +534,8 @@ void kernel_main() {
                 const uint32_t q = i % producers;
                 const uint32_t head_in_group = head % RATIO;
                 const uint32_t o_slot = (i / producers) % GDN_O_IN_DEPTH;
-                const uint32_t dst =
-                    get_write_ptr(cb_o_in) + (o_slot * RATIO * Vt + head_in_group * Vt + v_first) * STATE_TILE_BYTES;
+                const uint32_t dst = cb_region_base(cb_in_kq) + GDN_OFFSET_O_IN +
+                                     (o_slot * RATIO * Vt + head_in_group * Vt + v_first) * STATE_TILE_BYTES;
                 cb_wait_front(cb_o_acc, Vb);
                 noc_async_write(
                     get_read_ptr(cb_o_acc), get_noc_addr(producer_x[q], producer_y[q], dst), Vb * STATE_TILE_BYTES);

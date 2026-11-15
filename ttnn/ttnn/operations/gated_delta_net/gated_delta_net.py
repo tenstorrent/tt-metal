@@ -11,9 +11,10 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .gated_delta_net_program_descriptor import (
     HISTORY,
-    L1_BUDGET,
     TILE,
+    check_l1_footprint,
     create_program_descriptor,
+    l1_cb_budget,
     l1_footprint_bytes,
 )
 
@@ -181,8 +182,7 @@ def validate(
         raise UnsupportedAxisValue("gated_delta_net: every tensor must be TILE_LAYOUT")
 
     footprint = l1_footprint_bytes(key_dim // TILE, value_dim // TILE, mixed_qkv.dtype)
-    if footprint > L1_BUDGET:
-        raise RuntimeError(f"gated_delta_net: per-core L1 footprint {footprint} B exceeds {L1_BUDGET} B")
+    check_l1_footprint("R-STEP pair", footprint, l1_cb_budget(mixed_qkv.device()))
     return config
 
 

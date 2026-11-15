@@ -152,7 +152,9 @@ CHUNK_MAT_PAGES = 2  # R-CHUNK: L (solve operand), (Qn Kn^T) * D (matmul operand
 # its cb_in_v slot).
 IN_MAT_PAGES = 2
 IN_VEC_PAGES = 1
-L1_BUDGET = 1460288  # usable L1 per Blackhole worker core (risks.md R11)
+# The static CB region ends at or below this L1 address on every core (Refinement 12): the caller keeps L1 tensors
+# alive across the call (the model's residual stream is L1 width-sharded), allocated downward from the top of L1.
+L1_CB_REGION_END = 1_200_000
 
 # ---- CB indices ----
 CB_STATE_IN = 0
@@ -390,15 +392,18 @@ def _inbox_pages(Kt, Vb):
     return {CB_IN_KQ: 2 * Kt, CB_IN_KNT: Kt, CB_IN_MAT: IN_MAT_PAGES, CB_IN_VEC: IN_VEC_PAGES, CB_IN_V: Vb}
 
 
-# Buffers written by other cores (R-PREP): allocated first and on every core, so each has one L1 address everywhere,
-# which the writers take from their own allocation; every other buffer exists only on the role that uses it.
-REMOTE_CBS = (CB_IN_KQ, CB_IN_KNT, CB_IN_MAT, CB_IN_VEC, CB_IN_V, CB_O_IN)
+# Buffers written by cores of the other R-PREP role, per receiving role. Each role's plan starts with them, so they sit
+# at the same offsets from the CB region base on every core of the role; a sender addresses them at its own region base
+# (its plan's first buffer) plus the offsets of _remote_offsets. No core allocates another role's buffers.
+STATE_REMOTE_CBS = (CB_IN_KQ, CB_IN_KNT, CB_IN_MAT, CB_IN_VEC, CB_IN_V)
+PREP_REMOTE_CBS = (CB_O_IN,)
+REMOTE_CBS = STATE_REMOTE_CBS + PREP_REMOTE_CBS
+REMOTE_CB_NAMES = {name: globals()[f"CB_{name}"] for name in ("IN_KQ", "IN_KNT", "IN_MAT", "IN_VEC", "IN_V", "O_IN")}
 
 
 def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox):
-    """R-PREP plans as (shared, state, prep) lists of (indices, pages): the remotely written buffers (on every core,
-    sized for the role that receives them; the inbox buffers are exactly `inbox` slots, so tile row i lands in slot
-    i % inbox), then each role's own buffers."""
+    """R-PREP plans as (state, prep) lists of (indices, pages): the role's remotely written buffers first (the inbox
+    buffers are exactly `inbox` slots, so tile row i lands in slot i % inbox), then its own buffers."""
     Vb = Vt // pieces
     state = {idx[0]: pages for idx, pages in _cb_plan(Kt, Vb, conv_on_fpu, pieces, True)}
     prep = {idx[0]: pages for idx, pages in _cb_plan(Kt, heads * Vt, conv_on_fpu, 1, True, prep=True)}
@@ -420,16 +425,32 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox):
     for idx, pages in _inbox_pages(Kt, Vb).items():
         state[idx] = inbox * pages
     state[CB_V] = 0  # the state core reads v from its inbox
+    for idx in PREP_REMOTE_CBS:
+        state[idx] = 0
+    for idx in STATE_REMOTE_CBS:
+        prep[idx] = 0
     order = [idx for idx, _ in _cb_plan(Kt, Vb, conv_on_fpu, pieces, True)]
-    shared = [(idx, max(state[idx[0]], prep[idx[0]])) for idx in order if idx[0] in REMOTE_CBS]
-    own = [[(idx, plan[idx[0]]) for idx in order if idx[0] not in REMOTE_CBS] for plan in (state, prep)]
-    return shared, own[0], own[1]
+    return tuple(
+        [(idx, plan[idx[0]]) for idx in order if idx[0] in remote]
+        + [(idx, plan[idx[0]]) for idx in order if idx[0] not in REMOTE_CBS]
+        for plan, remote in ((state, STATE_REMOTE_CBS), (prep, PREP_REMOTE_CBS))
+    )
+
+
+def _remote_offsets(plan, remote):
+    """Byte offset of each remotely written buffer from the region base of the plan's role (Float32 pages)."""
+    offsets, offset = {}, 0
+    for indices, pages in plan:
+        if indices[0] not in remote:
+            break
+        offsets[indices[0]] = offset
+        offset += pages * FP32_TILE_BYTES
+    return offsets
 
 
 def _prep_plan_bytes(plans, dtype):
     """Per-core footprint of the larger role."""
-    shared, state, prep = plans
-    return max(_plan_bytes(shared + own, dtype) for own in (state, prep))
+    return max(_plan_bytes(plan, dtype) for plan in plans)
 
 
 def _share_qk(pieces, tokens):
@@ -503,6 +524,19 @@ def _plan_bytes(plan, dtype):
     return cb_bytes + BF16_TILE_BYTES + SIGNAL_PAGE_BYTES * WINDOW_DEPTH + _row_stage_bytes(token_bytes)
 
 
+def l1_cb_budget(device):
+    """Bytes of static CBs per core that keep the CB region inside L1_CB_REGION_END."""
+    return L1_CB_REGION_END - ttnn.device.get_allocator_base_address(device, ttnn.BufferType.L1)
+
+
+def check_l1_footprint(role, footprint, budget):
+    if footprint > budget:
+        raise RuntimeError(
+            f"gated_delta_net: {role} cores need {footprint} B of static circular buffers, above the {budget} B that "
+            f"keep the CB region at or below L1 address {L1_CB_REGION_END}"
+        )
+
+
 def l1_footprint_bytes(Kt, Vt, dtype, pieces=1, chunked=True, tokens=0):
     """Per-core footprint of one unit (Vt = the unit's column block). validate() checks R-STEP (the
     whole Vt); the descriptor re-checks the regime it selects."""
@@ -564,7 +598,7 @@ def _prep_heads(batch, value_heads, key_heads, tokens, Vb, spare_cores):
     )
 
 
-def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, dtype, spare_cores):
+def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, dtype, spare_cores, budget):
     """R-PREP plan, or None to keep prep and state on the same core: (prep cores per group cap, inbox depth, value
     heads per group). A group is (sequence, key head, subset of `heads` of its value heads). Needs one unit per core
     (R-VSPLIT), at least one idle core per group, the key head's value heads in one gate tile column (one gate tile
@@ -585,7 +619,7 @@ def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked,
     inbox = min([INBOX_DEPTH, per_group] + [_seq_tile_rows(seq, tokens) for seq in range(batch)])
     # The deepest inbox that fits L1 (a shallower one only costs slack between a grant and its landing).
     while inbox >= 1:
-        if _prep_plan_bytes(_prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox), dtype) <= L1_BUDGET:
+        if _prep_plan_bytes(_prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox), dtype) <= budget:
             return per_group, inbox, heads
         inbox -= 1
     return None
@@ -697,13 +731,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     num_grid_cores = grid.x * grid.y
     pieces = _value_pieces(num_pairs, Vt, num_grid_cores)
     chunked = _chunked(tokens, device)
+    budget = l1_cb_budget(device)
     if V_BLOCK_TILES is None and pieces > 1:
         # R-PREP: the modelled fastest of the piece counts it can run (else R-VSPLIT keeps its pieces).
         best = None
         for option in range(2, min(pieces, PREP_MAX_PIECES) + 1):
             spare_cores = num_grid_cores - num_pairs * option
             plan = Vt % option == 0 and _prep_layout(
-                batch, value_heads, key_heads, tokens, Kt, Vt, option, chunked, mixed_qkv.dtype, spare_cores
+                batch, value_heads, key_heads, tokens, Kt, Vt, option, chunked, mixed_qkv.dtype, spare_cores, budget
             )
             if plan:
                 cost = _prep_estimate(batch, value_heads, key_heads, tokens, Vt // option, plan[2], spare_cores)
@@ -761,7 +796,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     state_cores = [core for core, _, _, _ in assignment]
     state_set = {(c.x, c.y) for c in state_cores}
     spare = [c for c in grid_cores if (c.x, c.y) not in state_set]
-    prep = _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, token_dtype, len(spare))
+    prep = _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, token_dtype, len(spare), budget)
     heads = ratio  # R-PREP: value heads per prep group
     if prep is None:
         inbox = 0
@@ -783,6 +818,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             # its qn / kn stage.
             cs_tiles = -(-HISTORY * batch // TILE)
             sizes = {
+                # Conv weights of a pair core's v columns per unit, or of the q / k core's Kt columns.
+                CB_CONV_W: (1 if conv_on_fpu else CONV_TAPS) * max(Kt, v_block_tiles * depth),
                 CB_WINDOW: CONV_TAPS * max(Kt, v_block_tiles) * WINDOW_DEPTH,
                 CB_HIST_STAGE: max(2 * v_block_tiles, Kt * (1 + cs_tiles), 1 + 2 * cs_tiles),
                 CB_QK_STAGE: Kt,
@@ -792,14 +829,15 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             return [(idx, sizes.get(idx[0], pages)) for idx, pages in plan]
 
         cb_plan = local_plan(unit_depth)
-        while unit_depth > 1 and _plan_bytes(cb_plan, token_dtype) > L1_BUDGET:
+        while unit_depth > 1 and _plan_bytes(cb_plan, token_dtype) > budget:
             unit_depth -= 1
             cb_plan = local_plan(unit_depth)
-        assert _plan_bytes(cb_plan, token_dtype) <= L1_BUDGET
+        check_l1_footprint("pair and q / k" if qk_cores else "pair", _plan_bytes(cb_plan, token_dtype), budget)
     else:
         per_group, inbox, heads = prep
         prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox)
-        assert _prep_plan_bytes(prep_plans, token_dtype) <= L1_BUDGET
+        for role, plan in zip(("R-PREP state", "R-PREP prep"), prep_plans):
+            check_l1_footprint(role, _plan_bytes(plan, token_dtype), budget)
         # Group first units: heads value heads (each `pieces` units) from value head h0.
         groups = [(seq * value_heads + h0) * pieces for seq in range(batch) for h0 in range(0, value_heads, heads)]
         strides = [min(per_group, _seq_tile_rows(first // pieces // value_heads, tokens)) for first in groups]
@@ -938,10 +976,10 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if prep is None:
         add_cbs(cb_plan, all_cores)
     else:
-        # Allocation follows this order: the shared buffers first, so their addresses agree on every core.
-        add_cbs(prep_plans[0], all_cores)
-        add_cbs(prep_plans[1], _core_ranges(state_cores))
-        add_cbs(prep_plans[2], _core_ranges(prep_cores))
+        # Allocation follows this order: each role's remotely written buffers start at the CB region base of its cores
+        # (state and prep cores are disjoint), and the buffers on every core come after both roles'.
+        add_cbs(prep_plans[0], _core_ranges(state_cores))
+        add_cbs(prep_plans[1], _core_ranges(prep_cores))
     row_stage_bytes = _row_stage_bytes(token_tile_bytes)
     if row_stage_bytes:
         cbs.append(
@@ -1132,6 +1170,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
         ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
     ]
+    # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).
+    remote = {}
+    if prep is not None:
+        remote = _remote_offsets(prep_plans[0], STATE_REMOTE_CBS) | _remote_offsets(prep_plans[1], PREP_REMOTE_CBS)
+    defines += [(f"GDN_OFFSET_{name}", str(remote.get(idx, 0))) for name, idx in REMOTE_CB_NAMES.items()]
     kernels = []
     writers = []
 

@@ -67,19 +67,48 @@ cb_sq and cb_rinv were planned as shared by the L2 and RMS phases and split in t
 pipelining across pairs or T = 1 makes their lifetimes overlap. No L1 budget solve, safety fraction
 or blocking search exists: the footprint is a closed form checked once on host.
 
+## L1 bound (Refinement 12)
+
+The static CB region ends at or below L1 address `L1_CB_REGION_END` = 1,200,000 B on every core the op uses, for
+every shape in the golden INPUTS and for prefill T = 2048 / 4096 at the model geometry (Hk=4, Hv=12, K=V=128). About
+260 KB above it stay free for L1 tensors the caller keeps alive across the call (the model's residual stream is L1
+width-sharded; L1 buffers are allocated downward from the top of L1, and the dispatch fails when one starts below
+the CB region end). Per-core CB budget = `L1_CB_REGION_END - L1 allocator base` (`l1_cb_budget(device)`; 1,087,424 B
+on Blackhole, base 112,576). Checked on the host: `validate()` checks the R-STEP plan, the descriptor every role
+plan it builds (`check_l1_footprint`: a RuntimeError naming the role and its footprint). The plan choices honour
+it first: unit_depth and the R-PREP inbox depth D are the deepest that fit the budget, else the shallower knob.
+
+Largest role per shape (B of static CBs, region end = base + footprint), Refinement 12 / before:
+
+| Shape (dtype) | Regime | Largest role | Footprint | Region end | Before |
+|---|---|---|---|---|---|
+| decode B=1 (bf16 / fp32) | R-VSPLIT + R-BCAST | pair | 510,080 / 849,984 | 622,656 / 962,560 | same |
+| decode B=8 (bf16 / fp32) | R-QKCORE | pair | 612,480 / 809,024 | 725,056 / 921,600 | 628,864 / 940,096 |
+| decode B=16 (bf16 / fp32) | R-QKCORE | pair | 804,992 / 1,079,360 | 917,568 / 1,191,936 | 837,760 / 1,341,504 |
+| prefill T=128 (bf16 / fp32) | R-PREP | prep | 520,320 / 829,504 | 632,896 / 942,080 | 782,464 / 1,091,648 |
+| prefill T=512 (bf16 / fp32) | R-PREP | prep | 641,152 / 829,504 | 753,728 / 942,080 | 1,007,744 / 1,316,928 |
+| prefill T=2048, 4096 (bf16) | R-PREP (D = 7) | prep | 989,312 | 1,101,888 | 1,450,112 (failed beside the model's L1 tensor) |
+| prefill T=2048, 4096 (fp32) | R-VSPLIT chunked | pair | 874,560 | 987,136 | same |
+| decode Hv=48 (fp32) | R-QKCORE | pair | 985,152 | 1,097,728 | same |
+
+The two levers: (1) R-PREP no longer allocates the remotely written buffers on every core (the prep cores carried the
+state cores' inbox, 487 KB at T = 2048, and the state cores the prep cores' cb_o_in); (2) R-QKCORE sizes cb_conv_w
+for the role that fills it (a pair core's Vb columns per unit, a q / k core's Kt columns once) instead of 2Kt + Vb
+columns per unit.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| Kt = K/32 | 1..4 in INPUTS (K <= 128) | `footprint <= L1_BUDGET` (host check in validate step 5); K multiple of 32 (alignment tagger: `w_non_aligned` refused) |
+| Kt = K/32 | 1..4 in INPUTS (K <= 128) | `footprint <= l1_cb_budget(device)` (host check in validate step 5); K multiple of 32 (alignment tagger: `w_non_aligned` refused) |
 | Vt = V/32 | 1..4 in INPUTS (V <= 128) | same |
-| Vb = Vt / pieces | 1..Vt | `_value_pieces`: largest divisor of Vt (<= MAX_PIECES = 4, the combine's DEST window) with B*Hv*pieces <= grid cores (one unit per core), else 1; the descriptor re-checks `l1_footprint_bytes(Kt, Vb, dtype, pieces) <= L1_BUDGET` |
-| unit_depth = min(UNIT_INPUT_DEPTH, units per core) | 1..2 | host: 2 on cores that run several units (decode B=16), lowered until the plan fits L1 |
+| Vb = Vt / pieces | 1..Vt | `_value_pieces`: largest divisor of Vt (<= MAX_PIECES = 4, the combine's DEST window) with B*Hv*pieces <= grid cores (one unit per core), else 1; the descriptor re-checks every role plan against `l1_cb_budget(device)` |
+| unit_depth = min(UNIT_INPUT_DEPTH, units per core) | 1..2 | host: 2 on cores that run several units (decode B=16), lowered until the plan fits the budget |
 | STATE_IN_DEPTH, STATE_OUT_DEPTH | 2, capped at unit_depth | host constants |
 | CONV_ACC_DEPTH | 1 | host constant |
 | WINDOW_DEPTH, ROW_DEPTH, TOK_COEF_DEPTH | 2 | host constants |
 | B, T, N, Hv, Hk, C | unbounded | appear in no capacity expression (work and DRAM traffic only) |
-| L1_BUDGET | `device L1 size - L1 reserved base` queried on host (1460288 B usable per risks.md R11) | device query |
+| CB budget | `L1_CB_REGION_END - L1 allocator base` = 1,087,424 B on Blackhole (see L1 bound) | `l1_cb_budget(device)` |
 
 ## Total per-core footprint
 
@@ -102,7 +131,7 @@ This is `l1_footprint_bytes(Kt, Vt, dtype)` in `gated_delta_net_program_descript
 Scaling: the state term scales with Kt*Vt and the two state depths; cb_conv_w, the per-tile-row
 buffers and the token buffers scale linearly with Kt and Vt; cb_window with gcd(Kt, Vt) and
 WINDOW_DEPTH; nothing scales with B, T, N, Hv or C. At Kt = Vt = 4 with Phase 0 depths (fp32):
-216 pages + 2080 B = 886816 B (0.61 of 1460288 B); bf16 at Kt = Vt = 4 is smaller (FPU conv drops
+216 pages + 2080 B = 886816 B (0.82 of the 1087424 B budget); bf16 at Kt = Vt = 4 is smaller (FPU conv drops
 36 conv_w pages and cb_conv_acc). At Kt = 2, Vt = 1 (the K > V entry, fp32): 77 pages + 2080 B.
 
 ## Data-movement budget
@@ -169,9 +198,13 @@ no handshake) = 128 KiB of multicast payload. Self-addressed NoC traffic: window
 
 ## R-PREP (Refinement 6)
 
-Two roles with their own buffers (`_prep_cb_plan` returns shared, state and prep plans). Buffers written by other
-cores (`REMOTE_CBS`) are allocated first and on every core, so each has one L1 address everywhere (the writers
-take it from their own allocation); every other buffer exists only on the role that uses it (the merged
+Two roles with their own buffers only (`_prep_cb_plan` returns the state and prep plans). Refinement 12: the buffers
+the other role writes (`STATE_REMOTE_CBS`: the inbox; `PREP_REMOTE_CBS`: cb_o_in) lead the receiving role's plan and
+are allocated before any other CB, so on every core of that role they start at the CB region base, which is the same
+on every core; a sender addresses them at its own region base (the base of its plan's first buffer, `cb_region_base`
+in the writer) plus their offsets (`_remote_offsets`, kernel defines `GDN_OFFSET_*`). Before, they were allocated on
+every core of both roles (a prep core carried the state cores' inbox), and every other buffer exists only on the
+role that uses it (the merged
 all-on-every-core plan first used carried about 700 KB of prep buffers on every state core and capped the inbox
 at 6 slots). D = inbox slots (`INBOX_DEPTH` = 12 at most, the deepest that fits; 7 at model_prefill_4096 bf16).
 Vb = the piece's v columns; r = value heads per prep group (Refinement 11: `PREP_HEADS`, picked with the piece count
@@ -180,12 +213,12 @@ r = 1, 2 pieces).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| cb_in_kq (shared) | `D*2*Kt` | 2Kt per slot: beta exp(c) (*) kn, exp(c) (*) qn | {t: D tile rows in flight, K: spans Kt; others streams} | Float32 (std, matmul in0) | prep writer (multicast) + state reader (push on landing) | state compute | grant -> pop | ring of D slots at fixed addresses (row i in slot i % D); not shared: all inbox buffers of D rows are live together |
-| cb_in_knt (shared) | `D*Kt` | Kt: kn^T (*) exp(c_last - c)^T | as cb_in_kq | Float32 (std, update in0) | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
-| cb_in_mat (shared) | `D*2` | M = (I + L)^-1, QD | {t: D tile rows; others streams} | Float32 (std, matmul in0) | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
-| cb_in_vec (shared) | `D*1` | exp(c) (read_tile_value: exp(c_last) of the last token row) | {t: D tile rows} | Float32 | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
-| cb_in_v (shared) | `D*Vb` | beta (*) v of the piece's columns | {t: D tile rows, V: spans Vb} | Float32 (U2D) | prep writer (unicast) + state reader | state compute | grant -> pop (popped last: a free slot here frees the row) | as cb_in_kq |
-| cb_o_in (shared) | `O_IN_DEPTH*r*Vt` | o of one tile row of the r heads (head-major) | {t: 2 of the prep core's rows, V: spans r Vt} | Float32 (U2D) | state writers (NoC writes into slot k % 2) + prep writer (push after the landed count) | prep compute (RMS norm) | landing -> RMS norm one row later | two of the prep core's rows: the next row's o may land while the RMS norm of the previous one runs |
+| cb_in_kq (state) | `D*2*Kt` | 2Kt per slot: beta exp(c) (*) kn, exp(c) (*) qn | {t: D tile rows in flight, K: spans Kt; others streams} | Float32 (std, matmul in0) | prep writer (multicast) + state reader (push on landing) | state compute | grant -> pop | ring of D slots at fixed addresses (row i in slot i % D); not shared: all inbox buffers of D rows are live together |
+| cb_in_knt (state) | `D*Kt` | Kt: kn^T (*) exp(c_last - c)^T | as cb_in_kq | Float32 (std, update in0) | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
+| cb_in_mat (state) | `D*2` | M = (I + L)^-1, QD | {t: D tile rows; others streams} | Float32 (std, matmul in0) | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
+| cb_in_vec (state) | `D*1` | exp(c) (read_tile_value: exp(c_last) of the last token row) | {t: D tile rows} | Float32 | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
+| cb_in_v (state) | `D*Vb` | beta (*) v of the piece's columns | {t: D tile rows, V: spans Vb} | Float32 (U2D) | prep writer (unicast) + state reader | state compute | grant -> pop (popped last: a free slot here frees the row) | as cb_in_kq |
+| cb_o_in (prep) | `O_IN_DEPTH*r*Vt` | o of one tile row of the r heads (head-major) | {t: 2 of the prep core's rows, V: spans r Vt} | Float32 (U2D) | state writers (NoC writes into slot k % 2) + prep writer (push after the landed count) | prep compute (RMS norm) | landing -> RMS norm one row later | two of the prep core's rows: the next row's o may land while the RMS norm of the previous one runs |
 | cb_o_acc (state) | `O_ACC_DEPTH*Vb` | o of the piece | {t: 2 tile rows, V: Vb} | Float32 | state compute | state writer | tile row | double buffered so the next chunk step overlaps the o send |
 | cb_uw (state) | `Vb` | rhs = beta V - beta exp(c) Rk, then (local) Uw | {t: 1 tile row, V: Vb} | Float32 (std, matmul in1) | state compute | state compute | rhs -> M x rhs | reused as the rhs scratch: dead before U is produced |
 | cb_prep_send (prep) | `r*(3*Kt + 3 + Vt)` (`PREP_SEND_HEADS` head blocks, default one tile row's) | head blocks of one tile row, in pack order [exp(c) \| QD, M \| kq \| knT \| v] | {t: 1 tile row, heads: r} | Float32 | prep compute (pushes each part as packed) | prep writer (sends each part as pushed) | part packed -> sent | one tile row of head blocks: compute packs the next row's head j once the writer has sent this row's head j (the writer sends block by block); two rows (456 KB) did not fit with D = 6 |
@@ -196,10 +229,10 @@ r = 1, 2 pieces).
 | cb_zw (prep) | `2*r*Vt` | norm_weight (*)row silu(z) of a row's r heads | {t: 2 of the prep core's rows, V: r Vt} | Float32 (U2D) | prep compute (after the row's head blocks) | prep compute (RMS norm) | head blocks -> RMS norm one row later | takes silu(z) off the tail after o lands (T=128: RMS output loop 8.9 -> 3.3 us); not cb_z (bf16 token buffer); two rows: row k's is made before row k - 1's norm reads its own |
 | prep: cb_z, cb_norm_w (Vt), cb_out_rows, cb_sq_o, cb_rinv_o (r) | `r*Vt*ROW_DEPTH`, `Vt`, `r*Vt*ROW_DEPTH`, `r*Vt`, `r` | the RMS norm of the r heads of a row | {t: tile row, V: r Vt} | as the local rows | reader / compute | compute / writer | tile row | the RMS norm moved to the prep core with the output store; the state core keeps none of them (no o^2 all-gather: the prep core sees every piece) |
 
-Footprint at model_prefill_4096 (bf16, Kt = Vt = 4, r = 3, 2 pieces, D = 7): state core 722 KB, prep core
-1416 KB (budget 1460 KB; cb_zw cost one inbox slot, 8 -> 7, measured no slower). T = 128 (r = 1, 4 pieces, D = 4):
-state core 366 KB, prep core 764 KB. fp32 tokens at this geometry do not fit any D (prep core 1.65 MB at D = 2: SFPU conv
-weights 320 KB), so they keep the local regime.
+Footprint at model_prefill_4096 (bf16, Kt = Vt = 4, r = 3, 2 pieces, D = 7), Refinement 12: state core 641 KB, prep
+core 989 KB (budget 1087 KB; before: 739 KB and 1450 KB with the other role's remote buffers). T = 128 (r = 1, 4
+pieces, D = 4): state core 342 KB, prep core 520 KB. fp32 tokens at T = 2048 / 4096 keep the local chunked regime
+(the R-PREP layout with fp32 SFPU conv weights does not fit the budget at any D).
 
 R-PREP data movement (model_prefill_4096, bf16): DRAM as R-VSPLIT for the state, z and output; mixed_qkv,
 conv_state, conv_weight read once per (key head, tile row) by its prep core (q/k columns 1 crossing per key
@@ -213,13 +246,16 @@ them (`PREP_SEND_NOC` "auto").
 ## R-QKCORE (Refinement 7)
 
 One plan on pair and q / k cores (the multicast lands at the same cb_kq_rows address everywhere: identical CB layout,
-as R-BCAST). Changes against R-STEP decode, u = unit_depth (2 when a core runs several units):
+as R-BCAST). The q / k cores (2 Hk of them) therefore also hold the pair cores' state buffers; their footprint is the
+pair cores' (the largest role), so this costs no bound. Splitting the plan needs cb_kq_rows to lead both plans (as
+the R-PREP remote buffers) and q / k-core-only hardware startup; not done in Refinement 12. Changes against R-STEP decode, u = unit_depth (2 when a core runs several units):
 
 | CB | Capacity (pages) | Change | Why / shares with |
 |----|------------------|--------|-------------------|
 | cb_state_in (+ mm) | `Kt*Vb*min(STATE_IN_DEPTH, u)` | 1 -> u | the next unit's S0 is read while this unit computes; STATE_IN_DEPTH = 1 measured 95.5 vs 93 us at B=16 |
 | cb_state_out | `Kt*Vb*min(STATE_OUT_DEPTH, u)` | 1 -> u | the writer issues a non-last unit's state only after the next unit's coefficients and q/k rows (issuing blocks the writer under NoC back-pressure), so compute's next update needs the second slot |
-| cb_conv_w, cb_gate_w, cb_norm_w | x u | 1 -> u | per-unit weights in flight; a same-head next unit copies them from the previous slot (local NoC copy) instead of re-reading page 0 of each small tensor, which all sits in one DRAM bank |
+| cb_conv_w | `(1 or 4)*max(Kt, Vb*u)` | Refinement 12: per role, was `(2Kt + Vb)*u` | a pair core reads its Vb v columns' weights per unit (u in flight), a q / k core its Kt columns once; the q / k columns no pair core reads cost 262 KB at fp32 B=16 |
+| cb_gate_w, cb_norm_w | x u | 1 -> u | per-unit weights in flight; a same-head next unit copies them from the previous slot (local NoC copy) instead of re-reading page 0 of each small tensor, which all sits in one DRAM bank |
 | cb_window | `4*max(Kt, Vb)*WINDOW_DEPTH` | G = Vb on pair cores (v only, one group per unit), 1 column per group on a q / k core | the q / k core hands each column over as soon as its rows are gathered, so conv overlaps the next column's copies |
 | cb_hist_stage | `max(2*Vb, Kt*(1 + cs), 1 + 2*cs)`, cs = ceil(3B/32) | q / k core: its Kt current-row tiles and Kt*cs conv_state tiles (read whole), then for conv_state_out one x tile, cs input and cs output tiles | the window gather and the conv_state_out pass are sequential (the writer's slot tokens close the gather), so they share the staging |
 | cb_qk_stage | `Kt` | as R-BCAST | the q / k core's qn or kn, multicast source |
