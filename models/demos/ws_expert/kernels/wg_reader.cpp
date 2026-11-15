@@ -13,9 +13,10 @@
 //      XPROG word at the producer of block c + NX.
 //   QH h ring: push row q once both column leaders' flags read >= q + 1.
 // RT: 0 j, 1 g, 2 nexp_g, 3 col x NOC (c 0), 4 col x NOC (c 1), 5 row 0 y NOC, 6 injector x, 7 injector y,
-//     8 credit word offset (bytes) at the injector
+//     8 credit word offset (bytes) at the injector, 9 stamps, 10 out addr (WG_Y_NCRISC: QY, the down outputs)
 // CT: 0 KT, 1 BK, 2 KTD, 3 DCOLS, 4 GC, 5 G, 6 NS, 7 NX, 8 hflags, 9 xring, 10 xflags, 11 xprog, 12-15 group rect
-//     for NOC1 (start = the NOC0 end), 16 x tile bytes, 17 counts L1, 18 injector credits addr
+//     for NOC1 (start = the NOC0 end), 16 x tile bytes, 17 counts L1, 18 injector credits addr, 19 hring, 20 h tile
+//     bytes, 21 warr, 22 RMAX, 23 HT, then TensorAccessorArgs(out)
 #include "api/dataflow/dataflow_api.h"
 
 constexpr uint32_t xr_cb = tt::CBIndex::c_0;
@@ -47,6 +48,8 @@ void kernel_main() {
     // landed weight slices a ring slot (word (n & 1) * 4: expert n's slot counts n / 2 + 1 once it landed; written by
     // other chips - per slot because consecutive experts come from different owners and may land out of order)
     constexpr uint32_t warr_addr = get_compile_time_arg_val(21);
+    constexpr uint32_t RMAX = get_compile_time_arg_val(22), HT = get_compile_time_arg_val(23);
+    constexpr auto oargs = TensorAccessorArgs<24>();
     constexpr uint32_t BPR = KT / BK, HALF = GC / 2;
     constexpr uint32_t WGU = KT * 2, WDN = KTD * DCOLS;
 
@@ -246,8 +249,41 @@ void kernel_main() {
         lq += HALF;
         return true;
     };
+#ifdef WG_Y_NCRISC
+    // ---- QY: down outputs (CB 17) - the group's last expert's rows to DRAM, on NOC1 (moved from the BRISC so that one
+    // NoC carries the DRAM reads and the other the writes)
+    constexpr uint32_t y_cb = tt::CBIndex::c_17;
+    const uint32_t obytes = get_tile_size(y_cb);
+    const auto os = TensorAccessor(oargs, get_arg_val<uint32_t>(10), obytes);
+    uint32_t drained = 0, d_n = 0, d_r = 0;
+    auto qy = [&]() -> bool {
+        if (drained >= total_rows || !cb_pages_available_at_front(y_cb, DCOLS)) {
+            return false;
+        }
+        while (d_r >= rows_of(d_n)) {
+            ++d_n;
+            d_r = 0;
+        }
+        if (d_n + 1 == nexp_g) {
+            uint32_t l1 = get_read_ptr(y_cb);
+            const uint32_t row = g * RMAX + d_r;
+            for (uint32_t t = 0; t < DCOLS; ++t, l1 += obytes) {
+                noc_async_write_page(row * HT + J * DCOLS + t, os, l1);
+            }
+            noc_async_write_barrier();
+        }
+        cb_pop_front(y_cb, DCOLS);
+        ++d_r;
+        ++drained;
+        return true;
+    };
+#else
+    const uint32_t drained = total_rows;
+    auto qy = []() -> bool { return false; };
+#endif
     while (true) {
         const uint32_t t0 = wall();
+        const bool y = qy();
         const bool l = ql();
         const bool a = qw();
         const uint32_t t1 = wall();
@@ -262,7 +298,8 @@ void kernel_main() {
             tot[i] += dd[i];
             mx[i] = dd[i] > mx[i] ? dd[i] : mx[i];
         }
-        if (!l && !a && !b && !c && !d && (C != 1 || lq >= total_rows) && w_n >= nexp_g && w_freed_sent >= nexp_g &&
+        if (!y && !l && !a && !b && !c && !d && drained >= total_rows && (C != 1 || lq >= total_rows) && w_n >= nexp_g &&
+            w_freed_sent >= nexp_g &&
             (a_n >= nexp_g || J / HALF != 1) && b_s >= total_x && x_credited >= total_x && h_q >= total_rows) {
             break;
         }

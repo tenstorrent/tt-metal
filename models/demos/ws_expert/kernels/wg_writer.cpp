@@ -11,7 +11,8 @@
 //   Q3 leader (column 0; column 1's run on the NCRISC, NOC1 - NOC0 from column 1 would wrap the row through every
 //      other group): for the rows this core leads, once HARR counts all 10 of its column, multicast the column's 10 h
 //      tiles (linked) and its flag word (q + 1) to the whole group: 2 multicasts a row instead of 20.
-//   Q4 down outputs (CB 17): the group's last expert's rows to DRAM (out rows of group g at g * RMAX * 32).
+//   Q4 down outputs (CB 17): the group's last expert's rows to DRAM (out rows of group g at g * RMAX * 32); with
+//      WG_Y_NCRISC the NCRISC does it on NOC1 instead.
 //   QX (column 0 only) x multicast of this core's tilized blocks on NOC0 (+x: column 0 -> 1 without wrapping the row;
 //      column 1 does it on NOC1 (-x) from the NCRISC):
 //      10 + 10 senders on the two NoCs deliver 85-89 GB/s into the group, 20 on one NoC 34-40 (test_mcast_group).
@@ -165,6 +166,11 @@ void kernel_main() {
         return true;
     };
     // ---- Q4: down outputs
+#ifdef WG_Y_NCRISC
+    // (the down outputs go to DRAM from the NCRISC on NOC1: this RISC's NOC0 only reads DRAM)
+    uint32_t drained = total_rows, d_n = 0, d_r = 0;
+    auto q4 = [&]() -> bool { return false; };
+#else
     uint32_t drained = 0, d_n = 0, d_r = 0;
     auto q4 = [&]() -> bool {
         if (drained >= total_rows || !cb_pages_available_at_front(y_cb, DCOLS)) {
@@ -187,6 +193,7 @@ void kernel_main() {
         ++drained;
         return true;
     };
+#endif
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
     // ---- QX: x multicasts of column 0 (NOC0)
     uint32_t a_n = 0, a_l = L0, a_base = 0;

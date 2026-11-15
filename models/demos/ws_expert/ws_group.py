@@ -56,6 +56,8 @@ class GCfg:
     idefs: tuple = ()  # debug defines for the injector writer (WG_INJ_NOWRITE: only the arrival semaphores)
     xorder: int = 2  # x multicasts in stream order: block s waits for block s - xorder to land (0: off)
     trace0: int = -1  # debug: x block timeline from this stream index (40 blocks)
+    y_noc1: bool = True  # down outputs to DRAM from the NCRISC on NOC1 (the BRISC's NOC0 keeps the DRAM reads)
+    spare_slot: bool = False  # reserve a third weight slot's L1 on the group cores (fit check)
 
     KT = property(lambda s: s.H // 32)
     PAIRS = property(lambda s: s.I // 32)
@@ -92,6 +94,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t, fab=None)
     warr = sharded_l1(device, C, [2, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)  # landed slices a slot
     wgu_ring = sharded_l1(device, C, [2 * WGU * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
     wd_ring = sharded_l1(device, C, [2 * WDN * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
+    spare = sharded_l1(device, C, [(WGU + WDN) * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT) if cfg.spare_slot else None
     hring = sharded_l1(device, C, [NS * KTD * 32, 32], cfg.h_dt, ttnn.TILE_LAYOUT)
     hflags = sharded_l1(device, C, [NS * 2, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     xring = sharded_l1(device, C, [NX * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT)
@@ -133,7 +136,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t, fab=None)
                 counts_t.buffer_address(),
                 st.buffer_address(),
             ]
-            rd_rt[x][y] = [j, g, nexp_g, cx0, cx1, ny0, ix, iy, ioff, st.buffer_address()]
+            rd_rt[x][y] = [j, g, nexp_g, cx0, cx1, ny0, ix, iy, ioff, st.buffer_address(), out_t.buffer_address()]
         gwr = ttnn.RuntimeArgs()
         grd = ttnn.RuntimeArgs()
         for x, y in gr:
@@ -155,6 +158,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t, fab=None)
                 runtime_args=gwr,
                 defines=[(d, "1") for d in cfg.wdefs]
                 + [("WG_XORDER", str(cfg.xorder))]
+                + ([("WG_Y_NCRISC", "1")] if cfg.y_noc1 else [])
                 + ([("WG_TRACE0", str(cfg.trace0))] if cfg.trace0 >= 0 else []),
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -168,9 +172,12 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t, fab=None)
                 compile_time_args=[KT, BK, KTD, DC, cfg.GC, cfg.G, NS, NX, hflags.buffer_address()]
                 + [xring.buffer_address(), xflags.buffer_address(), xprog.buffer_address()]
                 + r_noc1
-                + [xtile, cnt_base, icred.buffer_address(), hring.buffer_address(), htile, warr.buffer_address()],
+                + [xtile, cnt_base, icred.buffer_address(), hring.buffer_address(), htile, warr.buffer_address()]
+                + [cfg.RMAX, cfg.HT]
+                + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args()),
                 runtime_args=grd,
                 defines=[("WG_XORDER", str(cfg.xorder))]
+                + ([("WG_Y_NCRISC", "1")] if cfg.y_noc1 else [])
                 + ([("WG_TRACE0", str(cfg.trace0))] if cfg.trace0 >= 0 else []),
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
@@ -224,6 +231,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t, fab=None)
         kernels += fab.get("kernels", [])  # (the caller's relay kernel: RT args filled in after, with fabric args)
     prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
     io = [x_t, idx_t, counts_t, wgu_t, wd_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1]
+    io += [spare] if spare is not None else []
     io += [idx_l1, icred, warr, st, out_t]
     return prog, io, st, dict(wgu_ring=wgu_ring, wd_ring=wd_ring, warr=warr)
 
