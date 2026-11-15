@@ -64,17 +64,19 @@ constexpr uint32_t RATIO = get_compile_time_arg_val(10);               // R-PREP
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: multicasts its key head's qn or kn, nothing else
+constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;  // R-PREP q / k core: writes qn or kn to its prep cores (RATIO)
 constexpr bool HOLD_QK = GDN_HOLD_QK != 0;     // compute holds the landed q/k rows for every unit (see compute)
 constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;   // compute normalizes unit u after unit u + 1's token step
 constexpr uint32_t STATE_STAGGER = GDN_STATE_STAGGER;  // compute's rotation of the final-state tiles (see compute)
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 constexpr uint32_t ONE_BITS = 0x3f800000u;  // 1.0f
 
-// R-PREP: base of this core's CB region, i.e. of its role's first buffer (host STATE_REMOTE_CBS / PREP_REMOTE_CBS).
-// A buffer the other role owns is at that base plus its GDN_OFFSET_* on every core of that role.
-FORCE_INLINE uint32_t cb_region_base(uint32_t first_cb) {
-    const auto& cb = get_local_cb_interface(first_cb);
-    return cb.fifo_limit - cb.fifo_size;
+// R-PREP: base of this core's CB region, from one of its role's remotely written buffers `cb` at byte offset `offset`
+// from it (host STATE_REMOTE_CBS / PREP_REMOTE_CBS; a q / k core's cb_qk_stage at 0). A buffer the other role owns is
+// at that base plus its GDN_OFFSET_* on every core of that role.
+FORCE_INLINE uint32_t cb_region_base(uint32_t cb, uint32_t offset) {
+    const auto& cb_if = get_local_cb_interface(cb);
+    return cb_if.fifo_limit - cb_if.fifo_size - offset;
 }
 
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
@@ -173,7 +175,7 @@ void prep_writer(
         head_rects[j] = arg;
         arg += 1 + 5 * get_arg_val<uint32_t>(arg);
     }
-    const uint32_t region = cb_region_base(cb_o_in);
+    const uint32_t region = cb_region_base(cb_o_in, GDN_OFFSET_O_IN);
     const uint32_t v_base = region + GDN_OFFSET_IN_V;
     const uint32_t kq_base = region + GDN_OFFSET_IN_KQ;
     const uint32_t knT_base = region + GDN_OFFSET_IN_KNT;
@@ -269,6 +271,46 @@ void prep_writer(
     }
 }
 
+// R-PREP q / k core (PREP_SHARE_QK). Unit = its key head's first group; tile rows offset, offset + stride, ... of the
+// sequence. Each row's qn (kn) from cb_qk_stage goes to tiles [Kt, 2Kt) ([0, Kt)) of slot k % GDN_PREP_KQ_DEPTH of
+// cb_kq_rows on the RATIO prep cores of its stride position (k: this core's row count), once each of them has granted
+// that row; then their qn (kn) landed counters are bumped. cb_kq_rows sits at the same offset from the CB region base
+// on every prep core, cb_qk_stage leads this core's region.
+template <uint32_t Kt, uint32_t Hv>
+void prep_qk_writer(
+    uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride, uint32_t qk_role, uint32_t arg) {
+    uint32_t dst_x[RATIO];
+    uint32_t dst_y[RATIO];
+    for (uint32_t d = 0; d < RATIO; ++d) {
+        dst_x[d] = get_arg_val<uint32_t>(arg++);
+        dst_y[d] = get_arg_val<uint32_t>(arg++);
+    }
+    constexpr uint32_t part_bytes = Kt * STATE_TILE_BYTES;
+    constexpr uint32_t landed_first = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 2;  // qn, then kn (see the reader)
+    const bool is_q = qk_role == GDN_QK_Q_INJECTOR;
+    const uint32_t dst_base = cb_region_base(cb_qk_stage, 0) + GDN_OFFSET_KQ_ROWS + (is_q ? part_bytes : 0);
+    Noc noc;
+    Semaphore<> landed(landed_first + (is_q ? 0 : 1));
+    const uint32_t seq_lo = (first_unit / PIECES / Hv) * T;
+    const uint32_t first_tr = seq_lo / TILE_ROWS;
+    const uint32_t last_tr = (seq_lo + T - 1) / TILE_ROWS;
+    uint32_t sent = 0;
+    for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride, ++sent) {
+        cb_wait_front(cb_qk_stage, Kt);
+        const uint32_t src = get_read_ptr(cb_qk_stage);
+        const uint32_t dst = dst_base + (sent % GDN_PREP_KQ_DEPTH) * 2 * part_bytes;
+        for (uint32_t d = 0; d < RATIO; ++d) {
+            Semaphore<>(landed_first + 2 + d).wait_min(sent + 1);
+            noc_async_write(src, get_noc_addr(dst_x[d], dst_y[d], dst), part_bytes);
+        }
+        noc_async_write_barrier();
+        for (uint32_t d = 0; d < RATIO; ++d) {
+            landed.up(noc, dst_x[d], dst_y[d], 1);
+        }
+        cb_pop_front(cb_qk_stage, Kt);
+    }
+}
+
 // Lands kn (cb_kq_rows tiles [0, Kt)) and qn ([Kt, 2Kt)) of one tile row. An injector multicasts its staged
 // part (qn from the q injector, kn from the k injector), its own rows included (the sender lies inside its
 // group, so a send from another address loops back and is complete when send() returns); every core receives
@@ -358,7 +400,7 @@ void kernel_main() {
     // one unit per core then, so every piece of a pair walks the same tile rows in lockstep.
     uint32_t peer_x[PIECES];
     uint32_t peer_y[PIECES];
-    for (uint32_t s = 0; s < PIECES && PIECES > 1 && !PREP; ++s) {
+    for (uint32_t s = 0; s < PIECES && PIECES > 1 && !PREP && !PREP_QK; ++s) {
         peer_x[s] = get_arg_val<uint32_t>(arg++);
         peer_y[s] = get_arg_val<uint32_t>(arg++);
     }
@@ -390,7 +432,7 @@ void kernel_main() {
         }
     }
 
-    if constexpr (CHUNKED && !STATE) {
+    if constexpr (CHUNKED && !STATE && !PREP_QK) {
         // Lower-triangular 0/1 mask (column <= row) of the chunk decay matrix, then the identity, once per kernel:
         // zeroed over the NoC, then only the ones are stored. Built here, after the window zeroing: the reader's first
         // DRAM reads are on the critical path, this RISC is idle until the first gates.
@@ -412,6 +454,10 @@ void kernel_main() {
 
     if constexpr (PREP) {
         prep_writer<Kt, Vt, Hv>(out_acc, first_unit, T, tr_offset, tr_stride, arg);
+        return;
+    }
+    if constexpr (PREP_QK) {
+        prep_qk_writer<Kt, Hv>(first_unit, T, tr_offset, tr_stride, qk_role, arg);
         return;
     }
     if constexpr (QK_CORE) {
@@ -535,7 +581,7 @@ void kernel_main() {
                 const uint32_t q = i % producers;
                 const uint32_t head_in_group = head % RATIO;
                 const uint32_t o_slot = (i / producers) % GDN_O_IN_DEPTH;
-                const uint32_t dst = cb_region_base(cb_in_kq) + GDN_OFFSET_O_IN +
+                const uint32_t dst = cb_region_base(cb_in_kq, GDN_OFFSET_IN_KQ) + GDN_OFFSET_O_IN +
                                      (o_slot * RATIO * Vt + head_in_group * Vt + v_first) * STATE_TILE_BYTES;
                 cb_wait_front(cb_o_acc, Vb);
                 noc_async_write(

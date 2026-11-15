@@ -162,12 +162,16 @@ constexpr uint32_t PIECES = get_compile_time_arg_val(7);             // column p
 constexpr uint32_t WINDOW_GROUP_COLS = get_compile_time_arg_val(8);  // columns per cb_window hand-off
 constexpr bool CHUNKED = get_compile_time_arg_val(9) != 0;           // R-CHUNK: one chunk step per tile row
 constexpr bool QK_SHARED = get_compile_time_arg_val(10) != 0;        // R-BCAST: q/k prepped once per key head
-static_assert(!(QK_SHARED && CHUNKED), "R-BCAST is a decode regime");
 constexpr uint32_t ROLE = get_compile_time_arg_val(11);   // GDN_ROLE_*
 constexpr uint32_t RATIO = get_compile_time_arg_val(12);  // R-PREP: value heads per prep group
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;              // Vb is then the group's RATIO * Vt v columns
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: conv + L2 norm of one key head's q or k, every sequence
+// R-PREP q / k core (PREP_SHARE_QK): conv + L2 norm of one key head's q or k for its tile rows; the prep cores it
+// writes qn / kn to have QK_SHARED (they convolve only their v columns and take kn / qn from cb_kq_rows).
+constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;
+constexpr bool PREP_SHARED_QK = PREP && QK_SHARED;
+static_assert(!(QK_SHARED && CHUNKED) || PREP, "R-BCAST is a decode regime");
 // R-QKCORE pair cores whose units share one key head: kn^T and d are computed once and held for every unit (host knob
 // SHARE_QK_FINISH); with UNIT_LAG a unit's RMS norm runs after the next unit's token step, so the last state is final
 // before the norms (host knob UNIT_LAG; needs two units of o, z and norm weights in flight).
@@ -603,7 +607,7 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
     if (v_range) {
         cb_reserve_back(cb_v_out, Vb);
     }
-    static_assert(QK_CORE || pair_cols % CONV_BATCH == 0, "window groups tile the unit's columns");
+    static_assert(QK_CORE || PREP_QK || pair_cols % CONV_BATCH == 0, "window groups tile the unit's columns");
     for (uint32_t col0 = first; col0 < last; col0 += CONV_BATCH) {
         const uint32_t n = last - col0 < CONV_BATCH ? last - col0 : CONV_BATCH;
         cb_wait_front(cb_window, GDN_CONV_TAPS * n);
@@ -621,7 +625,8 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(cb_y_qk);  // cb_y_qk and cb_v are both Float32
+        // Both Float32; a core with no q / k columns (PREP_SHARE_QK prep core) allocates no cb_y_qk.
+        pack_reconfig_data_format(cols.qk_cols != 0 ? cb_y_qk : cb_v_out);
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t col = cols.pair_col(col0 + i);
             if (col < 2 * Kt) {
@@ -1593,7 +1598,7 @@ ALWI void zw_block() {
 // after the next row's prep, by when the state cores have usually returned the row's o.
 ALWI void prep_main(
     Buffers& bufs, uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride, uint32_t v_eps_bits) {
-    const UnitCols cols{0, 2 * Kt};
+    const UnitCols cols{0, PREP_SHARED_QK ? 0 : 2 * Kt};
     const uint32_t conv_w_pages = (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * cols.count();
     const uint32_t seq_lo = (first_unit / PIECES / Hv) * T;
     const uint32_t seq_hi = seq_lo + T;
@@ -1616,7 +1621,11 @@ ALWI void prep_main(
             } else {
                 conv_block(full, cols, 0, cols.count());
             }
-            l2norm_block(bufs, full);
+            if constexpr (PREP_SHARED_QK) {
+                kn_transpose_block(bufs);  // on kn / qn as landed by the reader
+            } else {
+                l2norm_block(bufs, full);
+            }
             gram_block(bufs);
             cb_wait_front(cb_tri_mask, 2);  // writer-built once (mask, identity), held for the kernel
             cb_wait_front(cb_v_prep, Vb);
@@ -1677,6 +1686,8 @@ void kernel_main() {
     // R-PREP allocates each role only its own buffers: start up on buffers the role has.
     if constexpr (PREP) {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_kq_rows, cb_knT, cb_gram);
+    } else if constexpr (PREP_QK) {
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_y_qk, cb_sq, cb_qk_stage);
     } else if constexpr (STATE) {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in_kq, cb_state_mm, cb_reads);
     } else {
@@ -1687,19 +1698,30 @@ void kernel_main() {
         prep_main(bufs, first_unit, T, tr_offset, tr_stride, v_eps_bits);
     } else if constexpr (STATE) {
         state_main(bufs, first_unit, T);
-    } else if constexpr (QK_CORE) {
-        // num_units = the sequences B (token rows 0..B-1); qn or kn of the Kt columns -> cb_qk_stage (writer
-        // multicasts).
+    } else if constexpr (QK_CORE || PREP_QK) {
+        // R-QKCORE: num_units = the sequences B (token rows 0..B-1), one tile row. R-PREP q / k core: whole tiles of
+        // tile rows offset, offset + stride, ... of its sequence. qn or kn of the Kt columns -> cb_qk_stage (the writer
+        // multicasts / writes it to the prep cores).
         const bool is_q = qk_role == GDN_QK_Q_INJECTOR;
         const UnitCols cols{is_q ? 0u : Kt, Kt};
-        const RowScope scope = RowScope::of(0, num_units);
-        cb_wait_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);
-        if constexpr (CONV_ON_FPU) {
-            conv_block_fpu(scope, cols, 0, Kt);
-        } else {
-            conv_block(scope, cols, 0, Kt);
+        const RowScope scope = PREP_QK ? RowScope{RowScope::FULL_TILE} : RowScope::of(0, num_units);
+        uint32_t rows = 1;
+        if constexpr (PREP_QK) {
+            const uint32_t seq_lo = (first_unit / PIECES / Hv) * T;
+            const uint32_t first_tr = seq_lo / TILE_ROWS;
+            const uint32_t last_tr = (seq_lo + T - 1) / TILE_ROWS;
+            rows = first_tr + tr_offset <= last_tr ? (last_tr - first_tr - tr_offset) / tr_stride + 1 : 0;
         }
-        qk_part_block(bufs, is_q, scope);
+        cb_wait_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);
+#pragma GCC unroll 1
+        for (uint32_t row = 0; row < rows; ++row) {
+            if constexpr (CONV_ON_FPU) {
+                conv_block_fpu(scope, cols, 0, Kt);
+            } else {
+                conv_block(scope, cols, 0, Kt);
+            }
+            qk_part_block(bufs, is_q, scope);
+        }
         cb_pop_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);
     } else {
         constexpr bool qk_shared = QK_SHARED;  // every core of an R-BCAST program has a shared role

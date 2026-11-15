@@ -89,11 +89,22 @@ PREP_MIN_TILE_ROWS = 2
 # prep over more cores (short calls, whose time is the pipeline fill), all r share the q / k prep (long calls, where
 # prep throughput binds). None: auto (_prep_heads).
 PREP_HEADS = None
+# R-PREP q / k cores (Refinement 14): per (sequence, key head, stride position) a q core and a k core convolve and
+# L2-normalize the key head's q (k) columns of the position's tile rows once and write qn (kn) into cb_kq_rows of the
+# position's prep cores of every value-head group of the key head, which then convolve only their v columns. True /
+# False, or "auto": where _prep_estimate models it faster (short calls, whose time is the pipeline fill).
+PREP_SHARE_QK = "auto"
+PREP_KQ_DEPTH = 2  # tile rows of landed qn / kn a prep core holds (slots of its cb_kq_rows)
 # _prep_estimate cost model, device us at the model geometry (Kt = Vt = 4, bf16): a prep core's tile row is the q / k
 # part plus one part per value head, the state step one tile row (a base plus one part per state column tile of the
 # piece). Fits T = 64..4096: h = 1 wins to 16 tile rows per sequence (T=512 199 vs 214 us), h = 3 from 32 (T=1024
 # 335 vs 302 us); 4 pieces while every row has its own prep core (T=128 87 vs 92 us).
 PREP_QK_ROW_US = 27.0
+# PREP_SHARE_QK: what a prep core's tile row keeps of the q / k part (kn^T, the landing), and the q / k cores' row until
+# qn / kn have landed (beyond the head part). Fit on the shared layout (2 pieces, 4 positions) at T = 128 / 256 / 512 /
+# 1024: 69 / 103 / 182 / 341 us; unshared T=512 196 us, T=1024 299 us (h = 3).
+PREP_KQ_ROW_US = 4.0
+PREP_QK_FILL_US = 14.0
 PREP_HEAD_ROW_US = 30.0
 STATE_STEP_US = 2.9
 STATE_STEP_COL_US = 1.2
@@ -222,10 +233,14 @@ QK_MCAST_FIRST_SEM_ID = 2  # R-BCAST / R-QKCORE channel semaphores follow
 # (cumulative); then, on a prep core, the inbox slots its state cores have granted, then the o tiles that have landed
 # (both cumulative).
 LANDED_FIRST_SEM_ID = 1
+# PREP_SHARE_QK, after those: on a prep core the qn and the kn tile rows landed (cumulative), on a q / k core one grant
+# counter per destination prep core (the tile rows it has granted, cumulative).
+MAX_SEMAPHORES = 16  # semaphore ids per core (tt_metal NUM_SEMAPHORES)
 # Kernel roles: local = prep and state on the same core (R-STEP / R-VSPLIT / R-CHUNK / R-BCAST); R-PREP splits
 # them over prep and state cores.
 ROLE_LOCAL, ROLE_PREP, ROLE_STATE = 0, 1, 2
 ROLE_QK = 3  # R-QKCORE q / k core (its qk role says which)
+ROLE_PREP_QK = 4  # R-PREP q / k core (PREP_SHARE_QK; its qk role says which)
 # Per-core q/k prep role (R-BCAST): own = preps its own q and k (no sharing); q / k injector = preps qn / kn and
 # multicasts it, receives the other; receiver = receives both.
 QK_OWN, QK_Q_INJECTOR, QK_K_INJECTOR, QK_RECEIVER = 0, 1, 2, 3
@@ -271,6 +286,8 @@ def _kernel_defines():
         "ROLE_PREP",
         "ROLE_STATE",
         "ROLE_QK",
+        "ROLE_PREP_QK",
+        "PREP_KQ_DEPTH",
         "EARLY_S0",
         "CS_READ_SEM_ID",
         "MAX_CS_SIGNAL_TARGETS",
@@ -399,15 +416,36 @@ def _inbox_pages(Kt, Vb):
 STATE_REMOTE_CBS = (CB_IN_KQ, CB_IN_KNT, CB_IN_MAT, CB_IN_VEC, CB_IN_V)
 PREP_REMOTE_CBS = (CB_O_IN,)
 REMOTE_CBS = STATE_REMOTE_CBS + PREP_REMOTE_CBS
-REMOTE_CB_NAMES = {name: globals()[f"CB_{name}"] for name in ("IN_KQ", "IN_KNT", "IN_MAT", "IN_VEC", "IN_V", "O_IN")}
+REMOTE_CB_NAMES = {
+    name: globals()[f"CB_{name}"] for name in ("IN_KQ", "IN_KNT", "IN_MAT", "IN_VEC", "IN_V", "O_IN", "KQ_ROWS")
+}
 
 
-def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox):
-    """R-PREP plans as (state, prep) lists of (indices, pages): the role's remotely written buffers first (the inbox
-    buffers are exactly `inbox` slots, so tile row i lands in slot i % inbox), then its own buffers."""
+def _prep_unit_cols(Kt, Vt, heads, shared, role):
+    """Window columns of an R-PREP prep core (its heads' v columns, and q / k unless PREP_SHARE_QK) or q / k core."""
+    if role == ROLE_PREP_QK:
+        return Kt
+    return (0 if shared else 2 * Kt) + heads * Vt
+
+
+def _prep_group_cols(cols):
+    """Columns per window hand-off of an R-PREP prep or q / k core with `cols` window columns."""
+    return cols if cols <= PREP_WINDOW_MAX_COLS else _largest_divisor_at_most(cols, WINDOW_GROUP_MAX_COLS)
+
+
+def _prep_qk_dests(ratio, heads):
+    """Prep cores a q / k core writes each tile row to: one per value-head group of its key head."""
+    return ratio // heads
+
+
+def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False):
+    """R-PREP plans as (state, prep, q / k) lists of (indices, pages): the role's remotely written buffers first (the
+    inbox buffers are exactly `inbox` slots, so tile row i lands in slot i % inbox; cb_kq_rows exactly PREP_KQ_DEPTH
+    rows), then its own buffers. The q / k plan (PREP_SHARE_QK, else empty) starts with cb_qk_stage, its region base."""
     Vb = Vt // pieces
     state = {idx[0]: pages for idx, pages in _cb_plan(Kt, Vb, conv_on_fpu, pieces, True)}
     prep = {idx[0]: pages for idx, pages in _cb_plan(Kt, heads * Vt, conv_on_fpu, 1, True, prep=True)}
+    taps = 1 if conv_on_fpu else CONV_TAPS
     for idx in PREP_ONLY_CBS:
         state[idx] = 0
     for idx in STATE_ONLY_CBS:
@@ -426,16 +464,37 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox):
     for idx, pages in _inbox_pages(Kt, Vb).items():
         state[idx] = inbox * pages
     state[CB_V] = 0  # the state core reads v from its inbox
+    qk = {}
+    if shared:
+        # The prep core convolves only its v columns; qn / kn land in cb_kq_rows from the q / k cores.
+        cols = _prep_unit_cols(Kt, Vt, heads, True, ROLE_PREP)
+        group = _prep_group_cols(cols)
+        prep.update({CB_CONV_W: taps * cols, CB_WINDOW: CONV_TAPS * group * WINDOW_DEPTH, CB_HIST_STAGE: 2 * group})
+        prep.update({CB_Y_QK: 0, CB_SQ: 0, CB_RINV: 0, CB_KQ_ROWS: PREP_KQ_DEPTH * 2 * Kt})
+        group = _prep_group_cols(Kt)
+        qk = {
+            CB_QK_STAGE: PREP_KQ_DEPTH * Kt,
+            CB_CONV_W: taps * Kt,
+            CB_WINDOW: CONV_TAPS * group * WINDOW_DEPTH,
+            CB_CONV_ACC: 0 if conv_on_fpu else CONV_ACC_DEPTH,
+            CB_Y_QK: Kt,
+            CB_SQ: Kt,
+            CB_RINV: 1,
+            CB_HIST_STAGE: 2 * group,
+        }
+    prep_remote = PREP_REMOTE_CBS + ((CB_KQ_ROWS,) if shared else ())
     for idx in PREP_REMOTE_CBS:
         state[idx] = 0
     for idx in STATE_REMOTE_CBS:
         prep[idx] = 0
     order = [idx for idx, _ in _cb_plan(Kt, Vb, conv_on_fpu, pieces, True)]
-    return tuple(
+    plans = tuple(
         [(idx, plan[idx[0]]) for idx in order if idx[0] in remote]
-        + [(idx, plan[idx[0]]) for idx in order if idx[0] not in REMOTE_CBS]
-        for plan, remote in ((state, STATE_REMOTE_CBS), (prep, PREP_REMOTE_CBS))
+        + [(idx, plan[idx[0]]) for idx in order if idx[0] not in REMOTE_CBS + remote]
+        for plan, remote in ((state, STATE_REMOTE_CBS), (prep, prep_remote))
     )
+    qk_order = sorted(order, key=lambda idx: idx[0] != CB_QK_STAGE)
+    return (*plans, [(idx, qk[idx[0]]) for idx in qk_order if qk.get(idx[0])])
 
 
 def _remote_offsets(plan, remote):
@@ -450,8 +509,8 @@ def _remote_offsets(plan, remote):
 
 
 def _prep_plan_bytes(plans, dtype):
-    """Per-core footprint of the larger role."""
-    return max(_plan_bytes(plan, dtype) for plan in plans)
+    """Per-core footprint of the largest role."""
+    return max(_plan_bytes(plan, dtype) for plan in plans if plan)
 
 
 def _share_qk(pieces, tokens):
@@ -573,29 +632,47 @@ def _seq_tile_rows(seq, tokens):
     return (seq * tokens + tokens - 1) // TILE - (seq * tokens) // TILE + 1
 
 
-def _prep_estimate(batch, value_heads, key_heads, tokens, Vb, heads, spare_cores):
-    """Modelled R-PREP time (us): the pipeline fill (one prep row), then per tile row the state step, or the group's
-    prep rate when its cores take several rows each."""
+def _prep_positions(batch, value_heads, key_heads, heads, shared, spare_cores):
+    """Prep cores per R-PREP group (its stride positions): the spare cores over the groups, plus a q and a k core per
+    (sequence, key head) and position under PREP_SHARE_QK."""
     ratio = value_heads // key_heads
+    per_position = batch * key_heads * (ratio // heads + (2 if shared else 0))
+    return min(spare_cores // per_position, MAX_PREP_CORES_PER_GROUP)
+
+
+def _prep_estimate(batch, value_heads, key_heads, tokens, Vb, heads, spare_cores, shared=False):
+    """Modelled R-PREP time (us): the pipeline fill (one prep row), then per tile row the state step, or the group's
+    prep rate when its cores take several rows each. PREP_SHARE_QK moves the q / k part off the prep cores: their row
+    is the head part alone, the fill waits for the q / k cores' row instead."""
     rows = max(_seq_tile_rows(seq, tokens) for seq in range(batch))
-    per_group = min(spare_cores // (batch * key_heads * (ratio // heads)), MAX_PREP_CORES_PER_GROUP)
+    per_group = _prep_positions(batch, value_heads, key_heads, heads, shared, spare_cores)
     if per_group < 1:
         return float("inf")
-    prep_row = PREP_QK_ROW_US + heads * PREP_HEAD_ROW_US
+    core_row = heads * PREP_HEAD_ROW_US + (PREP_KQ_ROW_US if shared else PREP_QK_ROW_US)
+    prep_row = core_row + (PREP_QK_FILL_US if shared else 0)
     state_step = STATE_STEP_US + Vb * STATE_STEP_COL_US
-    rate = state_step if per_group >= rows else max(state_step, prep_row / per_group)
+    rate = state_step if per_group >= rows else max(state_step, core_row / per_group)
     return prep_row + rows * rate
 
 
 def _prep_heads(batch, value_heads, key_heads, tokens, Vb, spare_cores):
-    """Value heads per R-PREP group (PREP_HEADS, or the modelled fastest)."""
+    """(value heads per R-PREP group, PREP_SHARE_QK): PREP_HEADS / PREP_SHARE_QK, or the modelled fastest."""
     ratio = value_heads // key_heads
     if PREP_HEADS is not None:
         assert ratio % PREP_HEADS == 0, "PREP_HEADS must divide the value heads per key head"
-        return PREP_HEADS
+    options = [
+        (h, shared)
+        for h in ((PREP_HEADS,) if PREP_HEADS is not None else range(1, ratio + 1))
+        if ratio % h == 0
+        for shared in ((False, True) if PREP_SHARE_QK == "auto" else (bool(PREP_SHARE_QK),))
+    ]
     return min(
-        (h for h in range(1, ratio + 1) if ratio % h == 0),
-        key=lambda h: (_prep_estimate(batch, value_heads, key_heads, tokens, Vb, h, spare_cores), -h),
+        options,
+        key=lambda opt: (
+            _prep_estimate(batch, value_heads, key_heads, tokens, Vb, opt[0], spare_cores, opt[1]),
+            opt[1],
+            -opt[0],
+        ),
     )
 
 
@@ -611,17 +688,20 @@ def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked,
         return None
     if min(_seq_tile_rows(seq, tokens) for seq in range(batch)) < PREP_MIN_TILE_ROWS:
         return None
-    heads = _prep_heads(batch, value_heads, key_heads, tokens, Vt // pieces, spare_cores)
-    per_group = min(spare_cores // (batch * key_heads * (ratio // heads)), MAX_PREP_CORES_PER_GROUP)
+    heads, shared = _prep_heads(batch, value_heads, key_heads, tokens, Vt // pieces, spare_cores)
+    per_group = _prep_positions(batch, value_heads, key_heads, heads, shared, spare_cores)
     if per_group < 1:
         return None
     # A prep core's next tile row is granted only after its current one has landed when its stride is at least
     # the inbox depth (the cumulative credit count relies on it).
     inbox = min([INBOX_DEPTH, per_group] + [_seq_tile_rows(seq, tokens) for seq in range(batch)])
+    if shared:  # the q / k landing and grant counters follow the inbox's
+        inbox = min(inbox, MAX_SEMAPHORES - LANDED_FIRST_SEM_ID - 4 - _prep_qk_dests(ratio, heads))
     # The deepest inbox that fits L1 (a shallower one only costs slack between a grant and its landing).
     while inbox >= 1:
-        if _prep_plan_bytes(_prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox), dtype) <= budget:
-            return per_group, inbox, heads
+        plans = _prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox, shared)
+        if _prep_plan_bytes(plans, dtype) <= budget:
+            return per_group, inbox, heads, shared
         inbox -= 1
     return None
 
@@ -805,7 +885,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 batch, value_heads, key_heads, tokens, Kt, Vt, option, chunked, mixed_qkv.dtype, spare_cores, budget
             )
             if plan:
-                cost = _prep_estimate(batch, value_heads, key_heads, tokens, Vt // option, plan[2], spare_cores)
+                cost = _prep_estimate(
+                    batch, value_heads, key_heads, tokens, Vt // option, plan[2], spare_cores, plan[3]
+                )
                 if best is None or cost < best[0]:
                     best = (cost, option)
         if best is not None:
@@ -860,6 +942,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     spare = [c for c in grid_cores if (c.x, c.y) not in state_set]
     prep = _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, token_dtype, len(spare), budget)
     heads = ratio  # R-PREP: value heads per prep group
+    shared = False  # R-PREP: PREP_SHARE_QK (q / k cores)
     if prep is None:
         inbox = 0
         # The deepest per-unit input depth that fits L1 (1 when every core runs one unit).
@@ -896,10 +979,13 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             cb_plan = local_plan(unit_depth)
         check_l1_footprint("pair and q / k" if qk_cores else "pair", _plan_bytes(cb_plan, token_dtype), budget)
     else:
-        per_group, inbox, heads = prep
-        prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox)
-        for role, plan in zip(("R-PREP state", "R-PREP prep"), prep_plans):
-            check_l1_footprint(role, _plan_bytes(plan, token_dtype), budget)
+        per_group, inbox, heads, shared = prep
+        prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared)
+        for role, plan in zip(("R-PREP state", "R-PREP prep", "R-PREP q / k"), prep_plans):
+            if plan:
+                check_l1_footprint(role, _plan_bytes(plan, token_dtype), budget)
+        groups_per_kh = ratio // heads
+        qk_extra = 2 if shared else 0  # q / k cores per (sequence, key head) and stride position
         # Group first units: heads value heads (each `pieces` units) from value head h0.
         groups = [(seq * value_heads + h0) * pieces for seq in range(batch) for h0 in range(0, value_heads, heads)]
         strides = [min(per_group, _seq_tile_rows(first // pieces // value_heads, tokens)) for first in groups]
@@ -907,16 +993,21 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         if PREP_CLUSTER:
             # Each group's state and prep cores as one blob around the first free core (row-major), its state cores at
             # the blob's center: a head block crosses a few links instead of every group's converging on the top rows.
+            # PREP_SHARE_QK: the middle group of each key head's blob also takes the key head's q / k cores (after its
+            # own prep cores), between the key head's other groups.
             free = list(grid_cores)
-            assignment, cluster_picks = [], []
-            for first, stride in zip(groups, strides):
+            assignment, cluster_picks, qk_pools = [], [], {}
+            for g, (first, stride) in enumerate(zip(groups, strides)):
+                takes_qk = shared and g % groups_per_kh == groups_per_kh // 2
                 seed = free[0]
                 blob = sorted(free, key=lambda c: (abs(c.x - seed.x) + abs(c.y - seed.y), c.y, c.x))
-                blob = blob[: heads * pieces + stride]
+                blob = blob[: heads * pieces + stride * (1 + (qk_extra if takes_qk else 0))]
                 cx, cy = sum(c.x for c in blob) / len(blob), sum(c.y for c in blob) / len(blob)
                 blob.sort(key=lambda c: (abs(c.x - cx) + abs(c.y - cy), c.y, c.x))
                 assignment += [(core, first + u, 1, 1) for u, core in enumerate(blob[: heads * pieces])]
-                cluster_picks.append(blob[heads * pieces :])
+                cluster_picks.append(blob[heads * pieces : heads * pieces + stride])
+                if takes_qk:
+                    qk_pools[g // groups_per_kh] = blob[heads * pieces + stride :]
                 taken = {(c.x, c.y) for c in blob}
                 free = [c for c in free if (c.x, c.y) not in taken]
             state_cores = [core for core, _, _, _ in assignment]
@@ -994,6 +1085,10 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     # ---- R-PREP: prep cores per (sequence, key head, head subset) group, round robin over the group's tile rows ----
     prep_units = []  # (core, group first unit, stride position, stride)
     group_producers = {}  # group first unit -> NoC coordinates of its prep cores in stride order
+    prep_qk_units = (
+        []
+    )  # PREP_SHARE_QK: (core, key head's first unit, stride position, stride, qk role, dest prep cores)
+    prep_qk_src = {}  # PREP_SHARE_QK: prep core (x, y) -> [q core NoC x, y, k core NoC x, y, its index at those]
     if prep is not None:
         picks = cluster_picks
         if picks is None:
@@ -1015,8 +1110,31 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 prep_units.append((core, group_first, q, strides[g]))
                 noc_core = device.worker_core_from_logical_core(core)
                 group_producers.setdefault(group_first, []).extend([noc_core.x, noc_core.y])
+        if shared:
+            # Per (sequence, key head) and stride position, the q and k cores nearest the position's prep cores (one
+            # per value-head group of the key head, which share the key head's stride).
+            taken = {(c.x, c.y) for c in state_cores} | {(c.x, c.y) for c, _, _, _ in prep_units}
+            free = [c for c in grid_cores if (c.x, c.y) not in taken]
+            for kh_idx in range(len(groups) // groups_per_kh):
+                kh_groups = range(kh_idx * groups_per_kh, (kh_idx + 1) * groups_per_kh)
+                pool = qk_pools[kh_idx] if cluster_picks is not None else free
+                for q in range(strides[kh_idx * groups_per_kh]):
+                    dests = [picks[g][q] for g in kh_groups]
+                    cx, cy = sum(c.x for c in dests) / len(dests), sum(c.y for c in dests) / len(dests)
+                    srcs = []
+                    for role in (QK_Q_INJECTOR, QK_K_INJECTOR):
+                        core = min(pool, key=lambda c: (abs(c.x - cx) + abs(c.y - cy), c.y, c.x))
+                        pool.remove(core)
+                        prep_qk_units.append(
+                            (core, groups[kh_idx * groups_per_kh], q, strides[kh_idx * groups_per_kh], role, dests)
+                        )
+                        noc_core = device.worker_core_from_logical_core(core)
+                        srcs += [noc_core.x, noc_core.y]
+                    for d, dest in enumerate(dests):
+                        prep_qk_src[dest.x, dest.y] = srcs + [d]
     prep_cores = [core for core, _, _, _ in prep_units]
-    all_cores = _merged_ranges(state_cores + prep_cores) if prep_units else all_cores
+    prep_qk_cores = [unit[0] for unit in prep_qk_units]
+    all_cores = _merged_ranges(state_cores + prep_cores + prep_qk_cores) if prep_units else all_cores
 
     # ---- circular buffers ----
     cbs = []
@@ -1042,6 +1160,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         # (state and prep cores are disjoint), and the buffers on every core come after both roles'.
         add_cbs(prep_plans[0], _merged_ranges(state_cores))
         add_cbs(prep_plans[1], _merged_ranges(prep_cores))
+        if prep_qk_cores:
+            add_cbs(prep_plans[2], _merged_ranges(prep_qk_cores))
     row_stage_bytes = _row_stage_bytes(token_tile_bytes)
     if row_stage_bytes:
         cbs.append(
@@ -1089,9 +1209,12 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     ]
 
     def role_ct(role):
-        unit_v = heads * Vt if role == ROLE_PREP else v_block_tiles
+        # A q / k core's unit is nominally a prep core's (compute sizes nothing by it; its reader takes no v columns).
+        unit_v = heads * Vt if role in (ROLE_PREP, ROLE_PREP_QK) else v_block_tiles
         role_pieces = 1 if role == ROLE_PREP else pieces
         group_cols = _window_group_cols(Kt, unit_v, role_pieces, role == ROLE_PREP)
+        if role in (ROLE_PREP, ROLE_PREP_QK) and (shared or role == ROLE_PREP_QK):
+            group_cols = _prep_group_cols(_prep_unit_cols(Kt, Vt, heads, shared, role))
         if qk_cores:
             group_cols = 1 if role == ROLE_QK else v_block_tiles  # q / k core: per column; pair core: per unit
         reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
@@ -1101,7 +1224,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         reader_ct += [int(tokens == 1)]  # decode: window rows issued ahead of the other inputs
         reader_ct += [heads]  # R-PREP: value heads per prep group
         reader_ct += reader_accessor_ct
-        writer_ct = [Kt, Vt, value_heads, *geometry_ct, pieces, OSUM_SEM_ID, int(chunked), role, inbox, heads]
+        # RATIO: a q / k core's destination prep cores.
+        role_ratio = _prep_qk_dests(ratio, heads) if role == ROLE_PREP_QK else heads
+        writer_ct = [Kt, Vt, value_heads, *geometry_ct, pieces, OSUM_SEM_ID, int(chunked), role, inbox, role_ratio]
         writer_ct += writer_accessor_ct
         compute_ct = [
             Kt,
@@ -1114,7 +1239,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             pieces,
             group_cols,
             int(chunked),
-            int(bool(qk_channels) and role != ROLE_QK),
+            # R-BCAST receivers / injectors; PREP_SHARE_QK prep cores (qn / kn land from the q / k cores).
+            int((bool(qk_channels) and role != ROLE_QK) or (shared and role == ROLE_PREP)),
             role,
             heads,
         ]
@@ -1155,31 +1281,56 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         )
         rts[2][core.x, core.y] = [first_unit, count, tokens, v_eps_bits, role] + rows
     roles[state_role] = (state_cores, *rts)
-    prep_send_noc0 = {}  # R-PREP prep core (x, y) -> its writer sends on NOC 0
+    prep_send_noc0 = {}  # R-PREP prep / q / k core (x, y) -> its writer sends on NOC 0
+
+    def send_noc0(core, dsts):
+        """NOC 0 has the shorter torus paths from `core` to the NoC (x, y) list `dsts` (NOC 0 routes toward higher x
+        and y, NOC 1 toward lower)."""
+        src = device.worker_core_from_logical_core(core)
+        hops = [
+            sum((dx - src.x) % NOC_GRID[0] + (dy - src.y) % NOC_GRID[1] for dx, dy in dsts),
+            sum((src.x - dx) % NOC_GRID[0] + (src.y - dy) % NOC_GRID[1] for dx, dy in dsts),
+        ]
+        return hops[0] < hops[1]
+
     if prep_units:
         rts = ({}, {}, {})  # (x, y) -> args, per kernel
+        prep_cols = _prep_unit_cols(Kt, Vt, heads, shared, ROLE_PREP)
+        prep_qk_role = QK_RECEIVER if shared else QK_OWN  # PREP_SHARE_QK: qn / kn land, no q / k columns
         for core, group_first, q, stride in prep_units:
             seq = group_first // pieces // value_heads
             my_rows = len(range(q, _seq_tile_rows(seq, tokens), stride))
-            group_cols = _window_group_cols(Kt, heads * Vt, 1, True)
-            zero_slots, zero_slot_bytes = window_zeroing(2 * Kt + heads * Vt, group_cols, my_rows)
+            group_cols = _prep_group_cols(prep_cols) if shared else _window_group_cols(Kt, heads * Vt, 1, True)
+            zero_slots, zero_slot_bytes = window_zeroing(prep_cols, group_cols, my_rows)
             rows = [q, stride, 1]
             consumers = [c for u in range(heads * pieces) for c in unit_noc[group_first + u]]
             # A head block goes to the head's pieces: one multicast per row run.
             for j in range(heads):
                 first = group_first + j * pieces
                 consumers += _mcast_rects(device, unit_cores[first : first + pieces])
-            rts[0][core.x, core.y] = [group_first, 1, tokens, QK_OWN, zero_slots] + rows + cs_args(core)
-            rts[1][core.x, core.y] = [group_first, 1, tokens, QK_OWN, zero_slots, zero_slot_bytes] + rows + consumers
-            rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, QK_OWN] + rows
-            src = device.worker_core_from_logical_core(core)
+            qk_src = prep_qk_src.get((core.x, core.y), [])
+            rts[0][core.x, core.y] = [group_first, 1, tokens, prep_qk_role, zero_slots] + rows + qk_src + cs_args(core)
+            rts[1][core.x, core.y] = [group_first, 1, tokens, prep_qk_role, zero_slots, zero_slot_bytes] + rows
+            rts[1][core.x, core.y] += consumers
+            rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, prep_qk_role] + rows
             dsts = [unit_noc[group_first + u] for u in range(heads * pieces)]
-            hops = [
-                sum((dx - src.x) % NOC_GRID[0] + (dy - src.y) % NOC_GRID[1] for dx, dy in dsts),
-                sum((src.x - dx) % NOC_GRID[0] + (src.y - dy) % NOC_GRID[1] for dx, dy in dsts),
-            ]
-            prep_send_noc0[core.x, core.y] = hops[0] < hops[1]
+            prep_send_noc0[core.x, core.y] = send_noc0(core, dsts)
         roles[ROLE_PREP] = (prep_cores, *rts)
+    if prep_qk_units:
+        # A q / k core's unit is its key head's first group; it writes its rows' qn (kn) to the position's prep cores.
+        rts = ({}, {}, {})
+        for core, kh_first, q, stride, role, dests in prep_qk_units:
+            seq = kh_first // pieces // value_heads
+            my_rows = len(range(q, _seq_tile_rows(seq, tokens), stride))
+            zero_slots, zero_slot_bytes = window_zeroing(Kt, _prep_group_cols(Kt), my_rows)
+            rows = [q, stride, 1]
+            dst_noc = [device.worker_core_from_logical_core(d) for d in dests]
+            rts[0][core.x, core.y] = [kh_first, 1, tokens, role, zero_slots] + rows
+            rts[1][core.x, core.y] = [kh_first, 1, tokens, role, zero_slots, zero_slot_bytes] + rows
+            rts[1][core.x, core.y] += [c for d in dst_noc for c in (d.x, d.y)]
+            rts[2][core.x, core.y] = [kh_first, 1, tokens, v_eps_bits, role] + rows
+            prep_send_noc0[core.x, core.y] = send_noc0(core, [(d.x, d.y) for d in dst_noc])
+        roles[ROLE_PREP_QK] = (prep_qk_cores, *rts)
     if qk_cores:
         # A q / k core's "unit" is its key head; its count the sequences (token rows 0..B-1 of the decode tile row).
         rts = ({}, {}, {})  # (x, y) -> args, per kernel
@@ -1218,7 +1369,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).
     remote = {}
     if prep is not None:
-        remote = _remote_offsets(prep_plans[0], STATE_REMOTE_CBS) | _remote_offsets(prep_plans[1], PREP_REMOTE_CBS)
+        prep_remote = PREP_REMOTE_CBS + ((CB_KQ_ROWS,) if shared else ())
+        remote = _remote_offsets(prep_plans[0], STATE_REMOTE_CBS) | _remote_offsets(prep_plans[1], prep_remote)
     defines += [(f"GDN_OFFSET_{name}", str(remote.get(idx, 0))) for name, idx in REMOTE_CB_NAMES.items()]
     kernels = []
     writers = []
@@ -1237,7 +1389,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             # cores in the top SWAP_NOC_ROWS rows read on NOC 1 and write on NOC 0.
             top = [c for c in cores if c.y < SWAP_NOC_ROWS]
             kernel_groups += [(role, top, True), (role, [c for c in cores if c.y >= SWAP_NOC_ROWS], False)]
-        elif role == ROLE_PREP and PREP_SEND_NOC == "auto":
+        elif role in (ROLE_PREP, ROLE_PREP_QK) and PREP_SEND_NOC == "auto":
             # Each prep core writes on the NoC with the shorter paths to its state cores (NOC 0 routes toward higher x
             # and y, NOC 1 toward lower, both around the torus); the reader takes the other one.
             on_noc0 = [c for c in cores if prep_send_noc0[c.x, c.y]]
@@ -1259,7 +1411,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             reader_config = ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
             )
-        if role == ROLE_PREP and PREP_SEND_NOC != 0 and not swap_nocs:
+        if role in (ROLE_PREP, ROLE_PREP_QK) and PREP_SEND_NOC != 0 and not swap_nocs:
             # The prep cores sit below the state cores in row-major order: NOC 1 (which routes toward lower y) reaches
             # them directly, NOC 0 only around the torus. The reader takes the other NoC.
             writer_config = ttnn.DataMovementConfigDescriptor(
@@ -1303,7 +1455,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         semaphores.append(ttnn.SemaphoreDescriptor(id=OSUM_SEM_ID, core_ranges=all_cores, initial_value=0))
     if prep_units:
         # Landed counters per inbox slot (state cores), then the grant and o-landed counters (prep cores).
-        for sem in range(LANDED_FIRST_SEM_ID, LANDED_FIRST_SEM_ID + inbox + 2):
+        # PREP_SHARE_QK: then the qn / kn landed counters (prep cores) and the grant counters (q / k cores).
+        qk_sems = 2 + _prep_qk_dests(ratio, heads) if shared else 0
+        for sem in range(LANDED_FIRST_SEM_ID, LANDED_FIRST_SEM_ID + inbox + 2 + qk_sems):
             semaphores.append(ttnn.SemaphoreDescriptor(id=sem, core_ranges=all_cores, initial_value=0))
     if cs_in_place:
         semaphores.append(ttnn.SemaphoreDescriptor(id=CS_READ_SEM_ID, core_ranges=all_cores, initial_value=0))

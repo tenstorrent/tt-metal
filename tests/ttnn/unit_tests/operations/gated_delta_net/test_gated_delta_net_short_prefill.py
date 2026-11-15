@@ -24,7 +24,13 @@ from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_bf16 
 from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_perf import LAUNCHES, _to_device
 
 
-EXPERIMENT = {}  # knob overrides for A/B measurement
+import ast
+
+# Knob overrides for A/B measurement, e.g. GDN_KNOBS="PREP_SHARE_QK=True,PREP_HEADS=1".
+EXPERIMENT = {
+    name: ast.literal_eval(value)
+    for name, value in (item.split("=") for item in os.environ.get("GDN_KNOBS", "").split(",") if item)
+}
 
 
 @pytest.mark.parametrize("regime", ["default", "prep", "prep_h1", "local"])

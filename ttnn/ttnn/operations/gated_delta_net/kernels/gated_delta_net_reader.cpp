@@ -49,6 +49,7 @@ constexpr uint32_t cb_in_knt = GDN_CB_IN_KNT;
 constexpr uint32_t cb_in_mat = GDN_CB_IN_MAT;
 constexpr uint32_t cb_in_vec = GDN_CB_IN_VEC;
 constexpr uint32_t cb_in_v = GDN_CB_IN_V;
+constexpr uint32_t cb_kq_rows = GDN_CB_KQ_ROWS;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t TILE_BYTES = get_compile_time_arg_val(6);        // token-tensor tile (dtype-derived on host)
@@ -71,6 +72,11 @@ constexpr uint32_t PREP_HEADS = get_compile_time_arg_val(20);  // R-PREP: value 
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;    // R-PREP prep core: token-row inputs of strided tile rows
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;  // R-PREP state core: inbox, S0, z, norm_weight
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;   // R-QKCORE: q or k columns of one key head, every decode sequence
+constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;  // R-PREP q / k core: window of its q or k columns, nothing else
+// PREP_SHARE_QK semaphores after the inbox's: qn / kn tile rows landed on a prep core (cumulative each).
+constexpr uint32_t QN_LANDED_SEM_ID = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 2;
+constexpr uint32_t KN_LANDED_SEM_ID = QN_LANDED_SEM_ID + 1;
+constexpr uint32_t KQ_GRANT_FIRST_SEM_ID = KN_LANDED_SEM_ID + 1;    // on a q / k core, one per destination prep core
 constexpr uint32_t FACE_BYTES = TILE_BYTES / 4;                     // one 16x16 face
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;                     // one face row
 constexpr uint32_t CS_COLS_PER_FLUSH = TILE_ROWS / GDN_HISTORY;     // conv_state_out columns per scratch tile
@@ -279,6 +285,11 @@ void kernel_main() {
     const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);
     const uint32_t tr_stride = get_arg_val<uint32_t>(arg++);
     const uint32_t unit_stride = get_arg_val<uint32_t>(arg++);  // units first_unit, + stride, ... (R-QKCORE: Hv)
+    // R-PREP prep core under PREP_SHARE_QK (qk role receiver): NoC (x, y) of its position's q and k cores, then its
+    // index among their destinations (its grant counter there).
+    const bool kq_landing = PREP && qk_role == GDN_QK_RECEIVER;
+    uint32_t kq_src[4] = {0, 0, 0, 0};
+    uint32_t kq_grant_sem = 0;
     // R-PREP state core: NoC (x, y) of its group's prep cores; tile row i of the sequence comes from prep core
     // i % producers into inbox slot i % INBOX_SLOTS.
     constexpr uint32_t MAX_PRODUCERS = STATE ? GDN_MAX_PREP_CORES_PER_GROUP : 1;
@@ -293,10 +304,17 @@ void kernel_main() {
             producer_y[q] = get_arg_val<uint32_t>(arg++);
         }
     }
-    // The unit's columns: q/k columns [qk_lo, qk_lo + qk_cols) of the pair's 2Kt, then its Vb v columns.
+    if (kq_landing) {
+        for (uint32_t i = 0; i < 4; ++i) {
+            kq_src[i] = get_arg_val<uint32_t>(arg++);
+        }
+        kq_grant_sem = KQ_GRANT_FIRST_SEM_ID + get_arg_val<uint32_t>(arg++);
+    }
+    // The unit's columns: q/k columns [qk_lo, qk_lo + qk_cols) of the pair's 2Kt, then its Vb v columns (none on an
+    // R-PREP q / k core).
     const uint32_t qk_lo = qk_role == GDN_QK_K_INJECTOR ? Kt : 0;
     const uint32_t qk_cols = qk_role == GDN_QK_OWN ? 2 * Kt : (qk_role == GDN_QK_RECEIVER ? 0 : Kt);
-    const uint32_t unit_cols = qk_cols + Vb;
+    const uint32_t unit_cols = qk_cols + (PREP_QK ? 0 : Vb);
     const uint32_t conv_w_pages = CONV_W_RAW ? unit_cols : GDN_CONV_TAPS * unit_cols;
     // R-VSPLIT hands the whole unit over at once; R-STEP has no receivers, so its group divides pair_cols.
     const uint32_t group_cols = WINDOW_GROUP_COLS == pair_cols ? unit_cols : WINDOW_GROUP_COLS;
@@ -451,6 +469,7 @@ void kernel_main() {
         cs_reads = get_arg_val<uint32_t>(arg++);
     }
 
+    uint32_t kq_rows_landed = 0;  // PREP_SHARE_QK prep core: tile rows of qn / kn handed to compute
     uint32_t prev_head = 0xffffffffu;
     uint32_t prev_norm_w = 0;
     uint32_t prev_conv_w = 0;
@@ -463,7 +482,7 @@ void kernel_main() {
         for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
             const uint32_t unit = first_unit + unit_idx * unit_stride;
             const uint32_t pair = unit / PIECES;
-            const uint32_t v_first = PREP ? 0 : (unit % PIECES) * Vb;  // first v / state column tile of the piece
+            const uint32_t v_first = PREP || PREP_QK ? 0 : (unit % PIECES) * Vb;  // first v / state column of the piece
             const uint32_t seq = pair / Hv;
             const uint32_t head = pair % Hv;
             const uint32_t key_head = head / ratio;
@@ -528,7 +547,7 @@ void kernel_main() {
                 constexpr uint32_t norm_w_pages = PREP ? Vt : Vb;
                 const bool reuse = !PREP && head * PIECES + v_first / Vb == prev_head;
                 prev_head = head * PIECES + v_first / Vb;
-                if constexpr (!STATE) {
+                if constexpr (!STATE && !PREP_QK) {
                     cb_reserve_back(cb_norm_w, norm_w_pages);
                     const uint32_t norm_w_base = get_write_ptr(cb_norm_w);
                     for (uint32_t vt = 0; vt < norm_w_pages && !reuse; ++vt) {
@@ -541,9 +560,11 @@ void kernel_main() {
                 }
                 if constexpr (!STATE) {
                     cb_reserve_back(cb_conv_w, conv_w_pages);
-                    cb_reserve_back(cb_gate_w, 2);
+                    if constexpr (!PREP_QK) {
+                        cb_reserve_back(cb_gate_w, 2);
+                    }
                     const uint32_t conv_w_base = get_write_ptr(cb_conv_w);
-                    const uint32_t gate_w_base = get_write_ptr(cb_gate_w);
+                    const uint32_t gate_w_base = PREP_QK ? 0 : get_write_ptr(cb_gate_w);
                     if (reuse) {
                         noc_async_read(get_noc_addr(prev_conv_w), conv_w_base, conv_w_pages * TILE_BYTES);
                         noc_async_read(get_noc_addr(prev_gate_w), gate_w_base, 2 * TILE_BYTES);
@@ -562,7 +583,7 @@ void kernel_main() {
                         }
                     }
                     // Rank-1 weights: compute broadcasts row 0.
-                    if (!reuse) {
+                    if (!reuse && !PREP_QK) {
                         read_row_span(a_log, head / TILE_ROWS, 0, 1, gate_w_base);
                         read_row_span(dt_bias, head / TILE_ROWS, 0, 1, gate_w_base + TILE_BYTES);
                     }
@@ -624,25 +645,37 @@ void kernel_main() {
                         cb_push_back(cb_in_vec, GDN_IN_VEC_PAGES);
                         cb_push_back(cb_in_v, Vb);
                     } else {
-                        // ---- gate inputs: token rows of the b, a tiles of the gate column ----
-                        cb_reserve_back(cb_gate_in, 2);
-                        const uint32_t gate_in_base = get_write_ptr(cb_gate_in);
-                        const uint32_t gate_page = tr * Gt + head / TILE_ROWS;
-                        // Decode, units of consecutive sequences: the first unit reads the gate rows of all of them.
-                        const bool shared_gates = T == 1 && unit_stride == Hv * PIECES;
-                        if (reuse && shared_gates) {
-                            noc_async_read(get_noc_addr(prev_gate_in), gate_in_base, 2 * TILE_BYTES);
-                        } else {
-                            uint32_t gate_hi = hi - base_row;
-                            if (shared_gates) {
-                                gate_hi = lo - base_row + num_units - unit_idx;
-                                gate_hi = gate_hi < TILE_ROWS ? gate_hi : TILE_ROWS;
-                            }
-                            read_row_span(b_acc, gate_page, lo - base_row, gate_hi, gate_in_base);
-                            read_row_span(a_acc, gate_page, lo - base_row, gate_hi, gate_in_base + TILE_BYTES);
+                        if (kq_landing) {
+                            // ---- PREP_SHARE_QK: grant this tile row's cb_kq_rows slot to the q and k cores (free once
+                            // compute has popped the row PREP_KQ_DEPTH rows back); the row is handed to compute after
+                            // the other inputs, once both qn and kn have landed.
+                            cb_reserve_back(cb_kq_rows, 2 * Kt);
+                            Semaphore<> grant(kq_grant_sem);
+                            grant.up(noc, kq_src[0], kq_src[1], 1);
+                            grant.up(noc, kq_src[2], kq_src[3], 1);
                         }
-                        prev_gate_in = gate_in_base;
-                        bool gates_pending = true;  // pushed after the first window group's flush
+                        // ---- gate inputs: token rows of the b, a tiles of the gate column ----
+                        if constexpr (!PREP_QK) {
+                            cb_reserve_back(cb_gate_in, 2);
+                            const uint32_t gate_in_base = get_write_ptr(cb_gate_in);
+                            const uint32_t gate_page = tr * Gt + head / TILE_ROWS;
+                            // Decode, units of consecutive sequences: the first unit reads the gate rows of all of
+                            // them.
+                            const bool shared_gates = T == 1 && unit_stride == Hv * PIECES;
+                            if (reuse && shared_gates) {
+                                noc_async_read(get_noc_addr(prev_gate_in), gate_in_base, 2 * TILE_BYTES);
+                            } else {
+                                uint32_t gate_hi = hi - base_row;
+                                if (shared_gates) {
+                                    gate_hi = lo - base_row + num_units - unit_idx;
+                                    gate_hi = gate_hi < TILE_ROWS ? gate_hi : TILE_ROWS;
+                                }
+                                read_row_span(b_acc, gate_page, lo - base_row, gate_hi, gate_in_base);
+                                read_row_span(a_acc, gate_page, lo - base_row, gate_hi, gate_in_base + TILE_BYTES);
+                            }
+                            prev_gate_in = gate_in_base;
+                        }
+                        bool gates_pending = !PREP_QK;  // pushed after the first window group's flush
 
                         // ---- conv window: X_j[p] = xx[row(p) + j - 3], WINDOW_GROUP_COLS column tiles per hand-off
                         // ---- Per group: one zero fill, one flush of every DRAM row read (current rows + history
@@ -782,8 +815,10 @@ void kernel_main() {
                             }
                             if (weights_pending) {
                                 cb_push_back(cb_conv_w, conv_w_pages);
-                                cb_push_back(cb_gate_w, 2);
-                                cb_push_back(cb_norm_w, norm_w_pages);
+                                if constexpr (!PREP_QK) {
+                                    cb_push_back(cb_gate_w, 2);
+                                    cb_push_back(cb_norm_w, norm_w_pages);
+                                }
                                 weights_pending = false;
                             }
                             if (gates_pending) {
@@ -821,7 +856,7 @@ void kernel_main() {
                     }
                     // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs
                     // ----
-                    if (tr == first_tr && !PREP && !STATE) {
+                    if (tr == first_tr && !PREP && !PREP_QK && !STATE) {
                         if (early_s0) {
                             noc_async_read_barrier_with_trid(S0_TRID);
                         } else {
@@ -834,7 +869,7 @@ void kernel_main() {
                         cb_push_back(cb_state_in_mm, n_state);
                     }
 
-                    if constexpr (STATE) {
+                    if constexpr (STATE || PREP_QK) {
                         continue;
                     }
                     // ---- z columns of the unit ----
@@ -846,11 +881,17 @@ void kernel_main() {
                     }
                     rows.finish();
                     cb_push_back(cb_z, Vb);
+                    if (kq_landing) {
+                        ++kq_rows_landed;
+                        Semaphore<>(QN_LANDED_SEM_ID).wait_min(kq_rows_landed);
+                        Semaphore<>(KN_LANDED_SEM_ID).wait_min(kq_rows_landed);
+                        cb_push_back(cb_kq_rows, 2 * Kt);
+                    }
                 }
 
                 continue;
             }
-            if constexpr (PREP || CS_BY_QK_CORES) {
+            if constexpr (PREP || PREP_QK || CS_BY_QK_CORES) {
                 continue;
             }
             // ---- copy_conv_state_block: conv_state_out[3b + n] = xx[b, T + n] ----
