@@ -8,7 +8,7 @@ HY4_OPT=all HY4_IHC_FUSED=1 HY4_FUSE=sparse,xchg HY4_XM_NSPLIT=8 HY4_SKINNY=shar
 
 MODES (decided at construction from the server's own command line / HY4_SPEC_K)
   * SPEC (``--speculative-config '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter","num_speculative_tokens":3}' --no-async-scheduling``): the plugin's model-owned drafter contract
-    (docs/SPEC_DECODE_CONTRACT.md), the same shape as the DSV4.1 adapter: EVERY decode step is a verify block [B, 1+K] (no narrow decode). The device runs one traced ROUND per verify (verify S = K+1 rows through
+    (docs/SPEC_DECODE_CONTRACT.md), the same shape as the DSV4.1 adapter: a step carries a verify block [B, 1+K] when some row has drafts, else an ordinary [B, 1] decode (narrow decode: served as a forced single-token round). The device runs one traced ROUND per verify (verify S = K+1 rows through
     the 78 layers, accept, MTP draft of the next K tokens, all state resident); the adapter returns the emitted ids a_0..a_K as ``argmax_ids`` (the plugin's greedy walk reaches the same accept count m as the
     device) and hands the drafts of the round out in ``propose_draft_tokens``. A request with temperature > 0 is served by the lossless SAMPLED round (draft-from-q rejection sampling, temperature only; the
     plugin capability ``supports_sampled_verify``: the returned ids have the shape of the greedy walk: a rejected draw never equals its draft). Penalties / logprobs / grammar are refused by the plugin
@@ -64,9 +64,21 @@ def configured_spec_k():
 
 _SPEC_K = configured_spec_k()
 _SAMPLED = os.environ.get("HY4_SPEC_SAMPLED", "1") == "1"
-_SPEC_CAP = int(
+_SPEC_CAP_ENV = int(
     os.environ.get("HY4_SPEC_CAP", "99")
 )  # max drafts OFFERED per row (0 = the non-speculative stream through the same verify-shape path: the lossless gate reference)
+
+
+def _spec_cap():
+    """max drafts OFFERED per row. HY4_SPEC_CAP_FILE (live switch, read at every proposal): a file holding an integer overrides HY4_SPEC_CAP (0 = the non-speculative stream through the same verify-shape path)."""
+    f = os.environ.get("HY4_SPEC_CAP_FILE")
+    if f:
+        try:
+            with open(f) as fh:
+                return int(fh.read().strip())
+        except (OSError, ValueError):
+            pass
+    return _SPEC_CAP_ENV
 
 
 class _Slots:
@@ -160,7 +172,7 @@ class HYV4ForCausalLM:
             extra_bytes_per_token=0,
             accept_modes=("argmax_ids",),
             drafter_state="internal",
-            supports_narrow_decode=False,  # every step of a speculating launch is a verify block
+            supports_narrow_decode=True,  # a step with nothing to verify is an ordinary [B, 1] decode (served as a forced single-token round); it also lets sampled requests be admitted (supports_sampled_verify)
         )
 
     def __init__(self, mesh_device, max_num_seqs, max_seq_len, *, vllm_config=None):
@@ -350,6 +362,27 @@ class HYV4ForCausalLM:
             )
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out)
 
+    def _decode_narrow(self, tokens, start_pos, sp):
+        """ordinary [B, 1] decode in a speculating launch (no row carries a draft): a forced single-token round (cap 0): the verify rows beyond row 0 are computed and rejected, the MTP state advances as in
+        any round, the next drafts are handed out by the propose call that follows. Returns the ids [W, 1] int32 (greedy or sampled by the row's temperature).
+        """
+        if sp is None:
+            raise TTRequestError(
+                "Hy4 product server: host sampling (penalties, logit_bias, bad_words, logprobs) is not available"
+            )
+        W = int(tokens.shape[0])
+        sp0 = start_pos.reshape(-1).tolist()
+        K = self.eng.K
+        nv = torch.zeros(W, dtype=torch.int32)
+        blk = torch.zeros(W, K + 1, dtype=torch.int32)
+        blk[:, 0] = tokens.reshape(W, -1)[:, 0]
+        pos = torch.full((W, K + 1), -1, dtype=torch.int32)
+        for i in range(W):
+            if sp0[i] >= 0:
+                pos[i] = torch.arange(sp0[i], sp0[i] + K + 1, dtype=torch.int32)
+        out = self._verify(blk, pos, nv, sp).argmax_ids
+        return out[:, :1].clone()
+
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         """Hand out the drafts the last round / the seed round produced (they live in the engine's mirror). A row whose committed last token / position is not the engine's pending token / position is offered
         nothing (its next verify reloads the plugin's block)."""
@@ -368,7 +401,7 @@ class HYV4ForCausalLM:
                 continue
             j = max(int(cn[i]), 1) - 1
             if int(ct[i][j]) == eng.pend[ph] and int(cp[i][j]) == eng.pos[ph]:
-                k = min(K, int(num_drafts), _SPEC_CAP)
+                k = min(K, int(num_drafts), _spec_cap())
                 ids[i, :k] = torch.tensor([max(int(x), 0) for x in eng.drafts[ph][:k]], dtype=torch.int32)
                 nv[i] = k
             else:

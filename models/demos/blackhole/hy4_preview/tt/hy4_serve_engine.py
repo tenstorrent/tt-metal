@@ -160,7 +160,7 @@ class Hy4Engine:
             self._seed_rows(rows, first, res, prompts_by_row, sampling or {})
         logger.info(
             f"HY4 prefill call: rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
-            f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) seed={time.perf_counter() - t1:.2f}s"
+            f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) chunks_s={[round(x, 1) for x in res.chunk_sec[:6]]}..{[round(x, 1) for x in res.chunk_sec[-2:]]} seed={time.perf_counter() - t1:.2f}s"
         )
         return first
 

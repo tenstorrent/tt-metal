@@ -191,18 +191,22 @@ class Hy4PoolPrefill:
                 hn, logits = ch.head(x4)
                 if mtp is not None:
                     self.mtp_prompt_chunk(mtp, hn, c, prompts, PF)
-                lg = ttnn.to_torch(
-                    logits, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))
-                ).reshape(self.rows, PF, -1)
-                hh = self._host_rows(hn, True).reshape(self.rows, PF, -1) if keep_hidden else None
                 for r in enders:
+                    # only the last-prompt-position row of every finishing user crosses PCIe (the full [4, PF, V] logits of a chunk are ~1 GB: ~4 s per prefill call); the slice is taken per user at its own position
                     last = lens[r] - 1 - c * PF
-                    row = lg[r, last].float()
+                    ls = ttnn.slice(logits, [0, 0, last, 0], [1, 1, last + 1, int(logits.shape[3])])
+                    lg = ttnn.to_torch(
+                        ls, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))
+                    ).reshape(self.rows, -1)
+                    ttnn.deallocate(ls)
+                    row = lg[r].float()
                     res.first[r] = int(row.argmax())
                     if keep_logits:
                         res.logits[r] = row
                     if keep_hidden:
-                        res.hidden[r] = hh[r, last]
+                        hs = ttnn.slice(hn, [0, 0, last, 0], [1, 1, last + 1, int(hn.shape[3])])
+                        res.hidden[r] = self._host_rows(hs, True).reshape(self.rows, -1)[r]
+                        ttnn.deallocate(hs)
                 ttnn.deallocate(hn)
                 ttnn.deallocate(logits)
             if sync_every_chunk:
