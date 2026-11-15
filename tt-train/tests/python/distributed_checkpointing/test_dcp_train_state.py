@@ -10,6 +10,7 @@ dataloader state round-trip through header.json and must be JSON; what was asked
 
 import json
 import random
+import sys
 
 import numpy as np
 import pytest
@@ -86,6 +87,22 @@ def test_every_generator_comes_back_exactly():
         ttml.init._rng.random(2).tolist(),
         ctx.get_generator_state(),
     ) == expected
+
+
+def test_a_generator_without_stored_state_keeps_its_state_with_a_warning(monkeypatch):
+    block = capture_rng(world_rank=0)
+    without_numpy = json.loads(json.dumps(block))
+    del without_numpy["ranks"]["0"]["numpy"]  # saved while numpy's global generator was not MT19937
+    np.random.seed(7)
+    numpy_before = np.random.get_state()[1].copy()
+    with pytest.warns(UserWarning, match=r"no state for these generators, which keep their current state: \['numpy'\]"):
+        restored = restore_rng(without_numpy, world_rank=0)
+    assert "rng.numpy" not in restored and np.array_equal(np.random.get_state()[1], numpy_before)
+
+    monkeypatch.setitem(sys.modules, "torch", None)  # torch's state stored, torch not imported in this process
+    with pytest.warns(UserWarning, match="holds torch's generator state, but torch is not imported: not restored"):
+        restored = restore_rng(block, world_rank=0)
+    assert restored == ["rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init"]
 
 
 def test_a_rank_restores_only_its_own_entry():

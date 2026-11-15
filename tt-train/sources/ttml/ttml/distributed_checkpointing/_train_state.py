@@ -179,8 +179,22 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
 
 
 def restore_process_rng(state: dict) -> list[str]:
-    """Restore this process's generators from a ``capture_process_rng`` block; returns the names restored."""
+    """Restore this process's generators from a ``capture_process_rng`` block; returns the names restored. A generator
+    the block holds no state for (numpy's when it was not MT19937 at save, torch's when torch was imported only now)
+    keeps its state, with a warning; so does torch's stored state when torch is not imported."""
     decoded = _decode_process_rng(state)
+    torch = sys.modules.get("torch")
+    live = ["ttml", "python", "numpy", "ttml_init"] + (["torch"] if torch is not None else [])
+    unstored = [name for name in live if name not in decoded]
+    if unstored:
+        warnings.warn(
+            f"the checkpoint holds no state for these generators, which keep their current state: {unstored}",
+            stacklevel=2,
+        )
+    if "torch" in decoded and torch is None:
+        warnings.warn(
+            "the checkpoint holds torch's generator state, but torch is not imported: not restored", stacklevel=2
+        )
     restored: list[str] = []
     if "ttml" in decoded:
         ttml.autograd.AutoContext.get_instance().set_generator_state(decoded["ttml"])
@@ -194,7 +208,6 @@ def restore_process_rng(state: dict) -> list[str]:
     if "ttml_init" in decoded:
         ttml.init._rng = decoded["ttml_init"]  # replaced, as ttml.init.manual_seed does
         restored.append("rng.ttml_init")
-    torch = sys.modules.get("torch")
     if "torch" in decoded and torch is not None:
         torch.set_rng_state(torch.from_numpy(decoded["torch"]))
         restored.append("rng.torch")
