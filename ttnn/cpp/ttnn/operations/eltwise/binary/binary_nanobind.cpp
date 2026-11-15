@@ -357,6 +357,10 @@ void bind_binary_operation(
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
+            input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to `None`.
 
 
         Returns:
@@ -443,6 +447,8 @@ void bind_binary_gcd_lcm_operation(
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
+            input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
 
 
         Returns:
@@ -1640,11 +1646,14 @@ void bind_binary_operation_with_fast_approx(
 
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `{8}`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
             input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a before the operation. A Number in that position takes this list. Defaults to `None`.
             input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b before the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
