@@ -140,6 +140,7 @@
 #include "ttnn/operations/experimental/deepseek/width_sharded_all_reduce/width_sharded_all_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/sharded_rmsnorm/sharded_rmsnorm_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/step_context/step_context_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/sample_candidates/sample_candidates_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/compress_pool_decode/compress_pool_decode_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
@@ -282,6 +283,7 @@ void py_module(nb::module_& mod) {
     deepseek::detail::bind_width_sharded_all_reduce(mod);
     deepseek::detail::bind_sharded_rmsnorm(mod);
     deepseek::detail::bind_step_context(mod);
+    deepseek::detail::bind_sample_candidates(mod);
     deepseek::detail::bind_compress_pool_decode(mod);
     topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
