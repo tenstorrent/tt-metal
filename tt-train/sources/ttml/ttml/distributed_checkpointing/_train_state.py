@@ -30,20 +30,17 @@ import warnings
 from typing import Any
 
 import numpy as np
+import ttnn
 
 import ttml
 
 from ._errors import CheckpointError, VersionError
-from ._index import check_json, read_header
+from ._index import check_json, read_header_json
 
 TRAIN_STATE_KEY = "train_state"
 RNG_FORMAT = 1
-
-
-def _json(name: str, value: Any) -> Any:
-    """``value`` as plain JSON types (tuples become lists), or a ``CheckpointError`` naming the component and the first
-    value that would not read back as written (a non-string key, a non-finite float, a type JSON has no form for)."""
-    return check_json(f"{name} state", value)
+# The text of a std::mt19937 (get_generator_state): its 624 state words and its position.
+_MT19937_TOKENS = 625
 
 
 def _hex_u32(words) -> str:
@@ -54,10 +51,19 @@ def _u32_from_hex(text: str) -> np.ndarray:
     return np.frombuffer(bytes.fromhex(text), dtype="<u4")
 
 
-def capture_rng(world_rank: int = 0) -> dict:
-    """The state of every generator this process draws from, as JSON, under ``world_rank``'s entry: ttml, python,
-    numpy and torch when it is imported. A multi-rank save merges every rank's entry into one block."""
-    return {"format": RNG_FORMAT, "ranks": {str(int(world_rank)): capture_process_rng()}}
+def this_world_rank() -> int:
+    """This process's rank in the MPI world; 0 when no distributed context is initialized."""
+    if ttnn.distributed_context_is_initialized():
+        return int(ttnn.distributed_context_world_rank())
+    return 0
+
+
+def capture_rng(world_rank: int | None = None) -> dict:
+    """The state of every generator this process draws from, as JSON, under ``world_rank``'s entry (by default this
+    process's world rank): ttml, python, numpy, ttml.init and torch when it is imported. A multi-rank save merges every
+    rank's entry into one block."""
+    rank = this_world_rank() if world_rank is None else int(world_rank)
+    return {"format": RNG_FORMAT, "ranks": {str(rank): capture_process_rng()}}
 
 
 def capture_process_rng() -> dict:
@@ -103,16 +109,27 @@ def capture_process_rng() -> dict:
 
 
 def _check_rng_format(state: dict) -> None:
-    if int(state.get("format", RNG_FORMAT)) > RNG_FORMAT:
-        raise VersionError(f"RNG state format {state['format']} is newer than this reader ({RNG_FORMAT})")
+    """``state`` must be an RNG block, as ``capture_rng`` makes it, of a format this reader knows."""
+    if not isinstance(state, dict) or "format" not in state or not isinstance(state.get("ranks"), dict):
+        found = sorted(state) if isinstance(state, dict) else type(state).__name__
+        raise CheckpointError(
+            f"not an RNG block (found {found}); it needs 'format' and 'ranks': pass the train state's 'rng' entry"
+        )
+    try:
+        version = int(state["format"])
+    except (TypeError, ValueError):
+        raise CheckpointError(f"RNG state format {state['format']!r} is not a version number") from None
+    if version > RNG_FORMAT:
+        raise VersionError(f"RNG state format {version} is newer than this reader ({RNG_FORMAT})")
 
 
-def restore_rng(state: dict, world_rank: int = 0) -> list[str]:
-    """Restore the generators ``capture_rng`` recorded for ``world_rank``; returns the names restored (``rng.ttml``,
-    ``rng.python``, ``rng.numpy``, ``rng.ttml_init``, ``rng.torch``). A rank without an entry keeps its generators,
-    with a warning; torch's is restored only when torch is imported."""
+def restore_rng(state: dict, world_rank: int | None = None) -> list[str]:
+    """Restore the generators ``capture_rng`` recorded for ``world_rank`` (by default this process's world rank);
+    returns the names restored (``rng.ttml``, ``rng.python``, ``rng.numpy``, ``rng.ttml_init``, ``rng.torch``). A rank
+    without an entry keeps its generators, with a warning; torch's is restored only when torch is imported."""
+    world_rank = this_world_rank() if world_rank is None else int(world_rank)
     _check_rng_format(state)
-    ranks = state.get("ranks", {})
+    ranks = state["ranks"]
     own = ranks.get(str(int(world_rank)))
     if own is None:
         warnings.warn(
@@ -126,15 +143,26 @@ def restore_rng(state: dict, world_rank: int = 0) -> list[str]:
 
 def _decode_process_rng(state: dict) -> dict[str, Any]:
     """A ``capture_process_rng`` block decoded into what each generator's setter takes, or a ``CheckpointError``:
-    every generator is decoded before any is set, so a malformed block changes nothing."""
+    every generator is decoded, and set on a throwaway generator of its kind, before any live one is set, so a
+    malformed block changes nothing."""
     decoded: dict[str, Any] = {}
     try:
         if state.get("ttml") is not None:
-            decoded["ttml"] = str(state["ttml"])
+            text = str(state["ttml"])
+            tokens = text.split()
+            # The C++ setter would read a short text partway and leave the generator in neither state, so it is
+            # checked here: no throwaway ttml generator exists to try it on.
+            if len(tokens) != _MT19937_TOKENS or not all(token.isdigit() for token in tokens):
+                raise ValueError(
+                    f"the ttml generator state is {len(tokens)} tokens, not the {_MT19937_TOKENS} integers of an "
+                    "mt19937"
+                )
+            decoded["ttml"] = text
         python_state = state.get("python")
         if python_state is not None:
             words = tuple(int(w) for w in _u32_from_hex(python_state["state"]))
             decoded["python"] = (int(python_state["version"]), words, python_state["gauss_next"])
+            random.Random().setstate(decoded["python"])
         numpy_state = state.get("numpy")
         if numpy_state is not None:
             decoded["numpy"] = (
@@ -144,6 +172,7 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
                 int(numpy_state["has_gauss"]),
                 float(numpy_state["cached_gaussian"]),
             )
+            np.random.RandomState().set_state(decoded["numpy"])
         init_state = state.get("ttml_init")
         if init_state is not None:
             bit_generator = np.random.PCG64()
@@ -156,14 +185,31 @@ def _decode_process_rng(state: dict) -> dict[str, Any]:
             decoded["ttml_init"] = np.random.Generator(bit_generator)
         if state.get("torch") is not None:
             decoded["torch"] = np.frombuffer(bytes.fromhex(state["torch"]), dtype=np.uint8).copy()
-    except (KeyError, TypeError, ValueError) as err:
+            torch = sys.modules.get("torch")
+            if torch is not None:
+                torch.Generator().set_state(torch.from_numpy(decoded["torch"]))
+    except (KeyError, TypeError, ValueError, IndexError, RuntimeError) as err:
         raise CheckpointError(f"the stored RNG state is malformed ({type(err).__name__}: {err})") from err
     return decoded
 
 
 def restore_process_rng(state: dict) -> list[str]:
-    """Restore this process's generators from a ``capture_process_rng`` block; returns the names restored."""
+    """Restore this process's generators from a ``capture_process_rng`` block; returns the names restored. A generator
+    the block holds no state for (numpy's when it was not MT19937 at save, torch's when torch was imported only now)
+    keeps its state, with a warning; so does torch's stored state when torch is not imported."""
     decoded = _decode_process_rng(state)
+    torch = sys.modules.get("torch")
+    live = ["ttml", "python", "numpy", "ttml_init"] + (["torch"] if torch is not None else [])
+    unstored = [name for name in live if name not in decoded]
+    if unstored:
+        warnings.warn(
+            f"the checkpoint holds no state for these generators, which keep their current state: {unstored}",
+            stacklevel=2,
+        )
+    if "torch" in decoded and torch is None:
+        warnings.warn(
+            "the checkpoint holds torch's generator state, but torch is not imported: not restored", stacklevel=2
+        )
     restored: list[str] = []
     if "ttml" in decoded:
         ttml.autograd.AutoContext.get_instance().set_generator_state(decoded["ttml"])
@@ -177,7 +223,6 @@ def restore_process_rng(state: dict) -> list[str]:
     if "ttml_init" in decoded:
         ttml.init._rng = decoded["ttml_init"]  # replaced, as ttml.init.manual_seed does
         restored.append("rng.ttml_init")
-    torch = sys.modules.get("torch")
     if "torch" in decoded and torch is not None:
         torch.set_rng_state(torch.from_numpy(decoded["torch"]))
         restored.append("rng.torch")
@@ -189,9 +234,9 @@ def capture_train_state(*, scheduler=None, dataloader=None, rng: bool = True, wo
     are asked for."""
     state: dict[str, Any] = {}
     if scheduler is not None:
-        state["scheduler"] = _json("scheduler", scheduler.get_state_dict())
+        state["scheduler"] = check_json("scheduler state", scheduler.get_state_dict())
     if dataloader is not None:
-        state["dataloader"] = _json("dataloader", dataloader.get_state_dict())
+        state["dataloader"] = check_json("dataloader state", dataloader.get_state_dict())
     if rng:
         state["rng"] = capture_rng(world_rank)
     return state
@@ -203,12 +248,16 @@ def missing_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bo
     return [f"{TRAIN_STATE_KEY}/{name}" for name, asked in wanted if asked and name not in state]
 
 
-def check_train_state(state: dict, *, rng: bool = False, world_rank: int = 0) -> None:
-    """What can be checked before ``load`` touches anything: the RNG block's format, and that this rank's entry
-    decodes. The scheduler and dataloader states can only be judged by their own ``set_state_dict``."""
+def check_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bool = False, world_rank: int = 0) -> None:
+    """What can be checked before ``load`` touches anything: that a scheduler or dataloader passed can take a state
+    (a ``set_state_dict``), the RNG block's format, and that this rank's entry decodes. The scheduler and dataloader
+    states themselves can only be judged by their own ``set_state_dict``, after the tensors are placed."""
+    for name, component in (("scheduler", scheduler), ("dataloader", dataloader)):
+        if component is not None and name in state and not callable(getattr(component, "set_state_dict", None)):
+            raise TypeError(f"the {name} passed ({type(component).__name__}) has no set_state_dict to restore it with")
     if rng and "rng" in state:
         _check_rng_format(state["rng"])
-        own = state["rng"].get("ranks", {}).get(str(int(world_rank)))
+        own = state["rng"]["ranks"].get(str(int(world_rank)))
         if own is not None:
             _decode_process_rng(own)
 
@@ -221,7 +270,7 @@ def _apply(name: str, set_state_dict, value) -> None:
     except Exception as err:  # noqa: BLE001  (a component's own refusal: KeyError, ValueError, ...)
         raise CheckpointError(
             f"the live {name} refused the stored {name} state ({type(err).__name__}: {err}); is it configured as when "
-            f"the checkpoint was saved?"
+            f"the checkpoint was saved, and does it take its state back as JSON types (a tuple comes back as a list)?"
         ) from err
 
 
@@ -245,4 +294,4 @@ def restore_train_state(
 
 def read_train_state(ckpt_dir: str) -> dict:
     """The ``train_state`` block ``save`` stored (scheduler, dataloader, rng), without touching any device."""
-    return read_header(ckpt_dir).get(TRAIN_STATE_KEY, {})
+    return read_header_json(ckpt_dir).get(TRAIN_STATE_KEY, {})

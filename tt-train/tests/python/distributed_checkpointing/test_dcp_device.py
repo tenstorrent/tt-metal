@@ -14,20 +14,23 @@ device of its own.
 groups must not interleave: the TP tests come first, the FSDP test last.
 """
 
+import json
+import os
 import random
 
 import numpy as np
 import pytest
 import torch
 import ttnn
-from dcp_oracle import Loader
-from tp_block import TPBlock, fresh_tp, make_adamw, train_step
+from dcp_oracle import Loader, advance_generators
+from tp_block import TPBlock, device_slices, fresh_tp, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
 from ttml.common.schedulers import CosineAnnealingScheduler
+from ttml.distributed_checkpointing._state_dict import collect_model
 from ttml.fsdp import _ShardedState
-from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
+from ttml.modules import AbstractModuleBase, Buffer, LinearLayer, Parameter
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
@@ -36,7 +39,7 @@ NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
 def _shards(tensor):
-    return [ttnn.to_torch(s) for s in ttnn.get_device_tensors(tensor.get_value(NATIVE))]
+    return device_slices(tensor.get_value(NATIVE))
 
 
 def _model_shards(params):
@@ -66,12 +69,12 @@ def _assert_same_shards(actual: dict, expected: dict) -> None:
     for key in expected:
         assert len(actual[key]) == len(expected[key]), key
         for device, (a, e) in enumerate(zip(actual[key], expected[key])):
-            assert torch.equal(a, e), f"{key} differs on device {device}"
+            assert np.array_equal(a, e), f"{key} differs on device {device}"
 
 
 def _assert_some_differ(actual: dict, expected: dict) -> None:
     assert any(
-        not torch.equal(a, e) for key in expected for a, e in zip(actual[key], expected[key])
+        not np.array_equal(a, e) for key in expected for a, e in zip(actual[key], expected[key])
     ), "precondition: fresh state differs"
 
 
@@ -144,19 +147,50 @@ def test_a_step_after_the_load_matches_the_uninterrupted_run(tp_mesh, tmp_path):
     assert _state(opt2)[1] == expected_scalars
 
     model3, params3, opt3 = fresh_tp(DIM)
-    dcp.load(path, model=model3, strict=False)  # the parameters alone: the optimizer starts from nothing
+    # The parameters alone, strictly: a load without an optimizer does not count the optimizer entries as unexpected.
+    assert dcp.load(path, model=model3).unexpected == []
     train_step(model3, opt3, DIM, input_scale=0.5)
     _assert_some_differ(_model_shards(params3), expected)
     _assert_some_differ(_state(opt3)[0], expected_state)
 
 
-def test_strict_load_names_the_mismatch(tp_mesh, tmp_path):
+class _WithBuffers(AbstractModuleBase):
+    """A layer plus state a step updates outside the optimizer, like a MoE's load-balancing bias, reachable under two
+    names."""
+
+    def __init__(self, dim: int, seed: int) -> None:
+        super().__init__()
+        self.linear = LinearLayer(dim, dim, has_bias=False)
+        values = np.random.default_rng(seed).standard_normal((1, 1, 1, dim)).astype(np.float32)
+        self.expert_bias = Buffer(ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16))
+        self.alias = self.expert_bias
+
+    def forward(self, x):
+        return self.linear(x)
+
+
+def test_buffers_are_saved_and_loaded(tp_mesh, tmp_path):
+    model = _WithBuffers(DIM, seed=1)
+    path = str(tmp_path / "step_0000001")
+    dcp.save(path, model=model)
+    entry = dcp.read_index(path).entries["model/_WithBuffers/expert_bias"]
+    assert entry.role == "buffer" and entry.live_keys == ("model/_WithBuffers/alias", "model/_WithBuffers/expert_bias")
+
+    fresh = _WithBuffers(DIM, seed=2)
+    _assert_some_differ({"b": _shards(fresh.expert_bias.tensor)}, {"b": _shards(model.expert_bias.tensor)})
+    loaded = dcp.load(path, model=fresh)
+    assert loaded.missing == [] and loaded.unexpected == []
+    _assert_same_shards({"b": _shards(fresh.expert_bias.tensor)}, {"b": _shards(model.expert_bias.tensor)})
+    _assert_same_shards(_model_shards(fresh.parameters()), _model_shards(model.parameters()))
+
+
+def test_strict_load_names_the_mismatch(tp_mesh, tmp_path, expect_error):
     model, params, opt = fresh_tp(DIM)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model, optimizer=opt)
 
     other = _TPBlockPlus(DIM)
-    with pytest.raises(dcp.MissingKeyError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.MissingKeyError, r"live tensor\(s\) have no entry in the checkpoint: \['model/_TPBlockPlus/"):
         dcp.load(path, model=other)
     lenient = dcp.load(path, model=other, strict=False)
     assert lenient.missing and lenient.unexpected
@@ -168,20 +202,20 @@ def test_strict_load_names_the_mismatch(tp_mesh, tmp_path):
     model_only = str(tmp_path / "step_0000002")
     dcp.save(model_only, model=model)
     model2, params2, opt2 = fresh_tp(DIM)
-    with pytest.raises(dcp.MissingKeyError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.MissingKeyError, r"live tensor\(s\) have no entry in the checkpoint: \['optimizer/"):
         dcp.load(model_only, model=model2, optimizer=opt2)
     partial = dcp.load(model_only, model=model2, optimizer=opt2, strict=False)
     assert partial.missing and all(k.startswith("optimizer/") for k in partial.missing)
     assert not partial.unexpected
 
 
-def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_path):
+def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_path, expect_error):
     model, params, opt = fresh_tp(DIM)
-    with pytest.raises(dcp.IncompleteCheckpoint):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.IncompleteCheckpointError, "nowhere is not a complete checkpoint"):
         dcp.load(str(tmp_path / "nowhere"), model=model)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model)
-    with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.CheckpointError, "step_0000001 already exists; pass overwrite=True to replace it"):
         dcp.save(path, model=model)
     dcp.save(path, model=model, overwrite=True)
     assert dcp.is_complete(path)
@@ -200,23 +234,43 @@ class _LoraQKV(AbstractModuleBase):
         return self.qkv_linear(x)
 
 
-def test_lora_on_a_fused_layer_declares_the_rows_it_adds_to(tp_mesh, expect_error):
-    from ttml.distributed_checkpointing._layouts import fused_segments
-    from ttml.distributed_checkpointing._state_dict import collect_model
+class _LoraHeads(AbstractModuleBase):
+    """LoRA on two padded vocab heads, a TP one and a replicated one: 100 logical rows padded to 128."""
+
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        from ttml.modules import ColumnParallelLinear
+        from ttml.modules.lora import LoraColumnParallelLinear, LoraConfig, LoraLinear
+
+        tp_head = ColumnParallelLinear(dim, 128, has_bias=False)
+        tp_head.weight.checkpoint_layout = {"logical_extent": (2, 100)}
+        self.tp_head = LoraColumnParallelLinear(tp_head, LoraConfig(rank=8))
+        head = LinearLayer(dim, 128, has_bias=False)
+        head.weight.checkpoint_layout = {"logical_extent": (2, 100)}
+        self.head = LoraLinear(head, LoraConfig(rank=8))
+
+
+def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
+    from ttml.distributed_checkpointing._layouts import Pad, fused_segments
     from ttml.modules import ColumnParallelLinear
 
     infos = {lt.key.rsplit("/", 1)[-1]: lt.info for lt in collect_model(_LoraQKV(DIM))}
     segments = (DIM, DIM // 2, DIM // 2)
     assert infos["weight"].transform == fused_segments(2, segments, 2)
     assert infos["lora_B"].transform == fused_segments(2, segments, 2), "lora_B follows the base's per-shard rows"
+    # On a padded head lora_B carries the vocab padding too, so it reshards across TP sizes like the head does.
+    infos = {"/".join(lt.key.rsplit("/", 2)[-2:]): lt.info for lt in collect_model(_LoraHeads(DIM))}
+    for head in ("tp_head", "head"):
+        assert infos[f"{head}/weight"].transform == Pad(2, 100, 128)
+        assert infos[f"{head}/lora_B"].transform == Pad(2, 100, 128), head
     # A segment that does not split evenly over the TP shards is refused when the layer is built, not at the first save.
-    with expect_error(ValueError, "must each divide"):
+    with expect_error(dcp.LayoutError, "segment size 63 is not divisible by the 2 shards"):
         ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(63, 33))
+    with expect_error(dcp.LayoutError, r"fused_segments \(32, 32\) sum to 64 but the fused dim has 96 rows"):
+        ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(32, 32))
 
 
 def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_path, monkeypatch, expect_error):
-    import os
-
     from ttml.distributed_checkpointing import _save
 
     model, params, opt = fresh_tp(DIM)
@@ -244,9 +298,42 @@ def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_pa
     assert os.listdir(tmp_path) == [], "the staging directory is removed"
 
 
+def test_a_load_that_fails_after_placing_says_the_model_is_partly_restored(
+    tp_mesh, tmp_path, monkeypatch, expect_error
+):
+    from ttml.distributed_checkpointing import _load
+
+    model, params, opt = fresh_tp(DIM)
+    path = str(tmp_path / "step_0000001")
+    dcp.save(path, model=model, optimizer=opt)
+    real_place = _load._place
+    calls = []
+
+    def place_then_fail(live, arrays, device):
+        calls.append(live.key)
+        if len(calls) == 2:
+            raise RuntimeError("simulated device out of memory")
+        real_place(live, arrays, device)
+
+    model2, _, opt2 = fresh_tp(DIM)
+    monkeypatch.setattr(_load, "_place", place_then_fail)
+    with expect_error(
+        dcp.CheckpointError,
+        r"load failed at .* \(RuntimeError: simulated device out of memory\) after 1 of \d+ tensors were placed",
+    ):
+        dcp.load(path, model=model2, optimizer=opt2)
+
+    def fail(live, arrays, device):
+        raise RuntimeError("simulated device out of memory")
+
+    monkeypatch.setattr(_load, "_place", fail)
+    with expect_error(RuntimeError, "simulated device out of memory") as raised:
+        dcp.load(path, model=model2, optimizer=opt2)
+    assert type(raised.value) is RuntimeError, "nothing was placed: the error as it was raised"
+
+
 def test_a_truncated_data_file_is_refused_before_anything_is_placed(tp_mesh, tmp_path, expect_error):
     import glob
-    import os
 
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
@@ -257,7 +344,7 @@ def test_a_truncated_data_file_is_refused_before_anything_is_placed(tp_mesh, tmp
 
     model2, params2, opt2 = fresh_tp(DIM)
     before = _model_shards(params2)
-    with expect_error(dcp.IncompleteCheckpoint, "truncated or corrupt"):
+    with expect_error(dcp.IncompleteCheckpointError, "truncated or corrupt"):
         dcp.load(path, model=model2, optimizer=opt2)
     _assert_same_shards(_model_shards(params2), before)
 
@@ -293,7 +380,7 @@ def test_shards_that_end_inside_a_tile_round_trip_and_reshard(tp_mesh, tmp_path)
     replicated = _OddRows(sharded=False, seed=2)
     assert not dcp.load(path, model=replicated).fast_path_keys
     (whole,) = _model_shards(replicated.parameters()).values()
-    assert all(torch.equal(w, torch.cat(pieces, dim=2)) for w in whole)
+    assert all(np.array_equal(w, np.concatenate(pieces, axis=2)) for w in whole)
 
     # And back: the replicated weight's checkpoint cut into 48-row shards.
     path = str(tmp_path / "replicated")
@@ -322,6 +409,10 @@ def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_s
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
         dcp.load(path, model=fresh)
     _assert_same_shards(_model_shards(fresh.parameters()), saved)
+    # Its fused kv_linear is the one weight a load at another TP size would scramble, so load refuses that.
+    with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
+        flagged = [lt.key for lt in collect_model(fresh) if lt.undeclared_fusion]
+    assert flagged == ["model/llama/llama_block_0/attention/kv_linear/weight"], flagged
 
 
 def _ttml_draw():
@@ -330,17 +421,27 @@ def _ttml_draw():
     return ttnn.to_torch(ttnn.get_device_tensors(value)[0])
 
 
-def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
+def _adamw_stochastic_rounding(params):
+    """AdamW rounding its BF16 updates stochastically: every step draws from the ttml generator."""
+    cfg = ttml.optimizers.AdamWConfig.make(
+        lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0, stochastic_rounding=True
+    )
+    return ttml.optimizers.AdamW(params, cfg)
+
+
+def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_error):
     """The scheduler, the dataloader and every generator continue exactly as the uninterrupted run would, and so
-    does the next training step, taken with the restored moments, step count and LR."""
+    does the next training step, taken with the restored moments, step count, LR and generator: the optimizer rounds
+    stochastically, so the step matches only if the ttml generator was restored, not reseeded."""
     ctx = ttml.autograd.AutoContext.get_instance()
-    model, params, opt = fresh_tp(DIM)
+    model, params, opt = fresh_tp(DIM, _adamw_stochastic_rounding)
     sched = CosineAnnealingScheduler(opt, T_max=8)
     loader = Loader()
     ctx.set_seed(123)
     random.seed(4)
     np.random.seed(5)
     torch.manual_seed(6)
+    advance_generators()  # the generators are saved mid-stream, not as seeding left them
     for _ in range(3):
         train_step(model, opt, DIM)
         sched.step()
@@ -369,7 +470,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
         "torch": torch.rand(2).tolist(),
     }
 
-    model2, params2, opt2 = fresh_tp(DIM)
+    model2, params2, opt2 = fresh_tp(DIM, _adamw_stochastic_rounding)
     sched2 = CosineAnnealingScheduler(opt2, T_max=8)
     loader2 = Loader()
     ctx.set_seed(999)
@@ -400,6 +501,14 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
     assert random.random() == expected["python"] and float(np.random.random()) == expected["numpy"]
     assert torch.rand(2).tolist() == expected["torch"]
 
+    # The negative control: everything restored but the generators, and the same step rounds differently.
+    model3, params3, opt3 = fresh_tp(DIM, _adamw_stochastic_rounding)
+    sched3 = CosineAnnealingScheduler(opt3, T_max=8)
+    ctx.set_seed(999)
+    dcp.load(path, model=model3, optimizer=opt3, scheduler=sched3)
+    train_step(model3, opt3, DIM, input_scale=0.5)
+    _assert_some_differ(_model_shards(params3), after_step)
+
     # Not asked for, not touched: a plain load leaves the generators alone.
     before = ctx.get_generator_state()
     plain = dcp.load(path, model=model2)
@@ -409,13 +518,38 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
     bare = str(tmp_path / "bare")
     dcp.save(bare, model=model, rng=False)
     assert dcp.read_train_state(bare) == {}
-    with pytest.raises(dcp.MissingKeyError):  # allow-pytest.raises: the fixture matches on device error text
+    untouched = _model_shards(params2), sched2.get_state_dict()
+    with expect_error(dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/scheduler'\]"):
         dcp.load(bare, model=model2, scheduler=sched2)
+    assert sched2.get_state_dict() == untouched[1]
+    _assert_same_shards(_model_shards(params2), untouched[0])
     lenient = dcp.load(bare, model=model2, scheduler=sched2, rng=True, strict=False)
     assert lenient.missing == ["train_state/scheduler", "train_state/rng"] and lenient.restored == []
 
+    # A damaged RNG block is refused before anything is placed, generators and model alike.
+    header_path = os.path.join(path, "header.json")
+    header = json.loads(open(header_path).read())
+    numpy_state = header["train_state"]["rng"]["ranks"]["0"]["numpy"]
+    numpy_state["state"] = numpy_state["state"][:-8]  # 623 words
+    with open(header_path, "w") as f:
+        json.dump(header, f)
+    untouched = _model_shards(params2), ctx.get_generator_state(), random.getstate()
+    with expect_error(dcp.CheckpointError, "the stored RNG state is malformed"):
+        dcp.load(path, model=model2, optimizer=opt2, rng=True)
+    _assert_same_shards(_model_shards(params2), untouched[0])
+    assert (ctx.get_generator_state(), random.getstate()) == untouched[1:]
 
-def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
+    # And a save whose dataloader state is not JSON writes nothing.
+    class _NotJson(Loader):
+        def get_state_dict(self) -> dict:
+            return {"position": np.int64(self.position)}
+
+    with expect_error(dcp.CheckpointError, "dataloader state at /position: a int64 has no JSON form"):
+        dcp.save(str(tmp_path / "not_json"), model=model, dataloader=_NotJson())
+    assert not [name for name in os.listdir(tmp_path) if name.startswith("not_json")], "nothing on disk"
+
+
+def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_error):
     model = _Stack(DIM)
     ttml.fsdp.fully_shard(model)
     params = model.parameters()
@@ -457,8 +591,41 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
     )
     model3(x)  # leaves the module UNSHARDED
     assert model3._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
-    with pytest.raises(dcp.FSDPStateError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.FSDPStateError, "is not in its sharded state; pass reshard_fsdp=True"):
         dcp.save(str(tmp_path / "gathered"), model=model3, optimizer=opt3, reshard_fsdp=False)
     dcp.save(str(tmp_path / "resharded"), model=model3, optimizer=opt3)
     assert model3._fsdp_state.sharded_state == _ShardedState.SHARDED
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def test_fsdp_load_refuses_a_gathered_module_and_an_optimizer_built_before_sharding(fsdp_mesh, tmp_path, expect_error):
+    model = _Stack(DIM)
+    ttml.fsdp.fully_shard(model)
+    opt = make_adamw(model.parameters())
+    train_step(model, opt, DIM)
+    path = str(tmp_path / "step_0000001")
+    dcp.save(path, model=model, optimizer=opt)
+
+    # Loading into a module left gathered: refused with reshard_fsdp=False, resharded first by default.
+    gathered = _Stack(DIM)
+    ttml.fsdp.fully_shard(gathered, reshard_after_forward=False)
+    gathered_opt = make_adamw(gathered.parameters())
+    train_step(gathered, gathered_opt, DIM)
+    x = ttml.autograd.Tensor.from_numpy(
+        np.zeros((1, 1, DIM, DIM), dtype=np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
+    )
+    gathered(x)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    assert gathered._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
+    with expect_error(dcp.FSDPStateError, "is not in its sharded state; pass reshard_fsdp=True"):
+        dcp.load(path, model=gathered, optimizer=gathered_opt, reshard_fsdp=False)
+    dcp.load(path, model=gathered, optimizer=gathered_opt)
+    assert gathered._fsdp_state.sharded_state == _ShardedState.SHARDED
+    _assert_same_shards(_model_shards(gathered.parameters()), _model_shards(model.parameters()))
+
+    # An optimizer built before fully_shard holds full-size moments for sharded parameters.
+    early = _Stack(DIM)
+    early_opt = make_adamw(early.parameters())
+    ttml.fsdp.fully_shard(early)
+    with expect_error(dcp.CheckpointError, "was the optimizer created before the model was sharded"):
+        dcp.save(str(tmp_path / "early"), model=early, optimizer=early_opt)
