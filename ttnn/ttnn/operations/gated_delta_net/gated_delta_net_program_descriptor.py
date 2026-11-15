@@ -19,11 +19,15 @@ R-QKCORE (decode R-STEP, every sequence in one tile row) preps qn / kn once per 
 k core, which multicast them to the key head's pair cores and then write conv_state_out as whole tiles.
 """
 
+import os
 import struct
 from collections import OrderedDict
 from pathlib import Path
 
 import ttnn
+
+# The only Python binding of tt_metal::KernelBuildOptLevel (KernelDescriptor.opt_level).
+from ttnn._experimental.fabric_mux import KernelBuildOptLevel
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE = 32
@@ -158,6 +162,13 @@ STATE_SPLIT = 0
 # R-QKCORE pair cores running several units: the reader writes the final states of all but the last unit, as compute
 # packs them (the writer would issue them only at the next unit's store point), the writer the last unit's.
 STATE_READER_EARLY_UNITS = False
+# R-BCAST: a kernel group per qk role instead of one for all its cores. Smaller reader / writer binaries (the q / k
+# role compiled in), but the injector group stays the largest and decode B=1 host time per call rises 112 -> 166 us.
+SPLIT_BCAST_GROUPS = False
+# Per-block device profiler zones (GDN_ZONE in the kernels: compute blocks, reader / writer units and rows), on with
+# env GDN_PROFILE_ZONES=1, for --profile runs (never compiled under NoC tracing). Each zone execution spends 2 of a
+# RISC's ~250 markers per launch.
+PROFILE_ZONES = os.environ.get("GDN_PROFILE_ZONES", "0") not in ("", "0")
 CONV_ACC_DEPTH = 1  # partial tap sum: compute-to-compute, one compute thread, so depth 1
 
 HISTORY = 3  # spec constant: conv_state rows per sequence
@@ -252,9 +263,20 @@ MAX_SEMAPHORES = 16  # semaphore ids per core (tt_metal NUM_SEMAPHORES)
 ROLE_LOCAL, ROLE_PREP, ROLE_STATE = 0, 1, 2
 ROLE_QK = 3  # R-QKCORE q / k core (its qk role says which)
 ROLE_PREP_QK = 4  # R-PREP q / k core (PREP_SHARE_QK; its qk role says which)
+# Compute kernel source per role; the shared blocks are in gated_delta_net_compute_common.hpp and _chunk.hpp.
+COMPUTE_SOURCES = {
+    ROLE_LOCAL: "gated_delta_net_compute_local.cpp",
+    ROLE_PREP: "gated_delta_net_compute_prep.cpp",
+    ROLE_STATE: "gated_delta_net_compute_state.cpp",
+    ROLE_QK: "gated_delta_net_compute_qk.cpp",
+    ROLE_PREP_QK: "gated_delta_net_compute_qk.cpp",
+}
 # Per-core q/k prep role (R-BCAST): own = preps its own q and k (no sharing); q / k injector = preps qn / kn and
 # multicasts it, receives the other; receiver = receives both.
 QK_OWN, QK_Q_INJECTOR, QK_K_INJECTOR, QK_RECEIVER = 0, 1, 2, 3
+# A kernel group whose cores share one qk role compiles it in (GDN_GROUP_QK_ROLE), so its binary drops the other
+# roles' paths (e.g. an R-QKCORE pair core never preps q / k); QK_PER_CORE: the cores' runtime arg decides.
+QK_PER_CORE = 4
 
 # Rows staged per flush when a token face row is narrower than the DRAM read alignment (bf16 on
 # Blackhole): each half-row is read as one aligned chunk into staging, then copied L1-to-L1.
@@ -288,6 +310,7 @@ def _kernel_defines():
         "QK_Q_INJECTOR",
         "QK_K_INJECTOR",
         "QK_RECEIVER",
+        "QK_PER_CORE",
         "IN_MAT_PAGES",
         "IN_VEC_PAGES",
         "LANDED_FIRST_SEM_ID",
@@ -782,6 +805,17 @@ def _cs_read_signals(device, assignment, qk_cores, pieces, value_heads, ratio, q
         for target in cores:
             waits[target] = waits.get(target, 0) + 1
     return signals, waits
+
+
+def _noc_tracing():
+    """NoC-event tracing inlines a recorder into every NoC call. A traced run measures traffic, never time, so under it
+    the reader and writer are built for size and the zones (timing only) are left out: every role then fits the
+    kernel-config text budget."""
+    return os.environ.get("TT_METAL_DEVICE_PROFILER_NOC_EVENTS", "0") not in ("", "0")
+
+
+def _dataflow_opt_level():
+    return KernelBuildOptLevel.Os if _noc_tracing() else None
 
 
 def _core_ranges(cores):
@@ -1411,6 +1445,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
         ("GDN_STATE_SPLIT", str(int(state_split))),
         ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
+        ("GDN_PROFILE_ZONES", str(int(PROFILE_ZONES and not _noc_tracing()))),
     ]
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).
     remote = {}
@@ -1440,6 +1475,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             # and y, NOC 1 toward lower, both around the torus); the reader takes the other one.
             on_noc0 = [c for c in cores if prep_send_noc0[c.x, c.y]]
             kernel_groups += [(role, on_noc0, True), (role, [c for c in cores if not prep_send_noc0[c.x, c.y]], False)]
+        elif role == ROLE_LOCAL and qk_channels and SPLIT_BCAST_GROUPS:
+            # R-BCAST: one kernel group per qk role (q injectors, k injectors, receivers), each compiling its role in.
+            core_role = {(c.x, c.y): roles[role][3][c.x, c.y][4] for c in cores}
+            for qk in (QK_Q_INJECTOR, QK_K_INJECTOR, QK_RECEIVER):
+                kernel_groups.append((role, [c for c in cores if core_role[c.x, c.y] == qk], False))
         else:
             kernel_groups.append((role, cores, False))
     for role, cores, swap_nocs in kernel_groups:
@@ -1449,6 +1489,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         ranges = _merged_ranges(cores)
         reader_rt, writer_rt, compute_rt = (runtime_args(rt, cores) for rt in (reader_rt, writer_rt, compute_rt))
         reader_ct, writer_ct, compute_ct = role_ct(role)
+        # Names the role in the JIT cache (named_ct_arg_map_generated.h) for per-role binary size reports; unread.
+        role_label = [("gdn_role", role)]
+        group_qk_roles = {roles[role][3][c.x, c.y][4] for c in cores}  # compute rt arg 4: the qk role
+        group_qk_role = group_qk_roles.pop() if len(group_qk_roles) == 1 else QK_PER_CORE
+        group_defines = defines + [("GDN_GROUP_QK_ROLE", str(group_qk_role))]
         reader_config, writer_config = ttnn.ReaderConfigDescriptor(), ttnn.WriterConfigDescriptor()
         if swap_nocs:
             writer_config = ttnn.DataMovementConfigDescriptor(
@@ -1468,30 +1513,35 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             )
         writer = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "gated_delta_net_writer.cpp"),
+            opt_level=_dataflow_opt_level(),
             core_ranges=ranges,
             compile_time_args=writer_ct,
             runtime_args=writer_rt,
             common_runtime_args=writer_addresses(outputs),
-            defines=defines,
+            named_compile_time_args=role_label,
+            defines=group_defines,
             config=writer_config,
         )
         writers.append(writer)
         kernels += [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gated_delta_net_reader.cpp"),
+                opt_level=_dataflow_opt_level(),
                 core_ranges=ranges,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 common_runtime_args=reader_addresses(inputs, outputs),
-                defines=defines,
+                named_compile_time_args=role_label,
+                defines=group_defines,
                 config=reader_config,
             ),
             writer,
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "gated_delta_net_compute.cpp"),
+                kernel_source=str(KERNEL_DIR / COMPUTE_SOURCES[role]),
                 core_ranges=ranges,
                 compile_time_args=compute_ct,
-                defines=defines + [("INP_FLOAT32", "1")],
+                named_compile_time_args=role_label,
+                defines=group_defines + [("INP_FLOAT32", "1")],
                 runtime_args=compute_rt,
                 config=compute_kernel_config,
             ),

@@ -291,7 +291,10 @@ void kernel_main() {
     const uint32_t first_unit = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
     const uint32_t T = get_arg_val<uint32_t>(arg++);
-    const uint32_t qk_role = get_arg_val<uint32_t>(arg++);
+    // Compile-time when every core of the kernel group shares it (descriptor GDN_GROUP_QK_ROLE).
+    const uint32_t qk_role =
+        GDN_GROUP_QK_ROLE == GDN_QK_PER_CORE ? get_arg_val<uint32_t>(arg) : uint32_t{GDN_GROUP_QK_ROLE};
+    ++arg;
     const uint32_t zero_slots = get_arg_val<uint32_t>(arg++);  // cb_window slots the writer zeroes
     // Tile rows of the unit's sequence this core handles: offset, offset + stride, ... (R-PREP prep core), or all.
     const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);
@@ -372,6 +375,7 @@ void kernel_main() {
         // are copied into the zeroed window: tap 3 row p = x[p], tap j < 3 row p = conv_state[3p + j]. The writer
         // zeroes each column's slot and copies the history rows from history_split(B) on (after the staging token on
         // cb_scratch), then hands the slot over (cb_window_zeroed); this RISC copies the rest and pushes it.
+        GDN_ZONE("gdn_rd_qk");
         const uint32_t batch = num_units;
         const uint32_t col0 = (qk_role == GDN_QK_K_INJECTOR ? Hk * Kt : 0) + first_unit * Kt;
         constexpr uint32_t w_pages = CONV_W_RAW ? Kt : GDN_CONV_TAPS * Kt;
@@ -495,6 +499,7 @@ void kernel_main() {
         }
         for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
             const uint32_t unit = first_unit + unit_idx * unit_stride;
+            GDN_ZONE("gdn_rd_unit");
             const uint32_t pair = unit / PIECES;
             const uint32_t v_first = PREP || PREP_QK ? 0 : (unit % PIECES) * Vb;  // first v / state column of the piece
             const uint32_t seq = pair / Hv;

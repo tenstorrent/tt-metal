@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// R-QKCORE helpers shared by the reader (NCRISC) and writer (BRISC): the q / k core window gather, which they split
-// by rows, and the final-state tile order, which pair cores split by tiles (GDN_STATE_SPLIT).
+// Helpers shared by the reader (NCRISC) and writer (BRISC): profiler zones, the NoC drain on return, and for R-QKCORE
+// the q / k core window gather, which they split by rows, and the final-state tile order, which pair cores split by
+// tiles (GDN_STATE_SPLIT).
 
 #pragma once
 
@@ -10,6 +11,14 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/debug/kernel_profiler.hpp"
+
+// Device profiler zones, compiled in only with the host knob PROFILE_ZONES (GDN_PROFILE_ZONES).
+#if GDN_PROFILE_ZONES
+#define GDN_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define GDN_ZONE(name)
+#endif
 
 namespace gdn {
 

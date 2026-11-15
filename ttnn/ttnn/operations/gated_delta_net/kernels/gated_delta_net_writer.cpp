@@ -212,6 +212,7 @@ void prep_writer(
     const uint32_t first_row = first_tr + tr_offset;
     uint32_t sent = 0;
     for (uint32_t tr = first_row; tr <= last_tr; tr += tr_stride, ++sent) {
+        GDN_ZONE("gdn_wr_prep_row");
         const uint32_t base_row = tr * TILE_ROWS;
         const uint32_t lo = row_lo(tr);
         const uint32_t hi = row_hi(tr);
@@ -298,6 +299,7 @@ void prep_qk_writer(
     const uint32_t last_tr = (seq_lo + T - 1) / TILE_ROWS;
     uint32_t sent = 0;
     for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride, ++sent) {
+        GDN_ZONE("gdn_wr_qk_row");
         cb_wait_front(cb_qk_stage, Kt);
         const uint32_t src = get_read_ptr(cb_qk_stage);
         const uint32_t dst = dst_base + (sent % GDN_PREP_KQ_DEPTH) * 2 * part_bytes;
@@ -403,7 +405,10 @@ void kernel_main() {
     const uint32_t first_unit = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
     const uint32_t T = get_arg_val<uint32_t>(arg++);
-    const uint32_t qk_role = get_arg_val<uint32_t>(arg++);
+    // Compile-time when every core of the kernel group shares it (descriptor GDN_GROUP_QK_ROLE).
+    const uint32_t qk_role =
+        GDN_GROUP_QK_ROLE == GDN_QK_PER_CORE ? get_arg_val<uint32_t>(arg) : uint32_t{GDN_GROUP_QK_ROLE};
+    ++arg;
     const uint32_t zero_slots = get_arg_val<uint32_t>(arg++);       // cb_window slots this core's reader uses
     const uint32_t zero_slot_bytes = get_arg_val<uint32_t>(arg++);  // one window group
     const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);        // tile rows handled: offset, + stride, ...
@@ -480,6 +485,7 @@ void kernel_main() {
     }
     if constexpr (QK_CORE) {
         // Window: per column, zero its slot, copy the history rows from history_split(B) on, hand it to the reader.
+        GDN_ZONE("gdn_wr_qk");
         Noc noc;
         CircularBuffer window_buf(cb_window);
         const uint32_t batch = num_units;
@@ -541,6 +547,7 @@ void kernel_main() {
     uint32_t lag_page = 0, lag_base = 0, lag_lo = 0, lag_hi = 0;
     for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
         const uint32_t unit = first_unit + unit_idx * unit_stride;
+        GDN_ZONE("gdn_wr_unit");
         const uint32_t pair = unit / PIECES;
         const uint32_t piece = unit % PIECES;
         const uint32_t v_first = piece * Vb;

@@ -649,7 +649,7 @@ passes 3 of 3 after; `hang_t.sh 0 T` passes 12 of 12 calls at T = 64, 128, 256, 
 unchanged (device us: B=1 22.2-23.0, B=8 39.4-41.5, B=16 71.2-73.2, f32 29.8-31.0, T=96 54.5-55.2, B=2 T=40
 125.5-125.9, T=4096 910.4-911.6).
 
-### [ ] Refinement 17 — Split the kernels by role so that instrumented builds fit
+### [x] Refinement 17 — Split the kernels by role so that instrumented builds fit
 
 **Type**: refactor
 
@@ -672,6 +672,8 @@ the Outcome.
 one NoC-traced run of model_decode_b1 and model_decode_b16 completes and its capture path is in the
 Outcome, golden green, device kernel time of the guard set unchanged (within the spread), host time
 per repeat call not worse than refinement 13 left it (330 us prefill T=128, 112 us decode B=1).
+
+**Outcome**: compute is one source per role (local, prep, state, q / k) over two shared headers. The split alone is size-neutral (ROLE was already compile-time); the fit comes from the group qk role compiled in (decode pair compute 51.6 -> 37.5 KB), `-Os` reader / writer under NoC tracing, and compute zones on unpack / pack only. Golden + perf set 117/117 in plain, NoC-traced and zones (`GDN_PROFILE_ZONES=1`) builds; tightest program 3728 / 160 / 1904 B under 70688 (the 160 B is fp32 T=4096, local chunk step on 48 cores: the next NoC-traced addition to that build needs a cut). Max binary per role and RISC (ncrisc / brisc / trisc0-2, B), plain -> NoC trace: local 9164 / 9164 / 15828 / 32684 / 11020 -> 11004 / 11348 / 15928 / 32784 / 11108; prep 6884 / 5196 / 10892 / 26888 / 11908 -> 8264 / 7396 / 10992 / 26988 / 11996; state 4084 / 2012 / 7688 / 5956 / 4268 -> 6088 / 3764 / 7788 / 6036 / 4356; qk 3704 / 4368 / 7108 / 12100 / 3660 -> 6336 / 7276 / 7196 / 12180 / 3748; prep_qk 5868 / 1620 / 7168 / 9740 / 4272 -> 7252 / 3340 / 7256 / 9820 / 4360 (`tests/ttnn/unit_tests/operations/gated_delta_net/kernel_text_sizes.py`). NoC captures: `generated/noc/r17_capture_perf_decode_b1` (CONGESTED (merging chain) 3.8x, NOC0 E(0,11)) and `generated/noc/r17_capture_model_decode_b16` (DRAM BANK SHARED). Bit-identical to HEAD on one shape per regime, bf16 and fp32, default and in place. Device time of the guard set within the spread; host per call 112.8 vs 111.6 us (HEAD) at decode B=1 in the same process. The reader and writer were not split: their role paths are `if constexpr`, so separate sources would not change a binary. Parked: one R-BCAST kernel group per qk role (`SPLIT_BCAST_GROUPS`, +54 us host per decode call, no gain on the largest group).
 
 ### [ ] Refinement 18 — Decode B=1: shorten the serial q / k chain
 
