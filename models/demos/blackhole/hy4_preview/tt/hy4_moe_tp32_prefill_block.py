@@ -23,12 +23,25 @@ class Hy4MoeTp32PrefillBlock:
         self.tt = n * self.rows
         self.ex = Tp32PrefillExperts(md, tpe.w01, tpe.w2, nc=nc)
         self.nc = nc
-        self.nl = int(os.environ.get("HY4_TP32PF_LINKS", "1"))
+        self.nl = int(os.environ.get("HY4_TP32PF_LINKS", "2"))
+        self.async_ccl = os.environ.get("HY4_TP32PF_CCL", "stock") == "async"
         self.repl = ttnn.ReplicateTensorToMesh(md)
         self.t_plan = 0.0
         self.last = None
 
     def _ag_rows(self, t, dim):
+        if self.async_ccl:
+            return ttnn.experimental.all_gather_async(
+                t,
+                dim=dim,
+                cluster_axis=0,
+                mesh_device=self.md,
+                topology=ttnn.Topology.Linear,
+                multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
+                num_links=self.nl,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.ccl.get_barrier_semaphore(),
+            )
         return ttnn.all_gather(
             t,
             dim=dim,
@@ -39,6 +52,17 @@ class Hy4MoeTp32PrefillBlock:
         )
 
     def _rs(self, t, dim, axis, topology):
+        if self.async_ccl:
+            return ttnn.experimental.reduce_scatter_minimal_async(
+                t,
+                dim=dim,
+                multi_device_global_semaphore=self.ccl.get_rs_ping_pong_semaphore(),
+                num_links=self.nl,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=topology,
+                cluster_axis=axis,
+                barrier_semaphore=self.ccl.get_barrier_semaphore(),
+            )
         return ttnn.reduce_scatter(
             t,
             dim=dim,
@@ -75,7 +99,7 @@ class Hy4MoeTp32PrefillBlock:
         r = ttnn.to_torch(dev0).reshape(tt, 2 * TOPK).float()
         ids = r[:, :TOPK].round().long()
         sc = r[:, TOPK:]
-        pl = build_plan(ids, sc, nc=self.nc)
+        pl = build_plan(ids, sc, nc=self.nc, xl1=self.ex.k1v != "c")
         pt = PlanTensors(self.md, pl, mapper=self.repl)
         act, out = self.ex.alloc(tt)
         self.ex(x_all, pt, act, out, tt)

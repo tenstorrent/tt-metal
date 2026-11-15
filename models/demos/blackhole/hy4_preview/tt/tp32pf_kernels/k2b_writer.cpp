@@ -24,7 +24,7 @@ void kernel_main() {
     const auto pa = TensorAccessor(p_args, get_common_arg_val<uint32_t>(0), 2048);
     const auto da = TensorAccessor(d_args, get_common_arg_val<uint32_t>(1), 256);
     const auto oa = TensorAccessor(o_args, get_common_arg_val<uint32_t>(2), 2048);
-    cb_reserve_back(cb_ws, 2);
+    cb_reserve_back(cb_ws, 4);
     const uint32_t ml = get_write_ptr(cb_ws);
     const uint32_t dl = ml + 2048;
     noc_async_read(pa.get_noc_addr(me), ml, 2048);
@@ -35,11 +35,20 @@ void kernel_main() {
     cb_reserve_back(cb_slot, 256);
     const uint32_t slot = get_write_ptr(cb_slot);
     const uint32_t sem_l1 = get_semaphore(sem_id);
+    // per owner: rows sent by this core (one semaphore increment per owner at the end instead of one per row)
+    uint32_t cnt[64];
+    for (uint32_t o = 0; o < NOWN; ++o) {
+        cnt[o] = 0;
+    }
     for (uint32_t u = 0; u < nu; ++u) {
         const uint32_t mt0 = plan[2 + 3 * u], mtc = plan[3 + 3 * u];
+        // the whole unit's destination words in one go (one 256 B page per pair of M-tiles)
         for (uint32_t pr = 0; pr < mtc / 2; ++pr) {
-            noc_async_read(da.get_noc_addr((mt0 + 2 * pr) >> 1), dl, 256);
-            noc_async_read_barrier();
+            noc_async_read(da.get_noc_addr((mt0 + 2 * pr) >> 1), dl + pr * 256, 256);
+        }
+        noc_async_read_barrier();
+        for (uint32_t pr = 0; pr < mtc / 2; ++pr) {
+            volatile tt_l1_ptr uint32_t* dp = dst + pr * 64;
             cb_wait_front(cb_rm, 64);
             const uint32_t rd = get_read_ptr(cb_rm);
             if (DBG == 1) {
@@ -52,7 +61,7 @@ void kernel_main() {
                 continue;
             }
             for (uint32_t i = 0; i < 64; ++i) {
-                const uint32_t d = dst[i];
+                const uint32_t d = dp[i];
                 if (d != 0xFFFFFFFFu) {
                     const uint32_t o = d >> 16;
                     const uint32_t k = (d >> 8) & 7;
@@ -60,19 +69,22 @@ void kernel_main() {
                     const uint32_t ox = get_common_arg_val<uint32_t>(3 + 2 * o);
                     const uint32_t oy = get_common_arg_val<uint32_t>(4 + 2 * o);
                     noc_async_write(rd + i * 2048, get_noc_addr(ox, oy, slot + (k * 32 + tl) * 2048), 2048);
+                    cnt[o] += 1;
                 }
             }
-            noc_async_write_barrier();
-            for (uint32_t i = 0; i < 64; ++i) {
-                const uint32_t d = dst[i];
-                if (d != 0xFFFFFFFFu) {
-                    const uint32_t o = d >> 16;
-                    const uint32_t ox = get_common_arg_val<uint32_t>(3 + 2 * o);
-                    const uint32_t oy = get_common_arg_val<uint32_t>(4 + 2 * o);
-                    noc_semaphore_inc(get_noc_addr(ox, oy, sem_l1), 1);
-                }
-            }
+            noc_async_writes_flushed();  // the data left L1: the CB page may be reused
             cb_pop_front(cb_rm, 64);
+        }
+    }
+    noc_async_write_barrier();  // all rows landed in the owners' L1 before any increment is seen
+    if (DBG != 1) {
+        for (uint32_t o = 0; o < NOWN; ++o) {
+            if (cnt[o] != 0) {
+                noc_semaphore_inc(
+                    get_noc_addr(
+                        get_common_arg_val<uint32_t>(3 + 2 * o), get_common_arg_val<uint32_t>(4 + 2 * o), sem_l1),
+                    cnt[o]);
+            }
         }
     }
     noc_async_atomic_barrier();

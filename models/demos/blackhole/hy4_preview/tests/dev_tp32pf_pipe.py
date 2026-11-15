@@ -87,7 +87,12 @@ def main():
         ids = torch.stack([torch.multinomial(pop, 8, replacement=False) for _ in range(TT)])
         sc = torch.rand(TT, 8) + 0.1
         sc = sc / sc.sum(1, keepdim=True)
-        pl = build_plan(ids, sc, nc=NC, xl1=bool(int(os.environ.get("TP32PF_XL1", "1"))))
+        pl = build_plan(
+            ids,
+            sc,
+            nc=NC,
+            xl1=(os.environ.get("TP32PF_K1", "c") != "c") and bool(int(os.environ.get("TP32PF_XL1", "1"))),
+        )
         p("rep", rep, "mtiles", pl.mt_used, "maxload", pl.max_load, "maxexp", max(pl.mts))
         X = torch.randn(TT, HID).bfloat16()
         x = ttnn.from_torch(
@@ -243,8 +248,10 @@ def main():
             if TRACE:
                 us2 = traced_us(md, lambda: [ex.k2(S, pt, act, out, TT) for S in range(6)])
                 p("rep", rep, "K2 x6 us", round(us2, 1))
+                us21 = traced_us(md, lambda: ex.k2(0, pt, act, out, TT))
+                p("rep", rep, "K2 one pass us", round(us21, 1))
             continue
-        ex.k1(x, pt, act)
+        (ex.k1c if ex.k1v == "c" else ex.k1)(x, pt, act)
         ttnn.synchronize_device(md)
         if 3 <= int(os.environ.get("TP32PF_DBG", "0")) < 20:
             nb = int(os.environ.get("TP32PF_DBG", "0")) - 2  # blocks summed (j = 0 .. nb - 1)
@@ -394,12 +401,14 @@ def main():
                 float(Gg.abs().max()),
             )
         if TRACE:
-            us1 = traced_us(md, lambda: ex.k1(x, pt, act))
+            us1 = traced_us(md, lambda: (ex.k1c if ex.k1v == "c" else ex.k1)(x, pt, act))
             p("rep", rep, "K1 us", round(us1, 1))
             if STAGE == "full":
                 us2 = traced_us(md, lambda: [ex.k2(S, pt, act, out, TT) for S in range(6)])
                 p("rep", rep, "K2 x6 us", round(us2, 1))
                 p("rep", rep, "K1 + K2 us", round(us1 + us2, 1))
+                us21 = traced_us(md, lambda: ex.k2(0, pt, act, out, TT))
+                p("rep", rep, "K2 one pass us", round(us21, 1))
     ttnn.close_mesh_device(md)
 
 

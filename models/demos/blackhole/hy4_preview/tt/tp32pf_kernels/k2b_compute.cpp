@@ -26,6 +26,7 @@ void kernel_main() {
     constexpr uint32_t cb_til = get_compile_time_arg_val(6);
     constexpr uint32_t NOWN = get_compile_time_arg_val(7);
     constexpr uint32_t DBG = get_compile_time_arg_val(8);
+    constexpr uint32_t PERF = get_compile_time_arg_val(9);
     const uint32_t me = get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_w, cb_rm);
     cb_wait_front(cb_meta, 1);
@@ -41,11 +42,15 @@ void kernel_main() {
             cb_reserve_back(cb_rm, 64);
             for (uint32_t b = 0; b < 8; ++b) {
                 tile_regs_acquire();
-                matmul_block(cb_a, cb_w, 0, b * 8, 0, false, 4, 2, 2);
-                matmul_block(cb_a, cb_w, 1, b * 8 + 4, 0, false, 4, 2, 2);
+                if (!(PERF & 2)) {
+                    matmul_block(cb_a, cb_w, 0, b * 8, 0, false, 4, 2, 2);
+                    matmul_block(cb_a, cb_w, 1, b * 8 + 4, 0, false, 4, 2, 2);
+                }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_untilize_dest<4, 32>(cb_rm, 2, b);
+                if (!(PERF & 1)) {
+                    pack_untilize_dest<4, 32>(cb_rm, 2, b);
+                }
                 tile_regs_release();
             }
             cb_push_back(cb_rm, 64);

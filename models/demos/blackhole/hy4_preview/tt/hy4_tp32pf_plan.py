@@ -19,6 +19,7 @@ import torch
 
 PLAN_WORDS = 512  # u32 per core plan page: [nu, (e, mt0, mtc) x nu]
 MAX_UNITS = 100
+NREAL_OFF = 304  # plan[NREAL_OFF + u] = number of real (non-padding) M-tiles of unit u (K1c)
 
 
 @dataclass
@@ -98,6 +99,8 @@ def build_plan(ids, scores, nc=110, ne=256, unit_cost=(10, 8), split=0, xl1=True
         plan[c, 0] = len(units[c])
         for k, (e, s0, m) in enumerate(units[c]):
             plan[c, 1 + 3 * k : 4 + 3 * k] = torch.tensor([e, s0, m], dtype=torch.int32)
+            real_e = (int(cnt[e]) + 31) // 32  # M-tiles of expert e holding at least one row
+            plan[c, NREAL_OFF + k] = max(0, min(m, real_e - (s0 - start[e])))
     return Plan(
         plan=plan,
         gidx=gidx.reshape(cap // 2, 64),

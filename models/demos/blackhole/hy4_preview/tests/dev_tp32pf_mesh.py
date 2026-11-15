@@ -80,7 +80,7 @@ try:
         ids, scs = blk.last
         if os.environ.get("TIME", "1") == "1":
             # eager per-stage times with the plan kept fixed
-            pl = build_plan(ids, scs, nc=blk.nc)
+            pl = build_plan(ids, scs, nc=blk.nc, xl1=blk.ex.k1v != "c")
             pt = PlanTensors(md, pl, mapper=blk.repl)
             act, out = blk.ex.alloc(blk.tt)
             h_rm = ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT)

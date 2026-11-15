@@ -68,6 +68,7 @@ class Tp32PrefillExperts:
         self.perf = int(os.environ.get("TP32PF_PERF", "0"))
         self.xl1 = int(os.environ.get("TP32PF_XL1", "1"))
         self.split = int(os.environ.get("TP32PF_SPLIT", "0"))
+        self.k1v = os.environ.get("TP32PF_K1", "c")
 
     def alloc(self, tt):
         cap = mt_cap(tt)
@@ -79,6 +80,75 @@ class Tp32PrefillExperts:
             ttnn.Shape([1, 1, tt, HID]), ttnn.bfloat16, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
         )
         return act, out
+
+    # ------------------------------------------------------------------ K1c (full-row gather, single-buffered weights; needs a plan with xl1=False)
+    def k1c(self, x, pt, act):
+        cs, cores = self.cs, self.cores
+        CB_X, CB_W, CB_O, CB_META, CB_WS, CB_RM, CB_SC, CB_O2, CB_IX = range(9)
+        cbs = [
+            tile_cb(cs, CB_X, 192, ttnn.bfloat16),
+            tile_cb(cs, CB_W, 768, ttnn.bfloat4_b, TB4),
+            tile_cb(cs, CB_O, 2, ttnn.bfloat16),
+            u32_cb(cs, CB_META, 2048),
+            u32_cb(cs, CB_WS, 2048),
+            tile_cb(cs, CB_RM, 192, ttnn.bfloat16),
+            tile_cb(cs, CB_SC, 2, ttnn.bfloat16),
+            tile_cb(cs, CB_O2, 4, ttnn.bfloat16),
+            u32_cb(cs, CB_IX, 2048),
+        ]
+        rt = ttnn.RuntimeArgs()
+        for i, c in enumerate(cores):
+            rt[c.x][c.y] = [i]
+        rd = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/k1c_reader.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cs,
+            compile_time_args=[CB_RM, CB_META, CB_IX, CB_SC] + _acc(pt.plan) + _acc(pt.gidx) + _acc(x) + _acc(pt.sc),
+            runtime_args=rt,
+            common_runtime_args=[
+                x.buffer_address(),
+                pt.plan.buffer_address(),
+                pt.gidx.buffer_address(),
+                pt.sc.buffer_address(),
+            ],
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        wr = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/k1c_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cs,
+            compile_time_args=[CB_O2, CB_WS, CB_W] + _acc(pt.plan) + _acc(act),
+            runtime_args=rt,
+            common_runtime_args=[pt.plan.buffer_address(), act.buffer_address(), self.w01.buffer_address()],
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        L = self.limit
+        cp = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/k1c_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cs,
+            compile_time_args=[CB_X, CB_W, CB_O, CB_META, _fb(L), _fb(-L), _fb(-3.0e38), CB_RM, CB_SC, CB_O2],
+            runtime_args=rt,
+            common_runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                fp32_dest_acc_en=bool(int(os.environ.get("TP32PF_K1_FP32", "1"))),
+                math_approx_mode=True,
+            ),
+        )
+        prog = ttnn.ProgramDescriptor(kernels=[rd, wr, cp], semaphores=[], cbs=cbs)
+        prog.custom_program_hash = _hash(
+            0x7F23,
+            self.nc,
+            int(os.environ.get("TP32PF_K1_FP32", "1")),
+            self.w01.buffer_address(),
+            x.buffer_address(),
+            pt.plan.buffer_address(),
+            pt.gidx.buffer_address(),
+            pt.sc.buffer_address(),
+            act.buffer_address(),
+        )
+        ttnn.generic_op([x, self.w01, pt.plan, pt.gidx, pt.sc, act], prog)
 
     # ------------------------------------------------------------------ K1b
     def k1(self, x, pt, act):
@@ -227,7 +297,7 @@ class Tp32PrefillExperts:
             tile_cb(cs, CB_SLOT, 256, ttnn.bfloat16),
             tile_cb(cs, CB_SUM, 32, ttnn.bfloat16),
             tile_cb(cs, CB_TIL, 32, ttnn.bfloat16),
-            u32_cb(cs, CB_WS, 4096),
+            u32_cb(cs, CB_WS, 8192, 2048),
         ]
         rt = ttnn.RuntimeArgs()
         for i, c in enumerate(cores):
@@ -260,7 +330,7 @@ class Tp32PrefillExperts:
             kernel_source=f"{KDIR}/k2b_compute.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=cs,
-            compile_time_args=[CB_A, CB_W, CB_RM, CB_META, CB_SLOT, CB_SUM, CB_TIL, nown, self.dbg],
+            compile_time_args=[CB_A, CB_W, CB_RM, CB_META, CB_SLOT, CB_SUM, CB_TIL, nown, self.dbg, self.perf],
             runtime_args=rt,
             common_runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(
@@ -276,6 +346,7 @@ class Tp32PrefillExperts:
             0x7F22,
             self.nc,
             self.dbg,
+            self.perf,
             S,
             nown,
             self.w2.buffer_address(),
@@ -287,7 +358,7 @@ class Tp32PrefillExperts:
         ttnn.generic_op([act, self.w2, pt.plan, pt.dest, out], prog)
 
     def __call__(self, x, pt, act, out, tt):
-        self.k1(x, pt, act)
+        (self.k1c if self.k1v == "c" else self.k1)(x, pt, act)
         for S in range(6):
             self.k2(S, pt, act, out, tt)
         return out
