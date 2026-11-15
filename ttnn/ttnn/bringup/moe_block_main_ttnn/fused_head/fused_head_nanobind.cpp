@@ -10,7 +10,6 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
-#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -121,10 +120,6 @@ void bind_fused_head(nb::module_& mod) {
 
         Keyword args:
             resources, dtypes, accumulators, l1_free: as fused_head.
-            slot_map: replica slots (RouterSpec.candidates) only, and required there: the layer's slot map, a float32
-                host tensor of 1024 integer-valued words - [0, E) each candidate's own slot, [E, 2 E) its copies
-                n | first << 6, then the copies' slots; a (token, candidate) goes to one of its 1 + n slots by a hash of
-                the token (router_rows.hpp slot_of). Every slot at most once.
 
         Returns:
             FusedHeadWeights (device tensors).
@@ -140,8 +135,7 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("resources"),
         nb::arg("dtypes"),
         nb::arg("accumulators"),
-        nb::arg("l1_free") = nb::none(),
-        nb::arg("slot_map") = nb::none());
+        nb::arg("l1_free") = nb::none());
 
     ttnn::bind_function<"fused_head", "ttnn.bringup.moe_block_main.">(
         mod,
@@ -172,8 +166,6 @@ void bind_fused_head(nb::module_& mod) {
             loop: this call's loop over the chunk when it runs as MoEBlockConfig.chunk_splits x token_loops head
                 calls (split x token_loops + its loop in the split; x: that call's rows of every chip). A split's
                 last loop plans every loop's tokens of the split.
-            tail, tail_desc: P.62b (MOE_PLANNER=folded) - a HeadTail on the watcher's kernel and its descriptor (a
-                uint32 DRAM tensor of one 64 B page a chip the tail reads; both or neither).
             xq: x in bfloat8_b TILE (x's shape, DRAM) when dtypes.shared_activations is bfloat8_b - required then, None
                 otherwise: the shared expert's x (the engine's own-shard load and the gather read it; the router reads
                 x). With the DRAM fallback, x_full is gathered from xq.
@@ -201,40 +193,7 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("loop") = 0,
         nb::arg("xq") = nb::none(),
-        nb::arg("tail") = nb::none(),
-        nb::arg("tail_desc") = nb::none(),
         nb::arg("cached_slots") = false);
-    nb::class_<HeadTail>(
-        mod,
-        "HeadTail",
-        "P.62b: a tail on the fused head's watcher kernel (its NCRISC, after its work): the MOE_REPLICAS=prev planner "
-        "(kernels/prev_planner.hpp) of the previous MoE call. ct: its compile args; l1: its bytes past the head's "
-        "arena "
-        "bytes on the watcher core.")
-        .def(nb::init<>())
-        .def(
-            "__init__",
-            [](HeadTail* t, std::vector<uint32_t> ct, uint32_t l1) { new (t) HeadTail{std::move(ct), l1}; },
-            nb::arg("ct"),
-            nb::arg("l1"))
-        .def_rw("ct", &HeadTail::ct)
-        .def_rw("l1", &HeadTail::l1);
-    mod.def(
-        "fused_head_tail_core",
-        [](MoEBlockResources& resources,
-           const MoEDtypes& dtypes,
-           uint32_t accumulators,
-           std::optional<int64_t> l1_free) {
-            const auto [c, off] = fused_head_tail_core(resources, dtypes, accumulators, l1_free);
-            return std::make_tuple(static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y), off);
-        },
-        nb::arg("resources"),
-        nb::arg("dtypes"),
-        nb::arg("accumulators"),
-        nb::arg("l1_free").none() = nb::none(),
-        "P.62b: (x, y, l1 offset) - the logical core of the head's watcher (a HeadTail runs there; the same cell on "
-        "every "
-        "chip) and the arena offset its L1 starts at, for fused_head with these arguments.");
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

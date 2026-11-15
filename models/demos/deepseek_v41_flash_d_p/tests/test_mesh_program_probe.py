@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """P.63 diagnostic (iterating only, not a gate): the host cost a call of the fused head and the combine, and its parts.
 
-One model (PROBE_LAYERS layers, default 4; shipped settings, MOE_REPLICAS=prev), the novel prompt chunks 0..3 back to
+One model (PROBE_LAYERS layers, default 4; shipped settings), the novel prompt chunks 0..3 back to
 back, PASSES passes; prints the median host us a call of mb.fused_head and mb.routed_experts_combine (Python wrapper
 inclusive) and the host ms a chunk. With DS41_DIAG_TIMERS=1 and a build carrying the fork's diagnostic timers the C++
 side prints its own split (entry / prim / hash / override) to stderr; run with -s.
@@ -33,7 +33,7 @@ SIDES = os.environ.get("PROBE_SIDES", "legacy,on,legacy,on").split(",")
 
 @mesh_parametrize(timeout_s=3 * 3600)
 def test_mesh_program_probe(mesh_device, monkeypatch):
-    from models.demos.deepseek_v41_flash_d_p.tests.test_moe_prev_replicas import _ids
+    from models.demos.deepseek_v41_flash_d_p.tests.workloads import prompt_ids as _ids
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
     monkeypatch.setenv("DS41_ENGRAM_TABLE", "resident")
@@ -58,13 +58,16 @@ def test_mesh_program_probe(mesh_device, monkeypatch):
         timed(n)
     from models.demos.deepseek_v41_flash_d_p.tt import moe_block_main_adapter as A
 
+    mains = [b.moe_block for b in model.blocks.values() if isinstance(b.moe_block, A.TtMoEBlockMainLayer)]
+    assert mains, "MOE_BLOCK_SRC=main: no main-block MoE layer among the probe's layers"
+
     tokens = _ids("novel")
     chunk = int(S.get("target.chunk"))
     res = {}
     for side in SIDES:
         hosts = []
         for p in range(PASSES + 1):
-            for m in A._MAIN_LAYERS:
+            for m in mains:
                 m._cached_slots = side == "on"
             for k in rec:
                 rec[k].clear()

@@ -91,8 +91,7 @@ void bind_config(nb::module_& mod) {
         .def_rw("normalize_topk", &RouterSpec::normalize_topk)
         .def_rw("expert_groups", &RouterSpec::expert_groups)
         .def_rw("topk_groups", &RouterSpec::topk_groups)
-        .def_rw("fold", &RouterSpec::fold)
-        .def_rw("candidates", &RouterSpec::candidates);
+        .def_rw("fold", &RouterSpec::fold);
 
     nb::class_<MoEModelDims> dims(mod, "MoEModelDims", R"doc(
         The model's dims (MoEModel; K3Dims H/latent/I/E/K is the subset the exchange carries).

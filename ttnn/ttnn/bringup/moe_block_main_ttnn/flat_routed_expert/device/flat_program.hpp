@@ -27,7 +27,6 @@
 #include <array>
 #include <cstdint>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -77,13 +76,7 @@ struct FlatProgramHandles {
     // config.cmb_rt: the y writer kernels / cores whose report args the combine overlap fills, in program order (a
     // writer's index in the combine's L1 hand-off)
     std::vector<std::pair<tt::tt_metal::KernelHandle, tt::tt_metal::CoreCoord>> y_writers;
-    // config.fx_spare: the weight readers' fx_wait.hpp args (kernel, core, first arg index), written every call by
-    // routed_experts_combine's exact fill
-    std::vector<std::tuple<tt::tt_metal::KernelHandle, tt::tt_metal::CoreCoord, uint32_t>> fx_readers;
 };
-
-// fx_wait.hpp's runtime args (SE_FX_RT ..)
-constexpr uint32_t kFlatFxArgs = 6;
 
 // The y writers' L1 hand-off args after the 4 report args (y_row_major.hpp SE_Y_L1).
 constexpr uint32_t kFlatYL1Args = 8 + 5 * 32;

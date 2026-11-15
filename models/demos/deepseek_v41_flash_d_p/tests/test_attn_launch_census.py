@@ -135,7 +135,7 @@ def _host(t) -> torch.Tensor:
 
 @mesh_parametrize(timeout_s=3 * 3600)
 def test_attn_launch_census(mesh_device, monkeypatch):
-    from models.demos.deepseek_v41_flash_d_p.tests.test_moe_prev_replicas import _ids
+    from models.demos.deepseek_v41_flash_d_p.tests.workloads import prompt_ids as _ids
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
     monkeypatch.setenv("DS41_ENGRAM_TABLE", "resident")

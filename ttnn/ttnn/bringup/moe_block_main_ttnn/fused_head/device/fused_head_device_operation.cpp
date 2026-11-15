@@ -58,10 +58,7 @@ ttsl::hash::hash_t FusedHeadDeviceOperation::compute_program_hash(
         args.w_router.tensor_spec(),
         args.actual_start.has_value(),
         args.xq.has_value(),
-        attrs.loop,
-        attrs.tail.has_value(),
-        attrs.tail ? attrs.tail->ct : std::vector<uint32_t>{},
-        attrs.tail ? attrs.tail->l1 : 0u);
+        attrs.loop);
 }
 
 FusedHeadDeviceOperation::program_factory_t FusedHeadDeviceOperation::select_program_factory(
@@ -125,16 +122,6 @@ void FusedHeadDeviceOperation::validate_on_program_cache_miss(
         check_dram(*t, "an argument");
     }
     TT_FATAL(
-        attrs.tail.has_value() == args.tail_desc.has_value(),
-        "fused_head: a tail (P.62b) takes its descriptor, and a descriptor its tail");
-    if (args.tail_desc) {
-        check_dram(*args.tail_desc, "the tail's descriptor");
-        TT_FATAL(
-            args.tail_desc->dtype() == DataType::UINT32 && !args.tail_desc->is_sharded() &&
-                args.tail_desc->buffer()->aligned_page_size() == 64 && args.tail_desc->buffer()->num_pages() == 1,
-            "fused_head: the tail's descriptor is one 64 B page of uint32 (DRAM interleaved)");
-    }
-    TT_FATAL(
         args.actual_start.has_value() == args.actual_end.has_value(),
         "fused_head: a padded chunk takes both actual_start and actual_end");
     for (const auto* v : {&args.actual_start, &args.actual_end}) {
@@ -196,8 +183,6 @@ HeadBuffers head_buffers(const FusedHeadParams& attrs, const FusedHeadInputs& a)
     set(SRC_START, a.actual_start ? &*a.actual_start : nullptr);
     set(SRC_END, a.actual_end ? &*a.actual_end : nullptr);
     set(SRC_XQ, a.xq ? &*a.xq : nullptr);
-    set(SRC_TAIL, a.tail_desc ? &*a.tail_desc : nullptr);
-    b.tail = attrs.tail ? &*attrs.tail : nullptr;
     for (size_t i = 0; i < attrs.words.size(); ++i) {
         b.addresses[SRC_WORD0 + i] = attrs.words[i];
     }

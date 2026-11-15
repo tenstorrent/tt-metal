@@ -4,14 +4,11 @@
 """P.66 (owner 2026-11-14): the per-layer Python glue (LEAN_PY legacy | on, tt/lean.py), measured on real chunks.
 
 Terms:
-  host_ms   = first host call of a chunk to the moment the last layer's ops are enqueued (before the closing sync), as
-              tests/test_moe_prev_replicas.py (P.60) and tests/test_prev_host_account.py (P.62).
+  host_ms   = first host call of a chunk to the moment the last layer's ops are enqueued (before the closing sync).
   busy_ms   = host_ms minus the time the main thread waited for the engram worker (ENGRAM_ASYNC) inside the chunk.
   wall_ms   = to the end of the sync after the last layer (the clean wall: no profiler, no instrumentation).
-  side      = <glue>:<moe>: glue = LEAN_PY legacy | on (tt/lean.set_mode, switched in the loaded model); moe = prev
-              (MOE_REPLICAS=prev, the shipped host path lean) | off (prev switched off in the loaded model, P.56's
-              `_side`).
-  census    = one pass (chunks 1..10, the settings' LEAN_PY, side prev): every ccl.dealloc call by its caller (the step
+  side      = LEAN_PY legacy | on (tt/lean.set_mode, switched in the loaded model).
+  census    = one pass (chunks 1..10, the settings' LEAN_PY): every ccl.dealloc call by its caller (the step
               for the block's frees) with the freed tensor's shape / dtype / buffer type and the binding's host us,
               every Python-side ttnn.allocate_tensor_on_device call, the same way.
   cProfile  = tottime per function, one pass a side (inflated by the profiler; differences between sides only).
@@ -19,14 +16,14 @@ Per workload (novel, code): chunks 0..10 of fresh requests back to back (chunk 0
 then P66_CLEAN rounds with the sides alternating in each round. Means over chunks 1..10, and per side the mean of
 the per-round means with the paired difference to the first side and its standard error (DS41-264: one pass a side
 cannot split a few ms). Outputs: every side's chunk 1 and chunk 10 output streams must equal the first side's bit
-for bit (max |diff| 0; prev and off compute the same experts, P.56).
+for bit (max |diff| 0).
 
 Output: results/<task>_lean_py.json (record_json) and the log.
 
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile \\
         models/demos/deepseek_v41_flash_d_p/tests/test_lean_py.py
 P66_QUICK=1: 4 layers, chunks 0..3, novel (iterating only). P66_CENSUS=0 skips the census, P66_CPROFILE=0 the cProfile,
-P66_OPS=0 the op pass (one pass a prev side: every ttnn op launch by its calling line, median host us, launches a chunk).
+P66_OPS=0 the op pass (one pass a side: every ttnn op launch by its calling line, median host us, launches a chunk).
 """
 
 from __future__ import annotations
@@ -52,7 +49,7 @@ QUICK = os.environ.get("P66_QUICK") == "1"
 SEQ = 56320
 CHUNKS = 4 if QUICK else 11
 WORKLOADS = ("novel",) if QUICK else tuple(os.environ.get("P66_WL", "novel,code").split(","))
-SIDES = tuple(os.environ.get("P66_SIDES", "legacy:prev,on:prev,legacy:off,on:off").split(","))
+SIDES = tuple(os.environ.get("P66_SIDES", "legacy,on").split(","))
 CLEAN = int(os.environ.get("P66_CLEAN", "4"))
 CENSUS = os.environ.get("P66_CENSUS", "1") == "1"
 PROFILE = os.environ.get("P66_CPROFILE", "1") == "1"
@@ -63,22 +60,14 @@ _WAIT = [0.0]
 
 
 def _set_side(mesh, side: str) -> None:
-    from models.demos.deepseek_v41_flash_d_p.tests.test_moe_prev_replicas import _side
-    from models.demos.deepseek_v41_flash_d_p.tt import expert_prev as XP
     from models.demos.deepseek_v41_flash_d_p.tt import lean
 
-    glue, moe = side.split(":")
-    lean.set_mode(glue)
-    if moe == "off":
-        _side(mesh, "off")
-    else:
-        _side(mesh, "prev", "lean")
-        assert XP.host2() == "lean", XP.host2()
+    lean.set_mode(side)
 
 
 def _pass(model, mesh, layers, tokens, prof=None, keep=None, ref=None) -> list:
     """Chunks 0..CHUNKS-1 of a fresh request. -> per chunk {host_ms, wall_ms, wait_ms, busy_ms[, diff]}."""
-    from models.demos.deepseek_v41_flash_d_p.tests.test_moe_prev_replicas import _maxdiff
+    from models.demos.deepseek_v41_flash_d_p.tests.workloads import maxdiff as _maxdiff
 
     chunk = int(S.get("target.chunk"))
     state = model.new_state(SEQ)
@@ -204,16 +193,11 @@ def _agg_prof(prof: cProfile.Profile, nchunks: int) -> dict:
 
 @mesh_parametrize(timeout_s=3 * 3600)
 def test_lean_py(mesh_device, monkeypatch):
-    from models.demos.deepseek_v41_flash_d_p.tests.test_moe_prev_replicas import _ids
+    from models.demos.deepseek_v41_flash_d_p.tests.workloads import prompt_ids as _ids
     from models.demos.deepseek_v41_flash_d_p.tt import ccl, lean
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
-    monkeypatch.setenv("DS41_MOE_REPLICAS", "prev")
-    monkeypatch.setenv("DS41_MOE_FILL", "piggyback")
-    monkeypatch.setenv("DS41_MOE_PREV_HOST", "device")
     monkeypatch.setenv("DS41_ENGRAM_TABLE", "resident")
-    monkeypatch.setenv("DS41_MOE_COUNTS", "on")
-    monkeypatch.delenv("DS41_MOE_COUNTS_DIR", raising=False)
     settings.thaw()
     layers = S.layers()[:4] if QUICK else S.layers()
     model = batch.device_model(S, mesh_device, layers, lm_head=False)
@@ -243,7 +227,7 @@ def test_lean_py(mesh_device, monkeypatch):
                 if "diff" in r:
                     diffs[s].append(r["diff"])
         if CENSUS and wl == WORKLOADS[0]:
-            _set_side(mesh_device, f"{setting_mode}:prev")
+            _set_side(mesh_device, setting_mode)
             free0, alloc0 = ccl._DEALLOC, ttnn.allocate_tensor_on_device
             ccl._DEALLOC = [census.wrap_free(free0[0])]
             ttnn.allocate_tensor_on_device = census.wrap_alloc(alloc0)
@@ -261,7 +245,7 @@ def test_lean_py(mesh_device, monkeypatch):
             tot_a = sum(v[0] for v in census.alloc.values()) / n
             tot_aus = sum(v[1] for v in census.alloc.values()) * 1e6 / n
             logger.info(
-                f"P.66 census ({setting_mode}:prev, a chunk): {tot_f:.0f} frees {tot_fus / 1e3:.2f} ms, "
+                f"P.66 census ({setting_mode}, a chunk): {tot_f:.0f} frees {tot_fus / 1e3:.2f} ms, "
                 f"{tot_a:.0f} Python allocations {tot_aus / 1e3:.2f} ms"
             )
             for (who, spec_), (c, s_) in frees[:60]:
@@ -292,13 +276,11 @@ def test_lean_py(mesh_device, monkeypatch):
                 res[s].append(_pass(model, mesh_device, layers, tokens, ref=ref))
                 diffs[s].extend(r["diff"] for r in res[s][-1] if "diff" in r)
         ops_out = {}
-        if OPS:  # (one pass a prev side: each ttnn op launch by its calling line, inclusive host us; launches a chunk)
+        if OPS:  # (one pass a side: each ttnn op launch by its calling line, inclusive host us; launches a chunk)
             import ttnn.decorators as D
 
             orig = D.FastOperation.__call__
             for s in SIDES:
-                if not s.endswith(":prev"):
-                    continue
                 rec = defaultdict(list)
 
                 def call(self, *a, _rec=rec, **k):
@@ -325,8 +307,8 @@ def test_lean_py(mesh_device, monkeypatch):
                     },
                 }
                 logger.info(f"P.66 {wl} {s}: {ops_out[s]['launches_chunk']:.1f} ttnn op launches a chunk")
-            if "legacy:prev" in ops_out and "on:prev" in ops_out:
-                a, b = ops_out["legacy:prev"]["sites"], ops_out["on:prev"]["sites"]
+            if "legacy" in ops_out and "on" in ops_out:
+                a, b = ops_out["legacy"]["sites"], ops_out["on"]["sites"]
                 for k in sorted(set(a) | set(b)):
                     if any(w in k for w in OPS_WATCH):
                         x, y = a.get(k, {}), b.get(k, {})
@@ -337,8 +319,6 @@ def test_lean_py(mesh_device, monkeypatch):
         profs = {}
         if PROFILE:
             for s in SIDES:
-                if not s.endswith(":prev"):
-                    continue
                 _set_side(mesh_device, s)
                 p = cProfile.Profile()
                 rows = _pass(model, mesh_device, layers, tokens, prof=p)
@@ -357,7 +337,7 @@ def test_lean_py(mesh_device, monkeypatch):
             summ[s]["max_diff"] = max(diffs[s]) if diffs[s] else 0.0
             if s in profs:
                 summ[s]["cprofile_host_ms"] = profs[s]["host_ms"]
-            tag = s.replace(":", "_")
+            tag = s
             for k in ("host", "busy", "wall"):
                 metrics.record(f"p66_{k}_ms_{tag}_{wl}", round(summ[s][k + "_ms"], 2))
             metrics.record(f"p66_maxdiff_{tag}_{wl}", summ[s]["max_diff"])
@@ -367,10 +347,8 @@ def test_lean_py(mesh_device, monkeypatch):
                 f"(rounds {summ[s]['wall_ms_rounds']}), max |diff| vs {SIDES[0]} {summ[s]['max_diff']}"
             )
         pairs_out = {}
-        for moe in ("prev", "off"):
-            a, b = f"legacy:{moe}", f"on:{moe}"
-            if a not in summ or b not in summ or not res[a]:
-                continue
+        a, b = "legacy", "on"
+        if a in summ and b in summ and res[a]:
             rec = {}
             for k in ("busy", "wall", "host"):
                 pa = [_mean(r, k + "_ms") for r in res[a]]
@@ -378,16 +356,16 @@ def test_lean_py(mesh_device, monkeypatch):
                 d = [y - x for x, y in zip(pa, pb)]
                 se = statistics.stdev(d) / len(d) ** 0.5 if len(d) > 1 else float("nan")
                 rec[k] = {"d_ms": statistics.mean(d), "se_ms": se}
-                metrics.record(f"p66_d_{k}_ms_{moe}_{wl}", round(statistics.mean(d), 2))
-            pairs_out[moe] = rec
+                metrics.record(f"p66_d_{k}_ms_{wl}", round(statistics.mean(d), 2))
+            pairs_out["on-legacy"] = rec
             logger.info(
-                f"P.66 {wl} on - legacy ({moe}): busy {rec['busy']['d_ms']:+.2f} +- {rec['busy']['se_ms']:.2f} ms, "
+                f"P.66 {wl} on - legacy: busy {rec['busy']['d_ms']:+.2f} +- {rec['busy']['se_ms']:.2f} ms, "
                 f"host {rec['host']['d_ms']:+.2f} +- {rec['host']['se_ms']:.2f}, wall {rec['wall']['d_ms']:+.2f} +- "
                 f"{rec['wall']['se_ms']:.2f}"
             )
         prof_out = {}
-        if "legacy:prev" in profs and "on:prev" in profs:
-            fa, fb = profs["legacy:prev"]["funcs"], profs["on:prev"]["funcs"]
+        if "legacy" in profs and "on" in profs:
+            fa, fb = profs["legacy"]["funcs"], profs["on"]["funcs"]
             keys = set(fa) | set(fb)
             pr = sorted(
                 (

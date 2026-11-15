@@ -58,7 +58,7 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
-from . import ccl, ffn_feed, host_alloc, lean, moe_trace
+from . import ccl, ffn_feed, host_alloc, lean
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc
 from .collapse import TtHcCollapse
@@ -642,7 +642,6 @@ class TtDS41Block:
         self.router_wts = indexer_glue()
         if self.router is not None:
             self.router.dense = not self.router_wts
-        self.seg = None  # MOE_TRACE=moe (P.61): the MoE half's trace (tt/moe_trace.prepare, at the model's load)
         self.fns = self._fns()
         # boundaries freed after their last reader (never "in": the caller owns it; never "out")
         last = {}
@@ -839,9 +838,7 @@ class TtDS41Block:
                 return ctx.extra.pop("attn_in")
 
             def attn_residual(ctx, x, mix, y):  # noqa: F811
-                # MOE_TRACE=moe (P.61): the new streams and ffn_hc's hc into the traced MoE half's input buffers
-                bufs = self.seg.outputs() if self.seg is not None else {}
-                out, row = self.attn_res.fused(x.streams, mix, y, self.ffn_hc, collapse=self.post_collapse, **bufs)
+                out, row = self.attn_res.fused(x.streams, mix, y, self.ffn_hc, collapse=self.post_collapse)
                 if row is not None:
                     ctx.extra["ffn_row"] = row
                 return out
@@ -945,7 +942,7 @@ class TtDS41Block:
         # could hand its id to a new tensor, which _free would then skip (a deallocate fewer, at random: FIX.5)
         held = h.tensors()
         protect = {id(t) for t in held}
-        if lean.ON[0] and self.seg is None:  # LEAN_PY=on (P.66): the step wrappers built once (_lean_overrides)
+        if lean.ON[0]:  # LEAN_PY=on (P.66): the step wrappers built once (_lean_overrides)
             self._protect = protect
             try:
                 out = run_block(self.steps, _no_cpu, ctx, h, overrides=self._lean_overrides())
@@ -971,8 +968,6 @@ class TtDS41Block:
             return run
 
         overrides = {s.name: wrap(s, self.fns[s.name]) for s in self.steps}
-        if self.seg is not None:  # MOE_TRACE=moe (P.61): the MoE half as one unit (tt/moe_trace.py), at ffn_residual
-            self._segment(overrides)
 
         def no_cpu(name):
             raise AssertionError(f"layer {self.layer}: step {name} has no device module (all-device model)")
@@ -1017,37 +1012,6 @@ class TtDS41Block:
         ov = self._lean_ov = {s.name: wrap(s, self.fns[s.name]) for s in self.steps}
         return ov
 
-    def _segment(self, overrides: dict) -> None:
-        """MOE_TRACE=moe (P.61): ffn_norm only notes its input, router .. moe_add do nothing, and ffn_residual runs the
-        whole MoE half - eager (the same wrapped steps, in order, with run_block's signposts) or from its trace."""
-        from models.demos.common.bringup.testing import profiler
-
-        steps, real = self.seg.steps, dict(overrides)
-
-        def eager(ctx, h, mix, x):
-            env = {"h_mid": h, "ffn_hc": mix, "ffn_in": x}
-            marks = ctx.extra.pop("seg_marks", None)  # (a capture: each step's first device-operation id)
-            for s in steps:
-                if marks is not None:
-                    marks.append((s.name, ttnn._ttnn.get_device_operation_id()))
-                profiler.signpost(s.name)
-                env[s.output] = real[s.name](ctx, *[env[n] for n in s.inputs])
-            return env["out"]
-
-        def note(ctx, x):
-            ctx.extra["seg_in"] = x
-            return Keep()
-
-        def skip(ctx, *args):
-            return Keep()
-
-        def segment(ctx, h, mix, y):
-            return self.seg(ctx, h, mix, ctx.extra.pop("seg_in"), eager)
-
-        overrides.update(
-            ffn_norm=note, router=skip, experts=skip, shared_expert=skip, moe_add=skip, ffn_residual=segment
-        )
-
 
 # ============================================================================================= model
 class TtDS41Model:
@@ -1090,8 +1054,6 @@ class TtDS41Model:
         self.sp, self.tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
         assert self.chunk % (32 * self.sp * self.tp) == 0, (self.chunk, tuple(mesh.shape))
         self.fused = settings.get("MHC_FUSED") == "on"  # P.14
-        self._counts = settings.get("MOE_COUNTS") == "on"  # P.45: sync() reads the MoE layers' expert counts
-        self._counts_start = 0
         self.own = own_rows()  # OWN_ROWS (P.23): the streams on each chip's own S/(SP TP) rows, whole hidden
         self.rows = self.chunk // (self.sp * self.tp if self.own else self.sp)  # the streams' rows a chip
         if bf16_activations():  # P.20: the bf16 paths exist on the fused / folded / stock-rope / fork-norm path only
@@ -1260,7 +1222,6 @@ class TtDS41Model:
                 self.memo_last.setdefault(i, []).append(slot)
         host_alloc.reserve_sites(self)  # HOST_ALLOC=on (P.15): the in-step gathers' outputs, at load time (DS41-146)
         host_alloc.reserve_forks(self)  # FORK_OUT_BUFFERS=on (P.16): the forks' in-layer outputs, at load time
-        moe_trace.prepare(self)  # MOE_TRACE=moe (P.61): the MoE half's input buffers, at load time
         self.load_seconds = time.time() - t0
 
     def _rows_to_device(self, x: torch.Tensor) -> ttnn.Tensor:
@@ -1411,11 +1372,6 @@ class TtDS41Model:
             assert g % 32 == 0, f"global_write_start {g} must be 32-aligned (a kv block)"
             replay = True  # (DeepSeek's Encoder SWA Bounded Replay: every window truncated at the replay start)
         self._write_from = g if g > start else None
-        self._counts_start = int(start)  # (MOE_COUNTS: the chunk sync() files the counts under)
-        if settings.get("MOE_REPLICA_DEMO") == "rotate":  # (diagnostic, P.53 step 3: a replica table change a chunk)
-            from .moe_block_main_adapter import replica_demo
-
-            replica_demo(self.mesh)
         self._skip = bool(self.decoder) and last is False and self.skip_mode != "off"
         # WINDOW_KV_KEEP=snapshot128 (P.42): every chunk not marked not-last rewrites the served window snapshots;
         # DECODER_SKIP=decode (P.51): every chunk (the encoder's windows are decode's handoff; the decoder's never run)
@@ -1423,10 +1379,6 @@ class TtDS41Model:
         self._last = last is True
         if start == 0 or replay:  # (P.43: the request starts here, the clamp of last_start)
             self._req = int(start)
-            if settings.get("MOE_REPLICAS") == "prev":  # (P.56: no replica table crosses requests; chunk 0 runs off)
-                from .moe_block_main_adapter import prev_reset
-
-                prev_reset(self.mesh)
         self._tail_mode = self.replay and last is True
         self._tail_at = None
         st = self.state
@@ -1857,7 +1809,3 @@ class TtDS41Model:
 
     def sync(self) -> None:
         ttnn.synchronize_device(self.mesh)
-        if self._counts:  # (MOE_COUNTS=on, P.45: every MoE layer's counts since the last sync, one readback)
-            from .moe_block_main_adapter import flush_counts
-
-            flush_counts(self.mesh, self._counts_start, self.chunk)
