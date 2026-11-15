@@ -172,6 +172,16 @@ def free_tensors(*tensors):
             ttnn.deallocate(t)
 
 
+def prompt_ints(tokens):
+    """The token ids of ``tokens`` as Python ints, [int(t) for t in tokens] for any tensor: an integer tensor by one
+    tolist() (iterating it makes a 0-d tensor per token, about 1 us each); a floating or bool one keeps int() per
+    token (truncation; True / False to 1 / 0)."""
+    t = torch.as_tensor(tokens).reshape(-1)
+    if t.is_floating_point() or t.is_complex() or t.dtype == torch.bool:
+        return [int(x) for x in t]
+    return t.tolist()
+
+
 def anchor_selector(m, B, T):
     """One-hot [1,1,B,B*T] bf16 with a single 1.0 at (u, u*T + m[u]): ``sel @ feed`` gathers each
     user's accepted-prefix row of the verify feed."""
@@ -1030,7 +1040,7 @@ class MTPSpecEngine:
         model = self.model
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         assert self._last_hidden, "prefill before prepare"
-        prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
+        prompt_list = prompt_ints(prompt_ids)
         Tp = len(prompt_list)
         self._prompts[slot] = (prompt_list, torch.as_tensor(page_table_row).clone())
         cap_blocks = int(torch.as_tensor(page_table_row).shape[-1]) if _cap_blocks is None else _cap_blocks
@@ -2064,7 +2074,7 @@ class MTPBlockEngine(MTPSpecEngine):
         model = self.model
         pt_row = model._fit_spec_page_table(page_table_row, self.nb)
         self._check_scratch(pt_row)
-        prompt = [int(t) for t in torch.as_tensor(row_tokens).reshape(-1)]
+        prompt = prompt_ints(row_tokens)
         end = len(prompt)
 
         def on_chunk(hidden, chunk_start, valid_len):
