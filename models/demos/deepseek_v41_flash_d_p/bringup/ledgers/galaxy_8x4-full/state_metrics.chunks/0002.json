@@ -6793,9 +6793,9 @@
   "err_state_window_kv_L38_limit": 0.327803,
   "err_state_window_kv_L39": 0.0967044,
   "err_state_window_kv_L39_limit": 0.216138,
-  "op_rows": 1538,
+  "op_rows": 1099,
   "pos_chunk": 5120,
-  "prefill_ms_full": 1896.0,
+  "prefill_ms_full": 1630.5,
   "timeline_ok": 1,
   "top5_overlap": 1.0,
   "top5_overlap_limit": 0.994286

@@ -1633,6 +1633,9 @@
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/FIX.32.log",
   "rc": 0,
   "reason": [],
+  "review": [
+   "agent exited rc=-9 is_error=None"
+  ],
   "role": "overseer",
   "stamp": {
    "reused": [
@@ -5481,7 +5484,7 @@
  },
  "X.3": {
   "attempts": 1,
-  "duration_s": 594.7,
+  "duration_s": 739.7,
   "history": [
    {
     "s": 1754.0,
@@ -5505,22 +5508,27 @@
     "s": 594.7,
     "status": "PASS",
     "t": "2026-11-13T19:42:17"
+   },
+   {
+    "s": 739.7,
+    "status": "PASS",
+    "t": "2026-11-15T00:49:35"
    }
   ],
-  "last_run": "2026-11-13T19:42:15",
+  "last_run": "2026-11-15T00:49:33",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/X.3.log",
   "rc": 0,
   "reason": [],
   "stamp": {
    "reused": [],
    "units": {
-    "X.3#test_determinism": "b4eaa62781c68038",
-    "X.3#test_ladder": "0086f8e5871727ef",
-    "X.3#test_positions": "8c366ced6c97d788",
-    "X.3#test_profile": "4d3451dbe5137128"
+    "X.3#test_determinism": "20585ec2e1f448ce",
+    "X.3#test_ladder": "c07d19428a22f9b4",
+    "X.3#test_positions": "bec400b748799359",
+    "X.3#test_profile": "270ece347eaecf9e"
    }
   },
-  "started": "2026-11-13T19:32:20",
+  "started": "2026-11-15T00:37:13",
   "status": "PASS",
   "units": {
    "X.3#test_determinism": "PASS",
