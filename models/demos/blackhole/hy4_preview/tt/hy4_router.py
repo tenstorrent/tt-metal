@@ -59,7 +59,9 @@ class Hy4Gate:
         self._sk = None
         from models.demos.blackhole.hy4_preview.tt.hy4_skinny import enabled
 
-        if enabled("router") and self.mode == "fused":  # HY4_SKINNY=router (default OFF): bank-local logits + sigmoid + bias kernel, T <= 8
+        if (
+            enabled("router") and self.mode == "fused"
+        ):  # HY4_SKINNY=router (default OFF): bank-local logits + sigmoid + bias kernel, T <= 8
             from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyRouter
 
             self._sk = SkinnyRouter(mesh_device, torch_gate_weight, torch_gate_bias, k=k, scale=scale)
@@ -91,6 +93,12 @@ class Hy4Gate:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+    def route_words(self, tt_x):
+        """TP32 route tensor int32 RM [1,1,1,16 T] straight from the skinny router (select merge writes the packed words), or None when this gate has no skinny router / T > 8."""
+        if self._sk is not None and self._sk.ksplit and self._sk.fsel and int(tt_x.shape[2]) <= 8:
+            return self._sk.route(tt_x, int(tt_x.shape[2]))
+        return None
 
     def scores(self, tt_x, grid=(1, 8), mc=None):
         """fp32 sigmoid scores [1,1,T,E] (DRAM unless mc)."""

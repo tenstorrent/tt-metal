@@ -33,8 +33,11 @@ void kernel_main() {
     constexpr uint32_t TT = get_compile_time_arg_val(12);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(13);
     constexpr uint32_t SCALE_BITS = get_compile_time_arg_val(14);
+    constexpr uint32_t ROUTE =
+        get_compile_time_arg_val(15);  // 1: the index output is the TP32 route tensor int32 [1,1,1,16 T] (token t: 8
+                                       // ids, 8 bf16 score words, 64 B at +64 t of page 0), the weight output is unused
     constexpr uint32_t K = 8;
-    constexpr auto x_args = TensorAccessorArgs<15>();
+    constexpr auto x_args = TensorAccessorArgs<16>();
     constexpr auto b_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto s_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     constexpr auto r_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
@@ -51,7 +54,8 @@ void kernel_main() {
     const auto x_acc = TensorAccessor(x_args, x_addr, 2048);
     const auto b_acc = TensorAccessor(b_args, b_addr, 4096);
     const auto s_acc = TensorAccessor(s_args, s_addr, K * 2);  // weights out [T,1,1,K] bf16 pages
-    const auto r_acc = TensorAccessor(r_args, r_addr, K * 2);  // indices out [T,1,1,K] uint16 pages
+    const auto r_acc = TensorAccessor(
+        r_args, r_addr, ROUTE ? 64 * TT : K * 2);  // indices out [T,1,1,K] uint16 pages (ROUTE: one 64 T byte page)
     experimental::CB cbx(cb_x), cbb(cb_bias), cbs(cb_score), cbr(cb_rank), cbp(cb_pout), cbred(cb_red), cbsel(cb_sel), cbstg(cb_stg);
     volatile tt_l1_ptr uint32_t* sem_sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));
     const uint32_t sem_sel_addr = get_semaphore(1);
@@ -203,16 +207,29 @@ void kernel_main() {
             const float inv_den = cv.f + den;
             cv.u = SCALE_BITS;
             const float qf = cv.f / inv_den;  // ONE division: w = bf16(s * (scale / (sum + eps))) (within 1 fp32 ulp of the router_select (s / (sum + eps)) * scale before the bf16 rounding)
-            volatile tt_l1_ptr uint16_t* ow = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cbstg.get_write_ptr() + 1024);  // scratch after the records
-            volatile tt_l1_ptr uint16_t* oi = ow + 32;
-            for (uint32_t j = 0; j < K; ++j) {
-                cv.f = sv[j] * qf;
-                const uint32_t b = cv.u;
-                ow[j] = (uint16_t)((b + 0x7fffu + ((b >> 16) & 1u)) >> 16);
-                oi[j] = (uint16_t)bi[j];
+            if constexpr (ROUTE) {
+                volatile tt_l1_ptr uint32_t* rw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    cbstg.get_write_ptr() + 1024);  // 16 words: scratch after the records
+                for (uint32_t j = 0; j < K; ++j) {
+                    cv.f = sv[j] * qf;
+                    const uint32_t b = cv.u;
+                    rw[8 + j] = (uint32_t)((uint16_t)((b + 0x7fffu + ((b >> 16) & 1u)) >> 16));
+                    rw[j] = bi[j];
+                }
+                noc.async_write(cbstg, r_acc, 64, {.offset_bytes = 1024}, {.page_id = 0, .offset_bytes = me * 64});
+            } else {
+                volatile tt_l1_ptr uint16_t* ow = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                    cbstg.get_write_ptr() + 1024);  // scratch after the records
+                volatile tt_l1_ptr uint16_t* oi = ow + 32;
+                for (uint32_t j = 0; j < K; ++j) {
+                    cv.f = sv[j] * qf;
+                    const uint32_t b = cv.u;
+                    ow[j] = (uint16_t)((b + 0x7fffu + ((b >> 16) & 1u)) >> 16);
+                    oi[j] = (uint16_t)bi[j];
+                }
+                noc.async_write(cbstg, s_acc, K * 2, {.offset_bytes = 1024}, {.page_id = me, .offset_bytes = 0});
+                noc.async_write(cbstg, r_acc, K * 2, {.offset_bytes = 1024 + 64}, {.page_id = me, .offset_bytes = 0});
             }
-            noc.async_write(cbstg, s_acc, K * 2, {.offset_bytes = 1024}, {.page_id = me, .offset_bytes = 0});
-            noc.async_write(cbstg, r_acc, K * 2, {.offset_bytes = 1024 + 64}, {.page_id = me, .offset_bytes = 0});
             noc.async_write_barrier();
         }
         cbs.pop_front(1);

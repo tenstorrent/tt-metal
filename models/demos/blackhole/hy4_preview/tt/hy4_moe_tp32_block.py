@@ -18,6 +18,9 @@ from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32 import Tp32Experts
 HID = 6144
 PACK_U16 = os.environ.get("HY4_TP32_PACK", "") == "u16"
 RED_AG = os.environ.get("HY4_TP32_RED", "") == "ag"
+ROUTE_LOCAL = (
+    os.environ.get("HY4_TP32_ROUTE", "") == "local"
+)  # router on the gathered x (every chip routes all Tt tokens, writes the route words itself): no pack, no route all-gather
 
 
 class Hy4MoeTp32Block:
@@ -118,14 +121,22 @@ class Hy4MoeTp32Block:
     # ------------------------------------------------------------------ forward
     def forward(self, tt_x_gate, tt_x_tokens=None, forced_routing=None, fold=None, ft_defer=False):
         T, Tt = self.T, self.Tt
-        w, idx = forced_routing if forced_routing is not None else self.gate.forward(tt_x_gate)
-        self.last_routing = (w, idx)
-        route = self._pack_route(w, idx)
-        route_all = self._ag_rows(route, 3)  # [1,1,1,16 Tt] int32 RM, rows in mesh-row order
-        ttnn.deallocate(route)
-        x_all = ttnn.to_layout(
-            ttnn.reshape(self._ag_rows(tt_x_tokens, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT
-        )  # tokens [T,1,1,HID] RM -> [Tt,1,1,HID] -> [1,1,Tt,HID]
+        route_all = None
+        if ROUTE_LOCAL and forced_routing is None and Tt <= 8 and hasattr(self.gate, "route_words"):
+            x_all = ttnn.to_layout(ttnn.reshape(self._ag_rows(tt_x_tokens, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT)
+            self.last_routing = None
+            route_all = self.gate.route_words(
+                x_all
+            )  # [1,1,1,16 Tt] int32 RM, tokens in mesh-row order (same bytes as pack + row all-gather)
+        if route_all is None:
+            w, idx = forced_routing if forced_routing is not None else self.gate.forward(tt_x_gate)
+            self.last_routing = (w, idx)
+            route = self._pack_route(w, idx)
+            route_all = self._ag_rows(route, 3)  # [1,1,1,16 Tt] int32 RM, rows in mesh-row order
+            ttnn.deallocate(route)
+            x_all = ttnn.to_layout(
+                ttnn.reshape(self._ag_rows(tt_x_tokens, 0), [1, 1, Tt, HID]), ttnn.TILE_LAYOUT
+            )  # tokens [T,1,1,HID] RM -> [Tt,1,1,HID] -> [1,1,Tt,HID]
         part = self.tpe(x_all, route_all, Tt)  # [1,1,Tt,HID] bf16 TILE partial
         ttnn.deallocate(x_all)
         ttnn.deallocate(route_all)
