@@ -25,7 +25,7 @@ import pytest
 import torch
 import ttnn
 from dcp_oracle import Loader
-from dcp_shards import param_shards
+from dcp_shards import assert_same, optimizer_state, param_shards
 from tp_block import TPBlock, fresh_tp, train_step
 
 import ttml
@@ -85,6 +85,9 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
         sched.step()
         loader.advance()
     before = param_shards(params, local)
+    assert len(before) == len(params) * len(local)
+    state_before, scalars_before = optimizer_state(opt, local)
+    assert len(state_before) == 2 * len(params) * len(local) and scalars_before["steps"] == 2
     path = os.path.join(root, dcp.step_dir_name(2))
 
     result = dcp.save(path, model=model, optimizer=opt, scheduler=sched, dataloader=loader, header={"step": 2})
@@ -119,10 +122,10 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
 
     assert loaded.missing == [] and loaded.unexpected == [] and loaded.header == {"step": 2}
     assert loaded.restored[:2] == ["scheduler", "dataloader"] and "rng.ttml" in loaded.restored
-    after = param_shards(params2, local)
-    assert after.keys() == before.keys(), "this rank restores exactly the coordinates it holds"
-    for (name, coord), array in after.items():
-        assert np.array_equal(array, before[(name, coord)]), f"{name} at {coord} differs from the saved shard"
+    assert_same(param_shards(params2, local), before, "parameters")  # exactly the coordinates this rank holds
+    state_after, scalars_after = optimizer_state(opt2, local)
+    assert_same(state_after, state_before, "optimizer moments")
+    assert scalars_after["steps"] == 2 and scalars_after == scalars_before
     assert ctx.get_generator_state() == own_gen_after_save, "this rank's own ttml generator came back"
     sched2.step()
     loader2.advance()

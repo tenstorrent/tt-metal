@@ -22,10 +22,9 @@ import re
 import shutil
 import tempfile
 
-import numpy as np
 import pytest
 import ttnn
-from dcp_shards import param_shards
+from dcp_shards import assert_same, optimizer_state, param_shards
 from tp_block import TPBlock, make_adamw, train_step
 
 import ttml
@@ -97,6 +96,9 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     opt = make_adamw(params)
     train_step(model, opt, DIM)
     before = param_shards(params, local)
+    assert len(before) == len(params) * len(local)
+    state_before, scalars_before = optimizer_state(opt, local)
+    assert len(state_before) == 2 * len(params) * len(local) and scalars_before["steps"] == 1
     path = os.path.join(root, dcp.step_dir_name(1))
 
     result = dcp.save(path, model=model, optimizer=opt, header={"step": 1})
@@ -116,10 +118,13 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     opt2 = make_adamw(params2)
     loaded = dcp.load(path, model=model2, optimizer=opt2)
     assert loaded.missing == [] and loaded.unexpected == [], "judged over the union of the ranks' keys"
-    after = param_shards(params2, local)
-    assert after.keys() == before.keys()
-    for (name, coord), array in after.items():
-        assert np.array_equal(array, before[(name, coord)]), f"{name} at {coord} differs from the saved shard"
+    assert_same(param_shards(params2, local), before, "parameters")
+    state_after, scalars_after = optimizer_state(opt2, local)
+    assert_same(state_after, state_before, "optimizer moments")
+    # The scalars restored are the index's; this rank keeps its own param-group member list (its own stage).
+    assert {k: v for k, v in scalars_after.items() if not k.endswith(".params")} == {
+        k: v for k, v in scalars_before.items() if not k.endswith(".params")
+    }
 
     # A rank whose model wants a key no rank saved fails strictly, and takes every rank with it.
     model3 = _Pipeline(DIM, [f"stage{rank}"] + (["extra"] if rank == 1 else []))
