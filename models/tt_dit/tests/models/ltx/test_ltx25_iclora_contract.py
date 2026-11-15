@@ -570,10 +570,24 @@ def test_constructor_cold_capture_cleanup(contract, constructor_native, error):
 
 @pytest.mark.parametrize("cold", [False, True])
 @pytest.mark.parametrize("dynamic_load", [False, True])
-def test_native_collector_warms_reference_once(contract, constructor_native, monkeypatch, tmp_path, cold, dynamic_load):
+@pytest.mark.parametrize(
+    "recipe",
+    [None, pytest.param("ltx25-ic-6s-iclora", id="served_traced"), pytest.param("ltx25-ic-10s-iclora", id="served_eager")],
+)
+def test_native_collector_warms_reference_once(
+    contract, constructor_native, monkeypatch, tmp_path, cold, dynamic_load, recipe
+):
     """Run the real collector through its first generation with real constructor dispatch."""
     state, events = constructor_native
     state.cold = cold
+    if recipe:
+        contract.fixture["generation"] = contract.module.generation_recipe(recipe)
+        for key in ("first_frame", "last_frame"):
+            binding = contract.fixture["acceptance"][key]
+            Image.new("RGB", (768, 448), "red").save(binding["path"])
+            binding["sha256"] = contract.module.file_digest(binding["path"])
+    g = contract.fixture["generation"]
+    traced = recipe != "ltx25-ic-10s-iclora"
     contract.path.write_text(json.dumps(contract.fixture))
     target = tmp_path / "collection"
     monkeypatch.setenv("TT_ICLORA_FIXTURE", str(contract.path))
@@ -585,9 +599,9 @@ def test_native_collector_warms_reference_once(contract, constructor_native, mon
         pass
 
     def generate(pipe, prompt, **kwargs):
-        assert pipe._pipeline._traced
-        assert pipe._pipeline._audio_traced
-        assert pipe._pipeline._vae_traced
+        assert pipe._pipeline._traced is traced
+        assert pipe._pipeline._audio_traced is traced
+        assert pipe._pipeline._vae_traced is traced
         assert kwargs["first_frame"] == contract.fixture["acceptance"]["first_frame"]["path"]
         assert kwargs["output_type"] == "float"
         events.append(("generate",))
@@ -608,17 +622,20 @@ def test_native_collector_warms_reference_once(contract, constructor_native, mon
     warmups = [e for e in events if e[0] == "warmup"]
     real = [e for e in warmups if not e[3]]
     assert len(real) == 1  # A cold manifest pass is distinct from the required dispatched warmup.
-    assert len(warmups) == (2 if cold and not dynamic_load else 1)
-    for _, kwargs, traced, _ in warmups:
-        assert traced
-        assert (kwargs["num_frames"], kwargs["height"], kwargs["width"]) == (9, 128, 128)
-        assert kwargs["ref_num_frames"] == 9
+    assert len(warmups) == (2 if traced and cold and not dynamic_load else 1)
+    for _, kwargs, actual_traced, _ in warmups:
+        assert actual_traced is traced
+        assert (kwargs["num_frames"], kwargs["height"], kwargs["width"]) == (g["num_frames"], g["height"], g["width"])
+        assert kwargs["ref_num_frames"] == g["ref_frames"]
         assert kwargs["stages"] == ("s1_ref", "s2_ref")
-    assert real[0][1]["capture_all"] is cold
-    assert events.index(("allocate", "s1_ref")) < events.index(("capture", ("s1_ref", "s2_ref")))
-    assert events.index(("allocate", "s2_ref")) < events.index(("capture", ("s1_ref", "s2_ref")))
+    assert real[0][1].get("capture_all", False) is (cold and traced)
+    if traced:
+        assert events.index(("allocate", "s1_ref")) < events.index(("capture", ("s1_ref", "s2_ref")))
+        assert events.index(("allocate", "s2_ref")) < events.index(("capture", ("s1_ref", "s2_ref")))
+    else:
+        assert not any(e[0] in ("allocate", "capture") for e in events)
     assert events[-1] == ("generate",)
-    assert json.loads((target / "runtime-options.json").read_text())["traced"] is True
+    assert json.loads((target / "runtime-options.json").read_text())["traced"] is traced
     assert json.loads((target / "resolved-fixture.json").read_text()) == contract.fixture
     assert json.loads((target / "calls.jsonl").read_text())["error"].startswith("FirstGeneration")
 
