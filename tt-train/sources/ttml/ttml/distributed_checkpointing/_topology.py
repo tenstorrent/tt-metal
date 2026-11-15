@@ -47,7 +47,8 @@ class Placement:
 
     @staticmethod
     def from_json(value: Sequence) -> "Placement":
-        return Placement.replicate() if value[0] == "replicate" else Placement.shard(int(value[1]))
+        # Through the constructor, so a kind this reader does not know is refused instead of read as a shard.
+        return Placement(str(value[0]), int(value[1]) if len(value) > 1 else None)
 
 
 def dist_coords(dist_shape: Sequence[int]) -> list[tuple[int, ...]]:

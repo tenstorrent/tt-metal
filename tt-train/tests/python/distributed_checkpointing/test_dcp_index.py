@@ -9,7 +9,12 @@ import os
 
 
 from ttml.distributed_checkpointing._boxes import Box
-from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpointError, VersionError
+from ttml.distributed_checkpointing._errors import (
+    CheckpointError,
+    IncompleteCheckpointError,
+    TopologyError,
+    VersionError,
+)
 from ttml.distributed_checkpointing._index import (
     ChunkRecord,
     Entry,
@@ -124,6 +129,30 @@ def test_index_rejects_newer_versions_and_foreign_formats(expect_error):
     encoded["format"] = "something-else"
     with expect_error(VersionError, "not a"):
         Index.from_json(encoded)
+
+
+def test_a_bad_index_names_its_file(tmp_path, expect_error):
+    def written(change) -> str:
+        ckpt = str(tmp_path / f"step_{len(os.listdir(tmp_path)):07d}")
+        os.makedirs(ckpt)
+        encoded = _index().to_json()
+        change(encoded)
+        with open(os.path.join(ckpt, "index.json"), "w", encoding="utf-8") as f:
+            json.dump(encoded, f)
+        return ckpt
+
+    def placement(value):
+        return lambda encoded: encoded["state"]["model/Llama/fc/weight"]["label"]["placements"].__setitem__(1, value)
+
+    newer = written(lambda encoded: encoded.update(version=2))
+    with expect_error(VersionError, f"{newer}/index.json: index version 2 is newer"):
+        read_index(newer)
+    # A placement kind this reader does not know (a future partial-sum label) is refused, not read as a shard.
+    partial = written(placement(["partial", 2]))
+    with expect_error(TopologyError, f"{partial}/index.json: unknown placement kind 'partial'"):
+        read_index(partial)
+    with expect_error(TopologyError, "placement shard must have a dim"):
+        read_index(written(placement(["shard"])))
 
 
 def test_naming():
