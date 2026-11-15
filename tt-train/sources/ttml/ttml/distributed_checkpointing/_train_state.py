@@ -294,4 +294,4 @@ def restore_train_state(
 
 def read_train_state(ckpt_dir: str) -> dict:
     """The ``train_state`` block ``save`` stored (scheduler, dataloader, rng), without touching any device."""
-    return read_header_json(ckpt_dir).get(TRAIN_STATE_KEY, {})
+    return read_header_json(ckpt_dir)[TRAIN_STATE_KEY]
