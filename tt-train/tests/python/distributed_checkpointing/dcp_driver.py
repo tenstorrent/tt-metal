@@ -36,6 +36,7 @@ import ttml.distributed_checkpointing as dcp
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
+from ttml.modules import Parameter
 from ttml.sharding import Sharding
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
@@ -50,6 +51,12 @@ TINY = dict(
     max_position_embeddings=32,
 )
 SEQ_LEN = 32  # a whole tile: the SDPA kernel wants the sequence dimension unpadded
+# Across layouts the forward reduces in another order (other shard boundaries, other all-reduces), so the logits and
+# the moments after one more step differ in rounding. Measured on the tiny Llama's cross-world cases on a loudbox, as a
+# fraction of the reference's largest magnitude: logits 0.004-0.011, post-step moments 0.012-0.022. The bounds leave
+# about 3x headroom; a scrambled fused weight moves the logits by 1.36 (the --strip-fused control).
+LOGITS_TOLERANCE = 0.03
+STATE_TOLERANCE = 0.06
 MESH_OPEN_FAILED = 3  # exit status when this host cannot open the requested mesh; the tests skip on it
 # The one mesh-open failure that means "this host cannot open the mesh" rather than a bug: a descriptor asking for
 # ethernet links this host's fabric does not have (the QuietBox 1x4 ring on a loudbox). Any other failure to open a
@@ -70,6 +77,19 @@ def open_world(mesh_shape: tuple[int, ...], axes: tuple[str, ...], tp: bool, mgd
         ddp = mesh.has_axis("dp") and mesh.axis_size("dp") > 1
         ctx = ttml.autograd.AutoContext.get_instance()
         ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=ddp, enable_tp=True))
+
+
+def strip_fused_declarations(model) -> int:
+    """Remove every fused_segments declaration, so the fused weights look undeclared: the negative control of the
+    logits check. Returns how many were removed."""
+    removed = 0
+    for _, module in model.named_modules():
+        for value in getattr(module, "__dict__", {}).values():
+            layout = getattr(value, "checkpoint_layout", None)
+            if isinstance(value, Parameter) and layout and "fused" in layout:
+                value.checkpoint_layout = {k: v for k, v in layout.items() if k != "fused"}
+                removed += 1
+    return removed
 
 
 def build(tp: bool, fsdp: bool, tie: bool, sizes: dict):
@@ -270,14 +290,15 @@ def resume_reference(model, params, optimizer, config, seed: int, step: int) -> 
 
 def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logits_tolerance: float) -> list[str]:
     """Every entry of the loaded world against the saving world's: exact, except across layouts, where the forward
-    and the step after the checkpoint round differently. There the logits and the post-step moments must lie within
-    ``logits_tolerance`` of their scale, and the post-step parameter update within a quarter of its mean size (a
-    fresh optimizer's update differs from the restored one's by about its whole size).
+    and the step after the checkpoint round differently. There the logits must lie within ``logits_tolerance`` of
+    their scale, the post-step moments within ``STATE_TOLERANCE`` of theirs, and the post-step parameter update within
+    a quarter of its mean size (a fresh optimizer's update differs from the restored one's by about its whole size).
 
     Padding rows (``pad:``) come back bit for bit when the padded extent is unchanged (the planner then copies device
     rows). When it changed, the load fills the padding with zeros, so the loaded world's padding must be zero; after
     the step it is not compared."""
     problems = []
+    worst_state = 0.0
     exact = logits_tolerance == 0.0
     if set(actual) != set(expected):
         problems.append(
@@ -304,8 +325,9 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
         elif not exact and base is not None and base.startswith("state:"):
             scale = float(np.max(np.abs(e))) + 1e-6
             rel = float(np.max(np.abs(a - e))) / scale
-            if rel > logits_tolerance:
-                problems.append(f"{key}: differs by {rel:.4f} of its scale (tolerance {logits_tolerance})")
+            worst_state = max(worst_state, rel)
+            if rel > STATE_TOLERANCE:
+                problems.append(f"{key}: differs by {rel:.4f} of its scale (tolerance {STATE_TOLERANCE})")
         elif not exact and base is not None and base.startswith("param:") and base in actual and base in expected:
             # The update each world applied. The loaded parameters equal the saved ones (checked under their own
             # key), so the updates differ only where the steps did, whatever the parameters' own magnitude.
@@ -319,6 +341,8 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
         elif not np.array_equal(a, e):
             n = int(np.count_nonzero(a != e))
             problems.append(f"{key}: {n} of {a.size} values differ (max |diff| {float(np.max(np.abs(a - e))):.4g})")
+    if not exact:
+        print(f"post-step moments: max |diff| / max |ref| = {worst_state:.4f} (tolerance {STATE_TOLERANCE})")
     return problems
 
 
@@ -334,7 +358,12 @@ def main(argv=None) -> int:
     parser.add_argument("--steps", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--mgd", default=None, help="mesh graph descriptor to set before opening the mesh")
-    parser.add_argument("--logits-tolerance", type=float, default=0.1)
+    parser.add_argument("--logits-tolerance", type=float, default=LOGITS_TOLERANCE)
+    parser.add_argument(
+        "--strip-fused",
+        action="store_true",
+        help="remove the fused_segments declarations: the negative control, whose cross-TP load must fail on logits",
+    )
     parser.add_argument(
         "--same-layout",
         action="store_true",
@@ -386,6 +415,8 @@ def main(argv=None) -> int:
         return MESH_OPEN_FAILED
     try:
         config, model, params, optimizer = build(args.tp, args.fsdp, args.tie, sizes)
+        if args.strip_fused:
+            print(f"stripped {strip_fused_declarations(model)} fused_segments declarations")
         if args.command == "save":
             train(model, params, optimizer, config, args.steps, args.seed)
             result = dcp.save(

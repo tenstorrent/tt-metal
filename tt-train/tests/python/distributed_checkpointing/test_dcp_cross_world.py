@@ -77,7 +77,7 @@ _NOISE = re.compile(
 )
 
 
-def _run(args: list[str], what: str) -> str:
+def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
     env = dict(os.environ)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
     proc = subprocess.run(DRIVER + args, capture_output=True, text=True, timeout=1500, env=env)
@@ -86,8 +86,11 @@ def _run(args: list[str], what: str) -> str:
     if proc.returncode == MESH_OPEN_FAILED:  # only the descriptor-fabric mismatch: the QuietBox 1x4 ring on a loudbox
         reason = next((ln for ln in lines if ln.startswith("MESH_OPEN_FAILED")), "no reason given")
         pytest.skip(f"{what}: this host cannot open the mesh: {reason}")
+    for line in lines:  # the measured differences, for the log
+        if "max |diff| / max |ref|" in line:
+            print(f"{what}: {line}")
     tail = "\n".join(lines[-60:])
-    assert proc.returncode == 0, f"{what} failed with exit {proc.returncode}:\n{tail}"
+    assert proc.returncode == (0 if expect_ok else 1), f"{what} failed with exit {proc.returncode}:\n{tail}"
     return proc.stdout
 
 
@@ -126,3 +129,17 @@ def test_same_world_through_the_driver_matches_exactly(tmp_path, release_metal_e
     _run(["save", "--dir", ckpt, "--steps", "2", *world], "save")
     out = _run(["load", "--dir", ckpt, "--steps", "2", "--same-layout", *world], "load")
     assert "RESULT: OK" in out
+
+
+def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal_env, skip_if_host_too_small, mgd_path):
+    """The negative control of the logits tolerance: with its fused_segments declarations removed, a TP2 checkpoint
+    loads onto one device with its fused rows in TP2's per-shard order, and the logits alone must catch it."""
+    skip_if_host_too_small((2,), "the logits negative control")
+    release_metal_env()
+    save_world = _resolve(_world("1x2", "dp,tp", ("--tp", "--strip-fused"), "bh_1_2_line_line.textproto"), mgd_path)
+    ckpt = str(tmp_path / "step_0000002")
+    _run(["save", "--dir", ckpt, "--steps", "2", "--no-resume-step", *save_world], "save")
+    out = _run(
+        ["load", "--dir", ckpt, "--steps", "2", *_world("1x1", "dp,tp", ("--strip-fused",), None)], "load", False
+    )
+    assert "MISMATCH: logits differ" in out, out.splitlines()[-8:]
