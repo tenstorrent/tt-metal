@@ -67,6 +67,10 @@ BCAST_SPLIT_NOCS = True
 # idle cores instead of two pieces of each key head, so every state core is a receiver. Per key head its pieces fill a
 # rectangle with the q core left of its first row (sends on NOC 0) and the k core right of its last (NOC 1).
 QK_CORES_VSPLIT = True
+# QK_CORES_VSPLIT: the q core left of the rectangle sending on NOC 0 (True), or both q / k cores right of its last row on
+# NOC 1 (False: the two multicasts share a NoC, but no kernel group of q cores with swapped NoCs; every kernel group
+# costs ~13 us of host time per call). perf_decode_b1 12.79 (True) vs 12.99 us (median of launches 2..12).
+QK_VSPLIT_SPLIT_NOCS = False
 # QK_CORES_VSPLIT: the q / k cores hand over in two stages, the conv output y as soon as it is made and its inverse norm
 # (rsqrt(sum y^2 + eps), times K^-1/2 for q) when the norm is done, so the state cores transpose y_k, take y_q . y_k and
 # read the state with the raw rows while the norm runs, and scale by the two scalars after (fp32 SFPU).
@@ -1017,11 +1021,16 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 for j in range(ratio)
                 for piece in range(pieces)
             ]
+            x0 = 1 if QK_VSPLIT_SPLIT_NOCS else 0
             for idx, unit in enumerate(units):
-                core = ttnn.CoreCoord(1 + idx % width, y0 + idx // width)
+                core = ttnn.CoreCoord(x0 + idx % width, y0 + idx // width)
                 assignment.append((core, unit, 1, value_heads * pieces))
-            qk_cores.append((ttnn.CoreCoord(0, y0), hk, QK_Q_INJECTOR))
-            qk_cores.append((ttnn.CoreCoord(width + 1, y0 + rect_rows - 1), hk, QK_K_INJECTOR))
+            y_last = y0 + rect_rows - 1
+            q_core = ttnn.CoreCoord(0, y0) if QK_VSPLIT_SPLIT_NOCS else ttnn.CoreCoord(width, y_last)
+            qk_cores.append((q_core, hk, QK_Q_INJECTOR))
+            qk_cores.append(
+                (ttnn.CoreCoord(x0 + width + (0 if QK_VSPLIT_SPLIT_NOCS else 1), y_last), hk, QK_K_INJECTOR)
+            )
         cores_per_kh = len(assignment) // key_heads
         all_cores = _merged_ranges([core for core, _, _, _ in assignment] + [core for core, _, _ in qk_cores])
     elif qk_per_core:
@@ -1154,7 +1163,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         # key head's q core (channel q) and k core (channel k), outside the group. One flag-signalled round per call.
         # QK_CORES_VSPLIT: the q cores send on NOC 0 (their reader and writer swap NoCs). QK_RAW_HANDOFF: a second pair
         # of channels carries the inverse norms (one round per channel per call).
-        q_noc = ttnn.NOC.NOC_0 if pieces > 1 else ttnn.NOC.NOC_1
+        q_noc = ttnn.NOC.NOC_0 if pieces > 1 and QK_VSPLIT_SPLIT_NOCS else ttnn.NOC.NOC_1
         qk_channels = [
             ttnn.Mcast(
                 device,
@@ -1526,7 +1535,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
     kernel_groups = []  # (role, cores, swap the reader / writer NoCs)
     for role, (cores, *_) in roles.items():
-        if role == ROLE_QK and pieces > 1:
+        if role == ROLE_QK and pieces > 1 and QK_VSPLIT_SPLIT_NOCS:
             # QK_CORES_VSPLIT: the q cores send on NOC 0.
             q_cores = {(core.x, core.y) for core, _, r in qk_cores if r == QK_Q_INJECTOR}
             kernel_groups += [

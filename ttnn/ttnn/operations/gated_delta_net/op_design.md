@@ -172,7 +172,20 @@ computed from them, never restated.
 
 Regime selection (Refinement 7): R-QKCORE on top of decode R-STEP when `_qk_core_units` returns a plan (decode
 B=8: 96 pair cores of one sequence each + 8 q / k cores; B=16: 96 pair cores of two sequences each). R-VSPLIT decode
-keeps R-BCAST; multi-token calls and B > 32 keep R-STEP. Regime-pinned tests: `test_gated_delta_net_qkcore.py`
+keeps R-BCAST; multi-token calls and B > 32 keep R-STEP. Refinement 18 (`QK_CORES_VSPLIT`): R-QKCORE also on decode
+R-VSPLIT when each key head's r * pieces units fill a rectangle of width W <= grid width - 2 stacked Hk times in the
+grid (`_qk_vsplit_rect`; B=1 chip: 6 x 2 per key head, 56 cores): the q and k cores sit right of the rectangle's last
+row and send on NOC 1, which starts a rectangle multicast at its highest corner and routes toward lower x / y only, so
+each path starts next to its sender (`QK_VSPLIT_SPLIT_NOCS`: the q core left of the first row on NOC 0 instead, 0.2 us
+faster, one more kernel group of host time). The top `SWAP_NOC_ROWS` rows of state cores read on NOC 1.
+The q / k cores hand over in two stages (`QK_RAW_HANDOFF`): the conv output y at once, then the inverse norm
+rsqrt(sum y^2 + eps) (times K^-1/2 for q) on a second channel; the state cores transpose y_k, compute d_raw = y_q . y_k
+and the raw state reads while the norm runs, then scale rk, ro by the inverse norms, pack u' = ik u as the update
+operand (kn^T u = y_k^T u') and d u = iq d_raw u' (fp32 SFPU scalars; not bit-identical to the normalized hand-off,
+equal accuracy). conv_state_out: the q / k cores their own Kt columns, each state core its own v columns (`cs_split`
+2: every column written by the only core that reads it, so in place needs no signal). Where the rectangles do not
+fit (B=2, Hv=48) R-VSPLIT keeps R-BCAST, with `BCAST_SPLIT_NOCS` (one-rectangle groups, q injector first core on
+NOC 0, k injector last core on NOC 1). Regime-pinned tests: `test_gated_delta_net_qkcore.py`
 (predicate; q / k cores vs per-pair prep bit-identical on chip B = 5 fp32, 8, 16, 27 bf16 and small B = 32 fp32,
 clean and inf padding).
 
