@@ -1309,6 +1309,11 @@
   "steady_tok_s_p51200": 47985.0,
   "steady_wall_ms_p51200": 106.7
  },
+ "FIX.35": {
+  "e2e_tok_s_p1024000": 46822.6,
+  "e2e_tok_s_p51200": 50460.4,
+  "e2e_wall_s_p1024000": 21.87
+ },
  "P.51": {
   "acks_early": 0,
   "acks_early_decoder_skip": 0,
