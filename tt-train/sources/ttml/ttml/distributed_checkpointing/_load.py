@@ -105,13 +105,12 @@ def _read_chunk(
     needed = sum(it.src.volume for it in items) * itemsize
     if 2 * needed >= record.nbytes:
         raw = pread_all(fd, record.nbytes, data_start + record.data_offset)
-        if record.crc32 is not None:
-            crc = zlib.crc32(raw)
-            if crc != record.crc32:
-                raise CheckpointError(
-                    f"{plan.key}: chunk {items[0].chunk} ({record.box}) in {path} fails its CRC32 check (recorded "
-                    f"{record.crc32:08x}, read {crc:08x}); the checkpoint is corrupt"
-                )
+        crc = zlib.crc32(raw)
+        if crc != record.crc32:
+            raise CheckpointError(
+                f"{plan.key}: chunk {items[0].chunk} ({record.box}) in {path} fails its CRC32 check (recorded "
+                f"{record.crc32:08x}, read {crc:08x}); the checkpoint is corrupt"
+            )
         chunk = np.frombuffer(raw, dtype=carrier).reshape(record.box.sizes)
         for it in items:
             arrays[it.group][it.dst.slices()] = chunk[it.src.slices()]

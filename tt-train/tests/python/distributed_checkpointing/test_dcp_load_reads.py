@@ -7,7 +7,6 @@ shards together need at least half of it (on one host they tile the whole tensor
 falls back to one read per contiguous run otherwise; both must put the same bytes in the same places."""
 
 import os
-import zlib
 
 import numpy as np
 from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expected_shards, world
@@ -128,11 +127,7 @@ def test_a_column_slice_of_a_chunk_is_read_row_by_row(tmp_path, monkeypatch):
 def test_a_whole_chunk_read_checks_the_chunk_crc(tmp_path, expect_error):
     ckpt = FakeCheckpoint()
     src = arange(SHAPE)
-    ckpt.save({"w": (src, TP2_COLS, Identity())})
-    for record in ckpt.index.entries["w"].chunks:  # what save records for every chunk it writes
-        record.crc32 = zlib.crc32(
-            bytes(ckpt.files[record.file][record.data_offset : record.data_offset + record.nbytes])
-        )
+    ckpt.save({"w": (src, TP2_COLS, Identity())})  # records every chunk's CRC32, as save does
     plan, _ = ckpt.load({"w": (FSDP4_ROWS, Identity(), SHAPE)})
     kplan = plan.keys["w"]
     ckpt.files[1][5] ^= 0x40  # one flipped bit in the second chunk; the file size is unchanged
