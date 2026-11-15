@@ -254,6 +254,16 @@ class Hy4Engine:
         """
         rn = self.runner
         tA = time.perf_counter()
+        pf = os.environ.get("HY4_SPEC_PIPE_FILE")
+        if pf and self.rounds % 16 == 0:  # live A/B switch (a file holding 0 / 1) without a reboot
+            try:
+                with open(pf) as fh:
+                    want = fh.read().strip() == "1"
+                if want != self.pipe:
+                    self.drain()
+                    self.pipe = want
+            except OSError:
+                pass
         for r in range(ROWS):
             if not self.live[r]:
                 caps[r] = 0
