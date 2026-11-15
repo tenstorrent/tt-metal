@@ -11,6 +11,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace {
 
@@ -19,12 +21,15 @@ constexpr uint32_t cb_state_out = GDN_CB_STATE_OUT;
 constexpr uint32_t cb_gates = GDN_CB_GATES;
 constexpr uint32_t cb_tok_coef = GDN_CB_TOK_COEF;
 constexpr uint32_t cb_out_rows = GDN_CB_OUT_ROWS;
+constexpr uint32_t cb_window = GDN_CB_WINDOW;
+constexpr uint32_t cb_window_zeroed = GDN_CB_WINDOW_ZEROED;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t OUT_TILE_BYTES = get_compile_time_arg_val(3);    // output tile (dtype-derived on host)
 constexpr uint32_t STATE_TILE_BYTES = get_compile_time_arg_val(4);  // fp32 state tile
 constexpr uint32_t FACE_BYTES = OUT_TILE_BYTES / 4;
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;
+constexpr uint32_t WINDOW_BYTES = get_compile_time_arg_val(5);  // whole cb_window
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
@@ -44,7 +49,7 @@ void kernel_main() {
     constexpr uint32_t n_state = Kt * Vt;
     constexpr uint32_t out_width_tiles = Hv * Vt;
 
-    constexpr auto out_args = TensorAccessorArgs<5>();
+    constexpr auto out_args = TensorAccessorArgs<6>();
     constexpr auto state_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     uint32_t arg = 0;
@@ -53,6 +58,17 @@ void kernel_main() {
     const uint32_t first_pair = get_arg_val<uint32_t>(arg++);
     const uint32_t num_pairs = get_arg_val<uint32_t>(arg++);
     const uint32_t T = get_arg_val<uint32_t>(arg++);
+
+    // Zero the reader's conv window buffer once (it keeps rows outside the token rows zero from then
+    // on) and hand the reader a token; this RISC is idle until the first gates arrive.
+    {
+        Noc noc;
+        CircularBuffer window_buf(cb_window);
+        noc.async_write_zeros(window_buf, WINDOW_BYTES, {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
+        cb_reserve_back(cb_window_zeroed, 1);
+        cb_push_back(cb_window_zeroed, 1);
+    }
 
     for (uint32_t pair = first_pair; pair < first_pair + num_pairs; ++pair) {
         const uint32_t seq = pair / Hv;

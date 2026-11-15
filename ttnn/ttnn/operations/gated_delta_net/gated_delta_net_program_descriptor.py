@@ -76,7 +76,9 @@ CB_SCRATCH = 27
 CB_SQ_O = 28
 CB_RINV_O = 29
 CB_ROW_STAGE = 30
+CB_WINDOW_ZEROED = 31
 NUM_CB_SLOTS = 64
+SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 
 # Rows staged per flush when a token face row is narrower than the DRAM read alignment (bf16 on
 # Blackhole): each half-row is read as one aligned chunk into staging, then copied L1-to-L1.
@@ -178,7 +180,7 @@ def l1_footprint_bytes(Kt, Vt, dtype):
         pages * (token_bytes if indices[0] in TOKEN_CBS else FP32_TILE_BYTES)
         for indices, pages in _cb_plan(Kt, Vt, _conv_on_fpu(dtype))
     )
-    return cb_bytes + BF16_TILE_BYTES + _row_stage_bytes(token_bytes)
+    return cb_bytes + BF16_TILE_BYTES + SIGNAL_PAGE_BYTES + _row_stage_bytes(token_bytes)
 
 
 def _float_bits(value):
@@ -252,6 +254,18 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 ],
             )
         )
+    # Writer-to-reader token: the window buffer has been zeroed.
+    cbs.append(
+        ttnn.CBDescriptor(
+            total_size=SIGNAL_PAGE_BYTES,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_WINDOW_ZEROED, data_format=ttnn.bfloat16, page_size=SIGNAL_PAGE_BYTES
+                )
+            ],
+        )
+    )
     cbs.append(
         ttnn.CBDescriptor(
             total_size=BF16_TILE_BYTES,
@@ -284,12 +298,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     reader_ct.append(ROW_STAGE_SLOTS if row_stage_bytes else 0)
     reader_ct.append(int(conv_on_fpu))
     reader_ct.append(_window_group_cols(Kt, Vt))
+    reader_ct.append(WINDOW_DEPTH)
     for t in reader_tensors:
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     reader_addrs = [t.buffer_address() for t in reader_tensors]
 
     # ---- writer ----
-    writer_ct = [Kt, Vt, value_heads, *geometry_ct]
+    window_bytes = CONV_TAPS * _window_group_cols(Kt, Vt) * WINDOW_DEPTH * token_tile_bytes
+    writer_ct = [Kt, Vt, value_heads, *geometry_ct, window_bytes]
     for t in (output, recurrent_state_out):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     writer_addrs = [output.buffer_address(), recurrent_state_out.buffer_address()]

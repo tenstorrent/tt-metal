@@ -6,8 +6,12 @@
 // Per pair, per tile row: gates_block -> conv_block -> l2norm_block -> recurrence_block (one
 // token per step: read matmul, token vector, state update) -> rmsnorm_gate_block.
 //
-// Helpers: matmul_block (read [kn; qn] x S), reduce (row sums, Accurate fp32) and eltwise_chain
-// (SFPU squares). Raw LLK where the design names a custom block op, with the reasons:
+// Helpers: matmul_block (read [kn; qn] x S) and reduce (row sums, Accurate fp32). Raw LLK where the
+// design names a custom block op, with the reasons:
+//   - row scope (sfpu_tile_scope): in decode a tile row holds one or a few token rows; the row-local
+//     SFPU ops (squares, rsqrt post-op, gates, silu, broadcasts) run only on the 4-row band holding
+//     them. eltwise_chain / the *_tile APIs run whole tiles, so squares are a raw loop over
+//     DEST_AUTO_LIMIT-tile windows and the band variants call the LLK bodies with ITERATIONS=2;
 //   - every row / column broadcast must stay fp32 (alpha, the L2 scale, S): the only broadcast in
 //     eltwise_chain is BinaryFpu (srcB, 19-bit), so these use sfpu_*_bcast_{row,col} in DEST;
 //   - conv_block_fpu (bf16 tokens): the four taps of a column are FPU row-broadcast multiplies
@@ -43,7 +47,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
 
 namespace ckl = compute_kernel_lib;
@@ -171,6 +174,86 @@ ALWI void silu_scoped(uint32_t dst, RowScope scope) {
     }
 }
 
+// Row-local unary SFPU ops on the scope's rows (full-tile API call when unscoped).
+ALWI void softplus_scoped(uint32_t dst, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        softplus_tile(dst, ONE_BITS, ONE_BITS, SOFTPLUS_THRESHOLD_BITS);
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(dst, scope.band, [] {
+            ckernel::sfpu::calculate_softplus<APPROX, DST_ACCUM_MODE, 2>(ONE_BITS, ONE_BITS, SOFTPLUS_THRESHOLD_BITS);
+        });
+#endif
+    }
+}
+
+ALWI void exp_scoped(uint32_t dst, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        exp_tile<false>(dst);
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_exponential<false, DST_ACCUM_MODE, false, 2>(); });
+#endif
+    }
+}
+
+ALWI void negative_scoped(uint32_t dst, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        negative_tile(dst);
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(dst, scope.band, [] { ckernel::sfpu::_calculate_negative_<APPROX, 2>(); });
+#endif
+    }
+}
+
+ALWI void sigmoid_scoped(uint32_t dst, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        sigmoid_tile(dst);
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_sigmoid<false, DST_ACCUM_MODE, 2>(); });
+#endif
+    }
+}
+
+ALWI void square_scoped(uint32_t dst, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        square_tile(dst);
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_square<APPROX, DST_ACCUM_MODE, 2>(); });
+#endif
+    }
+}
+
+template <int BINOP_MODE>
+ALWI void binop_scalar_scoped(uint32_t dst, uint32_t scalar_bits, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        if constexpr (BINOP_MODE == ADD_UNARY) {
+            add_unary_tile(dst, scalar_bits);
+        } else {
+            mul_unary_tile(dst, scalar_bits);
+        }
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(dst, scope.band, [=] {
+            ckernel::sfpu::calculate_binop_with_scalar<APPROX, BINOP_MODE, 2, DST_ACCUM_MODE>(scalar_bits);
+        });
+#endif
+    }
+}
+
+ALWI void rsqrt_scoped(uint32_t dst, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        rsqrt_tile(dst);
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_rsqrt<APPROX, 2, DST_ACCUM_MODE, false>(); });
+#endif
+    }
+}
+
 // fp32 SFPU binary (DEST[d0] op DEST[d1] -> DEST[out]) on the scope's rows.
 template <ckernel::BinaryOp OP>
 ALWI void binary_scoped(uint32_t d0, uint32_t d1, uint32_t out, RowScope scope) {
@@ -208,11 +291,16 @@ ALWI void mul_bcast_col_scoped(uint32_t data, uint32_t col, RowScope scope) {
     }
 }
 
-// DEST[data] *= row 0 of DEST[row] (broadcast down the column), on the scope's rows.
-// Band path: the LLK's own per-band body of sfpu_mul_bcast_row (needs sfpu_bcast_row_init).
-ALWI void mul_bcast_row_scoped(uint32_t data, uint32_t row, RowScope scope) {
+// DEST[data] op= row 0 of DEST[row] (broadcast down the column), on the scope's rows.
+// Band path: the LLK's own per-band body of sfpu_*_bcast_row (needs sfpu_bcast_row_init).
+template <ckernel::BinaryOp OP>
+ALWI void bcast_row_scoped(uint32_t data, uint32_t row, RowScope scope) {
     if (scope.band == RowScope::FULL_TILE) {
-        sfpu_mul_bcast_row(data, row);
+        if constexpr (OP == ckernel::BinaryOp::ADD) {
+            sfpu_add_bcast_row(data, row);
+        } else {
+            sfpu_mul_bcast_row(data, row);
+        }
     } else {
 #ifdef TRISC_MATH
         using namespace ckernel::sfpu;
@@ -223,7 +311,7 @@ ALWI void mul_bcast_row_scoped(uint32_t data, uint32_t row, RowScope scope) {
         TT_SFPLOAD(p_sfpu::LREG5, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[1]);
         TT_SFPLOAD(p_sfpu::LREG6, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[2]);
         TT_SFPLOAD(p_sfpu::LREG7, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[3]);
-        _process_row_bcast_data_band_<ckernel::BinaryOp::MUL>(
+        _process_row_bcast_data_band_<OP>(
             data * DEST_TILE_SIZE_RAW,
             data * DEST_TILE_SIZE_RAW,
             scope.band >= 4 ? FACE2_BASE : FACE0_BASE,
@@ -249,8 +337,8 @@ struct Buffers {
 };
 
 // ---------------------------------------------------------------- gates_block
-// alpha = exp(-exp(A_log) * softplus(a + dt_bias)), beta = sigmoid(b), on the whole gate tile.
-ALWI void gates_block() {
+// alpha = exp(-exp(A_log) * softplus(a + dt_bias)), beta = sigmoid(b), on the token rows of the gate tile.
+ALWI void gates_block(RowScope scope) {
     cb_wait_front(cb_gate_in, 2);
     tile_regs_acquire();
     begin_loads(cb_gate_in);
@@ -259,23 +347,24 @@ ALWI void gates_block() {
     load(cb_gate_w, 1, 1);  // dt_bias (row 0)
     load(cb_gate_w, 0, 2);  // A_log (row 0)
     sfpu_bcast_row_init();
-    sfpu_add_bcast_row(0, 1);
+    bcast_row_scoped<ckernel::BinaryOp::ADD>(0, 1, scope);
     softplus_tile_init();
-    softplus_tile(0, ONE_BITS, ONE_BITS, SOFTPLUS_THRESHOLD_BITS);
+    softplus_scoped(0, scope);
     // Pass 0: exp(A_log), then g = -exp(A_log) * softplus; pass 1: alpha = exp(g). One exp call site.
 #pragma GCC unroll 1
     for (uint32_t pass = 0; pass < 2; ++pass) {
         exp_tile_init<false>();
-        exp_tile<false>(pass == 0 ? 2 : 0);
+        // A_log is a broadcast row (row 0 only); alpha is per token row.
+        exp_scoped(pass == 0 ? 2 : 0, pass == 0 ? RowScope{0} : scope);
         if (pass == 0) {
             sfpu_bcast_row_init();
-            sfpu_mul_bcast_row(0, 2);
+            bcast_row_scoped<ckernel::BinaryOp::MUL>(0, 2, scope);
             negative_tile_init();
-            negative_tile(0);
+            negative_scoped(0, scope);
         }
     }
     sigmoid_tile_init<false>();
-    sigmoid_tile(3);
+    sigmoid_scoped(3, scope);
     tile_regs_commit();
     cb_reserve_back(cb_gates, 2);
     tile_regs_wait();
@@ -373,42 +462,46 @@ ALWI void conv_block_fpu(RowScope scope) {
     cb_push_back(cb_v, Vt);
 }
 
-// Squares of `count` tiles of an fp32 buffer starting at `base` (the input is kept) -> sq_buf.
+// Squares of `count` tiles of an fp32 buffer starting at `base` (the input is kept) -> sq_cb, DEST_AUTO_LIMIT
+// tiles per window, on the scope's rows.
 template <uint32_t in_cb, uint32_t sq_cb>
-ALWI void square_block(DataflowBuffer& in_buf, DataflowBuffer& sq_buf, uint32_t base, uint32_t count) {
-    if constexpr (in_cb == cb_y_qk) {
-        ckl::eltwise_chain(
-            ckl::IterationShape::tiles(count),
-            ckl::CopyTile<ckl::input(
-                cb_y_qk,
-                ckl::WaitPolicy::Upfront,
-                ckl::PopPolicy::None,
-                ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Enabled,
-                ckl::TileAddressing::Offset)>{in_buf, base},
-            ckl::Square<>{},
-            ckl::PackTile<ckl::output(sq_cb)>{sq_buf});
-    } else {
-        ckl::eltwise_chain(
-            ckl::IterationShape::tiles(count),
-            ckl::CopyTile<ckl::input(
-                cb_o_acc, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{in_buf},
-            ckl::Square<>{},
-            ckl::PackTile<ckl::output(sq_cb)>{sq_buf});
+ALWI void square_block(uint32_t base, uint32_t count, RowScope scope) {
+    cb_wait_front(in_cb, base + count);
+    cb_reserve_back(sq_cb, count);
+    for (uint32_t first = 0; first < count; first += ckl::DEST_AUTO_LIMIT) {
+        const uint32_t n = (count - first) < ckl::DEST_AUTO_LIMIT ? (count - first) : ckl::DEST_AUTO_LIMIT;
+        tile_regs_acquire();
+        begin_loads(in_cb);
+        for (uint32_t i = 0; i < n; ++i) {
+            load(in_cb, base + first + i, i);
+        }
+        square_tile_init();
+        for (uint32_t i = 0; i < n; ++i) {
+            square_scoped(i, scope);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, sq_cb, first);
+        for (uint32_t i = 1; i < n; ++i) {
+            pack_at(i, sq_cb, first + i);
+        }
+        tile_regs_release();
     }
+    cb_push_back(sq_cb, count);
 }
 
 // Post-reduce op on the column-0 row sum: rsqrt(sum + add) * post_mul.
 struct RsqrtPost {
     uint32_t add_bits;
     uint32_t post_mul_bits;
+    RowScope scope;
     ALWI void operator()(uint32_t dst) const {
         binop_with_scalar_tile_init();
-        add_unary_tile(dst, add_bits);
+        binop_scalar_scoped<ADD_UNARY>(dst, add_bits, scope);
         rsqrt_tile_init();
-        rsqrt_tile(dst);
+        rsqrt_scoped(dst, scope);
         binop_with_scalar_tile_init();
-        mul_unary_tile(dst, post_mul_bits);
+        binop_scalar_scoped<MUL_UNARY>(dst, post_mul_bits, scope);
     }
 };
 
@@ -433,9 +526,9 @@ ALWI void row_sum(Buffers& bufs, DataflowBuffer& sq_buf, DataflowBuffer& out_buf
 }
 
 // rsqrt(sum of squares of the Kt tiles of cb_y_qk at `base` + 1e-6) * post_mul -> cb_rinv.
-ALWI void l2_inverse_norm(Buffers& bufs, uint32_t base, uint32_t post_mul_bits) {
-    square_block<cb_y_qk, cb_sq>(bufs.y_qk, bufs.sq, base, Kt);
-    row_sum<cb_sq, cb_rinv>(bufs, bufs.sq, bufs.rinv, Kt, RsqrtPost{L2_EPS_BITS, post_mul_bits});
+ALWI void l2_inverse_norm(Buffers& bufs, uint32_t base, uint32_t post_mul_bits, RowScope scope) {
+    square_block<cb_y_qk, cb_sq>(base, Kt, scope);
+    row_sum<cb_sq, cb_rinv>(bufs, bufs.sq, bufs.rinv, Kt, RsqrtPost{L2_EPS_BITS, post_mul_bits, scope});
 }
 
 // ---------------------------------------------------------------- l2norm_block
@@ -445,7 +538,7 @@ ALWI void l2norm_block(Buffers& bufs, RowScope scope) {
     // q then k: one loop body keeps a single expansion of the square chain and the reduce.
 #pragma GCC unroll 1
     for (uint32_t part = 0; part < 2; ++part) {
-        l2_inverse_norm(bufs, part * Kt, part == 0 ? Q_SCALE_BITS : ONE_BITS);
+        l2_inverse_norm(bufs, part * Kt, part == 0 ? Q_SCALE_BITS : ONE_BITS, scope);
     }
 
     cb_wait_front(cb_rinv, 2);
@@ -631,8 +724,8 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
 // out = ((o (*)col rsqrt(mean o^2 + eps)) (*)row w) * silu(z), with
 // rsqrt(mean o^2 + eps) = sqrt(V) * rsqrt(sum o^2 + V eps).
 ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope) {
-    square_block<cb_o_acc, cb_sq_o>(bufs.o_acc, bufs.sq_o, 0, Vt);
-    row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, Vt, RsqrtPost{v_eps_bits, SQRT_V_BITS});
+    square_block<cb_o_acc, cb_sq_o>(0, Vt, scope);
+    row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, Vt, RsqrtPost{v_eps_bits, SQRT_V_BITS, scope});
     cb_wait_front(cb_rinv_o, 1);
     cb_wait_front(cb_z, Vt);
     cb_reserve_back(cb_out_rows, Vt);
@@ -648,7 +741,7 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope)
         sfpu_bcast_col_init();
         mul_bcast_col_scoped(0, 1, scope);
         sfpu_bcast_row_init();
-        mul_bcast_row_scoped(0, 2, scope);
+        bcast_row_scoped<ckernel::BinaryOp::MUL>(0, 2, scope);
         silu_tile_init();
         silu_scoped(3, scope);
         mul_binary_tile_init();
@@ -693,7 +786,7 @@ void kernel_main() {
             const RowScope scope = RowScope::of(lo - base_row, hi - base_row);
             {
                 DeviceZoneScopedN("Z_GATES");
-                gates_block();
+                gates_block(scope);
             }
             {
                 DeviceZoneScopedN("Z_CONV");
