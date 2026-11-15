@@ -592,7 +592,7 @@ golden suite is green, no regression on the guard set.
 
 **Outcome**: measured null, levers kept off as live knobs. Default (levers off) model_decode_b8 40.4-40.7 us, model_decode_b16 72.6-74.4 (before 40.3 / 73.0-75.8; guard set at parity). The reader now can write part of each final state on its own NoC (cb_state_done handshake, bit-identical outputs incl. in place): STATE_SPLIT=2 43.3 / 79.5 us, STATE_WRITE_NOC=1 (every state write on NOC 1) 42.9 / 78.7, STATE_READER_EARLY_UNITS (reader writes unit 0's state as packed) 80.7 at B=16; throttling outstanding writes 73-75. Ablation without any state write: 39.2 / 65.3 us. What binds: the issue rate of the state writes is DRAM / NoC back-pressure (~40 us per 64 KB on whichever cores write while reads are in flight, on either NoC), and the critical path is the S0 reads of the pair cores in NoC rows y = 5-6 (issued at 26-34 us, unit 1 at 42-47), which every extra early write delays further. At B=8 the writes cost ~1 us. Next: get those cores' inputs and S0 issued earlier (their window / weight / gate reads land late; the writer RISC is idle at that point and could read S0 on its NoC into a second CB), so compute ends sooner and the write-back starts when the reads are done; not done here because it is a read-side scheme change (a second S0 producer for compute) outside this write-back lever.
 
-### [ ] Refinement 16 — In-place state, T = 64 to 640: the program after the op hangs in a NoC barrier
+### [x] Refinement 16 — In-place state, T = 64 to 640: the program after the op hangs in a NoC barrier
 
 **Type**: fix
 
@@ -631,3 +631,20 @@ tolerances and in-place stays bit-identical to the default path.
 **Done when**: the new test passes 3 runs in a row, `hang_t.sh 0 <T>` passes for T = 64, 128, 256,
 384, 500, 512, 640, the root cause is named in the Outcome (which kernel, which transaction, why only
 in place and only without the profiler), the golden suite is green, no regression on the guard set.
+
+**Outcome**: root cause: the reader and writer kernels bump remote semaphores with `Semaphore::up(noc, x, y)`, a
+non-posted NoC atomic (`noc_semaphore_inc`) with no barrier of its own, and no kernel ever called
+`noc_async_atomic_barrier`. The next program's firmware seeds each RISC's NoC counters from the hardware ones at launch,
+so an ack still in flight when the kernel returns lands after that seeding; the next kernel's atomic barrier on that NoC
+(minimal_matmul `dm_in0_sender`, `noc_async_atomic_barrier`) then waits for an equality that never holds. The plan for T
+= 64 to 640 is R-PREP with shared q / k cores, whose last increments are issued right before return (the q / k core
+writer's qn / kn landed counters on its last row, the prep / state cores' slot grants, the state cores' o landed
+counters); on the other plans the last increment is followed by microseconds of state writes and their barrier, which
+hides it. Not in-place specific: with the fix disabled, copy mode at T=512 with a matmul right after each call hangs too
+(the integration's copy path ran other programs in between); the profiler hides it because the end-of-kernel profiler
+flush delays the next launch past the ack. Fix: `gdn::NocDrainOnReturn` (declared first in both dataflow kernels) runs
+`async_full_barrier` on the kernel's NoC on every return. New test (B=1 T in {64, 128, 256, 512, 640}, decode B=1 / 8 /
+16, 12 in-place calls each followed by minimal_matmul + matmul, bit-identical to the default chain) hung at T=64 before,
+passes 3 of 3 after; `hang_t.sh 0 T` passes 12 of 12 calls at T = 64, 128, 256, 384, 500, 512, 640. Guard set
+unchanged (device us: B=1 22.2-23.0, B=8 39.4-41.5, B=16 71.2-73.2, f32 29.8-31.0, T=96 54.5-55.2, B=2 T=40
+125.5-125.9, T=4096 910.4-911.6).
