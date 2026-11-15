@@ -4452,7 +4452,6 @@ tasks:
   - models/demos/common/bringup
   - models/demos/common/bringup/orchestrator.py
   - models/demos/common/bringup/testing
-  - models/demos/deepseek_v41_flash_d_p/bringup
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
