@@ -327,7 +327,7 @@ agents:
     it has no entry for, which is safe but not tuned. Do this as a perf pick after the first profile on the Galaxy, not inside
     W.1.'
   model: null
-  timeout_s: 14400
+  timeout_s: 0  # F252 (owner 2026-11-05): no fixed limit on an agent attempt; only a stall ends it (FIX.32 lost its agent at 4 h)
   read:
     reference:
     - /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/inference/model.py
