@@ -24,7 +24,7 @@ from math import prod
 import numpy as np
 import ttnn
 
-from ._coordinator import checked_payload, current_group, name_hash
+from ._coordinator import checked_payload, current_group
 from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError, UnexpectedKeyError
 from ._index import Index, is_complete, read_header_json, read_index
 from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan, unexpected_keys
@@ -45,7 +45,7 @@ from ._state_dict import (
     mesh_device,
     restore_scalars,
 )
-from ._topology import chunk_boxes
+from ._topology import chunk_boxes, crc31
 from ._train_state import TRAIN_STATE_KEY, check_train_state, missing_train_state, restore_train_state
 
 
@@ -265,7 +265,7 @@ def load(
     ckpt_dir = group.phase("checking the arguments", check_arguments)
     # Ranks that resolved different directories (a stale NFS listing behind find_latest) or asked for different
     # things would restore different checkpoints, or wait for each other in different collectives.
-    group.agree("the checkpoint directory", name_hash(ckpt_dir))
+    group.agree("the checkpoint directory", crc31(ckpt_dir))
     group.agree("strict and whether an optimizer is loaded", int(bool(strict)) + 2 * int(optimizer is not None))
 
     def open_and_collect():

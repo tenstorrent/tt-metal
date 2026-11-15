@@ -45,7 +45,6 @@ from __future__ import annotations
 import json
 import re
 import traceback
-import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
@@ -70,7 +69,7 @@ from ._errors import (
 from ._index import Entry, FileRecord, Index, _entry_from_json, _entry_to_json
 from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
-from ._topology import Chunk, Label
+from ._topology import Chunk, Label, crc31
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
 # other user of ttnn's point-to-point calls (tag 0 by default; tt-train's GRPO rollout uses 22010-22013 and
@@ -277,10 +276,6 @@ class Group:
         return values
 
 
-def name_hash(text: str) -> int:
-    return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
-
-
 def current_group() -> Group:
     """The group of this process: the MPI world under ``tt-run`` with several ranks, else the group of one."""
     return Group(current_transport() or LoopbackTransport())
@@ -288,7 +283,7 @@ def current_group() -> Group:
 
 def state_hash(value: Any) -> int:
     """A 31-bit hash of JSON state, the same on every rank that holds equal state."""
-    return zlib.crc32(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")) & 0x7FFFFFFF
+    return crc31(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
 # --- plan parts ------------------------------------------------------------------------------------------------------
@@ -494,7 +489,7 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     for key, info in infos.items():
         groups, _ = _groups_of(info)
         chosen: dict[tuple[int, ...], Owner] = {}
-        spread = zlib.crc32(key.encode("utf-8"))
+        spread = crc31(key)
         for group_key in groups:
             holders = sorted(members[key].get(group_key, []))
             if not holders:

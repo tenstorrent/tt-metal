@@ -34,7 +34,6 @@ from ._coordinator import (
     current_group,
     merge_plan_parts,
     merge_results,
-    name_hash,
     state_hash,
 )
 from ._errors import CheckpointError, CheckpointFatalError
@@ -63,6 +62,7 @@ from ._state_dict import (
     is_structural_scalar,
     rank_record,
 )
+from ._topology import crc31
 from ._train_state import capture_train_state
 
 
@@ -294,7 +294,7 @@ def save(
     name = os.path.basename(ckpt_dir)
     by_key = {lt.key: lt for lt in live}
     stats["collect_s"] = time.perf_counter() - t0
-    group.agree("the checkpoint directory", name_hash(ckpt_dir))
+    group.agree("the checkpoint directory", crc31(ckpt_dir))
     group.agree("overwrite", int(bool(overwrite)))
     # The index holds one copy of the optimizer's scalars, rank 0's; a rank whose optimizer differs (or that has none)
     # would load rank 0's steps and learning rates without a word. A param group's member list is per rank (a rank of

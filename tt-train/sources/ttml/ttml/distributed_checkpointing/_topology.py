@@ -161,7 +161,13 @@ def replica_groups(chunks: Sequence[Chunk]) -> dict[tuple[int, ...], list[Chunk]
     return groups
 
 
+def crc31(text: str) -> int:
+    """A stable 31-bit hash of ``text``: zlib's CRC32 without its top bit, the same in every process, and small
+    enough for the C int that carries a hash between the ranks."""
+    return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
+
+
 def owner(key: str, group: Sequence[Chunk]) -> Chunk:
     """The replica that writes the group's box: a stable hash of the key spreads owners over every device."""
     ordered = sorted(group, key=lambda c: c.mesh_coord)
-    return ordered[zlib.crc32(key.encode("utf-8")) % len(ordered)]
+    return ordered[crc31(key) % len(ordered)]
