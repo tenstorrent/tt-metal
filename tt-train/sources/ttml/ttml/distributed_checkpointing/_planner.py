@@ -126,7 +126,6 @@ class SavePlan:
                     file=item.file,
                     data_offset=item.data_offset,
                     nbytes=item.nbytes,
-                    writer_coord=item.chunk.mesh_coord,
                     crc32=None if crc32 is None else crc32.get((key, item.file)),
                 )
                 for item in self.items[key]

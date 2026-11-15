@@ -14,7 +14,6 @@ from ttml.distributed_checkpointing._topology import (
     chunk_boxes,
     dist_coords,
     global_shape,
-    local_shape,
     owner,
     replica_groups,
 )
@@ -31,7 +30,6 @@ def test_replicate_and_shard_on_a_2d_mesh():
     label = _label([R(), S(2)], (2, 2))
     local = (1, 1, 32, 64)
     assert global_shape(label, local) == (1, 1, 64, 64)
-    assert local_shape(label, (1, 1, 64, 64)) == local
     chunks = chunk_boxes(label, local)
     assert [c.mesh_coord for c in chunks] == [(0, 0), (0, 1), (1, 0), (1, 1)]
     assert [c.box.offsets for c in chunks] == [(0, 0, 0, 0), (0, 0, 32, 0), (0, 0, 0, 0), (0, 0, 32, 0)]
@@ -71,7 +69,6 @@ def test_fully_replicated_label_is_one_group():
     label = _label([R(), R()], (2, 4))
     chunks = chunk_boxes(label, (1, 1, 1, 64))
     assert len(replica_groups(chunks)) == 1
-    assert label.is_fully_replicated()
     assert global_shape(label, (1, 1, 1, 64)) == (1, 1, 1, 64)
 
 
@@ -99,8 +96,6 @@ def test_negative_dims_are_normalized_and_bad_labels_rejected(expect_error):
         Label([R(), S(2)], (1, 2), [(0, 0)])
     with expect_error(TopologyError, "twice"):
         Label([R(), S(2)], (1, 2), [(0, 0), (0, 0)])
-    with expect_error(TopologyError, "split evenly"):
-        local_shape(_label([S(2)], (3,)), (1, 1, 64, 64))
 
 
 def test_label_round_trips_through_json():
@@ -146,7 +141,7 @@ def test_boxes_tile_grid_fast_path_agrees_with_the_pairwise_definition():
                 k = int(rng.integers(1, b.sizes[0]))
                 boxes += [b.with_dim(0, b.offsets[0], k), b.with_dim(0, b.offsets[0] + k - 1, b.sizes[0] - k)]
         elif mutation == 4:
-            boxes = [b.translate((1,) + (0,) * (ndim - 1)) for b in boxes]  # shifted past the target
+            boxes = [Box((b.offsets[0] + 1,) + b.offsets[1:], b.sizes) for b in boxes]  # shifted past the target
         kept = [b for b in boxes if not b.is_empty()]
         grid = grid_cell_size(kept, target.offsets) is not None
         grid_cases += grid

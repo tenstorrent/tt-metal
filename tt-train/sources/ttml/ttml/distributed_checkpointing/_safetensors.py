@@ -89,10 +89,10 @@ def read_header(path: str) -> tuple[dict, int]:
 
 
 def encode_metadata(metadata: dict) -> dict[str, str]:
-    """``__metadata__`` values, which safetensors requires to be strings, so that ``read_metadata`` returns exactly
-    ``metadata``: a string is stored as it is and a dict or list as JSON, which always starts with ``{`` or ``[``.
-    Anything else (a number, a bool, None) or a string that itself starts with ``{`` or ``[`` would not read back as
-    the same value, so it is refused."""
+    """``__metadata__`` values, which safetensors requires to be strings: a string is stored as it is and a dict or
+    list as JSON, which always starts with ``{`` or ``[``, so a reader that decodes exactly those values gets
+    ``metadata`` back. Anything else (a number, a bool, None) or a string that itself starts with ``{`` or ``[`` would
+    not read back as the same value, so it is refused."""
     encoded = {}
     for key, value in metadata.items():
         if isinstance(value, str):
@@ -110,23 +110,6 @@ def encode_metadata(metadata: dict) -> dict[str, str]:
                 f"read back as the same type)"
             )
     return encoded
-
-
-def read_metadata(header: dict) -> dict:
-    """The ``__metadata__`` of a parsed header: JSON objects and arrays decoded again, every other value as stored.
-
-    Files from other writers may hold values that look like JSON but are not; those come back as stored."""
-    raw = header.get("__metadata__", {})
-    decoded = {}
-    for key, value in raw.items():
-        if isinstance(value, str) and value[:1] in ("{", "["):
-            try:
-                decoded[key] = json.loads(value)
-                continue
-            except ValueError:
-                pass
-        decoded[key] = value
-    return decoded
 
 
 def pread_all(fd: int, nbytes: int, offset: int) -> bytes:

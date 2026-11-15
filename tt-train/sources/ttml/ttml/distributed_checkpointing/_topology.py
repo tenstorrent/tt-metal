@@ -97,9 +97,6 @@ class Label:
     def shard_count(self, dim: int) -> int:
         return prod(self.dist_shape[a] for a in self.shard_axes(dim))
 
-    def is_fully_replicated(self) -> bool:
-        return all(p.kind == "replicate" for p in self.placements)
-
     def to_json(self) -> dict:
         return {
             "placements": [p.to_json() for p in self.placements],
@@ -119,17 +116,6 @@ class Label:
 def global_shape(label: Label, local_shape: Sequence[int]) -> tuple[int, ...]:
     """The global shape a label describes, from the shape every device holds."""
     return tuple(int(n) * label.shard_count(d) for d, n in enumerate(local_shape))
-
-
-def local_shape(label: Label, global_shape_: Sequence[int]) -> tuple[int, ...]:
-    """The per-device shape a label gives a global array, or a ``TopologyError`` when the split is uneven."""
-    shape = []
-    for d, n in enumerate(global_shape_):
-        count = label.shard_count(d)
-        if n % count:
-            raise TopologyError(f"dim {d} of extent {n} does not split evenly into {count} shards")
-        shape.append(n // count)
-    return tuple(shape)
 
 
 @dataclass(frozen=True)

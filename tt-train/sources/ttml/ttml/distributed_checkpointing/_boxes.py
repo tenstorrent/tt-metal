@@ -65,9 +65,6 @@ class Box:
     def contains(self, other: "Box") -> bool:
         return all(lo <= o and o + s <= hi for lo, hi, o, s in zip(self.offsets, self.ends, other.offsets, other.sizes))
 
-    def translate(self, delta: Sequence[int]) -> "Box":
-        return Box(tuple(o + int(d) for o, d in zip(self.offsets, delta)), self.sizes)
-
     def relative_to(self, origin: "Box") -> "Box":
         """This box in coordinates local to ``origin`` (which must contain it)."""
         if not origin.contains(self):
