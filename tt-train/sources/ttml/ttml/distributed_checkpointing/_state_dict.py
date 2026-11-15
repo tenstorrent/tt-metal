@@ -56,7 +56,9 @@ NUMPY_CARRIERS = {
     "I8": np.int8,
 }
 
-_FUSION_HINT = re.compile(r"(qkv|kv_|_kv\b|gate_up|fused)", re.IGNORECASE)
+# A module name with qkv, kv, gate_up or fused as a whole underscore-separated part (kv_linear, qkv_proj, w_qkv,
+# gate_up_proj), but not DeepSeek's head-major wkv_a/wkv_b, which reshard correctly without a declaration.
+_FUSION_HINT = re.compile(r"(?:^|_)(qkv|kv|gate_up|fused)(?:_|$)", re.IGNORECASE)
 
 
 @dataclass

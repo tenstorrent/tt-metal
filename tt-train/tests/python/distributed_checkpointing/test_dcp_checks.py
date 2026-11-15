@@ -124,6 +124,17 @@ def test_fused_name_lint_ignores_fsdp_rows_and_warns_for_tp_rows():
         assert len(caught) == 1, "a declared fused weight is fine"
 
 
+def test_fused_name_lint_matches_whole_name_parts():
+    tp_rows = _label([Placement.replicate(), Placement.shard(2)], (1, 4))
+    fused = ["kv_linear", "qkv_proj", "w_qkv", "gate_up_proj", "fused_qkv", "attention_kv"]
+    head_major = ["wkv_a", "wkv_b", "q_linear", "in_proj", "kvass"]  # DeepSeek's wkv_b reshards head by head
+    for name in fused + head_major:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _lint_fusion(f"model/Root/blocks/0/attention/{name}/weight", tp_rows, {}, _Tensor())
+        assert len(caught) == (name in fused), name
+
+
 class _CppChild:
     """A nanobind-bound module: no __dict__."""
 
