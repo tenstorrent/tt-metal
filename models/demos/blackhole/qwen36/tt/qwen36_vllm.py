@@ -392,7 +392,6 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                 )
         start_pos = kwargs.get("start_pos")
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
-        comp = ttnn.ConcatMeshToTensor(model.mesh_device, dim=0)
         blocks = model.gdn_blocks
         rows = []
         for u in range(N):
@@ -426,7 +425,7 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                 )
             # The logits are read and freed before the block writes: a write can replay a captured trace, which may
             # overwrite a buffer allocated after its capture, such as these logits.
-            rows.append(ttnn.to_torch(logits, mesh_composer=comp).reshape(-1, model.args.vocab_size)[:1].float())
+            rows.append(_replica_to_torch(logits).reshape(-1, model.args.vocab_size)[:1].float())
             ttnn.deallocate(logits)
             if segments[-1][2]:  # prefill_segments computes a checkpoint in a forward only in a one-part plan
                 blocks.write_checkpoint(mamba_state, rb.checkpoint)
@@ -560,6 +559,13 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         kwargs.pop("non_greedy_decoding_on_device", None)
         self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
         return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
+
+
+def _replica_to_torch(logits):
+    """Host copy of device 0's replica of the prefill logits. Every device holds the same [1, 1, vocab] row (the LM head
+    all-gathers its vocabulary shards, or runs on a replicated weight), so one replica is the whole row and moves
+    1 / num_devices of the bytes of reading every replica."""
+    return ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
 
 
 def _vision_warmup_patches(model):
