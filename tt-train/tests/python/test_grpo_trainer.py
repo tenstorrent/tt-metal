@@ -543,6 +543,23 @@ def test_grpo_trainer_trains_fp32_master_weights_with_fp32_gradient_accumulation
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+def test_grpo_trainer_rejects_a_whole_config_as_optimizer_dict(expect_error):
+    """``create_optimizer`` applies a whole config's precision block, which here would run after the weights loaded.
+    The trainer takes that block as ``precision=`` and only the optimizer's own dict as ``optimizer_dict``."""
+    whole_config = {
+        "training_config": {"optimizer": {"type": "AdamW", "lr": 1.0e-3}, "precision": {"master_dtype": "float32"}}
+    }
+    with expect_error(ValueError, "must be the optimizer's own dict"):
+        GRPOTrainer(
+            transformer_config=None,
+            device_config=None,
+            model_source="unused",
+            dataset_func=lambda: None,
+            config=None,
+            optimizer_dict=whole_config,
+        )
+
+
 @pytest.mark.requires_device
 def test_policy_forward_is_causal(patch_llama_weight_loading):
     """A change to the last token changes no earlier -log pi; full attention would change them."""
@@ -963,7 +980,7 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
         dataset_func=lambda: None,
         config=cfg,
         reward_funcs=[lambda completions, **_: list(_REWARDS)],
-        optimizer_dict={},
+        optimizer_dict={"type": "AdamW"},  # never built: _build_policy is replaced
         callbacks=[_Recorder(), monitor],
     ).train()
     return run
@@ -1277,7 +1294,7 @@ def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs, callbacks=()
         dataset_func=lambda: None,
         config=_remote_grpo_config(),
         reward_funcs=reward_funcs,
-        optimizer_dict={},
+        optimizer_dict={"type": "AdamW"},  # never built: _build_policy is replaced
         callbacks=list(callbacks),
     )
 

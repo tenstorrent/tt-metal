@@ -1105,6 +1105,12 @@ class GRPOTrainer:
         """
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
+        if not isinstance(optimizer_dict, dict) or "type" not in optimizer_dict:
+            raise ValueError(
+                "GRPOTrainer: 'optimizer_dict' must be the optimizer's own dict, with a 'type' key. A whole config "
+                "would apply its training_config.precision a second time, after the weights load; pass that block as "
+                "precision=."
+            )
         if not callable(dataset_func):
             raise TypeError("GRPOTrainer: 'dataset_func' must be a zero-argument callable returning the dataset.")
         _validate_remote_inputs(config, transformer_config, device_config, model_source)
