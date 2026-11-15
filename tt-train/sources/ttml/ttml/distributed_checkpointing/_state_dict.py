@@ -375,8 +375,7 @@ def fsdp_gate(model, reshard: bool) -> list[Any]:
             continue
         if not reshard:
             raise FSDPStateError(f"FSDP module {path or '<root>'} is not in its sharded state; pass reshard_fsdp=True")
-        state._reshard_all_params()
-        state.sharded_state = _ShardedState.SHARDED
+        module.reshard()  # installed by fully_shard
     return states
 
 
