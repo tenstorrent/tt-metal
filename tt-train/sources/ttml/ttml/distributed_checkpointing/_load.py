@@ -246,7 +246,9 @@ def load(
     and ``strict`` judges unexpected entries over the union of the ranks' live tensors. A failure on any rank makes
     every rank raise the same error class, and no point-to-point MPI traffic between the ranks may be outstanding when
     load is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``) on the world communicator while it runs:
-    the ranks' metadata travels under it. A single process is the group of one and takes the same path.
+    the ranks' metadata travels under it. Every rank of the world must call load (#65436 tracks a subset of the ranks;
+    #65666 a communicator of its own, without the reserved tag). A single process is the group of one and takes the same
+    path.
     """
     t0 = time.perf_counter()
     group = current_group()

@@ -248,9 +248,10 @@ def save(
     the checkpoint stores one copy; their generators are stored per rank. The user header stored is rank 0's. A failure
     on any rank, the local work included, makes every rank raise the same error class, and no point-to-point MPI traffic
     between the ranks may be outstanding when save is called. No other code may use the MPI tag ``DCP_TAG`` (``0x7DC0``)
-    on the world communicator while it runs: the ranks' metadata travels under it. The result on each rank lists that
-    rank's files and bytes; ``keys`` counts the whole checkpoint. A single process is the group of one and takes the
-    same path.
+    on the world communicator while it runs: the ranks' metadata travels under it. Every rank of the world must call
+    save (#65436 tracks a subset of the ranks; #65666 a communicator of its own, without the reserved tag). The result
+    on each rank lists that rank's files and bytes; ``keys`` counts the whole checkpoint. A single process is the group
+    of one and takes the same path.
     """
     t0 = time.perf_counter()
     stats: dict[str, float] = {}

@@ -5,7 +5,9 @@
 """Multi-rank coordination for save and load.
 
 One communicator, the MPI world ``tt-run`` launches as seen through ttnn's distributed context, gives every rank its
-rank and the group size.
+rank and the group size. So save and load always span every rank of the world: a world where some ranks never call
+them (the rollout ranks of a GRPO run, say) waits for those ranks at the first collective. Saving from a subset of the
+ranks is #65436; a communicator of the coordinator's own, in place of the world and its reserved tag, is #65666.
 
 Save and load each run as a fixed sequence of phases. A phase is one named step of local work that every rank reaches at
 the same point (collecting its live tensors, writing its shards or, on rank 0 alone, merging the ranks' plan parts),
@@ -61,7 +63,8 @@ from ._train_state import RNG_FORMAT
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
 # other user of ttnn's point-to-point calls (tag 0 by default; tt-train's GRPO rollout uses 22010-22013 and
-# 22101-22106), so no other protocol may use this tag while a save or load runs.
+# 22101-22106), so no other protocol may use this tag while a save or load runs. A communicator of the coordinator's
+# own (MPI_Comm_dup of the world) would make the reservation unnecessary: #65666.
 DCP_TAG = 0x7DC0
 # The largest payload one transfer can carry: its length travels through distributed_context_allgather_int, a C int,
 # and MPI_Send / MPI_Recv take an int count (ttnn's MPI context throws past INT_MAX).
