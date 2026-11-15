@@ -31,3 +31,4 @@
 {"event":"test_run","status":"pass","test":"golden slice x128x128|8192x256|1x40x256 + unit dir + guard profile","details":"29/29 golden, 228 unit, guard set unchanged","ts":"2026-11-15T08:11:54+00:00"}
 {"event":"test_run","refinement":13,"status":"pass","tests":"unit dir 231 passed; golden slice 19 + regression 36; program_cache 3 passed","host_wall_us":{"prefill_t128":[1610,330],"decode_b1":[560,112]},"ts":"2026-11-15T08:39:48+00:00"}
 {"event":"test_run","refinement":14,"status":"pass","detail":"prep 49+10 new, unit dir 164, golden loose or prefill 52/52; T=128 82.3->65.9 us, T=512 196.4->179.4, 4096 unchanged","ts":"2026-11-15T09:08:54+00:00"}
+{"event":"test_run","status":"pass","tests":"state_split 24/24, unit net 57/57, golden loose or decode 34/34","perf":"default b8 40.5 b16 73; levers 43/79 split2, 43/79 noc1, 81 early","ts":"2026-11-15T09:34:27+00:00"}

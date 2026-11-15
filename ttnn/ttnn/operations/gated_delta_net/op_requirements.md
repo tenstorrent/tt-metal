@@ -570,7 +570,7 @@ RMS), so T >= 32 tile rows stays prep-throughput bound and T=128 is the one-row 
 for T=4096: cut the head part itself (head prep / head block per value head, ~17 us), since sharing frees no work
 there; not attempted here because it is a different lever from this refinement's.
 
-### [ ] Refinement 15 — Decode B=8 / B=16: state write-back on both RISCs and both NoCs
+### [x] Refinement 15 — Decode B=8 / B=16: state write-back on both RISCs and both NoCs
 
 **Type**: perf
 
@@ -589,3 +589,5 @@ every read of a region before any write of it. Must not slow `perf_decode_b1` or
 
 **Done when**: measured device-ns on both cases improves toward the goals, in-place tests pass, the
 golden suite is green, no regression on the guard set.
+
+**Outcome**: measured null, levers kept off as live knobs. Default (levers off) model_decode_b8 40.4-40.7 us, model_decode_b16 72.6-74.4 (before 40.3 / 73.0-75.8; guard set at parity). The reader now can write part of each final state on its own NoC (cb_state_done handshake, bit-identical outputs incl. in place): STATE_SPLIT=2 43.3 / 79.5 us, STATE_WRITE_NOC=1 (every state write on NOC 1) 42.9 / 78.7, STATE_READER_EARLY_UNITS (reader writes unit 0's state as packed) 80.7 at B=16; throttling outstanding writes 73-75. Ablation without any state write: 39.2 / 65.3 us. What binds: the issue rate of the state writes is DRAM / NoC back-pressure (~40 us per 64 KB on whichever cores write while reads are in flight, on either NoC), and the critical path is the S0 reads of the pair cores in NoC rows y = 5-6 (issued at 26-34 us, unit 1 at 42-47), which every extra early write delays further. At B=8 the writes cost ~1 us. Next: get those cores' inputs and S0 issued earlier (their window / weight / gate reads land late; the writer RISC is idle at that point and could read S0 on its NoC into a second CB), so compute ends sooner and the write-back starts when the reads are done; not done here because it is a read-side scheme change (a second S0 producer for compute) outside this write-back lever.
