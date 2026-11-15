@@ -316,7 +316,7 @@ class GdnBlockState:
         self._verify_idx = [table(idx0, ttnn.uint32) for _ in range(groups)]
         for i, dn in self.layers.items():
             k = self._verify_group[i]
-            dn.state_blocks.verify = SimpleNamespace(T=T, ctrl=self._verify_ctrl[k], idx=self._verify_idx[k])
+            dn.state_blocks.verify = SimpleNamespace(T=T, rows=rows, ctrl=self._verify_ctrl[k], idx=self._verify_idx[k])
         self._verify_refs = []
         self._verify_staged = {}  # ("ctrl" | "idx", table group) -> the host table its device table holds
         self._verify_order = None  # (mamba_state group names, [table group of each mamba_state group])

@@ -2160,13 +2160,17 @@ class TPGatedDeltaNet:
         ONE gdn_spec_step reads each row's full state (recurrent state and packed history) from its start block and
         writes the full state after every token into the block that the verify tables name (state_blocks.verify,
         written by GdnBlockState.set_verify_blocks), so nothing is committed or kept here. Arithmetic of
-        gdn_decode_step on the same blocks, token by token. Then the out-projection and all-reduce of decode."""
+        gdn_decode_step on the same blocks, token by token. Then the out-projection and all-reduce of decode.
+        n_users below the tables' rows (a verify row bucket) runs the tables' first n_users rows: gdn_spec_step reads
+        them from the ctrl page of all rows (max_users)."""
         tw, sb = self.tw, self.state_blocks
         vb = getattr(sb, "verify", None)
         assert vb is not None and valid_len == n_users * vb.T, (
             f"the verify tables are bound for T = {getattr(vb, 'T', None)} tokens per row; got {valid_len} rows for "
             f"{n_users} users"
         )
+        table_rows = getattr(vb, "rows", n_users)
+        assert n_users <= table_rows, f"{n_users} verify users, the verify tables hold {table_rows} rows"
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
         qkvzab = tpc.matmul_1d_decode(
@@ -2199,6 +2203,7 @@ class TPGatedDeltaNet:
             ring_page_idx=vb.idx,
             conv_hist=sb.hist,
             **({} if sb.rec_v is None else {"ring_pool2": sb.rec_v}),
+            **({} if n_users == table_rows else {"max_users": table_rows}),
             **self._spec_step_options(vb.T),
         )  # [1, n_users * T, Nv * Dv]
         ttnn.deallocate(qkvzab)

@@ -1470,40 +1470,45 @@ class Qwen36Model:
         logits, feed, _ = self._spec_tail_ids(x, None)
         return logits, feed
 
-    def _spec_tail_ids(self, x, shard_ids):
+    def _spec_tail_ids(self, x, shard_ids, logits=True):
         """_spec_tail, and ``shard_ids(shard)`` run on this device's vocab shard of the logits before the vocab all-gather
         (vocab-sharded head only). Returns (logits, feed, ids): ids is shard_ids' result, or None without a sharded
-        head or ``shard_ids``.
+        head or ``shard_ids``. ``logits`` False: when shard_ids gave the ids, the shard is freed without the vocab
+        all-gather and logits is None.
 
         A full-width x is the replicated decode residual: the final norm is its local norm and the feed is this
         device's dim/tp span of its output (mesh_partition, as Qwen36MTP.forward_decode re-fractures)."""
         if self._decode_ar is not None and x.shape[-1] == self.args.dim:
             normed = self._final_norm_decode(x)  # [1,1,R,dim] DRAM, replicated
             ttnn.deallocate(x)
-            logits, ids = self._lm_head_ids(normed, shard_ids)
+            out, ids = self._lm_head_ids(normed, shard_ids, logits)
             feed = ttnn.mesh_partition(normed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(normed)
-            return logits, feed, ids
+            return out, feed, ids
         rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,R,dim]
-        logits, ids = self._lm_head_ids(normed, shard_ids)
+        out, ids = self._lm_head_ids(normed, shard_ids, logits)
         ttnn.deallocate(normed)
         feed = self.spec_feed_rows(rows)
         if feed is not rows:
             ttnn.deallocate(rows)
-        return logits, feed, ids
+        return out, feed, ids
 
-    def _lm_head_ids(self, normed, shard_ids):
+    def _lm_head_ids(self, normed, shard_ids, logits=True):
         """(logits, ids) of the full-width ``normed`` rows: ``shard_ids`` runs on this device's vocab shard before the
-        all-gather (vocab-sharded head only); ids is None without it."""
+        all-gather (vocab-sharded head only); ids is None without it. ``logits`` False: logits is None when the shard
+        gave the ids (the shard is freed, nothing is gathered)."""
         if shard_ids is None or not self._lmhead_vocab_sharded:
             return self._lm_head(normed), None
         shard = ttnn.linear(normed, self.lm_head_weight)
         ids = shard_ids(shard)
+        if not logits and ids is not None:
+            ttnn.deallocate(shard)
+            return None, ids
         return self._gather_vocab(shard), ids
 
-    def _forward_verify_bucket_tp(self, n_users):
+    def _forward_verify_bucket_tp(self, n_users, tables=None, logits=True):
         """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
         logits + hidden. Reads only fixed-address buffers so it is trace-capturable. Full-attention
         layers run the decode flash kernel with the rows as pseudo-users (see capture_verify_trace).
@@ -1512,9 +1517,16 @@ class Qwen36Model:
         table rows come from the step buffer _vfy_step_buf (spec_step), cos and sin from rope_lookup. Returns (logits,
         rows, ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
         ``logits_rm`` is the ROW_MAJOR bf16 copy the in-trace argmax needs, kept for the sampling path.
+
+        ``tables``: (per-row, per-user, per-group) page tables of the n_users users, in place of the persistent
+        B-user buffers (_verify_bucket_body). ``logits`` False: the ids come from the fused per-shard argmax, and
+        logits and logits_rm are None (no vocab all-gather, no untilize).
         """
         T = self._vfy_T
         rows = n_users * T
+        pt_rows, pt_users, pt_groups = (
+            (self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf) if tables is None else tables
+        )
         step = self._vfy_step_buf
         tokens = ttnn.slice(step, (VERIFY_TOKENS, 0), (VERIFY_TOKENS + 1, rows))
         positions = ttnn.slice(step, (VERIFY_POSITIONS, 0), (VERIFY_POSITIONS + 1, rows))
@@ -1544,16 +1556,16 @@ class Qwen36Model:
                     sin=sin,
                     mode="decode",
                     position_tensor=kvpos,
-                    page_table=self._vfy_kvpt_buf,
+                    page_table=pt_rows,
                     alias_kv_write=True,
-                    spec_user_page_table=self._vfy_kvpt_users,
+                    spec_user_page_table=pt_users,
                     # The SDPA read folds those rows into a few batch rows (spec_multi_pos_tiles: groups
                     # of 4 candidates, n_users x the single-user split), so the KV cache streams out of
                     # DRAM once per group per layer instead of once per row. The op wants one aliased
                     # page-table row per group; the per-row KV write above still needs the full row-count
                     # alias table. A T with no L1-fitting split (7, 11, ...) uses the legacy per-row call.
                     spec_verify_mode=True,
-                    spec_page_table=self._vfy_kvpt1_buf,
+                    spec_page_table=pt_groups,
                     n_users=n_users,
                 )
             else:
@@ -1572,6 +1584,11 @@ class Qwen36Model:
             x = x_new
         for t in (kvpos, cos, sin):
             ttnn.deallocate(t)
+        if not logits:
+            _, rows_out, ids = self._spec_tail_ids(x, self._vfy_shard_ids, logits=False)
+            if ids is None:
+                raise RuntimeError("a verify without logits needs the fused per-shard argmax of its vocab shard")
+            return None, rows_out, ids, None
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x vocab floats. The fused per-shard argmax (tt/spec_argmax_fused.py) takes the ids
         # from each device's vocab shard before the all-gather: [1,1,1,32] uint32 ROW_MAJOR, lane r = row r.
@@ -1594,6 +1611,57 @@ class Qwen36Model:
         if fused is None:
             fused = self._vfy_argmax_fused = FusedShardArgmax(self.mesh_device, self.vocab_size, self.num_devices)
         return fused(shard, LANES) if fused.supports(shard) is None else None
+
+    def _verify_bucket_body(self, b, ids_out, rows_out):
+        """Trace body of verify row bucket ``b`` < B: the verify of users 0 .. b-1 alone, on the B-user step buffer,
+        page tables and GDN verify tables, handed over to the B-user outputs. ``ids_out`` takes its argmax lanes (lanes
+        past b*T hold no row) and ``rows_out`` its drafter feed rows, with every row past them zero, so the step trace,
+        the drafter and the chain program read the outputs of a B-user verify whose users from b on are padding. It
+        makes no logits: it serves only a step that reads none (no sampler, no logits verify)."""
+        T, nb = self._vfy_T, self._vfy_nb
+        owned = []
+
+        def head(buf, n):
+            # A full-span slice would alias the persistent table itself.
+            if n == int(buf.shape[0]):
+                return buf
+            t = ttnn.slice(buf, (0, 0), (n, nb))
+            owned.append(t)
+            return t
+
+        groups = int(self._vfy_att0.spec_sdpa_groups(T, b))
+        tables = (head(self._vfy_kvpt_buf, b * T), head(self._vfy_kvpt_users, b), head(self._vfy_kvpt1_buf, groups))
+        _, feed, ids, _ = self._forward_verify_bucket_tp(n_users=b, tables=tables, logits=False)
+        for t in owned:
+            ttnn.deallocate(t)
+        ttnn.copy(ids, ids_out)
+        full = ttnn.concat([feed, self._vfy_bucket_zeros[b]], dim=2, memory_config=rows_out.memory_config())
+        ttnn.copy(full, rows_out)
+        for t in (ids, feed, full):
+            ttnn.deallocate(t)
+
+    def _warm_verify_buckets(self, buckets, ids_out, rows_out):
+        """Allocate the zero feed rows of every verify row bucket and run its body once into the warm pass's B-user
+        outputs ``ids_out`` and ``rows_out``, so its capture compiles nothing. Returns the buckets, ascending."""
+        B, T = self._vfy_B, self._vfy_T
+        buckets = tuple(sorted({int(b) for b in buckets}))
+        bad = [b for b in buckets if not 1 <= b < B or self._vfy_att0.spec_sdpa_groups(T, b) > self._vfy_spec_groups]
+        if bad:
+            raise ValueError(f"verify row buckets {bad} are not below the decode width {B}")
+        width = int(rows_out.shape[-1])
+        self._vfy_bucket_zeros = {
+            b: ttnn.zeros(
+                [1, 1, (B - b) * T, width],
+                dtype=rows_out.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for b in buckets
+        }
+        for b in buckets:
+            self._verify_bucket_body(b, ids_out, rows_out)
+        return buckets
 
     def _vfy_row_positions(self, positions):
         """Per-ROW absolute positions for the user-major bucket: row u*T + j is positions[u] + j."""
@@ -1651,6 +1719,9 @@ class Qwen36Model:
         if getattr(self, "_vfy_sample_trace_id", None) is not None:
             ttnn.release_trace(self.mesh_device, self._vfy_sample_trace_id)
             self._vfy_sample_trace_id = None
+        for trace_id in (getattr(self, "_vfy_bucket_traces", None) or {}).values():
+            ttnn.release_trace(self.mesh_device, trace_id)
+        self._vfy_bucket_traces = {}
 
     @staticmethod
     def _fit_spec_page_table(pt, nb):
@@ -1674,7 +1745,7 @@ class Qwen36Model:
         self.prepare_verify_trace(page_tables, T, warm_positions)
         self.record_verify_trace()
 
-    def prepare_verify_trace(self, page_tables, T, warm_positions, sample=False):
+    def prepare_verify_trace(self, page_tables, T, warm_positions, sample=False, buckets=()):
         """Allocate and compile everything the verify trace needs without capturing (warmup phase 1);
         record_verify_trace captures it (phase 2); verify_traced replays it.
         Bucket is a fixed B x T (T = len([pending] + drafts) per user, B = max_batch_size users).
@@ -1687,7 +1758,10 @@ class Qwen36Model:
         point the writes past each user's prompt frontier; the first real verify overwrites them.
         ``sample``: also compile the device sampler over the verify's logits (spec_sample.VerifySampler), which
         record_verify_trace captures as a trace of its own and verify_traced(sample_plan=...) replays.
-        Idempotent for the same (B, T, nb, sample); a different key releases any live trace first.
+        ``buckets``: user counts b < B (GDN state in vLLM KV cache blocks only) whose verify of users 0 .. b-1
+        record_verify_trace also captures (_verify_bucket_body); verify_enqueue(bucket=b) replays it. They need the
+        fused per-shard argmax ids; without them no bucket is prepared (_vfy_buckets).
+        Idempotent for the same (B, T, nb, sample, buckets); a different key releases any live trace first.
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
@@ -1718,7 +1792,7 @@ class Qwen36Model:
         # through decode flash as pseudo-users: write all K/V, then one SDPA-decode with per-row
         # cur_pos so row u*T+j attends [0, p_u+j]. Causality is free and the KV scan spreads over
         # the full grid.
-        key = (B, T, nb, bool(sample))
+        key = (B, T, nb, bool(sample), tuple(sorted(int(b) for b in buckets)))
         if getattr(self, "_vfy_prepared_key", None) == key and getattr(self, "_vfy_step_buf", None) is not None:
             return
         dev = self.device
@@ -1755,6 +1829,10 @@ class Qwen36Model:
         # warmup so their addresses bake into the trace; verify_traced(page_tables=...) re-stages them
         # in place.
         _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
+        # A verify row bucket keeps the full-width verify's SDPA core split, so its rows round as there.
+        for layer in self.layers:
+            if layer.is_full_attention:
+                layer.attention.spec_sdpa_split_users = B
         _spec_groups = int(_att0.spec_sdpa_groups(T, B))
         self._vfy_spec_groups = _spec_groups
         self._vfy_kvpt_buf, self._vfy_kvpt_users, self._vfy_kvpt1_buf = (
@@ -1764,6 +1842,7 @@ class Qwen36Model:
 
         gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
         assert gdn, "the hybrid verify needs GDN layers"
+        self._vfy_att0 = _att0
         if self.gdn_blocks is not None:
             # The GDN state is in vLLM KV cache blocks: each GDN layer's verify reads its start state from, and
             # writes every token's state to, the blocks of the verify tables (GdnBlockState.set_verify_blocks), which
@@ -1773,11 +1852,12 @@ class Qwen36Model:
             ), f"the GDN verify tables are bound for T = {self.gdn_blocks.verify_tokens}, the verify trace has T = {T}"
             self._vfy_state_idx = self._vfy_conv_sel = None
             self.gdn_blocks.clear_verify_blocks()
-            self._warm_verify_body(B)
+            self._warm_verify_body(B, buckets)
             ttnn.synchronize_device(dev)
-            self._vfy_att0 = _att0
             self._vfy_prepared_key = key
             return
+        if buckets:
+            raise ValueError("verify row buckets need the GDN state in vLLM KV cache blocks")
 
         # The deferred commit's two selectors, shared by all GDN layers (pure index / one-hot data, so one
         # pair of buffers is staged per iteration instead of one per layer). state_blk_idx picks each
@@ -1821,13 +1901,13 @@ class Qwen36Model:
         # the live decode state, and the first replay then runs at mi = 0.
         self._warm_verify_body(B)
         ttnn.synchronize_device(dev)
-        self._vfy_att0 = _att0
         self._vfy_prepared_key = key
 
-    def _warm_verify_body(self, B):
-        """One eager pass of the verify body, and of the device sampler over its logits, only to compile their
-        programs before any capture; the outputs are dropped. Notes whether the ids come out as the fused argmax's
-        [1, 1, 1, 32] uint32 lanes, the input the one-enqueue step's acceptance is compiled for."""
+    def _warm_verify_body(self, B, buckets=()):
+        """One eager pass of the verify body, of the device sampler over its logits and of every bucket's body
+        (_warm_verify_buckets), only to compile their programs before any capture; the outputs are dropped. Notes
+        whether the ids come out as the fused argmax's [1, 1, 1, 32] uint32 lanes, the input the one-enqueue step's
+        acceptance is compiled for and the lanes a bucket hands over."""
         outs = self._forward_verify_bucket_tp(n_users=B)
         ids = outs[2]
         self._vfy_ids_lanes = (
@@ -1837,6 +1917,13 @@ class Qwen36Model:
         )
         if self._vfy_sampler is not None:
             self._vfy_sampler.body(outs[0])  # writes the sampler's own persistent draws buffer
+        self._vfy_buckets = ()
+        if buckets and self._vfy_ids_lanes:
+            self._vfy_buckets = self._warm_verify_buckets(buckets, ids, outs[1])
+        elif buckets:
+            logger.info(
+                "verify row buckets off: they hand over the fused per-shard argmax lanes, which this head lacks"
+            )
         for t in outs:
             ttnn.deallocate(t)
 
@@ -1868,6 +1955,17 @@ class Qwen36Model:
             self._vfy_sampler.body(self._vfy_logits_out)
             ttnn.end_trace_capture(dev, self._vfy_sample_trace_id, cq_id=0)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
+        buckets = getattr(self, "_vfy_buckets", ())
+        if buckets:
+            self._log_trace_region("the verify trace")
+        self._vfy_bucket_traces = {}
+        for b in buckets:
+            self._vfy_bucket_traces[b] = ttnn.begin_trace_capture(dev, cq_id=0)
+            self._verify_bucket_body(b, self._vfy_ids_out, self._vfy_rows_out)
+            ttnn.end_trace_capture(dev, self._vfy_bucket_traces[b], cq_id=0)
+        if buckets:
+            logger.info(f"Verify row bucket traces captured for {list(buckets)} of {B} users")
+            self._log_trace_region("the verify row bucket traces")
         # Fused grouped SDPA read (spec_multi_pos_tiles) or the legacy per-row call; a T with no
         # L1-fitting split (7, 11, ...) stays legacy.
         _fused = _att0.spec_sdpa_enabled(T)
@@ -1900,6 +1998,7 @@ class Qwen36Model:
         inactive=None,
         rope_deltas=None,
         sample_plan=None,
+        bucket=None,
     ):
         """Replay the captured verify trace for B users x T candidates.
 
@@ -1934,7 +2033,11 @@ class Qwen36Model:
 
         With the GDN state in vLLM KV cache blocks (gdn_blocks), ``mi_prev`` is not used: the caller writes the verify
         tables (GdnBlockState.set_verify_blocks) before the replay.
+
+        ``bucket``: replay the verify row bucket of that many users instead (verify_enqueue); it makes no logits.
         """
+        if read_logits and bucket is not None and int(bucket) != self._vfy_B:
+            raise ValueError("a verify row bucket makes no logits to read")
         self.verify_enqueue(
             tokens,
             positions,
@@ -1943,6 +2046,7 @@ class Qwen36Model:
             inactive=inactive,
             rope_deltas=rope_deltas,
             sample_plan=sample_plan,
+            bucket=bucket,
         )
         T, B = self._vfy_T, self._vfy_B
         rows = B * T
@@ -1971,17 +2075,23 @@ class Qwen36Model:
         sample_plan=None,
         accept_rows=None,
         step_staged=False,
+        bucket=None,
     ):
         """verify_traced's staging and replays (the verify trace, and the sampler trace with ``sample_plan``), enqueued
         without waiting; the caller enqueues what follows and reads the outputs (_vfy_ids_out, the sampler's draws,
         _vfy_rows_out). ``accept_rows``: {spec_step STEP_* row: B ints}, the rows of the step buffer that only the device
         acceptance reads (spec_accept.StepAccept), staged in the same copy; None stages zeros. ``step_staged``: a chain
         program (spec_chain.ChainInputs) enqueued before wrote the step buffer, so ``tokens`` and ``positions`` are not
-        staged, and the caller checked the grouped KV write over every position the rows can take."""
+        staged, and the caller checked the grouped KV write over every position the rows can take. ``bucket`` (None or
+        B: the B-user trace): replay the trace of verify row bucket ``bucket`` (_verify_bucket_body), which runs users
+        0 .. bucket-1 only; every user from ``bucket`` on must be ``inactive``, and no sampler can follow it."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
         if sample_plan is not None and self._vfy_sampler is None:
             raise ValueError("verify_traced(sample_plan=...) needs a verify trace prepared with sample=True")
+        trace_id = self._vfy_trace_id if bucket is None or int(bucket) == B else None
+        if trace_id is None:
+            trace_id = self._vfy_bucket_trace(int(bucket), inactive, sample_plan)
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
         assert all(len(t) == T for t in tokens), f"expected {T} tokens per user"
         assert len(positions) == B and len(mi_prev) == B, "one position and one mi per user"
@@ -2027,9 +2137,21 @@ class Qwen36Model:
         if sample_plan is not None:
             self._vfy_sampler.stage(sample_plan)
 
-        ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
         if sample_plan is not None:
             ttnn.execute_trace(dev, self._vfy_sample_trace_id, cq_id=0, blocking=False)
+
+    def _vfy_bucket_trace(self, bucket, inactive, sample_plan):
+        """The trace of verify row bucket ``bucket``, or ValueError when the step needs more: a live user at or past
+        ``bucket`` (the bucket would leave it unverified, its ids stale), or the sampler's logits."""
+        traces = getattr(self, "_vfy_bucket_traces", None) or {}
+        if bucket not in traces:
+            raise ValueError(f"no verify row bucket of {bucket} users (captured: {sorted(traces)})")
+        if sample_plan is not None:
+            raise ValueError("a verify row bucket makes no logits for the device sampler")
+        if inactive is None or not all(bool(x) for x in list(inactive)[bucket:]):
+            raise ValueError(f"the verify row bucket of {bucket} users leaves out a live user at or past row {bucket}")
+        return traces[bucket]
 
     def _vfy_step_host(self, tokens, positions, rope_deltas, accept_rows=None):
         """The verify step buffer's rows (spec_step) of B users x T tokens: ``tokens`` B lists of T ids, ``positions`` user

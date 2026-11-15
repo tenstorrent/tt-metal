@@ -342,6 +342,21 @@ def spec_round_up(n, mult=32):
     return -(-int(n) // mult) * mult
 
 
+# Verify row buckets below the decode width: a step whose live rows all sit below b replays the verify trace of b users.
+VERIFY_BUCKETS = (1, 2, 4)
+
+
+def verify_buckets(B):
+    """The verify row buckets of an engine of B users: VERIFY_BUCKETS below B."""
+    return tuple(b for b in VERIFY_BUCKETS if b < int(B))
+
+
+def verify_bucket(buckets, active, B):
+    """The smallest of ``buckets`` that holds every active row (row r needs a bucket above r), else B."""
+    top = max((u for u, a in enumerate(active) if bool(a)), default=-1)
+    return min((int(b) for b in buckets if int(b) > top), default=int(B))
+
+
 def spec_table_width(max_seq_len, draft_len, block_size=64):
     """Page-table width (blocks) the engine needs: max_seq_len + K + 1 lookahead (no padding; fits vLLM's pool)."""
     return -(-(int(max_seq_len) + int(draft_len) + 1) // int(block_size))
@@ -1891,7 +1906,16 @@ class MTPBlockEngine(MTPSpecEngine):
     is decided before the verify (no row whose drafting depends on its count) enqueues the verify trace, the sampler
     trace, the step trace (spec_accept.StepAccept: the greedy walk and the drafter's inputs on the device) and the
     drafter trace, then reads the ids, the drafter pack and the drafts with one wait. The next propose_draft_tokens
-    checks that the runner committed what the device accepted and returns those drafts."""
+    checks that the runner committed what the device accepted and returns those drafts.
+
+    Verify row buckets: an argmax_ids verify without device draws whose live rows all sit below a bucket b of
+    verify_buckets(B) replays the verify trace of users 0 .. b-1 (Qwen36Model._verify_bucket_body) instead of the B-user
+    one; the smallest such b, chosen per step from that step's rows alone. That trace hands its ids and drafter feed rows
+    to the B-user outputs, so the step trace, the drafter, the chain program and the reads run as after a B-user verify
+    whose users from b on are padding, and a chained verify can take another bucket than its predecessor. vllm-tt-plugin's
+    InputBatch (without data-parallel lanes) keeps a decode step's n requests in rows 0 .. n-1, so they take the smallest
+    bucket of at least n users. The device sampler and a logits verify read logits, which a bucket trace does not make:
+    those steps replay the B-user trace."""
 
     def __init__(self, model, batch_size, draft_len):
         super().__init__(model, batch_size, draft_len)
@@ -1911,6 +1935,7 @@ class MTPBlockEngine(MTPSpecEngine):
         self._chain_trace = None  # the chain program's trace
         self.chained_steps = 0  # chained verifies whose inputs the chain program built
         self.materialized_steps = 0  # chained verifies the engine built from a read predecessor instead
+        self.verify_bucket_steps = {}  # users of the verify trace a step replayed -> verifies
 
     def prepare_prefill(self, page_table):
         """Allocate the engine buffers and compile the drafter's prompt programs (the drafter KV warm and the last-row
@@ -1947,8 +1972,22 @@ class MTPBlockEngine(MTPSpecEngine):
 
     def _prepare_verify(self):
         self.model.prepare_verify_trace(
-            self._prep_pt, self.T, warm_positions=[0] * self.B, sample=self.sample_on_device
+            self._prep_pt,
+            self.T,
+            warm_positions=[0] * self.B,
+            sample=self.sample_on_device,
+            buckets=verify_buckets(self.B),
         )
+
+    def _verify_bucket(self, active, read_logits=False, sample_plan=None):
+        """The verify row bucket a step over ``active`` rows replays (verify_bucket over the captured ones), or None for
+        the B-user trace; counts the step in verify_bucket_steps."""
+        traces = getattr(self.model, "_vfy_bucket_traces", None) or {}
+        users = self.B
+        if traces and not read_logits and sample_plan is None:
+            users = verify_bucket(traces, active.tolist(), self.B)
+        self.verify_bucket_steps[users] = self.verify_bucket_steps.get(users, 0) + 1
+        return None if users == self.B else users
 
     def prepare_decode(self):
         """The base prepare, then the step trace's buffers and programs (compiled on a stand-in for the verify's ids,
@@ -2020,7 +2059,8 @@ class MTPBlockEngine(MTPSpecEngine):
         logger.info(
             f"[spec_engine] one-enqueue steps: {self.one_enqueue_steps} of {self.verify_steps} verifies; "
             f"{self.one_enqueue_host_proposes} of them drafted again on the host; chained verifies: "
-            f"{self.chained_steps} built on the device, {self.materialized_steps} from a read predecessor"
+            f"{self.chained_steps} built on the device, {self.materialized_steps} from a read predecessor; "
+            f"verifies per replayed user count: {dict(sorted(self.verify_bucket_steps.items()))}"
         )
 
     def shutdown(self):
@@ -2163,6 +2203,9 @@ class MTPBlockEngine(MTPSpecEngine):
         )
         if sample_plan is not None:
             kw["sample_plan"] = sample_plan
+        bucket = self._verify_bucket(active, read_logits, sample_plan)
+        if bucket is not None:
+            kw["bucket"] = bucket
         plan = None
         if one_enqueue and not read_logits and num_valid_drafts is not None:
             plan = self._one_enqueue_plan(start_pos, active, num_valid_drafts, sample_plan)
@@ -2498,6 +2541,7 @@ class MTPBlockEngine(MTPSpecEngine):
         if self._acc_pt_staged is None or not torch.equal(self._acc_pt_staged, pt_rows):
             self._accept.stage_pt_rows(pt_rows)
             self._acc_pt_staged = pt_rows
+        bucket = self._verify_bucket(active)
         ttnn.execute_trace(self.mesh, self._chain_trace, cq_id=0, blocking=False)
         blocks.ctrl_written()
         model.verify_enqueue(
@@ -2508,6 +2552,7 @@ class MTPBlockEngine(MTPSpecEngine):
             inactive=(~active).tolist(),
             rope_deltas=list(self._rope_deltas),
             step_staged=True,
+            **({} if bucket is None else {"bucket": bucket}),
         )
         step = PendingVerify(
             B, self.K, nv, active, pt, self._last_cap_blocks, self._no_draft, plan=plan, rope_deltas=self._rope_deltas
