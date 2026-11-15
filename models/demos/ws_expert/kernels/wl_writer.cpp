@@ -31,6 +31,17 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR = 2, SEM_SCRX = 4;
 #endif
 constexpr uint32_t K = WL_K;  // weight slots a core
 
+// A group multicast and its flag: the payload unlinked, flushed (sent) before the flag multicast. On this
+// architecture the payload and the flag go through different command buffers that are not sent in issue order, so
+// without the flush the flag can overtake its payload, and a linked payload left as a source's last multicast keeps
+// its path reserved (a group's other multicast senders then cannot get theirs out).
+FORCE_INLINE void mcast_with_flag(
+    uint32_t src, uint64_t dst, uint32_t bytes, uint32_t n, uint32_t flag_src, uint64_t flag_dst) {
+    noc_async_write_multicast_loopback_src(src, dst, bytes, n, false);
+    noc_async_writes_flushed();
+    noc_semaphore_set_multicast_loopback_src(flag_src, flag_dst, n);
+}
+
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
     constexpr uint32_t BK = get_compile_time_arg_val(1);
@@ -238,10 +249,13 @@ void kernel_main() {
         }
         const uint32_t part = hring + ((lq % NS) * KTD + C * HALF) * htile;
         *scr = lq + 1;
-        noc_async_write_multicast_loopback_src(
-            part, get_noc_multicast_addr(gx0, gy0, gx1, gy1, part), HALF * htile, ngroup, true /*linked*/);
-        noc_semaphore_set_multicast_loopback_src(
-            scr_addr, get_noc_multicast_addr(gx0, gy0, gx1, gy1, hflags + ((lq % NS) * 2 + C) * 16), ngroup);
+        mcast_with_flag(
+            part,
+            get_noc_multicast_addr(gx0, gy0, gx1, gy1, part),
+            HALF * htile,
+            ngroup,
+            scr_addr,
+            get_noc_multicast_addr(gx0, gy0, gx1, gy1, hflags + ((lq % NS) * 2 + C) * 16));
         noc_async_writes_flushed();
         ++led;
         lq += HALF;
@@ -325,14 +339,13 @@ void kernel_main() {
 #endif
         const uint32_t xs = s % NX;
         *xscr = s + 1;
-        noc_async_write_multicast_loopback_src(
+        mcast_with_flag(
             get_read_ptr(xst_cb),
             get_noc_multicast_addr(gx0, gy0, gx1, gy1, xring + xs * BK * xtile),
             BK * xtile,
             ngroup,
-            true /*linked*/);
-        noc_semaphore_set_multicast_loopback_src(
-            xscr_addr, get_noc_multicast_addr(gx0, gy0, gx1, gy1, xflags + xs * 16), ngroup);
+            xscr_addr,
+            get_noc_multicast_addr(gx0, gy0, gx1, gy1, xflags + xs * 16));
         noc_async_writes_flushed();
         cb_pop_front(xst_cb, BK);
 #ifdef WG_TRACE0

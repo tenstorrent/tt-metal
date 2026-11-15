@@ -49,6 +49,17 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 constexpr uint32_t K = WL_K;  // weight slots a core
 static_assert(K >= 1 && K <= 4);  // (2-bit slot fields in the tables)
 
+// A group multicast and its flag: the payload unlinked, flushed (sent) before the flag multicast. On this
+// architecture the payload and the flag go through different command buffers that are not sent in issue order, so
+// without the flush the flag can overtake its payload, and a linked payload left as a source's last multicast keeps
+// its path reserved (a group's other multicast senders then cannot get theirs out).
+FORCE_INLINE void mcast_with_flag(
+    uint32_t src, uint64_t dst, uint32_t bytes, uint32_t n, uint32_t flag_src, uint64_t flag_dst) {
+    noc_async_write_multicast_loopback_src(src, dst, bytes, n, false);
+    noc_async_writes_flushed();
+    noc_semaphore_set_multicast_loopback_src(flag_src, flag_dst, n);
+}
+
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
     constexpr uint32_t BK = get_compile_time_arg_val(1);
@@ -338,13 +349,15 @@ void kernel_main() {
 #endif
         const uint32_t xs = s % NX;
         *scr = s + 1;
-        noc_async_write_multicast_loopback_src(
-            get_read_ptr(xst_cb), get_noc_multicast_addr(mx0, my0, mx1, my1, xring + xs * BK * xtile), BK * xtile,
-            GC, true /*linked*/);
-        noc_semaphore_set_multicast_loopback_src(
-            scr_addr, get_noc_multicast_addr(mx0, my0, mx1, my1, xflags + xs * 16), GC);
-        // (flushed, not barrier: only the source must be free before reuse - the flag rides the linked payload; a
-        // barrier waited for 20 acks and stalled every other queue of this RISC)
+        mcast_with_flag(
+            get_read_ptr(xst_cb),
+            get_noc_multicast_addr(mx0, my0, mx1, my1, xring + xs * BK * xtile),
+            BK * xtile,
+            GC,
+            scr_addr,
+            get_noc_multicast_addr(mx0, my0, mx1, my1, xflags + xs * 16));
+        // (flushed, not barrier: only the source must be free before reuse; a barrier waited for 20 acks and stalled
+        // every other queue of this RISC)
         noc_async_writes_flushed();
         cb_pop_front(xst_cb, BK);
 #ifdef WG_TRACE0
@@ -428,10 +441,13 @@ void kernel_main() {
         }
         const uint32_t part = hring + ((lq % NS) * KTD + C * HALF) * htile;
         *hscr = lq + 1;
-        noc_async_write_multicast_loopback_src(
-            part, get_noc_multicast_addr(mx0, my0, mx1, my1, part), HALF * htile, GC, true /*linked*/);
-        noc_semaphore_set_multicast_loopback_src(
-            hscr_addr, get_noc_multicast_addr(mx0, my0, mx1, my1, hflags + ((lq % NS) * 2 + C) * 16), GC);
+        mcast_with_flag(
+            part,
+            get_noc_multicast_addr(mx0, my0, mx1, my1, part),
+            HALF * htile,
+            GC,
+            hscr_addr,
+            get_noc_multicast_addr(mx0, my0, mx1, my1, hflags + ((lq % NS) * 2 + C) * 16));
         noc_async_writes_flushed();
         ++led;
         lq += HALF;
