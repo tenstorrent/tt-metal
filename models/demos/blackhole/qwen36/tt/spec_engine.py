@@ -2188,7 +2188,7 @@ class MTPBlockEngine(MTPSpecEngine):
             self._verify_one_enqueue(args, kw, step)
             return (step if defer else step.result()), None
         if defer and not read_logits and not self._timing:
-            self.model.verify_enqueue(*args, **kw)
+            self.model.verify_enqueue(*args, **{k: v for k, v in kw.items() if k != "read_logits"})
             draws = [] if sample_plan is None else [self.model._vfy_sampler.draws]
             step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws])
             self._vfeed = self.model._vfy_rows_out
