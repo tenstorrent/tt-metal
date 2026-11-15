@@ -294,26 +294,29 @@ def local_items(shape, rc: RCfg, cfg: GCfg, last):
 
 
 def ring_tables(shape, rc: RCfg, cfg: GCfg):
-    """Per chip: [nring, TL] uint32 order tables (entry kind | u << 2 | c << 6 | e << 14) and per ring (length,
-    packets in, packets out); TL rounded up to 16 entries (64 B)."""
+    """Per chip: [nring + 1, TL] uint32 order tables (entry kind | u << 2 | c << 6 | e << 14; the last page is the local
+    lander's slice list, c | e << 8) and per ring (length, packets in, packets out); TL rounded up to 16 entries."""
     R, Cn = shape
     NCHIP = R * Cn
     seqs, _, last = conveyor(shape, rc, cfg)
+    items = local_items(shape, rc, cfg, last)
     nr = len(rings(shape, rc))
-    TL = max(len(s) for s in seqs.values())
+    TL = max(max(len(s) for s in seqs.values()), max(len(i) for i in items))
     TL = -(-TL // 16) * 16
-    tab = torch.zeros(NCHIP, nr, TL, dtype=torch.int64)
+    tab = torch.zeros(NCHIP, nr + 1, TL, dtype=torch.int64)  # (page nr: the local lander's slice list)
+    for chip, it in enumerate(items):
+        tab[chip, nr, : len(it)] = torch.tensor(it, dtype=torch.int64)
     meta = {}
     for (chip, f), sq in seqs.items():
         assert all(e < (1 << 18) and c < 256 and u < 16 for _, e, c, u in sq)
         tab[chip, f, : len(sq)] = torch.tensor([k | u << 2 | c << 6 | e << 14 for k, e, c, u in sq], dtype=torch.int64)
         meta[(chip, f)] = (len(sq), sum(k != INJ for k, *_ in sq), sum(k != TERM for k, *_ in sq))
-    return tab.to(torch.int32), meta, seqs, local_items(shape, rc, cfg, last)
+    return tab.to(torch.int32), meta, seqs, items
 
 
 def make_tables(mesh, cfg: GCfg, rc: RCfg):
-    """Device copy of the order tables (each chip its own [nring, TL], DRAM, one page a ring), their metadata and the
-    local landers' orders."""
+    """Device copy of the order tables (each chip its own [nring + 1, TL], DRAM, one page a ring and the local lander's
+    slice list), their metadata and the local landers' orders."""
     tab, meta, seqs, items = ring_tables(tuple(mesh.shape), rc, cfg)
     NCHIP, nr, TL = tab.shape
     tab_t = ttnn.from_torch(
@@ -380,10 +383,10 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
             )
             lx, ly = rc.local
             lrd, lsd, frd, fsd = (ttnn.RuntimeArgs() for _ in range(4))
-            items = tabs["items"][me]
-            assert len(items) <= 200, "the local lander's slice list fits its runtime args"
-            lrd[lx][ly] = [ws_t.buffer_address(), me, NC] + tl_all + [len(items)] + items
-            lsd[lx][ly] = [mesh_id, me, 0, 0, 0, 0, 1 << me, NC] + tl_all + [len(items)] + items
+            ni = len(tabs["items"][me])
+            lrl = [ws_t.buffer_address(), me, NC] + tl_all + [ni, tab_t.buffer_address(), len(rl), TL * 4]
+            lrd[lx][ly] = lrl
+            lsd[lx][ly] = [mesh_id, me, 0, 0, 0, 0, 1 << me, NC] + tl_all + [ni]
             nxt = {}
             for lane, d, cyc, l in rl:
                 f = 2 * lane + d
@@ -404,7 +407,8 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
                     kernel_source=kpath("wf_sreader.cpp"),
                     core_ranges=crs([rc.local]),
                     compile_time_args=[cfg.nexp, KT, KTD, DC, cfg.PAIRS, cfg.HT, rc.CHT, cfg.G, cfg.GC]
-                    + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args()),
+                    + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
+                    + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args()),
                     runtime_args=lrd,
                     defines=[("RD_DEPTH", str(rc.RD)), ("SCB_CHUNKS", str(rc.SCB)), ("NOWN", str(NCHIP))]
                     + [("WS_ITEMS", "1")]
@@ -446,6 +450,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
                 cb(0, cfg.w_dt, rc.SCB * rc.CHT, crs(land)),
                 cb(1, cfg.w_dt, rc.S * rc.CHT, crs(fcores)),
                 cb(2, ttnn.uint32, TL, crs(fcores), page=4),
+                cb(7, ttnn.uint32, 1, crs([rc.local]), page=TL * 4),
             ]
             if rc.diag:  # (counters only: never written)
                 cbs += [cb(i, ttnn.uint32, 4, crs(land), page=16) for i in (3, 4, 5, 6)]

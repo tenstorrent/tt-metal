@@ -342,7 +342,9 @@ def test_ws_sf_tray(mesh_device, M):
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [TORUS], indirect=True)
-@pytest.mark.parametrize("nexp,T,M", [(128, 8192, 586), (128, 8192, 2048)], ids=["e128m586", "e128m2048"])
+@pytest.mark.parametrize(
+    "nexp,T,M", [(128, 8192, 586), (128, 8192, 2048), (640, 31250, 586)], ids=["e128m586", "e128m2048", "e640m586"]
+)
 def test_ws_sf_glx(mesh_device, nexp, T, M):
     """Stage B: the whole Galaxy (8 x 4, FABRIC_2D_TORUS_XY), two edge-disjoint Hamiltonian cycles x 2 directions x 2
     links = 8 directed rings, one per incoming link of every chip; each chip holds only the slices it owns."""

@@ -9,10 +9,12 @@
 // transaction id each). The slices are stored chunk-contiguous (ws_fab.slice_layout): chunk q = (e GC + j) NCH + u
 // is one read of CHT tiles from bank q % 8 (576 B page reads were issue-bound at ~10 GB/s a sender).
 // RT: 0 slices addr, 1 own (reads experts e % NOWN == own), 2 ntargets, 3.. targets (c | x << 8 | y << 16), then with
-//     WS_ITEMS: the number of owned slices and the slices (c | e << 8) to read, in order (instead of own's experts)
+//     WS_ITEMS: the number of owned slices, the address of the table holding the list of them (c | e << 8, in order;
+//     read instead of own's experts), its page and the page bytes
 // WS_OWN_SLICES: the slices tensor holds only the slices this chip owns: slice j of expert e at local index
 //     (e / NOWN) GC + j
-// CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 PAIRS, 5 HT, 6 CHT, 7 G, 8 GC, then TensorAccessorArgs(slices)
+// CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 PAIRS, 5 HT, 6 CHT, 7 G, 8 GC, then TensorAccessorArgs(slices), with WS_ITEMS
+//     TensorAccessorArgs(table)
 #include "api/dataflow/dataflow_api.h"
 
 #ifndef NOWN
@@ -71,10 +73,19 @@ void kernel_main() {
         }
     };
 #ifdef WS_ITEMS
-    // the host's list of owned slices (c | e << 8), in the order the sender lands them
-    const uint32_t ni = get_arg_val<uint32_t>(3 + nt);
+    // the host's list of owned slices (c | e << 8), in the order the sender lands them: one page of a DRAM table,
+    // loaded into CB 7 for the sender (NCRISC) as well
+    constexpr auto iargs = TensorAccessorArgs<wargs.next_compile_time_args_offset()>();
+    const uint32_t ni = get_arg_val<uint32_t>(3 + nt), ipage_bytes = get_arg_val<uint32_t>(6 + nt);
+    const auto ia = TensorAccessor(iargs, get_arg_val<uint32_t>(4 + nt), ipage_bytes);
+    cb_reserve_back(7, 1);
+    const uint32_t il1 = get_write_ptr(7);
+    noc_async_read(ia.get_noc_addr(get_arg_val<uint32_t>(5 + nt)), il1, ipage_bytes);
+    noc_async_read_barrier();
+    cb_push_back(7, 1);
+    volatile tt_l1_ptr uint32_t* items = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(il1);
     for (uint32_t i = 0; i < ni; ++i) {
-        const uint32_t it = get_arg_val<uint32_t>(4 + nt + i);
+        const uint32_t it = items[i];
         read_slice(it >> 8, (it & 0xFF) % GC);
     }
 #else

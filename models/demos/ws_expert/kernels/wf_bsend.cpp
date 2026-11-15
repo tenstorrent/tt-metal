@@ -12,7 +12,7 @@
 // c % 2 == link); the link-0 core also forwards the relay's credit entries (WF_CREDQ) between its packets.
 // RT: 0 my mesh id, 1 my chip id, 2 e hops, 3 w hops, 4 n hops, 5 s hops, 6 covered chips (bit mask), 7 ntargets,
 //     8.. targets (c | x << 8 | y << 16), then (not WF_LOCAL) the fabric connection args; WS_ITEMS (WF_LOCAL, targets
-//     = all NC cores in order): the number of owned slices and the slices (c | e << 8), in landing order
+//     = all NC cores in order): the number of owned slices (their list, c | e << 8 in landing order, in CB 7)
 // CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 CHT, 5 G, 6 GC, 7 wgu_ring, 8 wd_ring, 9 warr, 10 icred, 11 NC, 12 NCHIP, 13 own
 #include "api/dataflow/dataflow_api.h"
 #ifndef WF_LOCAL
@@ -177,10 +177,13 @@ void kernel_main() {
         }
     };
 #ifdef WS_ITEMS
-    // the host's list of owned slices (c | e << 8), in landing order (target c is RT 8 + c)
+    // the host's list of owned slices (c | e << 8), in landing order (target c is RT 8 + c), loaded into CB 7 by the
+    // reader
     const uint32_t ni = get_arg_val<uint32_t>(8 + nt);
+    cb_wait_front(7, 1);
+    volatile tt_l1_ptr uint32_t* items = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(7));
     for (uint32_t i = 0; i < ni; ++i) {
-        const uint32_t it = get_arg_val<uint32_t>(9 + nt + i);
+        const uint32_t it = items[i];
         send_slice(it >> 8, get_arg_val<uint32_t>(8 + (it & 0xFF)));
 #ifdef WS_DIAG
         cb_push_back(3, 1);
