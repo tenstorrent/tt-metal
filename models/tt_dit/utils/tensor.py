@@ -302,7 +302,10 @@ def _concat_shards(x: ttnn.Tensor, *, mesh_axes: Sequence[int | None]) -> torch.
         dim = placements[mesh_axis]
         return parts[0] if dim is None else torch.cat(parts, dim=dim)
 
-    return read_block(())
+    try:
+        return read_block(())
+    finally:
+        del read_block  # it refers to itself: the cycle would hold every host shard until the next gc pass
 
 
 def _compose(
