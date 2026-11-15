@@ -302,9 +302,7 @@ class HYV4ForCausalLM:
                 )
             return self._verify(tokens, start_pos, num_valid_drafts, sampling_params)
         if self.eng.spec:
-            raise ValueError(
-                "an ordinary [B,1] decode call arrived in a speculating launch (the engine declares no narrow decode)"
-            )
+            return self._decode_narrow(tokens, start_pos, sampling_params)
         return self._decode_plain(
             tokens,
             start_pos,
