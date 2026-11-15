@@ -434,3 +434,12 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
   M 2048, not M 586 (chip 0 47%, the tray's slowest chips 41-43%).
 - Lane model vs tray at M 586: lock-step 0.563, random timing 0.516; measured 44%. Torus (E 160 a lane): lock-step
   0.557, random timing 0.482.
+- Whole Galaxy, design B with 3 slots (ws_lane_b, hold 213824, c10u20, 8 x 4 torus XY, 2 cycles x 2 links = 4 lanes,
+  G 4, wpoll 2): 128 experts M 586, 1 launch: PCC 0.99994 on all 32 chips (util 31.4%, a cold launch of 32 experts a
+  lane). 640 experts, T 31250, M 586, 20 warm-up + 5 measured: util tile median 36.2% (35.1-37.2), PCC 0.99994 on
+  all 32 chips, no hang (store-and-forward 34.6%, multicast tree 28.5%). Chip 0: 74.9 K cycles a chip-expert, weights
+  in 75 GB/s; waits a core x 11.1 M / weights 13.7 M cycles of 47.6 M. Dynamic M (128 experts, per-chip counts with
+  581 zeros, up to M = T = 31250, every expert of chips 1 and 0): min PCC 0.99991.
+- 4 weight slots (types d0, d1, d0|d1, any; owner keep 2) in the lane model: lock-step 0.767 / 0.777, random timing
+  0.664 / 0.698 (tray E 16 / torus E 160) against 0.563 / 0.557 and 0.516 / 0.482 with 3 slots - the model becomes
+  compute-bound (C 9 of 7 useful). The 4th slot (207 KB) needs the remaining L1 beside BK 20 / NX 9.
