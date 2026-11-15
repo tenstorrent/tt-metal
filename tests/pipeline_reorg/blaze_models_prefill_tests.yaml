@@ -382,12 +382,14 @@
     k31_sparse_mla() (
       # Random weights vs the CPU reference, computed on the fly and cached under /tmp (about 25 s). 7 cases, about
       # 40 s with a warm kernel cache on one open mesh. Then determinism at production shapes (warm and long cache,
-      # scaled-FP8, 10 eager runs and 10 replays, identical, compared on device): 2 cases, about 22 s warm.
+      # scaled-FP8, 10 eager runs and 10 replays, identical, compared on device): 2 cases, about 22 s warm, on 8x4
+      # and on one 4x4 stage (top tray half, 2.5k chunks).
       timeout -k 2m 10m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         export DS_PREFILL_REUSE_MODEL=1  # one mesh open for all cases
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "kimi_k3_1 and shape-8x4" -vvv --tb=short &&
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k kimi_k3_1 -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k kimi_k3_1 -vvv --tb=short &&
+        models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k kimi_k3_1 -vvv --tb=short
       '
     )
 
@@ -429,7 +431,9 @@
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
       # K3.1 sparse MLA host-time gate: warm and long, each untraced (fastest of 10 after 10 warm-up) and traced (one replay). Runs first,
       # as in the GLM job, so a perf miss in the other tests (this block stops at the first failure) cannot hide it.
+      # 8x4, then one 4x4 stage (top tray half, 2.5k chunks).
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
+      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
@@ -441,7 +445,7 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 10
+      timeout: 12
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -635,7 +639,8 @@
         export OMP_NUM_THREADS=$(nproc)
         export DS_PREFILL_REUSE_MODEL=1  # one mesh open for all cases
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_3 and shape-8x4 and not kv_only" -vvv --tb=short &&
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k glm_5_3 -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k glm_5_3 -vvv --tb=short &&
+        models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k glm_5_3 -vvv --tb=short  # one 4x4 stage, 2.5k chunks
       '
     )
 
@@ -760,8 +765,10 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       # GLM-5.3 sparse MLA host-time gate, full-indexer and shared (no indexer) layers: warm and long, each untraced
-      # (fastest of 10 after 10 warm-up) and traced (one replay). Before DS_PREFILL_REUSE_MODEL, as its targets were taken.
+      # (fastest of 10 after 10 warm-up) and traced (one replay), on 8x4 and on one 4x4 stage (top tray half, 2.5k
+      # chunks). Before DS_PREFILL_REUSE_MODEL, as its targets were taken.
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
+      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '

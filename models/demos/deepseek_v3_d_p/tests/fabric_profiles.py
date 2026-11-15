@@ -136,6 +136,11 @@ def _device_topologies(path: str) -> tuple[Path, list[tuple[str, str, str, str]]
     return descriptor_path, topologies
 
 
+def mesh_descriptor_topologies(path: str) -> list[tuple[str, str, str, str]]:
+    """(dims..., dim_types...) of every device mesh a mesh graph descriptor declares."""
+    return _device_topologies(path)[1]
+
+
 def assert_torus_xy_descriptor(path: str) -> None:
     """Fail before device open unless every declared device mesh is 8x4 Ring/Ring."""
     descriptor_path, topologies = _device_topologies(path)

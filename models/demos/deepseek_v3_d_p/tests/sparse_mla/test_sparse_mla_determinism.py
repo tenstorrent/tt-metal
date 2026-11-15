@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sparse MLA determinism at the perf gate's production shapes: one 5k chunk over a 50k or 500k cache (Galaxy sizes,
-scaled by SP on smaller boxes), the scaled-FP8 KVPE cache, each model's fabric packet size, for K3.1 (last DSA layer's
+"""Sparse MLA determinism at the perf gate's production shapes and boxes (test_sparse_mla_perf.py): one chunk over a
+50k or 500k cache, the scaled-FP8 KVPE cache, each model's fabric packet size, for K3.1 (last DSA layer's
 slot of 24), GLM-5.3 (last full indexer layer) and a GLM-5.3 shared layer.
 
 The check stays on device, as in tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py (helpers in
@@ -44,13 +44,10 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.device_determinism import (
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import (
     _BOX,
-    CHUNK_TOKENS,
-    GALAXY_SP,
     GATE_CASES,
     SCENARIO_CACHE_TOKENS,
     _gate_params,
     build_sparse_perf_case,
-    local_cache_tokens,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
@@ -95,7 +92,9 @@ def _fill_prefix(mesh_device, case, cache: int, chunk: int, hidden_size: int):
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[-2, -1]),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=case.input_shard_dims
+                    ),
                 )
             )
             case.x = inputs[-1]
@@ -244,9 +243,8 @@ def _check(mesh_device, case, start):
 def test_sparse_mla_determinism(mesh_device, device_params, variant, case_name, config_only, scenario):
     shared_layer = GATE_CASES[case_name][1]
     prefixes = [p for p in PREFIXES[scenario] if not (p == "filled" and shared_layer)]
-    sp, _ = mesh_device.shape
-    chunk = CHUNK_TOKENS * sp // GALAXY_SP
-    cache = local_cache_tokens(SCENARIO_CACHE_TOKENS[scenario], sp)
+    chunk = _BOX.chunk
+    cache = _BOX.cache_tokens(SCENARIO_CACHE_TOKENS[scenario])
     case = build_sparse_perf_case(
         mesh_device,
         variant,
@@ -255,6 +253,7 @@ def test_sparse_mla_determinism(mesh_device, device_params, variant, case_name, 
         chunk=chunk,
         topology=per_axis_topology(device_params["fabric_config"]),
         shared_layer=shared_layer,
+        sp_axis=_BOX.sp_axis,
     )
     try:
         failures = _run_prefixes(
@@ -276,7 +275,7 @@ def _run_prefixes(mesh_device, case, case_name, scenario, prefixes, cache, chunk
 
     failures = []
     for prefix in prefixes:
-        label = f"{case_name} sparse MLA {_BOX[0]} {scenario} {prefix} prefix"
+        label = f"{case_name} sparse MLA {_BOX.name} {scenario} {prefix} prefix"
         if prefix == "filled":
             _fill_prefix(mesh_device, case, cache, chunk, hidden_size)
         failure = _check(mesh_device, case, cache)
