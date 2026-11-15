@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """GLM-5.3-Flash on the persistent-stack port (models/autoports/zai_org_glm_5_3_flash/tt: ``StackBackend`` under
-``Glm53Generator``) for the TT vLLM plugin -- the FIRST adapter: text only, greedy on device (the head's top-1 inside
-the one full-width decode trace), host-sampled rows through full logits, no prefix cache, no multimodal, synchronous
-scheduling (every decode reloads its inputs). GLM53_STACK_PREFIX=1 (opt-in) adds vLLM's automatic
+``Glm53Generator``) for the TT vLLM plugin: the head's device sampler inside the decode trace (DEVICE_TOP_K candidates:
+greedy and sampled rows on device; GLM53_STACK_DEVICE_SAMPLING=0: greedy on device, sampled rows on the host sampler
+over full logits), the resident-input chain under vLLM's async scheduling (ASYNC_DECODE; GLM53_STACK_ASYNC_DECODE=0:
+every decode reloads its inputs). GLM53_STACK_PREFIX=1 (opt-in) adds vLLM's automatic
 prefix caching from the stack's device snapshot pool (``StackPrefixCache``). Image input:
 ``GLM53StackForConditionalGeneration`` at the bottom of this module (the same adapter + vLLM's ``SupportsMultiModal``
 and the upstream GLM-5.3-Flash processor). Speculative decode (opt-in GLM53_STACK_VLLM_SPEC=1 with GLM53_SPEC_K;
@@ -24,7 +25,9 @@ generator's slots (``_CacheBinding.slots``) through a bijection it keeps (``_ali
 instead of moving state: row ``i`` decodes in the generator slot its request was admitted to
 (``Glm53Generator.decode_forward(slots=...)``), so no ``remap_slots`` copies run and a gather that is a cycle over a
 full batch (every slot live: the generator's "cyclic slot_remap needs a free scratch slot" refusal) is fine. A new
-request takes the lowest free generator slot. The plugin references in this module (``worker.py:...``,
+request takes the lowest free generator slot. GLM53_STACK_BUILD_B (``stack_build_b``) builds the generator wider than
+max_num_seqs: the plugin's slots are the alias's first max_num_seqs entries, the rest spare generator slots (a
+speculating user's group base may be one). The plugin references in this module (``worker.py:...``,
 ``model_runner.py:...``, ``async_decode.py:...``) are to vllm-tt-plugin main at 042a948 (2026-11-09). vLLM's logical blocks travel
 ``pt_shadow -> OwnerBlockMap -> per-chip local tables`` inside the generator / backend once the cache is allocated
 with ``null_block=0``.
@@ -65,6 +68,34 @@ MM_ENCODER_ENV = "GLM53_STACK_MM_ENCODER"  # the multimodal class's image encode
 MM_CACHE_ENV = "GLM53_STACK_MM_CACHE_MB"  # the image feature cache's bound: MB of feature rows (default 256)
 MM_ALIAS_CAP = 4096  # vLLM item identifiers remembered as aliases of a content key
 LATENT_DIM = 512  # kv_lora_rank: the latent page row, the only "KV" vLLM accounts for (generator_vllm.LATENT_DIM)
+# GLM53_STACK_BUILD_B (default: max_num_seqs): the device build's width -- the StackBackend, the generator's slots, the
+# KV cache and the prefix pool are built this many rows wide while vLLM schedules at most max_num_seqs rows (plugin slots
+# 0 .. max_num_seqs - 1, mapped onto any generator slot by the slot alias). The served 16-row build keeps its multi-user
+# speculative steps (8 users x (1 + 1) verify rows: spec_mtp.py's G (K + 1) <= max_batch) under an inference server
+# that defaults to max_num_seqs 8. Must be >= max_num_seqs (stack_build_b)
+BUILD_B_ENV = "GLM53_STACK_BUILD_B"
+
+
+def stack_build_b(max_num_seqs: int, env=os.environ) -> int:
+    """the device build width of a launch of ``max_num_seqs`` rows: GLM53_STACK_BUILD_B, default max_num_seqs. Raises
+    ValueError for a value below max_num_seqs (vLLM could schedule a row the build has no slot for), above the stack's
+    MAX_DECODE_SLOTS, or not an integer."""
+    n = int(max_num_seqs)
+    raw = (env.get(BUILD_B_ENV, "") or "").strip()
+    if not raw:
+        return n
+    try:
+        b = int(raw)
+    except ValueError:
+        raise ValueError(f"{BUILD_B_ENV}={raw!r}: an integer (the device build width)") from None
+    if b < n:
+        raise ValueError(
+            f"{BUILD_B_ENV}={b} < max_num_seqs {n}: the device build must hold every row vLLM schedules (raise "
+            f"{BUILD_B_ENV} or lower --max-num-seqs)"
+        )
+    if b > MAX_DECODE_SLOTS:
+        raise ValueError(f"{BUILD_B_ENV}={b} > {MAX_DECODE_SLOTS} (the stack's decode slots)")
+    return b
 
 
 def _mesh_shape_from_env() -> tuple[int, int]:
@@ -139,8 +170,8 @@ PREFIX_KEEP_PREV = os.environ.get("GLM53_STACK_PREFIX_KEEP_PREV", "0") == "1"
 PREFIX_KEEP_PREV_MIN = int(os.environ.get("GLM53_STACK_PREFIX_KEEP_PREV_MIN", "262144"))
 SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
 SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
-# GLM53_SPEC_MULTI=1 (default off; design doc/perf/mtp_multi_user_design.md): every live user speculates on a B 16
-# build (GLM53_SPEC_MULTI_W, default 16) with generator.spec_multi_plan's row groups. The backend's multi-user step
+# GLM53_SPEC_MULTI=1 (default off; design doc/perf/mtp_multi_user_design.md): every live user speculates on a build of
+# up to GLM53_SPEC_MULTI_W rows (default 16; the build: GLM53_STACK_BUILD_B) with generator.spec_multi_plan's row groups. The backend's multi-user step
 # (``spec_multi_capable``: batch 2's fixed G = GLM53_SPEC_MULTI_USERS) verifies exactly G greedy requests on the group
 # bases; any other step keeps DraftOutput.num_valid = 0 (plain decode), exactly as the single-user plan's multi-row steps
 SPEC_MULTI_ENV = "GLM53_SPEC_MULTI"
@@ -577,16 +608,24 @@ class SpecReadback:
 def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.environ):
     """The plugin's ``SpecPlan`` / ``SpecReject`` for one launch point (``GLM53StackForCausalLM.spec_plan``; pure): the
     backend's step drafts exactly K = GLM53_SPEC_K (num_speculative_tokens must be >= K; effective_k = K) for ONE live
-    user in generator slot 0 of a B in [K + 1, 4] build; ``k_by_rows`` ((1, K), (max_num_seqs, 1)) and
+    user in generator slot 0 of a build of width in [K + 1, 4] (GLM53_STACK_BUILD_B, default max_num_seqs:
+    stack_build_b); ``k_by_rows`` ((1, K), (max_num_seqs, 1)) and
     ``DraftOutput.num_valid`` = 0 whenever more than one row is live keep every other step an ordinary decode;
     ``argmax_ids`` only (greedy: sampled rows decode plainly through ``supports_narrow_decode``), the drafter's state
     on device (no hidden feed: the step reads the head's h itself). GLM53_SPEC_STEPS_PER_CALL = M > 1: effective_k =
     M (K + 1) - 1 (num_speculative_tokens must reach it), every k_by_rows cap k -> M (k + 1) - 1, ``fused_sample``
-    only (the verify chains up to M device steps and returns their committed tokens; synchronous scheduling)."""
+    only (the verify chains up to M device steps and returns their committed tokens; synchronous scheduling).
+    GLM53_SPEC_MULTI: the multi-user caps of the BUILD's rows (spec_multi_k_by_rows(K, max_num_seqs, full=build): 8
+    live users x 1 draft on the 16-row build under max_num_seqs 8); refused when the primary step's G (K + 1) or
+    GLM53_SPEC_MULTI_ALT's G' (K' + 1) verify rows exceed the build, or the build exceeds GLM53_SPEC_MULTI_W (16)."""
     if not spec_enabled(env):
         return types["SpecReject"](reason=f"{SPEC_ENV}=1 with GLM53_SPEC_K > 0 enables the stack's speculative step")
     K = int(env.get("GLM53_SPEC_K"))
     B, req = int(max_num_seqs), int(requested_k)
+    try:
+        Bb = stack_build_b(B, env)  # the device build width (GLM53_STACK_BUILD_B, default max_num_seqs)
+    except ValueError as e:
+        return types["SpecReject"](reason=str(e))
     M = spec_steps_per_call(env)
     Kp, modes = spec_plugin_k(K, M), (("fused_sample",) if M > 1 else ("argmax_ids",))
     if M > 1 and env.get(SPEC_ASYNC_ENV, "0") == "1":
@@ -600,13 +639,35 @@ def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.envir
             supported_k=(Kp,),
         )
     if env.get(SPEC_MULTI_ENV, "0") == "1":
-        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_k_by_rows
+        from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
+            spec_multi_alt,
+            spec_multi_groups,
+            spec_multi_k_by_rows,
+        )
 
-        W = int(env.get("GLM53_SPEC_MULTI_W", "16") or 16)
-        if not K + 1 <= B <= W:
+        W = int(env.get("GLM53_SPEC_MULTI_W", "16") or 16)  # the widest build the multi-user steps serve
+        if not K + 1 <= Bb <= W:
             return types["SpecReject"](
-                reason=f"{SPEC_MULTI_ENV}=1: max_num_seqs {B} outside [K + 1, {W}] (the B {W} build's verify width)",
-                supported_k=tuple(k for k in (1, 2, 3) if k + 1 <= B) if B <= W else (),
+                reason=f"{SPEC_MULTI_ENV}=1: build width {Bb} (max_num_seqs {B}, {BUILD_B_ENV}) outside [K + 1, {W}] "
+                "(the multi-user steps' verify width)",
+                supported_k=tuple(k for k in (1, 2, 3) if k + 1 <= Bb) if Bb <= W else (),
+            )
+        try:  # (the backend's own checks of these knobs, here as a refusal: spec_plan never raises)
+            G, alt = spec_multi_groups(env), spec_multi_alt(env)
+        except (AssertionError, ValueError) as e:
+            return types["SpecReject"](reason=f"{SPEC_MULTI_ENV}=1: {e}")
+        # the steps' verify rows must be rows of the build (spec_mtp.py: G (K + 1) <= max_batch)
+        over = [f"GLM53_SPEC_MULTI_USERS {G} x (K {K} + 1) = {G * (K + 1)}"] if G * (K + 1) > Bb else []
+        alt_over = alt is not None and alt[0] * (alt[1] + 1) > Bb
+        if alt_over:
+            over.append(
+                f"GLM53_SPEC_MULTI_ALT {alt[0]}:{alt[1]} -> {alt[0]} x ({alt[1]} + 1) = {alt[0] * (alt[1] + 1)}"
+            )
+        if over:
+            return types["SpecReject"](
+                reason=f"{SPEC_MULTI_ENV}=1: {'; '.join(over)} verify rows > the {Bb}-row build ({BUILD_B_ENV}, "
+                f"default max_num_seqs {B})",
+                supported_k=() if alt_over else tuple(k for k in (1, 2, 3) if G * (k + 1) <= Bb),
             )
         return types["SpecPlan"](
             effective_k=Kp,
@@ -616,12 +677,13 @@ def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.envir
             accept_modes=modes,
             drafter_state="internal",
             supports_narrow_decode=True,
-            k_by_rows=tuple((rows, spec_plugin_k(k, M)) for rows, k in spec_multi_k_by_rows(K, B, W)),
+            k_by_rows=tuple((rows, spec_plugin_k(k, M)) for rows, k in spec_multi_k_by_rows(K, B, Bb)),
         )
-    if not K + 1 <= B <= SPEC_MAX_ROWS:
-        ok = tuple(k for k in (1, 2, 3) if k + 1 <= B) if B <= SPEC_MAX_ROWS else ()
+    if not K + 1 <= Bb <= SPEC_MAX_ROWS:
+        ok = tuple(k for k in (1, 2, 3) if k + 1 <= Bb) if Bb <= SPEC_MAX_ROWS else ()
         return types["SpecReject"](
-            reason=f"max_num_seqs {B}: the speculative step verifies K + 1 = {K + 1} rows on a B <= {SPEC_MAX_ROWS} build",
+            reason=f"max_num_seqs {B} (build width {Bb}): the speculative step verifies K + 1 = {K + 1} rows on a build "
+            f"<= {SPEC_MAX_ROWS} rows",
             supported_k=ok,
         )
     return types["SpecPlan"](
@@ -1206,9 +1268,11 @@ class GLM53StackForCausalLM:
         # GLM53_STACK_PREFIX=1: vLLM's prefix cache, its hits confirmed against the device snapshots (StackPrefixCache)
         "supports_prefix_caching": PREFIX_CACHE,
         "confirms_prefix_cache_hits": PREFIX_CACHE,
-        # MODEL_CAPABILITIES.md:85-91 sampling / async flags: the head's argmax is the only device sampler
-        # (``StackBackend(topk=1, sample=False)``), so greedy rows (and top_k == 1) decode on device and every other
-        # sampled row goes to the host sampler over full logits; no resident-input chain (every decode reloads)
+        # MODEL_CAPABILITIES.md:85-91 sampling / async flags: the head's device sampler (``StackBackend(topk=DEVICE_TOP_K,
+        # sample=DEVICE_TOP_K > 1)``: _device_top_k) draws greedy and sampled rows inside the decode trace (top-k bounded
+        # by max_device_top_k; GLM53_STACK_DEVICE_SAMPLING=0: greedy on device, every other sampled row on the host
+        # sampler over full logits); the resident-input chain (ASYNC_DECODE) lets vLLM's async scheduling build the
+        # next step while one runs
         "supports_sample_on_device": True,
         "max_device_top_k": DEVICE_TOP_K,
         "device_top_k_unbounded_as": DEVICE_TOP_K if DEVICE_TOP_K > 1 else None,
@@ -1230,18 +1294,27 @@ class GLM53StackForCausalLM:
         "spec_ids_are_sampled": SPEC_SAMPLED,
     }
 
-    # model_runner.py:2301-2320: the one captured decode width (fixed user slots, no smaller bucket); set by
-    # ``warmup_model_decode(enable_trace=True)``, cleared by ``release_persistent_capture``
+    # model_runner.py:2301-2320: the one decode width the plugin pads to (fixed user slots, no smaller bucket) --
+    # max_num_seqs (the build may be wider: GLM53_STACK_BUILD_B); set by ``warmup_model_decode(enable_trace=True)``,
+    # cleared by ``release_persistent_capture``
     tt_supported_decode_batch_sizes: tuple[int, ...] = ()
     _HYBRID_KV_CACHE_GROUPS_ENABLED = False  # worker.py:799-807: one logical KV group
     supports_multimodal = False  # vLLM's ``SupportsMultiModal`` flag: text only
 
     def __init__(self, generator, max_batch_size: int, max_seq_len: int, *, source=None, spec: bool | None = None,
-                 spec_async: bool | None = None, **vllm_kwargs):  # fmt: skip
+                 spec_async: bool | None = None, max_num_seqs: int | None = None, **vllm_kwargs):  # fmt: skip
         # ``**vllm_kwargs`` (``vllm_config`` / ``prefix``) is never used: the plugin constructs the adapter through
         # ``initialize_vllm_model``; vLLM >= 0.30's ``is_vllm_model`` wants the keyword accepted (see the shims below)
         self.gen = generator
+        # max_batch_size: the generator's slots (the device build width, GLM53_STACK_BUILD_B); max_num_seqs: the plugin's
+        # slots / rows (default the build width) -- plugin slot i is the alias's entry i, the entries past max_num_seqs
+        # are spare generator slots
         self.max_batch = int(max_batch_size)
+        self.max_num_seqs = self.max_batch if max_num_seqs is None else int(max_num_seqs)
+        if not 1 <= self.max_num_seqs <= self.max_batch:
+            raise ValueError(
+                f"max_num_seqs {self.max_num_seqs} outside [1, {self.max_batch}] (the build width: {BUILD_B_ENV})"
+            )
         self.max_seq_len = int(max_seq_len)
         self.source = source
         self.vocab_size = int(generator.vocab_size)
@@ -1291,17 +1364,20 @@ class GLM53StackForCausalLM:
         optimizations: str | None = None,
     ):
         """loader.py:38-45: ``initialize_vllm_model(hf_config, device, max_batch_size, max_seq_len=max_model_len,
-        tt_data_parallel=..., optimizations=...)`` on the already-open mesh. ``max_num_seqs`` is the backend's
-        construction ``max_batch`` (<= 32; the trace sizes, sparse ladder and buckets are construction-time: another
-        ``max_model_len`` is a rebuild); ``tt_data_parallel`` must be 1 (one engine per mesh). The validated 8x4
+        tt_data_parallel=..., optimizations=...)`` on the already-open mesh. The backend's construction ``max_batch``
+        is the build width GLM53_STACK_BUILD_B (default ``max_num_seqs``, never below it; <= 32; the trace sizes, sparse
+        ladder and buckets are construction-time: another ``max_model_len`` is a rebuild); vLLM schedules at most
+        ``max_num_seqs`` rows on it. ``tt_data_parallel`` must be 1 (one engine per mesh). The validated 8x4
         knobs come from ``galaxy_defaults.apply`` (an explicit environment value always wins), the weights from
         ``mk_sources.install_weight_source`` (GLM53_MK_TILE_CACHE_V3, built on a cold cache), the backend as the e2e
-        test builds it (topk 1, sample False, EP experts, native_t above 4 users). ``optimizations`` is ignored."""
+        test builds it (topk DEVICE_TOP_K with the device sampler, EP experts, native_t above 4 rows).
+        ``optimizations`` is ignored."""
         if int(tt_data_parallel) != 1:
             raise ValueError("GLM53StackForCausalLM runs one engine per mesh (tt_data_parallel must be 1)")
         B, seq = int(max_batch_size), int(max_seq_len)
         if not 1 <= B <= MAX_DECODE_SLOTS:
             raise ValueError(f"max_num_seqs {B} outside [1, {MAX_DECODE_SLOTS}] (the stack's decode slots)")
+        Bb = stack_build_b(B)  # GLM53_STACK_BUILD_B: refused before the mesh / any stack module is touched
         caches = cache_defaults()
         os.environ.update(caches)  # before the stack modules are imported (their own defaults read the environment)
         from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults as GD
@@ -1316,7 +1392,8 @@ class GLM53StackForCausalLM:
         shape = tuple(int(v) for v in list(mesh_device.shape))
         applied = GD.apply(shape, seq=seq)  # (its prefill buckets are the ones that fit `seq`)
         logger.info(
-            f"GLM53 stack vLLM: mesh {shape}, max_num_seqs {B}, max_model_len {seq}, galaxy defaults {applied}, "
+            f"GLM53 stack vLLM: mesh {shape}, max_num_seqs {B}, build width {Bb}"
+            f"{f' ({BUILD_B_ENV})' if Bb != B else ''}, max_model_len {seq}, galaxy defaults {applied}, "
             f"caches {caches or 'from the environment'}"
         )
         cfg = load_hf_text_config(str(snapshot))
@@ -1327,20 +1404,20 @@ class GLM53StackForCausalLM:
         t0 = time.perf_counter()
         backend = StackBackend(
             mesh_device,
-            max_batch=B,
+            max_batch=Bb,
             layers=layers,
             hf_config=cfg,
             topk=DEVICE_TOP_K,
             sample=DEVICE_TOP_K > 1,
             ep_weights=True,
-            native_t=B > 4,
+            native_t=Bb > 4,
             weight_cache={} if narrow else None,
         )
         if isinstance(source, MkTileCacheSource) and not source.ready:
             source.complete()  # built by this construction: a later boot reads every tensor from the cache
         logger.info(f"GLM53 stack vLLM: StackBackend built in {time.perf_counter() - t0:.0f} s ({len(layers)} layers)")
-        gen = Glm53Generator(backend, tokenizer=load_tokenizer(snapshot), max_batch=B, max_seq_len=seq)
-        return cls(gen, B, seq, source=source)
+        gen = Glm53Generator(backend, tokenizer=load_tokenizer(snapshot), max_batch=Bb, max_seq_len=seq)
+        return cls(gen, Bb, seq, source=source, max_num_seqs=B)
 
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs: int, requested_k: int):
@@ -1433,14 +1510,16 @@ class GLM53StackForCausalLM:
     ):
         """model_runner.py:4770-4799: the same two phases (prepared / captured already by ``warmup_model_prefill`` when
         the plugin traces prefill too; ``trace_mode=decode_only`` captures here). After the capture the one decode
-        width is declared (model_runner.py:2301-2320: every decode is padded to ``max_num_seqs`` rows)."""
-        if max_batch_size is not None and int(max_batch_size) != self.max_batch:
+        width is declared (model_runner.py:2301-2320: every decode is padded to ``max_num_seqs`` rows). The plugin's
+        ``max_batch_size`` (its max_num_seqs) may be below the build width (GLM53_STACK_BUILD_B), never above it."""
+        if max_batch_size is not None and not 1 <= int(max_batch_size) <= self.max_batch:
             raise ValueError(
-                f"warmup_model_decode max_batch_size {max_batch_size} != the construction's {self.max_batch}"
+                f"warmup_model_decode max_batch_size {max_batch_size} outside [1, {self.max_batch}] (the construction's "
+                f"build width; max_num_seqs {self.max_num_seqs})"
             )
         self.gen.warmup_serving(self._kv(kv_cache), phase="capture" if enable_trace else "prepare")
         if enable_trace:
-            self.tt_supported_decode_batch_sizes = (self.max_batch,)
+            self.tt_supported_decode_batch_sizes = (self.max_num_seqs,)
 
     # ================================================================================= prefill
     def prefill_forward(
@@ -1606,8 +1685,9 @@ class GLM53StackForCausalLM:
         plugin slot ``remap[i]``, a full permutation: model_runner.py:1366-1421) is applied -- absorbed into the slot
         alias (``_permuted``): every row decodes in the generator slot its request lives in (``slots=``), nothing is
         copied, and the alias advances only once the generator accepted the step (the plugin commits its own map then:
-        ``note_decode_state_slots_settled``). ``reload_inputs`` is always True for this adapter (async_decode.py:423-481: no ``supports_async_decode``), so tokens / positions /
-        page rows are restaged from the host (the generator writes only what changed). Device route (``sampling_params``
+        ``note_decode_state_slots_settled``). ``reload_inputs=True`` restages tokens / positions / page rows from the host
+        (the generator writes only what changed); ``reload_inputs=False`` (``supports_async_decode``: ASYNC_DECODE,
+        async_decode.py:423-481) is a resident chain step (``_chain_decode``). Device route (``sampling_params``
         given): ``read_from_device=False`` returns the generator's ``DecodeOutput`` handle (DP=1 always sends it:
         model_runner.py:4106-4108), ``True`` the ids ``[B_pad, 1]``. Host route (no ``sampling_params``): the logits
         are read back regardless (the generator needs ``read_from_device=True`` without a sampler) and returned as
@@ -1663,8 +1743,8 @@ class GLM53StackForCausalLM:
         B = int(tokens.numel())
         if int(positions.numel()) != B:
             raise ValueError(f"tokens {B} rows vs start_pos {int(positions.numel())}")
-        if B > self.max_batch:
-            raise ValueError(f"{B} decode rows exceed the {self.max_batch} slots")
+        if B > self.max_num_seqs:
+            raise ValueError(f"{B} decode rows exceed the {self.max_num_seqs} plugin slots")
         rows = None
         if page_table is not None:
             rows = trim_page_rows(page_table)
@@ -2158,23 +2238,26 @@ class GLM53StackForCausalLM:
         """The alias after the plugin's gather ``slot_remap`` (row ``i`` reads plugin slot ``remap[i]``: the one
         encoding the plugin sends, a full-width int tensor that permutes every slot, model_runner.py:1366-1421), the
         current alias without one. Row ``i`` keeps the generator slot its request already decodes in, so no state
-        moves."""
-        n = self.max_batch
+        moves. The remap permutes the plugin's max_num_seqs slots; the alias entries past them (GLM53_STACK_BUILD_B's
+        spare generator slots) stay."""
+        n = self.max_num_seqs
         if slot_remap is None:
             return self._alias
         remap = [int(x) for x in torch.as_tensor(slot_remap).reshape(-1).tolist()]
         if len(remap) != n or sorted(remap) != list(range(n)):
             raise ValueError(f"slot_remap {remap} is not a full-width permutation of the {n} slots")
-        return [self._alias[s] for s in remap]
+        return [self._alias[s] for s in remap] + self._alias[n:]
 
     def _admit(self, kv, slots: list, starts: list) -> list:
         """The generator slots of a prefill batch's plugin slots. A new request (chunk start 0 in a plugin slot whose
         generator slot holds none) takes the lowest free generator slot: its alias entry is swapped with the free
         plugin slot that held that generator slot, invisible to the plugin, so the live generator slots stay as low as
-        the plugin's rows (the generator's decode width covers slots 0..max live). A continuation keeps its slot."""
+        the plugin's rows (the generator's decode width covers slots 0..max live). A continuation keeps its slot.
+        Plugin slots < max_num_seqs; the free generator slots range over the build (GLM53_STACK_BUILD_B: a spare
+        entry of the alias then takes the new request's previous generator slot)."""
         n = self.max_batch
-        if any(not 0 <= s < n for s in slots):
-            raise ValueError(f"empty_slots {slots} outside [0, {n})")
+        if any(not 0 <= s < self.max_num_seqs for s in slots):
+            raise ValueError(f"empty_slots {slots} outside [0, {self.max_num_seqs})")
         live = set(self.gen.live_slots(kv))
         alias, taken = list(self._alias), set(live)
         for s, start in zip(slots, starts):
@@ -2255,8 +2338,8 @@ class GLM53StackForCausalLM:
         its page coverage and (sharded pool) physical blocks are released, the backend's release hook runs once."""
         if self.kv_cache is None:
             raise RuntimeError("release_request before allocate_kv_cache")
-        if not 0 <= int(slot) < self.max_batch:
-            raise ValueError(f"release_request({slot}) outside the {self.max_batch} slots")
+        if not 0 <= int(slot) < self.max_num_seqs:
+            raise ValueError(f"release_request({slot}) outside the {self.max_num_seqs} slots")
         g = self._alias[int(slot)]
         self._spec_settle()
         if (self.spec and self.spec_multi_capable and g in self.gen.spec_all_slots()
@@ -2598,7 +2681,7 @@ def declare_multimodal_class(api=None):
             return super().allocate_kv_cache(shape, dtype, num_layers)
 
         def release_request(self, slot: int) -> None:
-            if self.kv_cache is not None and 0 <= int(slot) < self.max_batch:
+            if self.kv_cache is not None and 0 <= int(slot) < self.max_num_seqs:
                 self._mm_failed.discard(self._alias[int(slot)])
             super().release_request(slot)
 

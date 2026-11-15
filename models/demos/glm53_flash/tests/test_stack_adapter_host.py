@@ -2718,7 +2718,10 @@ def test_spec_plan_for_the_lone_user():
     menv = dict(env, GLM53_SPEC_MULTI="1")
     p = spec_plan_for(16, 3, T, menv)
     assert isinstance(p, T["SpecPlan"]) and p.effective_k == 3 and p.k_by_rows == ((4, 3), (8, 1), (16, 1))
-    assert spec_plan_for(4, 3, T, menv).k_by_rows == ((4, 3),)
+    # the multi-user caps come from the BUILD (GLM53_STACK_BUILD_B, default max_num_seqs): the G 4 x (K 3 + 1) = 16
+    # verify rows do not fit a 4-row build; on a 16-row build 4 users take K 3
+    assert isinstance(spec_plan_for(4, 3, T, menv), T["SpecReject"])
+    assert spec_plan_for(4, 3, T, dict(menv, GLM53_STACK_BUILD_B="16")).k_by_rows == ((4, 3),)
     assert isinstance(spec_plan_for(32, 3, T, menv), T["SpecReject"])
     assert spec_plan_for(4, 3, T, env).k_by_rows == ((1, 3), (4, 1))
     # GLM53_SPEC_STEPS_PER_CALL = M: effective_k M (K + 1) - 1 (num_speculative_tokens must reach it), fused_sample
@@ -3466,4 +3469,168 @@ def test_served_spec_async_readback():
     assert isinstance(vo.argmax_ids, gvs.SpecReadback)
     ad.release_request(0)
     assert vo.argmax_ids.ids is not None and backend.spec.counters.get("aborts") == 1 and b.spec_pending is None
+    assert "ttnn" not in sys.modules
+
+
+# ------------------------------------------------------------------- GLM53_STACK_BUILD_B: a build wider than max_num_seqs
+def test_stack_build_b_knob_warmup_and_spec_plan(monkeypatch):
+    """GLM53_STACK_BUILD_B: the device build (backend, generator slots, KV cache, prefix pool) 16 rows wide while vLLM
+    schedules at most max_num_seqs 8 rows -- the knob (default max_num_seqs; refused below it, past the decode slots or
+    not an integer, before any device work), the warm-up accepting the plugin's max_batch_size 8 <= 16 and declaring the
+    8-row decode width the plugin pads to, plugin slots < 8 (prefill, decode rows, an 8-wide slot_remap, release), and
+    the spec plan: 8 live users x 1 draft on the 16 rows (refused on the default 8-row build); without the knob nothing
+    changes (max_num_seqs = the build width)"""
+    NB, N = 16, 8
+    assert gvs.stack_build_b(N, {}) == N and gvs.stack_build_b(N, {"GLM53_STACK_BUILD_B": "16"}) == NB
+    assert (
+        gvs.stack_build_b(N, {"GLM53_STACK_BUILD_B": " "}) == N
+        and gvs.stack_build_b(N, {"GLM53_STACK_BUILD_B": "8"}) == N
+    )
+    with expect_error(ValueError, "GLM53_STACK_BUILD_B=4 < max_num_seqs 8"):
+        gvs.stack_build_b(N, {"GLM53_STACK_BUILD_B": "4"})
+    with expect_error(ValueError, "GLM53_STACK_BUILD_B=33 > 32"):
+        gvs.stack_build_b(N, {"GLM53_STACK_BUILD_B": "33"})
+    with expect_error(ValueError, "an integer"):
+        gvs.stack_build_b(N, {"GLM53_STACK_BUILD_B": "wide"})
+    monkeypatch.setenv("GLM53_STACK_BUILD_B", "4")
+    with expect_error(ValueError, "< max_num_seqs 8"):  # (before the mesh or any stack module is touched)
+        GLM53StackForCausalLM.initialize_vllm_model(None, None, N, SEQ)
+    monkeypatch.delenv("GLM53_STACK_BUILD_B")
+    with expect_error(ValueError, "max_num_seqs 17 outside"):
+        GLM53StackForCausalLM(Glm53Generator(_MockStackBackend(NB), tokenizer=None, max_batch=NB, max_seq_len=SEQ),
+                              NB, SEQ, max_num_seqs=17)  # fmt: skip
+    # ---- the default: max_num_seqs = the build width, the declared decode width the build's
+    ad0, *_ = _adapter()
+    assert ad0.max_batch == ad0.max_num_seqs == B and ad0.tt_supported_decode_batch_sizes == (B,)
+    # ---- the 16-row build under max_num_seqs 8 (vLLM's block budget for 8 users)
+    backend = _MockStackBackend(NB)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=NB, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, NB, SEQ, max_num_seqs=N)
+    assert ad.max_batch == NB and ad.max_num_seqs == N
+    kv = ad.allocate_kv_cache((N * BPS + N, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    assert ad._alias == list(range(NB)) and gen._binding(kv).max_batch == NB
+    for trace in (False, True):  # model_runner.py:4770-4799: the plugin's max_batch_size is its max_num_seqs
+        ad.warmup_model_prefill(kv_cache=kv, enable_trace=trace, can_sample_on_device=True)
+        ad.warmup_model_decode(kv_cache=kv, enable_trace=trace, max_batch_size=N, num_blocks=BPS,
+                               can_sample_on_device=True)  # fmt: skip
+    assert ad.tt_supported_decode_batch_sizes == (N,)  # the plugin pads every decode to its 8 rows
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=NB)  # (<= the build: accepted)
+    with expect_error(ValueError, "max_batch_size 17 outside"):
+        ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=NB + 1)
+    assert ad.tt_supported_decode_batch_sizes == (N,)
+    # plugin slots 0..7: a request in plugin slot 7, decoded in an 8-row step; slot 8 does not exist for the plugin
+    p = _prompt(70, 3)
+    row = [1 + j for j in range(-(-200 // BLOCK_SIZE))]
+    tab = torch.zeros(N, BPS, dtype=torch.int32)
+    tab[7, : len(row)] = torch.tensor(row, dtype=torch.int32)
+    out, _ = ad.prefill_forward(_history([p]), page_table=tab[7:8], kv_cache=kv, prompt_lens=[70], start_pos=[0],
+                                empty_slots=[7], sampling_params=_greedy(1))  # fmt: skip
+    g = ad._alias[7]
+    assert g == 0 and kv.state[g] == p and int(out[0, 0]) == (p[-1] + 1) % VOCAB
+    with expect_error(ValueError, r"empty_slots \[8\] outside \[0, 8\)"):
+        ad.prefill_forward(_history([p]), page_table=tab[7:8], kv_cache=kv, prompt_lens=[70], start_pos=[0],
+                           empty_slots=[8], sampling_params=_greedy(1))  # fmt: skip
+    tok, pos = torch.zeros(N, 1, dtype=torch.int32), torch.full((N,), -1, dtype=torch.int32)
+    tok[0, 0], pos[0] = int(out[0, 0]), 70
+    tab2 = torch.zeros(N, BPS, dtype=torch.int32)
+    tab2[0] = tab[7]
+    remap = torch.tensor([7, 1, 2, 3, 4, 5, 6, 0], dtype=torch.int32)  # the plugin condenses its row to row 0
+    ids = ad.decode_forward(tok, pos, page_table=tab2, kv_cache=kv, sampling_params=_greedy(N), slot_remap=remap,
+                            reload_sampling_params=True, reset_sampling_state=True)  # fmt: skip
+    assert int(ids[0, 0]) == (int(out[0, 0]) + 1) % VOCAB and ad._alias[0] == g and ad._alias[N:] == list(range(N, NB))
+    with expect_error(ValueError, "full-width permutation of the 8 slots"):
+        ad.decode_forward(tok, pos, page_table=tab2, kv_cache=kv, sampling_params=_greedy(N),
+                          slot_remap=torch.arange(NB, dtype=torch.int32))  # fmt: skip
+    with expect_error(ValueError, "16 decode rows exceed the 8 plugin slots"):
+        ad.decode_forward(torch.zeros(NB, 1, dtype=torch.int32), torch.full((NB,), -1, dtype=torch.int32),
+                          kv_cache=kv, sampling_params=_greedy(NB))  # fmt: skip
+    with expect_error(ValueError, r"release_request\(8\) outside the 8 slots"):
+        ad.release_request(8)
+    ad.release_request(0)
+    assert gen.live_slots(kv) == []
+    # ---- the spec plan sizes the multi-user caps from the build: 8 live users x 1 draft on the 16 rows
+    T = contract_types()
+    menv = {"GLM53_STACK_VLLM_SPEC": "1", "GLM53_SPEC_K": "3", "GLM53_SPEC_MULTI": "1"}
+    p16 = spec_plan_for(N, 3, T, dict(menv, GLM53_STACK_BUILD_B="16"))
+    assert isinstance(p16, T["SpecPlan"]) and p16.k_by_rows == ((4, 3), (8, 1))  # 8 x (1 + 1) = 16 rows
+    alt = dict(menv, GLM53_STACK_BUILD_B="16", GLM53_SPEC_MTP_SPARSE="1", GLM53_SPEC_MULTI_ALT="8:1")
+    assert spec_plan_for(N, 3, T, alt).k_by_rows == ((4, 3), (8, 1))  # (the served 4 x 3 + 8:1 pair)
+    r = spec_plan_for(N, 3, T, menv)  # the default 8-row build: the primary 4 x (3 + 1) = 16 rows do not fit
+    assert isinstance(r, T["SpecReject"]) and "16 verify rows > the 8-row build" in r.reason and r.supported_k == (1,)
+    small = dict(menv, GLM53_SPEC_MULTI_USERS="2", GLM53_SPEC_MTP_SPARSE="1", GLM53_SPEC_MULTI_ALT="8:1")
+    r = spec_plan_for(N, 3, T, small)  # the primary 2 x 4 fits 8 rows, the alternate 8 x 2 does not
+    assert isinstance(r, T["SpecReject"]) and "GLM53_SPEC_MULTI_ALT 8:1" in r.reason and r.supported_k == ()
+    assert spec_plan_for(N, 3, T, dict(small, GLM53_STACK_BUILD_B="16")).k_by_rows == ((4, 3), (8, 1))
+    r = spec_plan_for(N, 3, T, dict(menv, GLM53_STACK_BUILD_B="4"))  # (spec_plan never raises: a refusal)
+    assert isinstance(r, T["SpecReject"]) and "< max_num_seqs 8" in r.reason
+    assert isinstance(spec_plan_for(N, 3, T, dict(menv, GLM53_STACK_BUILD_B="32")), T["SpecReject"])  # > the 16 W
+    lone = {"GLM53_STACK_VLLM_SPEC": "1", "GLM53_SPEC_K": "3"}  # the single-user step: a build of <= 4 rows
+    assert spec_plan_for(1, 3, T, dict(lone, GLM53_STACK_BUILD_B="4")).k_by_rows == ()
+    assert isinstance(spec_plan_for(1, 3, T, lone), T["SpecReject"])  # (K + 1 = 4 verify rows on a 1-row build)
+    assert isinstance(spec_plan_for(4, 3, T, dict(lone, GLM53_STACK_BUILD_B="8")), T["SpecReject"])
+    assert "ttnn" not in sys.modules
+
+
+def test_stack_build_b_served_multi_user_spec_on_spare_slots():
+    """GLM53_STACK_BUILD_B = 8 under max_num_seqs 4 (the served 16 under 8, halved): the multi-user step G 4 x K 1
+    verifies 8 rows of the 8-row build -- its group bases 0 / 2 / 4 / 6, two of them generator slots past the plugin's 4.
+    The 4 requests of plugin slots 0..3 are admitted onto the bases (the alias's spare entries take the generator slots
+    they leave), their MTP caches fill, the seed runs once all 4 are live, every verify of the 4 users' blocks runs ONE
+    fused step and every stream equals plain greedy; an ordinary decode with the plugin's 4-wide slot_remap moves the
+    plugin entries only; a fifth plugin slot does not exist"""
+    K, G, NB = 1, 4, 8
+    backend = _MockSpecMultiBackend(NB, K, G, lambda step: K if step % 3 else 0)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=NB, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, NB, SEQ, spec=True, max_num_seqs=B)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    assert ad.spec_multi_capable and gen.spec_slots() == (0, 2, 4, 6) and ad.tt_supported_decode_batch_sizes == (B,)
+    prompts = [_prompt(100 - 5 * i, 7 + 13 * i) for i in range(G)]
+    table = _table([_blocks(i, 400) for i in range(G)], B)
+    s = []
+    for i, p in enumerate(prompts):
+        out, _ = ad.prefill_forward(_history([p]), page_table=table[i : i + 1], kv_cache=kv, prompt_lens=[len(p)],
+                                    start_pos=[0], empty_slots=[i], sampling_params=_greedy(1))  # fmt: skip
+        s.append([int(out[0, 0])])
+    assert ad._alias[:B] == [0, 2, 4, 6] and sorted(ad._alias) == list(range(NB))  # users on the bases 4 / 6 too
+    assert sorted({sl for sl, *_ in backend.mtp_spans}) == [0, 2, 4, 6] and ad.spec_stats["seeds"] == 1
+    pos = [len(p) for p in prompts]
+    ids = ad.decode_forward(torch.tensor([[x[-1]] for x in s]), torch.tensor(pos), page_table=table, kv_cache=kv,
+                            sampling_params=_greedy(B))  # fmt: skip
+    for i in range(G):
+        s[i].append(int(ids[i, 0]))
+        pos[i] += 1
+    ct, cp, ac = _block({i: ([s[i][-1]], pos[i]) for i in range(G)}, K)
+    for _ in range(5):
+        do = ad.propose_draft_tokens(K, ct, cp, ac)
+        assert do.num_valid.tolist() == [K] * G
+        d = {i: [int(v) for v in do.draft_token_ids[i].tolist()] for i in range(G)}
+        ids, (committed, counts) = _verify(ad, kv, K, {i: (s[i][-1], pos[i], d[i]) for i in range(G)}, table)
+        assert tuple(ids.shape) == (B, 1 + K)
+        new = {i: [int(v) for v in committed[i, : int(counts[i])].tolist()] for i in range(G)}
+        ct, cp, ac = _block({i: (new[i], pos[i] + 1) for i in range(G)}, K)
+        for i in range(G):
+            s[i] += new[i]
+            pos[i] += len(new[i])
+    assert ad.spec_stats["fused"] == 5 == backend.spec.counters["steps"] and ad.spec_stats["enters"] == 1
+    want = lambda p, x: [(p[-1] + 1 + j) % VOCAB for j in range(len(x))]  # noqa: E731  (plain greedy: t + 1)
+    assert all(s[i] == want(prompts[i], s[i]) for i in range(G))
+    # an ordinary decode with the plugin's gather: rows 0 / 1 swapped (a 4-wide permutation of its slots)
+    spare = ad._alias[B:]
+    order = [1, 0, 2, 3]
+    ids = ad.decode_forward(torch.tensor([[s[i][-1]] for i in order]), torch.tensor([pos[i] for i in order]),
+                            page_table=table[order], kv_cache=kv, sampling_params=_greedy(B),
+                            slot_remap=torch.tensor(order, dtype=torch.int32), reload_sampling_params=True,
+                            reset_sampling_state=True)  # fmt: skip
+    assert ad._alias[:B] == [2, 0, 4, 6] and ad._alias[B:] == spare
+    for r, i in enumerate(order):
+        s[i].append(int(ids[r, 0]))
+    assert all(s[i] == want(prompts[i], s[i]) for i in range(G))
+    with expect_error(ValueError, r"empty_slots \[4\] outside \[0, 4\)"):
+        ad.prefill_forward(_history([prompts[0]]), page_table=table[0:1], kv_cache=kv, prompt_lens=[95],
+                           start_pos=[0], empty_slots=[4], sampling_params=_greedy(1))  # fmt: skip
+    for i in range(B):
+        ad.release_request(i)
+    assert gen.live_slots(kv) == [] and backend.spec.counters.get("aborts") is None
     assert "ttnn" not in sys.modules
