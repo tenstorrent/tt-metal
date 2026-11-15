@@ -5,7 +5,8 @@ all-gather, over the vocab-sharded LM-head output (each device holds [1,1,R,voca
 
 What it replaces:
   * verify (Qwen36Model._forward_verify_bucket_tp, R = B*T rows, bf16): ttnn.argmax over the untilized all-gathered
-    logits (the all-gather and the untilize stay: the logits readback of a logits-mode verify reads them);
+    logits (the verify trace ends at the vocab shard; separate traces all-gather and untilize it for a step that
+    samples or reads the logits);
   * drafter (draft_argmax, R = B rows, fp32): Qwen36MTP._argmax_sharded (a per-shard ttnn.argmax and max, two
     all-gathers, a second argmax and about a dozen one-tile ops).
 
