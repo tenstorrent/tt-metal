@@ -34,6 +34,10 @@ enum class Conv2dCb {
     L1_ARRAY,
     MATMUL_PARTIALS,
     OUT,
+    STATS,
+    STATS_SCALER,
+    STATS_SCRATCH,
+    STATS_MASK,
     COUNT
 };
 struct CBInfo {
@@ -80,7 +84,8 @@ std::vector<CBInfo> get_cb_info(
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
     uint32_t input_channels_padded,
-    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt,
+    bool epilogue_stats = false);
 
 const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);

@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#ifdef EPILOGUE_STATS
+#include "conv_epilogue_stats_writer.hpp"
+#endif
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
@@ -64,6 +67,9 @@ void kernel_main() {
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
     const uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);
+#ifdef EPILOGUE_STATS
+    const uint32_t stats_core_first_page = get_arg_val<uint32_t>(i++);
+#endif
 
     constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("weights_mcast_ct_offset"),
@@ -272,6 +278,9 @@ void kernel_main() {
         }
     }  // out_num_blocks_h
     noc.async_write_barrier();
+#ifdef EPILOGUE_STATS
+    write_epilogue_stats<STATS_CTA>(stats_core_first_page);
+#endif
 
 #ifdef CONFIG_TENSOR_IN_DRAM
     if constexpr (split_reader_enabled) {

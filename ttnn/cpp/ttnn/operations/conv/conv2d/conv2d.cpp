@@ -35,6 +35,13 @@ using ttnn::Conv2dResultWithOptions;
 using Result = Conv2dResult;
 using ResultWithOptions = Conv2dResultWithOptions;
 
+// The epilogue_stats tensor and the first page this conv writes in it.
+struct EpilogueStats {
+    std::optional<Tensor> stats;
+    uint32_t page_base = 0;
+    uint32_t slice_stride = 0;
+};
+
 Result conv2d_L1(
     const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
@@ -54,7 +61,8 @@ Result conv2d_L1(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
-    const ttnn::prim::HaloOptionalInputs& halo_inputs = {}) {
+    const ttnn::prim::HaloOptionalInputs& halo_inputs = {},
+    const EpilogueStats& epilogue = {}) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor_.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -330,7 +338,10 @@ Result conv2d_L1(
             conv_config.full_inner_dim,
             conv_config.enable_activation_reuse,
             conv_config.config_tensors_in_dram,
-            conv_config.force_split_reader);
+            conv_config.force_split_reader,
+            epilogue.stats,
+            epilogue.page_base,
+            epilogue.slice_stride);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
@@ -340,6 +351,7 @@ Result conv2d_L1(
     TT_FATAL(
         !halo_inputs.halo_boundary.has_value() && !halo_inputs.prologue_scale.has_value(),
         "conv2d prologue_scale / prologue_shift / halo_boundary run in the halo, which the 1x1 matmul path skips");
+    TT_FATAL(!epilogue.stats.has_value(), "conv2d epilogue_stats is not supported on the 1x1 matmul path");
     tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
 
     // run conv as matmul
@@ -420,6 +432,9 @@ class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
     ttnn::prim::HaloOptionalInputs halo_inputs;
+    std::optional<Tensor> epilogue_stats;
+    uint32_t epilogue_stats_slice_stride = 0;
+    uint32_t slice_index = 0;
 
 public:
     Conv2dSliceAttr(
@@ -440,7 +455,9 @@ public:
         const Conv2dConfig& conv_config,
         const DeviceComputeKernelConfig& compute_config,
         MeshDevice* device,
-        const ttnn::prim::HaloOptionalInputs& halo_inputs = {}) :
+        const ttnn::prim::HaloOptionalInputs& halo_inputs = {},
+        const std::optional<Tensor>& epilogue_stats = std::nullopt,
+        uint32_t epilogue_stats_slice_stride = 0) :
         batch_size(batch_size),
         input_shape(input_shape),
         input_channels(input_channels),
@@ -458,7 +475,9 @@ public:
         conv_config(conv_config),
         compute_config(compute_config),
         device(device),
-        halo_inputs(halo_inputs) {}
+        halo_inputs(halo_inputs),
+        epilogue_stats(epilogue_stats),
+        epilogue_stats_slice_stride(epilogue_stats_slice_stride) {}
 
     std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>> get_input_slice_and_padding(
         const IOShape& output_slice_start, const IOShape& output_slice_end) const {
@@ -673,6 +692,8 @@ public:
         return {halo_inputs.prologue_scale, halo_inputs.prologue_shift};
     }
 
+    void start_slice(uint32_t index) override { slice_index = index; }
+
     std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor,
         const IOShape& output_slice_start,
@@ -731,7 +752,10 @@ public:
             conv_config_l1,
             compute_config,
             std::nullopt,
-            slice_halo_inputs);
+            slice_halo_inputs,
+            {.stats = epilogue_stats,
+             .page_base = slice_index * epilogue_stats_slice_stride,
+             .slice_stride = epilogue_stats_slice_stride});
         weight_tensor = std::get<3>(conv2d_result);
         if (bias_tensor.has_value()) {
             bias_tensor->get() = std::get<4>(conv2d_result).value();
@@ -769,7 +793,8 @@ Result conv2d_DRAM(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
-    const ttnn::prim::HaloOptionalInputs& halo_inputs = {}) {
+    const ttnn::prim::HaloOptionalInputs& halo_inputs = {},
+    const EpilogueStats& epilogue = {}) {
     TT_FATAL(
         !halo_inputs.halo_boundary.has_value() ||
             (dram_slice_config_.has_value() &&
@@ -828,7 +853,8 @@ Result conv2d_DRAM(
             conv_config,
             compute_config_,
             memory_config_,
-            halo_inputs);
+            halo_inputs,
+            epilogue);
     }
 
     // DRAM slicing path - only executed when mm_conv is false
@@ -891,7 +917,9 @@ Result conv2d_DRAM(
         conv_config,
         compute_config,
         device,
-        halo_inputs);
+        halo_inputs,
+        epilogue.stats,
+        epilogue.slice_stride);
 
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
     ttnn::operations::op_slicing::run_sliced_op(
@@ -941,7 +969,7 @@ Conv2dResultWithOptions conv2d_fused(
     // Kernel-stride folding takes `% stride` before the output size is computed, and the L1 estimate divides
     // by the kernel size, channels and batch.
     operations::conv::validate_conv_params(in_channels, out_channels, batch_size, kernel_size, stride, groups);
-    const auto& [prologue_scale, prologue_shift, halo_boundary] = fused_ops;
+    const auto& [prologue_scale, prologue_shift, halo_boundary, epilogue_stats] = fused_ops;
     TT_FATAL(
         prologue_scale.has_value() == prologue_shift.has_value(),
         "conv2d prologue_scale and prologue_shift are passed together");
@@ -953,6 +981,8 @@ Conv2dResultWithOptions conv2d_fused(
         input_tensor.layout());
     const prim::HaloOptionalInputs halo_inputs{
         .halo_boundary = halo_boundary, .prologue_scale = prologue_scale, .prologue_shift = prologue_shift};
+    const EpilogueStats epilogue{
+        .stats = epilogue_stats, .slice_stride = conv2d_epilogue_stats_num_pages(device, out_channels, 1)};
     // Determine execution path based on configuration and input properties
     Conv2dExecutionPath path = determine_conv2d_execution_path(input_tensor, slice_config_);
 
@@ -979,7 +1009,8 @@ Conv2dResultWithOptions conv2d_fused(
                 conv_config_,
                 compute_config_,
                 memory_config,
-                halo_inputs),
+                halo_inputs,
+                epilogue),
             return_output_dim,
             return_weights_and_bias);
     }
@@ -1007,7 +1038,8 @@ Conv2dResultWithOptions conv2d_fused(
             compute_config_,
             memory_config,
             slice_config_,
-            halo_inputs),
+            halo_inputs,
+            epilogue),
         return_output_dim,
         return_weights_and_bias);
 }
@@ -1057,6 +1089,11 @@ Conv2dResultWithOptions conv2d(
         return_output_dim,
         return_weights_and_bias,
         {});
+}
+
+uint32_t conv2d_epilogue_stats_num_pages(MeshDevice* device, uint32_t out_channels, uint32_t num_slices) {
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    return num_slices * 2 * tt::div_up(out_channels, tt::constants::TILE_WIDTH) * grid.x * grid.y;
 }
 
 }  // namespace ttnn
