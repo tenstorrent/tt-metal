@@ -545,23 +545,29 @@ struct GradientLaunch {
     uint32_t seed;
     ttnn::DataType grad_dtype;
     CacheExpectation cache;
+    // The earlier launch whose seed this one repeats and whose bits it must give; none: the CPU reference is the check.
+    std::optional<size_t> repeats;
     const char* name;
 };
 
 // Launches A (bf16 gradient) and B (fp32 gradient, same shape) must each compile a program: the program hash keys the
-// gradient's dtype, and the two gradients' tiles differ in size. Launches C and D rerun A's and B's seeds on fresh
-// tensors, must hit the cache and give the same bits. Every launch's tensors stay alive to the end, so a later launch
-// can't land on an earlier one's buffers, and each launch's buffers are read again after the last launch.
+// gradient's dtype, and the two gradients' tiles differ in size. Launches C and D hit those programs with values of
+// their own and are checked against the CPU reference, so a hit that kept the cached launch's gradient address, which
+// is only read, shows. Launches E and F rerun A's and B's seeds on fresh tensors and must give the same bits. Every
+// launch's tensors stay alive to the end, so a later launch can't land on an earlier one's buffers, and each launch's
+// buffers are read again after the last launch.
 void run_gradient_dtype_launches(
     const std::vector<uint32_t>& shape,
     ttnn::DataType state_dtype,
     const AdamWStepScalars& scalars,
     const Tolerances& tolerances) {
-    const std::array<GradientLaunch, 4> launches = {{
-        {3000U, ttnn::DataType::BFLOAT16, CacheExpectation::Miss, "launch A (bf16 gradient)"},
-        {4000U, ttnn::DataType::FLOAT32, CacheExpectation::Miss, "launch B (fp32 gradient)"},
-        {3000U, ttnn::DataType::BFLOAT16, CacheExpectation::Hit, "launch C (launch A again)"},
-        {4000U, ttnn::DataType::FLOAT32, CacheExpectation::Hit, "launch D (launch B again)"},
+    const std::array<GradientLaunch, 6> launches = {{
+        {3000U, ttnn::DataType::BFLOAT16, CacheExpectation::Miss, std::nullopt, "launch A (bf16 gradient)"},
+        {4000U, ttnn::DataType::FLOAT32, CacheExpectation::Miss, std::nullopt, "launch B (fp32 gradient)"},
+        {5000U, ttnn::DataType::BFLOAT16, CacheExpectation::Hit, std::nullopt, "launch C (bf16 gradient, new values)"},
+        {6000U, ttnn::DataType::FLOAT32, CacheExpectation::Hit, std::nullopt, "launch D (fp32 gradient, new values)"},
+        {3000U, ttnn::DataType::BFLOAT16, CacheExpectation::Hit, 0U, "launch E (launch A again)"},
+        {4000U, ttnn::DataType::FLOAT32, CacheExpectation::Hit, 1U, "launch F (launch B again)"},
     }};
     std::vector<AdamWLaunchTensors> tensors;
     std::vector<AdamWValues> after;
@@ -577,11 +583,22 @@ void run_gradient_dtype_launches(
             expect_distinct_buffers(tensors[earlier], current);
         }
         after.push_back(read_back(current));
-        if (launch.cache == CacheExpectation::Hit) {
-            expect_bitwise_equal(after[i - 2U], after.back(), launch.name);
+        if (launch.repeats.has_value()) {
+            expect_bitwise_equal(after[*launch.repeats], after.back(), launch.name);
             continue;
         }
-        expect_close_to_reference(adamw_reference(current, scalars), after.back(), tolerances, launch.name);
+        const auto reference = adamw_reference(current, scalars);
+        expect_close_to_reference(reference, after.back(), tolerances, launch.name);
+        if (launch.cache == CacheExpectation::Hit) {
+            // Guards against a vacuous pass: the step from the gradient of the launch that compiled this program (two
+            // launches back) must miss the reference.
+            auto stale = current;
+            stale.grad.before = tensors[i - 2U].grad.before;
+            EXPECT_GT(
+                error_metrics(reference.exp_avg, adamw_reference(stale, scalars).exp_avg).max_error,
+                tolerances.max_error)
+                << launch.name << ": the cached launch's gradient is too close to tell apart";
+        }
         // An fp32 parameter keeps what the gradient's low bits move; a bf16 one rounds them away.
         if (launch.grad_dtype == ttnn::DataType::FLOAT32 && state_dtype == ttnn::DataType::FLOAT32) {
             auto rounded = current;
