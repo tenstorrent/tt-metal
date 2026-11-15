@@ -9,7 +9,7 @@ import warnings
 
 import numpy as np
 
-from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError
+from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError, MissingKeyError
 from ttml.distributed_checkpointing._index import check_json
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._planner import TensorInfo
@@ -70,12 +70,18 @@ def test_param_groups_are_checked_before_anything_is_placed(expect_error):
         "optimizer/param_groups.0.params": "a\nb",
         "optimizer/param_groups.1.params": "c",
     }
-    check_param_groups(_StubOptimizer([["a", "b"], ["c"]]), saved)
-    check_param_groups(_StubOptimizer([["a"]]), {})  # a model-only checkpoint has nothing to check
+    check_param_groups(_StubOptimizer([["a", "b"], ["c"]]), saved, strict=True)
     with expect_error(CheckpointError, "group 0 holds different params"):
-        check_param_groups(_StubOptimizer([["c"], ["a", "b"]]), saved)
+        check_param_groups(_StubOptimizer([["c"], ["a", "b"]]), saved, strict=True)
     with expect_error(CheckpointError, "2 optimizer param groups, the live optimizer 1"):
-        check_param_groups(_StubOptimizer([["a", "b", "c"]]), saved)
+        check_param_groups(_StubOptimizer([["a", "b", "c"]]), saved, strict=True)
+
+
+def test_a_strict_load_with_an_optimizer_needs_optimizer_state_in_the_checkpoint(expect_error):
+    # A model-only checkpoint: an optimizer whose state is scalars only would restore nothing, so strict refuses.
+    with expect_error(MissingKeyError, "the checkpoint holds no optimizer state"):
+        check_param_groups(_StubOptimizer([["a"]]), {}, strict=True)
+    check_param_groups(_StubOptimizer([["a"]]), {}, strict=False)  # keeps the live state, nothing to check
 
 
 class _StubOptimizerWithoutMembers(_StubOptimizer):
@@ -87,9 +93,9 @@ def test_param_groups_whose_members_cannot_be_compared_warn():
     saved = {"optimizer/num_param_groups": 1, "optimizer/param_groups.0.params": "a\nb"}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        check_param_groups(_StubOptimizerWithoutMembers([["a", "b"]]), saved)
-        check_param_groups(_StubOptimizer([["a", "b"]]), {"optimizer/num_param_groups": 1})
-        check_param_groups(_StubOptimizer([["a", "b"]]), saved)  # comparable and equal: silent
+        check_param_groups(_StubOptimizerWithoutMembers([["a", "b"]]), saved, strict=True)
+        check_param_groups(_StubOptimizer([["a", "b"]]), {"optimizer/num_param_groups": 1}, strict=True)
+        check_param_groups(_StubOptimizer([["a", "b"]]), saved, strict=True)  # comparable and equal: silent
     messages = [str(w.message) for w in caught]
     assert len(messages) == 2, messages
     assert "group 0: the live optimizer records no member list" in messages[0]

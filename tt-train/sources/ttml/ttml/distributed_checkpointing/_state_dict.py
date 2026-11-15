@@ -28,7 +28,7 @@ import ttnn
 import ttml
 from ttml.modules.parameter import Parameter
 
-from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, TopologyError
+from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
 from ._layouts import Identity, declared_transform
 from ._planner import TensorInfo
 from ._topology import Label, Placement, global_shape
@@ -290,16 +290,24 @@ def check_undeclared_fusion(live: LiveTensor, saved: Label) -> None:
         )
 
 
-def check_param_groups(optimizer, scalars: dict[str, Any]) -> None:
+def check_param_groups(optimizer, scalars: dict[str, Any], strict: bool) -> None:
     """The checkpoint's param groups must be the live optimizer's: the same count and, group by group, the same
     params. Checked before any tensor is placed, so a mismatch leaves the model and optimizer untouched instead of
-    surfacing from ``set_state_dict`` after every tensor was replaced. A checkpoint without optimizer scalars (a
-    model-only save loaded non-strictly) has nothing to check."""
-    saved_count = scalars.get("optimizer/num_param_groups")
-    if saved_count is None:
-        return
+    surfacing from ``set_state_dict`` after every tensor was replaced.
+
+    A checkpoint without optimizer scalars was saved without an optimizer. A strict load refuses it when the live
+    optimizer records param groups: an optimizer whose state is scalars only (SGD without momentum, say) would
+    otherwise restore nothing without a word. A non-strict load has nothing to check."""
     state = optimizer.get_state_dict()
     live_count = state.get("num_param_groups")
+    saved_count = scalars.get("optimizer/num_param_groups")
+    if saved_count is None:
+        if strict and live_count is not None:
+            raise MissingKeyError(
+                "the checkpoint holds no optimizer state (no optimizer/num_param_groups); load it with optimizer=None, "
+                "or with strict=False to keep the live optimizer's state"
+            )
+        return
     if live_count is not None and int(saved_count) != int(live_count):
         raise CheckpointError(
             f"the checkpoint has {saved_count} optimizer param groups, the live optimizer {live_count}"

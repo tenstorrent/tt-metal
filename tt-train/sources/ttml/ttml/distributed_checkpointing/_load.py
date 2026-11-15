@@ -192,7 +192,7 @@ def load(
     for key, kplan in plan.keys.items():
         check_undeclared_fusion(by_key[key], kplan.entry.label)
     if optimizer is not None:
-        check_param_groups(optimizer, index.scalars)  # before anything is placed
+        check_param_groups(optimizer, index.scalars, strict)  # before anything is placed
     stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
 
     fds: dict[int, int] = {}
