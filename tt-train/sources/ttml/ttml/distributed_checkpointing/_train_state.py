@@ -270,7 +270,7 @@ def _apply(name: str, set_state_dict, value) -> None:
     except Exception as err:  # noqa: BLE001  (a component's own refusal: KeyError, ValueError, ...)
         raise CheckpointError(
             f"the live {name} refused the stored {name} state ({type(err).__name__}: {err}); is it configured as when "
-            f"the checkpoint was saved?"
+            f"the checkpoint was saved, and does it take its state back as JSON types (a tuple comes back as a list)?"
         ) from err
 
 

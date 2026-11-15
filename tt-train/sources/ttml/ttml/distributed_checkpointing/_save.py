@@ -120,7 +120,8 @@ def save(
     """Write ``model`` and ``optimizer`` to the directory ``ckpt_dir``.
 
     ``header`` is any JSON-encodable dict (the step, the config, ...), returned by ``load``. ``scheduler`` and
-    ``dataloader`` are saved through their ``get_state_dict`` (JSON only) and, with ``rng`` (default), so is the
+    ``dataloader`` are saved through their ``get_state_dict`` (JSON only; ``load`` hands their ``set_state_dict`` the
+    state as JSON types, so a tuple comes back as a list) and, with ``rng`` (default), so is the
     state of every random generator training draws from: the ttml generator, python's, numpy's and torch's when
     torch is imported; ``load`` restores them on request. ``threads`` caps the writer threads (default: one per
     device data file); ``max_inflight_bytes`` bounds the host buffers waiting to be written. An existing

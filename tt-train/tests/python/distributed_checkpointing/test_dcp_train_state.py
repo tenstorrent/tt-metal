@@ -242,6 +242,25 @@ def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error
     assert np.array_equal(after[2], before[2]) and torch.equal(after[3], before[3]), "numpy and torch untouched"
 
 
+class _TupleLoader(Loader):
+    """Stores a tuple, as random.Random().getstate() returns, and wants it back as one."""
+
+    def get_state_dict(self) -> dict:
+        return {"position": self.position, "shuffle": (1, 2)}
+
+    def set_state_dict(self, state: dict) -> None:
+        if not isinstance(state["shuffle"], tuple):
+            raise TypeError("state vector must be a tuple")
+        super().set_state_dict({"position": state["position"]})
+
+
+def test_a_tuple_comes_back_as_a_list_and_the_refusal_says_so(expect_error):
+    stored = capture_train_state(dataloader=_TupleLoader(), rng=False)
+    assert stored["dataloader"]["shuffle"] == [1, 2], "JSON has no tuples"
+    with expect_error(CheckpointError, r"does it take its state back as JSON types \(a tuple comes back as a list\)"):
+        restore_train_state(stored, dataloader=_TupleLoader())
+
+
 class _IntKeyLoader(Loader):
     def get_state_dict(self) -> dict:
         return {"per_shard": {0: 7}}
