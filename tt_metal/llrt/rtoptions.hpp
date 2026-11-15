@@ -289,7 +289,8 @@ class RunTimeOptions {
     bool skip_loading_fw = false;
 
     bool jit_analytics_enabled = false;
-    bool riscv_debug_info_enabled = false;
+    // TT_METAL_RISCV_DEBUG_INFO when set; unset, get_riscv_debug_info_enabled() picks the default.
+    std::optional<bool> riscv_debug_info_override;
     uint32_t watcher_debug_delay = 0;
 
     bool validate_kernel_binaries = false;
@@ -813,9 +814,21 @@ public:
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
     void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
-    // Whether to compile with -g to include DWARF debug info in the binary.
-    bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
-    void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
+    // Whether to compile with -g to include DWARF debug info in the binary. TT_METAL_RISCV_DEBUG_INFO=0/1 decides
+    // when set. Unset, it follows the Inspector (tt-triage reads the debug info for hang callstacks), except on a
+    // simulator, where nothing reads it unless DPRINT is on (enum names and callstacks) or a debug tool can attach
+    // (TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS).
+    bool get_riscv_debug_info_enabled() const {
+        if (riscv_debug_info_override) {
+            return *riscv_debug_info_override;
+        }
+        if (get_simulator_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) &&
+            !simulator_serve_over_sockets) {
+            return false;
+        }
+        return get_inspector_enabled();
+    }
+    void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_override = enable; }
 
     unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
