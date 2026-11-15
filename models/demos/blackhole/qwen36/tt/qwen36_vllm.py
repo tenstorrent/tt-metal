@@ -516,6 +516,8 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                 model.record_prefill_trace_chunked(self.mesh_device)
             model.record_prefill_traces_masked()
         model.gdn_blocks.warmup()
+        if enable_trace:
+            model.gdn_blocks.record_traces()
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
