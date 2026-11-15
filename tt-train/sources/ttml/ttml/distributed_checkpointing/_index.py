@@ -397,6 +397,8 @@ def read_index(directory: str) -> Index:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return Index.from_json(json.load(f))
+    except CheckpointError as err:
+        raise type(err)(f"{path}: {err}") from err
     except (ValueError, KeyError, TypeError, IndexError, AttributeError) as err:
         raise IncompleteCheckpointError(
             f"{path} is not a readable index ({type(err).__name__}: {err}); the checkpoint is corrupt or truncated"
