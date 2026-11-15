@@ -2215,3 +2215,49 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py` (via devjob: ~11 min with the load), or the gate:
   `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.34 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
+
+## FIX.35 (overseer, OWNER 2026-11-15): measured end-to-end prefill 0 -> 1,024,000 under DECODER_SKIP=decode (no model change)
+
+- New test `tests/test_full_prefill.py` (BATCH_SHARED, one load). Drives the serving runtime itself
+  (adapter.DS41PrefillRuntime: build_runtime, allocate_kv_cache 1 slot at deploy.seq 1,044,480, runtime.compile), one
+  request in slot 0 of 200 x 5120 chunks via `runtime.prefill_chunk` back to back; the runtime marks every chunk
+  last=False under decode. Engine inputs (server_rules.server_payload) put on the device before the clock (the H2D
+  socket has them there). No sink / D2H acks (sink would sync per layer; D2H is a device op per layer, not run).
+  The only per-chunk sync is the runtime's own: `_host_ids` reads the engine input back (a blocking read behind the
+  previous chunk's work). The test times it by wrapping `runtime._host_ids` (timing only). 6 boundary syncs.
+- Tokens: the canonical prompt whole (chat-wrapped Tale of Two Cities, 189,939 ids; its first 56,320 = prompt.json,
+  asserted) + 256 WikiText-2 raw train articles (/mnt/models/agentic-prefill-goldens/wikitext-2-raw-v1-train.txt),
+  1,098,205 ids; 200 distinct chunks (asserted); the warm-up uses ids after the first 1,024,000.
+- Gotcha DS41-280: spec text.source (models/tt_transformers/...) no longer exists; read models/ttt_compat/tests copy
+  (same sha). Gotcha DS41-281: the 3-chunk warm-up is not enough: the first full request built 4 programs at every
+  chunk 3..199 (788, +11 s: 33.18 s); the test repeats the request until one builds 0 (here the 2nd) and measures it.
+- Device time: a separate pass under the rt profiler with its own array-backed callback (3.96 M program records, 0
+  dropped; 16-bit ids unwrapped against the host id at arrival). That pass's wall is 25.17 s vs 21.87 unprofiled, so
+  its span / gap are upper bounds; program busy time is not affected.
+- Results (8x4, warm request, gate log FIX.35.units.log):
+
+| boundary | cumulative wall s | tok/s | sync ms |
+|---|---|---|---|
+| 51200 | 1.01 | 50460 | 15.1 |
+| 128000 | 2.59 | 49331 | 16.3 |
+| 256000 | 5.17 | 49520 | 18.3 |
+| 512000 | 10.51 | 48713 | 24.6 |
+| 768000 | 16.02 | 47938 | 26.9 |
+| 1024000 | 21.87 | 46823 | 27.3 |
+
+  Per chunk: host enqueue (after the read-back) 86.1 ms mean (p10 80.3, p90 91.3, max 133.4); read-back 22.6 ms mean
+  (idle read-back 2.4 ms, so the host waited ~20 ms for the device every chunk); device (slowest chip's program
+  time) 80.7 ms mean, 70.6 (chunk 0) -> 92.6 (indexer grows); gap between chunks 6.3 ms mean (max 21.2).
+  Sync at the boundaries 15-27 ms = the device's lag behind the host. The next chunk's read-back would wait the same.
+- Verdict: device-bound. The host is ahead of the device at the end of every chunk (host_bound_chunks 0 of 200: the
+  next read-back waited >= 7.8 ms beyond idle on every chunk). Host time shows in the wall only at chunk boundaries:
+  the runtime's per-chunk read-back + begin_chunk host work before the first program, 1.26 s of 21.87 s (5.8%,
+  profiled pass). Wall 21.87 s vs sum of program time 16.14 s: the other ~5.7 s is the device between programs
+  inside a chunk (dispatch / CCL waits), not host. Host enqueue (86 ms) exceeds program time (81 ms) on 159 chunks,
+  but not the device's timeline per chunk (~109 ms).
+- vs FIX.34 (one chunk alone, random ids, zero history, wall incl. its sync): 106.7-120.4 ms wall a chunk there;
+  here 21.87 s / 200 = 109 ms a chunk on average. Device ms here 75.3 (p51200 chunk) .. 86.2 (last) vs 81.6 .. 99.1
+  there. Real text routes differently from random ids. Its "host 25 ms" is wall - device (unhidden), not enqueue time.
+- Re-run: `PYTHONPATH=$PWD DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py` (via devjob, ~7 min with the load), or
+  `gate FIX.35 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
