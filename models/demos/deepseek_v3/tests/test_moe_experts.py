@@ -408,7 +408,7 @@ def test_convert_weights_quad_ring_prepares_stacked_checkpoint_tensors(
 
 
 def test_convert_weights_quad_ring_rejects_implicit_stacked_repack(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expect_error
 ) -> None:
     class _FakeMeshDevice:
         shape = (16, 8)
@@ -438,7 +438,7 @@ def test_convert_weights_quad_ring_rejects_implicit_stacked_repack(
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("raw W2 preparation should not run")),
     )
 
-    with pytest.raises(ValueError, match="requires prepacked HF expert tensors"):
+    with expect_error(ValueError, "requires prepacked HF expert tensors"):
         TTExperts.convert_weights(
             SimpleNamespace(
                 n_routed_experts=2,
@@ -578,7 +578,7 @@ def test_convert_weights_quad_ring_uses_prepared_checkpoint_tensors(
 
 
 def test_convert_weights_quad_ring_rejects_partial_prepared_checkpoint(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expect_error
 ) -> None:
     class _FakeMeshDevice:
         shape = (16, 8)
@@ -598,7 +598,7 @@ def test_convert_weights_quad_ring_rejects_partial_prepared_checkpoint(
         lambda mesh_device, hidden_size, matmul_N: ("w0_w1_shard_map", "w2_shard_map", "dram-core-range-set"),
     )
 
-    with pytest.raises(ValueError, match="partial quad-ring prepared"):
+    with expect_error(ValueError, "partial quad-ring prepared"):
         TTExperts.convert_weights(
             SimpleNamespace(
                 n_routed_experts=2,
@@ -654,7 +654,9 @@ def test_create_combined_state_dict_uses_stacked_expert_weights():
     )
 
 
-def test_convert_weights_rejects_partial_stacked_expert_checkpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_convert_weights_rejects_partial_stacked_expert_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, expect_error
+):
     class _FakeMeshDevice:
         shape = (1, 1)
 
@@ -687,7 +689,7 @@ def test_convert_weights_rejects_partial_stacked_expert_checkpoint(monkeypatch: 
     )
     monkeypatch.setattr(TTExperts, "_warned_legacy_expert_checkpoint", False)
 
-    with pytest.raises(ValueError, match="mixes stacked and legacy expert weights"):
+    with expect_error(ValueError, "mixes stacked and legacy expert weights"):
         TTExperts.convert_weights(
             SimpleNamespace(n_routed_experts=2),
             (state_dict,),
