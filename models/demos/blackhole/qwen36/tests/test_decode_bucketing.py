@@ -438,7 +438,9 @@ def _warmup_model(calls, max_batch_size):
     model.record_prefill_trace_chunked = record
     model.prepare_prefill_traces_masked = lambda: calls.append("prepare masked")
     model.record_prefill_traces_masked = record_masked
-    model.gdn_blocks = SimpleNamespace(warmup=lambda: calls.append("blocks"))
+    model.gdn_blocks = SimpleNamespace(
+        warmup=lambda: calls.append("blocks"), record_traces=lambda: calls.append("block traces")
+    )
     return model
 
 
@@ -466,12 +468,13 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
         "record",
         "record masked",
         "blocks",
+        "block traces",
     ]
     # A chunk trace recorded without the masked-bucket traces is kept; only those are recorded.
     calls.clear()
     model._masked_traces_recorded = False
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
-    assert calls == [prepare, "prepare masked", "record masked", "blocks"]
+    assert calls == [prepare, "prepare masked", "record masked", "blocks", "block traces"]
 
 
 @pytest.mark.parametrize("max_batch_size, per_row_rope_delta", [(1, False), (8, True)])
@@ -503,7 +506,7 @@ def test_prefill_warmup_warms_vision_before_any_trace(monkeypatch, max_batch_siz
         "prepare masked",
         "record",
         "record masked",
-    ] + ["blocks"]
+    ] + ["blocks", "block traces"]
 
 
 def test_vision_warmup_covers_each_patch_bucket_once(monkeypatch):

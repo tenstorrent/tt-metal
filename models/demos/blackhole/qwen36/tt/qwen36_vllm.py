@@ -424,10 +424,12 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                     **extra,
                     **({"checkpoint_pos": checkpoint_pos} if checkpoint_pos else {}),
                 )
-                if checkpoint_pos:
-                    blocks.write_checkpoint(mamba_state, rb.checkpoint)
+            # The logits are read and freed before the block writes: a write can replay a captured trace, which may
+            # overwrite a buffer allocated after its capture, such as these logits.
             rows.append(ttnn.to_torch(logits, mesh_composer=comp).reshape(-1, model.args.vocab_size)[:1].float())
             ttnn.deallocate(logits)
+            if segments[-1][2]:  # prefill_segments computes a checkpoint in a forward only in a one-part plan
+                blocks.write_checkpoint(mamba_state, rb.checkpoint)
             blocks.write_state(mamba_state, rb.dest)
         # Zero rope deltas: the multimodal M-RoPE delta is applied model-side (rope.rope_delta).
         return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
@@ -549,6 +551,8 @@ class Qwen36ForCausalLM(_Qwen36Generator):
                 model.record_prefill_trace_chunked(self.mesh_device)
             model.record_prefill_traces_masked()
         model.gdn_blocks.warmup()
+        if enable_trace:
+            model.gdn_blocks.record_traces()
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
