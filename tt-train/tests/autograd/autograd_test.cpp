@@ -173,6 +173,11 @@ public:
         create_name("one_parameter");
         register_tensor(parameter, "weight");
     }
+
+    // Puts `parameter` in the registered one's place, as a Python module does when its attribute is assigned again.
+    void replace_weight(const ttml::autograd::TensorPtr& parameter) {
+        override_tensor(parameter, "weight");
+    }
 };
 
 ttml::autograd::TensorPtr registered_parameter() {
@@ -245,6 +250,21 @@ TEST_F(GradAccumulationTest, AParameterUnfrozenLaterAccumulatesInFp32) {
 
     EXPECT_EQ(parameter->get_grad().dtype(), ttnn::DataType::FLOAT32);
     EXPECT_EQ(ttml::core::to_vector(parameter->get_grad())[0], 1.0F + std::ldexp(1.0F, -9));
+}
+
+// A tensor that replaces a registered one (ModuleBase::override_tensor) is a parameter too.
+TEST_F(GradAccumulationTest, ATensorThatReplacesAParameterAccumulatesInFp32) {
+    OneParameterModule module(ttml::autograd::create_tensor(bf16_gradient(1U, 0.5F)));
+    auto replacement = ttml::autograd::create_tensor(bf16_gradient(1U, 0.5F));
+    ASSERT_FALSE(replacement->is_parameter());
+
+    module.replace_weight(replacement);
+    ASSERT_TRUE(replacement->is_parameter());
+    replacement->add_grad(bf16_gradient(2U, 1.0F));
+    replacement->add_grad(bf16_gradient(3U, std::ldexp(1.0F, -9)));
+
+    EXPECT_EQ(replacement->get_grad().dtype(), ttnn::DataType::FLOAT32);
+    EXPECT_EQ(ttml::core::to_vector(replacement->get_grad())[0], 1.0F + std::ldexp(1.0F, -9));
 }
 
 // A trainable tensor no module registered keeps its gradient's dtype: activations feed bf16-only backward kernels.
