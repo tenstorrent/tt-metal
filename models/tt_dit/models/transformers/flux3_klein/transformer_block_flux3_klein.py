@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
@@ -73,15 +74,26 @@ RING_SDPA_CHUNKS_SP32_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
 }
 
 
-def fast_matmul_config(device: ttnn.MeshDevice) -> ttnn.WormholeComputeKernelConfig:
-    """The fast mode's matmuls: LoFi over bfloat8_b weights, fp32 accumulation."""
-    return ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
+@dataclass(frozen=True)
+class Flux3KleinPrecision:
+    """Weight dtype and matmul fidelity of every DiT block and modulation linear; ``name`` keys the weight cache.
+    ``mm_fidelity`` None keeps each layer's own matmul config."""
+
+    name: str
+    weight_dtype: ttnn.DataType = ttnn.bfloat16
+    mm_fidelity: ttnn.MathFidelity | None = None
+
+    def matmul_config(self, arch: ttnn.Arch) -> ttnn.WormholeComputeKernelConfig | None:
+        if self.mm_fidelity is None:
+            return None
+        return ttnn.init_device_compute_kernel_config(
+            arch, math_fidelity=self.mm_fidelity, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+
+
+PRECISION_BF16 = Flux3KleinPrecision("bf16")
+# opt-in fast mode: bfloat8_b weights, LoFi matmuls (activations stay bf16)
+PRECISION_FAST = Flux3KleinPrecision("bf8_lofi", ttnn.bfloat8_b, ttnn.MathFidelity.LoFi)
 
 
 class Flux3KleinAttention(Attention):
@@ -135,14 +147,14 @@ class Flux3KleinTransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        weight_dtype: ttnn.DataType = ttnn.bfloat16,
+        precision: Flux3KleinPrecision = PRECISION_BF16,
     ) -> None:
         super().__init__()
 
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         mlp_hidden_dim = MLP_RATIO * HIDDEN
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
-        mm_config = fast_matmul_config(device) if weight_dtype == ttnn.bfloat8_b else None
+        mm_config = precision.matmul_config(device.arch())
 
         self.attn = Flux3KleinAttention(
             query_dim=HIDDEN,
@@ -161,11 +173,9 @@ class Flux3KleinTransformerBlock(Module):
             per_head_norm=True,
             is_fsdp=is_fsdp,
             shard_prompt=False,
+            qkv_dtype=precision.weight_dtype,
+            mm_compute_kernel_config=mm_config,
         )
-        # fast mode: bfloat8_b QKV, MLP-in and proj_out weights with LoFi matmuls (activations stay bf16)
-        self.attn.to_qkv.weight.dtype = weight_dtype
-        if mm_config is not None:
-            self.attn.mm_compute_kernel_config = mm_config
         self.attn.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -196,7 +206,7 @@ class Flux3KleinTransformerBlock(Module):
             mlp_hidden_dim,
             bias=False,
             activation_fn="swiglu",
-            dtype=weight_dtype,
+            dtype=precision.weight_dtype,
             compute_kernel_config=mm_config,
             mesh_device=device,
             mesh_axis=tp_axis,
@@ -207,7 +217,7 @@ class Flux3KleinTransformerBlock(Module):
             HIDDEN + mlp_hidden_dim,
             HIDDEN,
             bias=False,
-            dtype=weight_dtype,
+            dtype=precision.weight_dtype,
             compute_kernel_config=mm_config,
             mesh_device=device,
             mesh_axis=tp_axis,

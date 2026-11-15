@@ -27,6 +27,7 @@ from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     padded_length,
     timestep_inputs,
 )
+from ...models.transformers.flux3_klein.transformer_block_flux3_klein import PRECISION_BF16, Flux3KleinPrecision
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
@@ -166,7 +167,7 @@ class Flux3KleinPipeline:
         tp_axis: int = 0,
         topology: ttnn.Topology = ttnn.Topology.Ring,
         num_links: int = 2,
-        dit_bf8: bool = False,
+        precision: Flux3KleinPrecision = PRECISION_BF16,
     ) -> None:
         self._device = mesh_device
         self._text_length = text_length
@@ -197,13 +198,12 @@ class Flux3KleinPipeline:
         )
         self._transformers: dict[str, Flux3KleinTransformer] = {}
         for model, snapshot in snapshots.items():
-            # dit_bf8: the opt-in fast mode, bfloat8_b weights and LoFi matmuls for every DiT block and modulation linear
             transformer = Flux3KleinTransformer(
                 flow_map=model == "distilled",
                 device=mesh_device,
                 ccl_manager=self._ccl,
                 parallel_config=parallel,
-                weight_dtype=ttnn.bfloat8_b if dit_bf8 else ttnn.bfloat16,
+                precision=precision,
             )
             cache.load_model(
                 transformer,
@@ -212,7 +212,7 @@ class Flux3KleinPipeline:
                 parallel_config=parallel,
                 mesh_shape=mesh_shape,
                 mesh_device=mesh_device,
-                dtype="bf8_lofi" if dit_bf8 else "bf16",
+                dtype=precision.name,
                 get_torch_state_dict=lambda snapshot=snapshot: _load_dit_state(snapshot),
             )
             self._transformers[model] = transformer

@@ -96,6 +96,8 @@ class Attention(Module):
         per_head_norm: bool = False,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        qkv_dtype: ttnn.DataType = ttnn.bfloat16,
+        mm_compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None,
     ) -> None:
         super().__init__()
 
@@ -154,7 +156,7 @@ class Attention(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
-        self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        self.mm_compute_kernel_config = mm_compute_kernel_config or ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
@@ -164,7 +166,7 @@ class Attention(Module):
 
         # chunks=3 splits QKV inside minimal_matmul_split (faster than matmul + ttnn.chunk).
         self.to_qkv = ColParallelLinear(
-            query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, **common_args
+            query_dim, 3 * padded_inner_dim, bias=proj_bias, mesh_axis=tp_axis, chunks=3, dtype=qkv_dtype, **common_args
         )
 
         # Fuses head-split + RMSNorm + RoPE. Weight is tiled per-head → [padded_inner_dim] in

@@ -5,7 +5,7 @@
 """FLUX 3 Klein's linear1 (QKV + MLP-in as one all-gather-matmul, swiglu_chunk + grouped N) at the 4096 row
 counts: its q / k / v / MLP outputs must be byte-identical to the separate to_qkv and proj_mlp calls, and a whole
 block with linear1 and the one-tile TP barrier before proj_out must be byte-identical to the block without them,
-call after call. Also in the fast mode (bfloat8_b weights, LoFi)."""
+call after call. Also in the fast mode (PRECISION_FAST)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,12 @@ import ttnn
 
 from ....blocks.attention_opt import Attention
 from ....models.transformers.flux3_klein import transformer_flux3_klein as klein
-from ....models.transformers.flux3_klein.transformer_block_flux3_klein import Flux3KleinTransformerBlock
+from ....models.transformers.flux3_klein.transformer_block_flux3_klein import (
+    PRECISION_BF16,
+    PRECISION_FAST,
+    Flux3KleinPrecision,
+    Flux3KleinTransformerBlock,
+)
 from ....parallel.config import DiTGParallelConfigNoCFG, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
@@ -52,8 +57,8 @@ def _same(a: ttnn.Tensor | list[torch.Tensor], b: ttnn.Tensor | list[torch.Tenso
 
 @pytest.mark.parametrize("device_params", [{**ring_params_8k, "l1_small_size": 65536}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(TP, SP)], indirect=True)
-@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
-def test_linear1(*, mesh_device: ttnn.MeshDevice, weight_dtype: ttnn.DataType) -> None:
+@pytest.mark.parametrize("precision", [PRECISION_BF16, PRECISION_FAST], ids=["bf16", "fast"])
+def test_linear1(*, mesh_device: ttnn.MeshDevice, precision: Flux3KleinPrecision) -> None:
     tp_axis, sp_axis = 0, 1
     ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     parallel = DiTGParallelConfigNoCFG(
@@ -61,7 +66,7 @@ def test_linear1(*, mesh_device: ttnn.MeshDevice, weight_dtype: ttnn.DataType) -
         sequence_parallel=ParallelFactor(factor=SP, mesh_axis=sp_axis),
     )
     block = Flux3KleinTransformerBlock(
-        device=mesh_device, ccl_manager=ccl, parallel_config=parallel, weight_dtype=weight_dtype
+        device=mesh_device, ccl_manager=ccl, parallel_config=parallel, precision=precision
     )
     gen = torch.Generator().manual_seed(0)
     missing = block.load_torch_state_dict(_random_state(gen), strict=False).missing_keys
@@ -71,8 +76,11 @@ def test_linear1(*, mesh_device: ttnn.MeshDevice, weight_dtype: ttnn.DataType) -
         attn.to_qkv.weight.data.dtype
         == block.proj_mlp.weight.data.dtype
         == block.proj_out.weight.data.dtype
-        == weight_dtype
+        == precision.weight_dtype
     )
+    if precision.mm_fidelity is not None:
+        for config in (attn.mm_compute_kernel_config, block.proj_mlp.compute_config, block.proj_out.compute_config):
+            assert config.math_fidelity == precision.mm_fidelity
     full = mesh_device.compute_with_storage_grid_size()
 
     def rows_tensor(t: torch.Tensor) -> ttnn.Tensor:
