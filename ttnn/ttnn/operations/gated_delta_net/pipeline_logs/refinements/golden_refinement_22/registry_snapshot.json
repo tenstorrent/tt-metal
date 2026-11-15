@@ -1,0 +1,25 @@
+{
+  "supported": {
+    "dtype": [
+      "FLOAT32",
+      "BFLOAT16"
+    ],
+    "layout": [
+      "TILE"
+    ],
+    "fp32_dest_acc_en": [
+      true
+    ],
+    "alignment": [
+      "tile_aligned",
+      "h_non_aligned"
+    ],
+    "sequence_mode": [
+      "decode",
+      "prefill",
+      "batched_prefill"
+    ]
+  },
+  "exclusions": [],
+  "invalid": []
+}
