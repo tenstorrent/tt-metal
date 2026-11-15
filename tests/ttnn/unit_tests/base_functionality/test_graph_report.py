@@ -5438,6 +5438,34 @@ class TestRecordPythonOperation:
         assert len(g._python_io_data) == 1
         assert reserved["arguments"]["bias"] == "1"
 
+    def test_nested_operation_outputs_stay_on_their_own_records(self):
+        import ttnn.graph as g
+
+        outer = g.append_python_io_record("outer")
+        inner = g.append_python_io_record("inner")
+        g.store_output_tensor_ids([20], record=inner)
+        g.store_captured_graph({"inner": True}, record=inner)
+        g.store_output_tensor_ids([99], record=outer)
+        g.store_captured_graph({"outer": True}, record=outer)
+        assert outer["output_tensor_ids"] == [99]
+        assert outer["captured_graph"] == {"outer": True}
+        assert inner["output_tensor_ids"] == [20]
+        assert inner["captured_graph"] == {"inner": True}
+
+    def test_store_without_record_uses_latest_entry(self):
+        import ttnn.graph as g
+
+        g.store_output_tensor_ids([1])
+        g.store_captured_graph({})
+        assert g._python_io_data == []
+        first = g.append_python_io_record("first")
+        latest = g.append_python_io_record("latest")
+        g.store_output_tensor_ids([7])
+        g.store_captured_graph({"latest": True})
+        assert "output_tensor_ids" not in first
+        assert latest["output_tensor_ids"] == [7]
+        assert latest["captured_graph"] == {"latest": True}
+
     def test_populate_failure_keeps_the_reserved_record(self, expect_error, monkeypatch):
         import ttnn.graph as g
 
