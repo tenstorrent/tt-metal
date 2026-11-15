@@ -391,6 +391,9 @@ class RunTimeOptions {
     // EXPERIMENTAL: Enable VC1 inter-mesh pass-through routing (A->B->C). Not deadlock-safe.
     bool enable_fabric_mesh_pass_through = false;
 
+    // EXPERIMENTAL: Build fabric routers from the fabric graph instead of the stock builder
+    bool fabric_graph_builder = false;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -969,6 +972,10 @@ public:
     // EXPERIMENTAL: Fabric VC1 inter-mesh pass-through enable (A->B->C). Not deadlock-safe.
     bool get_enable_fabric_mesh_pass_through() const { return enable_fabric_mesh_pass_through; }
     void set_enable_fabric_mesh_pass_through(bool enable) { enable_fabric_mesh_pass_through = enable; }
+
+    // EXPERIMENTAL: graph-based fabric builder
+    bool get_fabric_graph_builder() const { return fabric_graph_builder; }
+    void set_fabric_graph_builder(bool enable) { fabric_graph_builder = enable; }
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }

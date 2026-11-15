@@ -54,6 +54,11 @@ set(UNIT_TESTS_FABRIC_SRC
 
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)
 
+set(UNIT_TESTS_FABRIC_GRAPH_SRC
+    graph/test_logical_graph_lowering.cpp
+    graph/test_graph_fabric_mock_compile.cpp
+)
+
 set(TEST_SYSTEM_HEALTH_SMOKE_SOURCES system_health/test_system_health.cpp)
 
 set(TEST_FABRIC_SMOKE_SOURCES fabric_data_movement/test_basic_fabric_smoke.cpp)

@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
+#include "tt_metal/fabric/graph/graph_fabric_build_session.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -309,7 +310,10 @@ std::unique_ptr<FabricBuilder> FabricBuildSession::make_device_builder(
     return std::make_unique<FabricBuilder>(device, program, fabric_context, dispatch_core_type);
 }
 
-std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& /*fabric_context*/) {
+std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& fabric_context) {
+    if (fabric_context.get_rtoptions().get_fabric_graph_builder()) {
+        return std::make_unique<graph::GraphFabricBuildSession>(fabric_context);
+    }
     return std::make_unique<FabricBuildSession>();
 }
 

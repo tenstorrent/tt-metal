@@ -110,6 +110,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
     TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FABRIC_GRAPH_BUILDER,                      // Build fabric routers from the fabric graph
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -855,6 +856,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: this->enable_fabric_mesh_pass_through = true; break;
+
+        // TT_METAL_FABRIC_GRAPH_BUILDER
+        // EXPERIMENTAL: Builds fabric routers from the fabric graph (tt_metal/fabric/graph) instead of the
+        // stock builder. Tensix mux/UDM fabrics still use the stock builder. A registered plugin session wins.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_GRAPH_BUILDER=1
+        case EnvVarID::TT_METAL_FABRIC_GRAPH_BUILDER: this->fabric_graph_builder = true; break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).

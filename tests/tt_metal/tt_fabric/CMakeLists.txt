@@ -75,6 +75,31 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
+# Graph fabric builder: lowering tests, plus mock compile (needs TT_METAL_MOCK_CLUSTER_DESC_PATH or tt-run)
+add_executable(test_fabric_graph ${UNIT_TESTS_FABRIC_GRAPH_SRC})
+
+target_link_libraries(
+    test_fabric_graph
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+target_include_directories(
+    test_fabric_graph
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+)
+
+set_target_properties(
+    test_fabric_graph
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
 add_library(test_system_health_smoke OBJECT)
 add_library(TT::SystemHealth::Smoke ALIAS test_system_health_smoke)
 
@@ -316,6 +341,7 @@ foreach(
     ITEMS
         fabric_unit_tests
         test_physical_discovery
+        test_fabric_graph
         test_system_health_smoke
         test_fabric_smoke
         test_tt_fabric

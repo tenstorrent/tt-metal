@@ -43,6 +43,15 @@ set(FABRIC_SOURCES
     builder/static_sized_channel_connection_writer_adapter.cpp
     builder/connection_registry.cpp
     builder/router_wiring_rules.cpp
+    graph/fabric_graph_types.cpp
+    graph/fabric_graph_inputs.cpp
+    graph/fabric_wiring_rules.cpp
+    graph/logical_graph_lowering.cpp
+    graph/logical_graph_validation.cpp
+    graph/channel_graph_lowering.cpp
+    graph/physical_graph_lowering.cpp
+    graph/graph_fabric_build_session.cpp
+    graph/graph_fabric_builder.cpp
     channel_trimming_export.cpp
     channel_trimming_import.cpp
     channel_trimming_io.cpp
