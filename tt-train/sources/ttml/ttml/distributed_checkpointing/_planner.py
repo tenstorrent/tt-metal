@@ -31,6 +31,7 @@ from typing import Callable, Iterable
 
 from ._boxes import Box, boxes_tile, grid_cell_size
 from ._errors import (
+    CheckpointError,
     CoverageError,
     DtypeMismatchError,
     MissingKeyError,
@@ -183,13 +184,23 @@ def _checked_groups(info: TensorInfo) -> dict[tuple[int, ...], tuple[Chunk, ...]
     return groups
 
 
+def _by_key(infos: Iterable[TensorInfo], verb: str) -> dict[str, TensorInfo]:
+    """``infos`` by key; two tensors under one key would leave one of them silently not ``verb``."""
+    by_key: dict[str, TensorInfo] = {}
+    for info in infos:
+        if info.key in by_key:
+            raise CheckpointError(f"{info.key}: two live tensors have this key; only one of them would be {verb}")
+        by_key[info.key] = info
+    return by_key
+
+
 def create_save_plan(
     infos: Iterable[TensorInfo],
     file_for_coord: Callable[[tuple[int, ...]], str],
     file_metadata: Callable[[tuple[int, ...]], dict] | None = None,
 ) -> SavePlan:
     """One file per mesh coordinate any tensor lives on; each key's unique boxes assigned to their elected owners."""
-    infos = {info.key: info for info in infos}
+    infos = _by_key(infos, "saved")
     coords = sorted({c for info in infos.values() for c in info.label.mesh_coords})
     files = [FilePlan(i, c, file_for_coord(c)) for i, c in enumerate(coords)]
     file_of = {c: i for i, c in enumerate(coords)}
@@ -385,6 +396,7 @@ def create_load_plan(
     as unexpected, so a model alone loads from a checkpoint that also holds optimizer state. ``None`` means every
     role. A live tensor that resolves to an entry of another role is a ``RoleMismatchError``.
     """
+    infos = list(_by_key(infos, "loaded").values())
     live_map = index.live_key_map()
     wanted = None if roles is None else set(roles)
     plans: dict[str, KeyPlan] = {}
