@@ -22,10 +22,8 @@ from ._errors import (
     CheckpointError,
     CoverageError,
     DtypeMismatchError,
-    FSDPStateError,
     IncompleteCheckpointError,
     LayoutError,
-    LazyParameterError,
     MissingKeyError,
     RoleMismatchError,
     ShapeMismatchError,
@@ -33,7 +31,7 @@ from ._errors import (
     UnexpectedKeyError,
     VersionError,
 )
-from ._index import find_latest, is_complete, parse_dir_name, read_index, step_dir_name
+from ._index import find_latest, is_complete, read_index, step_dir_name
 from ._index import read_user_header as read_header
 
 
@@ -41,10 +39,8 @@ __all__ = [
     "CheckpointError",
     "CoverageError",
     "DtypeMismatchError",
-    "FSDPStateError",
     "IncompleteCheckpointError",
     "LayoutError",
-    "LazyParameterError",
     "MissingKeyError",
     "RoleMismatchError",
     "ShapeMismatchError",
@@ -53,7 +49,6 @@ __all__ = [
     "VersionError",
     "find_latest",
     "is_complete",
-    "parse_dir_name",
     "read_header",
     "read_index",
     "step_dir_name",
