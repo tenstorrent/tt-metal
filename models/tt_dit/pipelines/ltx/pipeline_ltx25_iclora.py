@@ -431,6 +431,8 @@ class LTX25ICLoRAPipeline:
         traced = runtime_options.get("traced", True)
         _require(type(traced) is bool, "traced must be boolean")
         _environment(fixture, traced)
+        # The native factory defaults to eager; forward this session's resolved setting.
+        runtime_options["traced"] = traced
         pipeline = _native_factory()(
             mesh_device,
             **{name: asset["path"] for name, asset in fixture["assets"].items()},

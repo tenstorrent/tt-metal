@@ -507,7 +507,7 @@ def constructor_native(contract, monkeypatch):
     return state, events
 
 
-@pytest.mark.parametrize("traced", [False, True])
+@pytest.mark.parametrize("traced", [pytest.param(None, id="omitted"), False, True])
 @pytest.mark.parametrize("cold", [False, True])
 @pytest.mark.parametrize("dynamic_load", [False, True])
 def test_constructor_reference_allocation_before_capture(contract, constructor_native, traced, cold, dynamic_load):
@@ -518,7 +518,10 @@ def test_constructor_reference_allocation_before_capture(contract, constructor_n
         endpoint = contract.fixture["acceptance"][name]
         Image.new("RGB", (256, 128), "red").save(endpoint["path"])
         endpoint["sha256"] = hashlib.sha256(Path(endpoint["path"]).read_bytes()).hexdigest()
-    pipe = contract.create(traced=traced, dynamic_load=dynamic_load)
+    options = {} if traced is None else {"traced": traced}
+    pipe = contract.create(dynamic_load=dynamic_load, **options)
+    traced = True if traced is None else traced
+    assert pipe.traced is traced
     native = pipe._pipeline
     assert native._traced is traced
     assert native._vae_traced is traced
