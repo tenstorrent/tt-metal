@@ -68,7 +68,15 @@ CB_CONV_ACC = 26
 CB_SCRATCH = 27
 CB_SQ_O = 28
 CB_RINV_O = 29
+CB_ROW_STAGE = 30
 NUM_CB_SLOTS = 64
+
+# Rows staged per flush when a token face row is narrower than the DRAM read alignment (bf16 on
+# Blackhole): each half-row is read as one aligned chunk into staging, then copied L1-to-L1.
+ROW_STAGE_SLOTS = 32
+
+# Buffers carrying token-tensor bytes (the tensor dtype); every other CB is a Float32 intermediate.
+TOKEN_CBS = (CB_CONV_W, CB_WINDOW, CB_GATE_IN, CB_GATE_W, CB_Z, CB_NORM_W, CB_OUT_ROWS, CB_SCRATCH)
 
 
 def _kernel_defines():
@@ -113,7 +121,8 @@ def _cb_plan(Kt, Vt):
     ]
 
 
-# Indices read by copy_tile / SFPU at full fp32 (UnpackToDestFp32); the rest feed srcA/srcB or dataflow.
+# Indices read by copy_tile / SFPU at full fp32 (UnpackToDestFp32) when Float32; the rest feed srcA/srcB
+# or dataflow. A bf16 token buffer reaches DEST losslessly through srcA, so it is never tagged.
 U2D_CBS = (
     CB_STATE_IN,
     CB_STATE,
@@ -136,8 +145,23 @@ U2D_CBS = (
 )
 
 
-def l1_footprint_bytes(Kt, Vt):
-    return sum(pages for _, pages in _cb_plan(Kt, Vt)) * FP32_TILE_BYTES + BF16_TILE_BYTES
+def _tile_bytes(dtype):
+    return FP32_TILE_BYTES if dtype == ttnn.float32 else BF16_TILE_BYTES
+
+
+def _row_stage_bytes(token_tile_bytes):
+    """Staging bytes for sub-alignment row reads; 0 when a face row already meets DRAM alignment."""
+    seg_bytes = token_tile_bytes // (TILE * TILE) * (TILE // 2)
+    align = ttnn.get_dram_alignment()
+    return 0 if seg_bytes % align == 0 else (ROW_STAGE_SLOTS + 1) * align
+
+
+def l1_footprint_bytes(Kt, Vt, dtype):
+    token_bytes = _tile_bytes(dtype)
+    cb_bytes = sum(
+        pages * (token_bytes if indices[0] in TOKEN_CBS else FP32_TILE_BYTES) for indices, pages in _cb_plan(Kt, Vt)
+    )
+    return cb_bytes + BF16_TILE_BYTES + _row_stage_bytes(token_bytes)
 
 
 def _float_bits(value):
@@ -184,15 +208,29 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             next_block += per_core
 
     # ---- circular buffers ----
+    token_dtype = mixed_qkv.dtype
+    token_tile_bytes = _tile_bytes(token_dtype)
     cbs = []
     for indices, pages in _cb_plan(Kt, Vt):
-        formats = []
-        for idx in indices:
-            formats.append(
-                ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=FP32_TILE_BYTES)
-            )
+        is_token = indices[0] in TOKEN_CBS
+        dtype = token_dtype if is_token else ttnn.float32
+        page_bytes = token_tile_bytes if is_token else FP32_TILE_BYTES
+        formats = [
+            ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dtype, page_size=page_bytes) for idx in indices
+        ]
+        cbs.append(ttnn.CBDescriptor(total_size=pages * page_bytes, core_ranges=all_cores, format_descriptors=formats))
+    row_stage_bytes = _row_stage_bytes(token_tile_bytes)
+    if row_stage_bytes:
         cbs.append(
-            ttnn.CBDescriptor(total_size=pages * FP32_TILE_BYTES, core_ranges=all_cores, format_descriptors=formats)
+            ttnn.CBDescriptor(
+                total_size=row_stage_bytes,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_ROW_STAGE, data_format=token_dtype, page_size=row_stage_bytes
+                    )
+                ],
+            )
         )
     cbs.append(
         ttnn.CBDescriptor(
@@ -220,13 +258,16 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         norm_weight,
         conv_state_out,
     )
-    reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt]
+    # Token tile bytes, state tile bytes, DRAM read alignment, row-stage slots (0 = direct row reads).
+    geometry_ct = [token_tile_bytes, FP32_TILE_BYTES]
+    reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
+    reader_ct.append(ROW_STAGE_SLOTS if row_stage_bytes else 0)
     for t in reader_tensors:
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     reader_addrs = [t.buffer_address() for t in reader_tensors]
 
     # ---- writer ----
-    writer_ct = [Kt, Vt, value_heads]
+    writer_ct = [Kt, Vt, value_heads, *geometry_ct]
     for t in (output, recurrent_state_out):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     writer_addrs = [output.buffer_address(), recurrent_state_out.buffer_address()]
@@ -251,7 +292,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if len(modes) < NUM_CB_SLOTS:
         modes = modes + [ttnn.UnpackToDestMode.Default] * (NUM_CB_SLOTS - len(modes))
     for idx in U2D_CBS:
-        modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        fp32_cb = idx not in TOKEN_CBS or token_dtype == ttnn.float32
+        modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32 if fp32_cb else ttnn.UnpackToDestMode.Default
     compute_kernel_config.unpack_to_dest_mode = modes
 
     defines = _kernel_defines()

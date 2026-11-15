@@ -105,7 +105,8 @@ ALWI void begin_loads(uint32_t cb) {
 
 ALWI void load(uint32_t cb, uint32_t tile, uint32_t dst) { copy_tile(cb, tile, dst); }
 
-// Every packed buffer here is Float32, so the packer is reconfigured once per window (pack_first),
+// Each window packs one format (Float32, or the token dtype for cb_out_rows), so the packer is
+// reconfigured once per window (pack_first),
 // not per tile.
 ALWI void pack_first(uint32_t dst, uint32_t cb, uint32_t idx) {
     pack_reconfig_data_format(cb);

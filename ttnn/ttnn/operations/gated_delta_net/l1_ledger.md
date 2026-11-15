@@ -4,7 +4,11 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (
 Blocking Model): `pair` (b, h; one pair per block), `t` (token rows; block = 1 tile row, step = 1
 token), `K` (Kt, whole), `V` (Vt, whole), `c` (channel group: Kt or Vt columns), `j` (4 taps).
 Page = one fp32 tile (4096 B) unless noted. `fp32_dest_acc_en = True` in every cell, so every
-compute page is Float32 (audit 2: no 16-bit page carries a DEST result).
+compute page is Float32 (audit 2: no 16-bit page carries a DEST result). Token buffers (Refinement 1:
+cb_conv_w, cb_window, cb_gate_in, cb_gate_w, cb_z, cb_norm_w, cb_out_rows, cb_scratch; `TOKEN_CBS`
+in the descriptor) take the token-tensor dtype: 2048 B bf16 pages, untagged (bf16 reaches DEST
+losslessly through srcA); fp32 pages keep their U2D tag. cb_out_rows in bf16 is the one 16-bit page
+fed by DEST: it is the output ABI (output dtype = input dtype).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
@@ -34,7 +38,8 @@ compute page is Float32 (audit 2: no 16-bit page carries a DEST result).
 | cb_norm_w | `Vt` | Vt | {pair: streams (refilled per pair), t: streams (constant), K: streams, V: spans Vt, c, j: streams} | Float32 (U2D) | reader | compute | pair | constant per pair |
 | cb_out_rows | `Vt*ROW_DEPTH` | Vt | {pair: streams, t: spans 1 tile row, K: streams, V: spans Vt, c, j: streams} | Float32 (output dtype) | compute | writer | tile row | pack-into-destination (no intermediate between the norm chain and the writer); double buffered |
 | cb_reduce_scaler | 1 (2048 B page) | 1 | {pair, t, K, V, c, j: streams (constant)} | Float16_b (bf16-packed SUM scaler 1.0) | reader | compute | kernel | constant; literal 1 page |
-| cb_scratch | 1 | 3 rows | reader-private | Float32 | reader | reader | conv_state_out copy | 64 B row staging for the bit-exact conv_state_out copy; never seen by compute |
+| cb_scratch | 1 | 3 rows | reader-private | token dtype | reader | reader | conv_state_out copy | face-row staging for the bit-exact conv_state_out copy; never seen by compute |
+| cb_row_stage | 1 page of `(ROW_STAGE_SLOTS + 1) * dram_alignment` B (2112 B on Blackhole); allocated only when a face row is narrower than the DRAM read alignment (bf16) | up to ROW_STAGE_SLOTS aligned chunks | reader-private | raw bytes (token dtype descriptor) | reader | reader | between a row read and its RowReader::finish() | a bf16 face row is 32 B, a Blackhole DRAM read must be 64 B aligned: each half-row is read as its aligned 64 B chunk here, then copied L1-to-L1 into the destination tile. Not shared with cb_scratch: the conv_state_out copy reads rows into cb_scratch through this staging |
 
 Inventory decisions (Rule 3): conv packs straight into cb_y_qk / cb_v (no tap-sum
 intermediate); L2 scale packs straight into cb_kq_rows; the RMS norm chain packs into the writer's
@@ -64,7 +69,8 @@ footprint = 4096 * ( Kt*Vt*(STATE_IN_DEPTH + 1 + STATE_OUT_DEPTH)
           + 2048
 ```
 
-This is `l1_footprint_bytes(Kt, Vt)` in `gated_delta_net_program_descriptor.py` (summed from
+(fp32 token tensors.) For bf16 the token-buffer pages above are 2048 B and cb_row_stage adds 2112 B.
+This is `l1_footprint_bytes(Kt, Vt, dtype)` in `gated_delta_net_program_descriptor.py` (summed from
 `_cb_plan`, the one place CB page counts are written).
 
 Scaling: the state term scales with Kt*Vt and the two state depths; cb_conv_w, the per-tile-row
@@ -105,6 +111,11 @@ cross-core 0 B in both.
 > call's DRAM traffic (the state dominates) and a prefill call is bound by 4096 ordered token steps
 > per pair, not by DRAM; the multicast layers onto the built structure (the injector is the pair
 > core with `h % r == 0`, receivers skip the q/k conv and L2 norm), so R-STEP keeps it reachable.
+
+bf16 token tensors (Refinement 1): crossings unchanged; token bytes halve. Row reads become 64 B
+aligned chunks holding the wanted 32 B row (2x the useful bytes on those rows only); row writes
+stay 32 B (Tensix-to-DRAM writes need only L1 alignment; repeated calls with neighbouring rows
+written by different cores are bit-identical, `test_gated_delta_net_bf16.py`).
 
 ## Notes
 

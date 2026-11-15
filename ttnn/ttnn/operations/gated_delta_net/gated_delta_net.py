@@ -58,7 +58,7 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True],
     "alignment": ["tile_aligned", "h_non_aligned"],
@@ -160,7 +160,7 @@ def validate(
     if any(t.layout != ttnn.TILE_LAYOUT for t in tensors):
         raise UnsupportedAxisValue("gated_delta_net: every tensor must be TILE_LAYOUT")
 
-    footprint = l1_footprint_bytes(key_dim // TILE, value_dim // TILE)
+    footprint = l1_footprint_bytes(key_dim // TILE, value_dim // TILE, mixed_qkv.dtype)
     if footprint > L1_BUDGET:
         raise RuntimeError(f"gated_delta_net: per-core L1 footprint {footprint} B exceeds {L1_BUDGET} B")
     return config

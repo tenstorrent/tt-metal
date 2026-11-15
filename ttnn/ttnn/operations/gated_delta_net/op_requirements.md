@@ -27,7 +27,7 @@
 - **Compute config**: caller's `compute_kernel_config` passed through (default HiFi4, fp32 DEST, no approx); per-CB `UnpackToDestFp32` set by the descriptor
 - **Golden baseline**: 64 supported_pass, 35 xfail_expected (all bfloat16), 0 loud
 
-### [ ] Refinement 1 — bfloat16 token tensors (lands the perf_decode_b1 contract)
+### [x] Refinement 1 — bfloat16 token tensors (lands the perf_decode_b1 contract)
 
 **Goal**: add `ttnn.bfloat16` to `SUPPORTED["dtype"]`: mixed_qkv, z, b, a, conv_state and the four
 weights in bfloat16, output and conv_state_out in bfloat16, recurrent_state and every carried / DEST
