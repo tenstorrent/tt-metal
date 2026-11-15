@@ -281,7 +281,7 @@ def load(
             )
         index: Index = read_index(ckpt_dir)
         header = read_header_json(ckpt_dir)
-        train_state = header.get(TRAIN_STATE_KEY, {})
+        train_state = header[TRAIN_STATE_KEY]
         missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
         if strict and missing_state:
             raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
@@ -425,7 +425,7 @@ def load(
         stats["total_s"] = time.perf_counter() - t0
         return LoadResult(
             ckpt_dir,
-            header.get("user", {}),
+            header["user"],
             {k: index.scalars[k] for k in applied} if optimizer is not None else dict(index.scalars),
             plan.missing + missing_state,
             plan.unexpected,
