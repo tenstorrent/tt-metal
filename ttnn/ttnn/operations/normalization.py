@@ -382,8 +382,12 @@ def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_gr
     within the device compute grid that satisfies the DRAM group-norm constraints.
 
     Args:
+        device: The device to query for compute grid size.
+        num_channels: Number of channels.
+        num_groups: Number of groups for group norm.
+        input_nhw: Spatial size (N * H * W).
         num_batches: Number of batches (N dimension). Used to ensure uniform
-            multicast group sizes for correct kernel synchronization.
+            multicast group sizes for correct kernel synchronization. Defaults to 1.
 
     Returns: CoreGrid
     """

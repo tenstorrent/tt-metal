@@ -1540,7 +1540,7 @@ def recurrent_gated_delta_rule(
         v: [B, T, HV, V] value
         beta: [B, T, HV] write strength (sigmoid output)
         g: [B, T, HV] log-space decay gate, or [B, T, HV, K] per-key log decays (KDA)
-        scale: query scale, defaults to 1/sqrt(K); applied after the optional L2 norm
+        scale: query scale. Defaults to None, which applies 1/sqrt(K); applied after the optional L2 norm
         initial_state: [B, HV, K, V] previous recurrent state
         output_final_state: whether to return the final state
         use_qk_l2norm: apply l2_norm (eps 1e-6 inside the root) to q and k, in the compute dtype
@@ -1642,7 +1642,7 @@ def chunk_gated_delta_rule(
         g: [B, T, H] log-space decay gate
         beta: [B, T, H] write strength (sigmoid output)
         chunk_size: number of tokens per chunk
-        scale: attention scale factor, defaults to 1/sqrt(K)
+        scale: attention scale factor. Defaults to None, which applies 1/sqrt(K)
         initial_state: [B, H, K, V] previous recurrent state
         output_final_state: whether to return the final state
         use_qk_l2norm: apply L2 normalization to q, k

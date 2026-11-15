@@ -312,11 +312,12 @@ def from_torch(
         spec (ttnn.TensorSpec, optional): the desired `ttnn` tensor spec. Defaults to `None`.
         tile (ttnn.Tile, optional): the desired tiling configuration for the tensor. Defaults to `None`.
         pad_value (float, optional): the desired padding value for tiling. Only used if `layout` is `TILE_LAYOUT`. Defaults to `None`.
-        layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+        layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `None` (ROW_MAJOR_LAYOUT applied by ttnn.Tensor).
         device (ttnn.MeshDevice, optional): the desired `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
-        cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+        cq_id (int, optional): The command queue ID to use. Defaults to `None` (queue 0 used).
+        preserve_nan_values (bool, optional): convert on the host instead of on device, so NaN values are kept (workaround for issue #31406). Defaults to `False`.
         col_tilize (bool, optional): If True, transpose the last two dimensions of the tensor in host
             memory (float32) before BFP tile encoding.  In BFP format one exponent byte is shared
             across 16 consecutive datums within a tile face row; transposing before packing redirects
@@ -443,7 +444,7 @@ def to_torch(
             Will use `torch.squeeze` operation to remove dimensions until the desired rank is reached. If not possible, the operation will raise an error.
         mesh_composer (ttnn.CppMeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
         device (ttnn.MeshDevice, optional): The `ttnn` device of the input tensor. Defaults to `None`.
-        cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+        cq_id (int, optional): The command queue ID to use. Defaults to `None` (queue 0 used).
 
     Returns:
         torch.Tensor: The converted `torch` tensor.

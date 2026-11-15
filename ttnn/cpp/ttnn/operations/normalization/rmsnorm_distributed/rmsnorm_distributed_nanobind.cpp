@@ -73,6 +73,7 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
 
               Limitations:
                 - All tensors must be on-device.
+                - FLOAT32 input requires compute_kernel_config with fp32_dest_acc_en=true.
                 - Unsharded inputs must be interleaved
                 - Sharded inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32). If :attr:`residual_input_tensor` is provided, it must match input's padded shape and sharding.
               )doc",

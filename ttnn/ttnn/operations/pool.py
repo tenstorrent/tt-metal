@@ -232,6 +232,7 @@ def golden_avg_pool2d(
         ceil_mode: Use ceiling for output shape calculation
         count_include_pad: Include padding in average calculation
         divisor_override: Override the divisor used in averaging
+        dtype: Output dtype passed to golden_to_output_dtype. Defaults to None.
 
     Returns:
         Output tensor in (1, 1, N*out_H*out_W, C) format
@@ -495,12 +496,12 @@ def prepare_grid_sample_grid(*args, **kwargs):
     and bilinear interpolation weights needed for grid sampling.
 
     Args:
-        grid (ttnn.Tensor): Grid tensor of shape (N, H_out, W_out, 2) with normalized coordinates in [-1, 1]
-        input_shape (List[int]): Input tensor dimensions [N, H_in, W_in, C] in NHWC format
-
-    Keyword Args:
-        padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
-        output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
+        *args: Positional arguments forwarded to the C++ op as keyword arguments:
+            - grid (ttnn.Tensor): Grid tensor of shape (N, H_out, W_out, 2) with normalized coordinates in [-1, 1]
+            - input_shape (List[int]): Input tensor dimensions [N, H_in, W_in, C] in NHWC format
+        **kwargs: Keyword arguments forwarded to the C++ op as keyword arguments:
+            - padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
+            - output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
 
     Returns:
         ttnn.Tensor: Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
