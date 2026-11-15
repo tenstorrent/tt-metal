@@ -1933,9 +1933,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 )
                 ctx["win_prev"][ratio] = ttnn.typecast(ttnn.eq(sm["win_cols"], prev), ttnn.bfloat16)
             if ratio == 1 or (ratio == 2 and r2_pool):
-                win_pos = ttnn.add(pos_f, float(1 - ratio))
-                inv, scale = sm["rope_invfreq"]["compress"]
-                cos_win, sin_win, _ = self._device_rope(inv, scale, win_pos)
+                if ratio == 1 and "compress" in rope:
+                    # The window row sits at pos itself: the compress family's rows of this step.
+                    cos_win, sin_win, _ = rope["compress"]
+                else:
+                    win_pos = ttnn.add(pos_f, float(1 - ratio))
+                    inv, scale = sm["rope_invfreq"]["compress"]
+                    cos_win, sin_win, _ = self._device_rope(inv, scale, win_pos)
                 ctx["win_rope"][ratio] = (cos_win, sin_win)
                 ctx["entry"][ratio] = self._entry_index(pos_f, ratio)
         for ratio in sm["row_ratios"]:
