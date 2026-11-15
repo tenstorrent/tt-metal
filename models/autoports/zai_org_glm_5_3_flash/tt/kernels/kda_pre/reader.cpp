@@ -242,6 +242,13 @@ void kernel_main() {
             for (uint32_t gi = 0; gi < G; ++gi) {
                 selw[gi] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s0)[gi];
             }
+            // THE REWIND CONTRACT: CB_H0..2 hold units + 1 pages and page `units` (the per-group scratch) is reserved,
+            // written through get_write_ptr + units pages, and never pushed -- so this needs every CB's write pointer
+            // at its base here (the units + 1 pages contiguous, no wrap). A launch starts every CB at its base; a stack
+            // program (MK_LAYERS > 1) runs this phase (ph3 of kernels/mk/owner_dm0.cpp) once per layer, after that RISC
+            // rewound every owner phase CB to its base at the layer boundary (cb_rewind_range(0, 29) / (32, 32): CBs
+            // 0..28 and 32..63; these are KDA_CB0 + 0..3 = 32..35 there, all empty at the boundary). A second run of
+            // this phase inside one layer, or these CBs moved outside the rewound ranges, breaks it.
             cb_reserve_back(CB_H0, units + 1);
             cb_reserve_back(CB_H1, units + 1);
             cb_reserve_back(CB_H2, units + 1);

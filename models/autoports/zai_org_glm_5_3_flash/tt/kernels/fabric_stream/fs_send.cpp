@@ -310,7 +310,8 @@ void kernel_main() {
            // peer's chunks of this LINE stream landed here (the waits above); a row barrier of 1-hop tokens on this
            // stream's own line connections (dirs[0] = up / higher positions, dirs[1] = down), then the close, then the
            // consumers: no packet of this stream is in transit when any chip of the line ends its program, and the
-           // link's next holder (the AR lane's own round) still opens only after the consumers' signal
+           // link's next holder (the AR lane's own round; rev 76 RS1 split: after AG1, the rs1a lane -- its
+           // FS_AFTER_SEM is AG1's consumers' signal) still opens only after the consumers' signal
 #if defined(FS_LATE_OPEN)
             if (!opened && (dirs[0].range || dirs[1].range)) {  // nothing was sent: open behind the same release
 #if defined(FS_AFTER_SEM)

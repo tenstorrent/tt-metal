@@ -1293,8 +1293,9 @@ void kernel_main() {
         };
 #endif
         // the column scatter's waiter: every column peer's slices landed in y_rs1. The row scatter signals the same
-        // semaphore later (wait_min 2 below): its waiter runs on the rs2 lane BRISC after that lane's sends, which wait
-        // on rs2_sem, raised by this root only past this wait -- so the count is ordinal (tp_dsa_shard.py, the streams)
+        // semaphore later (wait_min 2 below; 3 under MLA_DSA_SHARD_RS1_SPLIT, after both column-scatter waiters): its
+        // waiter runs on the rs2 lane BRISC after that lane's sends, which wait on rs2_sem, raised by this root only
+        // past this wait -- so the count is ordinal (tp_dsa_shard.py, the streams)
 #if defined(MLA_DSA_SHARD_RS1_SPLIT)
         noc_semaphore_wait_min(rsc, 2);  // rev 76: both column-scatter waiters (the link-1 and link-0 halves)
 #else

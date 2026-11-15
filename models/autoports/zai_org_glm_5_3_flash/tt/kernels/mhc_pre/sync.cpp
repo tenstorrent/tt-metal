@@ -142,6 +142,8 @@ void kernel_main() {
 #if defined(MHC_MS1)
     // S's rows t < T -> rows 16 + t of the M page (M's rows >= T <= 16 are never read): packer-written data read by
     // this RISC (invalidate first), then the fence lands every store before the NoC reads the page
+    // S rows MS1_S_ROW + t stay inside the tile, above M's T rows (the host builds MS1 at T <= 16; a watcher check)
+    ASSERT(T <= MS1_S_ROW);
     invalidate_l1_cache();
     {
         volatile tt_l1_ptr uint32_t* m = words(get_read_ptr(CB_PART));
@@ -315,6 +317,7 @@ void kernel_main() {
 #if defined(MHC_MS1)
     // the compute's combined total (CB_MSC: M rows < T, S rows 16 + t) -> S rows t of a zeroed CB_MSS page. This RISC
     // only reads CB_MSC (never pops it: the compute reloads M from it, then pops both pages)
+    ASSERT(T <= MS1_S_ROW);  // (as the round-1 pack above: S rows MS1_S_ROW + t of CB_MSC inside the tile)
     cb_wait_front(CB_MSC, 1);
     cb_reserve_back(CB_MSS, 1);
     {
