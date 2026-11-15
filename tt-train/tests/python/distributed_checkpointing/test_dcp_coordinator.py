@@ -263,7 +263,8 @@ def _run_ranks(size, body):
         except BaseException as err:  # noqa: BLE001
             errors[rank] = err
 
-    threads = [threading.Thread(target=run, args=(r,)) for r in range(size)]
+    # Daemon threads: a rank that hangs fails its test without keeping the process from exiting.
+    threads = [threading.Thread(target=run, args=(r,), daemon=True) for r in range(size)]
     for t in threads:
         t.start()
     for t in threads:
