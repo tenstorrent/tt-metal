@@ -87,11 +87,23 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
     const auto& router_config = builder_context.get_fabric_router_config();
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
+    // The router trusts a sender channel's connection semaphore to read "unused" at start, which only the last run's
+    // teardown guarantees. A router's channels move with its own sender counts, so start every run from zero.
+    const std::vector<uint32_t> sender_bookkeeping_zeros(
+        (router_config.sender_channels_bookkeeping_end - router_config.sender_channels_bookkeeping_start) /
+            sizeof(uint32_t),
+        0);
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
         for (const auto& address : addresses_to_clear) {
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }
+        tt::tt_metal::detail::WriteToDeviceL1(
+            device,
+            router_logical_core,
+            router_config.sender_channels_bookkeeping_start,
+            sender_bookkeeping_zeros,
+            CoreType::ETH);
     }
 }
 

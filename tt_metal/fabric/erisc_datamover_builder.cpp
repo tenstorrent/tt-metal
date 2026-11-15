@@ -376,6 +376,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
     uint32_t buffer_address = edm_status_address + field_size;
 
     // ----------- Sender Channels
+    this->sender_channels_bookkeeping_start = buffer_address;
     for (uint32_t i = 0; i < num_sender_channels; i++) {
         this->sender_channels_buffer_index_address[i] = buffer_address;
         buffer_address += field_size;
@@ -396,6 +397,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
         this->sender_channels_buffer_index_semaphore_address[i] = buffer_address;
         buffer_address += field_size;
     }
+    this->sender_channels_bookkeeping_end = buffer_address;
     // ----------- Receiver Channels
     for (uint32_t i = 0; i < num_downstream_edms; i++) {
         // persistent mode field

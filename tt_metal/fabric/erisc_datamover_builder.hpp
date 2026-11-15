@@ -208,6 +208,9 @@ struct FabricEriscDatamoverConfig {
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
     size_t router_buffer_clear_size_words = 1;
+    // Every sender channel's connection info and semaphores, [start, end): zeroed at fabric init.
+    size_t sender_channels_bookkeeping_start = 0;
+    size_t sender_channels_bookkeeping_end = 0;
 
     // ----------- Local Tensix Relay Connection (UDM mode only)
     // Connection buffer index for the local tensix relay interface
