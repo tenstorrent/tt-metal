@@ -144,6 +144,7 @@ constexpr uint32_t cb_in_v = GDN_CB_IN_V;
 constexpr uint32_t cb_v_prep = GDN_CB_V_PREP;
 constexpr uint32_t cb_o_in = GDN_CB_O_IN;
 constexpr uint32_t cb_zw = GDN_CB_ZW;
+constexpr uint32_t cb_rinv_in = GDN_CB_RINV_IN;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t COEF_ALPHA_SEL = 0;  // alpha_p at row p, 0 elsewhere
@@ -194,6 +195,10 @@ static_assert(!(QK_SHARED && CHUNKED) || PREP, "R-BCAST is a decode regime");
 // SHARE_QK_FINISH); with UNIT_LAG a unit's RMS norm runs after the next unit's token step, so the last state is final
 // before the norms (host knob UNIT_LAG; needs two units of o, z and norm weights in flight).
 constexpr bool HOLD_QK = GDN_HOLD_QK != 0;
+// Host QK_RAW_HANDOFF: a q / k core hands over its conv output y (cb_qk_stage, packed with cb_y_qk) and then its
+// inverse norm (cb_rinv); the state cores scale by the inverse norms (cb_rinv_in) in the token step.
+constexpr bool QK_RAW = GDN_QK_RAW != 0;
+constexpr bool STAGE_Y = QK_CORE && QK_RAW;
 constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;
 // Final-state tiles of pair `pair` start at tile (pair * STATE_STAGGER) mod n_state (rotated through the banks); the
 // writer applies the same rotation. 0 everywhere but R-QKCORE pair cores.
@@ -564,6 +569,9 @@ ALWI void conv_block(RowScope scope, UnitCols cols, uint32_t first, uint32_t las
     const bool v_range = last > cols.qk_cols;
     if (qk_range) {
         cb_reserve_back(cb_y_qk, cols.qk_cols);
+        if constexpr (STAGE_Y) {
+            cb_reserve_back(cb_qk_stage, cols.qk_cols);
+        }
     }
     if (v_range) {
         cb_reserve_back(cb_v_out, Vb);
@@ -595,6 +603,9 @@ ALWI void conv_block(RowScope scope, UnitCols cols, uint32_t first, uint32_t las
         tile_regs_wait();
         if (col < 2 * Kt) {
             pack_first(0, cb_y_qk, col - cols.qk_lo);
+            if constexpr (STAGE_Y) {
+                pack_at(0, cb_qk_stage, col - cols.qk_lo);
+            }
         } else {
             pack_first(0, cb_v_out, col - 2 * Kt);
         }
@@ -603,6 +614,9 @@ ALWI void conv_block(RowScope scope, UnitCols cols, uint32_t first, uint32_t las
     }
     if (qk_range) {
         cb_push_back(cb_y_qk, cols.qk_cols);
+        if constexpr (STAGE_Y) {
+            cb_push_back(cb_qk_stage, cols.qk_cols);
+        }
     }
     if (v_range) {
         cb_push_back(cb_v_out, Vb);
@@ -621,6 +635,9 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
     const bool v_range = last > cols.qk_cols;
     if (qk_range) {
         cb_reserve_back(cb_y_qk, cols.qk_cols);
+        if constexpr (STAGE_Y) {
+            cb_reserve_back(cb_qk_stage, cols.qk_cols);
+        }
     }
     if (v_range) {
         cb_reserve_back(cb_v_out, Vb);
@@ -649,6 +666,9 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
             const uint32_t col = cols.pair_col(col0 + i);
             if (col < 2 * Kt) {
                 pack_at(i, cb_y_qk, col - cols.qk_lo);
+                if constexpr (STAGE_Y) {
+                    pack_at(i, cb_qk_stage, col - cols.qk_lo);
+                }
             } else {
                 pack_at(i, cb_v_out, col - 2 * Kt);
             }
@@ -658,6 +678,9 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
     }
     if (qk_range) {
         cb_push_back(cb_y_qk, cols.qk_cols);
+        if constexpr (STAGE_Y) {
+            cb_push_back(cb_qk_stage, cols.qk_cols);
+        }
     }
     if (v_range) {
         cb_push_back(cb_v_out, Vb);

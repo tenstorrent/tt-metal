@@ -11,7 +11,13 @@ import torch
 import ttnn
 from ttnn.operations.gated_delta_net import gated_delta_net
 from ttnn.operations.gated_delta_net import gated_delta_net_program_descriptor as gdn_pd
-from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net import ORDER, compute_config, make_inputs
+from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net import (
+    ORDER,
+    compute_config,
+    make_inputs,
+    reference,
+)
+from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_bf16 import _rel_metrics
 
 
 def _to_device(tensors, device, poison, token_dtype):
@@ -51,7 +57,9 @@ def test_shared_matches_own(device, monkeypatch, inputs, token_dtype, poison):
             if name != "recurrent_state":
                 tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
     results = []
-    # q / k cores (QK_CORES_VSPLIT, where the rectangles fit), R-BCAST injectors, every core its own q / k.
+    # q / k cores (QK_CORES_VSPLIT, where the rectangles fit; normalized hand-off), R-BCAST injectors, every core its
+    # own q / k.
+    monkeypatch.setattr(gdn_pd, "QK_RAW_HANDOFF", False)
     for qk_cores, share in ((True, True), (False, True), (False, False)):
         monkeypatch.setattr(gdn_pd, "QK_CORES_VSPLIT", qk_cores)
         monkeypatch.setattr(gdn_pd, "SHARE_QK_PREP", share)
@@ -62,3 +70,34 @@ def test_shared_matches_own(device, monkeypatch, inputs, token_dtype, poison):
     for label, *variants in zip(("output", "conv_state_out", "recurrent_state_out"), *results):
         for variant in variants[:-1]:
             assert torch.equal(variant, variants[-1]), f"{label}: shared q/k prep differs from the unshared path"
+
+
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 1, 2560), (1, 12, 128, 128)), id="chip_b1"),
+        pytest.param(((1, 3, 512), (3, 4, 32, 64)), id="small_r1"),
+    ],
+)
+@pytest.mark.parametrize("token_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])
+def test_raw_handoff_accuracy(device, monkeypatch, inputs, token_dtype):
+    """QK_RAW_HANDOFF scales by the inverse norms after the state read instead of before: not bit-identical to the
+    normalized hand-off, but as close to the reference (conv_state_out exact)."""
+    torch.manual_seed(1)
+    tensors = make_inputs(inputs)
+    if token_dtype == ttnn.bfloat16:
+        for name in ORDER:
+            if name != "recurrent_state":
+                tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
+    expected = reference(*(tensors[name] for name in ORDER))
+    errors = []
+    for raw in (False, True):
+        monkeypatch.setattr(gdn_pd, "QK_RAW_HANDOFF", raw)
+        gdn_pd.clear_program_cache()
+        outs = gated_delta_net(*_to_device(tensors, device, None, token_dtype), compute_kernel_config=compute_config())
+        out, conv_state_out, state = (ttnn.to_torch(t).to(torch.float32) for t in outs)
+        assert torch.equal(conv_state_out, expected[1]), "conv_state_out not bit-exact"
+        errors.append([_rel_metrics(out, expected[0]), _rel_metrics(state, expected[2])])
+    for label, (normalized, raw) in zip(("output", "recurrent_state_out"), zip(*errors)):
+        assert raw[0] >= normalized[0] - 1e-6, f"{label}: PCC {raw[0]} vs {normalized[0]} normalized"
+        assert raw[1] <= 1.25 * normalized[1], f"{label}: relative RMS {raw[1]} vs {normalized[1]} normalized"

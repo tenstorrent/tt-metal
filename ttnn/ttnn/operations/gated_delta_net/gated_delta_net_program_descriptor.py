@@ -67,6 +67,10 @@ BCAST_SPLIT_NOCS = True
 # idle cores instead of two pieces of each key head, so every state core is a receiver. Per key head its pieces fill a
 # rectangle with the q core left of its first row (sends on NOC 0) and the k core right of its last (NOC 1).
 QK_CORES_VSPLIT = True
+# QK_CORES_VSPLIT: the q / k cores hand over in two stages, the conv output y as soon as it is made and its inverse norm
+# (rsqrt(sum y^2 + eps), times K^-1/2 for q) when the norm is done, so the state cores transpose y_k, take y_q . y_k and
+# read the state with the raw rows while the norm runs, and scale by the two scalars after (fp32 SFPU).
+QK_RAW_HANDOFF = True
 # R-QKCORE (decode R-STEP, one tile row of sequences): per key head a q core and a k core convolve and L2-normalize the
 # key head's q (k) columns of every sequence of the tile row at once and multicast qn (kn) to the key head's pair cores,
 # which read and convolve only their v columns. Pair cores run consecutive sequences of one value head.
@@ -254,6 +258,7 @@ CB_IN_V = 48
 CB_V_PREP = 49
 CB_ZW = 50  # R-PREP prep core: norm_weight (*)row silu(z) of its rows, ahead of the o that the RMS norm scales
 CB_STATE_DONE = 51  # STATE_SPLIT: reader-to-writer token per final state, once the reader's tiles of it have left
+CB_RINV_IN = 52  # QK_RAW_HANDOFF: the landed inverse norms of k (tile 0) and q (tile 1), column 0 per token row
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
@@ -391,6 +396,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_
         ((CB_TRI_MASK,), 2 if chunked else 0),  # the mask, then the identity (R-PREP inverse of I + L)
         # R-BCAST injector: its qn or kn (compute -> writer, multicast source).
         ((CB_QK_STAGE,), Kt if _share_qk(pieces, tokens) else 0),
+        ((CB_RINV_IN,), 0),  # QK_RAW_HANDOFF (sized by the R-QKCORE plan)
         # R-PREP prep core: prepped tile rows awaiting its writer; the state cores' chunk outputs o of its tile rows
         # (sized by _prep_cb_plan).
         ((CB_PREP_SEND,), 0),
@@ -1031,6 +1037,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         all_cores = _merged_ranges([core for core, _, _, _ in assignment] + [core for core, _, _ in qk_cores])
     state_cores = [core for core, _, _, _ in assignment]
     state_set = {(c.x, c.y) for c in state_cores}
+    qk_raw = bool(qk_cores) and pieces > 1 and QK_RAW_HANDOFF
+    # Who writes conv_state_out: 0 the pair cores (one unit per key head also the q / k columns), 1 the q / k cores
+    # (whole tiles: every sequence's rows of a column at once), 2 (QK_CORES_VSPLIT) the q / k cores their own columns
+    # and every state core its own v columns, each a column only that core reads, so in place needs no signal.
+    cs_split = 0 if not qk_cores else (2 if pieces > 1 else 1)
     spare = [c for c in grid_cores if (c.x, c.y) not in state_set]
     prep = _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, token_dtype, len(spare), budget)
     heads = ratio  # R-PREP: value heads per prep group
@@ -1060,6 +1071,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 CB_WINDOW: CONV_TAPS * max(Kt, v_block_tiles) * WINDOW_DEPTH,
                 CB_HIST_STAGE: max(2 * v_block_tiles, Kt * (1 + cs_tiles), 1 + 2 * cs_tiles),
                 CB_QK_STAGE: Kt,
+                CB_RINV_IN: 2 if qk_raw else 0,
                 CB_O_ACC: v_block_tiles * lag_units,
                 CB_SQ_O: v_block_tiles * lag_units,
             }
@@ -1139,7 +1151,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if qk_cores:
         # Group kh = the key head's cores_per_kh pair cores (consecutive in row-major order); its senders are the
         # key head's q core (channel q) and k core (channel k), outside the group. One flag-signalled round per call.
-        # QK_CORES_VSPLIT: the q cores send on NOC 0 (their reader and writer swap NoCs).
+        # QK_CORES_VSPLIT: the q cores send on NOC 0 (their reader and writer swap NoCs). QK_RAW_HANDOFF: a second pair
+        # of channels carries the inverse norms (one round per channel per call).
         q_noc = ttnn.NOC.NOC_0 if pieces > 1 else ttnn.NOC.NOC_1
         qk_channels = [
             ttnn.Mcast(
@@ -1150,7 +1163,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 ttnn.McastExplicitFixedSenderConfig([core for core, _, r in qk_cores if r == role]),
                 ttnn.McastCoreOrder.RowMajor,
             )
-            for role, noc in ((QK_Q_INJECTOR, q_noc), (QK_K_INJECTOR, ttnn.NOC.NOC_1))
+            for role, noc in ((QK_Q_INJECTOR, q_noc), (QK_K_INJECTOR, ttnn.NOC.NOC_1)) * (2 if qk_raw else 1)
         ]
 
     def qk_role(unit):
@@ -1341,7 +1354,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
         reader_ct += [ROW_STAGE_SLOTS if row_stage_bytes else 0, int(conv_on_fpu), group_cols, WINDOW_DEPTH]
         s0_tiles = Kt * v_block_tiles
-        reader_ct += [pieces, int(chunked), role, inbox, min(S0_READ_TILES or s0_tiles, s0_tiles), int(bool(qk_cores))]
+        reader_ct += [pieces, int(chunked), role, inbox, min(S0_READ_TILES or s0_tiles, s0_tiles), cs_split]
         reader_ct += [int(tokens == 1)]  # decode: window rows issued ahead of the other inputs
         reader_ct += [heads]  # R-PREP: value heads per prep group
         reader_ct += reader_accessor_ct
@@ -1373,7 +1386,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     # which read the history rows for the first one.
     cs_in_place = prep is None and conv_state_out.buffer_address() == conv_state.buffer_address()
     cs_signals, cs_waits = {}, {}
-    if cs_in_place:
+    if cs_in_place and cs_split != 2:
         cs_signals, cs_waits = _cs_read_signals(device, assignment, qk_cores, pieces, value_heads, ratio, qk_role)
 
     def cs_args(core):
@@ -1467,6 +1480,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             own_lo = (hk if role == QK_Q_INJECTOR else key_heads + hk) * Kt
             v_lo = 2 * key_heads * Kt + hk * ratio * Vt + (0 if role == QK_Q_INJECTOR else v_half)
             v_hi = 2 * key_heads * Kt + hk * ratio * Vt + (v_half if role == QK_Q_INJECTOR else ratio * Vt)
+            if cs_split == 2:
+                v_hi = v_lo
             cs_cols = [own_lo, own_lo + Kt, v_lo, v_hi, cs_waits.get((core.x, core.y), 0)]
             rts[0][core.x, core.y] = [hk, batch, tokens, role, zero_slots] + rows + cs_cols
             rts[1][core.x, core.y] = [hk, batch, tokens, role, zero_slots, zero_slot_bytes] + rows
@@ -1486,6 +1501,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
     defines = _kernel_defines() + [
         ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
+        ("GDN_QK_RAW", str(int(qk_raw))),
         ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
         ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
         ("GDN_STATE_SPLIT", str(int(state_split))),
@@ -1617,7 +1633,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
     # The writer carries the q and k multicast channels (absent outside R-BCAST, so one kernel source).
     next_sem = QK_MCAST_FIRST_SEM_ID
-    for prefix, channel in zip(("qkq", "qkk"), qk_channels or (None, None)):
+    channels = list(qk_channels) + [None] * (4 - len(qk_channels))
+    for prefix, channel in zip(("qkq", "qkk", "qkqr", "qkkr"), channels):
         if channel is None:
             for writer in writers:
                 ttnn.attach_absent_mcast(writer, prefix)

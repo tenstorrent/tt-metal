@@ -33,3 +33,6 @@
 {"event":"test_run","refinement":14,"status":"pass","detail":"prep 49+10 new, unit dir 164, golden loose or prefill 52/52; T=128 82.3->65.9 us, T=512 196.4->179.4, 4096 unchanged","ts":"2026-11-15T09:08:54+00:00"}
 {"event":"test_run","status":"pass","tests":"state_split 24/24, unit net 57/57, golden loose or decode 34/34","perf":"default b8 40.5 b16 73; levers 43/79 split2, 43/79 noc1, 81 early","ts":"2026-11-15T09:34:27+00:00"}
 {"event":"test_run","status":"pass","tests":"test_gated_delta_net_next_program.py x3, hang_t.sh T=64..640, golden loose/prefill/decode 72/72","root_cause":"unbarriered non-posted semaphore atomics at kernel return","ts":"2026-11-15T11:39:28+00:00"}
+{"event":"hypothesis","text":"R-BCAST NOC1 multicasts from group first cores wrap the torus; stalls 2-4.7 us","ts":"2026-11-15T13:18:14+00:00"}
+{"event":"fix_applied","text":"BCAST_SPLIT_NOCS, QK_CORES_VSPLIT, SWAP_NOC_ROWS for B=1, QK_RAW_HANDOFF, cs_split=2","ts":"2026-11-15T13:18:14+00:00"}
+{"event":"test_run","status":"pass","tests":"bcast,in_place,qkcore,vsplit,program_cache,state_split,next_program,perf","perf_decode_b1_us":"12.7-13.0","ts":"2026-11-15T13:18:14+00:00"}

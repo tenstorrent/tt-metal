@@ -44,7 +44,13 @@ void kernel_main() {
         }
         GDN_MARK("m_conv");
         GDN_ZONE("gdn_qk_norm");
-        qk_part_block(bufs, is_q, scope);
+        if constexpr (QK_RAW) {
+            // y already went to the writer with the conv; the inverse norm follows it.
+            l2_inverse_norm(bufs, 0, is_q ? Q_SCALE_BITS : ONE_BITS, scope);
+            cb_pop_front(cb_y_qk, Kt);
+        } else {
+            qk_part_block(bufs, is_q, scope);
+        }
         GDN_MARK("m_qk_norm");
     }
     cb_pop_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);

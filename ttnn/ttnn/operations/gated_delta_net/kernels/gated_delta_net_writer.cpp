@@ -48,6 +48,8 @@ constexpr uint32_t cb_in_v = GDN_CB_IN_V;
 constexpr uint32_t cb_o_acc = GDN_CB_O_ACC;
 constexpr uint32_t cb_o_in = GDN_CB_O_IN;
 constexpr uint32_t cb_tri_mask = GDN_CB_TRI_MASK;
+constexpr uint32_t cb_rinv = GDN_CB_RINV;
+constexpr uint32_t cb_rinv_in = GDN_CB_RINV_IN;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t OUT_TILE_BYTES = get_compile_time_arg_val(3);    // output tile (dtype-derived on host)
@@ -66,6 +68,7 @@ constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: multicasts its key head's qn or kn, nothing else
 constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;  // R-PREP q / k core: writes qn or kn to its prep cores (RATIO)
 constexpr bool HOLD_QK = GDN_HOLD_QK != 0;     // compute holds the landed q/k rows for every unit (see compute)
+constexpr bool QK_RAW = GDN_QK_RAW != 0;       // q / k cores send y, then the inverse norms (host QK_RAW_HANDOFF)
 constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;   // compute normalizes unit u after unit u + 1's token step
 constexpr uint32_t STATE_STAGGER = GDN_STATE_STAGGER;  // compute's rotation of the final-state tiles (see compute)
 constexpr bool STATE_SPLIT = GDN_STATE_SPLIT != 0;     // the reader writes this core's reader_share of the state tiles
@@ -399,6 +402,11 @@ void kernel_main() {
         McastArgs<get_named_compile_time_arg_val("qkq_ct_offset"), get_named_compile_time_arg_val("qkq_rt_offset")>();
     constexpr auto k_channel = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("qkk_ct_offset"), get_named_compile_time_arg_val("qkk_rt_offset")>();
+    // QK_RAW: the inverse norms of q and k.
+    constexpr auto qr_channel = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("qkqr_ct_offset"), get_named_compile_time_arg_val("qkqr_rt_offset")>();
+    constexpr auto kr_channel = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("qkkr_ct_offset"), get_named_compile_time_arg_val("qkkr_rt_offset")>();
     constexpr auto state_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     // Buffer addresses are common runtime args (see the reader).
@@ -518,6 +526,19 @@ void kernel_main() {
         }
         cb_pop_front(cb_qk_stage, Kt);
         GDN_MARK("m_wr_sent");
+        if constexpr (QK_RAW) {
+            // The inverse norm lands in tile 0 (k) or 1 (q) of the state cores' cb_rinv_in, also at its base.
+            cb_wait_front(cb_rinv, 1);
+            const uint32_t rinv_dst = get_write_ptr(cb_rinv_in);
+            if (qk_role == GDN_QK_Q_INJECTOR) {
+                qr_channel.optional_sender(noc)->send(
+                    get_read_ptr(cb_rinv), rinv_dst + STATE_TILE_BYTES, STATE_TILE_BYTES);
+            } else {
+                kr_channel.optional_sender(noc)->send(get_read_ptr(cb_rinv), rinv_dst, STATE_TILE_BYTES);
+            }
+            cb_pop_front(cb_rinv, 1);
+            GDN_MARK("m_wr_sent_rinv");
+        }
         return;
     }
 
@@ -568,10 +589,12 @@ void kernel_main() {
             const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
-            // An injector sends its qn / kn first: its compute makes the gates after them.
+            // An injector sends its qn / kn first: its compute makes the gates after them. QK_RAW: y lands ahead of the
+            // gates too, so compute's transposes and state read are not held behind them; the inverse norms after.
             const bool lands = !CHUNKED && qk_role != GDN_QK_OWN && !(hold_qk && unit_idx > 0);
             const bool injector = qk_role == GDN_QK_Q_INJECTOR || qk_role == GDN_QK_K_INJECTOR;
-            if (lands && injector) {
+            const bool land_early = injector || QK_RAW;
+            if (lands && land_early) {
                 land_qk_rows(q_channel, k_channel, qk_role, Kt, unit_idx == 0);
                 GDN_MARK("m_wr_landed");
             }
@@ -604,9 +627,18 @@ void kernel_main() {
                 GDN_MARK("m_wr_coef");
             }
 
-            if (lands && !injector) {
+            if (lands && !land_early) {
                 land_qk_rows(q_channel, k_channel, qk_role, Kt, unit_idx == 0);
                 GDN_MARK("m_wr_landed");
+            }
+            if constexpr (QK_RAW) {
+                // One unit per core (QK_CORES_VSPLIT): the inverse norms of its key head, once.
+                Noc noc;
+                cb_reserve_back(cb_rinv_in, 2);
+                qr_channel.optional_receiver(noc)->receive();
+                kr_channel.optional_receiver(noc)->receive();
+                cb_push_back(cb_rinv_in, 2);
+                GDN_MARK("m_wr_rinv");
             }
 
             // ---- partial sum o^2 all-gather (R-VSPLIT) ----

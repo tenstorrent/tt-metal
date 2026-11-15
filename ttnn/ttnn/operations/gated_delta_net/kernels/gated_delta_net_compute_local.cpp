@@ -41,6 +41,15 @@ ALWI void token_step(
     }
     if constexpr (QK_SHARED) {
         const uint32_t beta_bits = read_tile_value(cb_tok_coef, COEF_BETA_SEL, elem_index(p, 0));
+        // QK_RAW: cb_kq_rows held y_k, y_q, so rk, ro, d are raw. With the inverse norms ik, iq: rk = ik rk_raw,
+        // ro = iq ro_raw, and the update operand u' = ik u (cb_knT holds y_k^T), so d u = iq d_raw u'.
+        uint32_t ik_bits = ONE_BITS;
+        uint32_t iq_bits = ONE_BITS;
+        if constexpr (QK_RAW) {
+            cb_wait_front(cb_rinv_in, 2);
+            ik_bits = read_tile_value(cb_rinv_in, 0, elem_index(p, 0));
+            iq_bits = read_tile_value(cb_rinv_in, 1, elem_index(p, 0));
+        }
         for (uint32_t vt = 0; vt < Vb; ++vt) {
             tile_regs_acquire();
             begin_loads(cb_reads);
@@ -51,6 +60,10 @@ ALWI void token_step(
             binop_with_scalar_tile_init();
             binop_scalar_scoped<MUL_UNARY>(0, alpha_bits, scope);
             binop_scalar_scoped<MUL_UNARY>(2, alpha_bits, scope);
+            if constexpr (QK_RAW) {
+                binop_scalar_scoped<MUL_UNARY>(0, ik_bits, scope);
+                binop_scalar_scoped<MUL_UNARY>(2, iq_bits, scope);
+            }
             // w in the v slot: off the scope's rows u keeps v's zeros (rk there may hold other sequences' rows).
             sub_binary_tile_init();
             binary_scoped<ckernel::BinaryOp::SUB>(1, 0, 1, scope);
@@ -59,10 +72,16 @@ ALWI void token_step(
             mul_bcast_col_scoped(2, 3, scope);
             binop_with_scalar_tile_init();
             binop_scalar_scoped<MUL_UNARY>(1, beta_bits, scope);  // u
+            if constexpr (QK_RAW) {
+                binop_scalar_scoped<MUL_UNARY>(1, ik_bits, scope);  // u'
+            }
             copy_dest_values_init();
             copy_dest_values<DataFormat::Float32>(1, 0);
             binop_with_scalar_tile_init();
             binop_scalar_scoped<MUL_UNARY>(0, d_bits, scope);
+            if constexpr (QK_RAW) {
+                binop_scalar_scoped<MUL_UNARY>(0, iq_bits, scope);
+            }
             add_binary_tile_init();
             binary_scoped<ckernel::BinaryOp::ADD>(2, 0, 2, scope);  // o
             if (square_o) {
@@ -274,6 +293,9 @@ void kernel_main() {
                 cb_pop_front(cb_kq_rows, 2 * Kt);
                 if constexpr (qk_shared) {
                     cb_pop_front(cb_kq_rows_f32, 2 * Kt);
+                }
+                if constexpr (QK_RAW) {
+                    cb_pop_front(cb_rinv_in, 2);
                 }
                 cb_pop_front(cb_knT, Kt);
             }

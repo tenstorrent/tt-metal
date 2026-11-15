@@ -65,8 +65,10 @@ constexpr uint32_t ROLE = get_compile_time_arg_val(15);               // GDN_ROL
 constexpr uint32_t INBOX_SLOTS = get_compile_time_arg_val(16) > 0 ? get_compile_time_arg_val(16)
                                                                   : 1;  // R-PREP inbox slots (1 outside R-PREP)
 constexpr uint32_t S0_READ_TILES = get_compile_time_arg_val(17);        // S0 tiles per DRAM read barrier
-// R-QKCORE: the q / k cores write conv_state_out (whole tiles), the pair cores none of it.
-constexpr bool CS_BY_QK_CORES = get_compile_time_arg_val(18) != 0;
+// conv_state_out writers (host cs_split): 0 pair cores (q / k columns by one unit per key head), 1 the q / k cores
+// alone, 2 the q / k cores their own columns and the pair cores their v columns.
+constexpr uint32_t CS_SPLIT = get_compile_time_arg_val(18);
+constexpr bool CS_BY_QK_CORES = CS_SPLIT == 1;
 constexpr bool DECODE = get_compile_time_arg_val(19) != 0;  // T = 1 (other builds compile no prefetch path)
 constexpr uint32_t PREP_HEADS = get_compile_time_arg_val(20);  // R-PREP: value heads per prep group
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;    // R-PREP prep core: token-row inputs of strided tile rows
@@ -925,7 +927,7 @@ void kernel_main() {
             const uint32_t scratch = get_write_ptr(cb_scratch);
             const uint32_t seq_lo = seq * T;
             // q/k columns are written by one unit per key head (first head, first piece).
-            const uint32_t first_idx = (head % ratio == 0 && v_first == 0) ? 0 : 2 * Kt;
+            const uint32_t first_idx = (CS_SPLIT == 0 && head % ratio == 0 && v_first == 0) ? 0 : 2 * Kt;
             for (uint32_t flush_first = first_idx; flush_first < pair_cols; flush_first += CS_COLS_PER_FLUSH) {
                 const uint32_t flush_end =
                     pair_cols < flush_first + CS_COLS_PER_FLUSH ? pair_cols : flush_first + CS_COLS_PER_FLUSH;
