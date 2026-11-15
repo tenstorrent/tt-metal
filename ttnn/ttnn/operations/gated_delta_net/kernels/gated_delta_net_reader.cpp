@@ -67,6 +67,7 @@ constexpr uint32_t INBOX_SLOTS = get_compile_time_arg_val(16) > 0 ? get_compile_
 constexpr uint32_t S0_READ_TILES = get_compile_time_arg_val(17);        // S0 tiles per DRAM read barrier
 // R-QKCORE: the q / k cores write conv_state_out (whole tiles), the pair cores none of it.
 constexpr bool CS_BY_QK_CORES = get_compile_time_arg_val(18) != 0;
+constexpr bool DECODE = get_compile_time_arg_val(19) != 0;  // T = 1 (other builds compile no prefetch path)
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;    // R-PREP prep core: token-row inputs of strided tile rows
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;  // R-PREP state core: inbox, S0, z, norm_weight
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;   // R-QKCORE: q or k columns of one key head, every decode sequence
@@ -238,7 +239,7 @@ void kernel_main() {
     constexpr uint32_t z_width_tiles = Hv * Vt;
     constexpr uint32_t pair_cols = 2 * Kt + Vb;
 
-    constexpr auto mixed_args = TensorAccessorArgs<19>();
+    constexpr auto mixed_args = TensorAccessorArgs<20>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
@@ -475,7 +476,7 @@ void kernel_main() {
                         hist_stage + slot * TILE_BYTES);
                 }
             };
-            const bool prefetch = pass == 0 && T == 1 && !STATE;
+            const bool prefetch = DECODE && !STATE && pass == 0;
             if (prefetch) {
                 noc_async_read_set_trid(WINDOW_TRID);
                 for (uint32_t col = 0; col < group_cols; ++col) {

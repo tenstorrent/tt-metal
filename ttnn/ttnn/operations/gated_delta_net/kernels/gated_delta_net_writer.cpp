@@ -4,7 +4,7 @@
 // gated_delta_net writer (BRISC).
 //
 // Per unit (pair, piece), per tile row: expands the pair's (alpha, beta) gate elements into three
-// column-0 coefficient pages per token (alpha in every row; beta at row p; alpha at row p); with
+// column-0 coefficient pages per token (alpha at row p; beta at row p; 1 at row p); with
 // PIECES > 1 (R-VSPLIT) all-gathers the partial sum o^2 of every piece of the pair; then drains the
 // piece's output tiles (whole tiles when the pair owns the tile row, else face-row segments of its rows
 // only). After the pair's last token: drains the piece's slice of recurrent_state_out.
@@ -64,6 +64,7 @@ constexpr bool PREP = ROLE == GDN_ROLE_PREP;
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: multicasts its key head's qn or kn, nothing else
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
+constexpr uint32_t ONE_BITS = 0x3f800000u;  // 1.0f
 
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
 
@@ -464,9 +465,9 @@ void kernel_main() {
                     for (uint32_t r = 0; r < TILE_ROWS; ++r) {
                         const uint32_t e = elem_index(r, 0);
                         const bool at_p = (r == p);
-                        coef[e] = alpha;
+                        coef[e] = at_p ? alpha : 0u;
                         coef[TILE_WORDS + e] = at_p ? beta : 0u;
-                        coef[2 * TILE_WORDS + e] = at_p ? alpha : 0u;
+                        coef[2 * TILE_WORDS + e] = at_p ? ONE_BITS : 0u;  // row-p selector
                     }
                     cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
                 }

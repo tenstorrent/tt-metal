@@ -99,7 +99,7 @@ CONV_ACC_DEPTH = 1  # partial tap sum: compute-to-compute, one compute thread, s
 
 HISTORY = 3  # spec constant: conv_state rows per sequence
 CONV_TAPS = HISTORY + 1  # history rows + current token, not a knob
-TOK_COEF_PAGES = 3  # alpha (all rows), beta at row p, alpha at row p
+TOK_COEF_PAGES = 3  # alpha, beta and 1 (row selector) at the token's row p, 0 elsewhere
 D_PAGES = 2  # token step: [kn; qn] x kn^T, d = qn . kn of row p at (p, p) of the second tile
 CHUNK_COEF_PAGES = 2  # R-CHUNK, per tile row: g and beta of the pair in column 0, 0 on rows that are no token
 CHUNK_VEC_PAGES = 5  # R-CHUNK: D, c, exp(c), exp(c_last - c), beta exp(c)
@@ -846,6 +846,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         reader_ct += [ROW_STAGE_SLOTS if row_stage_bytes else 0, int(conv_on_fpu), group_cols, WINDOW_DEPTH]
         s0_tiles = Kt * v_block_tiles
         reader_ct += [pieces, int(chunked), role, inbox, min(S0_READ_TILES or s0_tiles, s0_tiles), int(bool(qk_cores))]
+        reader_ct += [int(tokens == 1)]  # decode: window rows issued ahead of the other inputs
         reader_ct += reader_accessor_ct
         writer_ct = [Kt, Vt, value_heads, *geometry_ct, pieces, OSUM_SEM_ID, int(chunked), role, inbox, ratio]
         writer_ct += writer_accessor_ct

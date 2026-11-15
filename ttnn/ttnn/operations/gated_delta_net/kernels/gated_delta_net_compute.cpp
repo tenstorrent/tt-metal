@@ -48,6 +48,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/transpose.h"
+#include "api/compute/copy_dest_values.h"
 #include "api/compute/pack.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/cb_api.h"
@@ -126,9 +127,9 @@ constexpr uint32_t cb_v_prep = GDN_CB_V_PREP;
 constexpr uint32_t cb_o_in = GDN_CB_O_IN;
 
 constexpr uint32_t TILE_ROWS = 32;
-constexpr uint32_t COEF_ALPHA = 0;      // alpha_p in every row
+constexpr uint32_t COEF_ALPHA_SEL = 0;  // alpha_p at row p, 0 elsewhere
 constexpr uint32_t COEF_BETA_SEL = 1;   // beta_p at row p, 0 elsewhere
-constexpr uint32_t COEF_ALPHA_SEL = 2;  // alpha_p at row p, 0 elsewhere
+constexpr uint32_t COEF_SEL = 2;        // 1 at row p, 0 elsewhere
 // R-CHUNK pages. Chunk coefficients (writer, column 0, 0 on rows that are no token):
 constexpr uint32_t CHUNK_G = 0;     // g
 constexpr uint32_t CHUNK_BETA = 1;  // beta
@@ -810,12 +811,12 @@ ALWI void qk_finish_block(Buffers& bufs) {
 // [rk; ro] = [kn; qn] x S_{in} -> cb_reads (2 x Vb tiles). S_in is S0 for the pair's first step.
 template <uint32_t kq_cb>
 ALWI void read_state(Buffers& bufs, bool first_in_pair) {
-    DataflowBuffer kq{kq_cb};
     const uint32_t src = first_in_pair ? cb_state_in : cb_state;
     const uint32_t src_mm = first_in_pair ? cb_state_in_mm : cb_state_mm;
     DataflowBuffer& src_mm_buf = first_in_pair ? bufs.state_in_mm : bufs.state_mm;
     cb_wait_front(src, n_state);
     cb_wait_front(src_mm, n_state);
+    DataflowBuffer kq{kq_cb};
     ckl::matmul_block<
         false,
         false,
@@ -885,7 +886,7 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
 }
 
 // ---------------------------------------------------------------- one token step
-ALWI void osum_partial(Buffers& bufs, RowScope scope);
+ALWI void osum_partial(Buffers& bufs, RowScope scope, bool squared);
 
 // p: the token's row in its tile row.
 ALWI void token_step(
@@ -898,63 +899,120 @@ ALWI void token_step(
     RowScope scope) {
     // read (5a): [rk; ro] = [kn; qn] x S_{t-1}
     read_state<cb_kq_rows>(bufs, first_in_pair);
-    // token vector (5b): u = beta_sel (*)col (v - alpha rk); o = alpha_sel (*)col ro + d (*)col u
+    // token vector (5b): w = v - alpha rk, u = beta (sel (*)col w), o = sel (*)col (alpha ro) + d u, with sel the
+    // row-p selector and alpha, beta, d fp32 scalars of token p. Shared-q/k builds (the decode regimes) run one DEST
+    // window per column tile and, for a tile row with this token alone, also pack o^2 (the RMS-norm square); the
+    // others run u and o as two windows (the fused window does not fit their math thread's kernel-config text).
     cb_wait_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
-    // alpha is one scalar per token (element (0, 0) of the alpha page): fp32 scalar SFPU multiplies
-    // here and in the state decay, with no broadcast tile in DEST.
-    const uint32_t alpha_bits = read_tile_value(cb_tok_coef, COEF_ALPHA, 0);
+    const uint32_t alpha_bits = read_tile_value(cb_tok_coef, COEF_ALPHA_SEL, elem_index(p, 0));
+    const uint32_t d_bits = read_tile_value(cb_d, D_PAGES - 1, elem_index(p, p));
+    const bool square_o = QK_SHARED && first_in_row && last_in_row;
     cb_wait_front(cb_reads, 2 * Vb);
     cb_reserve_back(cb_u, Vb);
     cb_reserve_back(cb_u_f32, Vb);
-    for (uint32_t vt = 0; vt < Vb; ++vt) {
-        tile_regs_acquire();
-        begin_loads(cb_reads);
-        load(cb_reads, vt, 0);
-        load(cb_tok_coef, COEF_BETA_SEL, 3);
-        load(cb_v, vt, 2);
-        binop_with_scalar_tile_init();
-        binop_scalar_scoped<MUL_UNARY>(0, alpha_bits, scope);
-        sub_binary_tile_init();
-        binary_scoped<ckernel::BinaryOp::SUB>(2, 0, 2, scope);
-        sfpu_bcast_col_init();
-        mul_bcast_col_scoped(2, 3, scope);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_first(2, cb_u, vt);
-        tile_regs_release();
+    if (square_o) {
+        cb_reserve_back(cb_sq_o, Vb);
     }
-    cb_push_back(cb_u, Vb);
-    cb_push_back(cb_u_f32, Vb);
-    cb_wait_front(cb_u, Vb);
-    cb_wait_front(cb_u_f32, Vb);
-    const uint32_t d_bits = read_tile_value(cb_d, D_PAGES - 1, elem_index(p, p));
-    for (uint32_t vt = 0; vt < Vb; ++vt) {
-        tile_regs_acquire();
-        begin_loads(cb_reads);
-        load(cb_reads, Vb + vt, 0);
-        load(cb_tok_coef, COEF_ALPHA_SEL, 1);
-        load(cb_u_f32, vt, 2);
-        sfpu_bcast_col_init();
-        mul_bcast_col_scoped(0, 1, scope);
-        binop_with_scalar_tile_init();
-        binop_scalar_scoped<MUL_UNARY>(2, d_bits, scope);  // u is zero off row p
-        add_binary_tile_init();
-        binary_scoped<ckernel::BinaryOp::ADD>(0, 2, 0, scope);
-        tile_regs_commit();
-        tile_regs_wait();
-        if (!first_in_row) {
-            pack_reconfig_l1_acc(1);
+    if constexpr (QK_SHARED) {
+        const uint32_t beta_bits = read_tile_value(cb_tok_coef, COEF_BETA_SEL, elem_index(p, 0));
+        for (uint32_t vt = 0; vt < Vb; ++vt) {
+            tile_regs_acquire();
+            begin_loads(cb_reads);
+            load(cb_reads, vt, 0);       // rk
+            load(cb_v, vt, 1);           // v
+            load(cb_reads, Vb + vt, 2);  // ro
+            load(cb_tok_coef, COEF_SEL, 3);
+            binop_with_scalar_tile_init();
+            binop_scalar_scoped<MUL_UNARY>(0, alpha_bits, scope);
+            binop_scalar_scoped<MUL_UNARY>(2, alpha_bits, scope);
+            // w in the v slot: off the scope's rows u keeps v's zeros (rk there may hold other sequences' rows).
+            sub_binary_tile_init();
+            binary_scoped<ckernel::BinaryOp::SUB>(1, 0, 1, scope);
+            sfpu_bcast_col_init();
+            mul_bcast_col_scoped(1, 3, scope);
+            mul_bcast_col_scoped(2, 3, scope);
+            binop_with_scalar_tile_init();
+            binop_scalar_scoped<MUL_UNARY>(1, beta_bits, scope);  // u
+            copy_dest_values_init();
+            copy_dest_values<DataFormat::Float32>(1, 0);
+            binop_with_scalar_tile_init();
+            binop_scalar_scoped<MUL_UNARY>(0, d_bits, scope);
+            add_binary_tile_init();
+            binary_scoped<ckernel::BinaryOp::ADD>(2, 0, 2, scope);  // o
+            if (square_o) {
+                mul_binary_tile_init();
+                binary_scoped<ckernel::BinaryOp::MUL>(2, 2, 0, scope);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(1, cb_u, vt);
+            if (square_o) {
+                pack_at(0, cb_sq_o, vt);
+            }
+            if (!first_in_row) {
+                pack_reconfig_l1_acc(1);
+            }
+            pack_at(2, cb_o_acc, vt);
+            pack_reconfig_l1_acc(0);
+            tile_regs_release();
         }
-        pack_first(0, cb_o_acc, vt);
-        pack_reconfig_l1_acc(0);
-        tile_regs_release();
+        cb_push_back(cb_u, Vb);
+        cb_push_back(cb_u_f32, Vb);
+        cb_wait_front(cb_u, Vb);  // the update's matmul operand
+        cb_wait_front(cb_u_f32, Vb);
+    } else {
+        for (uint32_t vt = 0; vt < Vb; ++vt) {
+            tile_regs_acquire();
+            begin_loads(cb_reads);
+            load(cb_reads, vt, 0);
+            load(cb_tok_coef, COEF_BETA_SEL, 3);
+            load(cb_v, vt, 2);
+            binop_with_scalar_tile_init();
+            binop_scalar_scoped<MUL_UNARY>(0, alpha_bits, scope);
+            sub_binary_tile_init();
+            binary_scoped<ckernel::BinaryOp::SUB>(2, 0, 2, scope);
+            sfpu_bcast_col_init();
+            mul_bcast_col_scoped(2, 3, scope);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(2, cb_u, vt);
+            tile_regs_release();
+        }
+        cb_push_back(cb_u, Vb);
+        cb_push_back(cb_u_f32, Vb);
+        cb_wait_front(cb_u, Vb);
+        cb_wait_front(cb_u_f32, Vb);
+        for (uint32_t vt = 0; vt < Vb; ++vt) {
+            tile_regs_acquire();
+            begin_loads(cb_reads);
+            load(cb_reads, Vb + vt, 0);
+            load(cb_tok_coef, COEF_ALPHA_SEL, 1);
+            load(cb_u_f32, vt, 2);
+            sfpu_bcast_col_init();
+            mul_bcast_col_scoped(0, 1, scope);
+            binop_with_scalar_tile_init();
+            binop_scalar_scoped<MUL_UNARY>(2, d_bits, scope);
+            add_binary_tile_init();
+            binary_scoped<ckernel::BinaryOp::ADD>(0, 2, 0, scope);
+            tile_regs_commit();
+            tile_regs_wait();
+            if (!first_in_row) {
+                pack_reconfig_l1_acc(1);
+            }
+            pack_first(0, cb_o_acc, vt);
+            pack_reconfig_l1_acc(0);
+            tile_regs_release();
+        }
+    }
+    if (square_o) {
+        cb_push_back(cb_sq_o, Vb);
     }
     cb_pop_front(cb_reads, 2 * Vb);
     if constexpr (PIECES > 1) {
         // o of the tile row is final: its partial sum o^2 goes to the peers now, so the all-gather overlaps the update.
         if (last_in_row) {
             cb_push_back(cb_o_acc, Vb);
-            osum_partial(bufs, scope);
+            osum_partial(bufs, scope, square_o);
         }
     }
     // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
@@ -1358,26 +1416,32 @@ ALWI void chunk_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, uint3
 // rsqrt(mean o^2 + eps) = sqrt(V) * rsqrt(sum o^2 + V eps); sum over the whole V (all pieces).
 // o_cb holds the unit's Vb columns of o for HEADS value heads (a prep core's r heads, else one head or one piece).
 // R-VSPLIT: this piece's partial sum o^2 of cb_o_acc -> cb_osum_part (the writer all-gathers it over the pieces).
-ALWI void osum_partial(Buffers& bufs, RowScope scope) {
-    square_block<cb_o_acc, cb_sq_o>(0, Vb, scope);
+// squared: the token step already pushed o^2 to cb_sq_o.
+ALWI void osum_partial(Buffers& bufs, RowScope scope, bool squared) {
+    if (!squared) {
+        square_block<cb_o_acc, cb_sq_o>(0, Vb, scope);
+    }
     DataflowBuffer osum_part{cb_osum_part};
     row_sum<cb_sq_o, cb_osum_part>(bufs, bufs.sq_o, osum_part, Vb, ckl::NoOp{});
 }
 
-// PARTIAL_DONE: the token step already produced this piece's partial sum (osum_partial).
+// PARTIAL_DONE: the token step already produced this piece's partial sum (osum_partial); squared: it pushed o^2 to
+// cb_sq_o.
 template <uint32_t o_cb, uint32_t HEADS, bool PARTIAL_DONE = false>
-ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope) {
+ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope, bool squared = false) {
     constexpr uint32_t W = Vb / HEADS;  // columns of one head in o_cb
     const RsqrtPost rsqrt_post{v_eps_bits, SQRT_V_BITS, scope};
     if constexpr (PIECES == 1 || PREP) {
-        square_block<o_cb, cb_sq_o>(0, Vb, scope);
+        if (!squared) {
+            square_block<o_cb, cb_sq_o>(0, Vb, scope);
+        }
 #pragma GCC unroll 1
         for (uint32_t head = 0; head < HEADS; ++head) {
             row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, W, rsqrt_post);
         }
     } else {
         if constexpr (!PARTIAL_DONE) {
-            osum_partial(bufs, scope);
+            osum_partial(bufs, scope, squared);
         }
         cb_wait_front(cb_osum_gather, PIECES);
         cb_reserve_back(cb_rinv_o, 1);
@@ -1618,7 +1682,8 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_knT, Kt);
                 cb_pop_front(cb_v, Vb);
-                rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(bufs, v_eps_bits, scope);
+                rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(
+                    bufs, v_eps_bits, scope, QK_SHARED && hi - lo == 1);  // token_step's square_o
             }
             cb_pop_front(cb_conv_w, conv_w_pages);
             cb_pop_front(cb_gate_w, 2);
