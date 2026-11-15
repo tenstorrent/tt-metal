@@ -368,3 +368,143 @@ def test_ws_lane_glx(mesh_device, nexp, T, M):
     warm = int(os.environ.get("WS_LANE_WARM", WARM))
     rows, pcs = run(mesh_device, cfg, lc, Ms, f"glx {nexp} experts M {M}", warm=warm)
     assert min(pcs.values()) > 0.999
+
+
+def dyn_counts(nexp, nchip, T, last, seed=3):
+    """Per-chip, per-expert row counts (test_ws_fab_bench.dyn_counts on the lane design's orders): zeros, tiny, tile
+    edges, above the old MMAX (2048), every token of a chip on one expert; the extremes on each chip's last expert of
+    each group (last[c][g]), where the last-expert check sees them."""
+    G = len(last[0])
+    g_ = torch.Generator().manual_seed(seed)
+    Ms = torch.zeros(nchip, nexp, dtype=torch.int64)
+    pick = [0, 0, 1, 31, 32, 33, 300, 586, 586, 700, 1500, 2049, 4000, 7000]
+    for c in range(nchip):
+        for e in range(nexp):
+            Ms[c, e] = pick[int(torch.randint(len(pick), (1,), generator=g_))]
+    huge_g = int(os.environ.get("WSD_HUGE_GROUP", "0"))  # which group's last expert takes chip 1's huge M
+    huge_m = int(os.environ.get("WSD_HUGE_M", str(T)))
+    others = [k for k in range(G) if k != huge_g]
+    for c in range(nchip):
+        Ms[c, last[c][huge_g]] = huge_m if c == 1 else (0 if c % 2 else 1)  # chip 1: one huge expert; zeros elsewhere
+        extra = [2049 + 7 * c, 5000 + 113 * c, int(torch.randint(0, 600, (1,), generator=g_))]
+        for k, m in zip(others, extra):
+            Ms[c, last[c][k]] = m
+    return Ms
+
+
+def run_dynm(mesh, cfg: GCfg, lc: LCfg, tag, check_chips):
+    """Correctness for arbitrary per-expert, per-chip M: every chip its own counts and token lists (WSD_SEED,
+    WSD_HUGE_GROUP, WSD_HUGE_M, WSD_LAUNCHES launches); WSD_ALL=1 checks every expert of chips 1 and 0 (WL_OUT_ALL),
+    otherwise each group's last expert on check_chips."""
+    shape = tuple(mesh.shape)
+    nchip, Tn = mesh.get_num_devices(), cfg.T
+    Tb = make_tables(shape, cfg, lc)
+    last = [[Tb["meta"][(c, g)]["order"][-1] for g in range(cfg.G)] for c in range(nchip)]
+    Ms = dyn_counts(cfg.nexp, nchip, Tn, last, seed=int(os.environ.get("WSD_SEED", "3")))
+    Rs = (Ms + 31) // 32
+    if lc.out_all:
+        out_rows = max(
+            int(sum(Rs[c, e] for e in Tb["meta"][(c, g)]["order"])) for c in range(nchip) for g in range(cfg.G)
+        )
+        check_chips = [c for c in (1, 0) if c < nchip]
+    else:
+        out_rows = max(int(Rs[c, last[c][g]]) for c in range(nchip) for g in range(cfg.G))
+    out_rows = max(out_rows, 1)
+    torch.manual_seed(0)
+    x = torch.randn(Tn + 1, cfg.H)
+    x[Tn] = 0
+    idx = torch.full((nchip, cfg.nexp, cfg.RMAX * 32), Tn, dtype=torch.int32)
+    for c in range(nchip):
+        for e in range(cfg.nexp):
+            M = int(Ms[c, e])
+            if M:
+                idx[c, e, :M] = torch.randperm(Tn)[:M].to(torch.int32)
+    wg = torch.randn(cfg.nexp, cfg.H, cfg.I, dtype=torch.bfloat16) / cfg.H**0.5
+    wu = torch.randn(cfg.nexp, cfg.H, cfg.I, dtype=torch.bfloat16) / cfg.H**0.5
+    wd = torch.randn(cfg.nexp, cfg.I, cfg.H, dtype=torch.bfloat16) / cfg.I**0.5
+    per_chip = []
+    for c in range(nchip):
+        o = Tb["own"][c]
+        per_chip.append(slice_layout(cfg, lc.CHT, wg[o].float(), wu[o].float(), wd[o].float()))
+    shard = lambda t, dt, lay, **kw: ttnn.from_torch(
+        t, dtype=dt, layout=lay, device=mesh, mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0), **kw
+    )
+    x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh)
+    idx_t = shard(idx.reshape(nchip * cfg.nexp, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    counts_t = shard(Ms.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    ws_t = shard(torch.cat(per_chip, 0), cfg.w_dt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    del per_chip
+    out_t = ttnn.empty(
+        [cfg.G * out_rows * 32, cfg.H],
+        dtype=cfg.out_dt,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tab_t = tables_tensor(mesh, Tb["tabs"])
+    logger.info(
+        f"WSD {tag}: counts zeros {int((Ms == 0).sum())}, max {int(Ms.max())}, rows a chip {Ms.sum(1).tolist()[:4]}.., "
+        f"output block {out_rows} tile rows, {lc}"
+    )
+    for launch in range(int(os.environ.get("WSD_LAUNCHES", "2"))):
+        mpd, io, st = build_lane(mesh, cfg, lc, x_t, idx_t, counts_t, ws_t, out_t, tab_t, Tb, out_rows)
+        ttnn.synchronize_device(mesh)
+        ttnn.generic_op(io, mpd)
+        ttnn.synchronize_device(mesh)
+        del mpd, io, st
+        logger.info(f"WSD {tag} launch {launch} done")
+
+    def ref_of(c, e, M):
+        Xq = quantize(x[idx[c, e, :M].long()].to(torch.bfloat16).float(), cfg.x_dt)
+        wguq = quantize(interleave_gu(wg[e].float(), wu[e].float()), cfg.w_dt)
+        wgq = wguq.reshape(cfg.H, -1, 2, 32)[:, :, 0].reshape(cfg.H, cfg.I)
+        wuq = wguq.reshape(cfg.H, -1, 2, 32)[:, :, 1].reshape(cfg.H, cfg.I)
+        h = quantize(torch.nn.functional.silu(Xq @ wgq) * (Xq @ wuq), cfg.h_dt)
+        return h @ quantize(wd[e].float(), cfg.w_dt)
+
+    outs = ttnn.get_device_tensors(out_t)
+    worst = 1.0
+    for c in check_chips:
+        out = ttnn.to_torch(outs[c]).float()
+        for g in range(cfg.G):
+            order = Tb["meta"][(c, g)]["order"]
+            if lc.out_all:
+                logger.info(f"WSD {tag} chip {c} group {g} M sequence {[int(Ms[c, e]) for e in order]}")
+                row, bad = g * out_rows, []
+                for k, e in enumerate(order):
+                    M = int(Ms[c, e])
+                    if M:
+                        p = pcc(out[row * 32 : row * 32 + M], ref_of(c, e, M))
+                        worst = min(worst, p)
+                        if p < 0.999:
+                            bad.append((k, e, M, round(p, 5)))
+                    row += int(Rs[c, e])
+                logger.info(f"WSD {tag} chip {c} group {g}: experts below 0.999 (index, expert, M, pcc) {bad}")
+            else:
+                e = order[-1]
+                M = int(Ms[c, e])
+                if M == 0:
+                    logger.info(f"WSD {tag} chip {c} group {g} expert {e}: M 0 (nothing to check)")
+                    continue
+                p = pcc(out[g * out_rows * 32 : g * out_rows * 32 + M], ref_of(c, e, M))
+                worst = min(worst, p)
+                logger.info(f"WSD {tag} chip {c} group {g} expert {e}: M {M} pcc {p:.5f}")
+    logger.info(f"WSD {tag} SUMMARY: dynamic M on {nchip} chips, checked {list(check_chips)}, min pcc {worst:.5f}")
+    assert worst > 0.999
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+def test_ws_lane_tray_dynm(mesh_device):
+    """Dynamic M on the tray: 32 experts, T 8192, G 2."""
+    cfg = gcfg(32, 2, 8192)
+    run_dynm(mesh_device, cfg, lcfg_from_env(), "tray", check_chips=range(8))
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [TORUS], indirect=True)
+def test_ws_lane_glx_dynm(mesh_device):
+    """Dynamic M on the whole Galaxy (torus, 4 lanes): 128 experts, T 31250 (MMAX = T)."""
+    cfg = gcfg(128, 4, 31250)
+    lc = lcfg_from_env(cycles=torus_cycles(*tuple(mesh_device.shape)))
+    run_dynm(mesh_device, cfg, lc, "glx", check_chips=(0, 1, 2, 13, 31))

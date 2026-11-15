@@ -267,8 +267,11 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         tab_t.buffer_address(),
                         ws_t.buffer_address(),
                     ]
-                    rd_rt[x][y] = [j, g, E, cx0, cx1, ny0, st.buffer_address(), out_t.buffer_address(), mesh_id]
-                    rd_rt[x][y] += [nid[0], nid[1], xy[0] | xy[1] << 8]
+                    rd_rt[x][y] = [j, g, E, cx0, cx1, ny0, st.buffer_address(), out_t.buffer_address(), mesh_id] + [
+                        nid[0],
+                        nid[1],
+                        xy[0] | xy[1] << 8,
+                    ]
                 kernels.append(
                     ttnn.KernelDescriptor(
                         kernel_source=kpath("wl_writer.cpp"),
