@@ -79,12 +79,18 @@ def measure(cfg: GCfg, Ms, st):
     return ops * 16 / (NC * span), span / len(es), unpack
 
 
-def bench(device, cfg: GCfg, Ms, tag):
+def bench(device, cfg: GCfg, Ms, tag, check=True):
     dev, refs = inputs(device, cfg, Ms)
     rows = []
     for i in range(WARM + MEAS):
         args = [dev[k] for k in ("x_t", "idx_t", "counts_t", "wgu_t", "wd_t", "out_t")]
         prog, io, st, _ = build(device, cfg, *args)
+        if i == 0:
+            l1 = [t for t in io if t.memory_config().buffer_type == ttnn.BufferType.L1]
+            logger.info(
+                f"WS3 {tag}: L1 tensors (address, bytes a core) "
+                f"{sorted((t.buffer_address(), t.memory_config().shard_spec.shape[0] * t.memory_config().shard_spec.shape[1] * (4 if t.dtype == ttnn.uint32 else 2)) for t in l1 if t.memory_config().shard_spec)}"
+            )
         mpd = ttnn.MeshProgramDescriptor()
         mc = ttnn.MeshCoordinate(0, 0)
         mpd[ttnn.MeshCoordinateRange(mc, mc)] = prog
@@ -106,7 +112,7 @@ def bench(device, cfg: GCfg, Ms, tag):
         f"max {max(ut):.1f}), {statistics.median(r[1] for r in rows):.0f} cyc/expert at {clk} MHz; waits per core "
         f"tilize / x / weight / h {[round(v) for v in rows[-1][2]]} (x median {xw:.0f}); pcc {min(pcs):.5f}"
     )
-    assert min(pcs) > 0.999
+    assert not check or min(pcs) > 0.999
     return rows
 
 
@@ -132,6 +138,15 @@ def test_ws_slot3(mesh_device, BK, NX, LOOK, spare):
     cfg = GCfg(nexp=32, G=4, x_dt=ttnn.bfloat8_b, BK=BK, NX=NX, LOOK=LOOK, NINJ=20, wsrc="l1", P=2, spare_slot=spare)
     Ms = [586] * cfg.nexp
     bench(device, cfg, Ms, f"BK {BK} NX {NX} LOOK {LOOK} {'3 slots' if spare else '2 slots'}")
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("spare", [False, True], ids=["s2", "s3"])
+def test_ws_slot3_noread(mesh_device, spare):
+    """Injectors land without reading weights (smaller injector buffers; weights garbage, no PCC): fit check."""
+    cfg = GCfg(nexp=32, G=4, x_dt=ttnn.bfloat8_b, BK=12, NX=15, LOOK=30, NINJ=20, wsrc="dram", spare_slot=spare,
+               idefs=("WG_INJ_NOREAD",))
+    bench(mesh_device, cfg, [586] * cfg.nexp, f"noread BK 12 NX 15 {'3 slots' if spare else '2 slots'}", check=False)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)

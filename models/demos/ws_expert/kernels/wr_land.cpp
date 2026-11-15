@@ -110,8 +110,11 @@ void kernel_main() {
         if (ii < len && issued - pushed < D && cb_pages_reservable_at_back(0, (issued - pushed + 1) * CHT)) {
             cb_reserve_back(0, (issued - pushed + 1) * CHT);
             const wr::Pkt p = wr::decode(T[ii]);
-            // chunk q: pages (q / 8) CHT 8 + q % 8 + 8 k (WS_OWN_SLICES: this chip's experts only, e / NCHIP)
-#ifdef WS_OWN_SLICES
+            // chunk q: pages (q / 8) CHT 8 + q % 8 + 8 k (WS_OWN_SLICES: only the slices this chip owns, at local
+            // expert ws_sf.local_expert)
+#if defined(WS_OWN_SLICES) && defined(WS_LANE_OWNERS)
+            const uint32_t q = (((p.e / G / NCHIP) * G + p.e % G) * GC + p.c % GC) * NCH + p.u;
+#elif defined(WS_OWN_SLICES)
             const uint32_t q = ((p.e / NCHIP) * GC + p.c % GC) * NCH + p.u;
 #else
             const uint32_t q = (p.e * GC + p.c % GC) * NCH + p.u;

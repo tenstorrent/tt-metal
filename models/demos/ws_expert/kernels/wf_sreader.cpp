@@ -12,7 +12,7 @@
 //     WS_ITEMS: the number of owned slices, the address of the table holding the list of them (c | e << 8, in order;
 //     read instead of own's experts), its page and the page bytes
 // WS_OWN_SLICES: the slices tensor holds only the slices this chip owns: slice j of expert e at local index
-//     (e / NOWN) GC + j
+//     (e / NOWN) GC + j, or with WS_LANE_OWNERS ((e / G / NOWN) G + e % G) GC + j (ws_sf.local_expert)
 // CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 PAIRS, 5 HT, 6 CHT, 7 G, 8 GC, then TensorAccessorArgs(slices), with WS_ITEMS
 //     TensorAccessorArgs(table)
 #include "api/dataflow/dataflow_api.h"
@@ -59,7 +59,9 @@ void kernel_main() {
             uint32_t l1 = base + (issued % SCB) * CHB;
             noc_async_read_set_trid(1 + issued % D);
             // chunk q's CHT tiles are pages (q / 8) CHT 8 + q % 8 + 8 k: contiguous in one bank
-#ifdef WS_OWN_SLICES
+#if defined(WS_OWN_SLICES) && defined(WS_LANE_OWNERS)
+            const uint32_t q = (((e / G / NOWN) * G + e % G) * GC + j) * NCH + u;  // (ws_sf.local_expert)
+#elif defined(WS_OWN_SLICES)
             const uint32_t q = ((e / NOWN) * GC + j) * NCH + u;  // only the slices this chip owns (local index e / NOWN)
 #else
             const uint32_t q = (e * GC + j) * NCH + u;

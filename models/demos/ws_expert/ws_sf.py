@@ -66,6 +66,7 @@ class RCfg:
     defer: bool = False  # forwarder sends do not wait for the payload to leave L1 until the next send (WS_DEFER)
     swap_noc: bool = False  # forwarder BRISC (landing, DRAM reads) on NOC1, NCRISC (fabric sends) on NOC0
     arr_noflush: bool = False  # arrival increments without the router's wait for the write ack (WS_ARR_NOFLUSH)
+    lane_per_group: bool = False  # all slices of expert e on lane e % G (needs G lanes), owners spread round its cycle
 
 
 def snake(shape):
@@ -173,11 +174,25 @@ def owner_table(shape, rc: RCfg, cfg: GCfg):
     if rc.spread:
         assert cfg.nexp % NCHIP == 0, "every chip owns as many slices of each core"
     own = [[e % NCHIP] * cfg.GC for e in range(cfg.nexp)]
+    if rc.lane_per_group:
+        assert NL == cfg.G and rc.spread, "one lane a group"
     for e in range(cfg.nexp):
         for j in range(cfg.GC if rc.spread else 0):
-            r, c = rl[2 * (j % NL)][2][(e + (j // NL) * NCHIP // (cfg.GC // NL)) % NCHIP]
+            if rc.lane_per_group:
+                r, c = rl[2 * (e % cfg.G)][2][(e // cfg.G + j * NCHIP // cfg.GC) % NCHIP]
+            else:
+                r, c = rl[2 * (j % NL)][2][(e + (j // NL) * NCHIP // (cfg.GC // NL)) % NCHIP]
             own[e][j] = r * Cn + c
     return own
+
+
+def local_expert(rc: RCfg, cfg: GCfg, NCHIP, e):
+    """With per-chip slice tensors (WS_OWN_SLICES): the local expert index k holding slice j of expert e on its owner
+    (chunk q = (k GC + j) NCH + u). Per-slice spread: e // N (the owner of slice j owns one expert in every N); one
+    lane a group: (e // G // N) G + e % G (one in every N of each group)."""
+    if rc.lane_per_group:
+        return (e // cfg.G // NCHIP) * cfg.G + e % cfg.G
+    return e // NCHIP
 
 
 def conveyor(shape, rc: RCfg, cfg: GCfg):
@@ -203,13 +218,16 @@ def conveyor(shape, rc: RCfg, cfg: GCfg):
         pos = {chip: i for i, chip in enumerate(order[f])}
         qf = [[deque() for _ in range(G)] for _ in range(N[f])]  # owner queues, one per group
         for e in range(cfg.nexp):
-            for s in range(GC // NL):
+            if rc.lane_per_group and e % G != lane:
+                continue
+            for s in range(GC) if rc.lane_per_group else range(GC // NL):
                 r = reach(e, s, d, N[f])
                 if r == 0:
                     continue
-                c = (e % G) * GC + NL * s + lane
+                j = s if rc.lane_per_group else NL * s + lane
+                c = (e % G) * GC + j
                 for u in range(NCH):
-                    qf[pos[own[e][NL * s + lane]]][e % G].append((e, c, u, r))
+                    qf[pos[own[e][j]]][e % G].append((e, c, u, r))
                 uninj[e] += NCH
         queue.append(qf)
     last = [dict() for _ in range(cfg.nexp)]  # chip -> last arrival time of the expert's packets
@@ -362,6 +380,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
     tab_t, TL, meta = tabs["tab_t"], tabs["TL"], tabs["meta"]
     sdefs = [("SST_ADDR", str(sst.buffer_address()))] + ([("WS_DIAG", "1")] if rc.diag else [])
     odefs = [("WS_OWN_SLICES", "1")] if rc.own_slices else []
+    odefs += [("WS_LANE_OWNERS", "1")] if rc.own_slices and rc.lane_per_group else []
     fdefs = ([("WS_DEFER", "1")] if rc.defer else []) + ([("WS_ARR_NOFLUSH", "1")] if rc.arr_noflush else [])
     ct_ring = [cfg.nexp, KT, KTD, DC, rc.CHT, cfg.G, cfg.GC, NCHIP, rc.S, words.buffer_address()]
     ct_send = [cfg.nexp, KT, KTD, DC, rc.CHT, cfg.G, cfg.GC]

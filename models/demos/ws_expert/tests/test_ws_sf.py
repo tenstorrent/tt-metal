@@ -29,6 +29,7 @@ from models.demos.ws_expert.ws_sf import (
     build_sf,
     conveyor,
     flow,
+    local_expert,
     local_items,
     make_tables,
     owner_table,
@@ -194,14 +195,16 @@ def make_inputs_spread(mesh, cfg: GCfg, rc: RCfg, Ms, seed=0):
     wu = torch.randn(cfg.nexp, cfg.H, cfg.I, dtype=torch.bfloat16) / cfg.H**0.5
     wd = torch.randn(cfg.nexp, cfg.I, cfg.H, dtype=torch.bfloat16) / cfg.I**0.5
     K, dw = cfg.nexp // N, 32 * cfg.DCOLS
+    loc = {(own[e][j], local_expert(rc, cfg, N, e), j): e for e in range(cfg.nexp) for j in range(cfg.GC)}
+    assert len(loc) == cfg.nexp * cfg.GC, "local slice indices are one-to-one"
     per_chip = []
     for X in range(N):
-        # chip X's slices as K whole experts: local expert k's slice j is slice j of the expert in [k N, (k + 1) N)
-        # that X owns (gate / up column tile j, down columns [dw j, dw (j + 1)))
+        # chip X's slices as K whole experts: local expert k's slice j is slice j of the expert X owns at local index
+        # k (ws_sf.local_expert; gate / up column tile j, down columns [dw j, dw (j + 1)))
         vg, vu, vd = torch.empty(K, cfg.H, cfg.I), torch.empty(K, cfg.H, cfg.I), torch.empty(K, cfg.I, cfg.H)
         for k in range(K):
             for j in range(cfg.GC):
-                (e,) = [e for e in range(k * N, (k + 1) * N) if own[e][j] == X]
+                e = loc[(X, k, j)]
                 vg[k][:, 32 * j : 32 * j + 32] = wg[e][:, 32 * j : 32 * j + 32].float()
                 vu[k][:, 32 * j : 32 * j + 32] = wu[e][:, 32 * j : 32 * j + 32].float()
                 vd[k][:, dw * j : dw * j + dw] = wd[e][:, dw * j : dw * j + dw].float()
@@ -348,7 +351,7 @@ def test_ws_sf_tray(mesh_device, M):
 def test_ws_sf_glx(mesh_device, nexp, T, M):
     """Stage B: the whole Galaxy (8 x 4, FABRIC_2D_TORUS_XY), two edge-disjoint Hamiltonian cycles x 2 directions x 2
     links = 8 directed rings, one per incoming link of every chip; each chip holds only the slices it owns."""
-    cfg = GCfg(nexp=nexp, G=4, T=T)
+    cfg = GCfg(nexp=nexp, G=4, T=T, y_noc1=os.environ.get("WS_Y_NOC1", "1") == "1")
     rc = rcfg_from_env(cycles=torus_cycles(*tuple(mesh_device.shape)), own_slices=True)
     Ms = [M] * cfg.nexp
     dev, refs = make_inputs_spread(mesh_device, cfg, rc, Ms)
