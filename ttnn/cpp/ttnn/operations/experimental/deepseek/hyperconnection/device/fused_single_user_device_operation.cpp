@@ -311,7 +311,37 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
         attributes.collapsed_layout == Layout::TILE || attributes.collapsed_layout == Layout::ROW_MAJOR,
         "collapsed_layout must be TILE or ROW_MAJOR, got {}",
         attributes.collapsed_layout);
-    if (attributes.collapsed_layout == Layout::ROW_MAJOR) {
+    const bool fuse_norm = tensor_args.collapsed_norm_weight.has_value();
+    if (fuse_norm) {
+        const auto& gamma = *tensor_args.collapsed_norm_weight;
+        TT_FATAL(
+            attributes.collapsed_layout == Layout::ROW_MAJOR && hidden_streams.layout() == Layout::ROW_MAJOR,
+            "collapsed_norm_weight needs ROW_MAJOR hidden_streams and a ROW_MAJOR collapsed_layout");
+        TT_FATAL(
+            hidden_streams.device()->arch() == tt::ARCH::BLACKHOLE,
+            "the fused collapsed RMSNorm uses Blackhole-only LLKs (mul_reduce_scalar accumulating in one tile)");
+        TT_FATAL(gamma.storage_type() == StorageType::DEVICE, "collapsed_norm_weight must be on device");
+        TT_FATAL(
+            gamma.dtype() == DataType::BFLOAT16 && gamma.layout() == Layout::ROW_MAJOR &&
+                gamma.logical_shape() == ttnn::Shape({1, 1, 1, d}) &&
+                gamma.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "collapsed_norm_weight must be [1,1,1,{}] BFLOAT16 ROW_MAJOR interleaved, got {} {} {} {}",
+            d,
+            gamma.logical_shape(),
+            gamma.dtype(),
+            gamma.layout(),
+            gamma.memory_config());
+        TT_FATAL(
+            attributes.collapsed_norm_epsilon >= 0.0F,
+            "collapsed_norm_epsilon must be non-negative, got {}",
+            attributes.collapsed_norm_epsilon);
+        const auto& out_mem = attributes.collapsed_output_mem_config;
+        TT_FATAL(
+            out_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                out_mem.buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "with collapsed_norm_weight, collapsed must be DRAM interleaved, got {}",
+            out_mem);
+    } else if (attributes.collapsed_layout == Layout::ROW_MAJOR) {
         // The collapse packs its row straight into the output shard, so it must be that core's [1, D/8].
         TT_FATAL(
             hidden_streams.layout() == Layout::ROW_MAJOR,
@@ -440,7 +470,9 @@ std::vector<Tensor> fused_hyperconnection_single_user(
     std::optional<float> rms_norm_epsilon,
     const std::optional<Tensor>& mix_post,
     const std::optional<Tensor>& mix_comb,
-    const std::optional<Tensor>& mix_sublayer_out) {
+    const std::optional<Tensor>& mix_sublayer_out,
+    const std::optional<Tensor>& collapsed_norm_weight,
+    float collapsed_norm_epsilon) {
     using OperationType = ttnn::operations::experimental::deepseek::hyperconnection::FusedSingleUserDeviceOperation;
     const MemoryConfig post_comb_output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const Layout resolved_collapsed_layout = collapsed_layout.value_or(Layout::TILE);
@@ -451,6 +483,10 @@ std::vector<Tensor> fused_hyperconnection_single_user(
         shard_spec.shape[0] = resolved_collapsed_layout == Layout::ROW_MAJOR ? 1u : tt::constants::TILE_HEIGHT;
         collapsed_output_mem_config = MemoryConfig(
             hidden_streams.memory_config().memory_layout(), hidden_streams.memory_config().buffer_type(), shard_spec);
+    }
+    // The normed collapsed row goes to DRAM, where the next op (the MoE request) reads it.
+    if (collapsed_norm_weight.has_value()) {
+        collapsed_output_mem_config = ttnn::DRAM_MEMORY_CONFIG;
     }
     collapsed_output_mem_config = memory_config.value_or(collapsed_output_mem_config);
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -466,6 +502,7 @@ std::vector<Tensor> fused_hyperconnection_single_user(
         .dot_core_grid = dot_core_grid,
         .reduce_fan_in = reduce_fan_in,
         .rms_norm_epsilon = rms_norm_epsilon,
+        .collapsed_norm_epsilon = collapsed_norm_epsilon,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .fused_w = fused_w,
@@ -478,6 +515,7 @@ std::vector<Tensor> fused_hyperconnection_single_user(
         .mix_post = mix_post,
         .mix_comb = mix_comb,
         .mix_sublayer_out = mix_sublayer_out,
+        .collapsed_norm_weight = collapsed_norm_weight,
     };
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

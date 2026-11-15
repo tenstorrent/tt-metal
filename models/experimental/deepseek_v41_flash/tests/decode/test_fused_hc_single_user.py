@@ -219,3 +219,101 @@ def test_fused_hc_single_user_folded_mix(device, reset_seeds, sub_memory, collap
         if not passing:
             failures.append(f"streams vs torch: {pcc}")
         assert not failures, "; ".join(failures)
+
+
+@pytest.mark.parametrize("hidden", (5120, 4096))
+@pytest.mark.parametrize("fold_mix", (True, False), ids=("mix", "no_mix"))
+def test_fused_hc_single_user_collapsed_norm(device, reset_seeds, hidden, fold_mix):
+    """``collapsed_norm_weight`` (the FFN sublayer's RMSNorm fused onto the collapse) vs the same program without
+    it followed by ``sharded_rmsnorm``, and vs torch. The other outputs must not change. Twice, the second on the
+    cached programs."""
+    if device.arch() != ttnn.Arch.BLACKHOLE:
+        pytest.skip("the fused fn dot and the fused norm are Blackhole-only")
+    hc, iters, eps, norm_eps, rms_eps = 4, 20, 1.0e-6, 1.0e-6, 1.0e-6
+    k, n = hc * hidden, ttnn.TILE_SIZE
+    grid, fan_in = _dot_grid(hc, hidden)
+
+    def to_tt(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config)
+
+    streams_config = width_sharded_l1_config(hc, hidden, device, num_cores=8, tile_height=1)
+    w = torch.zeros(n, k)
+    w[: (2 + hc) * hc] = torch.randn((2 + hc) * hc, k) * 0.02
+    w_core_major = w.reshape(n, hc, 8, hidden // 8).permute(0, 2, 1, 3).reshape(n, k)
+    kwargs = dict(
+        num_streams=hc,
+        sinkhorn_iters=iters,
+        pre_scale=0.7,
+        post_scale=1.3,
+        comb_scale=2.0,
+        eps=eps,
+        fn_weight=to_tt(w_core_major.t().reshape(1, 1, k, n)),
+        fn_core_grid=grid,
+        fn_reduce_fan_in=fan_in,
+        fn_rms_norm_epsilon=norm_eps,
+        pre_bias=to_tt(torch.randn(1, 1, 1, hc) * 0.5),
+        post_bias=to_tt(torch.randn(1, 1, 1, hc) * 0.5),
+        comb_bias=to_tt(torch.randn(1, 1, 1, hc * hc) * 0.5),
+    )
+    gamma = (torch.rand(hidden) + 0.5).bfloat16().float()
+    gamma_tile = to_tt(gamma.reshape(1, 1, 1, hidden))
+    gamma_row = to_tt(gamma.reshape(1, 1, 1, hidden), layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    names = ("post", "comb", "collapsed", "pre", "streams")
+    for step in range(2):
+        # Streams with a large common scale, so a missing or wrong 1 / rms shows.
+        streams = (torch.randn(1, 1, hc, hidden) * 3.0).bfloat16().float()
+        pre_mix = (torch.rand(1, 1, 1, hc) + 0.1).bfloat16().float()
+        streams_tt = to_tt(streams, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=streams_config)
+        call = dict(kwargs, pre_mix=to_tt(pre_mix))
+        if fold_mix:
+            post = (torch.rand(1, 1, hc, 1) * 2).bfloat16().float()
+            comb = torch.rand(1, 1, hc, hc)
+            comb = (comb / comb.sum(-1, keepdim=True)).bfloat16().float()
+            sub = torch.randn(1, 1, 1, hidden).bfloat16().float()
+            call.update(
+                mix_post=to_tt(post),
+                mix_comb=to_tt(comb),
+                mix_sublayer_out=to_tt(sub, layout=ttnn.ROW_MAJOR_LAYOUT),
+            )
+
+        old = list(ttnn.experimental.deepseek.fused_hyperconnection(streams_tt, **call))
+        old_normed = ttnn.experimental.deepseek.sharded_rmsnorm(
+            old[2],
+            gamma_tile,
+            epsilon=rms_eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        new = ttnn.experimental.deepseek.fused_hyperconnection(
+            streams_tt,
+            collapsed_layout=ttnn.ROW_MAJOR_LAYOUT,
+            collapsed_norm_weight=gamma_row,
+            collapsed_norm_epsilon=rms_eps,
+            **call,
+        )
+        assert len(new) == len(old), f"{len(new)} outputs, expected {len(old)}"
+        assert new[2].layout == ttnn.ROW_MAJOR_LAYOUT and new[2].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+        ttnn.synchronize_device(device)
+
+        failures = []
+        for i, (got_tt, ref_tt) in enumerate(zip(new, old)):
+            if i == 2:
+                continue
+            got, ref = ttnn.to_torch(got_tt).float(), ttnn.to_torch(ref_tt).float()
+            passing, pcc = comp_pcc(ref, got, PCC)
+            logger.info(f"step {step} {names[i]}: PCC vs unfused {pcc}")
+            if not passing or not torch.equal(got, ref):
+                failures.append(f"{names[i]} changed: {pcc}, max_abs_err {(ref - got).abs().max():.3e}")
+        got = ttnn.to_torch(new[2]).float().reshape(hidden)
+        ref = ttnn.to_torch(old_normed).float().reshape(hidden)
+        collapsed = ttnn.to_torch(old[2]).float()[..., 0, :].reshape(hidden)
+        expected = collapsed * torch.rsqrt(collapsed.pow(2).mean() + rms_eps) * gamma
+        for label, target in (("sharded_rmsnorm", ref), ("torch", expected)):
+            passing, pcc = comp_pcc(target, got, PCC)
+            logger.info(
+                f"step {step} normed collapsed vs {label}: PCC {pcc}, max_abs_err {(target - got).abs().max():.3e}"
+            )
+            if not passing:
+                failures.append(f"normed vs {label}: {pcc}")
+        assert not failures, "; ".join(failures)

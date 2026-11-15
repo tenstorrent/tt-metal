@@ -23,7 +23,10 @@ struct FusedSingleUserSharedVariables {
     tt::tt_metal::KernelHandle post_writer_kernel_id = 0;
     tt::tt_metal::KernelHandle comb_writer_kernel_id = 0;
     // ROW_MAJOR streams with a TILE collapsed output: the writer scatters the row into the tiles.
+    // ROW_MAJOR streams with a TILE collapsed output, or the fused collapsed RMSNorm (whose writer sends the normed
+    // row to DRAM): the collapse cores run a writer, whose runtime arg 0 is collapsed's address.
     bool has_collapse_writer = false;
+    bool fuse_norm = false;
     tt::tt_metal::CBHandle hidden_cb = 0;
     tt::tt_metal::CBHandle collapsed_output_cb = 0;
     // The folded mix step: the collapse cores pack the mixed streams into their shard of the last output.

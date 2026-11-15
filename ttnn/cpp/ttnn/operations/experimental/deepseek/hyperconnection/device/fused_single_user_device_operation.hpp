@@ -51,6 +51,9 @@ namespace ttnn::prim {
 // With fn_weight and pre_mix, mix_post / mix_comb / mix_sublayer_out fold the previous sublayer's mix step
 // (mix_streams) in ahead of all that: each collapse core mixes its own shard of hidden_streams into a fifth output,
 // the mixed streams, and the collapse and the fn dot then work on those.
+//
+// collapsed_norm_weight fuses an RMSNorm (gain collapsed_norm_weight, epsilon collapsed_norm_epsilon) onto collapsed,
+// which is then returned normed, ROW_MAJOR and DRAM interleaved.
 std::vector<Tensor> fused_hyperconnection_single_user(
     const std::optional<Tensor>& fused_w,
     const Tensor& pre_bias,
@@ -72,6 +75,8 @@ std::vector<Tensor> fused_hyperconnection_single_user(
     std::optional<float> rms_norm_epsilon = std::nullopt,
     const std::optional<Tensor>& mix_post = std::nullopt,
     const std::optional<Tensor>& mix_comb = std::nullopt,
-    const std::optional<Tensor>& mix_sublayer_out = std::nullopt);
+    const std::optional<Tensor>& mix_sublayer_out = std::nullopt,
+    const std::optional<Tensor>& collapsed_norm_weight = std::nullopt,
+    float collapsed_norm_epsilon = 0.0F);
 
 }  // namespace ttnn::prim

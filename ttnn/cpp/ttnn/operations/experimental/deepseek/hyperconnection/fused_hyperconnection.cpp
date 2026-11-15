@@ -34,7 +34,9 @@ std::vector<Tensor> fused_hyperconnection(
     std::optional<float> fn_rms_norm_epsilon,
     const std::optional<Tensor>& mix_post,
     const std::optional<Tensor>& mix_comb,
-    const std::optional<Tensor>& mix_sublayer_out) {
+    const std::optional<Tensor>& mix_sublayer_out,
+    const std::optional<Tensor>& collapsed_norm_weight,
+    float collapsed_norm_epsilon) {
     const auto& shape = hidden_streams.logical_shape();
     const uint32_t b = static_cast<uint32_t>(shape[0]);
     const uint32_t s = static_cast<uint32_t>(shape[1]);
@@ -68,8 +70,14 @@ std::vector<Tensor> fused_hyperconnection(
             fn_rms_norm_epsilon,
             mix_post,
             mix_comb,
-            mix_sublayer_out);
+            mix_sublayer_out,
+            collapsed_norm_weight,
+            collapsed_norm_epsilon);
     }
+    TT_FATAL(
+        !collapsed_norm_weight.has_value(),
+        "fused_hyperconnection: only a single token can fuse the collapsed RMSNorm, got {}",
+        num_tokens);
     TT_FATAL(
         collapsed_layout.value_or(Layout::TILE) == Layout::TILE,
         "fused_hyperconnection: a ROW_MAJOR collapsed output needs a single token, got {}",

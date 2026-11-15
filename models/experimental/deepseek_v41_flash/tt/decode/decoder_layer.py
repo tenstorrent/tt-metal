@@ -52,6 +52,10 @@ HC_FN_IN_L1 = os.environ.get("DEEPSEEK_V41_HC_FN_IN_L1", "0") not in ("0", "", "
 FUSED_HC_MIX = os.environ.get("DEEPSEEK_V41_FUSED_HC_MIX", "1") not in ("0", "", "false", "False")
 # Likewise the FFN's mix (FFN_MIX) into the next layer's attention hyper-connection: :meth:`DeepSeekV41DecoderLayer.decode`
 # with ``defer_mix`` hands the step on as a :class:`PendingMix`. ``DEEPSEEK_V41_DEFER_FFN_MIX=0`` always mixes in place.
+# A one-row step with the persistent MoE fuses the post-attention RMSNorm onto the FFN hyper-connection's collapse
+# (``DeepSeekV4HyperConnection.forward``'s ``norm``), which hands the MoE request the normed DRAM row: one op less per
+# layer. Needs ``DEEPSEEK_V41_FUSED_HC_FN``. ``DEEPSEEK_V41_FOLD_POST_NORM=0`` runs ``sharded_rmsnorm`` on its own.
+FOLD_POST_NORM = os.environ.get("DEEPSEEK_V41_FOLD_POST_NORM", "1") not in ("0", "", "false", "False")
 DEFER_FFN_MIX = FUSED_HC_MIX and os.environ.get("DEEPSEEK_V41_DEFER_FFN_MIX", "1") not in ("0", "", "false", "False")
 
 
@@ -213,6 +217,10 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         self.post_attention_layernorm = DeepSeekV4RMSNorm(
             weights["post_attention_layernorm.weight"], eps, device, cache.file("ffn_norm"), sharded=True
         )
+        # The post-attention norm's gain as the ROW_MAJOR DRAM row the FFN hyper-connection's fused norm reads.
+        self.post_norm_row = None
+        if FOLD_POST_NORM and FUSED_HC_FN and device.arch() == ttnn.Arch.BLACKHOLE:
+            self.post_norm_row = ttnn.to_layout(self.post_attention_layernorm.weight, ttnn.ROW_MAJOR_LAYOUT)
         self.attn_hc = DeepSeekV4HyperConnection(
             config,
             _strip_prefix(weights, "attn_hc"),
@@ -288,14 +296,20 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             )
         return post, comb, collapsed, attn_pre, hidden_streams
 
-    def _attn_mix_and_ffn_hc(self, post, comb, attn_out, hidden_streams, attn_pre, one_row: bool):
+    def _fuses_post_norm(self, one_row: bool) -> bool:
+        """Whether a one-row step's FFN hyper-connection returns ``collapsed`` already RMS-normed (see
+        :data:`FOLD_POST_NORM`)."""
+        return one_row and self.post_norm_row is not None and self.ffn_hc.can_fuse_norm()
+
+    def _attn_mix_and_ffn_hc(self, post, comb, attn_out, hidden_streams, attn_pre, one_row: bool, norm=None):
         """ATTN_MIX then FFN_HC: ``(post, comb, collapsed, ffn_pre, streams)`` for the FFN, ``streams`` the mixed
         ones. A one-row step folds the mix into the FFN hyper-connection's program when it can (see
-        :data:`FUSED_HC_MIX`); otherwise ``mix_streams`` runs first. ``hidden_streams`` is consumed."""
+        :data:`FUSED_HC_MIX`); otherwise ``mix_streams`` runs first. ``hidden_streams`` is consumed. ``norm``
+        ``(weight, eps)``: ``collapsed`` comes back RMS-normed (``DeepSeekV4HyperConnection.forward``'s ``norm``)."""
         if FUSED_HC_MIX and one_row and self.ffn_hc.can_fold_mix(post, comb, attn_out):
             with _region("FFN_HC"):
                 post, comb, collapsed, ffn_pre, streams = self.ffn_hc(
-                    hidden_streams, pre_mix=attn_pre, mix=(post, comb, attn_out)
+                    hidden_streams, pre_mix=attn_pre, mix=(post, comb, attn_out), norm=norm
                 )
             ttnn.deallocate(hidden_streams)
             return post, comb, collapsed, ffn_pre, streams
@@ -303,7 +317,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             streams = self._mix(post, comb, attn_out, hidden_streams)
         ttnn.deallocate(hidden_streams)
         with _region("FFN_HC"):
-            post, comb, collapsed, ffn_pre = self.ffn_hc(streams, pre_mix=attn_pre)
+            post, comb, collapsed, ffn_pre = self.ffn_hc(streams, pre_mix=attn_pre, norm=norm)
         return post, comb, collapsed, ffn_pre, streams
 
     def decode(
@@ -608,13 +622,23 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
                 normed = self.input_layernorm(collapsed)
         with _region("ATTENTION"):
             attn_out = self.self_attn.decode(normed, scache=scache, **attn_inputs)
+        fold_post_norm = self._fuses_post_norm(one_row)
         post, comb, collapsed, ffn_pre, hidden_streams = self._attn_mix_and_ffn_hc(
-            post, comb, attn_out, hidden_streams, attn_pre, self.device.arch() == ttnn.Arch.BLACKHOLE
+            post,
+            comb,
+            attn_out,
+            hidden_streams,
+            attn_pre,
+            self.device.arch() == ttnn.Arch.BLACKHOLE,
+            norm=(self.post_norm_row, self.post_attention_layernorm.eps) if fold_post_norm else None,
         )
         ttnn.deallocate(normed)
         ttnn.deallocate(attn_out)
         with _region("POST_NORM"):
-            if self.device.arch() == ttnn.Arch.BLACKHOLE:
+            if fold_post_norm:
+                # FFN_HC's collapse cores normed it (the MoE request's DRAM row).
+                normed = collapsed
+            elif self.device.arch() == ttnn.Arch.BLACKHOLE:
                 normed = ttnn.experimental.deepseek.sharded_rmsnorm(
                     collapsed,
                     self.post_attention_layernorm.weight,
