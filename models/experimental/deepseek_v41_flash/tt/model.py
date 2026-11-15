@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import collections
 import math
+import os
 import queue
 import threading
 import time
@@ -85,6 +86,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import (
 from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
 from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
+from models.experimental.deepseek_v41_flash.tt.decode.step_context import StepContextBuilder, rope_table, term
 from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
 from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
@@ -153,6 +155,11 @@ _FIX_ROWS = ttnn.TILE_SIZE
 # Tokens past the current position a session's blocks are grown for (when the pool can spare them), so
 # the device page tables are rewritten every 16 ratio-1 blocks instead of on every block.
 _GROW_AHEAD_TOKENS = 16 * CSA_INDEX_BLOCK_SIZE
+# A one-user step builds its token, positions, SDPA bounds and RoPE rows with one ``decode_step_context`` program
+# (RoPE from per-stage Q28 angle-sum tables) instead of ~70 one-tile ops. ``DEEPSEEK_V41_FUSED_STEP_CONTEXT=0``: the
+# op chain. The tables cover at least the model's 1M-token context.
+FUSED_STEP_CONTEXT = os.environ.get("DEEPSEEK_V41_FUSED_STEP_CONTEXT", "1") not in ("0", "", "false", "False")
+_ROPE_TABLE_MIN_POSITIONS = 1 << 20
 
 
 def _host_mem_available() -> int:
@@ -973,6 +980,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     ttnn.from_torch(inv_freq, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device),
                     scaling,
                 )
+                if FUSED_STEP_CONTEXT:
+                    sm.setdefault("rope_tables", {})[family] = ttnn.from_torch(
+                        rope_table(inv_freq, scaling, max(max_seq, _ROPE_TABLE_MIN_POSITIONS)),
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
             if stage_ratios:
                 mask_idx = torch.arange(window + cfg.index_topk, dtype=torch.float32).reshape(1, 1, 1, -1)
                 sm["mask_idx"] = ttnn.from_torch(mask_idx, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -1870,6 +1885,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``sdpa_lengths`` carry ``dense_offset`` too (``dense_lengths``).
         """
         b = self._decode_batch
+        if b == 1 and "rope_tables" in sm:
+            return self._step_context_fused(sm, pkt, r2_pool, r2_select, image, dense)
 
         def field(i: int) -> ttnn.Tensor:  # packet int i as INT32 ROW_MAJOR [1]
             return ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, i], [1, 1, 1, i + 1]), [1])
@@ -1969,6 +1986,126 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ctx["index_pos"][ratio] = self._index_position(pos_f, ratio)
         if sm.get("taps"):
             ctx["stash_slot"] = self._win_slot(pos_f, self.dspark.stash_rows)
+        return ctx
+
+    def _step_context_fused(
+        self,
+        sm: dict,
+        pkt: ttnn.Tensor,
+        r2_pool: bool,
+        r2_select: bool,
+        image: bool,
+        dense: frozenset[int],
+    ) -> dict:
+        """:meth:`_step_context` of one user from one ``decode_step_context`` program: the same tensors, as the
+        packet's integer terms (fields 0 token, 1 sliding pos, 2 pos, 3 page row, 4 ring offset, 5 window offset)
+        and the stage's RoPE tables. Only the speculative window's ``win_prev`` one-hot still runs as device ops."""
+        window, topk = self.sliding_window, self.config.index_topk
+        slotted = self._slotted
+        sb = StepContextBuilder(pkt, sm["rope_tables"])
+        sb.add_int("token", [1, 1], [term(0)], ttnn.uint32)
+        sb.add_int("sliding_pos", [1], [term(1)])
+        sb.add_int("page_row", [1], [term(3)])
+        if slotted:
+            sb.add_int("ring_offset", [1], [term(4)])
+            sb.add_int("win_offset", [1], [term(5)])
+        for family in sm["rope_tables"]:
+            sb.add_rope(("rope", family), family, 2)
+
+        def lengths_terms(ratio: int) -> list:
+            selected = term(2, pre_add=1, mode="div", div=ratio, clamp_max=topk) if ratio else term(-1, mul=0)
+            return [term(2, pre_add=1, clamp_max=window), selected] + ([term(4)] if slotted else [])
+
+        length_ratios = ([0] if sm["has_sliding"] else []) + list(sm["ratios"])
+        for ratio in length_ratios:
+            t = lengths_terms(ratio)
+            sb.add_int(("lengths", ratio), [1, 1, 1, len(t)], t)
+        win_rows = self.spec_window_rows
+        win_base = slotted and any(r > 1 for r in sm["kv_ratios"])
+        entry_ratios = []
+        win_prev_ratios = []
+        for ratio in sm["kv_ratios"]:
+            if ratio > 1:
+                sb.add_int(
+                    ("win_slot", ratio),
+                    [1],
+                    [term(2, mode="mod", div=win_rows or ratio, add_field=5 if win_base else -1)],
+                )
+            if ratio > 1 and win_rows and r2_pool:
+                win_prev_ratios.append(ratio)
+            if ratio == 1 or (ratio == 2 and r2_pool):
+                if ratio != 1:
+                    sb.add_rope(("win_rope", ratio), "compress", 2, 1 - ratio)
+                entry_ratios.append(ratio)
+        for ratio in sm["row_ratios"]:
+            if ratio not in entry_ratios and (ratio == 1 or (ratio == 2 and r2_pool)):
+                entry_ratios.append(ratio)
+        for ratio in entry_ratios:
+            sb.add_int(("entry", ratio), [1], [term(2, mode="div", div=ratio)])
+        dense_slotted = bool(dense) and slotted
+        if dense_slotted:
+            sb.add_int("dense_offset", [1], [term(3, mul=topk)])
+            for ratio in dense:
+                t = lengths_terms(ratio) + [term(3, mul=topk)]
+                sb.add_int(("dense_lengths", ratio), [1, 1, 1, len(t)], t)
+        for ratio in sm["index_ratios"]:
+            if ratio in dense:
+                if ratio in entry_ratios and dense_slotted:
+                    sb.add_int(("dense_entry", ratio), [1], [term(2, mode="div", div=ratio, add_field=3, add_mul=topk)])
+            elif ratio == 1 or (ratio == 2 and r2_select):
+                sb.add_int(
+                    ("index_pos", ratio),
+                    [1],
+                    [term(2, pre_add=1, mode="div", div=ratio, mul=_SELECT_KV_RATE, post_add=-1)],
+                )
+        if sm.get("taps"):
+            sb.add_int("stash_slot", [1], [term(2, mode="mod", div=self.dspark.stash_rows)])
+        out = sb.run()
+
+        ctx = {
+            "token": out["token"],
+            "sliding_pos": out["sliding_pos"],
+            "rope": {family: out[("rope", family)] for family in sm["rope_tables"]},
+            "sliding_curpos": None,
+            "mask": {},
+            "curpos": {},
+            "win_slot": {r: out[("win_slot", r)] for r in sm["kv_ratios"] if r > 1},
+            "win_prev": {},
+            "win_rope": {},
+            "entry": {r: out[("entry", r)] for r in entry_ratios},
+            "index_pos": {},
+            "dense_entry": {},
+            "dense_offset": out.get("dense_offset"),
+            "dense_lengths": {},
+            "page_row": out["page_row"],
+            "ring_offset": out.get("ring_offset"),
+            "win_offset": out.get("win_offset"),
+            "image_mask": image_mask(out["token"], self.config.vocab_size) if image else None,
+            "sdpa_lengths": {ratio: out[("lengths", ratio)] for ratio in length_ratios},
+        }
+        for ratio in sm["kv_ratios"]:
+            if ratio == 1 or (ratio == 2 and r2_pool):
+                cos, sin, _ = out[("rope", "compress")] if ratio == 1 else out[("win_rope", ratio)]
+                ctx["win_rope"][ratio] = (cos, sin)
+        if dense_slotted:
+            ctx["dense_lengths"] = {ratio: out[("dense_lengths", ratio)] for ratio in dense}
+        for ratio in sm["index_ratios"]:
+            if ratio in dense:
+                if ratio in entry_ratios:
+                    ctx["dense_entry"][ratio] = out[("dense_entry", ratio)] if dense_slotted else ctx["entry"][ratio]
+            elif ratio == 1 or (ratio == 2 and r2_select):
+                ctx["index_pos"][ratio] = out[("index_pos", ratio)]
+        if sm.get("taps"):
+            ctx["stash_slot"] = out["stash_slot"]
+        if win_prev_ratios:
+            pos = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1, 1, 1, 1])
+            pos_f = ttnn.typecast(ttnn.to_layout(pos, ttnn.TILE_LAYOUT), ttnn.float32)
+            for ratio in win_prev_ratios:
+                prev = ttnn.add(pos_f, float(win_rows - 1))
+                prev = ttnn.subtract(
+                    prev, ttnn.multiply(ttnn.floor(ttnn.multiply(prev, 1.0 / win_rows)), float(win_rows))
+                )
+                ctx["win_prev"][ratio] = ttnn.typecast(ttnn.eq(sm["win_cols"], prev), ttnn.bfloat16)
         return ctx
 
     def _compressed_mask(self, idx: ttnn.Tensor, pos_f: ttnn.Tensor, ratio: int) -> ttnn.Tensor:
