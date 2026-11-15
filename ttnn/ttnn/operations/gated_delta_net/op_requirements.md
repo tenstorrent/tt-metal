@@ -591,3 +591,43 @@ every read of a region before any write of it. Must not slow `perf_decode_b1` or
 golden suite is green, no regression on the guard set.
 
 **Outcome**: measured null, levers kept off as live knobs. Default (levers off) model_decode_b8 40.4-40.7 us, model_decode_b16 72.6-74.4 (before 40.3 / 73.0-75.8; guard set at parity). The reader now can write part of each final state on its own NoC (cb_state_done handshake, bit-identical outputs incl. in place): STATE_SPLIT=2 43.3 / 79.5 us, STATE_WRITE_NOC=1 (every state write on NOC 1) 42.9 / 78.7, STATE_READER_EARLY_UNITS (reader writes unit 0's state as packed) 80.7 at B=16; throttling outstanding writes 73-75. Ablation without any state write: 39.2 / 65.3 us. What binds: the issue rate of the state writes is DRAM / NoC back-pressure (~40 us per 64 KB on whichever cores write while reads are in flight, on either NoC), and the critical path is the S0 reads of the pair cores in NoC rows y = 5-6 (issued at 26-34 us, unit 1 at 42-47), which every extra early write delays further. At B=8 the writes cost ~1 us. Next: get those cores' inputs and S0 issued earlier (their window / weight / gate reads land late; the writer RISC is idle at that point and could read S0 on its NoC into a second CB), so compute ends sooner and the write-back starts when the reads are done; not done here because it is a read-side scheme change (a second S0 producer for compute) outside this write-back lever.
+
+### [ ] Refinement 16 — In-place state, T = 64 to 640: the program after the op hangs in a NoC barrier
+
+**Type**: fix
+
+**Goal**: a correctness defect on the path the model uses. With `conv_state_out` and
+`recurrent_state_out` aliased to the inputs (in place), B=1 and T from 64 to 640, a repeated call
+WITHOUT the device profiler leaves the device in a state where the NEXT program hangs. Evidence
+(operator, single chip, op at 19656f8, 12 calls with the state carried, 30 s operation timeout):
+T=32 passes; T=64, 128, 256, 384, 500, 512, 640 time out on call 1 or 2 (call 0 passes, output
+finite), 3 of 3 runs at T=512; T=768, 896, 1000, 1024, 2048, 4096 pass 12 of 12. At T=512 the same
+run passes in copy mode (fresh output tensors) and passes in place under the profiler, so the hang is
+timing dependent and every profiled bench missed it. Triage of the hung device
+(`generated/chip_runs/gdn_hang_triage_t512_c0/hang-triage/triage.txt`): the stuck program is not this
+op but the matmul that follows it; one of its cores sits in `noc_async_atomic_barrier` after a
+semaphore increment that is never acknowledged, with empty buffers and no assert. That is the
+signature of this op's kernels ending with NoC transactions still outstanding or miscounted on some
+core (a write or an atomic increment issued and not flushed before the kernel returns, on the NoC
+whose counters the next kernel then inherits), on the plan used for short and medium prefill and only
+when the outputs alias the inputs. Repro from the repo root:
+`generated/meta/gated_delta_net/integrate/hang_t.sh 0 512` (about 2 min, resets the chip afterwards;
+`STATE=copy` or `PROF=1` in front give the two passing variants; the test it runs is
+`generated/meta/gated_delta_net/integrate/test_single_chip.py` with the adapter beside it). Find the
+root cause first: audit every kernel of that plan for writes, multicasts and semaphore increments
+that are not followed by the matching barrier on the same NoC before return, for a barrier issued on
+the wrong NoC index, and for what differs between the in-place and the copy path (order of state read
+and write-back on the same DRAM addresses, a read still in flight when the write to the same address
+is issued, a core that skips its flush when it has nothing to write). Then fix it without a blanket
+slowdown: the guard set must not regress.
+
+**Verifier notes**: add a device test WITHOUT the profiler that, for B=1 and T in {64, 128, 256, 512,
+640} with in-place states, calls the op at least 12 times with the state carried and runs one other
+device program (for example a `ttnn.matmul` on the full grid) after every call, under a 30 s
+operation timeout; it must fail on the present build and pass after the fix. Same test for decode
+B=1 / 8 / 16 in place (these pass today; they must stay so). Results stay within the golden
+tolerances and in-place stays bit-identical to the default path.
+
+**Done when**: the new test passes 3 runs in a row, `hang_t.sh 0 <T>` passes for T = 64, 128, 256,
+384, 500, 512, 640, the root cause is named in the Outcome (which kernel, which transaction, why only
+in place and only without the profiler), the golden suite is green, no regression on the guard set.
