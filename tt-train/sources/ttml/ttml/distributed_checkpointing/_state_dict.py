@@ -30,7 +30,8 @@ import ttml
 from ttml.modules.parameter import Parameter
 
 from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
-from ._layouts import DECLARATIONS, Identity, declared_transform
+from ._index import Entry
+from ._layouts import DECLARATIONS, Compose, Identity, Segments, Transform, declared_transform
 from ._planner import TensorInfo
 from ._topology import Label, Placement, global_shape
 
@@ -69,9 +70,10 @@ class LiveTensor:
     key: str
     tensor: Any  # ttml.autograd.Tensor
     info: TensorInfo
-    # A parameter of a C++-bound module whose name suggests a fused projection (or the optimizer state of one): its
-    # segment order cannot be declared, so it can only be loaded split the way it was saved.
-    undeclared_fusion: bool = False
+    # The name suggests a fused projection (kv_linear, qkv_proj, ...), for the parameter or the optimizer state of one.
+    fused_name: bool = False
+    # Held by a C++-bound module, which cannot declare a layout from Python.
+    cpp_bound: bool = False
 
 
 def label_of(value) -> Label:
@@ -173,6 +175,20 @@ def _module_name(key: str) -> str:
     return key.rsplit("/", 2)[-2] if key.count("/") >= 2 else key
 
 
+def _fsdp_axis(tensor: Any) -> int | None:
+    """The mesh axis FSDP shards ``tensor`` over (an autograd tensor of a ``fully_shard``-ed module), or None."""
+    return getattr(tensor, "_fsdp_axis", None) if getattr(tensor, "_fsdp_managed", False) else None
+
+
+def tp_split(label: Label, fsdp_axis: int | None, rank: int) -> tuple[int, ...]:
+    """Per dim of a rank-``rank`` tensor, how many shards the mesh axes other than ``fsdp_axis`` split it into: the TP
+    split, which decides a fused weight's row order. FSDP splits rows that are already in canonical order, so it is
+    left out."""
+    return tuple(
+        int(np.prod([label.dist_shape[a] for a in label.shard_axes(d) if a != fsdp_axis])) for d in range(rank)
+    )
+
+
 def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) -> None:
     """A TP-sharded weight that looks fused by name but declares no segments loads silently wrong across TP sizes.
 
@@ -180,7 +196,7 @@ def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) 
     so an FSDP-only model's fused-looking weights are fine."""
     if "fused" in declaration:
         return
-    fsdp_axis = getattr(tensor, "_fsdp_axis", None) if getattr(tensor, "_fsdp_managed", False) else None
+    fsdp_axis = _fsdp_axis(tensor)
     axes = [a for a in label.shard_axes(2) if a != fsdp_axis]
     shards = int(np.prod([label.dist_shape[a] for a in axes])) if axes else 1
     if shards <= 1:
@@ -223,9 +239,19 @@ def collect_model(model) -> list[LiveTensor]:
         )
         _lint_fusion(key, label, declaration, tensor)
         live_keys = tuple(sorted({key, *(f"model/{n}" for n in names.get(id(tensor), []))}))
-        info = TensorInfo(key, "param", dtype_name(value), layout_name(value), label, local_shape, transform, live_keys)
-        undeclared_fusion = fqn in cpp_bound and bool(_FUSION_HINT.search(_module_name(key)))
-        live.append(LiveTensor(key, tensor, info, undeclared_fusion))
+        info = TensorInfo(
+            key,
+            "param",
+            dtype_name(value),
+            layout_name(value),
+            label,
+            local_shape,
+            transform,
+            live_keys,
+            tp_split=tp_split(label, _fsdp_axis(tensor), len(local_shape)),
+        )
+        fused_name = bool(_FUSION_HINT.search(_module_name(key)))
+        live.append(LiveTensor(key, tensor, info, fused_name=fused_name, cpp_bound=fqn in cpp_bound))
     live.extend(_collect_buffers(model, _root_name(model, params)))
     return live
 
@@ -246,7 +272,15 @@ def _collect_buffers(model, root: str) -> list[LiveTensor]:
         local_shape = tuple(int(n) for n in value.shape)
         live_keys = tuple(sorted(set(keys)))
         info = TensorInfo(
-            keys[0], "buffer", dtype_name(value), layout_name(value), label, local_shape, Identity(), live_keys
+            keys[0],
+            "buffer",
+            dtype_name(value),
+            layout_name(value),
+            label,
+            local_shape,
+            Identity(),
+            live_keys,
+            tp_split=tp_split(label, None, len(local_shape)),
         )
         live.append(LiveTensor(keys[0], tensor, info))
     return live
@@ -275,7 +309,8 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     warnings.warn(
                         f"{key} is not keyed by a parameter of the model; saved with an identity layout", stacklevel=3
                     )
-                    transform, live_keys, ref, undeclared_fusion = Identity(), (key,), None, False
+                    transform, live_keys, ref, fsdp_axis = Identity(), (key,), None, None
+                    fused_name = cpp_bound = False
                 else:
                     if local_shape != param.info.local_shape:
                         raise CheckpointError(
@@ -286,7 +321,8 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     prefix = "optimizer/" + "/".join(path) + "/"
                     live_keys = tuple(sorted(prefix + n[len("model/") :] for n in param.info.live_keys))
                     ref = param.key
-                    undeclared_fusion = param.undeclared_fusion
+                    fsdp_axis = _fsdp_axis(param.tensor)  # the moments are sharded like their parameter
+                    fused_name, cpp_bound = param.fused_name, param.cpp_bound
                 info = TensorInfo(
                     key,
                     "optimizer_state",
@@ -298,8 +334,9 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     live_keys,
                     ref,
                     path,
+                    tp_split(label, fsdp_axis, len(local_shape)),
                 )
-                live.append(LiveTensor(key, tensor, info, undeclared_fusion))
+                live.append(LiveTensor(key, tensor, info, fused_name=fused_name, cpp_bound=cpp_bound))
         elif isinstance(node, dict):
             for name, child in node.items():
                 walk(child, path + (str(name),))
@@ -312,20 +349,44 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
     return live, scalars
 
 
-def check_undeclared_fusion(live: LiveTensor, saved: Label) -> None:
-    """A C++-bound fused projection (``DistributedLlama``'s ``kv_linear``, say) stores its segments per shard, which no
-    declaration describes, so the checkpoint's chunks are in an order only the same split restores. Loading it split
-    another way would plan cleanly and scramble the segments, so it is refused."""
-    if not live.undeclared_fusion:
+def _undescribed_split(transform: Transform, split: tuple[int, ...]) -> tuple[int, ...]:
+    """The TP split of a fused-looking weight that its layout does not describe: none when its transform reorders
+    segments (a declared fusion), else the TP split itself."""
+    steps = transform.steps if isinstance(transform, Compose) else (transform,)
+    return (1,) * len(split) if any(isinstance(step, Segments) for step in steps) else tuple(split)
+
+
+def check_undeclared_fusion(live: LiveTensor, entry: Entry) -> None:
+    """Refuse to load a fused projection whose segments would be scrambled.
+
+    Under TP a fused weight's rows are in a per-shard order ([Q_0 K_0 V_0 Q_1 K_1 V_1 ...]) that only a
+    ``fused_segments`` declaration describes. Without one, on either side, the layout says nothing about that order,
+    and the planner copies rows as if they were canonical: right when both sides leave the same TP split undescribed
+    (the same TP size, both undeclared), scrambled otherwise. So for a weight whose name suggests a fused projection,
+    the TP split left undescribed must be the same at save (recorded in the index) and at load. A declared side and a
+    TP split of one leave nothing undescribed; FSDP's split never counts, since it splits rows already in canonical
+    order. Python layers declare ``fused_segments``; C++-bound modules cannot yet (#65584).
+
+    A checkpoint written before the index recorded the TP split falls back to the earlier rule: a C++-bound weight
+    must be split the same way as when it was saved, a Python one is not checked."""
+    if not live.fused_name:
         return
     rank = len(live.info.local_shape)
-    before = tuple(saved.shard_count(d) for d in range(rank))
-    after = tuple(live.info.label.shard_count(d) for d in range(rank))
+    if entry.tp_split is None:
+        if not live.cpp_bound:
+            return
+        before = tuple(entry.label.shard_count(d) for d in range(rank))
+        after = tuple(live.info.label.shard_count(d) for d in range(rank))
+    else:
+        before = _undescribed_split(entry.transform, entry.tp_split)
+        after = _undescribed_split(live.info.transform, live.info.tp_split)
     if before != after:
         raise LayoutError(
-            f"{live.key} belongs to a C++-bound module whose name suggests a fused projection, so its segments are "
-            f"stored per shard in an order it cannot declare; it was saved split {list(before)} ways per dim and "
-            f"would load split {list(after)}, which would scramble the segments. Load it at the TP size it was saved at"
+            f"{live.key}: its name suggests a fused projection whose per-shard segment order is not declared on both "
+            f"sides: the checkpoint leaves a TP split of {list(before)} per dim undescribed and the live model "
+            f"{list(after)}, so its segments would be scrambled. Declare fused_segments where the layer is built "
+            f"(C++-bound modules cannot yet: #65584), or load at the TP size and with the declarations it was saved "
+            f"with"
         )
 
 

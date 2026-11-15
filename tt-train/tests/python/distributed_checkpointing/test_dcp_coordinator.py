@@ -6,6 +6,7 @@
 results into one index, and the phase protocol over an in-process transport (a failing rank stops every rank with its
 number; a failing collective is fatal and ends the exchanges)."""
 
+import dataclasses
 import json
 import threading
 
@@ -103,6 +104,17 @@ def test_the_ranks_must_cover_the_label_and_agree_on_its_description(expect_erro
         merge_plan_parts(
             [PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2), (0, 3)]), different)]
         )
+
+
+def test_the_tp_split_travels_with_a_plan_part_and_the_ranks_must_agree_on_it(expect_error):
+    """Each rank's plan part carries its tensors' TP split, which the index records and load compares; ranks that
+    report different splits for one key (one of them FSDP-sharding it) describe it differently."""
+    split = dataclasses.replace(_info("model/qkv_linear/w", [R, S(2)], (1, 4), (1, 1, 32, 64)), tp_split=(1, 1, 4, 1))
+    part = PlanPart(_record(0, [(0, 0), (0, 1)]), [split])
+    assert PlanPart.from_bytes(part.to_bytes()).infos[0].tp_split == (1, 1, 4, 1)
+    other = dataclasses.replace(split, tp_split=(1, 1, 1, 1))
+    with expect_error(CheckpointError, r"describes it differently .*TP split"):
+        merge_plan_parts([part, PlanPart(_record(1, [(0, 2), (0, 3)]), [other])])
 
 
 def test_multi_mesh_ranks_with_their_own_keys_and_one_shared_key():

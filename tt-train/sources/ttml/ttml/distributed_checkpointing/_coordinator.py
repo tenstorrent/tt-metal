@@ -293,6 +293,7 @@ def info_to_json(info: TensorInfo) -> dict:
         "live_keys": list(info.live_keys),
         "param_ref": info.param_ref,
         "state_path": list(info.state_path),
+        "tp_split": None if info.tp_split is None else list(info.tp_split),
     }
 
 
@@ -308,6 +309,7 @@ def info_from_json(value: dict) -> TensorInfo:
         live_keys=tuple(value["live_keys"]),
         param_ref=value["param_ref"],
         state_path=tuple(value["state_path"]),
+        tp_split=None if value["tp_split"] is None else tuple(int(n) for n in value["tp_split"]),
     )
 
 
@@ -428,6 +430,7 @@ def _same_description(a: TensorInfo, b: TensorInfo) -> bool:
         and a.transform == b.transform
         and a.param_ref == b.param_ref
         and tuple(a.state_path) == tuple(b.state_path)
+        and a.tp_split == b.tp_split
     )
 
 
@@ -464,8 +467,8 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
                 if not _same_description(infos[info.key], info):
                     raise CheckpointError(
                         f"{info.key}: rank {part.record.rank} describes it differently from rank "
-                        f"{first_rank[info.key]} (role, dtype, label, per-device shape, transform, or an optimizer "
-                        f"state's parameter or state path)"
+                        f"{first_rank[info.key]} (role, dtype, label, per-device shape, transform, TP split, or an "
+                        f"optimizer state's parameter or state path)"
                     )
             else:
                 infos[info.key] = info
@@ -560,6 +563,7 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
                     or tuple(have.global_shape) != tuple(entry.global_shape)
                     or have.transform != entry.transform
                     or have.label != entry.label
+                    or have.tp_split != entry.tp_split
                 ):
                     raise CheckpointError(
                         f"{key}: rank {part.record.rank} reports a different entry than earlier ranks"

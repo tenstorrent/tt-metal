@@ -66,6 +66,10 @@ class Entry:
     chunks: list[ChunkRecord]
     param_ref: str | None = None  # optimizer state: the key of the parameter it belongs to
     state_path: tuple[str, ...] = ()  # optimizer state: the path of dict keys in the optimizer's state dict
+    # Per dim, how many shards the mesh axes other than the tensor's FSDP axis split it into at save: the TP split,
+    # which decides the row order of a fused weight (FSDP splits rows already in canonical order). None in a
+    # checkpoint written before the field existed.
+    tp_split: tuple[int, ...] | None = None
 
 
 @dataclass
@@ -189,6 +193,8 @@ def _entry_to_json(entry: Entry) -> dict:
         value["param_ref"] = entry.param_ref
     if entry.state_path:
         value["state_path"] = list(entry.state_path)
+    if entry.tp_split is not None:
+        value["tp_split"] = list(entry.tp_split)
     return value
 
 
@@ -219,6 +225,15 @@ def _entry_from_json(key: str, value: dict) -> Entry:
         )
         for i in range(n)
     ]
+    tp_split = value.get("tp_split")
+    if tp_split is not None:
+        if (
+            not isinstance(tp_split, list)
+            or len(tp_split) != len(value["global_shape"])
+            or not all(isinstance(s, int) and s >= 1 for s in tp_split)
+        ):
+            raise CheckpointError(f"index entry {key!r}: malformed tp_split {tp_split!r}")
+        tp_split = tuple(tp_split)
     return Entry(
         key=key,
         role=str(value["role"]),
@@ -232,6 +247,7 @@ def _entry_from_json(key: str, value: dict) -> Entry:
         chunks=chunks,
         param_ref=value.get("param_ref"),
         state_path=tuple(value.get("state_path", [])),
+        tp_split=tp_split,
     )
 
 
