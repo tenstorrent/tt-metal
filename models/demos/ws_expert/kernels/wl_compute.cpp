@@ -228,11 +228,13 @@ void kernel_main() {
             cb_push_back(h_cb, 1);
             ++produced;
             if (consumed < produced && (consumed < e_start || consumed + DN_LAG < produced)) {
+                pop_finished_down(n);  // release finished experts first: zero-row ones hold the down weights' front
                 down_row();
                 pop_finished_down(n);
             }
         }
         cb_pop_front(w_cb, WGU);  // this expert's gate/up weights are done
+        pop_finished_down(n);
         while (consumed < produced) {  // drain its down rows: the expert (and its slot) is done
             down_row();
         }

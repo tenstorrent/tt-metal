@@ -220,6 +220,7 @@ void kernel_main() {
             cb_push_back(h_cb, 1);
             ++produced;
             if (consumed < produced && (consumed < e_start || consumed + DN_LAG < produced)) {
+                pop_finished_down(n);  // release finished experts first: zero-row ones hold the down weights' front
                 down_row();
                 pop_finished_down(n);
             }
@@ -228,6 +229,7 @@ void kernel_main() {
         // Down rows of earlier experts run one per gate/up row of this one; an expert with fewer rows than the lag
         // (M = 0 at the extreme) leaves them pending, and the next expert reuses their weight slot: finish them now.
         while (consumed < e_start) {
+            pop_finished_down(n);
             down_row();
             pop_finished_down(n);
         }
@@ -235,6 +237,7 @@ void kernel_main() {
         PACK(stamps[1 + n] = wall());
     }
     while (consumed < produced) {
+        pop_finished_down(nexp_g);
         down_row();
         pop_finished_down(nexp_g);
     }
