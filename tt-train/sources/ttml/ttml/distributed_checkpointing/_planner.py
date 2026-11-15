@@ -32,10 +32,10 @@ from typing import Callable, Iterable
 from ._boxes import Box, boxes_tile, grid_cell_size
 from ._errors import (
     CoverageError,
-    DtypeMismatch,
+    DtypeMismatchError,
     MissingKeyError,
-    RoleMismatch,
-    ShapeMismatch,
+    RoleMismatchError,
+    ShapeMismatchError,
     TopologyError,
     UnexpectedKeyError,
 )
@@ -314,11 +314,11 @@ class _ChunkLookup:
 def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
     """The reads and fills that build every destination shard of one key from the saved chunks."""
     if entry.dtype != info.dtype:
-        raise DtypeMismatch(f"{info.key}: checkpoint holds {entry.dtype} but the live tensor is {info.dtype}")
+        raise DtypeMismatchError(f"{info.key}: checkpoint holds {entry.dtype} but the live tensor is {info.dtype}")
     dest_global = info.global_shape
     dest_canonical = info.transform.canonical_shape(dest_global)
     if tuple(entry.canonical_shape) != tuple(dest_canonical):
-        raise ShapeMismatch(
+        raise ShapeMismatchError(
             f"{info.key}: canonical shape {list(entry.canonical_shape)} in the checkpoint vs {list(dest_canonical)} in the "
             f"model (global {list(dest_global)} through {info.transform.to_json()}); a different model configuration, "
             f"or a missing layout declaration"
@@ -383,7 +383,7 @@ def create_load_plan(
     What is restored is decided by ``infos``: every live tensor passed is planned. ``roles`` only scopes the
     unexpected-key report: entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported
     as unexpected, so a model alone loads from a checkpoint that also holds optimizer state. ``None`` means every
-    role. A live tensor that resolves to an entry of another role is a ``RoleMismatch``.
+    role. A live tensor that resolves to an entry of another role is a ``RoleMismatchError``.
     """
     live_map = index.live_key_map()
     wanted = None if roles is None else set(roles)
@@ -402,7 +402,7 @@ def create_load_plan(
             continue
         entry = index.entries[entry_key]
         if entry.role != info.role:
-            raise RoleMismatch(
+            raise RoleMismatchError(
                 f"{info.key}: resolves to checkpoint entry {entry_key!r}, a {entry.role!r}, but the live tensor is a "
                 f"{info.role!r}"
             )

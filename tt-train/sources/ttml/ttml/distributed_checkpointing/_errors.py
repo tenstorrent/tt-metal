@@ -9,7 +9,7 @@ class CheckpointError(RuntimeError):
     """Base class: a save or load that could not be carried out as asked."""
 
 
-class IncompleteCheckpoint(CheckpointError):
+class IncompleteCheckpointError(CheckpointError):
     """The directory is a staging directory, or has no readable ``index.json`` (missing, truncated or malformed)."""
 
 
@@ -21,11 +21,11 @@ class LayoutError(CheckpointError):
     """A layout declaration or transform does not fit the tensor it describes."""
 
 
-class ShapeMismatch(CheckpointError):
+class ShapeMismatchError(CheckpointError):
     """The checkpoint's canonical shape for a key differs from the live tensor's."""
 
 
-class DtypeMismatch(CheckpointError):
+class DtypeMismatchError(CheckpointError):
     """The checkpoint's dtype for a key differs from the live tensor's."""
 
 
@@ -42,7 +42,7 @@ class CoverageError(CheckpointError):
     or the planned reads of a destination shard on load."""
 
 
-class RoleMismatch(CheckpointError):
+class RoleMismatchError(CheckpointError):
     """A live tensor resolved to a checkpoint entry of another role (a parameter to optimizer state, say)."""
 
 

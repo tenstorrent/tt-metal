@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from ._boxes import Box
-from ._errors import CheckpointError, IncompleteCheckpoint, VersionError
+from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
 from ._layouts import Transform, transform_from_json
 from ._topology import Label
 
@@ -272,7 +272,7 @@ def is_complete(path: str) -> bool:
     """A final directory name (no staging or replaced suffix) that holds an ``index.json``.
 
     Only the file's presence is checked, so the call stays cheap for ``find_latest``; ``read_index`` raises
-    ``IncompleteCheckpoint`` for an index that does not parse."""
+    ``IncompleteCheckpointError`` for an index that does not parse."""
     name = os.path.basename(path.rstrip("/"))
     if PARTIAL_MARK in name or REPLACED_MARK in name:
         return False
@@ -383,12 +383,12 @@ def write_index(directory: str, index: Index) -> None:
 def read_index(directory: str) -> Index:
     path = os.path.join(directory, INDEX_NAME)
     if not os.path.isfile(path):
-        raise IncompleteCheckpoint(f"{directory} has no {INDEX_NAME}; it is not a complete checkpoint")
+        raise IncompleteCheckpointError(f"{directory} has no {INDEX_NAME}; it is not a complete checkpoint")
     try:
         with open(path, "r", encoding="utf-8") as f:
             return Index.from_json(json.load(f))
     except (ValueError, KeyError, TypeError, IndexError, AttributeError) as err:
-        raise IncompleteCheckpoint(
+        raise IncompleteCheckpointError(
             f"{path} is not a readable index ({type(err).__name__}: {err}); the checkpoint is corrupt or truncated"
         ) from err
 
@@ -397,22 +397,22 @@ def write_header(directory: str, header: dict) -> None:
     _atomic_write_json(os.path.join(directory, HEADER_NAME), header)
 
 
-def read_header(directory: str) -> dict:
+def read_header_json(directory: str) -> dict:
     path = os.path.join(directory, HEADER_NAME)
     if not os.path.isfile(path):
-        raise IncompleteCheckpoint(f"{directory} has no {HEADER_NAME}")
+        raise IncompleteCheckpointError(f"{directory} has no {HEADER_NAME}")
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except ValueError as err:
-        raise IncompleteCheckpoint(
+        raise IncompleteCheckpointError(
             f"{path} is not readable JSON ({err}); the checkpoint is corrupt or truncated"
         ) from err
 
 
 def read_user_header(directory: str) -> dict:
     """The custom user-defined header dict passed to ``save``, without touching any device."""
-    return read_header(directory).get("user", {})
+    return read_header_json(directory).get("user", {})
 
 
 def data_file_name(world_rank: int, mesh_id: int, coord: Sequence[int]) -> str:
