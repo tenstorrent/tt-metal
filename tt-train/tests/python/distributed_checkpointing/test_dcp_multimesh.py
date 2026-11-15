@@ -40,11 +40,15 @@ NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
 class _Pipeline(AbstractModuleBase):
-    """A layer every rank replicates, then this rank's stage(s)."""
+    """A layer every rank replicates, then this rank's stage(s). The shared layer is frozen, so it stays an exact
+    replica across the ranks while each rank's stage trains on weights drawn from ``stage_seed``."""
 
-    def __init__(self, dim: int, stages: list[str]) -> None:
+    def __init__(self, dim: int, stages: list[str], stage_seed: int) -> None:
         super().__init__()
         self.shared = LinearLayer(dim, dim)
+        for tensor in self.shared.parameters().values():
+            tensor.set_requires_grad(False)
+        ttml.init.manual_seed(stage_seed)
         self._stages = list(stages)
         for name in stages:
             setattr(self, name, TPBlock(dim))
@@ -86,19 +90,22 @@ def two_meshes():
 def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     rank, local, root = two_meshes
     ctx = ttml.autograd.AutoContext.get_instance()
-    # The same seeds on both ranks, including ttml.init's own generator (seeded from OS entropy otherwise): the
-    # shared layer then starts identical on both meshes, and the stages, which differ only by name, too. The
-    # checkpoint keeps one copy of the shared layer, so each rank gets its own shards back only because they agree.
+    # The same seeds on both ranks for the shared layer, including ttml.init's own generator (seeded from OS entropy
+    # otherwise), so it starts identical on both meshes and, frozen, stays so: the checkpoint keeps one copy of it,
+    # which each rank gets back only because they agree. Each rank's stage is drawn from its own seed, so a stage
+    # restored from the other rank's chunks would show.
     ctx.set_seed(11)
     ttml.init.manual_seed(11)
-    model = _Pipeline(DIM, [f"stage{rank}"])
+    model = _Pipeline(DIM, [f"stage{rank}"], stage_seed=100 + rank)
     params = model.parameters()
     opt = make_adamw(params)
     train_step(model, opt, DIM)
     before = param_shards(params, local)
     assert len(before) == len(params) * len(local)
+    trainable = [name for name, tensor in params.items() if tensor.get_requires_grad()]
+    assert len(trainable) == len(params) - 2, "everything but the shared layer's weight and bias"
     state_before, scalars_before = optimizer_state(opt, local)
-    assert len(state_before) == 2 * len(params) * len(local) and scalars_before["steps"] == 1
+    assert len(state_before) == 2 * len(trainable) * len(local) and scalars_before["steps"] == 1
     path = os.path.join(root, dcp.step_dir_name(1))
 
     result = dcp.save(path, model=model, optimizer=opt, header={"step": 1})
@@ -113,7 +120,8 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     assert shared and all(len(e.chunks) == 1 for e in shared), "a replicated layer is written once"
     assert result.keys == len(index.entries), "keys counts the whole world"
 
-    model2 = _Pipeline(DIM, [f"stage{rank}"])
+    ttml.init.manual_seed(11)
+    model2 = _Pipeline(DIM, [f"stage{rank}"], stage_seed=200 + rank)
     params2 = model2.parameters()
     opt2 = make_adamw(params2)
     loaded = dcp.load(path, model=model2, optimizer=opt2)
@@ -127,7 +135,7 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     }
 
     # A rank whose model wants a key no rank saved fails strictly, and takes every rank with it.
-    model3 = _Pipeline(DIM, [f"stage{rank}"] + (["extra"] if rank == 1 else []))
+    model3 = _Pipeline(DIM, [f"stage{rank}"] + (["extra"] if rank == 1 else []), stage_seed=300 + rank)
     with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
         dcp.load(path, model=model3)
     ttnn.distributed_context_barrier()
