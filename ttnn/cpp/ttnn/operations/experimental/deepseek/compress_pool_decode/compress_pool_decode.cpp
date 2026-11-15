@@ -29,7 +29,8 @@ std::vector<Tensor> compress_pool_decode(
     const std::optional<Tensor>& page_row,
     const std::optional<Tensor>& dense_kv,
     const std::optional<Tensor>& dense_entry,
-    const std::optional<Tensor>& key_row) {
+    const std::optional<Tensor>& key_row,
+    uint32_t kv_gate_interleave) {
     return ttnn::prim::compress_pool_decode(
         kv,
         norm_weight,
@@ -51,7 +52,8 @@ std::vector<Tensor> compress_pool_decode(
         page_row,
         dense_kv,
         dense_entry,
-        key_row);
+        key_row,
+        kv_gate_interleave);
 }
 
 }  // namespace ttnn::experimental::deepseek

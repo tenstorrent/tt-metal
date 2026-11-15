@@ -155,7 +155,7 @@ def _baseline_ttnn_latent_and_rope(
     return latent, roped
 
 
-@pytest.mark.parametrize("mem_mode", ("dram", "l1_16", "l1_kv_grid", "l1_8"))
+@pytest.mark.parametrize("mem_mode", ("dram", "l1_16", "l1_kv_grid", "l1_8", "interleaved_tp4", "interleaved_tp2"))
 @pytest.mark.parametrize("do_pool", (True, False))
 @pytest.mark.parametrize("with_rope", (True, False))
 @pytest.mark.parametrize("rope_dim", (64, 32))
@@ -175,8 +175,20 @@ def test_compress_pool_decode_ratio2(device, reset_seeds, mem_mode, do_pool, wit
     win_slot_idx = 1 if do_pool else 0
     prev_slot_idx = 1 - win_slot_idx
 
-    kv_tt = _make_row_tensor(kv_host, device, mem_mode)
-    gate_tt = _make_row_tensor(gate_host, device, mem_mode)
+    interleave = 0
+    if mem_mode.startswith("interleaved_tp"):
+        # kv_gate_interleave: the TP-gathered row, each rank's kv columns then its gate columns.
+        tp = int(mem_mode[len("interleaved_tp") :])
+        interleave = HEAD_DIM // tp
+        blocks = [x.reshape(1, tp, interleave) for x in (kv_host, gate_host)]
+        row = torch.stack(blocks, dim=2).reshape(1, 1, 1, 2 * HEAD_DIM)
+        kv_tt = ttnn.from_torch(
+            row, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        gate_tt = kv_tt
+    else:
+        kv_tt = _make_row_tensor(kv_host, device, mem_mode)
+        gate_tt = _make_row_tensor(gate_host, device, mem_mode)
     win_kv_tt = ttnn.from_torch(
         win_kv_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -211,6 +223,7 @@ def test_compress_pool_decode_ratio2(device, reset_seeds, mem_mode, do_pool, wit
         cos=cos_tt,
         sin=sin_tt,
         do_pool=do_pool,
+        kv_gate_interleave=interleave,
     )
 
     # Verify in-place window updates (exact bit-for-bit on updated & untouched rows).

@@ -119,6 +119,9 @@ FUSED_POOL_WRITES = os.environ.get("DEEPSEEK_V41_FUSED_POOL_WRITES", "1") not in
 # falls back to smaller ones (``DEEPSEEK_V41_OB_ALLREDUCE_PACKETS=0``: the op's default 320 B packets).
 OB_ALLREDUCE_PACKETS = os.environ.get("DEEPSEEK_V41_OB_ALLREDUCE_PACKETS", "1") not in ("0", "", "false", "False")
 _OB_ALLREDUCE_PACKET_BYTES = 640
+# A pooled one-row compressor step hands compress_pool_decode the TP-gathered [rank: kv | gate] row to read in
+# place (``kv_gate_interleave``), not split by reshape / slice ops. ``DEEPSEEK_V41_COMP_INTERLEAVED_POOL=0``: split.
+COMP_INTERLEAVED_POOL = os.environ.get("DEEPSEEK_V41_COMP_INTERLEAVED_POOL", "1") not in ("0", "", "false", "False")
 # attention_qkv_decode's core roles on the 12x10 grid: the tokens replica covers it, q_a's 40 and kv's 16
 # cores hold one output tile and one [K, 32] weight slab each.
 _FUSED_QKV_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))})
@@ -1199,10 +1202,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             ]
         return rows[0], rows[1] if len(rows) > 1 else None
 
-    def _gather_compressor_rows(self, local, m: int):
+    def _gather_compressor_rows(self, local, m: int, interleaved: bool = False):
         """``kv`` / ``gate`` DRAM ``[1, 1, M, Dh]`` (``gate`` ``None`` at ratio 1) from each rank's ``comp_proj``
         columns ``local`` ``[M, Dh / TP]`` of kv, then of gate: gathered, a row is every rank's kv columns and
-        gate columns interleaved. Deallocates ``local`` unless it is ``fused_comp_row``."""
+        gate columns interleaved. Deallocates ``local`` unless it is ``fused_comp_row``. ``interleaved`` (one row,
+        ratio > 1, TP > 1) returns that gathered row as both, for ``compress_pool_decode``'s ``kv_gate_interleave``
+        (:meth:`_comp_interleave`) to read in place."""
         owned = local is not self.fused_comp_row
         rows = local
         if local.memory_config().buffer_type != ttnn.BufferType.DRAM:
@@ -1224,6 +1229,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         if self.compress_ratio == 1:
             return ttnn.reshape(rows, [1, 1, m, self.head_dim]), None
         cols = self.head_dim // self.tp_size
+        if interleaved:
+            assert m == 1 and self.tp_size > 1 and owned, "the interleaved row is one row of the gathered rows"
+            return rows, rows
         pairs = ttnn.reshape(rows, [1, m * self.tp_size, 2, cols])
         kv, gate = (
             ttnn.reshape(ttnn.slice(pairs, [0, 0, i, 0], [1, m * self.tp_size, i + 1, cols]), [1, 1, m, self.head_dim])
@@ -1255,8 +1263,27 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ttnn.deallocate(partial)
         return out
 
+    def _comp_interleave(self) -> int:
+        """``compress_pool_decode``'s ``kv_gate_interleave`` for :meth:`_gather_compressor_rows`' gathered row: each
+        rank's kv columns, then its gate's (0 where the row is not read in place)."""
+        if not COMP_INTERLEAVED_POOL or self.compress_ratio == 1 or self.tp_size == 1:
+            return 0
+        return self.head_dim // self.tp_size
+
     def _pooled_latent(
-        self, kv, gate, scache, win_slot, pool: bool, cos_win, sin_win, entry, page_row, dense: bool, dense_entry
+        self,
+        kv,
+        gate,
+        scache,
+        win_slot,
+        pool: bool,
+        cos_win,
+        sin_win,
+        entry,
+        page_row,
+        dense: bool,
+        dense_entry,
+        interleave: int = 0,
     ):
         """:meth:`_latent` of one row of one session as ``compress_pool_decode``, which also RoPEs the closed group:
         ``(latent, row)``, the pre-RoPE latent (TILE DRAM ``[1, 1, 1, Dh]``) and its RoPE'd row (ROW_MAJOR DRAM),
@@ -1265,7 +1292,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         With :data:`FUSED_POOL_WRITES` a pooling step also does the select's writes of the closed group (what
         :meth:`_write_index_key` and :meth:`_write_entries` do): its index key into ``idx_key_cache`` row ``entry``
         (and ``scache.new_key_row``), and with ``dense_entry`` its row into ``dense_kv`` and, when ``dense``,
-        ``comp_kv``.
+        ``comp_kv``. ``interleave``: ``kv`` is :meth:`_gather_compressor_rows`' gathered row, gate's columns
+        interleaved per rank (``gate`` is the same tensor).
         """
         windows = {}
         if self.compress_ratio > 1:
@@ -1295,6 +1323,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             self.comp_norm_weight,
             epsilon=self.eps,
             do_pool=pool,
+            kv_gate_interleave=interleave,
             **windows,
             **writes,
         )
@@ -1609,11 +1638,25 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             q_a = None
             if comp_in_qkv:
                 with _region("COMPRESSOR"):
-                    kv, gate = self._gather_compressor_rows(self.fused_comp_row, 1)
+                    interleave = self._comp_interleave()
+                    kv, gate = self._gather_compressor_rows(self.fused_comp_row, 1, interleaved=bool(interleave))
                     assert select or not pool, "a closed group is written by the select that follows it"
                     latent, roped = self._pooled_latent(
-                        kv, gate, scache, win_slot, pool, cos_win, sin_win, entry, page_row, dense, dense_entry
+                        kv,
+                        gate,
+                        scache,
+                        win_slot,
+                        pool,
+                        cos_win,
+                        sin_win,
+                        entry,
+                        page_row,
+                        dense,
+                        dense_entry,
+                        interleave=interleave,
                     )
+                    if interleave:
+                        gate = None
                     pool_writes = pool and FUSED_POOL_WRITES
         else:
             q, kv, q_a = self._qkv(tokens, cos, sin)

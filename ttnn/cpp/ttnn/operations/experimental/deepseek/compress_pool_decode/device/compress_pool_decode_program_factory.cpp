@@ -459,6 +459,12 @@ CompressPoolDecodeProgramFactory::cached_program_t CompressPoolDecodeProgramFact
         uint32_t gate_noc_x = 0;
         uint32_t gate_noc_y = 0;
         uint32_t gate_offset_bytes = i * row_tile_bytes;
+        if (const uint32_t r = args.kv_gate_interleave; r != 0) {
+            // Column c of kv sits in block c / r of the gathered row, gate's r columns after it.
+            const uint32_t c = i * constants::TILE_WIDTH;
+            kv_offset_bytes = ((c / r) * 2 * r + c % r) * elem_bytes;
+            gate_offset_bytes = kv_offset_bytes + r * elem_bytes;
+        }
         if (args.gate_sharded) {
             const uint32_t shard_idx = (i * constants::TILE_WIDTH) / gate_shard_w;
             gate_offset_bytes = ((i * constants::TILE_WIDTH) % gate_shard_w) * elem_bytes;
