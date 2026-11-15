@@ -575,6 +575,7 @@ from ttnn.operations.ccl import (
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
+    Conv2dFusedOps,
     PaddingMode,
     get_conv_output_dim,
     Conv2dSliceConfig,

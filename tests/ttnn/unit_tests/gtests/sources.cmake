@@ -17,6 +17,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
 set(UNIT_TESTS_TTNN_BASIC_SOURCES
     conv/test_halo.cpp
     conv/test_padded_slice_prologue.cpp
+    conv/test_conv2d_halo_inputs.cpp
     test_add.cpp
     test_scalar_lhs_binary.cpp
     test_add_int.cpp
