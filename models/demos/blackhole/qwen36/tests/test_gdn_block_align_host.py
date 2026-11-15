@@ -384,6 +384,7 @@ def adapter(monkeypatch):
     from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
     events = []
+    reads = []  # replicas each host read of the logits moved
     vocab = 8
 
     def prefill(tokens, pt, actual_len, vision_tokens=None, start_pos=0, rope_token_ids=None, checkpoint_pos=0):
@@ -393,7 +394,17 @@ def adapter(monkeypatch):
             events.append(("prefill", start_pos, actual_len, vision_tokens, checkpoint_pos, rope_token_ids.shape[1]))
         else:
             events.append(("prefill", start_pos, actual_len, vision_tokens, checkpoint_pos))
-        return torch.full((1, 1, vocab), float(actual_len))
+        # Replicated logits of 8 devices. Only device 0's replica holds the row here, so a read of another replica
+        # shows in the returned logits.
+        return _Replicas([torch.full((1, 1, vocab), float(actual_len))] + [torch.full((1, 1, vocab), -1.0)] * 7)
+
+    def to_torch(t, mesh_composer=None):
+        if isinstance(t, _Replicas):
+            assert mesh_composer is not None, "a replicated tensor is read through a mesh composer"
+            reads.append(len(t.copies))
+            return torch.cat(t.copies, dim=0)
+        reads.append(1)
+        return t
 
     blocks = SimpleNamespace(
         layout=SimpleNamespace(block_size=1024),
@@ -410,8 +421,9 @@ def adapter(monkeypatch):
         or "host vision",
         prefill_chunk_size=CHUNK,
     )
-    monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: t)
-    monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda *a, **kw: None)
+    monkeypatch.setattr(ttnn, "to_torch", to_torch)
+    monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda mesh, dim: ("concat", dim))
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: list(t.copies))
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
     wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
     wrapper.model = [model]
@@ -420,6 +432,7 @@ def adapter(monkeypatch):
 
     def run(start, end, dest, start_blocks=None, checkpoint=None, max_batch_size=4, **kw):
         events.clear()
+        reads.clear()
         model.args.max_batch_size = max_batch_size
         state = plugin.step_state([dest], BMAX, start_blocks=[start_blocks], checkpoints=[checkpoint])
         tokens, page_table = torch.zeros(1, end, dtype=torch.int64), torch.zeros(1, 4, dtype=torch.int32)
@@ -427,7 +440,15 @@ def adapter(monkeypatch):
         assert float(logits[0, 0, 0]) == end
         return list(events)
 
+    run.reads = reads
     return run
+
+
+class _Replicas:
+    """Stand-in for a replicated mesh tensor: ``copies[d]`` is device d's replica."""
+
+    def __init__(self, copies):
+        self.copies = copies
 
 
 def test_prefill_writes_the_checkpoint_between_two_parts(adapter):
@@ -455,6 +476,15 @@ def test_prefill_computes_a_checkpoint_in_its_last_chunk_in_one_forward(adapter)
         ("checkpoint", (4, 5, 6)),
         ("write", (7, 8, 9)),
     ]
+
+
+def test_prefill_reads_one_replica_of_the_logits(adapter):
+    """Every device holds the same all-gathered logits row; prefill_forward reads device 0's replica alone, one read per
+    row, instead of all 8 replicas (8 x 15.9 MB for Qwen3.8 at TP=8)."""
+    adapter(0, 2000, (4, 5, 6), checkpoint=(1024, (1, 2, 3)))
+    assert adapter.reads == [1]
+    adapter(0, 2500, (4, 5, 6), checkpoint=(2048, (1, 2, 3)))
+    assert adapter.reads == [1]
 
 
 def test_prefill_resumes_from_the_start_blocks_and_only_reads_them(adapter):
