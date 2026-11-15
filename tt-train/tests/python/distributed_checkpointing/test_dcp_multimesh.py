@@ -139,3 +139,17 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
         dcp.load(path, model=model3)
     ttnn.distributed_context_barrier()
+
+
+def test_strict_refuses_entries_no_rank_holds_on_every_rank(two_meshes, expect_error):
+    """strict judges the unexpected entries over the union of the ranks' live tensors. With rank 1 holding no stage,
+    no rank holds stage1's entries: every rank refuses a strict load, and a lenient one lists them on every rank."""
+    rank, local, root = two_meshes
+    path = os.path.join(root, dcp.step_dir_name(1))  # the first test's checkpoint
+    ttml.init.manual_seed(11)
+    model = _Pipeline(DIM, ["stage0"] if rank == 0 else [], stage_seed=400 + rank)
+    with expect_error(dcp.UnexpectedKeyError, r"have no live tensor: \['model/_Pipeline/stage1/"):
+        dcp.load(path, model=model)
+    lenient = dcp.load(path, model=model, strict=False)
+    assert lenient.unexpected and all("/stage1/" in key for key in lenient.unexpected), lenient.unexpected
+    ttnn.distributed_context_barrier()
