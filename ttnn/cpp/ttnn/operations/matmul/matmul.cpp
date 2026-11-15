@@ -432,13 +432,33 @@ static ttnn::Tensor bound_matmul(
 
     // Apply bias as post-processing if needed
     if (post_process_bias) {
+        // binary_ng broadcasts only up to rank 6, so for an unbatched bias the batch dims are folded into one.
+        auto fold_batch = [](const Tensor& tensor) {
+            const auto& logical = tensor.logical_shape();
+            const auto& padded = tensor.padded_shape();
+            const uint32_t batch = logical.volume() / (logical[-2] * logical[-1]);
+            return ttnn::reshape(
+                tensor, ttnn::Shape({batch, logical[-2], logical[-1]}), ttnn::Shape({batch, padded[-2], padded[-1]}));
+        };
+        const bool fold = output_tensor.logical_shape().rank() > 6 && !detail::is_input_batched(bias->logical_shape());
+        std::optional<Tensor> add_output_tensor = optional_output_tensor;
+        Tensor add_bias = bias.value();
+        if (fold) {
+            output_tensor = fold_batch(output_tensor);
+            if (add_output_tensor.has_value()) {
+                add_output_tensor = fold_batch(*add_output_tensor);
+            }
+            if (add_bias.logical_shape().rank() > 2) {
+                add_bias = fold_batch(add_bias);
+            }
+        }
         output_tensor = ttnn::add(
             output_tensor,
-            bias.value(),
+            add_bias,
             /*output_dtype=*/std::nullopt,
             optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
                                                : output_tensor.memory_config(),
-            optional_output_tensor);
+            add_output_tensor);
     }
 
     const auto& matmul_shape = utilities::compute_matmul_output_shape(
