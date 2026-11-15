@@ -605,3 +605,34 @@ def test_apply_precision_rejects_values_that_would_read_as_unset(expect_error, v
     it raises naming the key. No device needed."""
     with expect_error(TypeError, "precision.reduce_dtype must be"):
         apply_precision(_ModelWithoutParameters(), {"reduce_dtype": value})
+
+
+@pytest.mark.parametrize("block", [ttnn.DataType.FLOAT32, ("master_dtype", "float32"), "float32"])
+def test_apply_precision_rejects_a_block_that_is_not_a_dict(gradient_reduce_default, expect_error, block):
+    """A block that isn't a mapping could reach C++ as a YAML null and read as no block, clearing the stored reduce
+    dtype without a word, so it raises. No device needed."""
+    gradient_reduce_default(ttnn.DataType.FLOAT32)
+    with expect_error(TypeError, "precision must be a dict"):
+        apply_precision(_ModelWithoutParameters(), block)
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
+
+
+def test_create_optimizer_takes_ttnn_dtypes_in_a_whole_config(gradient_reduce_default, expect_error):
+    """The block of a whole config goes through the same conversion as ``apply_precision``'s. No device needed."""
+    gradient_reduce_default(None)
+    config = {"training_config": {"precision": {"reduce_dtype": ttnn.DataType.FLOAT32}, "optimizer": {"type": "AdamW"}}}
+    create_optimizer(_ModelWithoutParameters(), config)
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
+
+    config["training_config"]["precision"] = {"reduce_dtype": ttnn.DataType.UINT32}
+    with expect_error(TypeError, "precision.reduce_dtype must be BFLOAT16 or FLOAT32"):
+        create_optimizer(_ModelWithoutParameters(), config)
+
+
+def test_training_config_checks_ttnn_dtypes_when_the_config_is_parsed(expect_error):
+    """TrainingConfig's early check reads the block as ``apply_precision`` will, so a ``ttnn.DataType`` it can't take
+    stops the run before the model is built, and one it can take passes. No device needed."""
+    precision = {"reduce_dtype": ttnn.DataType.FLOAT32}
+    assert TrainingConfig({"training_config": {"precision": precision}}).precision == precision
+    with expect_error(TypeError, "precision.reduce_dtype must be BFLOAT16 or FLOAT32"):
+        TrainingConfig({"training_config": {"precision": {"reduce_dtype": ttnn.DataType.UINT32}}})

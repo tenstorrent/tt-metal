@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os, random
+from collections.abc import Mapping
 from contextlib import contextmanager
 
 import numpy as np
@@ -198,11 +199,16 @@ _PRECISION_DTYPE_NAMES = {ttnn.DataType.BFLOAT16: "bfloat16", ttnn.DataType.FLOA
 
 def _precision_block_as_yaml(precision):
     """``precision`` with each ``ttnn.DataType`` value written as its YAML name, so ``ttnn.DataType.FLOAT32`` and
-    ``"float32"`` mean the same. A value that is neither a string, ``None`` nor a bf16/fp32 ``ttnn.DataType`` raises
-    ``TypeError`` naming its key: converted to YAML it would read as unset. Anything but a dict is passed on for
-    ``apply_precision_config`` to reject."""
-    if not isinstance(precision, dict):
-        return precision
+    ``"float32"`` mean the same. ``None`` is no block. A block that is not a mapping, or a value that is neither a
+    string, ``None`` nor a bf16/fp32 ``ttnn.DataType``, raises ``TypeError``: converted to YAML it could read as
+    unset."""
+    if precision is None:
+        return None
+    if not isinstance(precision, Mapping):
+        raise TypeError(
+            f'precision must be a dict such as {{"master_dtype": "float32"}} or None, got '
+            f"{type(precision).__name__} {precision!r}"
+        )
     converted = {}
     for key, value in precision.items():
         if isinstance(value, ttnn.DataType):
