@@ -18,6 +18,7 @@ namespace ttnn::operations::data_movement {
 namespace nb = nanobind;
 
 void bind_repeat(nb::module_& mod) {
+    // The BFLOAT16 NaN rule in this docstring tracks tenstorrent/tt-metal#31406; drop it once that issue is fixed.
     const auto* doc = R"doc(
         Returns a tensor that repeats `input_tensor` along each dimension the number of times given in `repeat_dims`.
 
@@ -47,9 +48,11 @@ void bind_repeat(nb::module_& mod) {
 
             A 0 in ``repeat_dims`` returns an empty tensor.
 
+            For a ``BFLOAT16`` TILE input whose last two dims are not both multiples of 32, input values must not be NaN.
+
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1; DRAM-sharded input is also accepted
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1; DRAM-sharded input is also accepted with an interleaved ``memory_config``
             - ND sharded: DRAM and L1
     )doc";
 
