@@ -4441,6 +4441,39 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.69
+  title: 'Realistic prefill measurement with replicas (owner 2026-11-15): FIX.34 test, DECODER_SKIP=decode, 51k..1M, steady
+    + resumed'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.68
+  gate:
+    cmd: DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      steady_wall_ms_p51200: '> 0'
+      steady_tok_s_p1024000: '> 0'
+      resumed_tok_s_p1024000: '> 0'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  brief:
+    details: 'OWNER 2026-11-15: the realistic prefill measurement on the REPLICA branch, the same test as model_bringup''s
+      FIX.34 (81eb0ffce32), so the two tables compare. STEP 1: bring the test over: git merge -s ours --no-commit dnijemcevic/model_bringup,
+      then git checkout 81eb0ffce32 -- models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py (and append FIX.34''s
+      BREADCRUMBS section); this branch''s ledgers and code otherwise unchanged; commit. Change NO model code and do not edit
+      the test except where a replica-only need forces it (say exactly what and why; the steady/resumed definitions, points,
+      warm-run counts and timing must stay identical). Replicas on (MOE_REPLICAS=prev, the branch default): confirm the test
+      runs the REAL previous chunk (p - 5120, different tokens) before every timed chunk, so the replicas are learned from
+      it, and report the replica plan stats (layers ready, copies) per point. STEP 2: the gate runs the test (DS41_DECODER_SKIP=decode,
+      all six points, one process). Report the table and, beside it, model_bringup''s FIX.34 numbers (results/FIX.34.json
+      on dnijemcevic/model_bringup) with the per-point difference in device ms, wall ms and tok/s. SAFETY: a hang or a reset
+      need: STOP and report, never reset. Report plainly, short.'
+    gate_tasks:
+    - P.68
 - id: P.68
   title: 'Rebuild this branch as model_bringup + expert replication (owner 2026-11-15): take model_bringup @ 8b2b9df34dd''s code with FIX.33''s replica removal undone (= 0e397ef379a + 1f12f2ce34b); ledger stays this branch''s'
   step: perf
