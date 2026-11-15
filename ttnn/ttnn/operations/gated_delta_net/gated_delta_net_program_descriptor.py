@@ -12,6 +12,9 @@ each tile row over the pair's piece cores (semaphore-counted unicast) before the
 R-CHUNK (multi-token calls) replaces the token steps of a tile row by one closed-form chunk step (F1): the
 chunk's decay matrix and unit-lower-triangular system are built and solved in fp32 on the SFPU, the
 state is carried in fp32 across chunks.
+R-PREP (chunked R-VSPLIT) moves the per-tile-row preparation, everything that depends on the token rows alone, onto
+the idle cores: prep cores per (sequence, key head) take its tile rows round robin and write prescaled head blocks into
+the inboxes of the state cores, which run only the chunk step's state part and return o for the RMS norm.
 """
 
 import struct
@@ -54,8 +57,8 @@ PREP_OFFLOAD = True
 # row's time over a state step buys nothing).
 MAX_PREP_CORES_PER_GROUP = 32
 PREP_SEND_NOC_1 = True  # prep writer on NOC 1, reader on NOC 0 (see the kernel descriptors)
-# Pieces per pair under R-PREP, at most. Fewer pieces leave more prep cores and halve the bytes each prepped row
-# fans out to; model_prefill_4096: 4 pieces 1.52 ms (state cores starved by the prep cores' writes), 2 pieces 1.27 ms.
+# Pieces per pair under R-PREP, at most. Fewer pieces leave more prep cores and halve the fan-out of a prepped row;
+# model_prefill_4096: 4 pieces 1.34 ms (prep-bound, sends late), 2 pieces 1.18 ms (same run).
 PREP_MAX_PIECES = 2
 # R-PREP fills its pipeline once (about one prep core's tile row, ~120 us at the model geometry) and then runs a tile
 # row per state step; below this many tile rows per sequence the local chunk step is faster (prefill T=96, 3 tile

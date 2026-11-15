@@ -1,4 +1,4 @@
-# L1 ledger: gated_delta_net (regimes R-STEP, R-VSPLIT and R-CHUNK)
+# L1 ledger: gated_delta_net (regimes R-STEP, R-VSPLIT, R-CHUNK, R-BCAST and R-PREP)
 
 Refinement 3 (R-VSPLIT): a core runs one unit = one piece of a pair, owning `Vb = Vt / pieces` state
 columns (`v_block_tiles`; R-STEP is `Vb = Vt`). Every `Vt` below is the unit's `Vb`; capacities are
@@ -164,6 +164,42 @@ half), a decode token row one request per column (was two staged half-row reads)
 call: per key head two multicasts of Kt fp32 tiles (16 KiB each, to the group's 12 cores, flag signal,
 no handshake) = 128 KiB of multicast payload. Self-addressed NoC traffic: window zeroing 147 KiB -> 8 /
 40 KiB per core; the single-row staging adds 2 x 32 B local copies per window column.
+
+## R-PREP (Refinement 6)
+
+Two roles with their own buffers (`_prep_cb_plan` returns shared, state and prep plans). Buffers written by other
+cores (`REMOTE_CBS`) are allocated first and on every core, so each has one L1 address everywhere (the writers
+take it from their own allocation); every other buffer exists only on the role that uses it (the merged
+all-on-every-core plan first used carried about 700 KB of prep buffers on every state core and capped the inbox
+at 6 slots). D = inbox slots (`INBOX_DEPTH` = 12 at most, the deepest that fits; 8 at model_prefill_4096 bf16).
+Vb = the piece's v columns (2 at the model geometry under `PREP_MAX_PIECES` = 2); r = value heads per key head.
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| cb_in_kq (shared) | `D*2*Kt` | 2Kt per slot: beta exp(c) (*) kn, exp(c) (*) qn | {t: D tile rows in flight, K: spans Kt; others streams} | Float32 (std, matmul in0) | prep writer (multicast) + state reader (push on landing) | state compute | grant -> pop | ring of D slots at fixed addresses (row i in slot i % D); not shared: all inbox buffers of D rows are live together |
+| cb_in_knt (shared) | `D*Kt` | Kt: kn^T (*) exp(c_last - c)^T | as cb_in_kq | Float32 (std, update in0) | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
+| cb_in_mat (shared) | `D*2` | M = (I + L)^-1, QD | {t: D tile rows; others streams} | Float32 (std, matmul in0) | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
+| cb_in_vec (shared) | `D*1` | exp(c) (read_tile_value: exp(c_last) of the last token row) | {t: D tile rows} | Float32 | as cb_in_kq | state compute | grant -> pop | as cb_in_kq |
+| cb_in_v (shared) | `D*Vb` | beta (*) v of the piece's columns | {t: D tile rows, V: spans Vb} | Float32 (U2D) | prep writer (unicast) + state reader | state compute | grant -> pop (popped last: a free slot here frees the row) | as cb_in_kq |
+| cb_o_in (shared) | `O_IN_DEPTH*r*Vt` | o of one tile row of the r heads (head-major) | {t: 2 of the prep core's rows, V: spans r Vt} | Float32 (U2D) | state writers (NoC writes into slot k % 2) + prep writer (push after the landed count) | prep compute (RMS norm) | landing -> RMS norm one row later | two of the prep core's rows: the next row's o may land while the RMS norm of the previous one runs |
+| cb_o_acc (state) | `O_ACC_DEPTH*Vb` | o of the piece | {t: 2 tile rows, V: Vb} | Float32 | state compute | state writer | tile row | double buffered so the next chunk step overlaps the o send |
+| cb_uw (state) | `Vb` | rhs = beta V - beta exp(c) Rk, then (local) Uw | {t: 1 tile row, V: Vb} | Float32 (std, matmul in1) | state compute | state compute | rhs -> M x rhs | reused as the rhs scratch: dead before U is produced |
+| cb_prep_send (prep) | `r*(3*Kt + 3 + Vt)` (`PREP_SEND_HEADS` head blocks, default one tile row's) | head blocks of one tile row | {t: 1 tile row, heads: r} | Float32 | prep compute | prep writer | head block packed -> sent | one tile row of head blocks: compute packs the next row's head j once the writer has sent this row's head j (the writer sends block by block); two rows (456 KB) did not fit with D = 6 |
+| cb_v_prep (prep) | `r*Vt` | conv'd v of the r heads | {t: 1 tile row, V: r Vt} | Float32 (U2D) | prep compute (conv) | prep compute (beta scaling) | conv -> head blocks | not packed into cb_prep_send directly: each head's v is scaled by its beta after the gates of that head |
+| cb_chunk_vec (prep) | `CHUNK_VEC_PAGES + 1` | D, c, exp(c), exp(c_last - c), beta exp(c), exp(c_last - c)^T | {t: 1 tile row, one value head} | Float32 (U2D) | prep compute | prep compute | one head's block | the transposed decay vector stays fp32 (U2D) for the knT scaling |
+| cb_chunk_mat (prep) | 1 | L | {t: 1 tile row, one head} | Float32 (std; the solve reads L1) | prep compute | prep compute (solve) | L -> M | QD goes straight into the head block |
+| cb_tri_mask | 2 (chunked) | lower-triangular mask, identity | constant | Float32 (U2D) | reader (once) | compute | kernel | the identity is the right-hand side of the M solve |
+| prep: cb_z, cb_norm_w (Vt), cb_out_rows, cb_sq_o, cb_rinv_o (r) | `r*Vt*ROW_DEPTH`, `Vt`, `r*Vt*ROW_DEPTH`, `r*Vt`, `r` | the RMS norm of the r heads of a row | {t: tile row, V: r Vt} | as the local rows | reader / compute | compute / writer | tile row | the RMS norm moved to the prep core with the output store; the state core keeps none of them (no o^2 all-gather: the prep core sees every piece) |
+
+Footprint at model_prefill_4096 (bf16, Kt = Vt = 4, r = 3, 2 pieces, D = 8): state core 809 KB, prep core
+1421 KB (budget 1460 KB). fp32 tokens at this geometry do not fit any D (prep core 1.65 MB at D = 2: SFPU conv
+weights 320 KB), so they keep the local regime.
+
+R-PREP data movement (model_prefill_4096, bf16): DRAM as R-VSPLIT for the state, z and output; mixed_qkv,
+conv_state, conv_weight read once per (key head, tile row) by its prep core (q/k columns 1 crossing per key
+head, v 1). NoC per tile row and key head: r head blocks of 15 fp32 tiles (60 KB) multicast to the head's 2
+pieces (one row run, two runs when a head straddles a virtual-column gap or a row), r Vt unicast v tiles (48 KB),
+r Vt o tiles back (48 KB), 2 r pieces grant / landed semaphore increments.
 
 ## Notes
 

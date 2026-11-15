@@ -259,7 +259,7 @@ o = qn^T S_new (one row of the read matmul after the update), split each q/k par
 sums), and fuse the step / RMS phases (region 3, not attempted here: the compute kernel's text budget and the
 d-free form changes the token-step numerics, which deserves its own measured pass).
 
-### [ ] Refinement 6 — Prefill: take the per-row preparation off the ordered path
+### [x] Refinement 6 — Prefill: take the per-row preparation off the ordered path
 
 **Type**: perf
 
@@ -286,6 +286,8 @@ limit: split work across kernels / cores rather than adding paths to one kernel.
 **Done when**: measured device-ns on `model_prefill_4096` improves by a large factor over 6.41 ms (aim:
 under 1.28 ms), precision gates and every state-carry case hold, the golden suite is green, no
 regression on the decode model cases.
+
+**Outcome**: model_prefill_4096 6.41 ms -> 1.06-1.13 ms device time on 108 cores (R-PREP: 24 state cores = 12 pairs x 2 pieces, 84 prep cores; levers (a), (b) and (c) all built: prep cores per key head, q/k prep shared per key head, and the state step cut from 16 to 5.3 us per tile row by moving M = (I + L)^-1 and the row scalings onto the prep cores). Decode, prefill T=96 and batched B=2 T=40 stay at parity (short calls keep the local chunk step). What binds now: 128 ordered state steps of 5.3 us (0.68 ms), a ~120 us pipeline fill, and inbox waits on two of the four key-head groups, whose rows land late (prep writer send p90 40-50 us against ~42 us of inbox slack at depth 8). Next, by measurement: reduce the fan-out jitter (fewer, larger multicasts per row or staggered grants between groups), shorten the fill (split the first tile rows' prep across more cores), and win back state precision (R-PREP state rel RMS 1.1-1.4e-3 vs 0.6-0.85e-3 local on the state-carry generator, gate 2e-3) with a hi/lo split of the M x rhs operands. Not done here because each needs its own measured iteration and the aim is met.
 
 ### [ ] Refinement 7 — Decode B=8 and B=16: the input side at a full grid
 
