@@ -574,18 +574,23 @@ void kernel_main() {
         Noc noc;
         CircularBuffer window_buf(cb_window);
         const uint32_t batch = num_units;
+        const uint32_t hist_pct = qk_role == GDN_QK_Q_INJECTOR ? GDN_QK_Q_READER_PCT : 50;
         const uint32_t cs_tiles = (GDN_HISTORY * batch + TILE_ROWS - 1) / TILE_ROWS;
         const uint32_t cs_stage = get_write_ptr(cb_hist_stage) + Kt * OUT_TILE_BYTES;
         const uint32_t win = get_write_ptr(cb_window);
         constexpr uint32_t slot_bytes = GDN_CONV_TAPS * OUT_TILE_BYTES;
         constexpr uint32_t small_bytes = (GDN_SMALL_IN_GATE_PAGES + Vt) * OUT_TILE_BYTES;
         bool small_pending = small_sender;
+        // Every column's slot zeroed while the staging reads are in flight (this RISC waits for them anyway).
+        noc.async_write_zeros(window_buf, Kt * slot_bytes, {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
         cb_wait_front(cb_scratch, 1);  // staging landed
         for (uint32_t col = 0; col < Kt; ++col) {
-            noc.async_write_zeros(window_buf, slot_bytes, {.offset_bytes = col * slot_bytes});
-            noc.write_zeros_l1_barrier();
             gdn::copy_history_rows<OUT_TILE_BYTES, GDN_HISTORY>(
-                cs_stage + col * cs_tiles * OUT_TILE_BYTES, win + col * slot_bytes, gdn::history_split(batch), batch);
+                cs_stage + col * cs_tiles * OUT_TILE_BYTES,
+                win + col * slot_bytes,
+                gdn::history_split(batch, hist_pct),
+                batch);
             if (small_sender) {
                 noc_async_read_barrier_with_trid(QK_WINDOW_TRID);
             } else {
@@ -593,6 +598,7 @@ void kernel_main() {
             }
             cb_reserve_back(cb_window_zeroed, 1);
             cb_push_back(cb_window_zeroed, 1);
+            GDN_MARK("m_wr_col");
             // The small inputs as soon as a column hand-off finds them landed, at the latest after the last column.
             if (small_pending &&
                 (col + 1 == Kt || ncrisc_noc_read_with_transaction_id_flushed(noc_index, SMALL_TRID))) {
@@ -729,8 +735,8 @@ void kernel_main() {
                 cb_push_back(cb_state_in_mm, n_state);
                 GDN_MARK("m_wr_s0");
             }
-            if constexpr (QK_RAW) {
-                // One unit per core (QK_CORES_VSPLIT): the inverse norms of its key head, once.
+            if (QK_RAW && lands) {
+                // The inverse norms of the key head, once per core (held for its later units like y).
                 Noc noc;
                 cb_reserve_back(cb_rinv_in, 2);
                 qr_channel.optional_receiver(noc)->receive();

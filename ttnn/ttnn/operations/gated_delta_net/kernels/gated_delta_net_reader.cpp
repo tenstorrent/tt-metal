@@ -373,6 +373,7 @@ void kernel_main() {
         // cb_scratch), then hands the slot over (cb_window_zeroed); this RISC copies the rest and pushes it.
         GDN_ZONE("gdn_rd_qk");
         const uint32_t batch = num_units;
+        const uint32_t hist_pct = qk_role == GDN_QK_Q_INJECTOR ? GDN_QK_Q_READER_PCT : 50;
         const uint32_t col0 = (qk_role == GDN_QK_K_INJECTOR ? Hk * Kt : 0) + first_unit * Kt;
         constexpr uint32_t w_pages = CONV_W_RAW ? Kt : GDN_CONV_TAPS * Kt;
         const uint32_t cs_tiles = (GDN_HISTORY * batch + TILE_ROWS - 1) / TILE_ROWS;
@@ -409,9 +410,10 @@ void kernel_main() {
             const uint32_t col_win = get_write_ptr(cb_window);
             copy_local_rows(hist_stage + col * TILE_BYTES, 0, col_win + GDN_HISTORY * TILE_BYTES, 0, batch);
             gdn::copy_history_rows<TILE_BYTES, GDN_HISTORY>(
-                cs_stage + col * cs_tiles * TILE_BYTES, col_win, 0, gdn::history_split(batch));
+                cs_stage + col * cs_tiles * TILE_BYTES, col_win, 0, gdn::history_split(batch, hist_pct));
             noc_async_read_barrier();
             cb_push_back(cb_window, GDN_CONV_TAPS);
+            GDN_MARK("m_rd_col");
         }
 
         // ---- conv_state_out of the key head's columns, whole tiles (the writer's copies are done: every slot token

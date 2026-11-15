@@ -77,6 +77,8 @@ def test_shared_matches_own(device, monkeypatch, inputs, token_dtype, poison):
     [
         pytest.param(((1, 1, 2560), (1, 12, 128, 128)), id="chip_b1"),
         pytest.param(((1, 3, 512), (3, 4, 32, 64)), id="small_r1"),
+        pytest.param(((1, 8, 2560), (8, 12, 128, 128)), id="chip_b8"),  # R-QKCORE pair cores, 1 sequence each
+        pytest.param(((1, 16, 2560), (16, 12, 128, 128)), id="chip_b16"),  # 2 sequences each (held y, inverse norms)
     ],
 )
 @pytest.mark.parametrize("token_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])

@@ -37,6 +37,10 @@
 #define GDN_SMALL_IN_GATE_PAGES 0
 #endif
 
+#ifndef GDN_QK_Q_READER_PCT
+#define GDN_QK_Q_READER_PCT 50
+#endif
+
 namespace gdn {
 
 // Declared first in kernel_main so every return drains the kernel's NoC. Semaphore::up(noc, x, y) is a non-posted
@@ -102,7 +106,10 @@ FORCE_INLINE bool state_tile_on_reader(uint32_t unit_idx, uint32_t j, uint32_t r
     return unit_idx < reader_units || (share != 0 && j % share == share - 1);
 }
 
-// Rows [0, split) are the reader's, [split, B) the writer's.
-FORCE_INLINE uint32_t history_split(uint32_t batch) { return (batch + 1) / 2; }
+// Rows [0, split) are the reader's, [split, B) the writer's. A q core's writer also sends the small inputs
+// (SMALL_INPUTS_MCAST), so its reader takes GDN_QK_Q_READER_PCT percent of the rows (host QK_Q_READER_PCT).
+FORCE_INLINE uint32_t history_split(uint32_t batch, uint32_t reader_pct = 50) {
+    return (batch * reader_pct + 50) / 100;
+}
 
 }  // namespace gdn

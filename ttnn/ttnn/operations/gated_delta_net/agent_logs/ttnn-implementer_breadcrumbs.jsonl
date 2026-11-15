@@ -38,3 +38,4 @@
 {"event":"test_run","status":"pass","tests":"bcast,in_place,qkcore,vsplit,program_cache,state_split,next_program,perf","perf_decode_b1_us":"12.7-13.0","ts":"2026-11-15T13:18:14+00:00"}
 {"event":"test_run","refinement":19,"status":"pass","tests":"unit dir 277 + s0_writer 32 + golden loose-or-decode 34","perf":"S0_WRITER off 73.4/40.6/12.95; all on-variants slower (79-92 / 45-49), parked off","ts":"2026-11-15T14:00:55+00:00"}
 {"event":"test_run","status":"pass","test":"test_perf_decode[b1,b8,b16]","note":"SMALL_INPUTS_MCAST on: 12.74/38.63/70.23 us vs 12.92/40.43/73.37","ts":"2026-11-15T14:18:20+00:00"}
+{"event":"test_run","refinement":21,"result":"pass","b8_us":39.06,"b16_us":69.26,"note":"raw handoff on B>1, qk placement after group, upfront window zeroing; wall bound by S0 reads + state compute + writes","ts":"2026-11-15T15:23:17+00:00"}

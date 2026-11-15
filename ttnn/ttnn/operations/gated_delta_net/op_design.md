@@ -185,9 +185,13 @@ operand (kn^T u = y_k^T u') and d u = iq d_raw u' (fp32 SFPU scalars; not bit-id
 equal accuracy). conv_state_out: the q / k cores their own Kt columns, each state core its own v columns (`cs_split`
 2: every column written by the only core that reads it, so in place needs no signal). Where the rectangles do not
 fit (B=2, Hv=48) R-VSPLIT keeps R-BCAST, with `BCAST_SPLIT_NOCS` (one-rectangle groups, q injector first core on
-NOC 0, k injector last core on NOC 1). Regime-pinned tests: `test_gated_delta_net_qkcore.py`
-(predicate; q / k cores vs per-pair prep bit-identical on chip B = 5 fp32, 8, 16, 27 bf16 and small B = 32 fp32,
-clean and inf padding).
+NOC 0, k injector last core on NOC 1). Refinement 21: the two-stage hand-off also on the R-STEP plan (B=8 / B=16 pair
+cores; a multi-unit core receives y and the inverse norms once and holds both), each key head's q and k core placed
+right after its pair cores in row-major order (`QK_CORES_AFTER_GROUP`: the NOC 1 multicast starts next to its
+sender), and a q / k core's writer zeroes every window slot while the staging reads are in flight. Regime-pinned
+tests: `test_gated_delta_net_qkcore.py` (predicate; with the normalized hand-off q / k cores vs per-pair prep
+bit-identical on chip B = 5 fp32, 8, 16, 27 bf16 and small B = 32 fp32, clean and inf padding; the raw hand-off
+against the reference).
 
 Regime selection (Refinement 6): R-PREP on top of chunked R-VSPLIT when `_prep_layout` returns a plan
 (model_prefill_4096: 24 state cores = 12 pairs x 2 pieces, 84 prep cores = 21 per key head, inbox depth 8);

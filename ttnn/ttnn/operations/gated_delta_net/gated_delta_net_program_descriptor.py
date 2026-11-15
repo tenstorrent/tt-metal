@@ -71,10 +71,22 @@ QK_CORES_VSPLIT = True
 # NOC 1 (False: the two multicasts share a NoC, but no kernel group of q cores with swapped NoCs; every kernel group
 # costs ~13 us of host time per call). perf_decode_b1 12.79 (True) vs 12.99 us (median of launches 2..12).
 QK_VSPLIT_SPLIT_NOCS = False
-# QK_CORES_VSPLIT: the q / k cores hand over in two stages, the conv output y as soon as it is made and its inverse norm
-# (rsqrt(sum y^2 + eps), times K^-1/2 for q) when the norm is done, so the state cores transpose y_k, take y_q . y_k and
-# read the state with the raw rows while the norm runs, and scale by the two scalars after (fp32 SFPU).
+# R-QKCORE (B=1 QK_CORES_VSPLIT, B=8 / B=16 pair cores): the q / k cores hand over in two stages, the conv output y as
+# soon as it is made and its inverse norm (rsqrt(sum y^2 + eps), times K^-1/2 for q) when the norm is done, so the
+# state cores transpose y_k, take y_q . y_k and read the state with the raw rows while the norm runs, and scale by the
+# two scalars after (fp32 SFPU).
 QK_RAW_HANDOFF = True
+# Decode B=8 (median of launches 2..12): y lands on the state cores at 8.1-10.5 us instead of 12.3-14.9 (with
+# QK_CORES_AFTER_GROUP), the inverse norms at 10-12; the wall stays at 39 us (state compute and write-back bind).
+# R-QKCORE pair cores (decode R-STEP): each key head's q and k core placed right after its pair cores in row-major order
+# (False: every q / k core after the last key head's). NOC 1 starts a multicast at the rectangle's highest corner, so a
+# sender just past its group reaches it on a short path instead of from the grid's bottom rows across the other groups.
+QK_CORES_AFTER_GROUP = True
+# y send 1.3-3 -> 0.3-0.6 us after its pack at B=8; wall 39.0 vs 38.9 (B=8), 69.4 vs 69.3 us (B=16): noise.
+# R-QKCORE q cores: percent of the window's history rows their reader copies (the writer the rest, and it sends the
+# small inputs; k cores split half and half). B=8: 70 / 85 make the reader the later RISC (last column 7.6 / 7.9 vs
+# 7.4 us at 50); 50 emits no define.
+QK_Q_READER_PCT = 50
 # R-QKCORE (decode R-STEP, one tile row of sequences): per key head a q core and a k core convolve and L2-normalize the
 # key head's q (k) columns of every sequence of the tile row at once and multicast qn (kn) to the key head's pair cores,
 # which read and convolve only their v columns. Pair cores run consecutive sequences of one value head.
@@ -1074,19 +1086,21 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         all_cores = _merged_ranges([core for core, _, _, _ in assignment] + [core for core, _, _ in qk_cores])
     elif qk_per_core:
         assignment = []
+        free = iter(grid_cores)
         for hk in range(key_heads):
             for j in range(ratio):
                 for s0 in range(0, batch, qk_per_core):
                     first = s0 * value_heads + hk * ratio + j
-                    assignment.append((grid_cores[len(assignment)], first, min(qk_per_core, batch - s0), value_heads))
+                    assignment.append((next(free), first, min(qk_per_core, batch - s0), value_heads))
+            if QK_CORES_AFTER_GROUP:
+                qk_cores += [(next(free), hk, role) for role in (QK_Q_INJECTOR, QK_K_INJECTOR)]
         cores_per_kh = len(assignment) // key_heads
-        for hk in range(key_heads):
-            for role in (QK_Q_INJECTOR, QK_K_INJECTOR):
-                qk_cores.append((grid_cores[len(assignment) + len(qk_cores)], hk, role))
+        if not QK_CORES_AFTER_GROUP:
+            qk_cores = [(next(free), hk, role) for hk in range(key_heads) for role in (QK_Q_INJECTOR, QK_K_INJECTOR)]
         all_cores = _merged_ranges([core for core, _, _, _ in assignment] + [core for core, _, _ in qk_cores])
     state_cores = [core for core, _, _, _ in assignment]
     state_set = {(c.x, c.y) for c in state_cores}
-    qk_raw = bool(qk_cores) and pieces > 1 and QK_RAW_HANDOFF
+    qk_raw = bool(qk_cores) and QK_RAW_HANDOFF
     small_mcast = (
         bool(qk_cores)
         and SMALL_INPUTS_MCAST
@@ -1592,6 +1606,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     defines = (
         _kernel_defines()
         + (small_defines if small_mcast else [])
+        + ([("GDN_QK_Q_READER_PCT", str(QK_Q_READER_PCT))] if qk_cores and QK_Q_READER_PCT != 50 else [])
         + [
             ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
             ("GDN_QK_RAW", str(int(qk_raw))),

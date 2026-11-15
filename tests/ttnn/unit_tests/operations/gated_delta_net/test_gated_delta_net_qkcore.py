@@ -3,8 +3,9 @@
 
 """Regime-pinned tests: R-QKCORE (decode R-STEP with every sequence in one tile row: per key head a q core and a k
 core prep qn / kn of all sequences at once and multicast them to the key head's pair cores) against the same call
-with the q/k cores off (every pair core preps its own q/k). The q/k cores run the same per-row conv and L2 norm on
-rows 0..B-1, so all three outputs must match bit for bit; both are also checked against the reference."""
+with the q/k cores off (every pair core preps its own q/k). With the normalized hand-off (QK_RAW_HANDOFF off) the q/k
+cores run the same per-row conv and L2 norm on rows 0..B-1, so all three outputs must match bit for bit; the default
+raw hand-off is checked against the reference (and against the normalized one in test_gated_delta_net_bcast)."""
 
 import pytest
 import torch
@@ -58,17 +59,19 @@ def test_qk_cores_match_own(device, monkeypatch, inputs, token_dtype, poison):
                 tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
     expected = reference(*(tensors[name] for name in ORDER))
     results = []
-    for share in (True, False):
+    for share, raw in ((True, False), (False, False), (True, True)):
         monkeypatch.setattr(gdn_pd, "SHARE_QK_CORES", share)
+        monkeypatch.setattr(gdn_pd, "QK_RAW_HANDOFF", raw)
         device_inputs = _to_device(tensors, device, poison, token_dtype)
         outs = gated_delta_net(*device_inputs, compute_kernel_config=compute_config())
         results.append([ttnn.to_torch(t).to(torch.float32) for t in outs])
-    for shared, own, label in zip(*results, ("output", "conv_state_out", "recurrent_state_out")):
+    for shared, own, label in zip(*results[:2], ("output", "conv_state_out", "recurrent_state_out")):
         assert torch.equal(shared, own), f"{label}: q/k cores differ from the per-pair q/k prep"
-    assert torch.equal(results[0][1], expected[1]), "conv_state_out not bit-exact"
-    for got, ref, label, pcc_min, rms_max in (
-        (results[0][0], expected[0], "output", 0.995, 0.04),
-        (results[0][2], expected[2], "recurrent_state_out", 0.999, 0.01),
-    ):
-        pcc, rel_rms = _rel_metrics(got, ref)
-        assert pcc >= pcc_min and rel_rms <= rms_max, f"{label}: PCC {pcc:.6f}, rel RMS {rel_rms:.6f}"
+    for result in (results[0], results[2]):
+        assert torch.equal(result[1], expected[1]), "conv_state_out not bit-exact"
+        for got, ref, label, pcc_min, rms_max in (
+            (result[0], expected[0], "output", 0.995, 0.04),
+            (result[2], expected[2], "recurrent_state_out", 0.999, 0.01),
+        ):
+            pcc, rel_rms = _rel_metrics(got, ref)
+            assert pcc >= pcc_min and rel_rms <= rms_max, f"{label}: PCC {pcc:.6f}, rel RMS {rel_rms:.6f}"

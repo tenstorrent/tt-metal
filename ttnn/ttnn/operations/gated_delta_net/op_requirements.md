@@ -820,7 +820,7 @@ per call on the q core: not built, because at B=1 the state cores finish their g
 cores. Next: shorten the q / k chain (one conv window of the Kt columns instead of per-column row gathers, y_k^T from
 the k core) so the early-S0 cores start computing, and writing, while the late rows still read.
 
-### [ ] Refinement 21 — Decode B=8 / B=16: q / k chain as fast as at B=1
+### [x] Refinement 21 — Decode B=8 / B=16: q / k chain as fast as at B=1
 
 **Type**: perf
 
@@ -854,3 +854,5 @@ S0 landed, first and last update done, first and last state write issued, per B)
 **Done when**: model_decode_b16 is below 64 us and model_decode_b8 below 35 us (median of 11 after
 launch 1), or the timeline shows the q / k hand-off no longer holds any state core and names what
 binds; golden green, no regression on the guard set.
+
+**Outcome**: device kernel us (median of launches 2..12, before -> after): model_decode_b8 39.27 -> 39.06, model_decode_b16 69.77 -> 69.26 (both within noise; targets 35 / 64 not met), in-place b16 69.75, perf_decode_b1 12.63 -> 12.44, decode_b1_f32 20.5 -> 19.8; guard set unchanged (prefill_t96 54.3, batched_b2_t40 125.2, model_prefill_4096 910.3). Landed: two-stage raw hand-off on the B > 1 plan, q / k cores placed after their key head's pair cores (`QK_CORES_AFTER_GROUP`), window slots zeroed while the staging reads fly. Timeline before -> after (GDN_PROFILE_ZONES=2, us). B=8: y landed 12.3-14.9 -> 8.1-10.5 (median 13.4 -> 9.4), inverse norms 10.0-11.9, first / last S0 landed 6.1 / 19.6 -> 5.7 / 19.0, first / last update done 23.8 / 29.7 -> 20.3 / 29.9, first state write issued at the first update, last write done 39.4 -> 38.1. B=16: y 16-19 -> 11.5-14.8, inverse norms 12.9-16.2, last-unit S0 15-38, updates done 38-49, writes done 46-69 (unchanged). What binds: on every core the S0 reads (6 MB / 12 MB, last landing at ~19 / ~38 us) and then ~10 us of state compute per unit (token vector 4.4 us and update 4.4 us at Vb = 4, RMS 4 us), then the 64 KB state write-back queued at the DRAM banks behind other cores' traffic; the earliest-S0 cores (S0 at 6-8 us at B=8) still wait 2-3 us for y but finish at ~26 us, off the wall. Early write-back rechecked: STATE_READER_EARLY_UNITS 84.6 us, STATE_SPLIT=4 80.0 us at B=16 (early writes still push the late S0 reads back). Not done: more q / k cores (6 idle cores of 110 at B=8 / B=16, not one per key head and role), y_k^T from the k core and sequence ordering (the hand-off is off the critical path, nothing to gain); per-column gather is NoC-issue bound (~24 one-packet local reads in 0.7 us per RISC), q reader share 70 / 85 % measured worse. Next: the state cores' token vector and update (one DEST window over Vb tiles instead of per-tile init chains), which is now the per-unit term after S0.
