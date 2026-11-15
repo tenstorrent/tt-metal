@@ -225,17 +225,24 @@ def canonical_name(name: str, config: LlamaConfig) -> str:
 
 
 def reference(model, params, optimizer, config, seed: int) -> dict[str, np.ndarray]:
+    """Every parameter and optimizer state in canonical layout, the padding rows of the padded vocab weights apart
+    (``pad:``), the optimizer scalars and the logits on a fixed batch."""
     tp = ttml.mesh().axis_size("tp") if config.use_tp else 1
     out: dict[str, np.ndarray] = {}
+
+    def add(key: str, name: str, tensor) -> None:
+        array = gather(tensor)
+        out[key] = canonicalize(name, array, config, tp)
+        if (name.endswith("fc/weight") or name.endswith("tok_emb/weight")) and array.shape[2] > config.vocab_size:
+            out["pad:" + key] = array[:, :, config.vocab_size :, :]
+
     for name, tensor in params.items():
-        out["param:" + canonical_name(name, config)] = canonicalize(name, gather(tensor), config, tp)
+        add("param:" + canonical_name(name, config), name, tensor)
 
     def walk(node, path):
         if isinstance(node, ttml.NamedParameters):
             for name, tensor in node.items():
-                out["state:" + "/".join(path) + ":" + canonical_name(name, config)] = canonicalize(
-                    name, gather(tensor), config, tp
-                )
+                add("state:" + "/".join(path) + ":" + canonical_name(name, config), name, tensor)
         elif isinstance(node, dict):
             for key, child in node.items():
                 walk(child, path + (str(key),))
@@ -265,7 +272,11 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
     """Every entry of the loaded world against the saving world's: exact, except across layouts, where the forward
     and the step after the checkpoint round differently. There the logits and the post-step moments must lie within
     ``logits_tolerance`` of their scale, and the post-step parameter update within a quarter of its mean size (a
-    fresh optimizer's update differs from the restored one's by about its whole size)."""
+    fresh optimizer's update differs from the restored one's by about its whole size).
+
+    Padding rows (``pad:``) come back bit for bit when the padded extent is unchanged (the planner then copies device
+    rows). When it changed, the load fills the padding with zeros, so the loaded world's padding must be zero; after
+    the step it is not compared."""
     problems = []
     exact = logits_tolerance == 0.0
     if set(actual) != set(expected):
@@ -274,6 +285,12 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
         )
     for key in sorted(set(actual) & set(expected)):
         a, e = actual[key], expected[key]
+        if not exact and key.startswith("pad:") and a.shape != e.shape:
+            if np.any(a):
+                problems.append(f"{key}: {int(np.count_nonzero(a))} padding values are not the zeros a load fills in")
+            continue
+        if not exact and key.startswith(RESUME + "pad:"):
+            continue
         if a.shape != e.shape:
             problems.append(f"{key}: shape {a.shape} vs reference {e.shape}")
             continue
