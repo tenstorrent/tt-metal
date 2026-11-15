@@ -53,9 +53,12 @@ void validate_in0_row_major_height_sharded(
         !operation_attributes.ring_gather,
         "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is only supported with the two-hub (non-ring) gather path");
     TT_FATAL(
-        input_tensor_a.layout() == Layout::ROW_MAJOR,
-        "matmul_decode replicated-A path requires input tensor A in ROW_MAJOR layout, but got {}",
-        input_tensor_a.layout());
+        is_replicated_in0(input_tensor_a),
+        "matmul_decode replicated-A path requires input tensor A in ROW_MAJOR layout or TILE with an [h, 32] tile, h "
+        "in {{1, 2, 4, 8}}, but got {} (tile height {}, width {})",
+        input_tensor_a.layout(),
+        input_tensor_a.tensor_spec().tile().get_height(),
+        input_tensor_a.tensor_spec().tile().get_width());
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "matmul_decode replicated-A path requires input tensor A HEIGHT_SHARDED, but got {}",
@@ -98,16 +101,20 @@ void validate_in0_row_major_height_sharded(
         batched ? "batch * M" : "M",
         expected_shard_h,
         a_shard.shape[0]);
-    if (!batched && operation_attributes.M > 1) {
+    const uint32_t tile_h = in0_tile_for_compute(input_tensor_a).get_height();
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR && !batched && operation_attributes.M > 1) {
         log_warning(
             tt::LogOp,
-            "matmul_decode with ROW_MAJOR input A and M={} is not yet optimized for this case",
+            "matmul_decode with ROW_MAJOR input A and M={} runs one in0 tile row per row; a TILE A with an [M, 32] "
+            "tile (M in {{2, 4, 8}}) runs them as one",
             operation_attributes.M);
     }
     TT_FATAL(
-        operation_attributes.M >= 1 && operation_attributes.M <= 8,
-        "matmul_decode replicated-A path treats each row as a tile of height 1, so M must be in [1, 8] to fit DST, "
-        "but got {}",
+        operation_attributes.M >= 1 && static_cast<uint32_t>(operation_attributes.M) % tile_h == 0 &&
+            static_cast<uint32_t>(operation_attributes.M) / tile_h <= 8,
+        "matmul_decode replicated-A path needs M a multiple of the in0 tile height {} with at most 8 tile rows to fit "
+        "DST, but got M={}",
+        tile_h,
         operation_attributes.M);
     TT_FATAL(
         input_tensor_a.logical_shape()[-1] == operation_attributes.K,
@@ -302,11 +309,12 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
             "matmul_decode rms_norm is only supported on Blackhole");
         // Statistics come from a scalar reduction, which collapses an entire tile to one value. That
         // value is only this row's mean of squares if a tile holds exactly one row.
+        // A tile height of 1 uses the scalar reduction (one row per tile). Taller custom_mm tiles
+        // ([h, 32], h in {2, 4, 8}) reduce each row with a matmul against a ones tile instead.
         const uint32_t tile_height = in0_tile_for_compute(input_tensor_a).get_height();
         TT_FATAL(
-            tile_height == 1,
-            "matmul_decode rms_norm requires a tile height of 1, but got {}. Normalizing a taller "
-            "tile needs a per-row reduction, which the narrow decode tile does not support.",
+            is_custom_mm_in0_tile_height(tile_height),
+            "matmul_decode rms_norm requires an in0 tile height in {{1, 2, 4, 8}}, but got {}",
             tile_height);
     } else {
         TT_FATAL(
@@ -1085,8 +1093,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         attrs.rms_norm_group_size = rms_norm_group_size;
         attrs.dram_weight_grid = dram_weight_grid;
         attrs.in0_row_major_height_sharded =
-            input_tensor_a.layout() == Layout::ROW_MAJOR &&
-            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+            ttnn::operations::experimental::matmul_decode::is_replicated_in0(input_tensor_a);
         if (all_gather) {
             attrs.ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor_a, std::nullopt);
             TT_FATAL(
@@ -1097,8 +1104,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         return attrs;
     };
 
-    const bool in0_rm_hs = input_tensor_a.layout() == Layout::ROW_MAJOR &&
-                           input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool in0_rm_hs = ttnn::operations::experimental::matmul_decode::is_replicated_in0(input_tensor_a);
     if (in0_rm_hs) {
         TT_FATAL(
             input_tensor_a.memory_config().shard_spec().has_value(),

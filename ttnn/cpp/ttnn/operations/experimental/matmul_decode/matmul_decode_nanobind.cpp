@@ -69,6 +69,12 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 `[M][batch]`, i.e. the bytes of a row-major `[M, batch * K]` (row m holds every
                 batch's K side by side); at M = 1 that is just `[batch, K]`. That output is
                 ROW_MAJOR as well, so it can feed the next decode without a relayout.
+                Row blocks: a TILE A whose tile is `[h, 32]` with h in {2, 4, 8} (M padded to a
+                multiple of h) runs custom_mm with h rows per in0 tile, on the replicated
+                (HEIGHT_SHARDED, shard `[M, K]` / `[batch * M, K]`, a batched replica's tile rows
+                ordered `[M / h][batch]`, i.e. the bytes of the `[h, batch * K]` block) and the
+                WIDTH_SHARDED paths alike; the output is TILE with the same `[h, 32]` tile on the
+                same placement. `rms_norm` then normalizes each row on its own.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Either L1
                 width-sharded on the weight cores, or a DRAM ND-sharded tensor laid out exactly as
                 `prefetcher_pipes` requires (one contiguous slab per weight core). A DRAM weight

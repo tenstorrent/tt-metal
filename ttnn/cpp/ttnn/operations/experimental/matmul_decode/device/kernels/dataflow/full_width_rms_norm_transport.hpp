@@ -41,6 +41,21 @@ inline void run_full_width_rms_norm_transport() {
     Semaphore<> scale_ready_sem(sem::rms_scale_ready);
     UnicastEndpoint endpoint;
 
+#ifdef RMS_ROWS
+    // Row-block ([h, 32] tile) statistics: compute reduces each row against a 32x32 ones tile, filled
+    // here before anything waits so the local statistics never stall on it.
+    {
+        constexpr uint32_t ones_words = get_arg(args::rms_ones_bytes) / sizeof(uint32_t);
+        CircularBuffer rms_ones(dfb::rms_ones);
+        rms_ones.reserve_back(1);
+        volatile tt_l1_ptr uint32_t* ones = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_ones.get_write_ptr());
+        for (uint32_t i = 0; i < ones_words; ++i) {
+            ones[i] = 0x3F803F80u;  // two bf16 1.0s
+        }
+        rms_ones.push_back(1);
+    }
+#endif
+
     uint32_t arg = 0;
     const uint32_t local_group_count = get_vararg(arg++);
     const uint32_t hub_group_count = get_vararg(arg++);
@@ -149,6 +164,33 @@ inline void run_full_width_rms_norm_transport() {
         noc.async_atomic_barrier();
         rms_scale_src.pop_front(M_tiles * hub_group_count);
     }
+
+#if defined(RMS_ROWS) && defined(FUSE_RMS_VECTOR_GAMMA)
+    // A vector gamma is applied from tiles that repeat each 1x32 gamma tile down the h rows. Compute
+    // needs them only for the final scaling, so they are built while the scales are in flight.
+    {
+        constexpr uint32_t gamma_tiles = get_arg(args::rms_gamma_tiles);
+        constexpr uint32_t rows = get_arg(args::rms_rows);
+        // A 1x32 tile is two 16-wide face rows; an [h, 32] tile is two faces of h such rows.
+        constexpr uint32_t face_row_words = get_arg(args::rms_gamma_face_row_bytes) / sizeof(uint32_t);
+        CircularBuffer rms_gamma(dfb::rms_gamma);
+        CircularBuffer rms_gamma_rows(dfb::rms_gamma_rows);
+        rms_gamma_rows.reserve_back(gamma_tiles);
+        volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_gamma.get_write_ptr());
+        volatile tt_l1_ptr uint32_t* dst =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rms_gamma_rows.get_write_ptr());
+        for (uint32_t t = 0; t < gamma_tiles; ++t) {
+            for (uint32_t f = 0; f < 2; ++f) {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    for (uint32_t w = 0; w < face_row_words; ++w) {
+                        dst[((t * 2 + f) * rows + r) * face_row_words + w] = src[(t * 2 + f) * face_row_words + w];
+                    }
+                }
+            }
+        }
+        rms_gamma_rows.push_back(gamma_tiles);
+    }
+#endif
 
     scale_ready_sem.wait(local_group_count);
     scale_ready_sem.set(0);

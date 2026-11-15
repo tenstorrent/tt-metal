@@ -46,6 +46,22 @@ inline bool is_custom_mm_in0_tile_height(uint32_t tile_height) {
     return tile_height == 1 || tile_height == 2 || tile_height == 4 || tile_height == 8;
 }
 
+// A replicated A (the full [M, K] on every core, HEIGHT_SHARDED): ROW_MAJOR (1x32 rows), or a TILE
+// row block whose tile is [h, 32] with h a custom_mm in0 height, so that h rows are one in0 tile per K
+// step. A TILE replica's shard is [M_tiles * h, K] (batched: [batch * M_tiles * h, K]), its tile rows
+// ordered like the ROW_MAJOR rows ([M][batch]).
+inline bool is_replicated_in0(const Tensor& input_tensor_a) {
+    if (input_tensor_a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        return false;
+    }
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        return true;
+    }
+    const auto& tile = input_tensor_a.tensor_spec().tile();
+    return input_tensor_a.layout() == Layout::TILE && tile.get_width() == tt::constants::TILE_WIDTH &&
+           is_custom_mm_in0_tile_height(tile.get_height());
+}
+
 inline bool is_custom_mm_kt_dim(uint32_t kt_dim) { return kt_dim >= 2 && kt_dim <= 256 && (kt_dim % 2u) == 0; }
 
 inline bool is_custom_mm_ct_dim(uint32_t ct_dim) { return ct_dim >= 1 && ct_dim <= 16; }
@@ -93,11 +109,11 @@ struct MatmulDecodeDeviceOperation {
         // matmul. Output storage is still allocated on the complete mesh so a
         // later point-to-point broadcast can populate the inactive ranks.
         std::optional<std::vector<ttnn::MeshCoordinate>> mesh_coords = std::nullopt;
-        // A is ROW_MAJOR HEIGHT_SHARDED on a grid that contains B's cores, with the
-        // full activation replica on every A core. Shard shape is the actual 2D
-        // operand: [M, K] when batch == 1, [batch * M, K] when batched. Compute
-        // treats each row as a 1x32 tile. Mutually exclusive with ring_gather and
-        // partial.
+        // A is HEIGHT_SHARDED on a grid that contains B's cores, with the full activation
+        // replica on every A core (see is_replicated_in0): ROW_MAJOR, each row a 1x32 tile, or
+        // TILE with an [h, 32] tile (h in {1, 2, 4, 8}), h rows per in0 tile. Shard shape is the
+        // actual 2D operand: [M, K] when batch == 1, [batch * M, K] when batched (M a multiple
+        // of h for TILE). Mutually exclusive with ring_gather and partial.
         bool in0_row_major_height_sharded = false;
         // Full-width only: multicast a replica of [M, N] onto every core of this filled rectangle.
         // Absent: width-sharded [M, Nc] on the weight grid (legacy).
