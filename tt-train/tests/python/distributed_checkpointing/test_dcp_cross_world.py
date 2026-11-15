@@ -12,38 +12,45 @@ module holds no device fixture of its own: the children need the chips.
 """
 
 import os
-import re
-import shutil
 import socket
 import sys
 
 import pytest
-import ttnn
-
-import ttml
 from dcp_driver import MESH_OPEN_FAILED
-from dcp_harness import run_world
+from dcp_harness import DRIVER, TT_RUN, output_lines, run_world, tt_run_command
 
-pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(3600)]
+# Each child is one process opening a mesh, training or loading a tiny Llama: about a minute warm, a few cold (the
+# whole module took 5 minutes warm and 13 cold on a loudbox). A hung child fails after 10 minutes, so one hang still
+# leaves a 25-minute CI leg the time to report the tests after it.
+CHILD_TIMEOUT_S = 600
+pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(2 * CHILD_TIMEOUT_S + 60)]
 
-MGD_DIR = os.path.normpath(os.path.join(os.path.dirname(ttml.__file__), "..", "..", "..", "configs", "mgd"))
 # Two MPI ranks on one host, each with its own [2, 2] mesh (mesh ids 0 and 1), eight chips in all. One [1, 4] mesh
 # spanning both processes (the ttnn dual-rank descriptor) is not used here: the driver's Llama hangs on it in a
 # reduce-scatter whose line crosses the processes, as in #65032 (test_dcp_multirank covers the protocol on it).
 TWO_MESHES_MGD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bh_two_2x2_meshes.textproto")
-DRIVER = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcp_driver.py")]
-TT_RUN = shutil.which("tt-run")
 
 
 def _world(mesh: str, axes: str, flags: tuple[str, ...], mgd: str | None, ranks: int = 1):
-    """The driver arguments of one world; ``ranks > 1`` launches it through tt-run with ``TWO_MESHES_MGD``, one
-    [2, 2] mesh per rank."""
+    """The driver arguments of one world; ``mgd`` names a bundled descriptor, resolved by ``_resolve``. ``ranks > 1``
+    launches the world through tt-run with ``TWO_MESHES_MGD``, one [2, 2] mesh per rank."""
     args = ["--mesh", mesh, "--axes", axes, *flags]
     if mgd:
-        args += ["--mgd", os.path.join(MGD_DIR, mgd)]
+        args += ["--mgd", mgd]
     if ranks > 1:
         args += ["--mgd", TWO_MESHES_MGD, "--ranks", str(ranks)]
     return args
+
+
+def _resolve(world: list[str], mgd_path) -> list[str]:
+    """``world`` with its descriptor name replaced by the descriptor's path; skips if the descriptor is missing."""
+    if "--mgd" not in world:
+        return world
+    at = world.index("--mgd") + 1
+    path = mgd_path(world[at])
+    if not os.path.isfile(path):
+        pytest.skip(f"no descriptor {path}")
+    return world[:at] + [path] + world[at + 1 :]
 
 
 CASES = {
@@ -66,6 +73,19 @@ CASES = {
         _world("2x2", "dp,tp", ("--tp",), "bh_2_2_line_line.textproto"),
         _world("1x4", "dp,fsdp", ("--fsdp",), "bh_qb_1_4_ring_ring.textproto"),
         4,
+    ),
+    # Two-device cases, which a 2-chip CI host can run. TP1 -> TP2: the fused rows spread over the shards and the vocab
+    # padding grows from 160 to 192 rows.
+    "1x2_fsdp->1x2_tp": (
+        _world("1x2", "dp,fsdp", ("--fsdp",), "bh_1_2_line_line.textproto"),
+        _world("1x2", "dp,tp", ("--tp",), "bh_1_2_line_line.textproto"),
+        2,
+    ),
+    # TP2 -> one device, with the fused qkv bias and LoRA's fused lora_B trained.
+    "1x2_tp_bias_lora->single": (
+        _world("1x2", "dp,tp", ("--tp", "--bias", "--lora"), "bh_1_2_line_line.textproto"),
+        _world("1x1", "dp,tp", ("--bias", "--lora"), None),
+        2,
     ),
     "1x2_tp_tied->1x2_fsdp": (
         _world("1x2", "dp,tp", ("--tp", "--tie"), "bh_1_2_line_line.textproto"),
@@ -94,20 +114,6 @@ CASES = {
 }
 
 
-def _release_devices() -> None:
-    """The child processes open the chips; make sure this process holds none."""
-    for release in (ttml.close_device_mesh, ttml.core.distributed.release_metal_env):
-        try:
-            release()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-_NOISE = re.compile(
-    r"nanobind|leaked (instance|type|function|keep_alive)|refleaks|skipped remainder|\| DEBUG |^Config\{"
-)
-
-
 def _command(args: list[str]) -> list[str]:
     """The driver command line; a world with ``--ranks N`` runs under tt-run, every rank on this host."""
     if "--ranks" not in args:
@@ -115,34 +121,25 @@ def _command(args: list[str]) -> list[str]:
     args = list(args)
     at = args.index("--ranks")
     del args[at : at + 2]
-    mgd = args[args.index("--mgd") + 1]
-    return [
-        TT_RUN,
-        "--mesh-graph-descriptor",
-        mgd,
-        "--hosts",
-        socket.gethostname(),
-        "--mpi-args",
-        "--tag-output",
-        *DRIVER,
-        *args,
-    ]
+    return tt_run_command(args[args.index("--mgd") + 1], socket.gethostname(), args)
 
 
-def _run(args: list[str], what: str) -> str:
+def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
     env = dict(os.environ)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
     if "--ranks" in args and TT_RUN is None:
         pytest.skip(f"{what}: tt-run is not installed")
-    proc = run_world(_command(args), env, 1500)
-    # The interpreter's exit prints a long nanobind leak report after any traceback; keep the lines that matter.
-    lines = [ln for ln in (proc.stdout + proc.stderr).splitlines() if not _NOISE.search(ln)]
-    opened = not any("MESH_OPEN_FAILED" in ln for ln in lines)
-    if proc.returncode == MESH_OPEN_FAILED or not opened:  # e.g. the QuietBox 1x4 ring descriptor on a loudbox
+    proc = run_world(_command(args), env, CHILD_TIMEOUT_S)
+    lines = output_lines(proc)
+    opened = not any("MESH_OPEN_FAILED" in ln for ln in lines)  # tt-run may not carry a rank's exit status
+    if proc.returncode == MESH_OPEN_FAILED or not opened:  # only the descriptor-fabric mismatch: the QuietBox 1x4 ring
         reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
         pytest.skip(f"{what}: this host cannot open the mesh: {reason}")
+    for line in lines:  # the measured differences, for the log
+        if "max |diff| / max |ref|" in line:
+            print(f"{what}: {line}")
     tail = "\n".join(lines[-60:])
-    assert proc.returncode == 0, f"{what} failed with exit {proc.returncode}:\n{tail}"
+    assert proc.returncode == (0 if expect_ok else 1), f"{what} failed with exit {proc.returncode}:\n{tail}"
     if "--ranks" in args and what.endswith("save"):
         # tt-run does not always carry the ranks' exit status; the save prints its summary only when it succeeded.
         assert '"saved"' in proc.stdout, f"{what} printed no summary:\n{tail}"
@@ -163,27 +160,67 @@ def _saved_checkpoint(save_world: list[str], tmp_path_factory, what: str) -> str
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_checkpoint_loads_onto_another_world(tmp_path_factory, case):
+def test_checkpoint_loads_onto_another_world(
+    tmp_path_factory, release_metal_env, skip_if_host_too_small, mgd_path, case
+):
     save_world, load_world, needed = CASES[case]
-    available = ttnn.GetNumAvailableDevices()
-    if available < needed:
-        pytest.skip(f"{case} needs {needed} devices, {available} available")
-    for args in (save_world, load_world):
-        if "--mgd" in args and not os.path.isfile(args[args.index("--mgd") + 1]):
-            pytest.skip(f"{case}: no descriptor {args[args.index('--mgd') + 1]}")
-    _release_devices()
+    skip_if_host_too_small((needed,), case)
+    save_world, load_world = _resolve(save_world, mgd_path), _resolve(load_world, mgd_path)
+    release_metal_env()  # the children open the chips
     ckpt = _saved_checkpoint(save_world, tmp_path_factory, f"{case} save")
     out = _run(["load", "--dir", ckpt, "--steps", "2", *load_world], f"{case} load")
 
     assert "RESULT: OK" in out, out.splitlines()[-5:]
 
 
-def test_same_world_through_the_driver_matches_exactly(tmp_path):
-    if ttnn.GetNumAvailableDevices() < 2:
-        pytest.skip("needs two devices")
-    _release_devices()
-    world = _world("1x2", "dp,tp", ("--tp",), "bh_1_2_line_line.textproto")
+def test_same_world_through_the_driver_matches_exactly(tmp_path, release_metal_env, skip_if_host_too_small, mgd_path):
+    skip_if_host_too_small((2,), "the same-world driver round trip")
+    release_metal_env()
+    world = _resolve(_world("1x2", "dp,tp", ("--tp",), "bh_1_2_line_line.textproto"), mgd_path)
     ckpt = str(tmp_path / "step_0000002")
     _run(["save", "--dir", ckpt, "--steps", "2", *world], "save")
     out = _run(["load", "--dir", ckpt, "--steps", "2", "--same-layout", *world], "load")
     assert "RESULT: OK" in out
+
+
+def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal_env, skip_if_host_too_small, mgd_path):
+    """The negative control of the logits tolerance: with its fused_segments declarations removed, a TP2 checkpoint
+    loads onto one device with its fused rows in TP2's per-shard order, and the logits alone must catch it."""
+    skip_if_host_too_small((2,), "the logits negative control")
+    release_metal_env()
+    save_world = _resolve(_world("1x2", "dp,tp", ("--tp", "--strip-fused"), "bh_1_2_line_line.textproto"), mgd_path)
+    ckpt = str(tmp_path / "step_0000002")
+    _run(["save", "--dir", ckpt, "--steps", "2", "--no-resume-step", *save_world], "save")
+    out = _run(
+        ["load", "--dir", ckpt, "--steps", "2", *_world("1x1", "dp,tp", ("--strip-fused",), None)], "load", False
+    )
+    assert "MISMATCH: logits differ" in out, out.splitlines()[-8:]
+
+
+DUAL_RANK_MGD = "tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto"
+
+
+def test_a_checkpoint_two_ranks_wrote_on_one_mesh_loads_on_one_process(
+    tmp_path, release_metal_env, skip_if_host_too_small
+):
+    """Two ranks co-owning one [1, 4] mesh split most keys' chunks between their files (the other two-rank cases
+    give each rank a whole mesh, so each key is written by one rank). The test_dcp_multirank module's source test
+    saves such a checkpoint under tt-run; one process with one device loads it, and every parameter must equal the
+    global array rebuilt from the two ranks' own shards."""
+    skip_if_host_too_small((4,), "the dual-rank save")
+    if TT_RUN is None:
+        pytest.skip("tt-run is not installed")
+    mgd = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), DUAL_RANK_MGD)
+    if not os.path.isfile(mgd):
+        pytest.skip(f"no descriptor {mgd}")
+    release_metal_env()
+    env = dict(os.environ, DCP_CROSS_WORLD_DIR=str(tmp_path))
+    env.pop("TT_MESH_GRAPH_DESC_PATH", None)
+    module = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_dcp_multirank.py")
+    save = [TT_RUN, "--mesh-graph-descriptor", mgd, "--hosts", socket.gethostname(), "--mpi-args", "--tag-output"]
+    save += [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", module, "-k", "for_the_one_process_load"]
+    proc = run_world(save, env, CHILD_TIMEOUT_S)
+    tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-40:])
+    assert proc.returncode == 0 and os.path.isfile(tmp_path / "shards_1.npz"), f"the dual-rank save failed:\n{tail}"
+    out = _run(["load-tp-block", "--dir", str(tmp_path), "--mesh", "1x1", "--axes", "dp,tp"], "load")
+    assert "RESULT: OK" in out, out.splitlines()[-5:]

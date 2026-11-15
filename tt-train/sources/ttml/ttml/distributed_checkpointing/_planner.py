@@ -27,17 +27,17 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from itertools import product
 from math import prod
-from typing import Callable, Iterable
+from types import MappingProxyType
+from typing import Callable, Iterable, Mapping
 
 from ._boxes import Box, boxes_tile, grid_cell_size
 from ._errors import (
+    CheckpointError,
     CoverageError,
-    DtypeMismatch,
-    MissingKeyError,
-    RoleMismatch,
-    ShapeMismatch,
+    DtypeMismatchError,
+    RoleMismatchError,
+    ShapeMismatchError,
     TopologyError,
-    UnexpectedKeyError,
 )
 from ._index import ChunkRecord, Entry, Index
 from ._layouts import Compose, Pad, Transform
@@ -47,7 +47,6 @@ from ._topology import (
     Label,
     chunk_boxes,
     global_shape as label_global_shape,
-    owner as elect_owner,
     replica_groups,
 )
 
@@ -128,7 +127,6 @@ class SavePlan:
                     file=item.file,
                     data_offset=item.data_offset,
                     nbytes=item.nbytes,
-                    writer_coord=item.chunk.mesh_coord,
                     crc32=None if crc32 is None else crc32.get((key, item.file)),
                 )
                 for item in self.items[key]
@@ -151,9 +149,12 @@ class SavePlan:
 
 
 @lru_cache(maxsize=4096)
-def _replica_layout(label: Label, local_shape: tuple[int, ...]) -> tuple[dict[tuple[int, ...], tuple[Chunk, ...]], str]:
-    """The replica groups a label gives a tensor of ``local_shape`` (each group's chunks as a tuple, so the cached
-    value cannot be changed through it), and a description of what is wrong with them, empty when nothing is.
+def _replica_layout(
+    label: Label, local_shape: tuple[int, ...]
+) -> tuple[Mapping[tuple[int, ...], tuple[Chunk, ...]], CheckpointError | None]:
+    """The replica groups a label gives a tensor of ``local_shape``, read-only so the cached value cannot be changed
+    through it, and the error that is wrong with them (``None`` when nothing is). The error is returned rather than
+    raised so that a failure is cached too; callers raise it with the key prefixed.
 
     A key's groups depend only on its label and shape, which do not change during training, and most keys of a model
     share a handful of them; caching here makes every save after the first, and every key after the first of each
@@ -161,49 +162,62 @@ def _replica_layout(label: Label, local_shape: tuple[int, ...]) -> tuple[dict[tu
     rank = len(local_shape)
     for axis, placement in enumerate(label.placements):
         if placement.kind == "shard" and not 0 <= placement.dim < rank:
-            return {}, f"distribution axis {axis} shards dim {placement.dim}, out of range for a rank-{rank} tensor"
+            return MappingProxyType({}), TopologyError(
+                f"distribution axis {axis} shards dim {placement.dim}, out of range for a rank-{rank} tensor"
+            )
     groups = {group: tuple(chunks) for group, chunks in replica_groups(chunk_boxes(label, local_shape)).items()}
     boxes = [chunks[0].box for chunks in groups.values()]
     global_shape = label_global_shape(label, local_shape)
     if not boxes_tile(boxes, Box.whole(global_shape)):
-        return groups, (
+        return MappingProxyType(groups), CoverageError(
             f"the {len(boxes)} boxes of its label {label.to_json()} do not tile its global shape {list(global_shape)}"
         )
-    return groups, ""
+    return MappingProxyType(groups), None
 
 
-def _checked_groups(info: TensorInfo) -> dict[tuple[int, ...], tuple[Chunk, ...]]:
+def _checked_groups(info: TensorInfo) -> Mapping[tuple[int, ...], tuple[Chunk, ...]]:
     """The replica groups of a live tensor, after checking that their boxes tile its global shape.
 
-    This is the save-time assertion of the design: every shard dim lies within the tensor's rank, and the unique boxes
-    (one per replica group, duplicates kept) tile the global shape exactly. The boxes are cells of one grid, so the
-    check is linear in the device count, and it is cached per label and shape (``_replica_layout``).
+    This is the save-time assertion of the design: every shard dim lies within the tensor's rank (a
+    ``TopologyError`` otherwise), and the unique boxes (one per replica group, duplicates kept) tile the global shape
+    exactly (a ``CoverageError``). A label whose shard dims are in range always tiles, so the second check only guards
+    against a malformed label. The boxes are cells of one grid, so the check is linear in the device count, and it
+    is cached per label and shape (``_replica_layout``).
     """
     groups, problem = _replica_layout(info.label, tuple(info.local_shape))
-    if problem:
-        error = TopologyError if problem.startswith("distribution axis") else CoverageError
-        raise error(f"{info.key}: {problem}")
+    if problem is not None:
+        raise type(problem)(f"{info.key}: {problem}")
     return groups
+
+
+def _by_key(infos: Iterable[TensorInfo], verb: str) -> dict[str, TensorInfo]:
+    """``infos`` by key; two tensors under one key would leave one of them silently not ``verb``."""
+    by_key: dict[str, TensorInfo] = {}
+    for info in infos:
+        if info.key in by_key:
+            raise CheckpointError(f"{info.key}: two live tensors have this key; only one of them would be {verb}")
+        by_key[info.key] = info
+    return by_key
 
 
 def create_save_plan(
     infos: Iterable[TensorInfo],
     file_for_coord: Callable[[tuple[int, ...]], str],
+    owner_of: Callable[[str, list[Chunk]], Chunk | None],
     file_metadata: Callable[[tuple[int, ...]], dict] | None = None,
-    owner_of: Callable[[str, list[Chunk]], Chunk | None] | None = None,
 ) -> SavePlan:
     """One file per mesh coordinate that writes something; each key's unique boxes assigned to their elected owners.
 
-    ``owner_of(key, replica group)`` overrides the election: it returns the group's chunk this process writes, or
-    ``None`` when another rank of a multi-rank world writes it. The default elects among the group's coordinates.
+    ``owner_of(key, replica group)`` returns the group's chunk this process writes, or ``None`` when another rank
+    writes it: the coordinator's election (``Election.owner_of``), which a single process runs too.
     """
-    infos = {info.key: info for info in infos}
+    infos = _by_key(infos, "saved")
     owned: dict[str, list[Chunk]] = {}
     for key, info in infos.items():
         info.canonical_shape  # validates the transform against the global shape (raises LayoutError)
         chosen: list[Chunk] = []
         for group in _checked_groups(info).values():
-            own = elect_owner(key, group) if owner_of is None else owner_of(key, group)
+            own = owner_of(key, group)
             if own is not None:
                 chosen.append(own)
         owned[key] = chosen
@@ -273,13 +287,6 @@ class LoadPlan:
         return [k for k, p in self.keys.items() if p.fast_path]
 
 
-def _sub_box(outer: Box, inner: Box, inner_parent: Box) -> Box:
-    """``inner`` is a sub-box of ``inner_parent``; ``outer`` is ``inner_parent`` in another coordinate system (same
-    sizes, translated). Returns the sub-box of ``outer`` that corresponds to ``inner``."""
-    delta = tuple(a - b for a, b in zip(inner.offsets, inner_parent.offsets))
-    return Box(tuple(o + d for o, d in zip(outer.offsets, delta)), inner.sizes)
-
-
 def _padding_fill(transform: Transform) -> str:
     if isinstance(transform, Pad):
         return transform.fill
@@ -332,11 +339,11 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
     planned; the other ranks plan theirs.
     """
     if entry.dtype != info.dtype:
-        raise DtypeMismatch(f"{info.key}: checkpoint holds {entry.dtype} but the live tensor is {info.dtype}")
+        raise DtypeMismatchError(f"{info.key}: checkpoint holds {entry.dtype} but the live tensor is {info.dtype}")
     dest_global = info.global_shape
     dest_canonical = info.transform.canonical_shape(dest_global)
     if tuple(entry.canonical_shape) != tuple(dest_canonical):
-        raise ShapeMismatch(
+        raise ShapeMismatchError(
             f"{info.key}: canonical shape {list(entry.canonical_shape)} in the checkpoint vs {list(dest_canonical)} in the "
             f"model (global {list(dest_global)} through {info.transform.to_json()}); a different model configuration, "
             f"or a missing layout declaration"
@@ -360,7 +367,7 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
             pieces = []
             for d_piece, c_piece in info.transform.to_canonical(dbox):
                 for c_sub, s_sub in entry.transform.from_canonical(c_piece):
-                    pieces.append((_sub_box(d_piece, c_sub, c_piece), s_sub))
+                    pieces.append((d_piece.corresponding(c_sub, c_piece), s_sub))
             for pad_box in info.transform.padding_boxes(dest_global):
                 overlap = pad_box.intersect(dbox)
                 if overlap is not None:
@@ -375,7 +382,7 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
                 overlap = s_piece.intersect(chunk.box)
                 if overlap is None:
                     continue
-                d_overlap = _sub_box(d_piece, overlap, s_piece)
+                d_overlap = d_piece.corresponding(overlap, s_piece)
                 group_reads.append(
                     ReadItem(
                         info.key, chunk.file, ci, overlap.relative_to(chunk.box), d_overlap.relative_to(dbox), group
@@ -398,17 +405,19 @@ def plan_key(entry: Entry, info: TensorInfo, local_coords: set[tuple[int, ...]] 
 def create_load_plan(
     index: Index,
     infos: Iterable[TensorInfo],
-    strict: bool = True,
     roles: Iterable[str] | None = None,
     local_coords: set[tuple[int, ...]] | None = None,
 ) -> LoadPlan:
     """A ``KeyPlan`` per live tensor. Live names resolve through the entries' recorded live keys.
 
-    What is restored is decided by ``infos``: every live tensor passed is planned. ``roles`` only scopes the
-    unexpected-key report: entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported
-    as unexpected, so a model alone loads from a checkpoint that also holds optimizer state. ``None`` means every
-    role. A live tensor that resolves to an entry of another role is a ``RoleMismatch``.
+    What is restored is decided by ``infos``: every live tensor passed is planned. The plan lists the live tensors
+    without an entry (``missing``) and the entries without a live tensor (``unexpected``); ``load`` judges them under
+    ``strict``, over the union of the ranks for the unexpected ones. ``roles`` only scopes the unexpected-key report:
+    entries whose role is not in it ("param", "buffer", "optimizer_state") are not reported as unexpected, so a model
+    alone loads from a checkpoint that also holds optimizer state. ``None`` means every role. A live tensor that
+    resolves to an entry of another role is a ``RoleMismatchError``.
     """
+    infos = list(_by_key(infos, "loaded").values())
     live_map = index.live_key_map()
     wanted = None if roles is None else set(roles)
     plans: dict[str, KeyPlan] = {}
@@ -426,18 +435,13 @@ def create_load_plan(
             continue
         entry = index.entries[entry_key]
         if entry.role != info.role:
-            raise RoleMismatch(
+            raise RoleMismatchError(
                 f"{info.key}: resolves to checkpoint entry {entry_key!r}, a {entry.role!r}, but the live tensor is a "
                 f"{info.role!r}"
             )
         used.add(entry_key)
         plans[info.key] = plan_key(entry, info, local_coords)
-    unexpected = unexpected_keys(index, used, wanted)
-    if strict and missing:
-        raise MissingKeyError(f"{len(missing)} live tensor(s) have no entry in the checkpoint: {missing[:5]}")
-    if strict and unexpected:
-        raise UnexpectedKeyError(f"{len(unexpected)} checkpoint entr(ies) have no live tensor: {unexpected[:5]}")
-    return LoadPlan(plans, missing, unexpected)
+    return LoadPlan(plans, missing, unexpected_keys(index, used, wanted))
 
 
 def unexpected_keys(index: Index, used: set[str], wanted: set[str] | None) -> list[str]:

@@ -11,20 +11,55 @@ numpy. The oracle for every case is plain array slicing through the transforms, 
 
 from __future__ import annotations
 
+import random
+import sys
+
 import numpy as np
 
 from ttml.distributed_checkpointing._boxes import Box
+from ttml.distributed_checkpointing._errors import TopologyError
 from ttml.distributed_checkpointing._index import FileRecord, Index, data_file_name
 from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
-from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, local_shape as label_local_shape
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, owner
 
 R = Placement.replicate
 S = Placement.shard
 
 
+def one_process_owner(key: str, group) -> object:
+    """The election of a single-process save: the chunk of the group's coordinates ``_topology.owner`` picks."""
+    coord = owner(key, [c.mesh_coord for c in group])
+    return next(c for c in group if c.mesh_coord == coord)
+
+
+def label_local_shape(label: Label, global_shape) -> tuple[int, ...]:
+    """The per-device shape ``label`` gives a global array of ``global_shape``."""
+    shape = []
+    for d, n in enumerate(global_shape):
+        count = label.shard_count(d)
+        if n % count:
+            raise TopologyError(f"dim {d} of extent {n} does not split evenly into {count} shards")
+        shape.append(n // count)
+    return tuple(shape)
+
+
 def world(placements, dist_shape, mesh_shape=None) -> Label:
     """A label whose distribution coordinates are the row-major walk of ``mesh_shape`` (``dist_shape`` by default)."""
     return Label(tuple(placements), tuple(dist_shape), tuple(dist_coords(mesh_shape or dist_shape)))
+
+
+def per_shard_fused(canonical: np.ndarray, sizes, shards: int, dim: int) -> np.ndarray:
+    """The device-layout array a model with ``shards`` TP shards holds for a weight fused from ``sizes`` segments:
+    shard ``j`` holds piece ``j`` of every segment, in segment order, the way ColumnParallelLinear lays it out. Built
+    by slicing, independently of ``fused_segments``."""
+    starts = np.cumsum((0,) + tuple(sizes[:-1]))
+    pieces = []
+    for j in range(shards):
+        for g, size in enumerate(sizes):
+            n = size // shards
+            lo = starts[g] + j * n
+            pieces.append(np.take(canonical, range(lo, lo + n), axis=dim))
+    return np.concatenate(pieces, axis=dim)
 
 
 def arange(shape) -> np.ndarray:
@@ -40,7 +75,9 @@ def device_global(canonical: np.ndarray, transform, global_shape, pad_value: flo
 
 
 def canonical_of(device: np.ndarray, transform, canonical_shape) -> np.ndarray:
-    out = np.zeros(canonical_shape, dtype=device.dtype)
+    """The canonical array ``device`` holds under ``transform``; an element no piece writes stays NaN, so a transform
+    that misses one cannot pass a comparison."""
+    out = np.full(canonical_shape, np.nan, dtype=device.dtype)
     for dev, can in transform.to_canonical(Box.whole(device.shape)):
         out[can.slices()] = device[dev.slices()]
     return out
@@ -58,7 +95,7 @@ class FakeCheckpoint:
     def save(self, tensors: dict[str, tuple[np.ndarray, Label, object]]) -> Index:
         """``tensors[key] = (device-layout global array, label, transform)``."""
         infos = [info(key, label, arr.shape, transform) for key, (arr, label, transform) in tensors.items()]
-        plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord))
+        plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord), one_process_owner)
         self.files = {}
         records = []
         for fplan in plan.files:
@@ -73,10 +110,10 @@ class FakeCheckpoint:
         self.index = Index(checkpoint_id="fake", world={"group_size": 1}, files=records, entries=plan.entries())
         return self.index
 
-    def load(self, dests: dict[str, tuple[Label, object, tuple]], strict=True):
+    def load(self, dests: dict[str, tuple[Label, object, tuple]]):
         """``dests[key] = (label, transform, global shape)``; returns the plan and ``{key: {group: shard array}}``."""
         infos = [info(key, label, global_shape, transform) for key, (label, transform, global_shape) in dests.items()]
-        plan = create_load_plan(self.index, infos, strict=strict)
+        plan = create_load_plan(self.index, infos)
         shards: dict[str, dict[tuple, np.ndarray]] = {}
         for key, kplan in plan.keys.items():
             out = {group: np.full(box.sizes, np.nan, dtype=np.float32) for group, box in kplan.boxes.items()}
@@ -109,6 +146,20 @@ def assert_shards_equal(actual: dict[tuple, np.ndarray], expected: dict[tuple, n
     assert actual.keys() == expected.keys(), (sorted(actual), sorted(expected))
     for group in expected:
         np.testing.assert_array_equal(actual[group], expected[group], err_msg=f"group {group}")
+
+
+def advance_generators() -> None:
+    """Draw from every host generator once, so a state captured next is mid-stream: python's cached Gaussian, numpy's
+    cached Gaussian and position and the half-used 32-bit word of ttml.init's PCG64 are then set, all of which a state
+    captured right after seeding leaves at their defaults, where a decoder that dropped them would still pass."""
+    import ttml.init  # here: the format tests import this module without ttml's runtime
+
+    random.gauss(0.0, 1.0)
+    np.random.standard_normal()
+    ttml.init._rng.integers(0, 2**32, dtype=np.uint32)
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        torch.randn(1)
 
 
 class Loader:

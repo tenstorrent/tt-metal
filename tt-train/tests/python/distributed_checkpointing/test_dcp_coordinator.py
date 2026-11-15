@@ -9,7 +9,6 @@ number; a failing collective is fatal and ends the exchanges)."""
 import json
 import threading
 
-import pytest
 import ttnn
 
 from ttml.distributed_checkpointing._boxes import Box
@@ -25,7 +24,7 @@ from ttml.distributed_checkpointing._coordinator import (
     merge_plan_parts,
     merge_results,
 )
-from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatal, IncompleteCheckpoint
+from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatalError, IncompleteCheckpointError
 from ttml.distributed_checkpointing._index import ChunkRecord, Entry, FileRecord, data_file_name
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
@@ -95,12 +94,12 @@ def test_each_rank_plans_only_its_owned_chunks_and_files():
     assert "model/b" not in plans[other].entries() and "model/b" in plans[bias_writer].entries()
 
 
-def test_the_ranks_must_cover_the_label_and_agree_on_its_description():
+def test_the_ranks_must_cover_the_label_and_agree_on_its_description(expect_error):
     infos = [_info("model/w", [R, S(3)], (1, 4), (1, 1, 32, 16))]
-    with pytest.raises(CheckpointError, match="no rank holds"):
+    with expect_error(CheckpointError, "no rank holds"):
         merge_plan_parts([PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2)]), infos)])
     different = [_info("model/w", [R, S(2)], (1, 4), (1, 1, 32, 16))]
-    with pytest.raises(CheckpointError, match="describes it differently"):
+    with expect_error(CheckpointError, "describes it differently"):
         merge_plan_parts(
             [PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2), (0, 3)]), different)]
         )
@@ -127,7 +126,6 @@ def _result(rank, files, entries, rng_text):
         files,
         entries,
         {"format": 1, "ranks": {str(rank): {"ttml": rng_text}}},
-        sum(f.nbytes for f in files),
         scalars={"optimizer/steps": 3} if rank == 0 else {},
         header={"step": 3} if rank == 0 else {},
         train_state={"scheduler": {"m_last_step": 3}} if rank == 0 else {},
@@ -152,7 +150,7 @@ def _entry(key, chunks, global_shape=(1, 1, 32, 64)):
 def _chunk(col, file):
     """Column ``col`` of ``model/w`` (a [1, 1, 32, 16] box) as written by device (0, ``col``) into its rank's file
     ``file``."""
-    return ChunkRecord(Box((0, 0, 0, 16 * col), (1, 1, 32, 16)), file, 4096, 1024, (0, col), 7)
+    return ChunkRecord(Box((0, 0, 0, 16 * col), (1, 1, 32, 16)), file, 4096, 1024, 7)
 
 
 def _big_mesh_save():
@@ -169,7 +167,7 @@ def _big_mesh_save():
         {"model/w": _entry("model/w", [_chunk(0, 0), _chunk(1, 1)])},
         "gen0",
     )
-    bias = ChunkRecord(Box((0, 0, 0, 0), (1, 1, 1, 64)), 1, 8192, 128, (0, 3), 9)
+    bias = ChunkRecord(Box((0, 0, 0, 0), (1, 1, 1, 64)), 1, 8192, 128, 9)
     r1 = _result(
         1,
         [
@@ -185,7 +183,7 @@ def _big_mesh_save():
     return election, r0, r1
 
 
-def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_generators():
+def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_generators(expect_error):
     election, r0, r1 = _big_mesh_save()
     index, header = merge_results([r1, r0], election, "step_0000003")
     assert [f.path for f in index.files] == [
@@ -202,7 +200,7 @@ def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_gene
     assert header["train_state"]["rng"]["ranks"] == {"0": {"ttml": "gen0"}, "1": {"ttml": "gen1"}}
     # The index must hold exactly the elected chunks.
     short = _result(1, r1.files, {"model/w": _entry("model/w", [_chunk(2, 0)])}, "gen1")
-    with pytest.raises(CheckpointError, match="chunk"):
+    with expect_error(CheckpointError, r"model/[wb]: \d chunk\(s\) reported by the ranks, \d elected"):
         merge_results([r0, short], election, "x")
     # Parts travel as bytes without loss.
     assert ResultPart.from_bytes(r1.to_bytes()).to_bytes() == r1.to_bytes()
@@ -245,7 +243,9 @@ class _Fake:
 
             def recv_bytes(self, size, source):
                 with fake.cv:
-                    fake.cv.wait_for(lambda: fake.boxes[(source, rank)])
+                    fake.cv.wait_for(lambda: fake.boxes[(source, rank)] or source in fake.die)
+                    if not fake.boxes[(source, rank)]:  # the sender died: what ULFM reports to the receiver
+                        raise RuntimeError("MPI_ERR_PROC_FAILED")
                     data = fake.boxes[(source, rank)].pop(0)
                 assert len(data) == size
                 return data
@@ -263,7 +263,8 @@ def _run_ranks(size, body):
         except BaseException as err:  # noqa: BLE001
             errors[rank] = err
 
-    threads = [threading.Thread(target=run, args=(r,)) for r in range(size)]
+    # Daemon threads: a rank that hangs fails its test without keeping the process from exiting.
+    threads = [threading.Thread(target=run, args=(r,), daemon=True) for r in range(size)]
     for t in threads:
         t.start()
     for t in threads:
@@ -297,48 +298,63 @@ def test_a_failing_rank_stops_every_rank_and_names_itself():
     results, errors = _run_ranks(3, body)
     assert set(errors) == {0, 1, 2}
     assert all(isinstance(e, CheckpointError) and "rank(s) [1]" in str(e) for e in errors.values())
-    assert "disk full" in str(errors[1]) and "disk full" not in str(errors[0])
+    assert all("rank 1: ValueError: disk full" in str(e) for e in errors.values()), "every rank sees the cause"
 
 
-def test_a_failing_collective_is_fatal_and_ends_the_exchanges():
-    def body(group, fake):
-        if group.rank == 2:
-            fake.die.add(2)
-        try:
-            group.allgather(1)
-        except CheckpointFatal:
-            with pytest.raises(CheckpointFatal, match="no further exchange"):
-                group.allgather(2)
-            raise
-
-    fake_size = 3
-    fake = _Fake(fake_size)
-    errors = {}
-
-    def run(rank):
-        try:
-            body(Group(fake.transport(rank)), fake)
-        except BaseException as err:  # noqa: BLE001
-            errors[rank] = err
-
-    t2 = threading.Thread(target=run, args=(2,))
-    t2.start()
-    t2.join(timeout=10)
-    assert isinstance(errors[2], CheckpointFatal) and "peer may have died" in str(errors[2])
+def test_a_failing_collective_is_fatal_and_ends_the_exchanges(expect_error):
+    """A rank whose collective fails (a peer died, under ULFM) raises CheckpointFatalError, and its transport refuses
+    every later exchange."""
+    fake = _Fake(3)
+    fake.die.add(2)
+    group = Group(fake.transport(2))
+    with expect_error(CheckpointFatalError, "collective failed .*; a peer may have died"):
+        group.allgather(1)
+    with expect_error(CheckpointFatalError, "no further exchange is attempted"):
+        group.allgather(2)
 
 
-def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_anything():
+def _dies_sending(group, fake):
+    """Make this rank's next send fail as a dying process's would, and its peers' receives with it."""
+
+    def broken(data, dest):
+        with fake.cv:
+            fake.die.add(group.rank)
+            fake.cv.notify_all()
+        raise RuntimeError("MPI_ERR_PROC_FAILED")
+
+    group.transport.send_bytes = broken
+
+
+def test_a_failing_point_to_point_transfer_is_fatal_on_both_ends():
+    def gather_body(group, fake):
+        if group.rank == 1:
+            _dies_sending(group, fake)
+        group.gather(b"this rank's part")
+
+    def broadcast_body(group, fake):
+        if group.rank == 0:
+            _dies_sending(group, fake)
+        group.broadcast(b"the election" if group.is_coordinator else None)
+
+    for body in (gather_body, broadcast_body):
+        _, errors = _run_ranks(2, body)
+        assert set(errors) == {0, 1}, body.__name__
+        assert all(type(e) is CheckpointFatalError for e in errors.values()), (body.__name__, errors)
+        assert all("point-to-point transfer failed" in str(e) for e in errors.values()), (body.__name__, errors)
+
+
+def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_anything(expect_error):
     """A retry must not reach the other ranks: MPI pairs collectives by order, so an exchange on a communicator that
     failed could hang, or be paired with an unrelated one on a rank that moved on. The transport outlives the group
     of one save or load and records the failure, so a group built later on it raises before exchanging anything."""
     fake = _Fake(2)
     fake.die.add(1)
     transport = fake.transport(1)
-    with pytest.raises(CheckpointFatal, match="peer may have died"):
+    with expect_error(CheckpointFatalError, "peer may have died"):
         Group(transport).allgather(1)
     calls = []
     transport.allgather_int = lambda value: calls.append(value) or [value, value]  # would succeed if reached
-    with pytest.raises(CheckpointFatal, match="already failed in this process"):
+    with expect_error(CheckpointFatalError, "already failed in this process"):
         Group(transport).phase("a later save", lambda: None)
     assert calls == [], "the retry reached the transport"
 
@@ -397,21 +413,47 @@ def test_disagreeing_ranks_are_refused():
         group.agree("the checkpoint directory", group.rank)
 
     _, errors = _run_ranks(2, body)
-    assert all("disagree" in str(e) for e in errors.values()) and set(errors) == {0, 1}
+    assert set(errors) == {0, 1}
+    assert all(
+        f"disagree on the checkpoint directory: rank {r} has {r} (all ranks: [0, 1])" in str(e)
+        for r, e in errors.items()
+    )
 
 
 def test_every_rank_raises_the_class_the_failing_rank_raised():
     def body(group, fake):
         def work():
             if group.rank == 1:
-                raise IncompleteCheckpoint("no index.json")
+                raise IncompleteCheckpointError("no index.json")
 
         group.phase("reading the index", work)
 
     _, errors = _run_ranks(3, body)
     assert set(errors) == {0, 1, 2}
-    assert all(type(e) is IncompleteCheckpoint and "rank(s) [1]" in str(e) for e in errors.values())
-    assert "no index.json" in str(errors[1]) and "IncompleteCheckpoint on rank 1" in str(errors[0])
+    assert all(type(e) is IncompleteCheckpointError and "rank(s) [1]" in str(e) for e in errors.values())
+    # Every rank sees the failing rank's own message, not only its class.
+    assert all("rank 1: IncompleteCheckpointError: no index.json" in str(e) for e in errors.values())
+
+
+def test_an_interrupt_on_one_rank_is_exchanged_before_it_propagates():
+    def body(group, fake):
+        def work():
+            if group.rank == 1:
+                raise KeyboardInterrupt
+
+        group.phase("writing the shards", work)  # rank 0 would wait here for good if rank 1 never reported
+
+    _, errors = _run_ranks(2, body)
+    assert type(errors[1]) is KeyboardInterrupt, "re-raised as it was on the interrupted rank"
+    assert type(errors[0]) is CheckpointError and "writing the shards failed on rank(s) [1] of 2" in str(errors[0])
+
+
+def test_every_exported_error_class_crosses_the_ranks():
+    import ttml.distributed_checkpointing as dcp
+
+    exported = {name for name in dcp.__all__ if name.endswith("Error")} - {"CheckpointFatalError"}
+    assert {cls.__name__ for cls in _coordinator.ERROR_CLASSES} == exported
+    assert _coordinator.ERROR_CLASSES[0] is CheckpointError, "status 1, the class of anything else"
 
 
 def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
@@ -424,20 +466,20 @@ def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
 
     _, errors = _run_ranks(2, body)
     assert set(errors) == {0, 1} and all("serializing failed on rank(s) [1]" in str(e) for e in errors.values())
-    assert "more than a transfer can carry" in str(errors[1]), "the failing rank names the cause; the others name it"
+    assert all("more than a transfer can carry" in str(e) for e in errors.values()), "every rank names the cause"
 
 
-def test_ranks_with_different_scheduler_or_dataloader_state_are_refused():
+def test_ranks_with_different_scheduler_or_dataloader_state_are_refused(expect_error):
     parts = _big_mesh_parts()
     parts[0].train_state_hash, parts[1].train_state_hash = 11, 12
-    with pytest.raises(CheckpointError, match=r"rank\(s\) \[1\] differs from rank 0"):
+    with expect_error(CheckpointError, r"rank\(s\) \[1\] differs from rank 0"):
         merge_plan_parts(parts)
     parts[1].train_state_hash = 11
     assert merge_plan_parts(parts).owners
     assert PlanPart.from_bytes(parts[1].to_bytes()).train_state_hash == 11
 
 
-def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset():
+def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset(expect_error):
     # Each rank's optimizer holds the shared layer and its own stage; the index records the union of the lists.
     election, r0, r1 = _big_mesh_save()
     r0.scalars = {"optimizer/num_param_groups": 1, "optimizer/param_groups.0.params": "shared/w\nstage0/w"}
@@ -452,14 +494,14 @@ def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset():
         def get_state_dict(self):
             return self.state
 
-    check_param_groups(_Opt(["shared/w", "stage1/w"]), index.scalars)  # each rank holds part of the union
-    with pytest.raises(CheckpointError, match="holds params the checkpoint's group 0 does not"):
-        check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars)
+    check_param_groups(_Opt(["shared/w", "stage1/w"]), index.scalars, strict=True)  # each rank holds part of the union
+    with expect_error(CheckpointError, "holds params the checkpoint's group 0 does not"):
+        check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars, strict=True)
 
 
-def test_the_group_of_one_runs_phases_directly_and_keeps_error_types():
+def test_the_group_of_one_runs_phases_directly_and_keeps_error_types(expect_error):
     group = Group(LoopbackTransport())
     assert group.phase("x", lambda: 5) == 5 and group.gather(b"p") == [b"p"] and group.broadcast(b"q") == b"q"
     assert group.agree("x", 3) == [3] and group.allgather(4) == [4] and group.is_coordinator
-    with pytest.raises(ValueError, match="raw"):
+    with expect_error(ValueError, "raw"):
         group.phase("x", lambda: (_ for _ in ()).throw(ValueError("raw")))

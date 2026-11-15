@@ -32,24 +32,17 @@ that names the stuck operation). Without ``DCP_HOSTS`` the module skips.
 """
 
 import os
-import re
 import shutil
-import sys
 import uuid
 
 import pytest
 
-import ttml
 from dcp_driver import MESH_OPEN_FAILED
-from dcp_harness import run_world
+from dcp_harness import DRIVER, HERE, MGD_DIR, TT_RUN, output_lines, run_world, tt_run_command
 
 pytestmark = [pytest.mark.timeout(7200)]
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-MGD_DIR = os.path.normpath(os.path.join(os.path.dirname(ttml.__file__), "..", "..", "..", "configs", "mgd"))
 TWO_MESHES = os.path.join(HERE, "bh_two_2x2_meshes.textproto")
-DRIVER = [sys.executable, os.path.join(HERE, "dcp_driver.py")]
-TT_RUN = shutil.which("tt-run")
 HOSTS = [h for h in os.environ.get("DCP_HOSTS", "").split(",") if h]
 SHARED = os.environ.get("DCP_SHARED_TMP")
 BIGMESH_MGD = os.environ.get("DCP_BIGMESH_MGD")
@@ -99,8 +92,9 @@ def _pairs():
         # The load world only runs a forward pass on the big mesh; the save world's gradient sync spans the hosts,
         # and a collective that hangs there leaves the chips needing a reset, so the pair that loads runs first.
         # The training step the driver takes after a save or a load syncs gradients over the DP axis, whose lines
-        # cross the hosts on the big mesh, and that collective hangs there today (the open fabric issue): the pairs
-        # that touch the big mesh skip the step on both of their worlds.
+        # cross the hosts on the big mesh, and that collective hangs there today (#65032): the pairs that touch the
+        # big mesh skip the step on both of their worlds. The pair that saves on the big mesh cannot skip it: its
+        # save world trains first, so it is skipped until #65032 is fixed (see KNOWN_HANGS).
         no_step = ("--no-resume-step",)
         pairs["1host_fsdp->bigmesh_dp_tp"] = (
             _world(single, "fsdp,dp", ("--fsdp", *sizes, *no_step), single_mgd, first),
@@ -114,9 +108,12 @@ def _pairs():
 
 
 PAIRS = _pairs()
-_NOISE = re.compile(
-    r"nanobind|leaked (instance|type|function|keep_alive)|refleaks|skipped remainder|\| DEBUG |^Config\{"
-)
+# Pairs that cannot pass today, skipped with the reason instead of hanging until the budget and leaving the chips to
+# be reset: the save world on the big mesh trains, and its gradient sync across the hosts hangs.
+KNOWN_HANGS = {
+    "bigmesh_dp_tp->1host_fsdp": "#65032: training on a mesh spanning hosts hangs in the cross-host gradient sync, "
+    "so the big-mesh save world never reaches its save",
+}
 
 
 def _command(world, command, ckpt, steps):
@@ -126,9 +123,7 @@ def _command(world, command, ckpt, steps):
     mgd = world["args"][world["args"].index("--mgd") + 1]
     # DCP_MPI_ARGS adds mpirun options, e.g. "-x TT_METAL_OPERATION_TIMEOUT_SECONDS" to forward a dispatch timeout
     # (and its triage command) to every rank; see tools/tt-triage.py.
-    mpi_args = os.environ.get("DCP_MPI_ARGS", "--tag-output")
-    hosts = ",".join(world["hosts"])
-    return [TT_RUN, "--mesh-graph-descriptor", mgd, "--hosts", hosts, "--mpi-args", mpi_args, *DRIVER, *args]
+    return tt_run_command(mgd, ",".join(world["hosts"]), args, os.environ.get("DCP_MPI_ARGS", "--tag-output"))
 
 
 def _run(world, command, ckpt, steps, what):
@@ -137,7 +132,7 @@ def _run(world, command, ckpt, steps, what):
     env = dict(os.environ)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
     proc = run_world(_command(world, command, ckpt, steps), env, 3000)
-    lines = [ln for ln in (proc.stdout + proc.stderr).splitlines() if not _NOISE.search(ln)]
+    lines = output_lines(proc)
     if proc.returncode == MESH_OPEN_FAILED or any("MESH_OPEN_FAILED" in ln for ln in lines):
         reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")
         pytest.skip(f"{what}: a host cannot open the mesh: {reason}")
@@ -173,7 +168,13 @@ def _saved(save_world, shared_root, what):
     return _SAVED[key]
 
 
-@pytest.mark.parametrize("case", list(PAIRS))
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(case, marks=pytest.mark.skip(reason=KNOWN_HANGS[case])) if case in KNOWN_HANGS else case
+        for case in PAIRS
+    ],
+)
 def test_checkpoint_crosses_hosts(shared_root, case):
     save_world, load_world = PAIRS[case]
     ckpt = _saved(save_world, shared_root, f"{case} save")

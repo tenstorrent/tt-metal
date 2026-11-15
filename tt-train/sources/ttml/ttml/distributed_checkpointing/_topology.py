@@ -28,7 +28,7 @@ class Placement:
     dim: int | None = None
 
     def __post_init__(self) -> None:
-        # TODO: #62347 - accept a "partial" kind here once tensor placements carry a partial-sum label.
+        # TODO(awliu-TT): #62347 - accept a "partial" kind here once tensor placements carry a partial-sum label.
         if self.kind not in ("replicate", "shard"):
             raise TopologyError(f"unknown placement kind {self.kind!r}")
         if (self.kind == "shard") != (self.dim is not None):
@@ -47,7 +47,8 @@ class Placement:
 
     @staticmethod
     def from_json(value: Sequence) -> "Placement":
-        return Placement.replicate() if value[0] == "replicate" else Placement.shard(int(value[1]))
+        # Through the constructor, so a kind this reader does not know is refused instead of read as a shard.
+        return Placement(str(value[0]), int(value[1]) if len(value) > 1 else None)
 
 
 def dist_coords(dist_shape: Sequence[int]) -> list[tuple[int, ...]]:
@@ -97,9 +98,6 @@ class Label:
     def shard_count(self, dim: int) -> int:
         return prod(self.dist_shape[a] for a in self.shard_axes(dim))
 
-    def is_fully_replicated(self) -> bool:
-        return all(p.kind == "replicate" for p in self.placements)
-
     def to_json(self) -> dict:
         return {
             "placements": [p.to_json() for p in self.placements],
@@ -119,17 +117,6 @@ class Label:
 def global_shape(label: Label, local_shape: Sequence[int]) -> tuple[int, ...]:
     """The global shape a label describes, from the shape every device holds."""
     return tuple(int(n) * label.shard_count(d) for d, n in enumerate(local_shape))
-
-
-def local_shape(label: Label, global_shape_: Sequence[int]) -> tuple[int, ...]:
-    """The per-device shape a label gives a global array, or a ``TopologyError`` when the split is uneven."""
-    shape = []
-    for d, n in enumerate(global_shape_):
-        count = label.shard_count(d)
-        if n % count:
-            raise TopologyError(f"dim {d} of extent {n} does not split evenly into {count} shards")
-        shape.append(n // count)
-    return tuple(shape)
 
 
 @dataclass(frozen=True)
@@ -174,7 +161,16 @@ def replica_groups(chunks: Sequence[Chunk]) -> dict[tuple[int, ...], list[Chunk]
     return groups
 
 
-def owner(key: str, group: Sequence[Chunk]) -> Chunk:
-    """The replica that writes the group's box: a stable hash of the key spreads owners over every device."""
-    ordered = sorted(group, key=lambda c: c.mesh_coord)
-    return ordered[zlib.crc32(key.encode("utf-8")) % len(ordered)]
+def crc31(text: str) -> int:
+    """A stable 31-bit hash of ``text``: zlib's CRC32 without its top bit, the same in every process, and small
+    enough for the C int that carries a hash between the ranks."""
+    return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
+
+
+def owner(key: str, holders: Sequence[tuple]) -> tuple:
+    """Which holder of a replicated box writes it: a stable hash of the key picks one of the holders in sorted order,
+    so the writes of replicated tensors spread over the devices and the ranks. The holders are ``(rank, mesh
+    coordinate)`` pairs (``_coordinator.merge_plan_parts``); on one process the rank is 0 throughout, so the pick is
+    the same coordinate a list of bare coordinates gives."""
+    ordered = sorted(holders)
+    return ordered[crc31(key) % len(ordered)]

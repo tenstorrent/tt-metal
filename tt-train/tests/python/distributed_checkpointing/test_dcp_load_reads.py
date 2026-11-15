@@ -7,11 +7,13 @@ shards together need at least half of it (on one host they tile the whole tensor
 falls back to one read per contiguous run otherwise; both must put the same bytes in the same places."""
 
 import os
+import zlib
 
 import numpy as np
 from dcp_oracle import R, S, FakeCheckpoint, arange, assert_shards_equal, expected_shards, world
 
 from ttml.distributed_checkpointing import _load
+from ttml.distributed_checkpointing._errors import CheckpointError
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._load import _read_chunk
 from ttml.distributed_checkpointing._safetensors import ITEMSIZE
@@ -42,8 +44,16 @@ def _by_chunk(kplan):
     return groups
 
 
-def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path):
+def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path, monkeypatch):
     kplan, fds, src = _plan_and_files(tmp_path)
+    reads = []
+    real_pread = _load.pread_all
+
+    def counting_pread(fd, nbytes, offset):
+        reads.append(nbytes)
+        return real_pread(fd, nbytes, offset)
+
+    monkeypatch.setattr(_load, "pread_all", counting_pread)
     try:
         expected = expected_shards(src, FSDP4_ROWS)
         by_chunk = _by_chunk(kplan)
@@ -52,22 +62,32 @@ def test_whole_chunk_reads_and_per_run_reads_agree(tmp_path):
         # All four destination shards: each chunk is needed in full, so it is read once.
         whole = {group: np.zeros(box.sizes, np.float32) for group, box in kplan.boxes.items()}
         n = sum(
-            _read_chunk(fds[items[0].file], 0, kplan, items, ITEMSIZE["F32"], np.float32, whole)
+            _read_chunk(fds[items[0].file], 0, kplan, items, ITEMSIZE["F32"], np.float32, whole, "file")
             for items in by_chunk.values()
         )
         assert n == src.nbytes
+        assert reads == [src.nbytes // 2] * 2, "one pread per chunk, the speed-up a same-world load relies on"
         assert_shards_equal(whole, expected)
+        reads.clear()
 
         # One destination shard needs a quarter of each chunk: below the threshold, so one read per run of rows.
         group = next(iter(kplan.boxes))
         one = {group: np.zeros(kplan.boxes[group].sizes, np.float32)}
         n = sum(
             _read_chunk(
-                fds[items[0].file], 0, kplan, [i for i in items if i.group == group], ITEMSIZE["F32"], np.float32, one
+                fds[items[0].file],
+                0,
+                kplan,
+                [i for i in items if i.group == group],
+                ITEMSIZE["F32"],
+                np.float32,
+                one,
+                "file",
             )
             for items in by_chunk.values()
         )
         assert n == expected[group].nbytes
+        assert reads == [expected[group].nbytes // 2] * 2, "the quarter of each chunk the shard needs, nothing more"
         np.testing.assert_array_equal(one[group], expected[group])
     finally:
         for fd in fds.values():
@@ -93,13 +113,40 @@ def test_a_column_slice_of_a_chunk_is_read_row_by_row(tmp_path, monkeypatch):
         one = {group: np.zeros(box.sizes, np.float32)}
         for items in _by_chunk(kplan).values():
             mine = [i for i in items if i.group == group]
-            _read_chunk(fds[items[0].file], 0, kplan, mine, ITEMSIZE["F32"], np.float32, one)
+            _read_chunk(fds[items[0].file], 0, kplan, mine, ITEMSIZE["F32"], np.float32, one, "file")
 
         np.testing.assert_array_equal(one[group], expected_shards(src, TP4_COLS)[group])
         # Each of the four 2x16 chunks is read as two runs: columns 4-7 of its row 0, then of its row 1.
         itemsize = ITEMSIZE["F32"]
         run, start, row = 4 * itemsize, 4 * itemsize, SHAPE[3] * itemsize
         assert sorted(reads) == [(run, start)] * 4 + [(run, row + start)] * 4, reads
+    finally:
+        for fd in fds.values():
+            os.close(fd)
+
+
+def test_a_whole_chunk_read_checks_the_chunk_crc(tmp_path, expect_error):
+    ckpt = FakeCheckpoint()
+    src = arange(SHAPE)
+    ckpt.save({"w": (src, TP2_COLS, Identity())})
+    for record in ckpt.index.entries["w"].chunks:  # what save records for every chunk it writes
+        record.crc32 = zlib.crc32(
+            bytes(ckpt.files[record.file][record.data_offset : record.data_offset + record.nbytes])
+        )
+    plan, _ = ckpt.load({"w": (FSDP4_ROWS, Identity(), SHAPE)})
+    kplan = plan.keys["w"]
+    ckpt.files[1][5] ^= 0x40  # one flipped bit in the second chunk; the file size is unchanged
+    fds = {}
+    for index, buf in ckpt.files.items():
+        (tmp_path / f"file{index}").write_bytes(bytes(buf))
+        fds[index] = os.open(tmp_path / f"file{index}", os.O_RDONLY)
+    try:
+        chunks = _by_chunk(kplan)
+        whole = {group: np.zeros(box.sizes, np.float32) for group, box in kplan.boxes.items()}
+        first, second = (chunks[c] for c in sorted(chunks))
+        _read_chunk(fds[first[0].file], 0, kplan, first, ITEMSIZE["F32"], np.float32, whole, "file0")
+        with expect_error(CheckpointError, r"w: chunk 1 \(.*\) in file1 fails its CRC32 check"):
+            _read_chunk(fds[second[0].file], 0, kplan, second, ITEMSIZE["F32"], np.float32, whole, "file1")
     finally:
         for fd in fds.values():
             os.close(fd)

@@ -30,21 +30,21 @@ declares its logical row count; see ``_layouts``.
 
 from ._errors import (
     CheckpointError,
-    CheckpointFatal,
+    CheckpointFatalError,
     CoverageError,
-    DtypeMismatch,
+    DtypeMismatchError,
     FSDPStateError,
-    IncompleteCheckpoint,
+    IncompleteCheckpointError,
     LayoutError,
     LazyParameterError,
     MissingKeyError,
-    RoleMismatch,
-    ShapeMismatch,
+    RoleMismatchError,
+    ShapeMismatchError,
     TopologyError,
     UnexpectedKeyError,
     VersionError,
 )
-from ._index import find_latest, is_complete, parse_dir_name, read_index, step_dir_name
+from ._index import find_latest, is_complete, read_index, step_dir_name
 from ._index import read_user_header as read_header
 from ._load import LoadResult, load
 from ._save import SaveResult, save
@@ -53,18 +53,18 @@ from ._train_state import capture_rng, read_train_state, restore_rng
 
 __all__ = [
     "CheckpointError",
-    "CheckpointFatal",
+    "CheckpointFatalError",
     "CoverageError",
-    "DtypeMismatch",
+    "DtypeMismatchError",
     "FSDPStateError",
-    "IncompleteCheckpoint",
+    "IncompleteCheckpointError",
     "LayoutError",
     "LazyParameterError",
     "LoadResult",
     "MissingKeyError",
-    "RoleMismatch",
+    "RoleMismatchError",
     "SaveResult",
-    "ShapeMismatch",
+    "ShapeMismatchError",
     "TopologyError",
     "UnexpectedKeyError",
     "VersionError",
@@ -72,7 +72,6 @@ __all__ = [
     "find_latest",
     "is_complete",
     "load",
-    "parse_dir_name",
     "read_header",
     "read_index",
     "read_train_state",

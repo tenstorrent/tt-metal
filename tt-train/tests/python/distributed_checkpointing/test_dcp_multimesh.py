@@ -19,13 +19,11 @@ otherwise. Without ``tt-run`` the module skips.
 
 import os
 import re
-import shutil
-import tempfile
 
-import numpy as np
 import pytest
 import ttnn
-from dcp_shards import param_shards
+from dcp_harness import ranks_in_step, two_rank_world
+from dcp_shards import assert_same, optimizer_state, param_shards
 from tp_block import TPBlock, make_adamw, train_step
 
 import ttml
@@ -41,11 +39,15 @@ NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
 class _Pipeline(AbstractModuleBase):
-    """A layer every rank replicates, then this rank's stage(s)."""
+    """A layer every rank replicates, then this rank's stage(s). The shared layer is frozen, so it stays an exact
+    replica across the ranks while each rank's stage trains on weights drawn from ``stage_seed``."""
 
-    def __init__(self, dim: int, stages: list[str]) -> None:
+    def __init__(self, dim: int, stages: list[str], stage_seed: int) -> None:
         super().__init__()
         self.shared = LinearLayer(dim, dim)
+        for tensor in self.shared.parameters().values():
+            tensor.set_requires_grad(False)
+        ttml.init.manual_seed(stage_seed)
         self._stages = list(stages)
         for name in stages:
             setattr(self, name, TPBlock(dim))
@@ -59,44 +61,36 @@ class _Pipeline(AbstractModuleBase):
 
 @pytest.fixture(scope="module")
 def two_meshes():
-    if not ttnn.using_distributed_env():
-        pytest.skip("needs two ranks with one [1, 2] mesh each; launch with tt-run")
-    ttml.open_device_mesh(ttml.Mesh(MESH, ("dp", "tp")))
-    try:
-        size = int(ttnn.distributed_context_get_size())
-        if size != 2:
-            pytest.skip(f"needs exactly two ranks, launched with {size}")
-        rank = int(ttnn.distributed_context_get_rank())
+    with two_rank_world(MESH, "multimesh", "two ranks with one [1, 2] mesh each") as (rank, root):
         local = local_coords()
         assert local == [(0, 0), (0, 1)], f"rank {rank} holds {local}"
-        ctx = ttml.autograd.AutoContext.get_instance()
-        ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
-        root = os.path.join(os.environ.get("DCP_SHARED_TMP", tempfile.gettempdir()), f"dcp-multimesh-{os.getuid()}")
-        if rank == 0:
-            shutil.rmtree(root, ignore_errors=True)
-            os.makedirs(root, exist_ok=True)
-        ttnn.distributed_context_barrier()
         yield rank, local, root
-        ttnn.distributed_context_barrier()
-        if rank == 0:
-            shutil.rmtree(root, ignore_errors=True)
-    finally:
-        ttml.close_device_mesh()
 
 
-def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
+@pytest.fixture(autouse=True)
+def _ranks_in_step(request, two_meshes):
+    ranks_in_step(request.node.nodeid)
+
+
+def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes, expect_error):
     rank, local, root = two_meshes
     ctx = ttml.autograd.AutoContext.get_instance()
-    # The same seeds on both ranks, including ttml.init's own generator (seeded from OS entropy otherwise): the
-    # shared layer then starts identical on both meshes, and the stages, which differ only by name, too. The
-    # checkpoint keeps one copy of the shared layer, so each rank gets its own shards back only because they agree.
+    # The same seeds on both ranks for the shared layer, including ttml.init's own generator (seeded from OS entropy
+    # otherwise), so it starts identical on both meshes and, frozen, stays so: the checkpoint keeps one copy of it,
+    # which each rank gets back only because they agree. Each rank's stage is drawn from its own seed, so a stage
+    # restored from the other rank's chunks would show.
     ctx.set_seed(11)
     ttml.init.manual_seed(11)
-    model = _Pipeline(DIM, [f"stage{rank}"])
+    model = _Pipeline(DIM, [f"stage{rank}"], stage_seed=100 + rank)
     params = model.parameters()
     opt = make_adamw(params)
     train_step(model, opt, DIM)
     before = param_shards(params, local)
+    assert len(before) == len(params) * len(local)
+    trainable = [name for name, tensor in params.items() if tensor.get_requires_grad()]
+    assert len(trainable) == len(params) - 2, "everything but the shared layer's weight and bias"
+    state_before, scalars_before = optimizer_state(opt, local)
+    assert len(state_before) == 2 * len(trainable) * len(local) and scalars_before["steps"] == 1
     path = os.path.join(root, dcp.step_dir_name(1))
 
     result = dcp.save(path, model=model, optimizer=opt, header={"step": 1})
@@ -111,18 +105,38 @@ def test_each_mesh_saves_its_own_stage_and_the_shared_layer_once(two_meshes):
     assert shared and all(len(e.chunks) == 1 for e in shared), "a replicated layer is written once"
     assert result.keys == len(index.entries), "keys counts the whole world"
 
-    model2 = _Pipeline(DIM, [f"stage{rank}"])
+    ttml.init.manual_seed(11)
+    model2 = _Pipeline(DIM, [f"stage{rank}"], stage_seed=200 + rank)
     params2 = model2.parameters()
     opt2 = make_adamw(params2)
     loaded = dcp.load(path, model=model2, optimizer=opt2)
     assert loaded.missing == [] and loaded.unexpected == [], "judged over the union of the ranks' keys"
-    after = param_shards(params2, local)
-    assert after.keys() == before.keys()
-    for (name, coord), array in after.items():
-        assert np.array_equal(array, before[(name, coord)]), f"{name} at {coord} differs from the saved shard"
+    assert_same(param_shards(params2, local), before, "parameters")
+    state_after, scalars_after = optimizer_state(opt2, local)
+    assert_same(state_after, state_before, "optimizer moments")
+    # The scalars restored are the index's; this rank keeps its own param-group member list (its own stage).
+    assert {k: v for k, v in scalars_after.items() if not k.endswith(".params")} == {
+        k: v for k, v in scalars_before.items() if not k.endswith(".params")
+    }
 
     # A rank whose model wants a key no rank saved fails strictly, and takes every rank with it.
-    model3 = _Pipeline(DIM, [f"stage{rank}"] + (["extra"] if rank == 1 else []))
-    with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
+    model3 = _Pipeline(DIM, [f"stage{rank}"] + (["extra"] if rank == 1 else []), stage_seed=300 + rank)
+    with expect_error(
+        dcp.MissingKeyError, r"planning the load failed on rank\(s\) \[1\] of 2: rank 1: MissingKeyError: .*extra"
+    ):
         dcp.load(path, model=model3)
+    ttnn.distributed_context_barrier()
+
+
+def test_strict_refuses_entries_no_rank_holds_on_every_rank(two_meshes, expect_error):
+    """strict judges the unexpected entries over the union of the ranks' live tensors. With rank 1 holding no stage,
+    no rank holds stage1's entries: every rank refuses a strict load, and a lenient one lists them on every rank."""
+    rank, local, root = two_meshes
+    path = os.path.join(root, dcp.step_dir_name(1))  # the first test's checkpoint
+    ttml.init.manual_seed(11)
+    model = _Pipeline(DIM, ["stage0"] if rank == 0 else [], stage_seed=400 + rank)
+    with expect_error(dcp.UnexpectedKeyError, r"have no live tensor: \['model/_Pipeline/stage1/"):
+        dcp.load(path, model=model)
+    lenient = dcp.load(path, model=model, strict=False)
+    assert lenient.unexpected and all("/stage1/" in key for key in lenient.unexpected), lenient.unexpected
     ttnn.distributed_context_barrier()

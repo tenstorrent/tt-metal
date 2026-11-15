@@ -5,96 +5,82 @@
 """Multi-rank coordination for save and load.
 
 One communicator, the MPI world ``tt-run`` launches as seen through ttnn's distributed context, gives every rank its
-rank and the group size.
+rank and the group size. So save and load always span every rank of the world: a world where some ranks never call
+them (the rollout ranks of a GRPO run, say) waits for those ranks at the first collective. Saving from a subset of the
+ranks is #65436; a communicator of the coordinator's own, in place of the world and its reserved tag, is #65666.
 
 Save and load each run as a fixed sequence of phases. A phase is one named step of local work that every rank reaches at
 the same point (collecting its live tensors, writing its shards or, on rank 0 alone, merging the ranks' plan parts),
 followed by a status exchange: an allgather of one int per rank, 0 for success or the error class of a failure. Every
 rank so learns whether any rank's step failed, and either all of them go on to the next phase or all of them raise, with
-that class (``IncompleteCheckpoint``, ``MissingKeyError``, ...) and a message naming the phase and the ranks that
+that class (``IncompleteCheckpointError``, ``MissingKeyError``, ...) and a message naming the phase and the ranks that
 failed. Between phases the ranks only move bytes, rank 0 gathering the ranks' parts or broadcasting its own; those
 transfers do no local work that could fail on one rank alone. A single process is the group of one, a ``Group`` on a
 ``LoopbackTransport``: its phases just run, letting their errors propagate as raised, and its transfers return their
 input, so save and load take the same path on one process and on many.
 
-An error raised by a collective itself, a peer that died under ULFM, is fatal: ``CheckpointFatal`` propagates and the
-transport, one per process, records it, so neither this save or load nor any later one attempts another exchange. MPI
-pairs collectives by order, so another exchange could hang or be paired with an unrelated one on a rank that moved on.
-Metadata travels over MPI point-to-point (gathered to rank 0, broadcast from rank 0) under the tag ``DCP_TAG``; no other
-point-to-point traffic between the ranks may be outstanding when save or load is called. Every payload is serialized and
-size-checked inside a phase, so a payload the transport cannot carry fails on every rank. Data files go through the
-shared filesystem and are only ever opened by exact name.
+An error raised by a collective itself, a peer that died under ULFM, is fatal: ``CheckpointFatalError`` propagates and
+the transport, one per process, records it, so neither this save or load nor any later one attempts another exchange.
+MPI pairs collectives by order, so another exchange could hang or be paired with an unrelated one on a rank that moved
+on. Metadata travels over MPI point-to-point (gathered to rank 0, broadcast from rank 0) under the tag ``DCP_TAG``; no
+other point-to-point traffic between the ranks may be outstanding when save or load is called. Every payload is
+serialized and size-checked inside a phase, so a payload the transport cannot carry fails on every rank. Data files go
+through the shared filesystem and are only ever opened by exact name.
 
 Save. Every rank describes its tensors and the mesh coordinates it holds (its plan part); rank 0 merges the parts,
 checking that the ranks describe every key they share alike and together hold every box, and elects one owner per box,
 so a box held by several ranks (a replica across hosts, or the same key on several meshes) is written by exactly one of
 them, the hash of the key choosing among them in rank order; rank 0 broadcasts the election; every rank writes the boxes
 it owns into its own files; the result parts (files, chunk records, checksums, this rank's generators) are gathered;
-rank 0 merges them into ``index.json`` and ``header.json``, checking that every elected box was written once, checks
-every data file's size through the shared filesystem, and finalizes the directory. Its phases: collecting the live
-tensors, checking the target directory, merging the plan parts, writing the shards, merging the index and finalizing.
+rank 0 merges them into ``index.json`` and ``header.json``, checking that the ranks report one chunk per elected box,
+checks every data file's size through the shared filesystem, and finalizes the directory. Its phases: collecting the
+live tensors, checking the target directory, merging the plan parts, writing the shards, merging the index and
+finalizing.
 
 Load. Every rank reads the index and restores the shards of the coordinates it holds. ``strict`` is judged over the
-union of the ranks' live tensors, since on a multi-mesh world no single rank holds every key. Its phases: reading the
-index and collecting the live tensors, planning the load, judging the unexpected entries, reading and placing the
-shards, restoring the scalars and the train state.
+union of the ranks' live tensors, since on a multi-mesh world no single rank holds every key. Its phases: checking the
+arguments, reading the index and collecting the live tensors, planning the load, judging the unexpected entries, reading
+and placing the shards, restoring the scalars and the train state.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
-import re
-import traceback
-import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 import ttnn
 
-from ._errors import (
-    CheckpointError,
-    CheckpointFatal,
-    CoverageError,
-    DtypeMismatch,
-    FSDPStateError,
-    IncompleteCheckpoint,
-    LayoutError,
-    LazyParameterError,
-    MissingKeyError,
-    RoleMismatch,
-    ShapeMismatch,
-    TopologyError,
-    UnexpectedKeyError,
-    VersionError,
-)
-from ._index import Entry, FileRecord, Index, _entry_from_json, _entry_to_json
+from . import _errors
+from ._errors import CheckpointError, CheckpointFatalError
+from ._index import FORMAT, VERSION, Entry, FileRecord, Index, _entry_from_json, _entry_to_json
 from ._layouts import transform_from_json
-from ._planner import TensorInfo, _replica_layout
-from ._topology import Chunk, Label
+from ._planner import TensorInfo, _checked_groups
+from ._state_dict import is_structural_scalar
+from ._topology import Chunk, Label, crc31, owner
+from ._train_state import RNG_FORMAT
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
 # other user of ttnn's point-to-point calls (tag 0 by default; tt-train's GRPO rollout uses 22010-22013 and
-# 22101-22106), so no other protocol may use this tag while a save or load runs.
+# 22101-22106), so no other protocol may use this tag while a save or load runs. A communicator of the coordinator's
+# own (MPI_Comm_dup of the world) would make the reservation unnecessary: #65666.
 DCP_TAG = 0x7DC0
 # The largest payload one transfer can carry: its length travels through distributed_context_allgather_int, a C int,
 # and MPI_Send / MPI_Recv take an int count (ttnn's MPI context throws past INT_MAX).
 MAX_PAYLOAD = (1 << 31) - 1
+# The writer version an index records.
+WRITER_VERSION = "0.2"
+# How much of a failing rank's message reaches the other ranks.
+MESSAGE_LIMIT = 4096
 
-# The error classes a phase carries across the ranks: status 0 is success, status k the class at index k - 1.
-ERROR_CLASSES: tuple[type[CheckpointError], ...] = (
-    CheckpointError,
-    IncompleteCheckpoint,
-    VersionError,
-    LayoutError,
-    ShapeMismatch,
-    DtypeMismatch,
-    MissingKeyError,
-    UnexpectedKeyError,
-    CoverageError,
-    TopologyError,
-    FSDPStateError,
-    LazyParameterError,
-    RoleMismatch,
+# The error classes a phase carries across the ranks: status 0 is success, status k the class at index k - 1. They
+# are every class _errors defines, in definition order, so a new error is carried without being listed here; all but
+# CheckpointFatalError, which a failed exchange raises outside any status.
+ERROR_CLASSES: tuple[type[CheckpointError], ...] = (CheckpointError,) + tuple(
+    cls
+    for cls in vars(_errors).values()
+    if isinstance(cls, type) and issubclass(cls, CheckpointError) and cls not in (CheckpointError, CheckpointFatalError)
 )
 
 
@@ -202,15 +188,15 @@ class Group:
     def is_coordinator(self) -> bool:
         return self.rank == 0
 
-    def _fatal(self, what: str) -> CheckpointFatal:
+    def _fatal(self, what: str) -> CheckpointFatalError:
         """Record a failed exchange on the transport, which outlives this group, and return the error to raise."""
         message = f"rank {self.rank}: {what}"
         self.transport.broken = message
-        return CheckpointFatal(message)
+        return CheckpointFatalError(message)
 
     def allgather(self, value: int) -> list[int]:
         if self.transport.broken:
-            raise CheckpointFatal(
+            raise CheckpointFatalError(
                 f"rank {self.rank}: an exchange between the ranks already failed in this process "
                 f"({self.transport.broken}); no further exchange is attempted"
             )
@@ -221,23 +207,31 @@ class Group:
 
     def phase(self, name: str, fn: Callable[[], Any]) -> Any:
         """Run ``fn`` on this rank, then exchange its outcome: every rank raises when any rank failed. The group of
-        one has no other rank to tell, so its phases run ``fn`` and let its errors propagate as raised."""
+        one has no other rank to tell, so its phases run ``fn`` and let its errors propagate as raised.
+
+        An interrupt (``KeyboardInterrupt``, ``SystemExit``) is exchanged like any failure, so the other ranks raise
+        instead of waiting for this one in the next collective, and is then re-raised here as it was."""
         if self.size == 1:
             return fn()
         status, err = 0, None
         try:
             result = fn()
-        except Exception as caught:  # noqa: BLE001
+        except BaseException as caught:  # noqa: BLE001
             status, err, result = error_status(caught), caught, None
-            traceback.print_exc()
         statuses = self.allgather(status)
         failed = [r for r, s in enumerate(statuses) if s]
         if failed:
-            # Every rank raises the class the first failing rank reported, so callers can catch the typed error.
+            # Every rank raises the class the first failing rank reported, so callers can catch the typed error, with
+            # the failing ranks' own messages: one gather and one broadcast, on the failure path only.
             code = statuses[failed[0]]
             cls = ERROR_CLASSES[code - 1] if 0 < code <= len(ERROR_CLASSES) else CheckpointError
-            detail = f": {err}" if err is not None else f" ({cls.__name__} on rank {failed[0]})"
-            raise cls(f"{name} failed on rank(s) {failed} of {self.size}{detail}") from err
+            mine = f"rank {self.rank}: {type(err).__name__}: {err}" if err is not None else ""
+            parts = self.gather(mine.encode("utf-8")[:MESSAGE_LIMIT])
+            joined = b"\n".join(part for part in parts if part) if self.is_coordinator else None
+            messages = self.broadcast(joined).decode("utf-8", errors="replace")
+            if err is not None and not isinstance(err, Exception):
+                raise err  # an interrupt, as it was, once the other ranks have its message too
+            raise cls(f"{name} failed on rank(s) {failed} of {self.size}: {messages}") from err
         return result
 
     def gather(self, payload: bytes) -> list[bytes] | None:
@@ -264,16 +258,14 @@ class Group:
         except Exception as err:  # noqa: BLE001
             raise self._fatal(f"point-to-point transfer failed ({err})") from err
 
-    def agree(self, name: str, value: int) -> list[int]:
-        """Every rank's ``value``; raises when they differ."""
+    def agree(self, name: str, value: int, shown: Any = None) -> list[int]:
+        """Every rank's ``value``; raises when they differ, naming what this rank has: ``shown``, the thing ``value``
+        hashes when it is a hash, else ``value`` itself."""
         values = self.allgather(value)
         if any(v != values[0] for v in values):
-            raise CheckpointError(f"the ranks disagree on {name}: {values}")
+            mine = value if shown is None else shown
+            raise CheckpointError(f"the ranks disagree on {name}: rank {self.rank} has {mine!r} (all ranks: {values})")
         return values
-
-
-def name_hash(text: str) -> int:
-    return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
 
 
 def current_group() -> Group:
@@ -283,7 +275,7 @@ def current_group() -> Group:
 
 def state_hash(value: Any) -> int:
     """A 31-bit hash of JSON state, the same on every rank that holds equal state."""
-    return zlib.crc32(json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")) & 0x7FFFFFFF
+    return crc31(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
 # --- plan parts ------------------------------------------------------------------------------------------------------
@@ -313,9 +305,9 @@ def info_from_json(value: dict) -> TensorInfo:
         label=Label.from_json(value["label"]),
         local_shape=tuple(int(n) for n in value["local_shape"]),
         transform=transform_from_json(value["transform"]),
-        live_keys=tuple(value.get("live_keys", ())),
-        param_ref=value.get("param_ref"),
-        state_path=tuple(value.get("state_path", ())),
+        live_keys=tuple(value["live_keys"]),
+        param_ref=value["param_ref"],
+        state_path=tuple(value["state_path"]),
     )
 
 
@@ -376,7 +368,7 @@ class PlanPart:
         return PlanPart(
             RankRecord.from_json(value["record"]),
             [info_from_json(i) for i in value["infos"]],
-            int(value.get("train_state_hash", 0)),
+            int(value["train_state_hash"]),
         )
 
 
@@ -441,9 +433,7 @@ def _same_description(a: TensorInfo, b: TensorInfo) -> bool:
 
 def _groups_of(info: TensorInfo) -> tuple[dict[tuple[int, ...], tuple[Chunk, ...]], dict[tuple[int, ...], tuple]]:
     """A key's replica groups (cached per label and shape) and, per mesh coordinate, the group it holds."""
-    groups, problem = _replica_layout(info.label, tuple(info.local_shape))
-    if problem:
-        raise CheckpointError(f"{info.key}: {problem}")
+    groups = _checked_groups(info)  # a TopologyError or CoverageError naming the key
     by_coord = {chunk.mesh_coord: group for group, chunks in groups.items() for chunk in chunks}
     return groups, by_coord
 
@@ -455,10 +445,8 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     transform), and the ranks' scheduler and dataloader states must agree, since the checkpoint stores one copy that
     every rank restores. A key's label splits it into boxes (its replica groups); each box is held by one or more
     (rank, mesh coordinate) pairs, at least one of which must exist. The box's owner, the one pair that writes it, is
-    picked by the key's CRC32 among those pairs sorted by (rank, coordinate), so different keys pick different pairs
-    and the writes of replicated tensors spread over the ranks and devices. On one process every pair is
-    (0, coordinate), so the pick is the device ``_topology.owner`` picks and a single-process checkpoint keeps its
-    layout.
+    picked by ``_topology.owner``, a hash of the key over the pairs in order, so different keys pick different pairs
+    and the writes of replicated tensors spread over the ranks and devices.
     """
     parts = sorted(parts, key=lambda p: p.record.rank)
     differing = [p.record.rank for p in parts if p.train_state_hash != parts[0].train_state_hash]
@@ -476,7 +464,8 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
                 if not _same_description(infos[info.key], info):
                     raise CheckpointError(
                         f"{info.key}: rank {part.record.rank} describes it differently from rank "
-                        f"{first_rank[info.key]} (label, per-device shape, dtype or transform)"
+                        f"{first_rank[info.key]} (role, dtype, label, per-device shape, transform, or an optimizer "
+                        f"state's parameter or state path)"
                     )
             else:
                 infos[info.key] = info
@@ -491,7 +480,6 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     for key, info in infos.items():
         groups, _ = _groups_of(info)
         chosen: dict[tuple[int, ...], Owner] = {}
-        spread = zlib.crc32(key.encode("utf-8"))
         for group_key in groups:
             holders = sorted(members[key].get(group_key, []))
             if not holders:
@@ -499,7 +487,7 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
                     f"{key}: no rank holds the box of replica group {group_key}; the ranks' local coordinates do not "
                     f"cover the label's mesh coordinates"
                 )
-            chosen[group_key] = holders[spread % len(holders)]
+            chosen[group_key] = owner(key, holders)
         owners[key] = chosen
     return Election(owners, len(infos))
 
@@ -509,13 +497,13 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
 
 @dataclass
 class ResultPart:
-    """What one rank wrote: its files, its chunk records per key, its generators and its bytes."""
+    """What one rank wrote: its files, its chunk records per key, its generators and its optimizer scalars; on rank 0
+    also the user header and the scheduler and dataloader state, the one copy stored."""
 
     record: RankRecord
     files: list[FileRecord]
     entries: dict[str, Entry]
     rng: dict
-    bytes_written: int
     scalars: dict = field(default_factory=dict)
     header: dict = field(default_factory=dict)
     train_state: dict = field(default_factory=dict)
@@ -527,7 +515,6 @@ class ResultPart:
                 "files": [{"path": f.path, "nbytes": f.nbytes, "coord": list(f.coord)} for f in self.files],
                 "entries": {k: _entry_to_json(e) for k, e in self.entries.items()},
                 "rng": self.rng,
-                "bytes_written": self.bytes_written,
                 "scalars": self.scalars,
                 "header": self.header,
                 "train_state": self.train_state,
@@ -547,19 +534,16 @@ class ResultPart:
             record,
             files,
             entries,
-            dict(value.get("rng", {})),
-            int(value.get("bytes_written", 0)),
-            dict(value.get("scalars", {})),
-            dict(value.get("header", {})),
-            dict(value.get("train_state", {})),
+            dict(value["rng"]),
+            dict(value["scalars"]),
+            dict(value["header"]),
+            dict(value["train_state"]),
         )
 
 
 def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: str) -> tuple[Index, dict]:
     """Rank 0's merge: one file table, one entry per key with every rank's chunks (exactly one per elected box), the
     world record, and the header (rank 0's user header and scheduler/dataloader state, every rank's generators)."""
-    from ._index import FORMAT, VERSION
-
     parts = sorted(parts, key=lambda p: p.record.rank)
     files: list[FileRecord] = []
     entries: dict[str, Entry] = {}
@@ -567,17 +551,7 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
         base = len(files)
         files.extend(part.files)
         for key, entry in part.entries.items():
-            chunks = [
-                type(c)(
-                    box=c.box,
-                    file=c.file + base,
-                    data_offset=c.data_offset,
-                    nbytes=c.nbytes,
-                    writer_coord=c.writer_coord,
-                    crc32=c.crc32,
-                )
-                for c in entry.chunks
-            ]
+            chunks = [dataclasses.replace(c, file=c.file + base) for c in entry.chunks]
             if key in entries:
                 have = entries[key]
                 if (
@@ -607,12 +581,12 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
             rng_ranks[rank_key] = block
     train_state = dict(rank0.train_state)
     if rng_ranks:
-        train_state["rng"] = {"format": int(rank0.rng.get("format", 1)), "ranks": rng_ranks}
+        train_state["rng"] = {"format": RNG_FORMAT, "ranks": rng_ranks}
     world = {"group_size": len(parts), "ranks": [p.record.to_json() for p in parts]}
     scalars = dict(rank0.scalars)
     # A param group's member list is per rank (each rank's optimizer holds the parameters of its own mesh); the index
     # records the union, which load checks every rank's live members against.
-    for key in [k for k in scalars if _PARAM_GROUP_MEMBERS.search(k)]:
+    for key in [k for k in scalars if is_structural_scalar(k)]:
         names: set[str] = set()
         for part in parts:
             value = part.scalars.get(key)
@@ -625,7 +599,7 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
         files=files,
         entries=entries,
         scalars=scalars,
-        writer_software={"ttml_distributed_checkpointing": "0.2"},
+        writer_software={"ttml_distributed_checkpointing": WRITER_VERSION},
     )
     header = {
         "format": FORMAT,
@@ -635,6 +609,3 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
         "train_state": train_state,
     }
     return index, header
-
-
-_PARAM_GROUP_MEMBERS = re.compile(r"(^|/)param_groups\.\d+\.params$")

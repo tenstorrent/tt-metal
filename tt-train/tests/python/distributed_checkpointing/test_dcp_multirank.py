@@ -17,15 +17,14 @@ system temporary directory otherwise. Without ``tt-run`` the module skips.
 
 import os
 import random
-import shutil
-import tempfile
 
 import numpy as np
 import pytest
 import torch
 import ttnn
 from dcp_oracle import Loader
-from dcp_shards import param_shards
+from dcp_harness import ranks_in_step, two_rank_world
+from dcp_shards import assert_same, optimizer_state, param_shards
 from tp_block import TPBlock, fresh_tp, train_step
 
 import ttml
@@ -41,32 +40,18 @@ NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 @pytest.fixture(scope="module")
 def two_ranks():
-    if not ttnn.using_distributed_env():
-        pytest.skip("needs two ranks co-owning a [1, 4] mesh; launch with tt-run")
-    ttml.open_device_mesh(ttml.Mesh(MESH, ("dp", "tp")))
-    try:
-        size = int(ttnn.distributed_context_get_size())
-        if size != 2:
-            pytest.skip(f"needs exactly two ranks, launched with {size}")
-        rank = int(ttnn.distributed_context_get_rank())
+    with two_rank_world(MESH, "multirank", "two ranks co-owning a [1, 4] mesh") as (rank, root):
         local = [
             tuple(c)
             for c in ttml.autograd.AutoContext.get_instance().get_device().get_view().get_local_mesh_coord_range()
         ]
         assert local == [(0, 2 * rank), (0, 2 * rank + 1)], f"rank {rank} holds {local}"
-        ctx = ttml.autograd.AutoContext.get_instance()
-        ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
-        root = os.path.join(os.environ.get("DCP_SHARED_TMP", tempfile.gettempdir()), f"dcp-multirank-{os.getuid()}")
-        if rank == 0:
-            shutil.rmtree(root, ignore_errors=True)
-            os.makedirs(root, exist_ok=True)
-        ttnn.distributed_context_barrier()
         yield rank, local, root
-        ttnn.distributed_context_barrier()
-        if rank == 0:
-            shutil.rmtree(root, ignore_errors=True)
-    finally:
-        ttml.close_device_mesh()
+
+
+@pytest.fixture(autouse=True)
+def _ranks_in_step(request, two_ranks):
+    ranks_in_step(request.node.nodeid)
 
 
 def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ranks):
@@ -85,6 +70,9 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
         sched.step()
         loader.advance()
     before = param_shards(params, local)
+    assert len(before) == len(params) * len(local)
+    state_before, scalars_before = optimizer_state(opt, local)
+    assert len(state_before) == 2 * len(params) * len(local) and scalars_before["steps"] == 2
     path = os.path.join(root, dcp.step_dir_name(2))
 
     result = dcp.save(path, model=model, optimizer=opt, scheduler=sched, dataloader=loader, header={"step": 2})
@@ -119,10 +107,10 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
 
     assert loaded.missing == [] and loaded.unexpected == [] and loaded.header == {"step": 2}
     assert loaded.restored[:2] == ["scheduler", "dataloader"] and "rng.ttml" in loaded.restored
-    after = param_shards(params2, local)
-    assert after.keys() == before.keys(), "this rank restores exactly the coordinates it holds"
-    for (name, coord), array in after.items():
-        assert np.array_equal(array, before[(name, coord)]), f"{name} at {coord} differs from the saved shard"
+    assert_same(param_shards(params2, local), before, "parameters")  # exactly the coordinates this rank holds
+    state_after, scalars_after = optimizer_state(opt2, local)
+    assert_same(state_after, state_before, "optimizer moments")
+    assert scalars_after["steps"] == 2 and scalars_after == scalars_before
     assert ctx.get_generator_state() == own_gen_after_save, "this rank's own ttml generator came back"
     sched2.step()
     loader2.advance()
@@ -137,19 +125,137 @@ def test_each_rank_writes_its_coordinates_and_rank_zero_merges_the_index(two_ran
     ttnn.distributed_context_barrier()
 
 
-def test_a_rank_failing_mid_save_stops_every_rank_and_leaves_no_checkpoint(two_ranks):
+def test_a_rank_failing_mid_save_stops_every_rank_and_leaves_no_checkpoint(two_ranks, expect_error):
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     path = os.path.join(root, "refused")
-    if rank == 1:
-        # A model that disagrees with rank 0's description of the same key: the merge refuses it on every rank.
-        other = TPBlock(DIM * 2)
-        other.parameters()  # materializes the weights
-        with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
-            dcp.save(path, model=other)
-    else:
-        with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
-            dcp.save(path, model=model)
+    # On rank 1 a model that disagrees with rank 0's description of the same keys: rank 0's merge refuses it, and
+    # every rank raises with rank 0's message.
+    other = TPBlock(DIM * 2) if rank == 1 else model
+    other.parameters()  # materializes the weights
+    with expect_error(
+        dcp.CheckpointError,
+        r"merging the plan parts failed on rank\(s\) \[0\] of 2: rank 0: CheckpointError: .* rank 1 describes it",
+    ):
+        dcp.save(path, model=other)
     ttnn.distributed_context_barrier()
     assert not os.path.exists(path) and not any(n.startswith("refused.partial-") for n in os.listdir(root))
+    ttnn.distributed_context_barrier()
+
+
+def test_a_rank_called_with_a_bad_argument_stops_every_rank(two_ranks, expect_error):
+    """A rank whose find_latest saw no checkpoint passes None. The arguments are checked inside the first phase, so
+    every rank raises, where the other rank used to wait in the first collective forever."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "bad_argument") if rank == 0 else None
+    with expect_error(dcp.CheckpointError, r"collecting the live tensors failed on rank\(s\) \[1\] of 2"):
+        dcp.save(path, model=model)
+    with expect_error(dcp.CheckpointError, r"checking the arguments failed on rank\(s\) \[1\] of 2"):
+        dcp.load(path, model=model)
+    ttnn.distributed_context_barrier()
+    assert not os.path.exists(os.path.join(root, "bad_argument"))
+    ttnn.distributed_context_barrier()
+
+
+def test_ranks_whose_optimizers_differ_are_refused(two_ranks, expect_error):
+    """The index holds one copy of the optimizer's scalars, rank 0's. Ranks whose learning rates differ, or of which
+    one passes no optimizer, are refused on every rank, where each rank used to load rank 0's values silently."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "optimizers_differ")
+    if rank == 1:
+        opt.set_group_lrs([5e-4])
+    with expect_error(dcp.CheckpointError, r"the ranks disagree on the optimizer's scalars"):
+        dcp.save(path, model=model, optimizer=opt)
+    with expect_error(dcp.CheckpointError, r"the ranks disagree on whether an optimizer is saved"):
+        dcp.save(path, model=model, optimizer=opt if rank == 0 else None)
+    ttnn.distributed_context_barrier()
+    assert not os.path.exists(path) and not any(n.startswith("optimizers_differ.partial-") for n in os.listdir(root))
+    ttnn.distributed_context_barrier()
+
+
+def test_a_truncated_file_on_one_rank_stops_every_rank_before_anything_is_placed(two_ranks, expect_error):
+    """Every rank opens and checks its data files while the load is planned, so a truncated file of rank 1's stops
+    every rank before any rank places anything. Rank 0 may read the file too (the election spreads replicated boxes
+    over both ranks' files) or not; either way it used to restore its tensors first."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    path = os.path.join(root, "truncated")
+    dcp.save(path, model=model)
+    ttnn.distributed_context_barrier()
+    if rank == 0:  # one of rank 1's files, through the shared directory
+        victim = next(f.path for f in dcp.read_index(path).files if f.world_rank == 1)
+        os.truncate(os.path.join(path, victim), 100)
+    ttnn.distributed_context_barrier()
+    fresh, fresh_params, _ = fresh_tp(DIM)
+    before = param_shards(fresh_params, local)
+    with expect_error(
+        dcp.IncompleteCheckpointError, r"planning the load failed on rank\(s\) \[(0, )?1\] of 2: .* is 100 bytes but"
+    ):
+        dcp.load(path, model=fresh)
+    after = param_shards(fresh_params, local)
+    assert after.keys() == before.keys() and before
+    assert all(np.array_equal(after[k], before[k]) for k in before), "no rank placed anything"
+    ttnn.distributed_context_barrier()
+
+
+def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypatch, expect_error):
+    """The one-rank failures save and load must turn into the same error on every rank: a header that is not JSON
+    on rank 1, a data file rank 1 cannot create (the staging directory is then removed), and ranks that load with
+    different strictness."""
+    from ttml.distributed_checkpointing import _save
+
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "one_rank")
+    with expect_error(
+        dcp.CheckpointError, r"collecting the live tensors failed on rank\(s\) \[1\] of 2: rank 1: .*header at /step"
+    ):
+        dcp.save(path, model=model, header={"step": np.int64(1) if rank == 1 else 1})
+
+    real_create = _save.create_file
+
+    def create_file(file_path, header, data_bytes):
+        if rank == 1:
+            raise OSError("simulated EDQUOT")
+        return real_create(file_path, header, data_bytes)
+
+    monkeypatch.setattr(_save, "create_file", create_file)
+    with expect_error(
+        dcp.CheckpointError, r"writing the shards failed on rank\(s\) \[1\] of 2: rank 1: OSError: simulated EDQUOT"
+    ):
+        dcp.save(path, model=model)
+    monkeypatch.undo()
+    ttnn.distributed_context_barrier()
+    assert not os.path.exists(path) and not any(n.startswith("one_rank.partial-") for n in os.listdir(root))
+    ttnn.distributed_context_barrier()
+
+    dcp.save(path, model=model)
+    with expect_error(dcp.CheckpointError, r"the ranks disagree on strict and whether an optimizer is loaded: rank"):
+        dcp.load(path, model=model, strict=rank == 0)
+    ttnn.distributed_context_barrier()
+
+
+def test_a_checkpoint_for_the_one_process_load(two_ranks):
+    """The save half of a cross-world case: two ranks co-owning the [1, 4] mesh write a TPBlock checkpoint, so most
+    keys' chunks come from both ranks' files, and dump their own shards next to it. ``test_dcp_cross_world`` runs this
+    test alone, with ``DCP_CROSS_WORLD_DIR`` set, then loads the checkpoint on one process."""
+    out = os.environ.get("DCP_CROSS_WORLD_DIR")
+    if not out:
+        pytest.skip("run by test_dcp_cross_world with DCP_CROSS_WORLD_DIR set")
+    rank, local, root = two_ranks
+    ttml.init.manual_seed(0)
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    dcp.save(os.path.join(out, "ckpt"), model=model)
+    shards = param_shards(params, local)
+    assert len(shards) == len(params) * len(local)
+    np.savez(
+        os.path.join(out, f"shards_{rank}.npz"),
+        **{f"{name}@{'-'.join(map(str, coord))}": array for (name, coord), array in shards.items()},
+    )
+    index = dcp.read_index(os.path.join(out, "ckpt"))
+    assert {f.world_rank for f in index.files} == {0, 1}
     ttnn.distributed_context_barrier()

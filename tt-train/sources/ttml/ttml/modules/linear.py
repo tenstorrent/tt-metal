@@ -112,17 +112,11 @@ class ColumnParallelLinear(AbstractModuleBase):
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
         if fused_segments is not None:
-            fused_segments = tuple(int(s) for s in fused_segments)
-            if sum(fused_segments) != out_features or any(s <= 0 for s in fused_segments):
-                raise ValueError(
-                    f"fused_segments {fused_segments} must be positive and sum to out_features={out_features}"
-                )
-            tp_size = ttml.mesh().axis_size(axis_name)
-            if any(s % tp_size for s in fused_segments):
-                raise ValueError(
-                    f"fused_segments {fused_segments} must each divide by the {axis_name!r} axis size {tp_size}: every "
-                    f"shard holds an equal piece of every segment"
-                )
+            # Imported here: ttml.distributed_checkpointing imports ttml.modules, so a module-level import would be
+            # circular.
+            from ttml.distributed_checkpointing._layouts import check_fused_segments
+
+            fused_segments = check_fused_segments(fused_segments, out_features, ttml.mesh().axis_size(axis_name))
         self.fused_segments = fused_segments
 
         if weight_init is None:

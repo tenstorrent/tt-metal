@@ -9,16 +9,16 @@ class CheckpointError(RuntimeError):
     """Base class: a save or load that could not be carried out as asked."""
 
 
-class CheckpointFatal(CheckpointError):
+class CheckpointFatalError(CheckpointError):
     """An exchange between the ranks failed (a peer died); the operation cannot be completed in this process, and
     the staging directory is left in place.
 
     It subclasses ``CheckpointError`` so that one handler catches every checkpoint failure. Retrying is harmless but
-    pointless: once an exchange has failed, every later save or load in this process raises ``CheckpointFatal`` at
+    pointless: once an exchange has failed, every later save or load in this process raises ``CheckpointFatalError`` at
     once, without reaching the other ranks."""
 
 
-class IncompleteCheckpoint(CheckpointError):
+class IncompleteCheckpointError(CheckpointError):
     """The directory is a staging directory, or has no readable ``index.json`` (missing, truncated or malformed)."""
 
 
@@ -30,11 +30,11 @@ class LayoutError(CheckpointError):
     """A layout declaration or transform does not fit the tensor it describes."""
 
 
-class ShapeMismatch(CheckpointError):
+class ShapeMismatchError(CheckpointError):
     """The checkpoint's canonical shape for a key differs from the live tensor's."""
 
 
-class DtypeMismatch(CheckpointError):
+class DtypeMismatchError(CheckpointError):
     """The checkpoint's dtype for a key differs from the live tensor's."""
 
 
@@ -51,7 +51,7 @@ class CoverageError(CheckpointError):
     or the planned reads of a destination shard on load."""
 
 
-class RoleMismatch(CheckpointError):
+class RoleMismatchError(CheckpointError):
     """A live tensor resolved to a checkpoint entry of another role (a parameter to optimizer state, say)."""
 
 
