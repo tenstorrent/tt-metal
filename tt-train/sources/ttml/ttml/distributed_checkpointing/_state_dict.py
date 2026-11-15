@@ -5,8 +5,9 @@
 """The live state: every tensor a model and optimizer hold, with its label, its layout declaration and its names.
 
 Keys are ``model/<fqn>`` for parameters, with ``<fqn>`` the name ``module.parameters()`` surfaces (slash-joined from
-the root module's name), and ``optimizer/<state path>/<fqn>`` for optimizer state tensors. Scalars in the optimizer
-state (steps, learning rates, flags) are collected separately and stored in the index.
+the root module's name), ``model/<fqn>`` for buffers likewise (``named_buffers()``, a DeepSeek MoE's expert bias say),
+and ``optimizer/<state path>/<fqn>`` for optimizer state tensors. Scalars in the optimizer state (steps, learning
+rates, flags) are collected separately and stored in the index.
 
 Topology labels are read from the live tensors and trusted. The one fact a label cannot carry, how a fused
 projection orders its segments, comes from the declaration the fusing layer put on its ``Parameter``
@@ -19,7 +20,7 @@ from __future__ import annotations
 
 import re
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -28,8 +29,8 @@ import ttnn
 import ttml
 from ttml.modules.parameter import Parameter
 
-from ._errors import CheckpointError, FSDPStateError, LazyParameterError, TopologyError
-from ._layouts import Identity, declared_transform
+from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, MissingKeyError, TopologyError
+from ._layouts import DECLARATIONS, Identity, declared_transform
 from ._planner import TensorInfo
 from ._topology import Label, Placement, global_shape
 
@@ -56,7 +57,9 @@ NUMPY_CARRIERS = {
     "I8": np.int8,
 }
 
-_FUSION_HINT = re.compile(r"(qkv|kv_|_kv\b|gate_up|fused)", re.IGNORECASE)
+# A module name with qkv, kv, gate_up or fused as a whole underscore-separated part (kv_linear, qkv_proj, w_qkv,
+# gate_up_proj), but not DeepSeek's head-major wkv_a/wkv_b, which reshard correctly without a declaration.
+_FUSION_HINT = re.compile(r"(?:^|_)(qkv|kv|gate_up|fused)(?:_|$)", re.IGNORECASE)
 
 
 @dataclass
@@ -66,7 +69,9 @@ class LiveTensor:
     key: str
     tensor: Any  # ttml.autograd.Tensor
     info: TensorInfo
-    declaration: dict = field(default_factory=dict)
+    # A parameter of a C++-bound module whose name suggests a fused projection (or the optimizer state of one): its
+    # segment order cannot be declared, so it can only be loaded split the way it was saved.
+    undeclared_fusion: bool = False
 
 
 def label_of(value) -> Label:
@@ -111,6 +116,12 @@ def _named_modules(model):
     return walk() if walk is not None else ()
 
 
+def _named_buffers(model):
+    """The Python module tree's buffers; a C++-bound model exposes none."""
+    walk = getattr(model, "named_buffers", None)
+    return walk() if walk is not None else ()
+
+
 def _cpp_bound_params(model, params) -> list[str]:
     """The names of the parameters held by C++-bound modules: the whole model when the model itself is C++-bound,
     else the parameters under a child that has no Python attributes. Such parameters cannot carry a Python layout
@@ -148,8 +159,18 @@ def _python_parameters(model, params) -> tuple[dict[int, list[str]], dict[int, d
             names.setdefault(id(tensor), []).append(fqn)
             declaration = getattr(value, "checkpoint_layout", None)
             if declaration:
+                unknown = sorted(set(declaration) - set(DECLARATIONS))
+                if unknown:
+                    raise LayoutError(
+                        f"{fqn}: checkpoint_layout declares {unknown}; the declarations are 'fused' (dim, segment "
+                        f"sizes) and 'logical_extent' (dim, logical rows)"
+                    )
                 declarations[id(tensor)] = dict(declaration)
     return names, declarations
+
+
+def _module_name(key: str) -> str:
+    return key.rsplit("/", 2)[-2] if key.count("/") >= 2 else key
 
 
 def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) -> None:
@@ -164,8 +185,7 @@ def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) 
     shards = int(np.prod([label.dist_shape[a] for a in axes])) if axes else 1
     if shards <= 1:
         return
-    module_name = key.rsplit("/", 2)[-2] if key.count("/") >= 2 else key
-    if _FUSION_HINT.search(module_name):
+    if _FUSION_HINT.search(_module_name(key)):
         warnings.warn(
             f"{key} is sharded on dim 2 across {shards} devices and its name suggests a fused projection, but it "
             f"declares no fused_segments; a checkpoint of it reshards correctly only between equal TP sizes",
@@ -174,7 +194,8 @@ def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) 
 
 
 def collect_model(model) -> list[LiveTensor]:
-    """Every parameter of ``model`` as a ``LiveTensor``, in ``parameters()`` order."""
+    """Every parameter of ``model`` as a ``LiveTensor``, in ``parameters()`` order, then every buffer (role
+    ``"buffer"``, identity layout) in ``named_buffers()`` order."""
     params = model.parameters()
     names, declarations = _python_parameters(model, params)
     cpp_bound = _cpp_bound_params(model, params)
@@ -185,6 +206,7 @@ def collect_model(model) -> list[LiveTensor]:
             f"it was saved at",
             stacklevel=3,
         )
+    cpp_bound = set(cpp_bound)
     live: list[LiveTensor] = []
     for fqn, tensor in params.items():
         value = tensor.get_value(NATIVE)
@@ -202,7 +224,31 @@ def collect_model(model) -> list[LiveTensor]:
         _lint_fusion(key, label, declaration, tensor)
         live_keys = tuple(sorted({key, *(f"model/{n}" for n in names.get(id(tensor), []))}))
         info = TensorInfo(key, "param", dtype_name(value), layout_name(value), label, local_shape, transform, live_keys)
-        live.append(LiveTensor(key, tensor, info, declaration))
+        undeclared_fusion = fqn in cpp_bound and bool(_FUSION_HINT.search(_module_name(key)))
+        live.append(LiveTensor(key, tensor, info, undeclared_fusion))
+    live.extend(_collect_buffers(model, _root_name(model, params)))
+    return live
+
+
+def _collect_buffers(model, root: str) -> list[LiveTensor]:
+    """Buffers are state a training step updates without the optimizer (a MoE's load-balancing bias): saved and
+    loaded like parameters, under role ``"buffer"``. A buffer reachable under several names is one entry."""
+    names: dict[int, list[str]] = {}
+    tensors: dict[int, Any] = {}
+    for name, tensor in _named_buffers(model):  # the autograd tensors the Buffer wrappers registered
+        tensors[id(tensor)] = tensor
+        names.setdefault(id(tensor), []).append(f"model/{root}/{name.replace('.', '/')}")
+    live: list[LiveTensor] = []
+    for ident, keys in names.items():
+        tensor = tensors[ident]
+        value = tensor.get_value(NATIVE)
+        label = label_of(value)
+        local_shape = tuple(int(n) for n in value.shape)
+        live_keys = tuple(sorted(set(keys)))
+        info = TensorInfo(
+            keys[0], "buffer", dtype_name(value), layout_name(value), label, local_shape, Identity(), live_keys
+        )
+        live.append(LiveTensor(keys[0], tensor, info))
     return live
 
 
@@ -213,7 +259,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
     shape must match the parameter's, the one invariant every optimizer keeps (state is created as zeros of its
     parameter), so a mismatch means the optimizer was created before the model was sharded.
     """
-    by_fqn = {lt.key[len("model/") :]: lt for lt in params}
+    by_fqn = {lt.key[len("model/") :]: lt for lt in params if lt.info.role == "param"}
     live: list[LiveTensor] = []
     scalars: dict[str, Any] = {}
 
@@ -229,7 +275,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     warnings.warn(
                         f"{key} is not keyed by a parameter of the model; saved with an identity layout", stacklevel=3
                     )
-                    transform, live_keys, ref = Identity(), (key,), None
+                    transform, live_keys, ref, undeclared_fusion = Identity(), (key,), None, False
                 else:
                     if local_shape != param.info.local_shape:
                         raise CheckpointError(
@@ -240,6 +286,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     prefix = "optimizer/" + "/".join(path) + "/"
                     live_keys = tuple(sorted(prefix + n[len("model/") :] for n in param.info.live_keys))
                     ref = param.key
+                    undeclared_fusion = param.undeclared_fusion
                 info = TensorInfo(
                     key,
                     "optimizer_state",
@@ -252,7 +299,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     ref,
                     path,
                 )
-                live.append(LiveTensor(key, tensor, info))
+                live.append(LiveTensor(key, tensor, info, undeclared_fusion))
         elif isinstance(node, dict):
             for name, child in node.items():
                 walk(child, path + (str(name),))
@@ -265,16 +312,41 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
     return live, scalars
 
 
-def check_param_groups(optimizer, scalars: dict[str, Any]) -> None:
+def check_undeclared_fusion(live: LiveTensor, saved: Label) -> None:
+    """A C++-bound fused projection (``DistributedLlama``'s ``kv_linear``, say) stores its segments per shard, which no
+    declaration describes, so the checkpoint's chunks are in an order only the same split restores. Loading it split
+    another way would plan cleanly and scramble the segments, so it is refused."""
+    if not live.undeclared_fusion:
+        return
+    rank = len(live.info.local_shape)
+    before = tuple(saved.shard_count(d) for d in range(rank))
+    after = tuple(live.info.label.shard_count(d) for d in range(rank))
+    if before != after:
+        raise LayoutError(
+            f"{live.key} belongs to a C++-bound module whose name suggests a fused projection, so its segments are "
+            f"stored per shard in an order it cannot declare; it was saved split {list(before)} ways per dim and "
+            f"would load split {list(after)}, which would scramble the segments. Load it at the TP size it was saved at"
+        )
+
+
+def check_param_groups(optimizer, scalars: dict[str, Any], strict: bool) -> None:
     """The checkpoint's param groups must be the live optimizer's: the same count and, group by group, the same
     params. Checked before any tensor is placed, so a mismatch leaves the model and optimizer untouched instead of
-    surfacing from ``set_state_dict`` after every tensor was replaced. A checkpoint without optimizer scalars (a
-    model-only save loaded non-strictly) has nothing to check."""
-    saved_count = scalars.get("optimizer/num_param_groups")
-    if saved_count is None:
-        return
+    surfacing from ``set_state_dict`` after every tensor was replaced.
+
+    A checkpoint without optimizer scalars was saved without an optimizer. A strict load refuses it when the live
+    optimizer records param groups: an optimizer whose state is scalars only (SGD without momentum, say) would
+    otherwise restore nothing without a word. A non-strict load has nothing to check."""
     state = optimizer.get_state_dict()
     live_count = state.get("num_param_groups")
+    saved_count = scalars.get("optimizer/num_param_groups")
+    if saved_count is None:
+        if strict and live_count is not None:
+            raise MissingKeyError(
+                "the checkpoint holds no optimizer state (no optimizer/num_param_groups); load it with optimizer=None, "
+                "or with strict=False to keep the live optimizer's state"
+            )
+        return
     if live_count is not None and int(saved_count) != int(live_count):
         raise CheckpointError(
             f"the checkpoint has {saved_count} optimizer param groups, the live optimizer {live_count}"
@@ -342,9 +414,13 @@ def fsdp_gate(model, reshard: bool) -> list[Any]:
             continue
         if not reshard:
             raise FSDPStateError(f"FSDP module {path or '<root>'} is not in its sharded state; pass reshard_fsdp=True")
-        state._reshard_all_params()
-        state.sharded_state = _ShardedState.SHARDED
+        module.reshard()  # installed by fully_shard
     return states
+
+
+def check_threads(threads: int | None) -> None:
+    if threads is not None and int(threads) < 1:
+        raise ValueError(f"threads must be at least 1, got {threads}")
 
 
 def mesh_device():

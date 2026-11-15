@@ -40,6 +40,7 @@ from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
 from ttml.common.utils import set_seed
 from ttml.distributed_checkpointing._train_state import capture_process_rng, restore_process_rng
+from ttml.modules import LoraConfig, LoraModel, Parameter
 from ttml.sharding import Sharding
 
 from dcp_oracle import Loader
@@ -56,7 +57,17 @@ TINY = dict(
     max_position_embeddings=32,
 )
 SEQ_LEN = 32  # a whole tile: the SDPA kernel wants the sequence dimension unpadded
+# Across layouts the forward reduces in another order (other shard boundaries, other all-reduces), so the logits and
+# the moments after one more step differ in rounding. Measured on the tiny Llama's cross-world cases on a loudbox, as a
+# fraction of the reference's largest magnitude: logits 0.004-0.011, post-step moments 0.012-0.022. The bounds leave
+# about 3x headroom; a scrambled fused weight moves the logits by 1.36 (the --strip-fused control).
+LOGITS_TOLERANCE = 0.03
+STATE_TOLERANCE = 0.06
 MESH_OPEN_FAILED = 3  # exit status when this host cannot open the requested mesh; the tests skip on it
+# The one mesh-open failure that means "this host cannot open the mesh" rather than a bug: a descriptor asking for
+# ethernet links this host's fabric does not have (the QuietBox 1x4 ring on a loudbox). Any other failure to open a
+# mesh the host has the devices for fails the test.
+DESCRIPTOR_MISMATCH = "connected_eth_cores.size() >= edge.connected_chip_ids.size()"
 T_MAX = 16  # cosine schedule length, longer than any --steps the tests use, so the LR keeps moving
 
 
@@ -75,15 +86,35 @@ def open_world(mesh_shape: tuple[int, ...], axes: tuple[str, ...], tp: bool, mgd
         ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=ddp, enable_tp=True))
 
 
-def build(tp: bool, fsdp: bool, tie: bool, sizes: dict):
+def strip_fused_declarations(model) -> int:
+    """Remove every fused_segments declaration, so the fused weights look undeclared: the negative control of the
+    logits check. Returns how many were removed."""
+    removed = 0
+    for _, module in model.named_modules():
+        for value in getattr(module, "__dict__", {}).values():
+            layout = getattr(value, "checkpoint_layout", None)
+            if isinstance(value, Parameter) and layout and "fused" in layout:
+                value.checkpoint_layout = {k: v for k, v in layout.items() if k != "fused"}
+                removed += 1
+    return removed
+
+
+def build(tp: bool, fsdp: bool, tie: bool, sizes: dict, bias: bool = False, lora: bool = False):
+    """The tiny Llama of a world, its AdamW and its cosine schedule. ``bias`` gives the attention projections biases,
+    so the fused qkv has a fused bias; ``lora`` puts ttml's LoRA on qkv (LoraColumnParallelLinear under TP), trains
+    only lora_A, lora_B and the biases, and leaves the frozen base weights at their seeded values."""
     config = LlamaConfig(
         **{**TINY, **sizes},
+        attention_bias=bias,
         use_tp=tp,
         weight_tying=WeightTyingType.Enabled if tie else WeightTyingType.Disabled,
         # A tied LM head is vocab-parallel, so the embedding must share that layout (LlamaConfig refuses otherwise).
         embedding_placement=EmbeddingPlacement.VocabParallel if (tp and tie) else EmbeddingPlacement.Replicated,
     )
     model = Llama(config)
+    if lora:
+        # Injects into model in place; the wrapper itself is not needed.
+        LoraModel(model, LoraConfig(rank=8, target_modules=[r"qkv_linear$"], is_bias_trainable=True))
     if fsdp:
         ttml.fsdp.fully_shard(model)
     params = model.parameters()
@@ -167,8 +198,9 @@ def train(model, params, optimizer, scheduler, loader, config, steps: int, seed:
 
 
 def gather(tensor) -> np.ndarray:
-    """A tensor's global device-layout array as float32, through the composer."""
-    return np.asarray(Sharding.from_tensor(tensor).gather(tensor)).astype(np.float32)
+    """A tensor's global device-layout array as float32, through the composer. Its replicas must agree: the reference
+    reads one copy, as save does, so replicas that drifted apart would otherwise go unseen."""
+    return np.asarray(Sharding.from_tensor(tensor).gather(tensor, verify_replicas=True)).astype(np.float32)
 
 
 def full_logits(tensor, config: LlamaConfig) -> np.ndarray:
@@ -215,7 +247,7 @@ def canonicalize(name: str, array: np.ndarray, config: LlamaConfig, tp: int) -> 
         config.num_key_value_heads * head_dim,
     )
     intermediate = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
-    if name.endswith("qkv_linear/weight"):
+    if name.endswith("qkv_linear/weight") or name.endswith("qkv_linear/lora_B"):
         return uninterleave(array, 2, qkv, tp)
     if name.endswith("qkv_linear/bias"):
         return uninterleave(array, 3, qkv, tp)
@@ -233,10 +265,11 @@ def canonical_name(name: str, config: LlamaConfig) -> str:
 
 
 def reference(model, params, optimizer, scheduler, loader, config, seed: int) -> dict[str, np.ndarray]:
-    """The run as it stands: every parameter and optimizer tensor and scalar in canonical layout, the logits on a fixed
-    batch and what a resumed run does next. The dump leaves the run where it found it: the probes below step the
-    scheduler and the loader and draw from the generators, and all three are put back, so the optimizer scalars
-    compared are the ones the save or the load left and a step taken afterwards is the run's own next step."""
+    """The run as it stands: every parameter and optimizer tensor and scalar in canonical layout (the padding rows of
+    the padded vocab weights apart, under ``pad:``), the logits on a fixed batch and what a resumed run does next. The
+    dump leaves the run where it found it: the probes below step the scheduler and the loader and draw from the
+    generators, and all three are put back, so the optimizer scalars compared are the ones the save or the load left
+    and a step taken afterwards is the run's own next step."""
     tp = ttml.mesh().axis_size("tp") if config.use_tp else 1
     out: dict[str, np.ndarray] = {}
     scheduler_state, loader_state, generators = (
@@ -255,15 +288,20 @@ def reference(model, params, optimizer, scheduler, loader, config, seed: int) ->
     out["train:numpy_next"] = np.asarray(np.random.random())
     scheduler.set_state_dict(scheduler_state)  # writes the LRs back into the optimizer as they were
     loader.set_state_dict(loader_state)
+
+    def add(key: str, name: str, tensor) -> None:
+        array = gather(tensor)
+        out[key] = canonicalize(name, array, config, tp)
+        if (name.endswith("fc/weight") or name.endswith("tok_emb/weight")) and array.shape[2] > config.vocab_size:
+            out["pad:" + key] = array[:, :, config.vocab_size :, :]
+
     for name, tensor in params.items():
-        out["param:" + canonical_name(name, config)] = canonicalize(name, gather(tensor), config, tp)
+        add("param:" + canonical_name(name, config), name, tensor)
 
     def walk(node, path):
         if isinstance(node, ttml.NamedParameters):
             for name, tensor in node.items():
-                out["state:" + "/".join(path) + ":" + canonical_name(name, config)] = canonicalize(
-                    name, gather(tensor), config, tp
-                )
+                add("state:" + "/".join(path) + ":" + canonical_name(name, config), name, tensor)
         elif isinstance(node, dict):
             for key, child in node.items():
                 walk(child, path + (str(key),))
@@ -297,10 +335,15 @@ def resume_reference(
 
 def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logits_tolerance: float) -> list[str]:
     """Every entry of the loaded world against the saving world's: exact, except across layouts, where the forward
-    and the step after the checkpoint round differently. There the logits and the post-step moments must lie within
-    ``logits_tolerance`` of their scale, and the post-step parameter update within a quarter of its mean size (a
-    fresh optimizer's update differs from the restored one's by about its whole size)."""
+    and the step after the checkpoint round differently. There the logits must lie within ``logits_tolerance`` of
+    their scale, the post-step moments within ``STATE_TOLERANCE`` of theirs, and the post-step parameter update within
+    a quarter of its mean size (a fresh optimizer's update differs from the restored one's by about its whole size).
+
+    Padding rows (``pad:``) come back bit for bit when the padded extent is unchanged (the planner then copies device
+    rows). When it changed, the load fills the padding with zeros, so the loaded world's padding must be zero; after
+    the step it is not compared."""
     problems = []
+    worst_state = 0.0
     exact = logits_tolerance == 0.0
     if set(actual) != set(expected):
         problems.append(
@@ -308,6 +351,12 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
         )
     for key in sorted(set(actual) & set(expected)):
         a, e = actual[key], expected[key]
+        if not exact and key.startswith("pad:") and a.shape != e.shape:
+            if np.any(a):
+                problems.append(f"{key}: {int(np.count_nonzero(a))} padding values are not the zeros a load fills in")
+            continue
+        if not exact and key.startswith(RESUME + "pad:"):
+            continue
         if a.shape != e.shape:
             problems.append(f"{key}: shape {a.shape} vs reference {e.shape}")
             continue
@@ -324,8 +373,9 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
         elif not exact and base is not None and base.startswith("state:"):
             scale = float(np.max(np.abs(e))) + 1e-6
             rel = float(np.max(np.abs(a - e))) / scale
-            if rel > logits_tolerance:
-                problems.append(f"{key}: differs by {rel:.4f} of its scale (tolerance {logits_tolerance})")
+            worst_state = max(worst_state, rel)
+            if rel > STATE_TOLERANCE:
+                problems.append(f"{key}: differs by {rel:.4f} of its scale (tolerance {STATE_TOLERANCE})")
         elif not exact and base is not None and base.startswith("param:") and base in actual and base in expected:
             # The update each world applied. The loaded parameters equal the saved ones (checked under their own
             # key), so the updates differ only where the steps did, whatever the parameters' own magnitude.
@@ -339,6 +389,8 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
         elif not np.array_equal(a, e):
             n = int(np.count_nonzero(a != e))
             problems.append(f"{key}: {n} of {a.size} values differ (max |diff| {float(np.max(np.abs(a - e))):.4g})")
+    if not exact:
+        print(f"post-step moments: max |diff| / max |ref| = {worst_state:.4f} (tolerance {STATE_TOLERANCE})")
     return problems
 
 
@@ -351,10 +403,17 @@ def main(argv=None) -> int:
     parser.add_argument("--tp", action="store_true", help="build the model tensor-parallel over the 'tp' axis")
     parser.add_argument("--fsdp", action="store_true", help="fully_shard the model over the 'fsdp' axis")
     parser.add_argument("--tie", action="store_true", help="tie the embedding and the LM head")
+    parser.add_argument("--bias", action="store_true", help="give the attention projections biases (a fused qkv bias)")
+    parser.add_argument("--lora", action="store_true", help="put LoRA on qkv and train only the adapters and biases")
     parser.add_argument("--steps", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--mgd", default=None, help="mesh graph descriptor to set before opening the mesh")
-    parser.add_argument("--logits-tolerance", type=float, default=0.1)
+    parser.add_argument("--logits-tolerance", type=float, default=LOGITS_TOLERANCE)
+    parser.add_argument(
+        "--strip-fused",
+        action="store_true",
+        help="remove the fused_segments declarations: the negative control, whose cross-TP load must fail on logits",
+    )
     parser.add_argument(
         "--same-layout",
         action="store_true",
@@ -399,12 +458,16 @@ def main(argv=None) -> int:
         )
     try:
         open_world(mesh_shape, axes, args.tp, args.mgd)
-    except RuntimeError as err:  # the descriptor does not fit this host's fabric, too few devices, ...
+    except RuntimeError as err:
+        if DESCRIPTOR_MISMATCH not in str(err):
+            raise
         print(f"MESH_OPEN_FAILED: {str(err).splitlines()[0]}")
         return MESH_OPEN_FAILED
     try:
-        config, model, params, optimizer, scheduler = build(args.tp, args.fsdp, args.tie, sizes)
+        config, model, params, optimizer, scheduler = build(args.tp, args.fsdp, args.tie, sizes, args.bias, args.lora)
         loader = Loader()
+        if args.strip_fused:
+            print(f"stripped {strip_fused_declarations(model)} fused_segments declarations")
         if args.command == "save":
             train(model, params, optimizer, scheduler, loader, config, args.steps, args.seed)
             result = dcp.save(

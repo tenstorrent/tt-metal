@@ -14,17 +14,43 @@ from __future__ import annotations
 import numpy as np
 
 from ttml.distributed_checkpointing._boxes import Box
+from ttml.distributed_checkpointing._errors import TopologyError
 from ttml.distributed_checkpointing._index import FileRecord, Index, data_file_name
 from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
-from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, local_shape as label_local_shape
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 
 R = Placement.replicate
 S = Placement.shard
 
 
+def label_local_shape(label: Label, global_shape) -> tuple[int, ...]:
+    """The per-device shape ``label`` gives a global array of ``global_shape``."""
+    shape = []
+    for d, n in enumerate(global_shape):
+        count = label.shard_count(d)
+        if n % count:
+            raise TopologyError(f"dim {d} of extent {n} does not split evenly into {count} shards")
+        shape.append(n // count)
+    return tuple(shape)
+
+
 def world(placements, dist_shape, mesh_shape=None) -> Label:
     """A label whose distribution coordinates are the row-major walk of ``mesh_shape`` (``dist_shape`` by default)."""
     return Label(tuple(placements), tuple(dist_shape), tuple(dist_coords(mesh_shape or dist_shape)))
+
+
+def per_shard_fused(canonical: np.ndarray, sizes, shards: int, dim: int) -> np.ndarray:
+    """The device-layout array a model with ``shards`` TP shards holds for a weight fused from ``sizes`` segments:
+    shard ``j`` holds piece ``j`` of every segment, in segment order, the way ColumnParallelLinear lays it out. Built
+    by slicing, independently of ``fused_segments``."""
+    starts = np.cumsum((0,) + tuple(sizes[:-1]))
+    pieces = []
+    for j in range(shards):
+        for g, size in enumerate(sizes):
+            n = size // shards
+            lo = starts[g] + j * n
+            pieces.append(np.take(canonical, range(lo, lo + n), axis=dim))
+    return np.concatenate(pieces, axis=dim)
 
 
 def arange(shape) -> np.ndarray:
@@ -40,7 +66,9 @@ def device_global(canonical: np.ndarray, transform, global_shape, pad_value: flo
 
 
 def canonical_of(device: np.ndarray, transform, canonical_shape) -> np.ndarray:
-    out = np.zeros(canonical_shape, dtype=device.dtype)
+    """The canonical array ``device`` holds under ``transform``; an element no piece writes stays NaN, so a transform
+    that misses one cannot pass a comparison."""
+    out = np.full(canonical_shape, np.nan, dtype=device.dtype)
     for dev, can in transform.to_canonical(Box.whole(device.shape)):
         out[can.slices()] = device[dev.slices()]
     return out

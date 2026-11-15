@@ -6,10 +6,18 @@
 
 import json
 import os
+import shutil
+
+import pytest
 
 
 from ttml.distributed_checkpointing._boxes import Box
-from ttml.distributed_checkpointing._errors import CheckpointError, IncompleteCheckpoint, VersionError
+from ttml.distributed_checkpointing._errors import (
+    CheckpointError,
+    IncompleteCheckpointError,
+    TopologyError,
+    VersionError,
+)
 from ttml.distributed_checkpointing._index import (
     ChunkRecord,
     Entry,
@@ -21,7 +29,7 @@ from ttml.distributed_checkpointing._index import (
     find_latest,
     is_complete,
     parse_dir_name,
-    read_header,
+    read_header_json,
     read_index,
     read_user_header,
     step_dir_name,
@@ -35,15 +43,12 @@ from ttml.distributed_checkpointing._topology import Label, Placement, dist_coor
 def _index() -> Index:
     label = Label((Placement.replicate(), Placement.shard(2)), (2, 2), tuple(dist_coords((2, 2))))
     chunks = [
-        ChunkRecord(
-            Box((0, 0, 0, 0), (1, 1, 96, 16)), file=0, data_offset=0, nbytes=3072, writer_coord=(0, 0), crc32=0x3F0A9C11
-        ),
+        ChunkRecord(Box((0, 0, 0, 0), (1, 1, 96, 16)), file=0, data_offset=0, nbytes=3072, crc32=0x3F0A9C11),
         ChunkRecord(
             Box((0, 0, 96, 0), (1, 1, 96, 16)),
             file=3,
             data_offset=4096,
             nbytes=3072,
-            writer_coord=(1, 1),
             crc32=0x77C2E0D9,
         ),
     ]
@@ -85,8 +90,8 @@ def _index() -> Index:
             label,
             ("model/Llama/blocks/0/attention/qkv_linear/weight",),
             [
-                ChunkRecord(Box((0, 0, 0, 0), (1, 1, 32, 16)), 0, 3072, 2048, (0, 0)),
-                ChunkRecord(Box((0, 0, 32, 0), (1, 1, 32, 16)), 1, 0, 2048, (0, 1)),
+                ChunkRecord(Box((0, 0, 0, 0), (1, 1, 32, 16)), 0, 3072, 2048),
+                ChunkRecord(Box((0, 0, 32, 0), (1, 1, 32, 16)), 1, 0, 2048),
             ],
         ),
     }
@@ -129,7 +134,31 @@ def test_index_rejects_newer_versions_and_foreign_formats(expect_error):
         Index.from_json(encoded)
 
 
-def test_naming():
+def test_a_bad_index_names_its_file(tmp_path, expect_error):
+    def written(change) -> str:
+        ckpt = str(tmp_path / f"step_{len(os.listdir(tmp_path)):07d}")
+        os.makedirs(ckpt)
+        encoded = _index().to_json()
+        change(encoded)
+        with open(os.path.join(ckpt, "index.json"), "w", encoding="utf-8") as f:
+            json.dump(encoded, f)
+        return ckpt
+
+    def placement(value):
+        return lambda encoded: encoded["state"]["model/Llama/fc/weight"]["label"]["placements"].__setitem__(1, value)
+
+    newer = written(lambda encoded: encoded.update(version=2))
+    with expect_error(VersionError, f"{newer}/index.json: index version 2 is newer"):
+        read_index(newer)
+    # A placement kind this reader does not know (a future partial-sum label) is refused, not read as a shard.
+    partial = written(placement(["partial", 2]))
+    with expect_error(TopologyError, f"{partial}/index.json: unknown placement kind 'partial'"):
+        read_index(partial)
+    with expect_error(TopologyError, "placement shard must have a dim"):
+        read_index(written(placement(["shard"])))
+
+
+def test_naming(expect_error):
     assert step_dir_name(1000) == "step_0001000"
     assert step_dir_name(7, prefix="llama8b") == "llama8b_step_0000007"
     assert parse_dir_name("step_0001000") == ("", 1000)
@@ -137,6 +166,8 @@ def test_naming():
     assert parse_dir_name("/runs/x/final") is None
     assert data_file_name(0, 0, (1, 2)) == "data/w000_m0_d1-2.safetensors"
     assert data_file_name(3, 1, (0,)) == "data/w003_m1_d0.safetensors"
+    with expect_error(ValueError, "step must not be negative"):
+        step_dir_name(-1)  # "step_-000001" would never parse back, so find_latest would not find it
 
 
 def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
@@ -162,15 +193,17 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
     assert find_latest(str(tmp_path / "missing")) is None
     assert is_complete(str(tmp_path / "step_0000030"))
     assert not is_complete(str(tmp_path / "step_0000100.partial-123"))
+    assert not is_complete(str(tmp_path / "step_0000050.replaced-9")), "renamed back to its final name first"
     assert not is_complete(str(tmp_path / "step_0000040"))
 
 
 def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
-    staging, _ = begin_staging(str(tmp_path / "step_0000001"))
-    write_header(staging, {"format": "ttml-dcp", "version": 1, "user": {"step": 1, "run": "a"}, "train_state": {}})
-    assert read_user_header(staging) == {"step": 1, "run": "a"}
-    write_header(staging, {"format": "ttml-dcp", "version": 1})
-    assert read_user_header(staging) == {}, "a header without a user dict reads as empty"
+    ckpt = str(tmp_path / "step_0000001")
+    os.makedirs(ckpt)
+    write_header(ckpt, {"format": "ttml-dcp", "version": 1, "user": {"step": 1, "run": "a"}, "train_state": {}})
+    assert read_user_header(ckpt) == {"step": 1, "run": "a"}
+    write_header(ckpt, {"format": "ttml-dcp", "version": 1})
+    assert read_user_header(ckpt) == {}, "a header without a user dict reads as empty"
 
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
@@ -180,14 +213,18 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     write_header(staging, {"step": 10})
     write_index(staging, _index())
     assert not is_complete(staging) and find_latest(str(tmp_path)) is None
+    with expect_error(IncompleteCheckpointError, "is a staging directory"):
+        read_index(staging)
+    with expect_error(IncompleteCheckpointError, "is a staging directory"):
+        read_user_header(staging)
 
     finalize_staging(staging, final)
 
     assert is_complete(final) and find_latest(str(tmp_path)) == final
-    assert read_header(final) == {"step": 10}
+    assert read_header_json(final) == {"step": 10}
     assert read_index(final).checkpoint_id == "step_0000010"
     assert read_index(final).created, "written at finalize"
-    with expect_error(IncompleteCheckpoint, "no index.json"):
+    with expect_error(IncompleteCheckpointError, "no index.json"):
         read_index(str(tmp_path / "nowhere"))
 
     staging2, _ = begin_staging(final)
@@ -228,18 +265,28 @@ def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, exp
 
     with open(index_path, "w") as f:
         f.write(text[: len(text) // 2])  # truncated
-    with expect_error(IncompleteCheckpoint, "not a readable index"):
+    with expect_error(IncompleteCheckpointError, "not a readable index"):
         read_index(final)
     value = json.loads(text)
     del value["state"]["model/Llama/fc/weight"]["chunks"]["file"]
     with open(index_path, "w") as f:
         json.dump(value, f)  # a required column missing
-    with expect_error(IncompleteCheckpoint, "not a readable index"):
+    with expect_error(IncompleteCheckpointError, "not a readable index"):
         read_index(final)
     with open(os.path.join(final, "header.json"), "w") as f:
         f.write("{")
-    with expect_error(IncompleteCheckpoint, "not readable JSON"):
-        read_header(final)
+    with expect_error(IncompleteCheckpointError, "not readable JSON"):
+        read_header_json(final)
+    os.remove(os.path.join(final, "header.json"))
+    with expect_error(IncompleteCheckpointError, "has no header.json"):
+        read_header_json(final)
+
+
+def test_only_bool_int_float_and_str_scalars_are_stored(expect_error):
+    index = _index()
+    index.scalars["optimizer/betas"] = (0.9, 0.999)
+    with expect_error(CheckpointError, "scalar of type tuple cannot be stored in the index"):
+        index.to_json()
 
 
 def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypatch, expect_error):
@@ -268,3 +315,46 @@ def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypa
     assert is_complete(final) and read_index(final).checkpoint_id == previous
     assert not [n for n in os.listdir(tmp_path) if ".replaced-" in n], "nothing left aside"
     assert os.path.isdir(staging2), "the new checkpoint is untouched for the caller to retry or delete"
+
+
+def test_a_failed_overwrite_that_cannot_roll_back_says_where_the_previous_checkpoint_is(
+    tmp_path, monkeypatch, expect_error
+):
+    final = str(tmp_path / "step_0000010")
+    staging, _ = begin_staging(final)
+    write_index(staging, _index())
+    finalize_staging(staging, final)
+    staging2, _ = begin_staging(final)
+    write_index(staging2, _index())
+    real_rename = os.rename
+
+    def failing_rename(src, dst):
+        if src == final:
+            real_rename(src, dst)  # moving the previous checkpoint aside works; nothing after it does
+        else:
+            raise OSError(f"simulated NFS failure renaming {os.path.basename(src)}")
+
+    monkeypatch.setattr(os, "rename", failing_rename)
+    with expect_error(
+        CheckpointError, r"nor move the previous checkpoint back from .*\.replaced-.*rename it back by hand"
+    ):
+        finalize_staging(staging2, final, overwrite=True)
+    monkeypatch.setattr(os, "rename", real_rename)
+    assert [n for n in os.listdir(tmp_path) if ".replaced-" in n], "the previous checkpoint is still aside"
+
+
+def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_path, monkeypatch):
+    final = str(tmp_path / "step_0000010")
+    staging, _ = begin_staging(final)
+    write_index(staging, _index())
+    finalize_staging(staging, final)
+    staging2, _ = begin_staging(final)
+    write_index(staging2, _index())
+
+    def busy_rmtree(path, onerror):  # an NFS server keeping an open file as .nfsXXXX
+        onerror(os.unlink, os.path.join(path, ".nfs0001"), (OSError, OSError("Device or resource busy"), None))
+
+    monkeypatch.setattr(shutil, "rmtree", busy_rmtree)
+    with pytest.warns(UserWarning, match="could not be removed"):
+        finalize_staging(staging2, final, overwrite=True)
+    assert is_complete(final), "the new checkpoint is in place"
