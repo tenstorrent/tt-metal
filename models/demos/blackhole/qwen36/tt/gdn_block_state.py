@@ -152,6 +152,16 @@ def _free_copy(view, source):
         ttnn.deallocate(view)
 
 
+def _trace_region_bytes(mesh):
+    """Bytes of the trace region in use on each device, or None when the allocator does not report them; never
+    raises (a log line only)."""
+    try:
+        view = ttnn.get_memory_view(mesh, ttnn.BufferType.TRACE)
+        return int(view.total_bytes_allocated_per_bank) * int(view.num_banks)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _dram_banks(mesh):
     grid = mesh.dram_grid_size()
     return int(grid.x * grid.y)
@@ -629,15 +639,18 @@ class GdnBlockState:
         capture. After warmup, in the traced warmup phase. Idempotent."""
         if self._write_traces or not self._warmed_variants:
             return
+        before = _trace_region_bytes(self.mesh)
         for checkpoint in self._warmed_variants:
             tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             self._write_trace_body(checkpoint)
             ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
             self._write_traces[checkpoint] = tid
             self._trace_sources[checkpoint] = self._write_trace_sources(checkpoint)
+        after = _trace_region_bytes(self.mesh)
+        size = "unknown" if None in (before, after) else f"{(after - before) / 2**20:.2f} MiB"
         logger.info(
             f"GDN block writes captured: {len(self._write_traces)} trace(s) of {len(self.layers)} GDN layer writes "
-            f"(workspace{', checkpoint' if True in self._write_traces else ''})"
+            f"(workspace{', checkpoint' if True in self._write_traces else ''}), trace region {size}"
         )
 
     def release_write_traces(self):
