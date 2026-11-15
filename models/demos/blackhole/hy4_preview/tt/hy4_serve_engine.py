@@ -280,6 +280,14 @@ class Hy4Engine:
         return st
 
     # ------------------------------------------------------------------------------------------------ warm-up (before any request: all persistent tensors exist before the traces)
+    def _dram(self, tag):
+        from models.demos.blackhole.hy4_preview.tt.hy4_chain import dram_view
+
+        v = dram_view(self.md)
+        logger.info(
+            f"HY4 dram[{tag}]: alloc {v['alloc_per_bank'] / 1e6:.0f} MB/bank, free {v['free_per_bank'] / 1e6:.0f} MB/bank, largest free {v['largest_free_per_bank'] / 1e6:.0f} MB"
+        )
+
     def warm(self):
         """synthetic 4 x 3072-token prefill (compiles every PF / MTP chunk program, creates every lazily cached persistent tensor: PF constants, dense-id tables) -> seed -> eager round -> trace capture(s)."""
         if self.warm_done:
@@ -289,7 +297,9 @@ class Hy4Engine:
         g = torch.Generator().manual_seed(0)
         n = min(3072, self.max_seq_len - 8)
         prompts = {r: torch.randint(1000, 100000, (n,), generator=g).tolist() for r in range(ROWS)}
+        self._dram("before warm prefill")
         first = self.prefill(prompts)
+        self._dram("after warm prefill")
         t1 = time.time()
         if self.spec:
             # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its
@@ -299,9 +309,12 @@ class Hy4Engine:
             if self.sampled:
                 self.runner.body("S")
                 ttnn.synchronize_device(self.md)
+            self._dram("after eager bodies")
             self.runner.capture("G")
+            self._dram("after G capture")
             if self.sampled:
                 self.runner.capture("S")
+                self._dram("after S capture")
             logger.info(f"HY4 warm-up: spec traces captured ({list(self.runner.traces)})")
         else:
             self.dl.capture(self.loop_variants)
