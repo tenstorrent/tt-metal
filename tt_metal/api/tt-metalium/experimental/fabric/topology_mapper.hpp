@@ -93,10 +93,14 @@ public:
     /**
      * @brief Construct a new TopologyMapper object
      *
+     * @param cluster Reference to the cluster object representing hardware devices
+     * @param distributed_context Distributed communication context across hosts
      * @param mesh_graph Reference to the mesh graph object containing fabric topology
      * @param physical_system_descriptor Reference to the physical system descriptor containing ASIC topology
      * @param local_mesh_id The mesh this process owns
      * @param local_host_rank This process's host rank within local_mesh_id
+     * @param timeout Timeout for topology mapping operations (default 60s)
+     * @param live_descriptor Optional pointer to live physical system descriptor (defaults to nullptr)
      */
     TopologyMapper(
         const tt::Cluster& cluster,
@@ -395,8 +399,10 @@ public:
      * This static function creates a mesh graph by trying different mesh shapes and finding
      * one that matches the physical topology described by the physical system descriptor.
      *
+     * @param cluster Reference to the cluster object representing hardware devices
      * @param physical_system_descriptor The physical system descriptor containing ASIC topology
      * @param fabric_config The fabric configuration
+     * @param reliability_mode Fabric reliability mode for the mesh graph
      * @return MeshGraph A mesh graph that matches the physical topology
      */
     static MeshGraph generate_mesh_graph_from_physical_system_descriptor(

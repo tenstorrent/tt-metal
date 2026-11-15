@@ -671,7 +671,6 @@ output_tensor = ttnn.all_gather(
     mesh_tensor,
     dim=3,
     cluster_axis=0,
-    mesh_device=mesh_device,
     topology=ttnn.Topology.Linear,
 )
 
@@ -774,7 +773,7 @@ torch_hidden_states = (torch.rand(batch_size, 1, sequence_length, config.hidden_
 torch_output = model.forward(torch_hidden_states)
 
 # Device Initialization
-mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(y=1, x=4))
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
 
 # Shard input activations on batch dimension to devices in the mesh
 with ttnn.distribute(ttnn.ShardTensorToMesh(mesh_device, dim=0)):

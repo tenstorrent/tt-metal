@@ -232,7 +232,6 @@ The distributed implementation is designed for cases where activations are **sha
        dim=3,
        num_links=1,
        cluster_axis=1,
-       mesh_device=mesh_device,
        memory_config=ttnn.DRAM_MEMORY_CONFIG,
        topology=ttnn.Topology.Linear,
    )
@@ -486,7 +485,7 @@ An end-to-end example of the decode attention module is in the [attention.py](..
    - `ttnn.transformer.paged_scaled_dot_product_attention_decode` takes in the same arguments as `ttnn.transformer.scaled_dot_product_attention_decode`, but also takes in an additional `page_table_tensor` argument.
    - For general decode use cases, we recommend setting `is_causal=True`. This removes the need for `attn_mask` which reduces memory bandwidth usage. For example:
      ```python
-     attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(Q, K, V, cur_pos_tensor=cur_pos, page_table=page_table)
+     attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(Q, K, V, cur_pos_tensor=cur_pos, page_table_tensor=page_table)
      ```
    - For non-causal attention, `attn_mask` must be provided. An example is in the cross attention case in visual language models. For example:
      ```python
@@ -804,7 +803,7 @@ w2_in = ttnn.multiply(
     )
     if mode == "decode"
     else ttnn.DRAM_MEMORY_CONFIG,
-    input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+    input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
     dtype=ttnn.bfloat8_b,
 )
 ```
@@ -846,8 +845,7 @@ Since the output of FF2 is the correct shape but only a partial on each device, 
     ```py
     w2_out_reduced = ttnn.reduce_scatter(
         w2_out,
-        scatter_dim=3,
-        math_op=ttnn.ReduceType.Sum,
+        dim=3,
         num_links=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG if mode == "prefill" else ttnn.L1_MEMORY_CONFIG,
     )
@@ -1300,7 +1298,6 @@ The AllGather operation collects data from all devices, concatenating each chunk
   - dim: the dimension to concatenate
   - num_links: number of ethernet links to be used
   - cluster_axis: cluster axis to gather along
-  - mesh_device: mesh device the tensor is mapped to
 
 The following is an example of Ring All-Gather on s 2x4 mesh_device:
 
@@ -1315,7 +1312,7 @@ The following is an example of Linear All-Gather on a 2x4 mesh_device:
 ```py
 # Execute All-Gather on the sharded tensor
 # Assuming mesh_tensor_sharded is a sharded tensor over 2x4 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is of size 32x128 where each row has the same data
-output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=2, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=2, cluster_axis=1, topology=ttnn.Topology.Linear)
 ```
 
 #### 3.3.2 ReduceScatter
@@ -1343,7 +1340,7 @@ The following is example usage of Linear Reduce-Scatter on a 2x4 mesh_devcie:
 ```py
 # Execute Reduce-Scatter on the sharded tensor
 # Assuming mesh_tensor_sharded is a sharded tensor over 2x4 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is of size 32x32 on each device but reduces over each row of devices
-output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1, cluster_axis=1, topology=ttnn.Topology.Linear)
 ```
 
 #### 3.3.3 AllReduce
@@ -1859,13 +1856,15 @@ If OPs are reading from the fastest memory they can, sharded if possible, what m
 
 * **Unnecessary `ShardedToInterleaved` and `InterleavedToSharded` calls**. The fastest work is work that you don’t have to do. These calls are pure data movement and it is often better to have some OPs using fewer cores if it means they can use the same sharding of their input data as the previous and subsequent OPs. Always avoid data movement!
 * **Always use `ScaledDotProductAttention` (SDPA) OPs if possible**. These implement FlashAttention / FlashDecode and are much faster than writing attention using individual operations.
-* **Cross-device communication OPs**. `AllGather`, `ReduceScatter` etc. Avoid these where possible, try using `bfp8` inputs instead of `bf16` if you can. There is an `AllGatherMatmul` OP that overlaps `AllGather` with a `Matmul` that you can investigate further too - see `ttnn.experimental.all_gather_matmul` with an [example of its use](https://github.com/tenstorrent/tt-metal/blob/79ff70b0e115ac50e70a72391dde3c4a4a6fab7f/models/demos/llama3/tt/llama_attention.py#L329) looking like this:
+* **Cross-device communication OPs**. `AllGather`, `ReduceScatter` etc. Avoid these where possible, try using `bfp8` inputs instead of `bf16` if you can. There is an `AllGatherMatmul` OP that overlaps `AllGather` with a `Matmul` that you can investigate further too - see `ttnn.experimental.all_gather_matmul_async` with an [example of its use](https://github.com/tenstorrent/tt-metal/blob/79ff70b0e115ac50e70a72391dde3c4a4a6fab7f/models/demos/llama3/tt/llama_attention.py#L329) looking like this:
 
 ```python
-_, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
+_, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
     input_tensor,
     weights,
+    persistent_output_buffer=None,
     dim=3,
+    multi_device_global_semaphore=multi_device_global_semaphore,
     all_gather_core_grid_offset=(0, 4),
     num_links=1,
     memory_config_ag=all_gather_memcfg,

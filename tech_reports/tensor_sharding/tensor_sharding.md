@@ -331,7 +331,7 @@ nd_memory_config = ttnn.MemoryConfig(
     ttnn.BufferType.L1,
     ttnn.NdShardSpec(
         shard_shape=[1, 1, 64, 128],  # Shard size in each dimension
-        core_ranges=core_ranges
+        grid=core_ranges
     ),
 )
 
