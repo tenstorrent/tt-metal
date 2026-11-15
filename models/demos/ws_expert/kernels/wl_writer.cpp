@@ -31,15 +31,15 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR = 2, SEM_SCRX = 4;
 #endif
 constexpr uint32_t K = WL_K;  // weight slots a core
 
-// A group multicast and its flag: the payload unlinked, flushed (sent) before the flag multicast. On this
-// architecture the payload and the flag go through different command buffers that are not sent in issue order, so
-// without the flush the flag can overtake its payload, and a linked payload left as a source's last multicast keeps
-// its path reserved (a group's other multicast senders then cannot get theirs out).
+// A group multicast and its flag, both unlinked and through the same command buffer (the flag as a 4-byte multicast
+// write, not noc_semaphore_set_multicast): on this architecture the write and write-register command buffers are not
+// sent in issue order, so a flag from the other buffer can overtake its payload, and a linked payload can be left as
+// a source's last multicast with its path reserved (a group's other multicast senders then cannot get theirs out).
+// From one buffer, on one NoC and virtual channel, the flag lands after its payload.
 FORCE_INLINE void mcast_with_flag(
     uint32_t src, uint64_t dst, uint32_t bytes, uint32_t n, uint32_t flag_src, uint64_t flag_dst) {
     noc_async_write_multicast_loopback_src(src, dst, bytes, n, false);
-    noc_async_writes_flushed();
-    noc_semaphore_set_multicast_loopback_src(flag_src, flag_dst, n);
+    noc_async_write_multicast_loopback_src(flag_src, flag_dst, 4, n, false);
 }
 
 void kernel_main() {
