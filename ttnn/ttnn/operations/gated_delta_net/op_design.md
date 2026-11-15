@@ -149,7 +149,7 @@ computed from them, never restated.
 | Regime | Status | Predicate | Block | Data movement vs. minimum (DRAM boundary: each input once, each output once) | What a bigger block buys |
 |--------|--------|-----------|-------|------------------------------------------------------------------------------|--------------------------|
 | R-STEP: state of one pair resident, token steps (F3) | built | every call (all INPUTS) | pair state Kt x Vt resident; prep/norm block = 1 tile row x pair columns; step = 1 token | recurrent_state 1 in / 1 out (minimum); output, z, conv_state_out 1 (minimum); v columns of mixed_qkv/conv_state/conv_weight 1; q,k columns r times (one read per value head): `(2HkK*r + HvV)/C` = 1.8 at the chip geometry; gate/A_log/dt_bias segments Hv times (tiny); token tensors read row-granular, so decode reads only the pair's own rows (no B-fold tile re-read) | tile-row block: one set of conv/gate/norm inits, one window assembly and one W expansion amortized over up to 32 tokens; per-token fixed cost is init churn of the update batches (intended: once per DEST batch) |
-| R-BCAST: kn/qn of a key head computed once, multicast to the r pair cores of that key head | deferred: the stepping stone (each pair core reads q/k columns from DRAM) is built and the multicast layers onto it (`ttnn.Mcast` + `McastArgs`, kn/qn tile rows = 2Kt fp32 tiles per tile row, one injector per (b, hk) group); positive reason: the bytes it saves are 64 KiB per decode call at the chip geometry against 1.5 MiB of state, and 33.5 MB on a prefill call that is bound by 4096 ordered steps, so neither Phase 0 profile is bound by them | same as R-STEP | mixed_qkv/conv_state/conv_weight 1.8 -> 1.0 crossings; adds one multicast of 2Kt tiles per tile row per key head | same |
+| R-BCAST: kn/qn of a key head computed once, multicast to the r * pieces cores of that key head | built (Refinement 5) on decode R-VSPLIT: of each (b, hk) group of r * pieces consecutive units (consecutive cores), the first core (q injector) reads, convolves and L2-normalizes only the q columns (+ its v), the second (k injector) only k (+ its v), the rest only their v columns; each injector multicasts its Kt fp32 tiles (qn or kn) into cb_kq_rows of the whole group (`ttnn.Mcast` + `McastArgs` on the writer, one channel per injector, flag signal, no handshake: one hand-off per call into untouched CB slots at the same address on every core); every core then derives d = qn . kn and kn^T from the landed rows (bit-identical to the unshared path). The injector runs conv + L2 of its part before its v column (the part is what the group waits for) | `_share_qk`: `SHARE_QK_PREP` and pieces > 1 and T = 1 (one unit per core, one tile row per unit); `SHARE_QK_PREP = False` gives the unshared path | same as R-VSPLIT | mixed_qkv/conv_state/conv_weight q/k: 1 crossing per key head (R-VSPLIT read them r * pieces times); adds 2 multicasts of Kt fp32 tiles per key head | q/k conv + L2 once per key head, split over 2 cores |
 | R-VSPLIT: state columns split across `Vt / v_block_tiles` cores per pair, partial sum of o^2 combined across the group for M13 | built (Refinement 3), without R-BCAST: each piece reads and preps the pair's q/k columns itself (q/k reads x pieces); the combine is one column-0 fp32 tile per tile row per piece, all-gathered by unicast NoC writes into the same L1 slot on every piece core plus a cumulative semaphore count; weights / gate tiles read as aligned row spans to offset the replicated reads | `_value_pieces`: pieces = largest divisor of Vt (<= MAX_PIECES = 4) with `B*Hv*pieces <= grid cores` (one unit per core, lockstep tile rows); `V_BLOCK_TILES` forces it | pair state Kt x v_block_tiles | adds the combine; q/k token columns x pieces | per-core state update work / pieces |
 | R-CHUNK: F1 chunk of 32 tokens per tile row (closed form inside the chunk, state carried across chunks) | built (Refinement 4), on R-STEP and R-VSPLIT alike: per tile row c = cumsum(g) (`cumsum_tile`, fp32), D = mask * exp(-relu(c[s'] - c[s])) (c^T by `transpose_dest`, fp32), [Kn Kn^T; Qn Kn^T] by matmul_block, L = beta (*)col (D * Kn Kn^T), U by `triangle_solve_tile` (fp32 SFPU forward substitution, one per column tile), O = exp(c) (*)col Rq + (Qn Kn^T * D) x U, S = exp(c_last) S (fp32 SFPU) + Kn^T x (exp(c_last - c) (*)col U). Rows that are no token get g = beta = 0 from the writer (no decay, no write; kn = v = 0 there already). Whole-tile SFPU scope in chunked builds | `_chunked`: T >= CHUNK_MIN_TOKENS (2) on Blackhole; decode keeps the token step | 32 tokens x pair state | state touched 4x per chunk instead of 2x per token in L1; DRAM unchanged | per-chunk matrix products replace 32 x (2 Kt Vt matmuls + Kt Vt updates) |
 | R-SEG: T split across cores by F4 segment pairs (P, H), combined in order | deferred: the only way to put more than B*Hv cores on a prefill call; costs a K x K factor per pair (2x state work per token) and a second pass over mixed_qkv unless segment rows stay resident; the per-segment output pass is `recurrence_block` unchanged | prefill with `B*Hv` much smaller than the grid (future) | segment of tile rows x pair | mixed_qkv up to 2 crossings; pair combine 128 KiB per pair per boundary over NoC | - |
@@ -157,6 +157,11 @@ computed from them, never restated.
 | R-BHEAD: all B sequences of a head on one core | rejected: 16 states resident at B=16 (1 MiB, 0.86 of L1) on 12 cores; superseded by R-STEP, which already avoids the B-fold tile re-read by row-granular reads | - | - | - | - |
 | R-PREP-SPLIT: conv/gates/norms on separate cores, y handed to the pair cores | rejected: prep is a small fraction of a tile row's work next to 32 token steps over Kt*Vt state tiles; the only redundancy it removes (kn/qn r-fold) is removed by R-BCAST without a y hand-off | - | - | adds y traffic (2Kt+Vt fp32 tiles per tile row per pair) | - |
 | R-STREAM-STATE: state not resident, read/written per token | rejected: violates "state crosses DRAM once in and once out" (T crossings each way) | - | - | - | - |
+
+Regime selection (Refinement 5): R-BCAST on top of R-VSPLIT when `_share_qk(pieces, T)` (decode B=1/2 on the
+chip geometry, small-geometry decode with few pairs); prefill and R-STEP keep every core's own q/k prep.
+Regime-pinned tests: `test_gated_delta_net_bcast.py` (predicate; shared vs unshared bit-identical on chip
+B=1/2 bf16, 48-head fp32, Hv = Hk fp32, clean and inf padding).
 
 Regime selection (Refinement 4): R-CHUNK replaces the token steps of every tile row when
 `_chunked(T, device)` (multi-token calls on Blackhole); it composes with the R-STEP / R-VSPLIT work split
@@ -181,8 +186,8 @@ Counted per call, fp32 Phase 0, chip geometry (Hk=4, Hv=12, K=V=128, C=2560).
 | 4 | T segments (R-SEG) | mixed_qkv up to 2 | 128 KiB per pair per boundary, ordered | more bytes and an ordered chain |
 | 5 | state round trip per token | state T in / T out | none | forbidden |
 
-Chosen: rank 2 as the built stepping stone, with rank 1 (R-BCAST) its deferred successor on the
-same structure. Rank 1 in its R-GROUP form is rejected because it divides cores by r for the same
+Chosen: rank 2 as the built stepping stone, with rank 1 (R-BCAST) its successor on the
+same structure (built for decode R-VSPLIT in Refinement 5). Rank 1 in its R-GROUP form is rejected because it divides cores by r for the same
 bytes R-BCAST saves.
 
 Stall-shadow reorders (scheme properties, recorded here):
@@ -270,11 +275,13 @@ split by pairs/columns, never by tile rows), `shared_input_reuse` (R-BCAST).
 | recurrent_state_out | fp32 tiles | writer drains cb_state_out, whole tiles | - |
 
 Deferred inter-Tensix contracts (kept reachable by this structure):
-- R-BCAST: the injector is the core of pair `(b, hk*r)`; after `l2norm_block` it multicasts the
-  kn/qn tile row (2Kt fp32 tiles) and kn^T (Kt) into the same CBs on the other r-1 pair cores
-  (`ttnn.Mcast` + `McastArgs`, data_ready semaphore per tile row); receivers skip `conv_block` and
-  `l2norm_block` for the q/k groups. Requires the r pairs of a key head on distinct, co-scheduled
-  cores: the pair-to-core map orders pairs by `(b, hk, h % r)`.
+- R-BCAST (built, Refinement 5, decode R-VSPLIT): the q injector is unit 0 of each (b, hk) group of
+  r * pieces units, the k injector unit 1; each packs its normalized part (Kt fp32 tiles) into
+  cb_qk_stage, and its writer multicasts it into cb_kq_rows ([0, Kt) kn, [Kt, 2Kt) qn) of every core of
+  the group, its own included (two `ttnn.Mcast` channels on the writer NoC, flag signal, no handshake);
+  every writer lands the parts it did not prep and pushes cb_kq_rows (+ its U2D alias), and compute
+  derives d and kn^T (`qk_finish_block`). Receivers read and convolve only their v columns. Units map to
+  cores in row-major order, so a group is consecutive cores (two rectangles on the 11-wide grid).
 - R-VSPLIT (built, Refinement 3): per pair, pieces own state columns `[s*v_block, (s+1)*v_block)`;
   after the token loop of a tile row each piece reduces `sum_m o^2` over its columns into cb_osum_part,
   its writer NoC-writes that tile into slot `s` of cb_osum_gather on every piece core (same address

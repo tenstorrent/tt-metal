@@ -33,7 +33,8 @@ fed by DEST: it is the output ABI (output dtype = input dtype).
 | cb_rinv | 2 | rsqrt q, k (column-0 tiles) | {pair: streams, t: spans 1 tile row; others streams (reduced)} | Float32 (U2D) | compute | compute | inside l2norm | not with cb_rinv_o, same wrap reason |
 | cb_rinv_o | 1 | 1 | {pair: streams, t: spans 1 tile row; others streams (reduced)} | Float32 (U2D) | compute | compute | inside rmsnorm | split from cb_rinv (wrap) |
 | cb_conv_acc | `CONV_ACC_DEPTH` = 1 (SFPU conv only; not allocated on the FPU conv path) | 1 | {pair: streams, t: spans 1 tile row, c: one column tile; others streams} | Float32 (U2D) | compute | compute | per column tile | SFPU path: partial tap sum (taps 0,1 packed, taps 2,3 added by packer L1 accumulation), two fp32 half-sync DEST windows per column. FPU path (Refinement 2): the four taps accumulate in one DEST tile by ELWMUL, so no partial sum leaves DEST |
-| cb_kq_rows | `2*Kt` | 2Kt | {pair: streams, t: spans 1 tile row, K: spans Kt, V: streams, c: q,k groups, j: streams} | Float32 (std) | compute | compute | tile row | concurrent with the token loop (read matmul in0 every token) |
+| cb_kq_rows (+ alias cb_kq_rows_f32) | `2*Kt` | 2Kt | {pair: streams, t: spans 1 tile row, K: spans Kt, V: streams, c: q,k groups, j: streams} | Float32 (std) / Float32 (U2D view) | compute; R-BCAST: writer (multicast landing) | compute | tile row | concurrent with the token loop (read matmul in0 every token). Refinement 5 (R-BCAST): kn at [0, Kt) and qn at [Kt, 2Kt) land here by the key head's two multicasts, at the same address on every core; the U2D alias (second format descriptor over the same allocation, lockstep push/pop) feeds the fp32 qn . kn |
+| cb_qk_stage | `Kt` (R-BCAST only) | Kt (the injector's qn or kn) | {pair: streams, t: spans 1 tile row, K: spans Kt; others streams} | Float32 | compute (injector) | writer (multicast source) | tile row | not packed into cb_kq_rows: on an injector the writer is that CB's single producer (it lands the other part), so the injector's own part goes through this source buffer; the multicast loops it back into the injector's cb_kq_rows |
 | cb_knT | `Kt` | Kt | {pair: streams, t: spans 1 tile row (tokens on columns), K: spans Kt, V: streams, c: k group, j: streams} | Float32 (std) | compute | compute | tile row | concurrent with the token loop (increment in0 every token) |
 | cb_d | 1 | 1 (column-0 tile) | {pair: streams, t: spans 1 tile row, K: streams (reduced), V: streams, c: streams, j: streams} | Float32 (U2D) | compute | compute | tile row | concurrent with the token loop; 1 page constant in every axis but t |
 | cb_gate_in | `2*ROW_DEPTH` | 2 (b, a tiles) | {pair: streams, t: spans 1 tile row, K: streams, V: streams, c: streams (gate column h//32), j: streams} | Float32 (U2D; input dtype) | reader | compute | tile row | double buffered across tile rows |
@@ -53,8 +54,8 @@ fed by DEST: it is the output ABI (output dtype = input dtype).
 | cb_out_rows | `Vt*ROW_DEPTH` | Vt | {pair: streams, t: spans 1 tile row, K: streams, V: spans Vt, c, j: streams} | Float32 (output dtype) | compute | writer | tile row | pack-into-destination (no intermediate between the norm chain and the writer); double buffered |
 | cb_reduce_scaler | 1 (2048 B page) | 1 | {pair, t, K, V, c, j: streams (constant)} | Float16_b (bf16-packed SUM scaler 1.0) | reader | compute | kernel | constant; literal 1 page |
 | cb_scratch | 1 | 3 rows | reader-private | token dtype | reader | reader | conv_state_out copy | face-row staging for the bit-exact conv_state_out copy; never seen by compute |
-| cb_window_zeroed | `WINDOW_DEPTH` pages of 32 B | 1 token per cb_window slot | {all axes: streams} | n/a (handshake) | writer | reader | kernel start | writer-to-reader tokens: slot k of cb_window has been zeroed (the writer is idle until the first gates; slot by slot so the reader starts on slot 0 without waiting for the rest) |
-| cb_hist_stage | G (window group columns) | one tile per column of a window group | reader-private | token dtype | reader | reader | between the window group's DRAM flush and its row copies | Refinement 3: the 3 conv_state history rows of a column are one aligned span read in place (one read per face half instead of one staged read per row and half), then copied out row by row. Not shared with cb_row_stage: both are live in the same flush |
+| cb_window_zeroed | `WINDOW_DEPTH` pages of 32 B | 1 token per cb_window slot | {all axes: streams} | n/a (handshake) | writer | reader | kernel start | writer-to-reader tokens: slot k of cb_window has been zeroed (the writer is idle until the first gates; slot by slot so the reader starts on slot 0 without waiting for the rest). Refinement 5: only the slots the core's reader will use, each the size of the core's window group (host RT args), instead of the whole buffer: on perf_decode_b1 147 KiB of self-addressed NoC reads per core became 8 KiB (v-only core) / 40 KiB (injector) |
+| cb_hist_stage | 2*G (window group columns) | two tiles per column of a window group: history rows, then the single token row | reader-private | token dtype | reader | reader | between the window group's DRAM flush and its row copies | Refinement 3: the 3 conv_state history rows of a column are one aligned span read in place, then copied out row by row. Refinement 5: one request per 16-row band covers both face halves, and a single token row (decode) is read the same way into the second tile per column, then copied into the tap tile (whose other rows must stay zero). Not shared with cb_row_stage: both are live in the same flush |
 | cb_osum_part | 1 (R-VSPLIT only) | 1 column-0 tile | {pair: streams, t: spans 1 tile row, V: reduced over the piece's Vb} | Float32 | compute | writer | tile row | the piece's partial sum o^2; not packed into cb_osum_gather directly: the gather buffer is filled by NoC writes from every piece (the writer also sends this tile to the peers) |
 | cb_osum_gather | `2*pieces` (R-VSPLIT only) | `pieces` partials of one tile row | {pair: streams, t: spans 1 tile row, V: one partial per piece} | Float32 (U2D) | writer (+ peer writers' NoC writes into slot `piece`) | compute | tile row | two tile rows of slots: a peer can be at most one tile row ahead (its next combine needs this core's next partial, produced only after this core consumed the current slots); same L1 address on every core (identical CB layout) so peers write by address |
 | cb_row_stage | 1 page of `(ROW_STAGE_SLOTS + 1) * dram_alignment` B (2112 B on Blackhole); allocated only when a face row is narrower than the DRAM read alignment (bf16) | up to ROW_STAGE_SLOTS aligned chunks | reader-private | raw bytes (token dtype descriptor) | reader | reader | between a row read and its RowReader::finish() | a bf16 face row is 32 B, a Blackhole DRAM read must be 64 B aligned: each half-row is read as its aligned 64 B chunk here, then copied L1-to-L1 into the destination tile. Not shared with cb_scratch: the conv_state_out copy reads rows into cb_scratch through this staging |
@@ -83,10 +84,11 @@ or blocking search exists: the footprint is a closed form checked once on host.
 ```
 footprint = 4096 * ( Kt*Vt*(STATE_IN_DEPTH + 1 + STATE_OUT_DEPTH)
                    + 14*Kt + 11*Vt + 2*ROW_DEPTH*Vt
-                   + 4*G*WINDOW_DEPTH + G (cb_hist_stage)
+                   + 4*G*WINDOW_DEPTH + 2*G (cb_hist_stage)
                    + CONV_ACC_DEPTH + 2*ROW_DEPTH + 3*TOK_COEF_DEPTH + 9 )
           + 2048 + 32*WINDOW_DEPTH
           [+ 4096*(1 + 2*pieces) for R-VSPLIT]
+          [+ 4096*Kt for R-BCAST (cb_qk_stage)]
           [+ 4096*(10 + Vt - TOK_COEF_DEPTH) for R-CHUNK]
 ```
 
@@ -153,6 +155,15 @@ recurrent_state_out stay at 1 crossing. Weights and gate tiles are read as align
 taps rows 0..3, rank-1 weights row 0, gate token rows), about 1/8 of the whole-tile bytes. Cross-core:
 per tile row each piece writes one 4 KiB partial tile to every piece of its pair (48 x 4 x 4 KiB =
 768 KiB per decode call) plus 3 semaphore increments. R-BCAST (deferred) would cut the q/k reads back.
+
+R-BCAST (Refinement 5), decode B=1 bf16, 48 cores in 4 key-head groups of 12: per key head one core reads
+the q columns (4 window columns, 4 conv_weight row spans) and one the k columns; all 48 read their own v
+column, state slice, z and gates. mixed_qkv / conv_state / conv_weight q/k bytes: 1 crossing per key head
+(were 12). Requests: every row span is one DRAM request per 16-row band (both face halves; were one per
+half), a decode token row one request per column (was two staged half-row reads). Cross-core added per
+call: per key head two multicasts of Kt fp32 tiles (16 KiB each, to the group's 12 cores, flag signal,
+no handshake) = 128 KiB of multicast payload. Self-addressed NoC traffic: window zeroing 147 KiB -> 8 /
+40 KiB per core; the single-row staging adds 2 x 32 B local copies per window column.
 
 ## Notes
 

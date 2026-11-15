@@ -211,7 +211,7 @@ head across its 12 cores (R-BCAST / split prep across pieces), which removes mos
 prep; then R-SEG to use the 62 idle cores. Not done here: both are separate cross-core topologies; and the
 chunked compute sits near the 70688 B kernel-config text limit, so any added compute code needs a size cut.
 
-### [ ] Refinement 5 — Decode B=1: remove the loopback copies and share the q/k preparation per key head
+### [x] Refinement 5 — Decode B=1: remove the loopback copies and share the q/k preparation per key head
 
 **Type**: perf
 
@@ -249,6 +249,15 @@ prefer removing code paths that the new scheme supersedes.
 **Done when**: measured device-ns on `perf_decode_b1` improves and moves toward 5.3 us, its precision
 gates hold, the golden suite is green, no regression across the config-spanning guard set of Refinement 2
 plus `model_prefill_4096`.
+
+**Outcome**: perf_decode_b1 34.0 -> 25.7 us (R-BCAST with a q injector and a k injector per key head, flag-signal
+multicast of qn / kn; window zeroing scoped to the used groups, 147 -> 8 / 40 KiB of loopback per core; one DRAM
+request per row span and per decode token row); guard set all faster or flat (B=8 62.9, B=16 132.2, fp32 B=1 34.4
+us, prefill 4096 6.41 ms). Bound now: the injectors' serial chain (read to window 6.8 us, conv 2.2 + L2 3.2 us,
+hand-off ~1.3-2.9 us), then d + kn^T 2.3 us and token step + RMS/combine ~7 us on every core. Next: drop d by
+o = qn^T S_new (one row of the read matmul after the update), split each q/k part over more cores (partial L2
+sums), and fuse the step / RMS phases (region 3, not attempted here: the compute kernel's text budget and the
+d-free form changes the token-step numerics, which deserves its own measured pass).
 
 ### [ ] Refinement 6 — Prefill: take the per-row preparation off the ordered path
 
