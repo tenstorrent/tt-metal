@@ -256,18 +256,20 @@ void kernel_main() {
     constexpr auto norm_w_args = TensorAccessorArgs<dt_bias_args.next_compile_time_args_offset()>();
     constexpr auto conv_state_out_args = TensorAccessorArgs<norm_w_args.next_compile_time_args_offset()>();
 
+    // Buffer addresses are common runtime args: a cached program patches them per call without per-core args.
+    uint32_t addr = 0;
+    const auto mixed = TensorAccessor(mixed_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto z_acc = TensorAccessor(z_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto b_acc = TensorAccessor(b_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto a_acc = TensorAccessor(a_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto conv_state = TensorAccessor(conv_state_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto state = TensorAccessor(state_args, get_common_arg_val<uint32_t>(addr++), STATE_TILE_BYTES);
+    const auto conv_w = TensorAccessor(conv_w_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto a_log = TensorAccessor(a_log_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto dt_bias = TensorAccessor(dt_bias_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto norm_w = TensorAccessor(norm_w_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto conv_state_out = TensorAccessor(conv_state_out_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
     uint32_t arg = 0;
-    const auto mixed = TensorAccessor(mixed_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto z_acc = TensorAccessor(z_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto b_acc = TensorAccessor(b_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto a_acc = TensorAccessor(a_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto conv_state = TensorAccessor(conv_state_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto state = TensorAccessor(state_args, get_arg_val<uint32_t>(arg++), STATE_TILE_BYTES);
-    const auto conv_w = TensorAccessor(conv_w_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto a_log = TensorAccessor(a_log_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto dt_bias = TensorAccessor(dt_bias_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto norm_w = TensorAccessor(norm_w_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
-    const auto conv_state_out = TensorAccessor(conv_state_out_args, get_arg_val<uint32_t>(arg++), TILE_BYTES);
     const uint32_t first_unit = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
     const uint32_t T = get_arg_val<uint32_t>(arg++);

@@ -133,3 +133,24 @@
 - Golden test progress: slice `x128x128 or 8192x256 or 1x40x256` 29/29 passing; unit directory 228 passed before the new file, new file 6 passed.
 - Issues encountered: None. Guard set unchanged (device us before / after, same session: B=1 21.7 / 21.7, B=8 41.2 / 41.0, B=16 73.7 / 73.5, prefill 4096 912.3 / 914.3, T=128 82.5 / 82.2, T=512 196.5 / 196.2). R-QKCORE q / k cores still hold the pair plan (not the largest role).
 - Tests added: `test_gated_delta_net_l1_footprint.py` (256 KB width-sharded L1 tensor on the whole grid, five model calls bit-identical to the calls without it; the host check raises naming the role); `test_prep_predicate` passes the device budget.
+
+## Refinement 13 — Host cost per call: build the program once per shape
+- Date: 2026-11-15
+- What was done: program descriptor cached per key (device, every tensor's shape / dtype / layout / memory config,
+  in-place flags, epsilon, compute config, module knobs; LRU of 64, no tensors held). Buffer addresses moved to the
+  reader's (11) and writer's (2) common runtime args, so a cache hit only rewrites those lists. `custom_program_hash`
+  computed once per entry (structural hash + key). Kernel, CB and semaphore core ranges merged into rectangles (the
+  multicast groups keep per-core ranges, they depend on the order). Structural validation memoized per key; output
+  aliasing still checked every call. The descriptor no longer mutates the caller's compute config (works on a copy).
+  Host wall per repeat call: prefill T=128 1610 -> 330 us, decode B=1 560 -> 112 us (descriptor build 1196 -> 7 and
+  404 -> 6 us). Remaining: generic_op C++ dispatch, 90 / 44 us. Reused: create_program_descriptor unchanged apart from
+  the address args; Added: cache layer, two address helpers, range merging.
+- Accuracy achieved: bit-identical to the pre-change build (torch.equal on output, conv_state_out, recurrent_state_out)
+  on decode B=1 / B=16 bf16, decode B=1 fp32, prefill T=96 / T=128, batched B=2 T=40, (1,64,384) fp32, each with and
+  without in-place states, on cold and warm cache.
+- Golden test progress: slice of 19 (model decode / prefill geometries, batched, T=33, 48-head decode) + 36
+  test_regression passing; unit directory 231 passed.
+- Issues encountered: TensorSpec and ttnn.Shape hash by identity (equal values, different hashes), so the first key
+  never hit; the key uses repr(shape), dtype, layout and memory config instead.
+- Tests added: test_gated_delta_net_program_cache.py (alternating shapes, same shape with other tensors, in-place and
+  caller-provided outputs, aliasing refused on a cache hit).

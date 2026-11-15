@@ -20,6 +20,7 @@ k core, which multicast them to the key head's pair cores and then write conv_st
 """
 
 import struct
+from collections import OrderedDict
 from pathlib import Path
 
 import ttnn
@@ -689,7 +690,70 @@ def _cs_read_signals(device, assignment, qk_cores, pieces, value_heads, ratio, q
 
 
 def _core_ranges(cores):
+    """One range per core, in the given order (the multicast groups enumerate cores in this order)."""
     return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+
+def _merged_ranges(cores):
+    """The same core set as rectangles (row runs stacked over consecutive rows): fewer ranges to dispatch."""
+    rows = {}
+    for c in cores:
+        rows.setdefault(c.y, set()).add(c.x)
+    rects = []  # [x_lo, x_hi, y_lo, y_hi]
+    for y in sorted(rows):
+        xs = sorted(rows[y])
+        runs, start = [], xs[0]
+        for prev, x in zip(xs, xs[1:] + [None]):
+            if x != prev + 1:
+                runs.append((start, prev))
+                start = x
+        for lo, hi in runs:
+            rect = next((r for r in rects if r[0] == lo and r[1] == hi and r[3] == y - 1), None)
+            if rect:
+                rect[3] = y
+            else:
+                rects.append([lo, hi, y, y])
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(lo, y_lo), ttnn.CoreCoord(hi, y_hi)) for lo, hi, y_lo, y_hi in rects]
+    )
+
+
+def _copy_compute_config(config):
+    copy = ttnn.ComputeConfigDescriptor(
+        math_fidelity=config.math_fidelity,
+        math_approx_mode=config.math_approx_mode,
+        fp32_dest_acc_en=config.fp32_dest_acc_en,
+        dst_full_sync_en=config.dst_full_sync_en,
+        bfp8_pack_precise=config.bfp8_pack_precise,
+    )
+    copy.enable_trisc2_rvv = config.enable_trisc2_rvv
+    copy.unpack_to_dest_mode = list(config.unpack_to_dest_mode)
+    return copy
+
+
+def compute_config_key(config):
+    """Every field of a compute config that reaches the program (None: the op's default)."""
+    if config is None:
+        return None
+    return (
+        config.math_fidelity,
+        config.math_approx_mode,
+        config.fp32_dest_acc_en,
+        config.dst_full_sync_en,
+        config.bfp8_pack_precise,
+        config.enable_trisc2_rvv,
+        tuple(config.unpack_to_dest_mode),
+    )
+
+
+# Buffer addresses are the reader's and writer's common runtime args, in this order; every other argument is a
+# function of the program cache key.
+def reader_addresses(inputs, outputs):
+    return [t.buffer_address() for t in inputs] + [outputs[1].buffer_address()]
+
+
+def writer_addresses(outputs):
+    return [outputs[0].buffer_address(), outputs[2].buffer_address()]
 
 
 def _mcast_rects(device, cores):
@@ -758,9 +822,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         widths = [w for w in range(1, grid.x + 1) if group % w == 0 and -(-num_units // w) <= grid.y]
         if widths:
             work_grid = ttnn.CoreCoord(max(widths), grid.y)
-    (_, all_cores, group_1, group_2, blocks_1, blocks_2) = ttnn.split_work_to_cores(
-        work_grid, num_blocks, row_wise=True
-    )
+    _, all_cores, group_1, group_2, blocks_1, blocks_2 = ttnn.split_work_to_cores(work_grid, num_blocks, row_wise=True)
 
     assignment = []  # (core, first_unit, unit_count)
     next_block = 0
@@ -792,7 +854,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         for hk in range(key_heads):
             for role in (QK_Q_INJECTOR, QK_K_INJECTOR):
                 qk_cores.append((grid_cores[len(assignment) + len(qk_cores)], hk, role))
-        all_cores = _core_ranges([core for core, _, _, _ in assignment] + [core for core, _, _ in qk_cores])
+        all_cores = _merged_ranges([core for core, _, _, _ in assignment] + [core for core, _, _ in qk_cores])
     state_cores = [core for core, _, _, _ in assignment]
     state_set = {(c.x, c.y) for c in state_cores}
     spare = [c for c in grid_cores if (c.x, c.y) not in state_set]
@@ -954,7 +1016,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 noc_core = device.worker_core_from_logical_core(core)
                 group_producers.setdefault(group_first, []).extend([noc_core.x, noc_core.y])
     prep_cores = [core for core, _, _, _ in prep_units]
-    all_cores = _core_ranges(state_cores + prep_cores) if prep_units else all_cores
+    all_cores = _merged_ranges(state_cores + prep_cores) if prep_units else all_cores
 
     # ---- circular buffers ----
     cbs = []
@@ -978,8 +1040,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     else:
         # Allocation follows this order: each role's remotely written buffers start at the CB region base of its cores
         # (state and prep cores are disjoint), and the buffers on every core come after both roles'.
-        add_cbs(prep_plans[0], _core_ranges(state_cores))
-        add_cbs(prep_plans[1], _core_ranges(prep_cores))
+        add_cbs(prep_plans[0], _merged_ranges(state_cores))
+        add_cbs(prep_plans[1], _merged_ranges(prep_cores))
     row_stage_bytes = _row_stage_bytes(token_tile_bytes)
     if row_stage_bytes:
         cbs.append(
@@ -1018,27 +1080,13 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     )
 
     # ---- compile-time args per role (a prep core's unit is a key head: its r value heads' v columns) ----
-    reader_tensors = (
-        mixed_qkv,
-        z,
-        b,
-        a,
-        conv_state,
-        recurrent_state,
-        conv_weight,
-        A_log,
-        dt_bias,
-        norm_weight,
-        conv_state_out,
-    )
+    reader_tensors = (*inputs, conv_state_out)
     # Token tile bytes, state tile bytes.
     geometry_ct = [token_tile_bytes, FP32_TILE_BYTES]
     reader_accessor_ct = [arg for t in reader_tensors for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
     writer_accessor_ct = [
         arg for t in (output, recurrent_state_out) for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()
     ]
-    reader_addrs = [t.buffer_address() for t in reader_tensors]
-    writer_addrs = [output.buffer_address(), recurrent_state_out.buffer_address()]
 
     def role_ct(role):
         unit_v = heads * Vt if role == ROLE_PREP else v_block_tiles
@@ -1098,14 +1146,12 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         if prep is not None:
             group_first = first_unit - first_unit % (heads * pieces)
             producers = [len(group_producers[group_first]) // 2] + group_producers[group_first]
-        rts[0][core.x, core.y] = (
-            reader_addrs + [first_unit, count, tokens, role, zero_slots] + rows + producers + cs_args(core)
-        )
+        rts[0][core.x, core.y] = [first_unit, count, tokens, role, zero_slots] + rows + producers + cs_args(core)
         # R-VSPLIT: NoC coordinates of the pair's piece cores, in piece order.
         group_first = first_unit - first_unit % pieces
         peers = [c for s in range(pieces) for c in unit_noc[group_first + s]] if pieces > 1 else []
         rts[1][core.x, core.y] = (
-            writer_addrs + [first_unit, count, tokens, role, zero_slots, zero_slot_bytes] + rows + peers + producers
+            [first_unit, count, tokens, role, zero_slots, zero_slot_bytes] + rows + peers + producers
         )
         rts[2][core.x, core.y] = [first_unit, count, tokens, v_eps_bits, role] + rows
     roles[state_role] = (state_cores, *rts)
@@ -1123,10 +1169,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             for j in range(heads):
                 first = group_first + j * pieces
                 consumers += _mcast_rects(device, unit_cores[first : first + pieces])
-            rts[0][core.x, core.y] = reader_addrs + [group_first, 1, tokens, QK_OWN, zero_slots] + rows + cs_args(core)
-            rts[1][core.x, core.y] = (
-                writer_addrs + [group_first, 1, tokens, QK_OWN, zero_slots, zero_slot_bytes] + rows + consumers
-            )
+            rts[0][core.x, core.y] = [group_first, 1, tokens, QK_OWN, zero_slots] + rows + cs_args(core)
+            rts[1][core.x, core.y] = [group_first, 1, tokens, QK_OWN, zero_slots, zero_slot_bytes] + rows + consumers
             rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, QK_OWN] + rows
             src = device.worker_core_from_logical_core(core)
             dsts = [unit_noc[group_first + u] for u in range(heads * pieces)]
@@ -1149,11 +1193,12 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             v_lo = 2 * key_heads * Kt + hk * ratio * Vt + (0 if role == QK_Q_INJECTOR else v_half)
             v_hi = 2 * key_heads * Kt + hk * ratio * Vt + (v_half if role == QK_Q_INJECTOR else ratio * Vt)
             cs_cols = [own_lo, own_lo + Kt, v_lo, v_hi, cs_waits.get((core.x, core.y), 0)]
-            rts[0][core.x, core.y] = reader_addrs + [hk, batch, tokens, role, zero_slots] + rows + cs_cols
-            rts[1][core.x, core.y] = writer_addrs + [hk, batch, tokens, role, zero_slots, zero_slot_bytes] + rows
+            rts[0][core.x, core.y] = [hk, batch, tokens, role, zero_slots] + rows + cs_cols
+            rts[1][core.x, core.y] = [hk, batch, tokens, role, zero_slots, zero_slot_bytes] + rows
             rts[2][core.x, core.y] = [hk, batch, tokens, v_eps_bits, role] + rows
         roles[ROLE_QK] = ([core for core, _, _ in qk_cores], *rts)
 
+    compute_kernel_config = _copy_compute_config(compute_kernel_config)  # never mutate the caller's
     modes = list(getattr(compute_kernel_config, "unpack_to_dest_mode", []) or [])
     if len(modes) < NUM_CB_SLOTS:
         modes = modes + [ttnn.UnpackToDestMode.Default] * (NUM_CB_SLOTS - len(modes))
@@ -1203,7 +1248,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         if not cores:
             continue
         _, reader_rt, writer_rt, compute_rt = roles[role]
-        ranges = _core_ranges(cores)
+        ranges = _merged_ranges(cores)
         reader_rt, writer_rt, compute_rt = (runtime_args(rt, cores) for rt in (reader_rt, writer_rt, compute_rt))
         reader_ct, writer_ct, compute_ct = role_ct(role)
         reader_config, writer_config = ttnn.ReaderConfigDescriptor(), ttnn.WriterConfigDescriptor()
@@ -1228,6 +1273,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             core_ranges=ranges,
             compile_time_args=writer_ct,
             runtime_args=writer_rt,
+            common_runtime_args=writer_addresses(outputs),
             defines=defines,
             config=writer_config,
         )
@@ -1238,6 +1284,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 core_ranges=ranges,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
+                common_runtime_args=reader_addresses(inputs, outputs),
                 defines=defines,
                 config=reader_config,
             ),
@@ -1271,4 +1318,54 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             channel.attach(descriptor, prefix, writers, next_sem)
             next_sem = channel.next_semaphore_id()
     descriptor.kernels = kernels
+    return descriptor
+
+
+# ---- Program cache (host cost per call) ----
+# A descriptor depends on its inputs only through the cache key (gated_delta_net.py: the device, every tensor's spec,
+# which state outputs are their inputs, epsilon, the compute config and the knobs above); a call with a known key
+# re-sends the cached descriptor with its buffer addresses replaced. Entries hold no tensors.
+PROGRAM_CACHE_SIZE = 64
+_program_cache = OrderedDict()  # key -> (descriptor, reader kernels, writer kernels)
+_KNOB_NAMES = tuple(
+    name
+    for name, value in globals().items()
+    if name.isupper() and isinstance(value, (bool, int, float, str, tuple, type(None)))
+)
+
+
+def knob_values():
+    module = globals()
+    return tuple(module[name] for name in _KNOB_NAMES)
+
+
+def clear_program_cache():
+    _program_cache.clear()
+
+
+def program_cache_size():
+    return len(_program_cache)
+
+
+def cached_program_descriptor(key, inputs, outputs, *, epsilon, compute_kernel_config):
+    entry = _program_cache.get(key)
+    if entry is None:
+        descriptor = create_program_descriptor(
+            inputs, outputs, epsilon=epsilon, compute_kernel_config=compute_kernel_config
+        )
+        # The structural hash leaves out per-core argument values and counts; the key covers them.
+        descriptor.custom_program_hash = hash((ttnn.compute_program_descriptor_hash(descriptor), key)) % (1 << 64)
+        kernels = descriptor.kernels  # references into the descriptor: reader, writer, compute per core group
+        entry = (descriptor, kernels[0::3], kernels[1::3])
+        _program_cache[key] = entry
+        while len(_program_cache) > PROGRAM_CACHE_SIZE:
+            _program_cache.popitem(last=False)
+        return descriptor
+    _program_cache.move_to_end(key)
+    descriptor, readers, writers = entry
+    reader_args, writer_args = reader_addresses(inputs, outputs), writer_addresses(outputs)
+    for kernel in readers:
+        kernel.common_runtime_args = reader_args
+    for kernel in writers:
+        kernel.common_runtime_args = writer_args
     return descriptor

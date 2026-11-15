@@ -496,7 +496,7 @@ decode B=1 21.7 / 21.7, B=8 41.2 / 41.0, B=16 73.7 / 73.5, model_prefill_4096 91
 196.5 / 196.2, T=2048 527.0 / 527.0. Remaining sharing: R-QKCORE q / k cores hold the pair cores' plan (they are not the
 largest role).
 
-### [ ] Refinement 13 — Host cost per call: build the program once per shape
+### [x] Refinement 13 — Host cost per call: build the program once per shape
 
 **Type**: perf
 
@@ -524,6 +524,23 @@ unchanged.
 **Done when**: measured host wall time per call for prefill T=128 and decode B=1 drops by a large
 factor on repeat calls and the numbers before / after are in the Outcome, the golden suite is green,
 no regression on the guard set.
+
+**Outcome**: host wall per repeat call (perf_counter around call + synchronize_device, median of 200, first call
+excluded, bf16 model geometry): prefill T=128 1610 -> 330 us, decode B=1 560 -> 112 us; back-to-back without sync
+1438 -> 187 and 539 -> 87 us. Split before / after (us): prefill validate 44 / 26, descriptor 1196 / 7, generic_op
+152 / 90; decode 41 / 18, 404 / 6, 64 / 44 (validate ~12 us standalone: the cache key, of which the knob snapshot
+is 3 us). Done by: descriptor cached under a key of device, shape / dtype / layout / memory config of every tensor,
+in-place flags, epsilon, compute config and every module knob (`cached_program_descriptor`); the 13 buffer
+addresses moved to common runtime args (reader 11, writer 2) so a hit patches 2 to 6 short lists instead of ~100
+per-core lists (75 us per kernel to rewrite in Python); `custom_program_hash` set once; kernel / CB / semaphore
+core ranges merged into rectangles; structural validation memoized per key, buffer aliasing still checked per call.
+Bit-exact against the pre-change build on decode B=1 / B=16 / fp32, prefill T=96 / T=128, batched, small fp32, with
+and without in-place states. Device kernel time unchanged (HEAD -> now): decode_b1 22.7 -> 22.6, decode_b16 74.8 ->
+72.3, prefill_t96 77.6 -> 77.9, batched_b2_t40 126.3 -> 125.4, model_prefill_4096 917 -> 912 us. What is left is
+generic_op's C++ path (90 us at T=128): the ProgramDescriptor is copied into a MeshProgramDescriptor and the
+attributes, and on every hit the slow path re-applies all per-core runtime args from the descriptor. Next lever: a
+generic_op hit path that patches only common args (or the ProgramSpec path with tensor bindings); not done here
+because it is framework code, not this op.
 
 ### [ ] Refinement 14 — Prefill: q / k preparation once per key head
 

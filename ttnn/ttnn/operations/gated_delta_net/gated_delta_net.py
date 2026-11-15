@@ -12,8 +12,10 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from .gated_delta_net_program_descriptor import (
     HISTORY,
     TILE,
+    cached_program_descriptor,
     check_l1_footprint,
-    create_program_descriptor,
+    compute_config_key,
+    knob_values,
     l1_cb_budget,
     l1_footprint_bytes,
 )
@@ -122,20 +124,51 @@ def _check_shapes(mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, 
     return key_dim, value_dim
 
 
-def _check_state_out(name, out, state, inputs):
+def _check_state_out(name, out, state):
     """A caller-provided state output: the state input itself (updated in place) or a distinct tensor of its form."""
-    if out is None:
-        return
-    if (
+    if out is not None and (
         _shape(out) != _shape(state)
         or out.dtype != state.dtype
         or out.layout != state.layout
         or out.memory_config() != state.memory_config()
     ):
         raise ValueError(f"gated_delta_net: {name} must match the shape, dtype, layout and memory config of its input")
+
+
+def _check_state_out_aliasing(name, out, state, addresses):
+    """Per call (addresses are not in the cache key): a distinct state output must not be another input's buffer."""
+    if out is None:
+        return
     address = out.buffer_address()
-    if address != state.buffer_address() and any(t.buffer_address() == address for t in inputs):
+    if address != state.buffer_address() and address in addresses:
         raise ValueError(f"gated_delta_net: {name} must be its own state input or a tensor no other input uses")
+
+
+# Cache keys whose structural checks passed (validate() then re-checks only the per-call buffer aliasing).
+_validated_keys = set()
+
+
+def _tensor_key(t):
+    # TensorSpec and Shape hash by identity; repr(shape) is the cheapest value form.
+    return (repr(t.shape), t.dtype, t.layout, t.memory_config())
+
+
+def _cache_key(tensors, conv_state_out, recurrent_state_out, epsilon, compute_kernel_config):
+    """Everything the checks and the program descriptor read from a call except buffer addresses: the device, every
+    tensor's shape, dtype, layout and memory config, which state outputs are given and which update in place,
+    epsilon, the compute config and the descriptor knobs."""
+    conv_state, recurrent_state = tensors[4], tensors[5]
+    outs = []
+    for out, state in ((conv_state_out, conv_state), (recurrent_state_out, recurrent_state)):
+        outs += [None, None] if out is None else [_tensor_key(out), out.buffer_address() == state.buffer_address()]
+    return (
+        tensors[0].device().id(),
+        *(_tensor_key(t) for t in tensors),
+        *outs,
+        float(epsilon),
+        compute_config_key(compute_kernel_config),
+        knob_values(),
+    )
 
 
 def validate(
@@ -155,13 +188,37 @@ def validate(
     conv_state_out=None,
     recurrent_state_out=None,
 ):
+    return _validate(
+        (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight),
+        epsilon,
+        compute_kernel_config,
+        conv_state_out,
+        recurrent_state_out,
+    )[0]
+
+
+def _validate(tensors, epsilon, compute_kernel_config, conv_state_out, recurrent_state_out):
+    """validate(), returning (compute config, program cache key)."""
+    config = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    key = _cache_key(tensors, conv_state_out, recurrent_state_out, epsilon, compute_kernel_config)
+    if key not in _validated_keys:
+        _validate_structure(tensors, epsilon, config, conv_state_out, recurrent_state_out)
+        if len(_validated_keys) > 1024:
+            _validated_keys.clear()
+        _validated_keys.add(key)
+    addresses = [t.buffer_address() for t in tensors]
+    _check_state_out_aliasing("conv_state_out", conv_state_out, tensors[4], addresses)
+    _check_state_out_aliasing("recurrent_state_out", recurrent_state_out, tensors[5], addresses)
+    return config, key
+
+
+def _validate_structure(tensors, epsilon, config, conv_state_out, recurrent_state_out):
+    mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight = tensors
     key_dim, value_dim = _check_shapes(
         mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight, epsilon
     )
-    tensors = (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
-    _check_state_out("conv_state_out", conv_state_out, conv_state, tensors)
-    _check_state_out("recurrent_state_out", recurrent_state_out, recurrent_state, tensors)
-    config = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    _check_state_out("conv_state_out", conv_state_out, conv_state)
+    _check_state_out("recurrent_state_out", recurrent_state_out, recurrent_state)
     axes = {
         "dtype": mixed_qkv.dtype,
         "layout": mixed_qkv.layout,
@@ -183,7 +240,6 @@ def validate(
 
     footprint = l1_footprint_bytes(key_dim // TILE, value_dim // TILE, mixed_qkv.dtype)
     check_l1_footprint("R-STEP pair", footprint, l1_cb_budget(mixed_qkv.device()))
-    return config
 
 
 # ---------------------------------------------------------------------------
@@ -215,22 +271,8 @@ def gated_delta_net(
     place; every byte of it is read before any core overwrites it). None allocates a new tensor. No other input is
     written.
     """
-    config = validate(
-        mixed_qkv,
-        z,
-        b,
-        a,
-        conv_state,
-        recurrent_state,
-        conv_weight,
-        A_log,
-        dt_bias,
-        norm_weight,
-        epsilon=epsilon,
-        compute_kernel_config=compute_kernel_config,
-        conv_state_out=conv_state_out,
-        recurrent_state_out=recurrent_state_out,
-    )
+    inputs = (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
+    config, key = _validate(inputs, epsilon, compute_kernel_config, conv_state_out, recurrent_state_out)
     device = mixed_qkv.device()
     batch, value_heads, key_dim, value_dim = _shape(recurrent_state)
     rows, channels = _shape(mixed_qkv)[1], _shape(mixed_qkv)[2]
@@ -259,8 +301,7 @@ def gated_delta_net(
             recurrent_state.memory_config(),
         )
 
-    inputs = (mixed_qkv, z, b, a, conv_state, recurrent_state, conv_weight, A_log, dt_bias, norm_weight)
     outputs = (output, conv_state_out, recurrent_state_out)
-    descriptor = create_program_descriptor(inputs, outputs, epsilon=epsilon, compute_kernel_config=config)
+    descriptor = cached_program_descriptor(key, inputs, outputs, epsilon=epsilon, compute_kernel_config=config)
     ttnn.generic_op([*inputs, *outputs], descriptor)
     return output, conv_state_out, recurrent_state_out

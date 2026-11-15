@@ -29,3 +29,4 @@
 {"event":"tool_use","tool":"Skill","skill":"memory-budget-metal","args":"","ts":"2026-11-15T07:56:03+00:00"}
 {"event":"test_run","status":"pass","test":"test_gated_delta_net_l1_footprint.py","details":"6 passed: decode b1/b16, prefill 128/2048/4096 beside 256KB L1 tensor","ts":"2026-11-15T08:06:58+00:00"}
 {"event":"test_run","status":"pass","test":"golden slice x128x128|8192x256|1x40x256 + unit dir + guard profile","details":"29/29 golden, 228 unit, guard set unchanged","ts":"2026-11-15T08:11:54+00:00"}
+{"event":"test_run","refinement":13,"status":"pass","tests":"unit dir 231 passed; golden slice 19 + regression 36; program_cache 3 passed","host_wall_us":{"prefill_t128":[1610,330],"decode_b1":[560,112]},"ts":"2026-11-15T08:39:48+00:00"}
