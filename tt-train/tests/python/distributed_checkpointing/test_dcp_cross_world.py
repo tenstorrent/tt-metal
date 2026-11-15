@@ -17,22 +17,30 @@ import subprocess
 import sys
 
 import pytest
-import ttnn
-
-import ttml
 from dcp_driver import MESH_OPEN_FAILED
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(3600)]
 
-MGD_DIR = os.path.normpath(os.path.join(os.path.dirname(ttml.__file__), "..", "..", "..", "configs", "mgd"))
 DRIVER = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcp_driver.py")]
 
 
 def _world(mesh: str, axes: str, flags: tuple[str, ...], mgd: str | None):
+    """The driver arguments of a world; ``mgd`` names a bundled descriptor, resolved by ``_resolve``."""
     args = ["--mesh", mesh, "--axes", axes, *flags]
     if mgd:
-        args += ["--mgd", os.path.join(MGD_DIR, mgd)]
+        args += ["--mgd", mgd]
     return args
+
+
+def _resolve(world: list[str], mgd_path) -> list[str]:
+    """``world`` with its descriptor name replaced by the descriptor's path; skips if the descriptor is missing."""
+    if "--mgd" not in world:
+        return world
+    at = world.index("--mgd") + 1
+    path = mgd_path(world[at])
+    if not os.path.isfile(path):
+        pytest.skip(f"no descriptor {path}")
+    return world[:at] + [path] + world[at + 1 :]
 
 
 CASES = {
@@ -97,14 +105,12 @@ def _saved_checkpoint(save_world: list[str], tmp_path_factory, what: str) -> str
 
 
 @pytest.mark.parametrize("case", list(CASES))
-def test_checkpoint_loads_onto_another_world(tmp_path_factory, release_metal_env, case):
+def test_checkpoint_loads_onto_another_world(
+    tmp_path_factory, release_metal_env, skip_if_host_too_small, mgd_path, case
+):
     save_world, load_world, needed = CASES[case]
-    available = ttnn.GetNumAvailableDevices()
-    if available < needed:
-        pytest.skip(f"{case} needs {needed} devices, {available} available")
-    for args in (save_world, load_world):
-        if "--mgd" in args and not os.path.isfile(args[args.index("--mgd") + 1]):
-            pytest.skip(f"{case}: no descriptor {args[args.index('--mgd') + 1]}")
+    skip_if_host_too_small((needed,), case)
+    save_world, load_world = _resolve(save_world, mgd_path), _resolve(load_world, mgd_path)
     release_metal_env()  # the children open the chips
     ckpt = _saved_checkpoint(save_world, tmp_path_factory, f"{case} save")
     out = _run(["load", "--dir", ckpt, "--steps", "2", *load_world], f"{case} load")
@@ -112,11 +118,10 @@ def test_checkpoint_loads_onto_another_world(tmp_path_factory, release_metal_env
     assert "RESULT: OK" in out, out.splitlines()[-5:]
 
 
-def test_same_world_through_the_driver_matches_exactly(tmp_path, release_metal_env):
-    if ttnn.GetNumAvailableDevices() < 2:
-        pytest.skip("needs two devices")
+def test_same_world_through_the_driver_matches_exactly(tmp_path, release_metal_env, skip_if_host_too_small, mgd_path):
+    skip_if_host_too_small((2,), "the same-world driver round trip")
     release_metal_env()
-    world = _world("1x2", "dp,tp", ("--tp",), "bh_1_2_line_line.textproto")
+    world = _resolve(_world("1x2", "dp,tp", ("--tp",), "bh_1_2_line_line.textproto"), mgd_path)
     ckpt = str(tmp_path / "step_0000002")
     _run(["save", "--dir", ckpt, "--steps", "2", *world], "save")
     out = _run(["load", "--dir", ckpt, "--steps", "2", "--same-layout", *world], "load")

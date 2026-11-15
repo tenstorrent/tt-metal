@@ -192,6 +192,18 @@ def _fresh_device_mesh(
 
 
 @pytest.fixture(scope="session")
+def skip_if_host_too_small():
+    """``skip_if_host_too_small(shape, what)`` -- see ``_skip_if_host_too_small``."""
+    return _skip_if_host_too_small
+
+
+@pytest.fixture(scope="session")
+def mgd_path():
+    """``mgd_path(name)``: the bundled mesh graph descriptor ``name`` under ``tt-train/configs/mgd``."""
+    return lambda name: os.path.join(_MGD_DIR, name)
+
+
+@pytest.fixture(scope="session")
 def release_metal_env():
     """``release_metal_env()`` closes this process's device mesh and releases its ``MetalEnv`` if it holds them (see
     ``_release_metal_env``), for a test whose child processes open the chips.

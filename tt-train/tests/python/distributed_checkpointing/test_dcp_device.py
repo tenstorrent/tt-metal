@@ -15,9 +15,8 @@ groups must not interleave: the TP tests come first, the FSDP test last.
 
 import numpy as np
 import pytest
-import torch
 import ttnn
-from tp_block import TPBlock, fresh_tp, make_adamw, train_step
+from tp_block import TPBlock, device_slices, fresh_tp, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
@@ -32,7 +31,7 @@ NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
 def _shards(tensor):
-    return [ttnn.to_torch(s) for s in ttnn.get_device_tensors(tensor.get_value(NATIVE))]
+    return device_slices(tensor.get_value(NATIVE))
 
 
 def _model_shards(params):
@@ -62,12 +61,12 @@ def _assert_same_shards(actual: dict, expected: dict) -> None:
     for key in expected:
         assert len(actual[key]) == len(expected[key]), key
         for device, (a, e) in enumerate(zip(actual[key], expected[key])):
-            assert torch.equal(a, e), f"{key} differs on device {device}"
+            assert np.array_equal(a, e), f"{key} differs on device {device}"
 
 
 def _assert_some_differ(actual: dict, expected: dict) -> None:
     assert any(
-        not torch.equal(a, e) for key in expected for a, e in zip(actual[key], expected[key])
+        not np.array_equal(a, e) for key in expected for a, e in zip(actual[key], expected[key])
     ), "precondition: fresh state differs"
 
 
@@ -373,7 +372,7 @@ def test_shards_that_end_inside_a_tile_round_trip_and_reshard(tp_mesh, tmp_path)
     replicated = _OddRows(sharded=False, seed=2)
     assert not dcp.load(path, model=replicated).fast_path_keys
     (whole,) = _model_shards(replicated.parameters()).values()
-    assert all(torch.equal(w, torch.cat(pieces, dim=2)) for w in whole)
+    assert all(np.array_equal(w, np.concatenate(pieces, axis=2)) for w in whole)
 
     # And back: the replicated weight's checkpoint cut into 48-row shards.
     path = str(tmp_path / "replicated")
