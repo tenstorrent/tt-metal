@@ -309,9 +309,9 @@ def declared_transform(
     """The transform for a tensor from its declarations and its sharding.
 
     ``fused`` is ``(dim, segment sizes)`` from a fusing layer; ``logical_extent`` is ``(dim, logical rows)`` from a
-    padded vocab weight; ``label`` is the live tensor's topology label (``_topology.Label``), whose shards of the fused
-    dim give the interleave. The declarations are checked against ``global_shape`` and the label: a mismatch is a
-    ``LayoutError`` naming ``key``, never a silent identity.
+    padded vocab weight; a negative dim counts from the end, as in numpy. ``label`` is the live tensor's topology label
+    (``_topology.Label``), whose shards of the fused dim give the interleave. The declarations are checked against
+    ``global_shape`` and the label: a mismatch is a ``LayoutError`` naming ``key``, never a silent identity.
 
     Two combinations are refused rather than given a transform:
 
@@ -324,6 +324,18 @@ def declared_transform(
       supporting one needs a transform for per-shard padding, and this refusal is the place to change.
     """
     where = f"{key}: " if key else ""
+    ndim = len(global_shape)
+
+    def resolve(dim: int, what: str) -> int:
+        # Labels hold non-negative dims, so a declared -2 must become 2 before it is compared with them.
+        if not -ndim <= int(dim) < ndim:
+            raise LayoutError(f"{where}{what} declares dim {int(dim)}, out of range for a rank-{ndim} tensor")
+        return int(dim) % ndim
+
+    if fused is not None:
+        fused = (resolve(fused[0], "fused_segments"), fused[1])
+    if logical_extent is not None:
+        logical_extent = (resolve(logical_extent[0], "logical_extent"), logical_extent[1])
     if fused is not None and logical_extent is not None and int(fused[0]) == int(logical_extent[0]):
         raise LayoutError(
             f"{where}fused_segments and logical_extent both declared on dim {int(fused[0])}; a fused weight padded "
@@ -332,7 +344,10 @@ def declared_transform(
     steps: list[Transform] = []
     if logical_extent is not None:
         dim, logical = logical_extent
-        steps.append(padded_extent(dim, logical, int(global_shape[dim])))
+        try:
+            steps.append(padded_extent(dim, logical, int(global_shape[dim])))
+        except LayoutError as err:
+            raise LayoutError(f"{where}{err}") from None
     if fused is not None:
         dim, sizes = fused
         if sum(sizes) != global_shape[dim]:
@@ -347,5 +362,8 @@ def declared_transform(
                 f"{list(axes)}); the fused row order is defined only when the tensor-parallel axis alone shards it. "
                 f"Shard this weight with FSDP along another dim (fully_shard's default picks one)"
             )
-        steps.append(fused_segments(dim, sizes, label.shard_count(dim)))
+        try:
+            steps.append(fused_segments(dim, sizes, label.shard_count(dim)))
+        except LayoutError as err:
+            raise LayoutError(f"{where}{err}") from None
     return compose(*steps)

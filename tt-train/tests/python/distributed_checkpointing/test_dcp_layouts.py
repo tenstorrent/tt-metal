@@ -174,6 +174,28 @@ def test_declared_transform_from_declarations(expect_error):
         declared_transform((1, 1, 64, 32), TP4, fused=(2, (32, 16)))
 
 
+def test_declared_dims_count_from_the_end_and_are_range_checked(expect_error):
+    # Labels hold non-negative dims; a declared -2 is dim 2, so it must get dim 2's interleave and padding.
+    assert declared_transform((1, 1, 64, 32), TP4, fused=(-2, (32, 16, 16))) == fused_segments(2, (32, 16, 16), 4)
+    assert declared_transform((1, 1, 192, 64), TP4, logical_extent=(-2, 130)) == Pad(2, 130, 192)
+    fsdp2_rows_tp4 = _label([Placement.shard(2), Placement.shard(2)], (2, 4))
+    with expect_error(LayoutError, "2 mesh axes shard"):
+        declared_transform((1, 1, 64, 32), fsdp2_rows_tp4, fused=(-2, (32, 16, 16)))
+    with expect_error(LayoutError, "both declared on dim 2"):
+        declared_transform((1, 1, 64, 32), TP4, fused=(-2, (32, 16, 16)), logical_extent=(2, 60))
+    with expect_error(LayoutError, "model/w: fused_segments declares dim 5, out of range for a rank-4 tensor"):
+        declared_transform((1, 1, 64, 32), TP4, fused=(5, (32, 16, 16)), key="model/w")
+    with expect_error(LayoutError, "logical_extent declares dim -5"):
+        declared_transform((1, 1, 64, 32), TP4, logical_extent=(-5, 10))
+
+
+def test_declaration_errors_name_the_key(expect_error):
+    with expect_error(LayoutError, "model/fc/weight: pad: logical extent 200"):
+        declared_transform((1, 1, 192, 64), TP4, logical_extent=(2, 200), key="model/fc/weight")
+    with expect_error(LayoutError, "model/qkv: fused_segments: segment size 90"):
+        declared_transform((1, 1, 96, 64), TP4, fused=(2, (90, 6)), key="model/qkv")
+
+
 def test_declared_transform_refuses_layouts_it_cannot_describe(expect_error):
     # A fused weight padded along its fused dim: every TP shard would carry its own padding inside its segments.
     with expect_error(LayoutError, "both declared on dim 2"):
