@@ -1419,6 +1419,66 @@ tasks:
       need: STOP and report, never reset. Report plainly, short.'
     gate_tasks:
     - P.67
+- id: FIX.33
+  title: 'OWNER 2026-11-15: model_bringup without expert replication: keep the orthogonal wins (P.59, P.63-P.66, FIX.32), remove every replica piece P.67 brought'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.67
+  gate:
+    cmd: BRINGUP_TASK=P.67 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.67 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      contract_checks_failed: == 0
+      acks_early: == 0
+      served_bytes_differ: == 0
+      chunk_wall_ms: '> 0'
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed_decoder_skip: == 0
+      acks_early_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      decode_acks_failures: == 0
+      device_ms_total: '> 0'
+      determinism_max_abs_diff: == 0
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/common/bringup/orchestrator.py
+  - models/demos/common/bringup/testing
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - ttnn/ttnn/bringup/INDEX.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CMakeLists.txt
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/README.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/common
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/expert_slot_copy
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/moe_block_nanobind.cpp
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'OWNER 2026-11-15 (supersedes this task''s earlier text): P.67 merged the WHOLE moe_replication branch; the owner asked only for the wins orthogonal to expert replication. model_bringup must hold the latest and greatest WITHOUT expert replication; the replica branch will be rebuilt on top of it afterwards (not this task). KEEP (and keep on by default where they are now): P.59 expert x pieces (EXPERT_X_PIECES), P.63 cached argument slots, P.64 ATTN_FUSE, P.65 CHEAP_CCL with FIX.32''s geometry-keyed program cache, P.66 LEAN_PY, FIX.31/FIX.32 framework and test work, the race tests (test_snapshot_race_loop, test_snapshot_send_geometry). REMOVE everything that exists only for expert replication: MOE_REPLICAS and all its modes (off/runtime/exact/prev; the code behaves as off does today), MOE_PREV_HOST, MOE_PREV_HOST2, MOE_PLANNER, MOE_PREV_FIXED and every other replica setting, tt/expert_prev.py and the replica parts of the adapter / moe_trace (P.61 MoE-half trace is replica-branch work: remove it too), the replica tests (test_moe_prev_replicas, test_moe_prev_host_probe, test_prev_host_account and the replica parts of any other), and the replica options in the forks (ttnn/ttnn/bringup/moe_block_main_ttnn: prev_counts, the fused head''s planner tail / prev_planner.hpp, the replica fill ports, the expert schedule''s replica paths) with their CHANGELOG entry. Reference for what is replica vs not: git diff ce1b9047afd b57de503eed (P.67) and the replica branch''s commits P.45-P.62b vs P.59/P.63-P.66 (bringup/deepseek_v41_flash_d_p/moe_replication). FIRST, before editing: list each P.67 file/hunk as KEEP or REMOVE, and name every place an orthogonal win depends on replica code (if one does, keep the orthogonal behaviour with replicas off and say how). Rebuild (./build_metal.sh) after the fork change. PROOF: outputs bit-identical to today''s MOE_REPLICAS=off path (test_determinism, test_decoder_skip_decode, ladder rung last within limits); chunk_wall_ms of the gate''s profile vs P.67''s A/B (off, pre-P.67: 182.8 ms; on, with replicas: 157.9 ms; replicas-off share of it expected ~10 ms slower than on); host / device ms a chunk reported. No new switches; no dead modes; grep proves no MOE_REPLICAS / expert_prev / prev_ name is left on model_bringup. Report plainly, short.'
+    gate_tasks:
+    - P.67
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1433,6 +1493,7 @@ tasks:
   - FIX.18
   - FIX.31
   - FIX.32
+  - FIX.33
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py

@@ -410,6 +410,14 @@ notes:
     implemented cannot work: name the ordering/synchronization assumption it relies on, show on device that it is violated,
     and why no in-program fix (barrier, semaphore wait) can restore it without losing its gain. Only (B) justifies leaving
     legacy defaults. If the pattern-only program cache in snapshot_send.py is not the cause, show that and keep digging.'
+- id: OV-41
+  tasks:
+  - FIX.33
+  status: closed
+  t: '2026-11-15T06:12:35'
+  text: 'The overseer stopped attempt 1 (overseer): owner 2026-11-15: hold; P.67 scope under review, change no code'
+  closed: '2026-11-15T06:16:11'
+  why_closed: 'owner decided: FIX.33 rewritten (model_bringup without expert replication)'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1000,6 +1008,35 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
   placed: '2026-11-14T20:20:55'
+- id: FIX.33
+  title: 'OWNER 2026-11-15: model_bringup without expert replication: keep the orthogonal wins (P.59, P.63-P.66, FIX.32),
+    remove every replica piece P.67 brought'
+  gate:
+  - P.67
+  status: placed
+  t: '2026-11-15T06:09:50'
+  text: 'OWNER 2026-11-15 (supersedes this task''s earlier text): P.67 merged the WHOLE moe_replication branch; the owner
+    asked only for the wins orthogonal to expert replication. model_bringup must hold the latest and greatest WITHOUT expert
+    replication; the replica branch will be rebuilt on top of it afterwards (not this task). KEEP (and keep on by default
+    where they are now): P.59 expert x pieces (EXPERT_X_PIECES), P.63 cached argument slots, P.64 ATTN_FUSE, P.65 CHEAP_CCL
+    with FIX.32''s geometry-keyed program cache, P.66 LEAN_PY, FIX.31/FIX.32 framework and test work, the race tests (test_snapshot_race_loop,
+    test_snapshot_send_geometry). REMOVE everything that exists only for expert replication: MOE_REPLICAS and all its modes
+    (off/runtime/exact/prev; the code behaves as off does today), MOE_PREV_HOST, MOE_PREV_HOST2, MOE_PLANNER, MOE_PREV_FIXED
+    and every other replica setting, tt/expert_prev.py and the replica parts of the adapter / moe_trace (P.61 MoE-half trace
+    is replica-branch work: remove it too), the replica tests (test_moe_prev_replicas, test_moe_prev_host_probe, test_prev_host_account
+    and the replica parts of any other), and the replica options in the forks (ttnn/ttnn/bringup/moe_block_main_ttnn: prev_counts,
+    the fused head''s planner tail / prev_planner.hpp, the replica fill ports, the expert schedule''s replica paths) with
+    their CHANGELOG entry. Reference for what is replica vs not: git diff ce1b9047afd b57de503eed (P.67) and the replica
+    branch''s commits P.45-P.62b vs P.59/P.63-P.66 (bringup/deepseek_v41_flash_d_p/moe_replication). FIRST, before editing:
+    list each P.67 file/hunk as KEEP or REMOVE, and name every place an orthogonal win depends on replica code (if one does,
+    keep the orthogonal behaviour with replicas off and say how). Rebuild (./build_metal.sh) after the fork change. PROOF:
+    outputs bit-identical to today''s MOE_REPLICAS=off path (test_determinism, test_decoder_skip_decode, ladder rung last
+    within limits); chunk_wall_ms of the gate''s profile vs P.67''s A/B (off, pre-P.67: 182.8 ms; on, with replicas: 157.9
+    ms; replicas-off share of it expected ~10 ms slower than on); host / device ms a chunk reported. No new switches; no
+    dead modes; grep proves no MOE_REPLICAS / expert_prev / prev_ name is left on model_bringup. Report plainly, short.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-11-15T06:10:26'
 classified:
   L.smoke:
     kind: framework
