@@ -51,10 +51,14 @@ def test_shared_matches_own(device, monkeypatch, inputs, token_dtype, poison):
             if name != "recurrent_state":
                 tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
     results = []
-    for share in (True, False):
+    # q / k cores (QK_CORES_VSPLIT, where the rectangles fit), R-BCAST injectors, every core its own q / k.
+    for qk_cores, share in ((True, True), (False, True), (False, False)):
+        monkeypatch.setattr(gdn_pd, "QK_CORES_VSPLIT", qk_cores)
         monkeypatch.setattr(gdn_pd, "SHARE_QK_PREP", share)
+        gdn_pd.clear_program_cache()
         device_inputs = _to_device(tensors, device, poison, token_dtype)
         outs = gated_delta_net(*device_inputs, compute_kernel_config=compute_config())
         results.append([ttnn.to_torch(t).to(torch.float32) for t in outs])
-    for shared, own, label in zip(*results, ("output", "conv_state_out", "recurrent_state_out")):
-        assert torch.equal(shared, own), f"{label}: shared q/k prep differs from the unshared path"
+    for label, *variants in zip(("output", "conv_state_out", "recurrent_state_out"), *results):
+        for variant in variants[:-1]:
+            assert torch.equal(variant, variants[-1]), f"{label}: shared q/k prep differs from the unshared path"

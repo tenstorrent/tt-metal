@@ -63,6 +63,10 @@ BCAST_RECT_GROUPS = False
 # On: the q injector is the group's first core and sends on NOC 0 (its reader and writer swap NoCs), the k injector
 # its last core on NOC 1: each path starts at the sender and q and k never share a NoC.
 BCAST_SPLIT_NOCS = True
+# R-QKCORE on R-VSPLIT pieces (decode, every sequence's pieces one per core, e.g. B = 1): the q / k part runs on 2 Hk
+# idle cores instead of two pieces of each key head, so every state core is a receiver. Per key head its pieces fill a
+# rectangle with the q core left of its first row (sends on NOC 0) and the k core right of its last (NOC 1).
+QK_CORES_VSPLIT = True
 # R-QKCORE (decode R-STEP, one tile row of sequences): per key head a q core and a k core convolve and L2-normalize the
 # key head's q (k) columns of every sequence of the tile row at once and multicast qn (kn) to the key head's pair cores,
 # which read and convolve only their v columns. Pair cores run consecutive sequences of one value head.
@@ -749,12 +753,26 @@ def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked,
     return None
 
 
-def _qk_core_units(batch, tokens, value_heads, key_heads, Kt, Vt, pieces, num_cores):
+def _qk_vsplit_rect(grid, batch, value_heads, key_heads, pieces):
+    """QK_CORES_VSPLIT: (width, rows) of each key head's rectangle of pieces, the widest whose rectangles stack in the
+    grid with a column to spare on either side (the q and k cores), or None."""
+    group = batch * (value_heads // key_heads) * pieces
+    for width in range(min(group, grid.x - 2), 0, -1):
+        if group % width == 0 and key_heads * (group // width) <= grid.y:
+            return width, group // width
+    return None
+
+
+def _qk_core_units(batch, tokens, value_heads, key_heads, Kt, Vt, pieces, num_cores, grid=None):
     """R-QKCORE plan: units (sequences of one value head) per pair core, or None. Needs decode with every sequence in
-    one tile row, one pair per unit (R-STEP), 2 Hk idle cores for the q / k cores, and a v-only window group whose FPU
-    conv batch also divides the pair's columns (compute's CONV_BATCH)."""
-    if not (SHARE_QK_CORES and tokens == 1 and pieces == 1 and batch <= TILE):
+    one tile row, one pair per unit (R-STEP; or one piece per core under QK_CORES_VSPLIT, placed by _qk_vsplit_rect),
+    2 Hk idle cores for the q / k cores, and a v-only window group whose FPU conv batch also divides the pair's columns
+    (compute's CONV_BATCH)."""
+    if not (SHARE_QK_CORES and tokens == 1 and batch <= TILE):
         return None
+    if pieces > 1:
+        vsplit = QK_CORES_VSPLIT and grid is not None and _qk_vsplit_rect(grid, batch, value_heads, key_heads, pieces)
+        return 1 if vsplit else None
     batch_cols = _largest_divisor_at_most(Vt, 4)
     if (2 * Kt + Vt) % batch_cols:
         return None
@@ -977,9 +995,27 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     grid_cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
     # R-QKCORE: pair cores grouped by key head (row-major, cores_per_kh each: value head j of the key head, sequences
     # s0, s0 + 1, ... at unit stride Hv), then the q and k core of each key head.
-    qk_per_core = _qk_core_units(batch, tokens, value_heads, key_heads, Kt, Vt, pieces, num_grid_cores)
+    qk_per_core = _qk_core_units(batch, tokens, value_heads, key_heads, Kt, Vt, pieces, num_grid_cores, grid)
     qk_cores = []  # (core, key head, qk role)
-    if qk_per_core:
+    if qk_per_core and pieces > 1:
+        width, rect_rows = _qk_vsplit_rect(grid, batch, value_heads, key_heads, pieces)
+        assignment = []
+        for hk in range(key_heads):
+            y0 = hk * rect_rows
+            units = [
+                (seq * value_heads + hk * ratio + j) * pieces + piece
+                for seq in range(batch)
+                for j in range(ratio)
+                for piece in range(pieces)
+            ]
+            for idx, unit in enumerate(units):
+                core = ttnn.CoreCoord(1 + idx % width, y0 + idx // width)
+                assignment.append((core, unit, 1, value_heads * pieces))
+            qk_cores.append((ttnn.CoreCoord(0, y0), hk, QK_Q_INJECTOR))
+            qk_cores.append((ttnn.CoreCoord(width + 1, y0 + rect_rows - 1), hk, QK_K_INJECTOR))
+        cores_per_kh = len(assignment) // key_heads
+        all_cores = _merged_ranges([core for core, _, _, _ in assignment] + [core for core, _, _ in qk_cores])
+    elif qk_per_core:
         assignment = []
         for hk in range(key_heads):
             for j in range(ratio):
@@ -1079,7 +1115,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     qk_group = (value_heads // key_heads) * pieces
     k_sender = qk_group - 1 if BCAST_SPLIT_NOCS else 1  # the k injector's index in its group
     qk_channels = []
-    if _share_qk(pieces, tokens):
+    if _share_qk(pieces, tokens) and not qk_cores:
         order = [(core.y, core.x) for core, _, _, _ in assignment]
         assert order == sorted(order), "units must be assigned in row-major core order"
         # One round per channel per call: no handshake (each receiver's landing CB is untouched before it) and a
@@ -1101,17 +1137,18 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if qk_cores:
         # Group kh = the key head's cores_per_kh pair cores (consecutive in row-major order); its senders are the
         # key head's q core (channel q) and k core (channel k), outside the group. One flag-signalled round per call.
-        config = ttnn.McastConfig(noc=ttnn.NOC.RISCV_1_default, handshake=False, data_ready=ttnn.McastDataReady.Flag)
+        # QK_CORES_VSPLIT: the q cores send on NOC 0 (their reader and writer swap NoCs).
+        q_noc = ttnn.NOC.NOC_0 if pieces > 1 else ttnn.NOC.NOC_1
         qk_channels = [
             ttnn.Mcast(
                 device,
-                config,
+                ttnn.McastConfig(noc=noc, handshake=False, data_ready=ttnn.McastDataReady.Flag),
                 _core_ranges(state_cores),
                 cores_per_kh,
                 ttnn.McastExplicitFixedSenderConfig([core for core, _, r in qk_cores if r == role]),
                 ttnn.McastCoreOrder.RowMajor,
             )
-            for role in (QK_Q_INJECTOR, QK_K_INJECTOR)
+            for role, noc in ((QK_Q_INJECTOR, q_noc), (QK_K_INJECTOR, ttnn.NOC.NOC_1))
         ]
 
     def qk_role(unit):
@@ -1470,7 +1507,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
     kernel_groups = []  # (role, cores, swap the reader / writer NoCs)
     for role, (cores, *_) in roles.items():
-        if role == ROLE_LOCAL and qk_cores and SWAP_NOC_ROWS:
+        if role == ROLE_QK and pieces > 1:
+            # QK_CORES_VSPLIT: the q cores send on NOC 0.
+            q_cores = {(core.x, core.y) for core, _, r in qk_cores if r == QK_Q_INJECTOR}
+            kernel_groups += [
+                (role, [c for c in cores if (c.x, c.y) in q_cores], True),
+                (role, [c for c in cores if (c.x, c.y) not in q_cores], False),
+            ]
+        elif role == ROLE_LOCAL and qk_cores and SWAP_NOC_ROWS and pieces == 1:
             # Decode R-QKCORE: every pair core reads its S0 at once. NOC 0 brings read responses south, around the
             # torus for the top rows, which then lose to the lower rows' traffic; NOC 1 brings them north. The pair
             # cores in the top SWAP_NOC_ROWS rows read on NOC 1 and write on NOC 0.
