@@ -12,11 +12,17 @@ engram table). Not shared: everything a run records (its own env, results dir, l
 (KV caches: freed between runs).
 
 A run may join a batch when it is one ``scripts/run_safe_pytest.sh --no-precompile`` call (flags: --no-precompile,
---run-all) over framework tests that take the model from testing/batch.device_model (SHARED_TESTS) with no device
-profiler variable (TT_METAL_*: read at process start). Every other run keeps its own process: the contract tests
-build the model through the engine's adapter (part of what they check) and the model's own tests load it themselves.
-The runs of one batch must agree on every variable but the per-run ones (ITEM_VARS): a model's switches are read at
-its load (DeepSeek-V4.1 HOST_GLUE freezes them), so different switch values are different processes (off / on).
+--run-all) over tests that take the model from the batch (``shareable``: the framework's SHARED_TESTS, or a test file
+that declares ``BATCH_SHARED = True``: it loads the model only through testing/batch.device_model or a model loader
+that goes through testing/batch.shared_model, e.g. DeepSeek-V4.1's serving adapter, tt/runners/adapter.load_model)
+with no device profiler variable (TT_METAL_*: read at process start). The runs of one batch must agree on every
+variable but the per-run ones (ITEM_VARS): a model's switches are read at its load (DeepSeek-V4.1 HOST_GLUE freezes
+them), so different switch values are different processes (off / on); a switch a test sets itself (monkeypatch) and
+the model reads at load makes testing/batch.shared_model load again in the process (a warning, counted in
+model_loads); one the model reads per call (hooks.batch_call_settings) does not.
+FIX.29 (OWNER 2026-11-13, "LOAD THE MODEL ONLY ONCE"): the contract tests and the model's own tests share it too, and
+a gate runs all its units that may share a process in ONE batch process (``gate_groups``, core/gate.run_units): one
+model load per gate and model configuration (``gate_model_loads``, counted from each process's ``model_loads``).
 """
 
 from __future__ import annotations
@@ -33,8 +39,25 @@ KEY_ENV = "BRINGUP_BATCH_KEY"  # set per run by the batch process: the model key
 LM_HEAD_ENV = "BRINGUP_BATCH_LM_HEAD"  # load the shared model with its LM head (a ladder run in the batch needs it)
 MAX_SEQ_ENV = "BRINGUP_BATCH_MAX_SEQ"  # load it with target.seq at least this (the furthest BRINGUP_POS + chunk)
 BATCH_TEST = "models/demos/common/bringup/tests/test_batch.py"
+KEEP_GOING_ENV = "BRINGUP_BATCH_KEEP_GOING"  # 1: a hand-run batch (BRINGUP_BATCH_CMD) runs every run past a failure
+INJECT_ENV = "BRINGUP_INJECT"  # diagnostic (FIX.29): a mistake injected into the batch's model (testing/batch.inject)
 TESTS_DIR = "models/demos/common/bringup/tests/"
-SHARED_TESTS = ("test_ladder.py", "test_profile.py", "test_positions.py", "test_smoke.py", "test_determinism.py")
+SHARED_TESTS = (
+    "test_ladder.py",
+    "test_profile.py",
+    "test_positions.py",
+    "test_smoke.py",
+    "test_determinism.py",
+    # FIX.29: the serving contract through the engine's adapter (its runtime takes the batch's model: the model's
+    # loader goes through testing/batch.shared_model), and its host-only ack-timing check
+    "test_contract.py",
+    "test_contract_acks.py",
+)
+# FIX.29: a model test file that takes the batch's model declares it with this line (module level)
+SHARED_MARK = re.compile(r"^BATCH_SHARED\s*=\s*True\b", re.M)
+LOADS_METRIC = "model_loads"  # each process: the model loads it made (testing/batch.shared_model)
+GATE_LOADS_METRIC = "gate_model_loads"  # a gate run: the model loads of all its processes (core/gate.run_units)
+_REPO = Path(__file__).resolve().parents[5]
 # FIX.25: the model-level determinism check (testing/model_determinism.py) every model-level gate runs (core/gate.py)
 DETERMINISM_TEST = TESTS_DIR + "test_determinism.py"
 DETERMINISM_CMD = f"scripts/run_safe_pytest.sh --run-all --no-precompile {DETERMINISM_TEST}"
@@ -61,6 +84,21 @@ SAFE_RUN = re.compile(r"^((?:\w+=\S*\s+)*)scripts/run_safe_pytest\.sh\s+(.+)$", 
 ASSIGN = re.compile(r"^(\w+)=(\S*)$")
 
 
+def shareable(test: str, repo: Path | None = None) -> bool:
+    """A test file (or ::nodeid) that may run in a batch: a framework SHARED_TESTS file, or a test file under models/
+    that declares ``BATCH_SHARED = True`` (FIX.29)."""
+    path = test.split("::")[0]
+    if path.startswith(TESTS_DIR) and path.rsplit("/", 1)[-1] in SHARED_TESTS:
+        return True
+    if not (path.startswith("models/") and path.endswith(".py") and "/tests/" in path):
+        return False
+    f = (repo or _REPO) / path
+    try:
+        return bool(SHARED_MARK.search(f.read_text(errors="replace")))
+    except OSError:
+        return False
+
+
 def parse(seg: str) -> dict | None:
     """One `&&` segment as a batch run {env, args, run_all}, or None when it cannot share a process."""
     m = SAFE_RUN.match(seg.strip())
@@ -72,7 +110,7 @@ def parse(seg: str) -> dict | None:
     tests = [w for w in words if not w.startswith("-")]
     if not tests or "--no-precompile" not in flags or not set(flags) <= FLAGS:
         return None
-    if any(not (t.startswith(TESTS_DIR) and t.split("::")[0].rsplit("/", 1)[-1] in SHARED_TESTS) for t in tests):
+    if not all(shareable(t) for t in tests):
         return None
     if any(k.startswith("TT_METAL_") for k in env) or env.get("BRINGUP_PROFILER") == "device":
         return None
@@ -102,14 +140,11 @@ def phase(run: dict) -> int:
     return 2
 
 
-def model_key(env: dict, names: set) -> str:
-    """The model configuration of a run: its effective value of every non-per-run variable any run sets."""
-    return json.dumps({k: env.get(k) for k in sorted(names - ITEM_VARS)}, sort_keys=True)
-
-
 def hints(runs: list[dict], spec) -> dict:
     """What the shared model is loaded for, so no run needs another load: the LM head when a ladder or the smoke runs,
-    target.seq up to the furthest position a profile (BRINGUP_POS) or test_positions times."""
+    target.seq up to the furthest position a profile (BRINGUP_POS) or test_positions times. FIX.29: at least the
+    longest sequence the spec's target and ladders reach, whatever loads first (the serving adapter's runtime asks
+    for its rung's max seq only; a model's load-time tables of more positions serve fewer: DeepSeek-V4.1's RoPE)."""
     out = {}
     tests = [r["args"][0].split("::")[0] for r in runs]
     if any(t.endswith(("test_ladder.py", "test_smoke.py")) for t in tests):
@@ -118,6 +153,9 @@ def hints(runs: list[dict], spec) -> dict:
     need = pos or any(t.endswith("test_positions.py") for t in tests)
     chunk = int(spec.get("target.chunk")) if need else 0  # (only then: FIX.25's determinism run needs no hint)
     seqs = [p + chunk for p in pos]
+    if len(runs) > 1:  # (a process of one run loads what it needs)
+        seqs += [int(spec.get("target.seq", 0) or 0)]
+        seqs += [int(r.get("seq", 0) or 0) for key in ("ladder", "scaled.ladder") for r in (spec.get(key) or [])]
     if any(t.endswith("test_positions.py") for t in tests):
         from models.demos.common.bringup.testing.positions import positions
 
@@ -149,6 +187,159 @@ def unit_command(cmd: str, spec=None) -> str | None:
     ).strip()
 
 
+LAUNCH_FLAGS = ("--precompile", "--no-precompile")  # FIX.31: where kernels compile, not what a run measures
+
+
+def launch_form(cmd: str) -> tuple[str, list[str]]:
+    """FIX.31: a command whose runs ask for the safe runner's precompile pass (no --no-precompile flag) in the form a
+    shared process runs it, and a note per such run. A batch process runs its tests with kernels compiled on demand:
+    a precompile pass inside it would run every test body under NO_DISPATCH first, and the batch's model cache
+    (testing/batch.shared_model) would keep the model that pass built from shape-only tensors. Model-level runs find
+    their kernels in the cache (F151: full-model steps already skip the pass); the first chunk compiles what is not."""
+    out, notes = [], []
+    for seg in cmd.split("&&"):
+        m = SAFE_RUN.match(seg.strip())
+        if not m:
+            out.append(seg.strip())
+            continue
+        words = m.group(2).split()
+        if "--no-precompile" not in words:
+            words = ["--no-precompile"] + [w for w in words if w != "--precompile"]
+            notes.append(
+                f"{' '.join(w for w in words if not w.startswith('-'))}: asked for the precompile pass; in the shared "
+                "process its kernels compile on demand (FIX.31, core/batch.launch_form)"
+            )
+        out.append(f"{m.group(1)}scripts/run_safe_pytest.sh {' '.join(words)}".strip())
+    return " && ".join(out), notes
+
+
+def why_not(cmd: str) -> str | None:
+    """FIX.31: why a unit's command cannot run in a shared process (the gate log says it), or None when it can."""
+    cmd = launch_form(cmd)[0]
+    for seg in (x.strip() for x in cmd.split("&&") if x.strip()):
+        m = SAFE_RUN.match(seg)
+        if not m:
+            return f"`{seg[:80]}` is not one scripts/run_safe_pytest.sh call"
+        words = shlex.split(m.group(2))
+        flags = [w for w in words if w.startswith("-")]
+        tests = [w for w in words if not w.startswith("-")]
+        env = dict(ASSIGN.match(w).groups() for w in m.group(1).split())
+        if not tests:
+            return f"`{seg[:80]}` names no test"
+        bad = sorted(set(flags) - FLAGS)
+        if bad:
+            return f"flags {bad} (a shared process takes only {sorted(FLAGS)})"
+        no = [t for t in tests if not shareable(t)]
+        if no:
+            return f"{no} cannot share the model (not a framework shared test, no BATCH_SHARED = True)"
+        if any(k.startswith("TT_METAL_") for k in env) or env.get("BRINGUP_PROFILER") == "device":
+            return "a device-profiler variable (read at process start)"
+    return None
+
+
+_TEST_VALUES: dict = {}
+
+
+def test_value(name: str):
+    """FIX.31: (found, value) of a model switch variable ``name`` (e.g. DS41_ENGRAM_TABLE) as a test process reads it
+    unset: its Setting's ``test`` value when it has one (F222), else its default (core/model_settings.Setting)."""
+    import importlib
+
+    if name in _TEST_VALUES:
+        return _TEST_VALUES[name]
+    _TEST_VALUES[name] = (False, None)
+    for f in sorted(_REPO.glob("models/demos/*/tt/settings.py")):
+        mod = f"models.demos.{f.parent.parent.name}.tt.settings"
+        try:
+            m = importlib.import_module(mod)
+        except Exception:  # noqa: BLE001 -- a model whose settings do not import: its switches stay as written
+            continue
+        for v in vars(m).values():
+            prefix = getattr(v, "prefix", None)
+            table = getattr(v, "table", None)
+            if isinstance(prefix, str) and isinstance(table, dict) and name.startswith(prefix):
+                st = table.get(name[len(prefix) :])
+                if st is not None:
+                    _TEST_VALUES[name] = (True, st.test if st.test is not None else st.default)
+    return _TEST_VALUES[name]
+
+
+def normalized(env: dict) -> dict:
+    """FIX.31 (owner 2026-11-13): a model switch set to the value a test process reads when it is unset is the same
+    model as unset (P.51's units ran as 5 processes over one such variable). Compared as text with the value's type
+    (bools as 1/true/yes). DS41_ENGRAM_TABLE=resident is NOT such a switch: its test value is mmap (F222), and a
+    timed gate sets resident on purpose (X.3, owner 2026-11-06)."""
+    out = {}
+    for k, v in env.items():
+        found, val = test_value(k) if k.isupper() and "_" in k and not k.startswith(("BRINGUP_", "TT_")) else (0, 0)
+        if found:
+            same = (str(v).lower() in ("1", "true", "yes")) == val if isinstance(val, bool) else str(v) == str(val)
+            if same:
+                continue
+        out[k] = v
+    return out
+
+
+def model_key(env: dict, names: set) -> str:
+    """The model configuration of a run: its effective value of every non-per-run variable any run sets (FIX.31: a
+    switch at the value a test reads unset counts as unset). Only which runs share a process: the device side loads
+    again whenever a load-time switch value differs (testing/batch.shared_model)."""
+    env = normalized({k: v for k, v in env.items() if k in names - ITEM_VARS})
+    return json.dumps({k: env.get(k) for k in sorted(names - ITEM_VARS)}, sort_keys=True)
+
+
+def gate_groups(units: list[tuple[str, str]], env: dict) -> list[list[tuple[str, str]]]:
+    """FIX.29: the gate units to run (unit, command), in gate order, as process groups: consecutive units whose every
+    run may share a process at one model configuration (``model_key`` over the gate's environment and the runs'
+    prefixes) form one group (one batch process, one model load); any other unit is a group of its own (its command
+    as written, or core/batch.unit_command). A single unit stays its own group.
+    FIX.31: a unit whose runs ask for the precompile pass joins too, in its launch form (``launch_form``: the command a
+    group of two or more carries)."""
+    out: list[list[tuple[str, str]]] = []
+    keys: list[str | None] = []
+    forms = {u: launch_form(c)[0] for u, c in units}
+    parsed = {u: parse_all(forms[u]) for u, _ in units}
+    names = {k for runs in parsed.values() if runs for r in runs for k in r["env"]}
+    for u, c in units:
+        runs = parsed[u]
+        key = None
+        if runs:
+            ks = {model_key({**env, **r["env"]}, names) for r in runs}
+            key = ks.pop() if len(ks) == 1 else None
+        if key is not None and out and keys[-1] == key:
+            out[-1].append((u, forms[u]))
+        else:
+            out.append([(u, forms[u] if key is not None else c)])
+            keys.append(key)
+    return [g if len(g) > 1 else [(g[0][0], dict(units)[g[0][0]])] for g in out]
+
+
+def gate_entries(group: list[tuple[str, str]], env: dict, unit_env: dict, logs: dict) -> list[dict]:
+    """FIX.29: the batch entries of one process group of gate units: each unit's runs (its `&&` segments) in a group
+    of their own (a failed run skips the rest of its unit), the unit's own log and per-run variables (``unit_env``:
+    {unit: {BRINGUP_TASK: ...}}), the determinism runs first (FIX.25: the first sequence after the load is the cold
+    one), else the gate's order; the plan stops at the first failure (the gate stops there too). ``logs``: {unit:
+    log path}."""
+    parsed = [(u, parse_all(c)) for u, c in group]
+    names = {k for _, runs in parsed for r in runs for k in r["env"]}
+    entries = []
+    for u, runs in parsed:
+        for j, r in enumerate(runs):
+            entries.append(
+                dict(
+                    r,
+                    env={**(unit_env.get(u) or {}), **r["env"]},
+                    name=f"{u}.{j}",
+                    group=u,
+                    unit=u,
+                    log=str(logs[u]),
+                    key=model_key({**env, **r["env"]}, names),
+                )
+            )
+    entries.sort(key=lambda e: -1 if phase(e) == -1 else 0)  # (stable: the gate's order otherwise)
+    return entries
+
+
 def write_plan(path: Path, entries: list[dict], stop_on_fail: bool = False) -> Path:
     """entries: {name, group, env, args, run_all, log, key}. ``group``: runs that stand or fall together (an A/B item:
     its clean wall and its profiled run); a failed run skips the rest of its group, or of the plan with stop_on_fail."""
@@ -175,8 +366,15 @@ def plan_from_cmd(cmd: str, spec=None) -> dict:
     if not runs:
         raise ValueError(f"{CMD_ENV}: not a command of runs that may share a process: {cmd!r}")
     names = {k for r in runs for k in r["env"]}
-    entries = [
-        dict(r, name=f"run{i}", group="unit", log=None, key=model_key(dict(os.environ, **r["env"]), names))
+    stop = os.environ.get(KEEP_GOING_ENV) != "1"
+    entries = [  # (one group: a failure skips the rest, as &&; KEEP_GOING: each run on its own)
+        dict(
+            r,
+            name=f"run{i}",
+            group="unit" if stop else f"run{i}",
+            log=None,
+            key=model_key(dict(os.environ, **r["env"]), names),
+        )  # fmt: skip
         for i, r in enumerate(runs)
     ]
-    return {"version": 1, "stop_on_fail": True, "entries": entries, "hints": hints(runs, spec) if spec else {}}
+    return {"version": 1, "stop_on_fail": stop, "entries": entries, "hints": hints(runs, spec) if spec else {}}

@@ -177,9 +177,15 @@ until the owner decides from the A/B).**
   snapshot) bit-identical between off and decode, both prompts, 5 prompt lengths; decode never writes a decoder
   snapshot; acks once per layer per chunk; prefix hit: no history record below global_write_start written, rows from
   it on vs a fresh prefill and vs the golden reported (approximate by design). The framework's ladder / profile drive
-  the model directly with `last` unset: under decode they run every layer (the off path); the contract tests that
-  check layers 20-39's windows (test_contract, test_adapter_acks) measure what decode no longer computes and run on
-  off (DS41-240).
+  the model directly with `last` unset: under decode they run every layer (the off path).
+  FIX.28 (OWNER 2026-11-13): the gate tests also run the decode path itself, on the same model (loaded off, switched
+  by `use_decoder_skip`): tests/test_determinism.py (a prompt of 4 chunks, request A [0, 7680) then B from 7552 with
+  global_write_start 7680 up to P, every chunk last=False; bit for bit cold / warm, both prompts:
+  `determinism_max_abs_diff_decoder_skip`), test_contract (hooks.contract_variants: the request [0, P), P = 10048 for
+  the contract's 10208 tokens, global_write_start = actual_start, last=False, on the other slot; acks, ack timing,
+  history [0, P) and layers 0-19's snapshot and fixed state vs the golden's handoff snapshot at P, nothing written in
+  [P, N): metrics `*_decoder_skip`) and test_adapter_acks (the same request at end P and at P + 40, whose cap is P:
+  P.49's rule holds under decode). Layers 20-39's windows are not judged under decode (never written, never read).
 
 **Index keys (P.39, owner 2026-11-06, PD migration first cut: compatibility with Blaze decode for now; P.42 replaced
 the re-index copies with aliases, above).** Setting

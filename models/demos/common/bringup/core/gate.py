@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from models.demos.common.bringup.core import batch, freeze, hangdump
+from models.demos.common.bringup.core import batch, freeze, hangdump, hostmem
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core import stamps
 from models.demos.common.bringup.core.chunked import log_chunks, roll_log
@@ -349,18 +349,16 @@ def needs_determinism(task: dict, units: list[tuple[str, str]]) -> bool:
 
 def with_determinism(task: dict, units: list[tuple[str, str]]) -> list[tuple[str, str]]:
     """FIX.25: every model-level gate runs the model determinism check (testing/model_determinism.py), without its
-    tasks.yaml entry naming it; no switch turns it off (owner: no exemption for the model). It joins the gate's first
-    unit whose runs may share one process at the model's shipped configuration (core/batch.py: shared framework tests,
-    no switch variable), first in it, so it costs no model load of its own (tests.one_process) and its first sequence
-    is the cold one after the load; a gate without such a unit gets it as its own first unit <task>#test_determinism.
+    tasks.yaml entry naming it; no switch turns it off (owner: no exemption for the model). It is the gate's first unit
+    <task>#test_determinism; the gate runs it in one process with the units after it that may share the model
+    (core/batch.gate_groups, tests.one_process), first in that process (its first sequence is the cold one after the
+    load), so it costs no model load of its own. FIX.31 (P.51, 2026-11-13): never inside another unit's command (it
+    once joined the first shareable unit, which changed that unit's command and so its stamp: a passed ladder re-ran);
+    a unit's stamp depends only on its own command and environment.
     A non-deterministic model fails the unit (the test asserts; DETERMINISM_METRIC == 0 is also a gate limit, see
     gate_limits), its message naming the prompt, run, first differing chunk and first differing layer state."""
     if not needs_determinism(task, units):
         return units
-    for k, (u, c) in enumerate(units):
-        runs = batch.parse_all(c)
-        if runs and all(set(r["env"]) <= batch.ITEM_VARS for r in runs):
-            return units[:k] + [(u, f"{batch.DETERMINISM_CMD} && {c}")] + units[k + 1 :]
     return [(f"{task.get('id')}#test_determinism", batch.DETERMINISM_CMD)] + units
 
 
@@ -656,9 +654,44 @@ def reusable(rec: dict | None, limits: dict, whole: bool) -> bool:
 
 INFRA_STOP = re.compile(  # F169: a unit that did not finish for the box's or the clock's sake: STOPPED, not FAILED
     r"Timeout \(>[\d.]+s\) from pytest-timeout|Timed out while waiting for active ethernet core|"
-    r"Try resetting the board|No Tenstorrent devices|Failed to open device|fabric router .* timed out",
+    r"Try resetting the board|No Tenstorrent devices|Failed to open device|fabric router .* timed out|"
+    + re.escape(hostmem.INFRA_TAG),  # FIX.30: not started for lack of host memory
     re.I,
 )
+NOT_RUN = "NOT RUN"  # FIX.30: a unit of a shared process the process never reached (never PASS, never reused)
+
+
+def hostmem_file(log: Path) -> Path:
+    """FIX.30: the run's host-memory records (core/hostmem.report: one line per device process)."""
+    return log.parent / "hostmem.jsonl"
+
+
+def hostmem_key(cmds: list[str]) -> str:
+    """FIX.30: the configuration a process's host memory is recorded under: its unit's command, or a shared
+    process's units' commands (one model load for all of them)."""
+    return ("group:" if len(cmds) > 1 else "unit:") + stamps.sha16(" && ".join(cmds))
+
+
+def hostmem_env(log: Path, cmds: list[str], f=None) -> dict:
+    """FIX.30: the safe runner's host-memory variables for a process running ``cmds`` (a unit, or a shared group of
+    units): where to record, under which key, and the need measured before (a group never measured: the largest of
+    its units' needs, the shared model being one of theirs). The gate log gets the node's memory now."""
+    path = hostmem_file(log)
+    key = hostmem_key(cmds)
+    need = hostmem.recorded_need(path, [key])
+    src = "measured for it"
+    if need is None and len(cmds) > 1:
+        each = [n for n in (hostmem.recorded_need(path, [hostmem_key([c])]) for c in cmds) if n is not None]
+        need, src = (max(each), "the largest of its units' needs") if each else (None, "")
+    env = {hostmem.FILE_ENV: str(path), hostmem.KEY_ENV: key}
+    if need is not None:
+        env[hostmem.NEED_ENV] = str(need)
+    if f is not None:
+        snap = hostmem.snapshot()
+        what = f"needs {need:.1f} GB ({src}, {key})" if need is not None else f"no measured need yet ({key})"
+        f.write(f"# host memory (FIX.30): {hostmem.describe(snap)}; this process {what}\n")
+        f.flush()
+    return env
 
 
 def under_test_paths(task: dict, tasks: dict | None = None) -> list[str]:
@@ -670,14 +703,18 @@ def under_test_paths(task: dict, tasks: dict | None = None) -> list[str]:
     return sorted(set(out))
 
 
-def _kept(d: dict | None, under: str, cmd: str, uenv: dict, limits: dict, whole: bool) -> bool:
-    """F169: a unit that passed in this task's gate on the same code under test, command and environment."""
+def _kept(d: dict | None, under: str, cmd: str, uenv: dict, limits: dict, whole: bool, aliases=None) -> bool:
+    """F169: a unit that passed in this task's gate on the same code under test, command and environment (FIX.31: an
+    environment key from before measuring_env counts when it is this environment's, or aliases to it)."""
+    if not d:
+        return False
+    env = stamps.env_key(uenv)
+    envs = {env, stamps.legacy_env_key(uenv)} | {k for k, v in ((aliases or {}).get("env") or {}).items() if v == env}
     return (
-        bool(d)
-        and d.get("verdict") == "PASS"
+        d.get("verdict") == "PASS"
         and d.get("under_test") in ((under,) if isinstance(under, str) else tuple(under))  # F175: (semantic, bytes)
         and d.get("cmd") == stamps.sha16(cmd)
-        and d.get("env") == stamps.env_key(uenv)
+        and d.get("env") in envs
         and unit_ok(limits, d.get("metrics") or {}, whole)
     )
 
@@ -716,6 +753,110 @@ def waived_failures(text: str, waivers: list[dict]) -> str | None:
     return "; ".join(str(w.get("why", "")) for w in waivers)
 
 
+PRE_RUN = "pre-run"  # FIX.31: a unit run in a multi-task shared process just before this gate (core/multigate.py)
+
+
+def _lookup(spec, store, u: str, cmd: str, st: dict, sid: str, uenv: dict, tasks: dict, limits: dict, whole: bool):
+    """FIX.31: a PASS of this unit the gate may reuse instead of running it: (record, how, restore) or None. In order:
+    its own stamp (F150; F177: the same test filed by another task); the same stamp made before FIX.31 (a legacy code /
+    env key that aliases to today's: the same tree and environment, stamps.ensure_aliases); every one of its runs'
+    newest safe-runner record (core/runrec.py: a devjob, gate --check, --one-process or a hand run of the same tests,
+    measuring environment and code), all PASS; a gate record of another task's unit whose runs are the same (its
+    command differs only in launch flags, e.g. --no-precompile). Never a FAIL, HANG or NOT RUN, never an older pass
+    behind a newer failure of the same run, and only when its metrics meet today's limits. ``restore(results, tid)``
+    puts its result files in place and returns them."""
+    from models.demos.common.bringup.core import runrec
+
+    if store is None:
+        return None
+    rec = store.get(u, sid)
+    if reusable(rec, limits, whole):
+        return (
+            rec,
+            f"same code (PASS at {rec.get('t')} in the {rec.get('by')} gate)",
+            (lambda results, tid: _restore_found(store, rec.get("_from", u), sid, rec, results, tid)),
+        )
+    aliases = store.aliases() if hasattr(store, "aliases") else {}
+    for alt in stamps.alias_sids(st, aliases):
+        rec = store.get(u, alt)
+        if reusable(rec, limits, whole):
+            return (
+                rec,
+                f"same code and environment, stamped before FIX.31 (PASS at {rec.get('t')} by {rec.get('by')})",
+                (lambda results, tid, a=alt, r=rec: _restore_found(store, r.get("_from", u), a, r, results, tid)),
+            )
+    keys = runrec.unit_keys(cmd, uenv, (st["code"], st["goldens"]), spec)
+    if not keys or st.get("waivers"):
+        return None
+    rs = runrec.RunStore(store.dir.parent)
+    found = runrec.find_unit(rs, keys)
+    if found:
+        got = {}
+        for r in found:
+            got.update(r.get("metrics") or {})
+        if unit_ok(limits, got, whole):
+            src = ", ".join(f"{r.get('launched')} run of {r.get('cmd', '')[:60]} at {r.get('t')}" for r in found)
+            rec = {"verdict": "PASS", "rc": 0, "metrics": got, "t": found[-1].get("t"), "by": "runner"}
+
+            def restore(results, tid, found=found):
+                out = []
+                for r in found:
+                    out += rs.restore(r["key"], r, results, tid)
+                return [results / n for n in out]
+
+            return rec, f"the same runs, filed by the safe runner ({src})", restore
+    if any((rs.latest(k) or {}).get("verdict") not in (None, "PASS") for k in keys):
+        return None  # a newer run of the same tests on the same code failed: never an older pass
+    label = u.split("#", 1)[1] if "#" in u else segment_label(cmd.split("&&")[-1], 1)
+    if not label or not store.dir.is_dir():
+        return None
+    codes = {st["code"]} | {k for k, v in (aliases.get("code") or {}).items() if v == st["code"]}
+    envs = {st["env"]} | {k for k, v in (aliases.get("env") or {}).items() if v == st["env"]}
+    for idx in sorted(store.dir.glob(f"*#{label}.json")):
+        other = idx.stem
+        for osid, r in sorted(store.records(other).items(), key=lambda x: x[1].get("t", ""), reverse=True):
+            ost = r.get("stamp") or {}
+            if (
+                ost.get("code") not in codes
+                or ost.get("env") not in envs
+                or ost.get("goldens") != st["goldens"]
+                or ost.get("waivers")
+                or not reusable(r, limits, whole)
+            ):
+                continue
+            ocmd = r.get("cmd_text")
+            if ocmd is None:  # a record made before FIX.31: its command from its task's gate, by its hash
+                otask = tasks.get(r.get("by") or unit_base(other))
+                ocmd = next(
+                    (c for x, c in (gate_units(otask, tasks) if otask else []) if stamps.sha16(c) == ost.get("cmd")),
+                    None,
+                )
+            if ocmd is None or runrec.unit_keys(ocmd, uenv, (st["code"], st["goldens"]), spec) != keys:
+                continue
+            return (
+                r,
+                f"the same runs as {other} (PASS at {r.get('t')}: the same tests, measuring environment and code)",
+                (lambda results, tid, o=other, a=osid, rr=r: _restore_found(store, o, a, rr, results, tid)),
+            )
+    return None
+
+
+def _restore_found(store, unit: str, sid: str, rec: dict, results: Path, tid: str) -> list[Path]:
+    names = []
+    for name in rec.get("outputs") or []:
+        src = store.dir / unit / sid / name
+        if src.exists():
+            dst = results / (f"{tid}{name}" if name.startswith("_") else name)
+            shutil.copy2(src, dst)
+            names.append(dst)
+    return names
+
+
+def _pre_rec(pre: dict | None, u: str):
+    """FIX.31: this unit's result from the multi-task shared process run just before this gate, or None."""
+    return (pre or {}).get(u)
+
+
 def run_units(
     spec: Spec,
     task: dict,
@@ -729,6 +870,7 @@ def run_units(
     only: set | None = None,
     rerun: set | frozenset = frozenset(),
     on_unit=None,
+    pre: dict | None = None,
 ) -> tuple[int, list[str], dict[str, str]]:
     """F150: the gate's units in order (&&: the first failure stops), each with its own BRINGUP_TASK. With a store,
     every run unit is kept under its stamp, and a unit whose stamp has a PASS (its metrics still within the gate's
@@ -736,6 +878,8 @@ def run_units(
     F169: with ``delta`` (the task's own record of its units), a unit that passed in this task's gate on the same code
     under test is kept, whatever the overseer edited since (the spec, waivers, the framework): a gate never restarts,
     it runs the delta. ``only``: run just these units (gate --unit); ``rerun``: run these even if kept (gate --rerun).
+    FIX.31: a unit is also reused from a safe-runner record of the same runs (``_lookup``); ``pre``: {unit: result} of
+    the units a multi-task shared process ran just before this gate (core/multigate.py), taken as run here.
     """
     tid, tasks = task["id"], tasks or {}
     limits = gate_limits(task, tasks)  # FIX.25: with the determinism limit
@@ -750,10 +894,37 @@ def run_units(
         else ("", "")
     )
     under = unders[0]
+    aliases = store.aliases() if store is not None else {}  # FIX.31
     rc, reused, stop = 0, [], False
     sids = {u: sid for u, _, _, sid in plan if sid}
     n = len(plan)
     note = on_unit or (lambda *a: None)
+
+    def would_run(u, cmd, sid) -> bool:
+        """FIX.29: the unit runs in this gate (not filtered out, not kept, not reused): the loop's own tests."""
+        if only is not None and u not in only:
+            return False
+        uenv = dict(env, **{M.TASK_ENV: unit_base(u)})
+        d = delta.get(u) if delta is not None and not fresh and u not in rerun else None
+        if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1, aliases):
+            return False
+        if u in (pre or {}):
+            return False
+        if store is None or fresh or u in rerun or only is not None:
+            return True
+        st = next(x[2] for x in plan if x[0] == u)
+        return _lookup(spec, store, u, cmd, st, sid, uenv, tasks, limits, len(plan) == 1) is None
+
+    # FIX.29: the units that run, grouped into processes (core/batch.gate_groups): {unit: its group}
+    groups = {}
+    if spec.get("tests.one_process"):
+        todo = [(u, c) for u, c, _, sid in plan if would_run(u, c, sid)]
+        for g in batch.gate_groups(todo, env):
+            if len(g) > 1:
+                for u, _ in g:
+                    groups[u] = g
+    shared: dict[str, dict] = dict(pre or {})  # unit -> its result in a group's batch process (rc, metrics, files, ...)
+    loads = {"n": 0, "seen": False}  # FIX.29: model loads of this gate's processes (gate_model_loads)
     with open(log, "a" if only else "w") as f:
         f.write(f"$ {gate_command(task, tasks)}\n")
         for k, (u, cmd, st, sid) in enumerate(plan, 1):
@@ -761,7 +932,7 @@ def run_units(
                 continue
             uenv = dict(env, **{M.TASK_ENV: unit_base(u)})  # F166: a split unit runs as its task
             d = delta.get(u) if delta is not None and not fresh and u not in rerun else None
-            if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1):
+            if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1, aliases):
                 _merge_metrics(results, tid, d["metrics"])
                 srec = store.get(u, d.get("sid")) if store is not None and d.get("sid") else None
                 if srec:
@@ -770,11 +941,19 @@ def run_units(
                 reused.append(u)
                 note(k, n, u, "KEPT", 0.0)
                 continue
-            rec = None if store is None or fresh or u in rerun else store.get(u, sid)
-            if reusable(rec, limits, len(plan) == 1) and only is None:
+            found = (
+                None
+                if store is None or fresh or u in rerun or only is not None or u in shared
+                else _lookup(spec, store, u, cmd, st, sid, uenv, tasks, limits, len(plan) == 1)
+            )
+            if found:
+                rec, how, restore = found
                 _merge_metrics(results, tid, rec["metrics"])
-                store.restore(u, sid, rec, results, tid)
-                f.write(f"# {u}: reused: same code (PASS at {rec.get('t')} in the {rec.get('by')} gate), not run\n")
+                outs = restore(results, tid)
+                f.write(f"# {u}: reused: {how}, not run\n")
+                if not how.startswith("same code (PASS"):  # FIX.31: filed under this unit's own stamp too
+                    keep = {k2: v for k2, v in rec.items() if k2 not in ("outputs", "_from", "stamp")}
+                    store.put(u, sid, dict(keep, stamp=st, cmd_text=cmd, via=how), outs, tid)
                 if delta is not None:
                     delta.put(u, _delta_rec("PASS", under, cmd, uenv, sid, rec["metrics"], 0.0))
                 reused.append(u)
@@ -795,13 +974,38 @@ def run_units(
             before = M.load(tid, results)
             seen = {p: p.stat().st_mtime_ns for p in outputs_in(results, task) if p.exists()}
             t0 = time.time()
-            run = batch.unit_command(cmd, spec) if spec.get("tests.one_process") else None
-            if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model loaded once
-                f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {run}\n")
+            if u in groups and u not in shared:  # FIX.29: the unit's group in one process, the model loaded once
+                cmds = {x[0]: x[1] for x in plan}
+                for gu, _ in groups[u]:  # FIX.31: a unit that asked for the precompile pass joins on demand
+                    for note_line in batch.launch_form(cmds[gu])[1]:
+                        f.write(f"# {gu}: {note_line}\n")
+                shared.update(
+                    _run_group(spec, groups[u], env, log, results, tid, f, lambda x: {M.TASK_ENV: unit_base(x)})
+                )
+            if u in shared:
+                r = shared[u]
+                where = (
+                    "a multi-task shared process (FIX.31)" if r.get(PRE_RUN) else "the gate's shared process (FIX.29)"
+                )
+                f.write(f"# {u}: run in {where}, {r['s']:.0f} s there\n")
+                f.write(r["text"])
                 f.flush()
-            rc = subprocess.run(
-                run or cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT
-            ).returncode
+                rc = r["rc"]
+                if r.get("first"):
+                    loads["n"] += r["loads"]
+                    loads["seen"] = True
+            else:
+                run = batch.unit_command(cmd, spec) if spec.get("tests.one_process") else None
+                if spec.get("tests.one_process"):  # FIX.31: why this unit has a process of its own, in the log
+                    why = batch.why_not(cmd) or "no other unit of this gate left to run at its model configuration"
+                    f.write(f"# {u}: a process of its own: {why}\n")
+                if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model once
+                    f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {run}\n")
+                    f.flush()
+                penv = dict(uenv, **hostmem_env(log, [cmd], f))  # FIX.30
+                rc = subprocess.run(
+                    run or cmd, shell=True, cwd=spec.repo, env=penv, stdout=f, stderr=subprocess.STDOUT
+                ).returncode
             if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F204: before the next unit's mesh open wipes it
                 kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
                 f.write(f"\n# {u}: HANG; triage + inspector kept in {kept}\n")
@@ -819,17 +1023,36 @@ def run_units(
                         f"\n# {u}: WAIVED (owner, tests.unit_waivers): every failure matches the waiver: {waived}\n"
                     )
                     rc = 0
-            if store is not None:
+            if u in shared:
+                got = dict(shared[u]["metrics"])
+                if shared[u].get(PRE_RUN):  # FIX.31: run before this gate (which reset its results): put them back
+                    _merge_metrics(results, tid, got)
+                    for src, name in shared[u].get("restore") or []:
+                        if Path(src).exists():
+                            shutil.copy2(src, results / name)
+            else:
                 got = {k: v for k, v in M.load(tid, results).items() if before.get(k) != v}
+                if batch.LOADS_METRIC in got:  # FIX.29: the model loads of the unit's processes (a running total)
+                    t0_loads = int((before.get(batch.LOADS_METRIC) or {}).get("total") or 0)
+                    loads["n"] += int(got[batch.LOADS_METRIC].get("total") or 0) - t0_loads
+                    loads["seen"] = True
+            if loads["seen"]:  # FIX.29: the model loads of this gate's processes so far
+                gl = {"value": loads["n"], "t": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                got[batch.GATE_LOADS_METRIC] = gl
+                _merge_metrics(results, tid, {batch.GATE_LOADS_METRIC: gl})
+            if store is not None:
                 ok = unit_ok(limits, got, len(plan) == 1)
                 hang = rc == SAFE_HANG_RC and _uses_safe_runner(cmd)
                 outs = [
                     p
                     for p in outputs_in(results, task)
-                    if p.exists() and p.name != f"{tid}.json" and seen.get(p) != p.stat().st_mtime_ns
+                    if p.exists()
+                    and p.name != f"{tid}.json"
+                    and (p.name in shared[u]["files"] if u in shared else seen.get(p) != p.stat().st_mtime_ns)
                 ]
                 verdict = "PASS" if rc == 0 and ok else ("HANG" if hang else "FAIL")
                 rec = {"stamp": st, "verdict": verdict, "rc": rc, "s": round(time.time() - t0, 1), "metrics": got}
+                rec["cmd_text"] = cmd  # FIX.31: another task's gate finds the same runs by it (_lookup)
                 if waived is not None:
                     rec["waived"] = waived
                 store.put(u, sid, dict(rec, by=tid, t=time.strftime("%Y-%m-%dT%H:%M:%S")), outs, tid)
@@ -844,8 +1067,88 @@ def run_units(
                     stop = verdict != "PASS"  # F169: a unit whose metrics missed stops the gate here too
                     note(k, n, u, dv, round(time.time() - t0, 1))
             if rc != 0 or stop:
+                # FIX.30: the units of this unit's shared process that the process never reached are NOT RUN in this
+                # gate (the delta, the stamp store, the summary), never left with an older PASS
+                for k2, (u2, cmd2, st2, sid2) in enumerate(plan, 1):
+                    if k2 <= k or u2 not in shared or shared[u2]["rc"] == 0:
+                        continue
+                    why = f"not run: the shared process stopped at {u} (rc {rc}) before reaching it"
+                    f.write(f"# {u2}: {NOT_RUN} ({why}, FIX.30)\n")
+                    u2env = dict(env, **{M.TASK_ENV: unit_base(u2)})
+                    if store is not None:
+                        rec = {"stamp": st2, "verdict": NOT_RUN, "rc": shared[u2]["rc"], "s": 0.0, "metrics": {}}
+                        store.put(u2, sid2, dict(rec, by=tid, t=time.strftime("%Y-%m-%dT%H:%M:%S"), why=why), [], tid)
+                    if delta is not None:
+                        delta.put(u2, dict(_delta_rec(NOT_RUN, under, cmd2, u2env, sid2, {}, 0.0), why=why))
+                    note(k2, n, u2, NOT_RUN, 0.0)
+                f.flush()
                 break
     return rc, reused, sids
+
+
+def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid: str, f, unit_env) -> dict:
+    """FIX.29: the gate units of ``group`` [(unit, command)] in ONE batch process (core/batch.gate_entries,
+    testing/batch.run_plan): the mesh opened and the model loaded once. Each unit's output goes to its own log, then
+    into the gate log at the unit's turn. {unit: {"rc", "metrics", "files", "text", "s", "loads", "first"}}: rc as the
+    unit's own process would give it (a hang: SAFE_HANG_RC for the run it hung in; a unit the process never reached:
+    1, the reason in its text); ``loads`` the process's model loads, on the group's first unit (``first``)."""
+    d = log.parent / f"{log.stem}.shared"
+    d.mkdir(parents=True, exist_ok=True)
+    names = [u for u, _ in group]
+    logs = {u: d / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', u)}.log" for u in names}
+    for u, c in group:
+        logs[u].write_text(f"$ {c}\n# FIX.29: in one process with {', '.join(x for x in names if x != u)}\n")
+    entries = batch.gate_entries(group, env, {u: unit_env(u) for u in names}, logs)
+    plan = batch.write_plan(d / "plan.json", entries, stop_on_fail=True)
+    hint = batch.hints([r for _, c in group for r in batch.parse_all(c)], spec)
+    cmd = batch.command(plan)
+    blog = d / "process.log"
+    f.write(
+        f"# FIX.29: units {', '.join(names)} in one process (tests.one_process)\n$ {cmd}\n# its own output: {blog}\n"
+    )
+    f.flush()
+    t0 = time.time()
+    mem = hostmem_env(log, [c for _, c in group], f)  # FIX.30
+    with open(blog, "w") as bf:
+        penv = dict(env, **unit_env(names[0]), **hint, **mem)
+        prc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT).returncode
+    got = batch.load_results(plan)
+    runs, running = got.get("runs") or {}, got.get("running")
+    btext = blog.read_text(errors="replace")
+    out = {}
+    for k, u in enumerate(names):
+        mine = [e for e in entries if e["unit"] == u]
+        rs = [runs.get(e["name"]) for e in mine]
+        text = logs[u].read_text(errors="replace")
+        metrics, files, secs = {}, [], 0.0
+        for r in rs:
+            if r and r.get("rc") is not None:
+                metrics.update(r.get("metrics") or {})
+                files += r.get("files") or []
+                secs += float(r.get("s") or 0)
+        if all(r and r.get("rc") is not None for r in rs):
+            rc = next((r["rc"] for r in rs if r["rc"]), 0)
+        elif prc == SAFE_HANG_RC and any(e["name"] == running for e in mine):
+            rc = SAFE_HANG_RC
+            text += f"\n# FIX.29: the shared process hung in this unit; its output:\n{btext}"
+        elif prc == SAFE_HANG_RC and running is None and not runs:
+            rc = SAFE_HANG_RC  # (hung before any run: the mesh open or the first load)
+            text += f"\n# FIX.29: the shared process hung before its first run; its output:\n{btext}"
+        elif any(e["name"] == running for e in mine):  # FIX.30: died in this unit (a SIGKILL: exit 137, OOM)
+            rc = 1
+            text += f"\n# FIX.30: the shared process ended (rc {prc}) while running {running}; its output:\n{btext}"
+        else:
+            failed = [n for n, r in runs.items() if r and r.get("rc")]
+            why = f"run {failed[0]} failed first in the shared process" if failed else f"the process ended (rc {prc})"
+            rc = 1
+            text += f"\n# FIX.29: {u} not run: {why}; the process's output:\n{btext}"
+        out[u] = {
+            "rc": rc, "metrics": metrics, "files": files, "text": text, "s": secs,
+            "loads": sum(int((r or {}).get("loads") or 0) for r in runs.values()), "first": k == 0,
+        }  # fmt: skip
+    f.write(f"# FIX.29: the shared process of {', '.join(names)}: rc {prc}, {time.time() - t0:.0f} s\n")
+    f.flush()
+    return out
 
 
 def _delta_rec(verdict: str, under: str, cmd: str, uenv: dict, sid, metrics: dict, secs: float) -> dict:
@@ -861,10 +1164,10 @@ def _delta_rec(verdict: str, under: str, cmd: str, uenv: dict, sid, metrics: dic
 
 
 def unit_states(spec: Spec, ledger: Ledger, tid: str) -> dict[str, str]:
-    """F169: {unit: its last verdict in this task's gate (PASS, FAIL, STOPPED) or 'not run'}, in gate order."""
-    tasks = ledger.tasks()
-    delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid).all()
-    return {u: (delta.get(u) or {}).get("verdict", "not run") for u, _ in gate_units(tasks[tid], tasks)}
+    """F169: {unit: its last verdict in this task's gate (PASS, FAIL, STOPPED, NOT RUN) or 'not run'}, in gate order.
+    FIX.30: PASS only for a pass on the current code under test, command and environment (a pass the gate would keep);
+    an older pass is 'stale' (it runs again), never reported passed."""
+    return dict(_verdicts(spec, ledger, tid))
 
 
 def progress_lines(spec: Spec, ledger: Ledger, tid: str) -> list[str]:
@@ -877,9 +1180,24 @@ def progress_lines(spec: Spec, ledger: Ledger, tid: str) -> list[str]:
     ]
 
 
+def _verdicts(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
+    """FIX.30: (unit, PASS | stale | <verdict> | not run) from the task's delta, PASS only when kept (``_kept``)."""
+    out = []
+    for u, st in delta_status(spec, ledger, tid):
+        if st.startswith("kept"):
+            out.append((u, "PASS"))
+        elif st.startswith("stale"):
+            out.append((u, "stale"))
+        elif st == "not run":
+            out.append((u, st))
+        else:
+            out.append((u, st.rsplit(" at ", 1)[0]))
+    return out
+
+
 def delta_status(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
     """F169: (unit, state) for every unit of the task's gate: kept (passed on the current code under test), failed,
-    stopped, stale (passed on other code under test: runs again) or not run."""
+    stopped, not run in its shared process (FIX.30), stale (passed on other code under test: runs again) or not run."""
     tasks = ledger.tasks()
     task = tasks[tid]
     delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid)
@@ -887,11 +1205,12 @@ def delta_status(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
     limits = gate_limits(task, tasks)  # FIX.25
     env = gate_env(spec, ledger, tid)
     units = gate_units(task, tasks)
+    aliases = stamps.Store(spec.run_dir(run_name(ledger))).aliases()  # FIX.31: the key the gate will use
     out = []
     for u, cmd in units:
         d = delta.get(u)
         uenv = dict(env, **{M.TASK_ENV: unit_base(u)})
-        if _kept(d, under, cmd, uenv, limits, len(units) == 1):
+        if _kept(d, under, cmd, uenv, limits, len(units) == 1, aliases):
             out.append((u, f"kept (PASS at {d.get('t')})"))
         elif not d:
             out.append((u, "not run"))
@@ -916,6 +1235,7 @@ def run_gate(
     rerun: list[str] | None = None,
     on_unit=None,
     check: bool = False,
+    pre: dict | None = None,
 ) -> GateResult:
     """Run the gate. record=False runs it without touching state.json (used by freeze's stub check).
     check (F170, `gate <task> --check`, the agent's way to run its gate): like record=False (no state, no commit), but
@@ -927,6 +1247,7 @@ def run_gate(
     F169: a gate never restarts: a unit that passed in this task's gate on the same code under test is kept (the
     delta runs); units (gate --unit) runs only those units and records them, without a gate verdict; rerun (gate
     --rerun) runs the named units again even if kept. fresh (owner only) runs every unit."""
+    pre_run = pre  # FIX.31 (``pre`` below is the pre-run checks' list)
     if units:
         return run_units_only(spec, ledger, tid, units)
     if check:
@@ -996,9 +1317,23 @@ def run_gate(
         store = stamps.Store(spec.run_dir(run_name(ledger))) if record or check else None
         fresh = fresh or any(not (spec.repo / a).exists() for a in task.get("artifacts", []))  # made only by a run
         delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid) if record or check else None
-        rc, reused, sids = run_units(
-            spec, task, env, log, results_dir, store, fresh, tasks, delta, None, frozenset(rerun or ()), on_unit
+        if store is not None:  # FIX.31: records stamped before the code-key split are found under today's keys
+            try:
+                stamps.ensure_aliases(spec.run_dir(run_name(ledger)), spec.repo, spec, env)
+            except stamps.GitError as e:
+                log.parent.mkdir(parents=True, exist_ok=True)
+                print(f"  key aliases not updated: {e}")
+        live = (
+            _live_gate(spec, ledger, tid, log, on_unit, "gate check" if check else "gate") if record or check else None
         )
+        try:
+            rc, reused, sids = run_units(
+                spec, task, env, log, results_dir, store, fresh, tasks, delta, None, frozenset(rerun or ()),
+                live.note if live else on_unit, pre_run,
+            )  # fmt: skip
+        finally:
+            if live:
+                live.close()
     dur = time.time() - t0
 
     got = M.load(tid, results_dir)
@@ -1024,6 +1359,8 @@ def run_gate(
         head += progress_lines(spec, ledger, tid)
     res = GateResult(tid, verdict, rc, head + lines + [f"  MISSING artifact {a}" for a in missing], log, None, dur)
     res.reused = reused
+    if record or check:  # FIX.31: the supervisor's watch wakes on a gate's result, whoever ran it
+        _gates_log(spec, ledger, f"[{tid}] {'gate check' if check else 'gate'} {verdict} ({dur:.0f} s, log {log})")
     if not record:
         return res
 
@@ -1059,6 +1396,52 @@ def run_gate(
         except RuntimeError as e:  # F149: the checks passed; only the commit waits (F110 made it a FAIL and a re-run)
             return _refused(spec, ledger, task, res, e)
     return res
+
+
+class _live_gate:
+    """FIX.31: runs/<run>/live/gate-<pid>.json while a gate runs (whoever runs it: the orchestrator, gate --continue,
+    gate --check, a chain script): its task, log and unit progress. The supervisor's watch counts it as a live run
+    and wakes on the gate's result line in runs/<run>/gates.log (``_gates_log``)."""
+
+    def __init__(self, spec, ledger, tid: str, log: Path, on_unit, kind: str = "gate"):
+        self.kind = kind  # "gate", or "gate check" (an agent's --check: its lines never wake the watch)
+        self.dir = spec.run_dir(run_name(ledger)) / "live"
+        self.path = self.dir / f"gate-{os.getpid()}-{re.sub(r'[^A-Za-z0-9_.-]', '_', tid)}.json"
+        self.tid, self.log, self.on_unit = tid, str(log), on_unit
+        self.info = {"pid": os.getpid(), "what": f"{kind} {tid}", "task": tid, "log": self.log, "t": time.time()}
+        self._write()
+
+    def _write(self):
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.info))
+            tmp.replace(self.path)
+        except OSError:
+            pass
+
+    def note(self, k, n, unit, verdict, secs):
+        self.info.update(unit=f"{k}/{n} {unit} {verdict}", t_unit=time.time())
+        self._write()
+        what = "gate unit" if self.kind == "gate" else "check unit"
+        _gates_log_dir(self.dir.parent, f"[{self.tid}] {what} {k}/{n} {unit} {verdict} ({secs:.0f} s)")
+        if self.on_unit:
+            self.on_unit(k, n, unit, verdict, secs)
+
+    def close(self):
+        self.path.unlink(missing_ok=True)
+
+
+def _gates_log_dir(run_dir: Path, line: str) -> None:
+    try:
+        with open(Path(run_dir) / "gates.log", "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} pid={os.getpid()} {line}\n")
+    except OSError:
+        pass
+
+
+def _gates_log(spec, ledger, line: str) -> None:
+    _gates_log_dir(spec.run_dir(run_name(ledger)), line)
 
 
 def run_units_only(spec: Spec, ledger: Ledger, tid: str, names: list[str]) -> GateResult:

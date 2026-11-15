@@ -38,7 +38,7 @@ from models.demos.common.bringup.testing.harness import spec
 S = spec()
 MS = (64, 256, 512, 1024)  # tokens an expert
 REPS = 5
-LEAD = 40  # matmuls (11 x 10 cores, rule 18) ahead of each timed window (DS41-243)
+LEAD = 40  # matmuls (11 x 10 cores, rule 18) ahead of each timed window (DS41-248)
 K_FLAT = "flat_routed_expert/device/kernels"
 SIDES = {"legacy": 0, "min8k": 8192}
 MESH = pytest.mark.parametrize("mesh_device", [tuple(S.mesh)], indirect=True, ids=["x".join(map(str, S.mesh))])

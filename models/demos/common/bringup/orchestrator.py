@@ -153,13 +153,27 @@ IGNORED = (
 )
 DONE, STOPPED, HUMAN, PAUSED = 0, 1, 3, 4
 CRASH_RETRIES, CRASH_WAIT_S = 2, 60  # F170: an agent that died without changing anything is retried, not charged
+# FIX.31 (owner 2026-11-13: three Cloudflare 403 crashes used the free retries, then a gate ran on an unchanged tree):
+# an agent ended by an API / auth / overload error is INFRA: never an attempt, never followed by a gate; it is retried
+# after a back-off that doubles (API_WAIT_S .. API_WAIT_MAX_S), and after API_RETRIES in a row the task stops for a person
+API_RETRIES, API_WAIT_S, API_WAIT_MAX_S = 8, 60, 1800
+API_ERROR = re.compile(
+    r"API Error: (?:40[138]|429|5\d\d)\b|\b(?:overloaded_error|rate_limit_error|authentication_error|permission_error|"
+    r"api_error)\b|Overloaded|Cloudflare|Request timed out|Connection error|ECONNRESET|socket hang up|"
+    r"\b(?:403 Forbidden|529)\b",
+    re.I,
+)
 # A gate that fails at device open is a box problem (a board reset is needed), not the task's: retrying it only burns
 # attempts. These signatures stop the run at once with a reason for the person.
 INFRA_FAILURES = re.compile(
     r"Timed out while waiting for active ethernet core|Try resetting the board|No Tenstorrent devices|"
-    r"Failed to open device|fabric router .* timed out|Device \d+: .*timed out waiting for .*firmware",
+    r"Failed to open device|fabric router .* timed out|Device \d+: .*timed out waiting for .*firmware|"
+    r"SAFE_PYTEST_INFRA: host memory[^\n]*",
     re.I,
 )
+# FIX.30: a device process not started for lack of host memory (scripts/run_safe_pytest.sh, core/hostmem.py): no retry,
+# no box check, never a reset; the run stops until the memory is back
+HOST_MEMORY = re.compile(r"SAFE_PYTEST_INFRA: host memory")
 # The prefill engine the contract step plugs a model into; its agent may change it (owner, F29).
 CONTRACT_SHARED = "models/demos/common/prefill"
 # A spec's ``prior`` (an earlier bring-up of the same checkpoint on another mesh or configuration): per role, the prior's
@@ -328,6 +342,37 @@ def agent_stalled(log: Path, pgid: int, stall_s: int, now_t: float | None = None
     return not [p for p in out if p != str(pgid)]
 
 
+def agent_gates(tid: str) -> list[int]:
+    """FIX.32 (2026-11-15): an agent may start its own gate detached (`gate <task> --check`, setsid / nohup), so it
+    leaves the agent's process group and outlives a kill of the agent. Its pids, found by command line."""
+    me, out = os.getpid(), []
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit() or int(d.name) == me:
+            continue
+        try:
+            argv = (d / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        argv = [a.decode(errors="replace") for a in argv if a]
+        if "models.demos.common.bringup" in argv and "gate" in argv and tid in argv:
+            out.append(int(d.name))
+    return out
+
+
+def wait_agent_gates(tid: str, echo=print, poll_s: float = 30.0) -> int:
+    """Wait for an ended agent's own gate run to finish before the orchestrator's gate: its units are checkpointed and
+    kept, so the orchestrator then runs only what is left. Without this both ran the same unit (the device lock kept
+    them apart; FIX.32 ran test_moe_prev_replicas twice, 15 min). Never kills it: finished units are never discarded."""
+    pids, said = agent_gates(tid), False
+    while pids:
+        if not said:
+            echo(f"  [{tid}] waiting for the agent's own gate run (pids {pids}) before the gate: its units are kept")
+            said = True
+        time.sleep(poll_s)
+        pids = agent_gates(tid)
+    return int(said)
+
+
 def _killpg(pgid: int, sig) -> None:
     from models.demos.common.bringup.core.hangdump import wait_triage
 
@@ -347,6 +392,22 @@ def agent_command(spec: Spec, run_dir: Path, agent: str, prompt: str, model: str
     if model:
         cmd += ["--model", model]
     return cmd + [prompt]
+
+
+def api_error(info: dict, log: Path) -> str | None:
+    """FIX.31: the API / auth / overload error that ended an agent run (its final result, else the transcript's last
+    lines), or None. Only asked of a run that crashed (rc != 0 or is_error)."""
+    texts = [str(info.get("result") or "")]
+    try:
+        texts.append("\n".join(log.read_text(errors="replace").splitlines()[-5:]))
+    except OSError:
+        pass
+    for t in texts:
+        m = API_ERROR.search(t)
+        if m:
+            line = next((ln for ln in t.splitlines() if m.group(0) in ln), m.group(0))
+            return line.strip()[:160]
+    return None
 
 
 def parse_stream(log: Path) -> dict:
@@ -597,6 +658,8 @@ class Orchestrator:
         self.pause_file = self.run_dir / "PAUSE"
         self.last_changed: list[str] = []  # the files the last agent run changed
         self.crashed = False  # F170: the last agent run died (rc != 0 / is_error), not by the overseer's abort
+        self.api_error = None  # FIX.31: the API / auth error that ended the last agent run (INFRA, not an attempt)
+        self._pre: dict = {}  # FIX.31: {task: {unit: result}} run by core/multigate.prerun for the task's next gate
         self.last_gate: dict = {}  # F170: {task: (code key, GateResult)} of its last gate, to not re-measure a FAIL
 
     # ---- policy
@@ -976,6 +1039,7 @@ class Orchestrator:
                 raise
             finally:
                 OV.agent_finished(self.run_dir)
+        wait_agent_gates(tid, self.echo)
         info = parse_stream(log)
         problems = []
         self.aborted = OV.take_abort(self.run_dir)
@@ -987,8 +1051,11 @@ class Orchestrator:
             self.led.update(tid, history_add={"t": now(), "status": "ABORTED", "why": why})
             self.echo(f"  [{tid}] ABORTED by the overseer ({role} attempt {attempt}): {why}")
         self.crashed = (rc != 0 or bool(info["is_error"])) and not self.aborted
+        self.api_error = api_error(info, log) if self.crashed else None
         if self.crashed:
             problems.append(f"agent exited rc={rc} is_error={info['is_error']}")
+        if self.api_error:
+            problems.append(f"INFRA: the agent was ended by an API error ({self.api_error}): not an attempt, no gate")
         problems += command_violations(info["commands"], self.spec.repo)
         pats = self.allowed_paths(task, role)
         outside = [p for p in self.last_changed if not allowed(p, pats)]
@@ -1114,8 +1181,11 @@ class Orchestrator:
                 self.echo(f"  [{tid}] gate unit {k}/{n} {unit} {verdict} ({secs:.0f} s)")
 
         key = stamps.code_key(self.spec.repo, self.spec)
-        res = run_gate(self.spec, self.led, tid, commit=True, reuse=reuse, on_unit=on_unit)
+        pre = self._pre.pop(tid, None)  # FIX.31: its units a multi-task shared process ran just now
+        res = run_gate(self.spec, self.led, tid, commit=True, reuse=reuse, on_unit=on_unit, pre=pre)
         sig = self.infra_failure(res) if res.verdict in ("FAIL", "HANG") else None
+        if sig and HOST_MEMORY.search(sig):  # FIX.30: a retry would find the same memory; a box check cannot help
+            raise InfraStop(tid, sig)
         if sig and reuse is None:  # F170 (audit items 7, 17): one automatic retry of the stopped unit, not a run stop
             if not TEST_TIMEOUT.search(sig) and not self.box_ok(tid):
                 raise InfraStop(tid, sig)
@@ -1343,7 +1413,7 @@ class Orchestrator:
         previous = first_failure
         pol = self.policy(task, role)
         attempt, cut = self.attempts_so_far(task["id"], role)
-        used = aborts = crashes = 0
+        used = aborts = crashes = api_errors = 0
         if cut is not None:
             previous = (
                 f"A previous run was interrupted during {role} attempt {cut} of this task (a crash or power loss). "
@@ -1366,6 +1436,28 @@ class Orchestrator:
                     self.echo(f"  [{task['id']}] paused after the overseer's abort; `resume` starts the next attempt")
                     raise SystemExit(PAUSED)
                 continue
+            if self.api_error:  # FIX.31: INFRA: no attempt charged, no gate, a back-off and the same attempt again
+                api_errors += 1
+                self.led.update(
+                    task["id"], history_add={"t": now(), "status": "INFRA", "why": f"agent API error: {self.api_error}"}
+                )
+                if api_errors > API_RETRIES:
+                    return self.stop_task(
+                        task, f"the agent was ended by an API error {api_errors} times in a row ({self.api_error})"
+                    )
+                wait = min(API_WAIT_S * 2 ** (api_errors - 1), API_WAIT_MAX_S)
+                self.echo(
+                    f"  [{task['id']}] INFRA: agent ended by an API error ({self.api_error}); not an attempt, no gate; "
+                    f"retry {api_errors}/{API_RETRIES} in {wait} s"
+                )
+                if self.last_changed:
+                    previous = (
+                        f"A previous attempt was cut off by an API error ({self.api_error}). Its uncommitted changes are "
+                        "still in the tree: check them (git diff), keep what is right, finish the work.\n" + previous
+                    )
+                time.sleep(wait)
+                continue
+            api_errors = 0
             if self.crashed and not self.last_changed and crashes < CRASH_RETRIES:
                 # F170 (audit item 4): an agent that died at once (an API outage) changed nothing: not an attempt, no gate
                 crashes += 1
@@ -1517,7 +1609,13 @@ class Orchestrator:
         return m.group(0) if m else None
 
     def stop_for_infra(self, tid: str, sig: str) -> int:
-        if TEST_TIMEOUT.search(sig):
+        if HOST_MEMORY.search(sig):  # FIX.30
+            why = (
+                f"the host has too little free memory for the gate's device process ({sig}). Do NOT reset the board or "
+                "reload the driver: free the host memory (leaked kernel / driver memory needs infra, #exabox-infra), "
+                "then resume (only the stopped unit and the ones after it run)"
+            )
+        elif TEST_TIMEOUT.search(sig):
             why = (
                 f"the test ran past its pytest timeout ({sig!r}) twice (one automatic retry, F170): check the machine's "
                 "load (CPU jobs next to the gate) and the log for a slow path, or raise box.test_timeout_s; then "
@@ -2315,7 +2413,7 @@ class Orchestrator:
         if self.perf_pick(task):  # F57: no gate before or after the agent; the owner decides on the A/B report
             return self.perf_step(task)
         if task.get("step") == "perf" and role is None:  # F122: the final task: the quick picks' full gates first
-            stop = self.pending_full_gates()
+            stop = self.pending_full_gates(include=[tid])  # FIX.31: its own units in the same shared process
             if stop is not None:
                 return stop
         plan_written = task.get("approval") == "plan" and (self.spec.bringup_dir / "plan.yaml").exists()
@@ -2403,12 +2501,20 @@ class Orchestrator:
             t.get("step") == "perf" and not t.get("role") and self.led.status(i) == "PASS" for i, t in tasks.items()
         )
 
-    def pending_full_gates(self) -> int | None:
+    def pending_full_gates(self, include: list[str] | None = None) -> int | None:
         """F122: every quick-accepted pick's full gate, once, on the tree as it is now; picks with the same gate
-        command share one run. None when all pass (cleared), else the stop."""
+        command share one run. None when all pass (cleared), else the stop.
+        FIX.31: these gates and the milestone gate after them (``include``: X.3) are ONE run: core/multigate.prerun runs
+        every pending unit of all of them once, in one process per model configuration, before the gates; each gate
+        then takes its units' results (its own verdict, metrics and commit)."""
         pending = [tid for tid, e in self.led.state().items() if isinstance(e, dict) and e.get("full_pending")]
         order = list(self.led.tasks())  # F175: the newest pick first: its own gate units already passed on this code
         pending.sort(key=lambda t: -order.index(t) if t in order else 0)  # (its agent's gate --check), so the shared
+        together = pending + [t for t in include or [] if t not in pending]
+        if len(together) > 1 and self.spec.get("tests.one_process"):
+            from models.demos.common.bringup.core import multigate
+
+            self._pre.update(multigate.prerun(self.spec, self.led, together, echo=self.echo))
         done = {}  # gate runs only the delta; the older picks with the same command take its result
         for tid in pending:
             cmd = gate_command(self.led.task(tid))
@@ -2577,6 +2683,24 @@ def _first_open(orch: Orchestrator) -> str | None:
     return None
 
 
+def _recorded_metrics(orch: Orchestrator):
+    """FIX.31: (task id, unit label) -> the metric names the newest PASS of that unit recorded (any task's gate that
+    ran the same test label), for a fix whose gate is its claim (overseer fix --unit)."""
+
+    def recorded(tid: str, label: str):
+        store = stamps.Store(orch.run_dir)
+        best = None
+        for idx in [store.dir / f"{tid}#{label}.json"] + sorted(store.dir.glob(f"*#{label}.json")):
+            for r in store.records(idx.stem).values():
+                if r.get("verdict") == "PASS" and r.get("metrics") and (best is None or r["t"] > best["t"]):
+                    best = r
+            if best is not None:
+                break
+        return sorted(best["metrics"]) if best else None
+
+    return recorded
+
+
 def _place_fixes(orch: Orchestrator) -> bool:
     """F77: every queued overseer fix becomes a ledger task placed just before the first unpassed task."""
     jobs = OV.take_fixes(orch.spec.ledger_dir)
@@ -2588,7 +2712,7 @@ def _place_fixes(orch: Orchestrator) -> bool:
         first = _first_open(orch)
         ids = [t["id"] for t in spec["tasks"]]
         at = ids.index(first) if first in ids else len(ids)
-        fix = OV.fix_task(job, tasks)
+        fix = OV.fix_task(job, tasks, _recorded_metrics(orch))
         # F126: a gate task not passed yet runs after the fix (the fix takes its deps), never before it
         open_gates = [g for g in job["gate"] if not satisfied(orch.led.status(g))]
         if open_gates:
@@ -2618,6 +2742,8 @@ def measure(orch: Orchestrator, tid: str, parts: list[str] | None) -> int:
     ab = task.get("ab") or {}
     old, _ = model_precision.switch_env(orch.spec, ab.get("env") or {})
     on, _ = model_precision.switch_env(orch.spec, ab.get("change") or {})
+    if ab_before(task):  # F230 as ab_report: ab.env is what both sides run with (P.67: measure ran 'new' without it)
+        on = old
     try:
         got = orch.ab_measure(task, "new", on, orch.ab_base(old, on, tid), orch.ab_code_key(task), only=parts)
     except InfraStop as e:

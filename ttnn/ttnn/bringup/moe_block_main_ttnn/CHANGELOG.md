@@ -319,7 +319,7 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   from models/demos/deepseek_v41_flash_d_p/tt/kernels/moe_prev_planner.cpp ROLE 0, which now includes it), with the
   folded input (counts 0: own row from the landing rows, a plan only when its tag says the call is pending, a bounded
   count wait). Defaults (no prev_counts, no tail): the programs as before (the port's new code is skipped on arg 12 = 0).
-- Why: P.62 measured prev's host over off as one 32-chip planner launch a MoE call (~90 us, DS41-258); the owner asked
+- Why: P.62 measured prev's host over off as one 32-chip planner launch a MoE call (~90 us, DS41-263); the owner asked
   for no launch of its own. The head has no free core at the 110-core cap, so the planner rides the watcher's NCRISC.
 - Needed by: deepseek_v41_flash_d_p P.62b (MOE_PLANNER=folded).
 - Files: routed_experts_combine/device/combine_program.{hpp,cpp}, routed_experts_combine/device/
@@ -344,7 +344,7 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
 - Why: P.63's probe (8x4, 4 layers, C++ timers): the combine's hit patching was ~245-250 us of a ~470 us call (the
   flat expert's 766 address args a chip, ~8 ns each: get_kernel's two hash lookups and a shared_ptr copy), the head's
   3.6 us x 32 chips of a ~340 us call. One mesh program would remove that loop's x32 but keeps the per-device command
-  copies (Metal already packs a multi-device program once and copies it per device; DS41-258); the cached records
+  copies (Metal already packs a multi-device program once and copies it per device; DS41-263); the cached records
   remove most of it without a kernel change.
 - Needed by: deepseek_v41_flash_d_p P.63 (MESH_PROGRAMS=on).
 - Files: fused_head/fused_head.{hpp,cpp}, fused_head/fused_head_nanobind.cpp, fused_head/device/head_program.{hpp,cpp},

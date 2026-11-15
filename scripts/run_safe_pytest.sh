@@ -49,6 +49,17 @@
 #   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
 #                    sanitization), lightweight ebreak asserts, and auto-triage
 #                    on hang with full triage + watcher log dump.
+#   --one-process    (bring-up, FIX.29) Run the given test files in ONE pytest process on one opened mesh and ONE
+#                    loaded model (models/demos/common/bringup/tests/test_batch.py, F259): each file as its own
+#                    in-process pytest session with its own log section and results, the model loaded by the
+#                    first and reused by the rest (no reload per test). Every file must be able to share the
+#                    model (core/batch.shareable: the framework's ladder / profile / positions / smoke /
+#                    determinism / contract tests, or a file declaring BATCH_SHARED = True); implies
+#                    --no-precompile. VAR=value prefixes apply to all. Stops at the first failing file
+#                    (BRINGUP_BATCH_KEEP_GOING=1: runs every file).
+#                    e.g. scripts/run_safe_pytest.sh --one-process --run-all \
+#                           models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py \
+#                           models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
 #   --run-all        Run all tests instead of stopping on first failure (-x).
 #                    Useful for eval scoring where you need full pass/fail counts.
 #   --profile        Run under the Tracy device profiler (python -m tracy -r). Emits
@@ -152,6 +163,10 @@ while [[ $# -gt 0 ]]; do
             FAIL_FAST=false
             shift
             ;;
+        --one-process)
+            ONE_PROCESS=true
+            shift
+            ;;
         --device)
             if [[ $# -lt 2 ]]; then
                 echo "SAFE_PYTEST_ERROR: --device requires an argument (UMD card id or 'auto')"
@@ -193,6 +208,28 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# --- --one-process (FIX.29): the test files as runs of one batch process (test_batch.py, BRINGUP_BATCH_CMD) ---
+if [[ "${ONE_PROCESS:-false}" == true ]]; then
+    _one_flags="--no-precompile"
+    [[ "$FAIL_FAST" == false ]] && _one_flags="--run-all --no-precompile"
+    _one_cmd=""
+    for _arg in "${PYTEST_ARGS[@]}"; do
+        case "$_arg" in
+            -*) echo "SAFE_PYTEST_ERROR: --one-process takes test files / ::nodeids only (got $_arg)" >&2; exit 3 ;;
+        esac
+        _one_cmd+="${_one_cmd:+ && }scripts/run_safe_pytest.sh ${_one_flags} ${_arg}"
+    done
+    if [[ -z "$_one_cmd" ]]; then
+        echo "SAFE_PYTEST_ERROR: --one-process needs at least one test file" >&2
+        exit 3
+    fi
+    export BRINGUP_BATCH_CMD="$_one_cmd"
+    echo "SAFE_PYTEST: --one-process: ${#PYTEST_ARGS[@]} test file(s) in one process: $_one_cmd"
+    PYTEST_ARGS=(models/demos/common/bringup/tests/test_batch.py)
+    PRECOMPILE=false
+    FAIL_FAST=false
+fi
 
 # --- Validate card selection (mesh default | auto | N, honours TT_VISIBLE_DEVICES) ---
 ttrun_resolve_selector || exit 3
@@ -324,6 +361,15 @@ if [[ "$SIM_MODE" == false ]]; then
 fi
 ttrun_activate_venv
 
+# --- Run record (FIX.31): this run's result in the bring-up stamp store (bookkeeping, never the verdict) ---
+# What the run measures: its pytest arguments and the measuring flags (core/runrec.py drops the launch flags).
+_runrec_args=()
+[[ "$DEV_MODE" == true ]] && _runrec_args+=(--dev)
+[[ "$PROFILE_MODE" == true ]] && _runrec_args+=(--profile)
+[[ "${DEVICE_SELECTOR:-mesh}" != mesh ]] && _runrec_args+=(--device "$DEVICE_SELECTOR")
+_runrec_args+=("${PYTEST_ARGS[@]}")
+ttrun_runrec_begin "${_runrec_args[@]}"
+
 # --- Profiling preflight ---
 # `python -m tracy` needs a Tracy-enabled build and tracy deps (e.g. websockets).
 # Probe the import it does at startup (tracy.__main__ -> tracy.serve_wasm) so a
@@ -435,6 +481,19 @@ PYTEST_CMD+=("${PYTEST_ARGS[@]}")
 # word-split even on runs where it was passed through intact.
 echo "SAFE_PYTEST: $(printf '%q ' "${PYTEST_CMD[@]}")"
 echo "========================================"
+
+# --- Host memory pre-flight (FIX.30) ---
+# A device process started into too little host memory is SIGKILLed by the kernel's OOM killer mid-run (DeepSeek-V4.1
+# X.3, 2026-11-13: ~310 GB held by no process after earlier killed runs, tt-kmd 2.11). MemAvailable is checked against
+# the need measured for this configuration (BRINGUP_HOST_MEM_NEED_GB, set by the bring-up gate from its records; at
+# least BRINGUP_HOST_MEM_FLOOR_GB, default 16): below it the run is not started, an INFRA line says why (exit 3).
+if [[ -f "$TTRUN_HOSTMEM" ]] && command -v python3 >/dev/null 2>&1; then
+    python3 -I "$TTRUN_HOSTMEM" preflight
+    if [[ $? -eq 10 ]]; then
+        echo "SAFE_PYTEST_RESULT: INFRA (host memory too low; not started)"
+        exit 3
+    fi
+fi
 
 # --- Mark device dirty before running tests (hardware only) ---
 # Pessimistic: assume the device will get corrupted. If the script is killed at any

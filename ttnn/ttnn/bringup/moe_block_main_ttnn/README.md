@@ -159,7 +159,7 @@ latency = the receiver's start barrier to the copy's last flag, added = the comb
 one, same window): no job +0.009 ms; one pair on one link 1.40 ms / +0.63, on both links 0.89 / +0.11, on 4 links (half
 relayed through a free neighbour's spare slot) 0.76 / +0.01; 32 neighbour copies at once 0.95 / +0.25; a real split
 (P.55a's layer-20 counts, relay trees) novel 23 copies 1.25 / +0.37, code 10 copies 1.24 / +0.37. Every copy
-bit-exact, 100 calls back to back without a hang, every gate and wait clean, outputs bit-identical (DS41-245).
+bit-exact, 100 calls back to back without a hang, every gate and wait clean, outputs bit-identical (DS41-250).
 
 
 combine_snap_split (FIX.23 on the replica branch, Galaxy 8x4, DeepSeek-V4.1, 40 layers, chunk 5120, q = 2^-19, 17

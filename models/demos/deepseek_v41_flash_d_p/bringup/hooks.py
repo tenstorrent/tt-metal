@@ -1290,11 +1290,35 @@ def contract_state_pcc(spec, runtime, kv, slot, length, golden):
 
 def contract_handoffs(spec, length):
     """F264 (FIX.26): the positions other than ``length`` a request of ``length`` tokens (the engine's actual_end) may
-    stop at: decode's cap (tt/attention.snapshot_cap, P.49 PREFILL_END=cap). The golden holds the state there
-    (reference/handoff.py)."""
-    from models.demos.deepseek_v41_flash_d_p.tt.attention import snapshot_cap
+    stop at: decode's cap (tt/attention.snapshot_cap, P.49 PREFILL_END=cap) and (FIX.28) DECODER_SKIP=decode's stop
+    P = (N - 128) // 64 x 64 of the request taken as a prompt of N = ``length`` tokens (tt/attention.decoder_skip_stop,
+    P.51; contract_variants). The golden holds the state there (reference/handoff.py)."""
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import decoder_skip_stop, snapshot_cap
 
-    return [snapshot_cap(length)]
+    return [snapshot_cap(length), decoder_skip_stop(length)]
+
+
+def contract_variants(spec, length):
+    """FIX.28 (testing/contract.py variants, F266): DECODER_SKIP=decode (P.51, Kartik's cut) as tt-d-gen sends it. The
+    request is a prompt of N = ``length`` tokens; prefill stops at P = (N - 128) // 64 x 64 (tt/attention.
+    decoder_skip_stop), so its chunks are [k chunk, min((k + 1) chunk, P)), each with the header's
+    global_write_start = actual_start (no prefix hit) and last=False. The model must stop at decode's cap of P
+    (snapshot_cap(P) = P) and never write [P, N). The runtime's model (loaded with the shipped DECODER_SKIP, off)
+    runs it through use_decoder_skip("decode") and goes back to off after."""
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import decoder_skip_stop, snapshot_cap
+
+    p = decoder_skip_stop(length)
+    return [
+        dict(
+            name="decoder_skip",
+            end=p,
+            served_end=snapshot_cap(p),
+            chunk_kwargs=lambda a, b: dict(global_write_start=a, last=False),
+            enter=lambda rt: rt.model.use_decoder_skip("decode"),
+            leave=lambda rt: rt.model.use_decoder_skip(rt.model.loaded_skip),
+            unwritten=(p, length),
+        )
+    ]
 
 
 def contract_end(spec, length):
@@ -1315,17 +1339,39 @@ def device_model(mesh, spec, layers, lm_head=True):
         return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.deepseek_v41_flash_d_p.tt.experts import expert_cache_dir
-    from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
+    from models.demos.deepseek_v41_flash_d_p.tt.runners.adapter import load_model
 
-    return TtDS41Model(
+    # FIX.29: the model's one load path, the serving adapter's (in a bring-up batch: the batch's model, loaded once)
+    return load_model(
         mesh,
-        hf_path(spec),
         layers,
         max_seq=_max_seq(spec),
         chunk=_chunk(spec),
         lm_head=lm_head,
         weight_cache=expert_cache_dir(spec),
+        checkpoint=hf_path(spec),
     )
+
+
+# FIX.29: device_model goes through testing/batch.shared_model itself (tt/runners/adapter.load_model), so the framework's
+# batch.device_model asks it directly: the hook's and the serving runtime's loads share one cache entry
+SHARED_LOADER = True
+
+
+def batch_settings() -> dict:
+    """FIX.29: every switch's value a load would read now, from the environment (a frozen HOST_GLUE snapshot does not
+    hide a test's monkeypatch): a batch reloads when a load-time value differs from its model's."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
+
+    return {name: _settings._read(name) for name in _settings.table}
+
+
+def batch_call_settings() -> tuple:
+    """FIX.29: switches the model reads per call, never at load (a test may change them on the batch's model):
+    PREFILL_END (tt/attention.prefill_end, read on every chunk). DECODER_SKIP is read at load (the decoder lists,
+    replay128's tail model); the tests run decode on a model loaded with off through use_decoder_skip (host lists
+    only, FIX.28), so the shipped value stays the load's."""
+    return ("PREFILL_END",)
 
 
 def settings():

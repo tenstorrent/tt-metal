@@ -5,8 +5,9 @@
 below the chunk's global_write_start writes no history-cache row.
 
 The serving runtime (tt/runners/adapter.py, built and compiled as the engine does: caches.build, every layer, 3 slots,
-chunk / max seq of the golden rung; the model loaded with DECODER_SKIP=decode, ``use_decoder_skip`` runs it as off for
-the other side in the same process) gets each request the way tt-d-gen will hand it under decode's proposal: prompt
+chunk / max seq of the golden rung; FIX.29: the model as loaded with the shipped DECODER_SKIP=off, run as decode or off
+per request through ``use_decoder_skip``: decode's load-time difference is host lists only, FIX.28; so the test takes a
+bring-up batch's shared model, BATCH_SHARED) gets each request the way tt-d-gen will hand it under decode's proposal: prompt
 length N, prefill stop P = (N - 128) // KV_BLOCK_SIZE x KV_BLOCK_SIZE, chunks [k chunk, min((k + 1) chunk, P)) with
 actual_end <= P, the H2D payload with the PAD_ID tail (server_rules), and the header's new field global_write_start.
 Everything is read through the exported table over UMD, as the KV Manager reads it.
@@ -55,6 +56,7 @@ from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import server_ru
 from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
 S = spec()
+BATCH_SHARED = True  # FIX.29: takes the model of a bring-up batch process (core/batch.shareable)
 PROMPTS = ("novel", "code")
 SLOT = {"off": 0, "decode": 1, "hit": 2}
 WINDOW = 128
@@ -92,13 +94,11 @@ def _pcc(a: np.ndarray, b: np.ndarray) -> float:
 
 
 @mesh_parametrize(timeout_s=2 * 3600)
-def test_decoder_skip_decode(mesh_device, tmp_path, monkeypatch):
+def test_decoder_skip_decode(mesh_device, tmp_path):
     if mesh_device is None:
         pytest.skip("device test")
     import ttnn
 
-    monkeypatch.setenv(settings.env_name("DECODER_SKIP"), "decode")  # (read at load; off via use_decoder_skip)
-    settings.refresh()
     layers = C.served_prefix()
     cfgs = C.served_configs(layers)
     chunk, max_seq = R.CHUNK, R.MAX_SEQ
@@ -110,6 +110,9 @@ def test_decoder_skip_decode(mesh_device, tmp_path, monkeypatch):
     except C.NotBuilt as e:
         pytest.fail(f"not built: {e}", pytrace=False)
     model = runtime.model
+    # FIX.29: the model as loaded (the shipped DECODER_SKIP, off), run as decode here and per request below
+    assert model.loaded_skip == settings.get("DECODER_SKIP"), (model.loaded_skip, settings.get("DECODER_SKIP"))
+    model.use_decoder_skip("decode")
     assert model.skip_mode == "decode" and model.decoder, (model.skip_mode, model.decoder)
     enc = [i for i in layers if i not in model.decoder]
     dec = [i for i in layers if i in model.decoder]
@@ -277,7 +280,7 @@ def test_decoder_skip_decode(mesh_device, tmp_path, monkeypatch):
                     fresh[wl] = (got, p)
                     hit[wl] = prefix_hit(wl)
     finally:
-        model.use_decoder_skip("decode")
+        model.use_decoder_skip(model.loaded_skip)  # (FIX.29: back to the model as loaded, for the batch's next test)
     if reader.replica_mismatch:
         fails.append(
             f"device-group replicas differ at {len(reader.replica_mismatch)} records: {reader.replica_mismatch[:3]}"

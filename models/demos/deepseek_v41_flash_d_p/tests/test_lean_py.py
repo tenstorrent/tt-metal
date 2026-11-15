@@ -17,7 +17,7 @@ Terms:
   cProfile  = tottime per function, one pass a side (inflated by the profiler; differences between sides only).
 Per workload (novel, code): chunks 0..10 of fresh requests back to back (chunk 0 is not counted). One warm pass a side,
 then P66_CLEAN rounds with the sides alternating in each round. Means over chunks 1..10, and per side the mean of
-the per-round means with the paired difference to the first side and its standard error (DS41-259: one pass a side
+the per-round means with the paired difference to the first side and its standard error (DS41-264: one pass a side
 cannot split a few ms). Outputs: every side's chunk 1 and chunk 10 output streams must equal the first side's bit
 for bit (max |diff| 0; prev and off compute the same experts, P.56).
 

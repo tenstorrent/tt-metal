@@ -1,0 +1,18 @@
+{
+ "used": [
+  {"id": "DS41-242", "how": "runrec.end diffs a plain run's metrics by value like the gate does; a batch's runs take testing/batch's per-run metrics instead"},
+  {"id": "DS41-243", "how": "the multi-task pre-run relies on the one load path: one shared model per process (gate_model_loads 1 per task in the selftest)"}
+ ],
+ "contradicted": [],
+ "missing": [
+  "the stamp env key hashed every TT_* variable of the launching shell (TT_METAL_HOME / TT_METAL_CACHE): the same gate from a shell and from the orchestrator never matched, and the env contents were never stored (DS41-244)",
+  "a Setting's test value (F222) is what an unset switch reads under pytest: DS41_ENGRAM_TABLE=resident is not the effective default in a test (DS41-245)",
+  "a bringup ledger's .gitignore is in the code key (not SKIP): creating a ledger changes the key"
+ ],
+ "overseer": [
+  {"id": "FIX.31", "answer": "done", "evidence": "(1) core/runrec.py + tt_safe_run.sh ttrun_runrec_begin/_end; gate._lookup (stamp, legacy-key alias, runner records, another task's same runs; newest PASS only); (2) overseer fix --unit/--selftest -> fix_task builds the claim; (3) stamps.BOOKKEEPING measuring-part hashing: HEAD 82a197f0edf legacy key 1117c19bb2f25445 (= FIX.30's records) and new key b4e915a478bc066f = the tree after every FIX.31 edit; (4) orchestrator.API_ERROR INFRA path; (5) core/multigate.prerun wired into pending_full_gates(include=[X.3]), determinism its own unit, launch_form/why_not logging, model_key folds a switch at its test value; (6) watch live/ + gates.log + `watch live`. Selftests: test_count_runs_once (21), test_back_to_back_gates (6), test_fix_claim_and_infra (7), test_watch (+4). Two parts differ from the letter, with evidence: precompile is NOT run inside a batch (the up_front_collect pass would run test_batch.py's plan under NO_DISPATCH and testing/batch.shared_model would keep the shape-only model; the shared process compiles on demand and the log says so); DS41_ENGRAM_TABLE=resident is not folded into unset (its Setting has test='mmap', F222: an unset test reads mmap), so resident units share with each other, not with unset ones. FIX.30's own unit records cannot be reused: their env key 6d56329acc1a26b2 matches no current launcher and its contents were never stored (DS41-244); the gate reuses determinism and ladder from X.3's passes on the same tree instead."},
+  {"id": "OV-3", "answer": "n/a", "evidence": "framework only; no kernel, weight or padding change"},
+  {"id": "OV-23", "answer": "n/a", "evidence": "no Python-built op added or touched"},
+  {"id": "OV-25", "answer": "done", "evidence": "no fork regression suite run on the 8x4; only CPU selftests (through the safe runner) and the task's gate"}
+ ]
+}

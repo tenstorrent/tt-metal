@@ -205,6 +205,9 @@ def drift(spec) -> dict:
     p_out = drift_path(out_dir, rung["name"])
     out = json.loads(p_out.read_text()) if p_out.exists() else {}
     for p in points(spec, tail_at(spec, g.seq)):
+        if str(p) in out:  # (FIX.28: as `handoff golden`, a point the file already holds is not recomputed)
+            print(f"handoff {p}: drift already held", flush=True)
+            continue
         t0 = time.time()
         rep = D.replay(spec, ref, g, layers, 0, p, full_last=False)
         _wait(g, p)  # `handoff golden` may still be running (the two jobs run side by side)

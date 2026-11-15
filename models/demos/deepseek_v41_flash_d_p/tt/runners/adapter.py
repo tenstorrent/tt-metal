@@ -42,6 +42,12 @@ the long-range caches decode / the prefix cache hold; missing = actual_start: no
 history-cache row below it is written, and a chunk starting below it is an encoder replay (windows truncated at
 actual_start). Other DECODER_SKIP values refuse a global_write_start above actual_start (ValueError).
 
+Model load (FIX.29, OWNER 2026-11-13 "LOAD THE MODEL ONLY ONCE"): ``load_model`` is the model's one load path; the
+runtime and the bring-up hook (bringup/hooks.py device_model: the ladder, determinism, the model's tests) both call it.
+Inside a bring-up batch process (testing/batch.py: one pytest process running several tests) it returns the batch's
+model, so the contract tests' adapter path and every other test of a gate share one load; elsewhere (the engine,
+a test of its own) it builds the model as asked.
+
 Import-light: all device / model imports happen inside the methods.
 """
 
@@ -115,6 +121,35 @@ def served_layer_ids(first_layer_idx: int, num_layers: int) -> list[int]:
     return ids
 
 
+def load_model(
+    mesh_device, layers, *, max_seq: int, chunk: int, lm_head: bool = False, weight_cache=None, checkpoint=None
+):
+    """The model's one load path (module docstring "Model load"): TtDS41Model of ``layers`` with RoPE tables for
+    ``max_seq`` positions; in a bring-up batch the batch's model (loaded once for the longest sequence its tests need,
+    with the LM head when one needs it), else a new model. Never a second copy of the weights in one process.
+    ``checkpoint``: the checkpoint directory (default: the run's, model_path())."""
+    from models.demos.common.bringup.testing import batch
+
+    ck = str(checkpoint or model_path())
+
+    def load(seq, head):
+        from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
+
+        return TtDS41Model(
+            mesh_device, ck, list(layers), max_seq=seq, chunk=chunk, lm_head=head, weight_cache=weight_cache
+        )
+
+    return batch.shared_model(
+        mesh_device,
+        layers,
+        seq=int(max_seq),
+        lm_head=bool(lm_head),
+        load=load,
+        config={"chunk": int(chunk), "weight_cache": str(weight_cache), "checkpoint": ck},
+        spec=bringup_spec(),
+    )
+
+
 @dataclass
 class DS41KvCaches(KvCaches):
     contract: object  # kv_contract.DS41ContractKV
@@ -129,7 +164,6 @@ class DS41PrefillRuntime:
     def __init__(self, *, mesh_device, hf_config, params: PrefillRunParams):
         import ttnn
         from models.demos.deepseek_v41_flash_d_p.tt.attention import WindowGeometry
-        from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
 
         assert params.is_first_rank and params.is_last_rank, "single-rank only"
         assert tuple(params.mesh_shape) == tuple(mesh_device.shape), (params.mesh_shape, tuple(mesh_device.shape))
@@ -137,14 +171,9 @@ class DS41PrefillRuntime:
         assert m % c == 0, (m, c)
         self.mesh_device, self.config = mesh_device, params
         self.layer_ids = served_layer_ids(params.first_layer_idx, params.num_layers)
-        self.model = TtDS41Model(
-            mesh_device,
-            model_path(),
-            self.layer_ids,
-            max_seq=m,
-            chunk=c,
-            lm_head=False,
-            weight_cache=params.weight_cache_path,
+        # FIX.29: through the one load path (in a bring-up batch: the batch's model, loaded once)
+        self.model = load_model(
+            mesh_device, self.layer_ids, max_seq=m, chunk=c, lm_head=False, weight_cache=params.weight_cache_path
         )
         # FIX.17: DEEP_LAYERS=tail skips layers 21-39 until the prompt's end; the engine reads every layer's window KV
         assert not self.model.deep, "DEEP_LAYERS=tail is not served: the engine needs every layer's whole history"
@@ -240,9 +269,12 @@ class DS41PrefillRuntime:
         st = self.state(kv, slot)
         model.state = st  # begin_chunk reads (and advances) the active slot's engram tail
         if acks:  # (P.42: the in-process read-back's snapshot cap; host bookkeeping)
-            from .kv_contract import SNAPSHOT_ENDS
+            from .kv_contract import SNAPSHOT_ENDS, WINDOW_UNWRITTEN
 
             SNAPSHOT_ENDS[int(slot)] = int(end)
+            # FIX.28: the layers whose window (ring and served snapshot) this chunk never writes: DECODER_SKIP=decode's
+            # decoder (20-39); the in-process read-backs judge only what decode is served (host bookkeeping)
+            WINDOW_UNWRITTEN[int(slot)] = frozenset(model.decoder) if model.skip_mode == "decode" else frozenset()
         from ..attention import prefill_end
 
         # PREFILL_END=cap (P.49): compute only [start, cap), cap = decode's cap of the engine's actual_end
@@ -283,9 +315,12 @@ class DS41PrefillRuntime:
         at cap; cap 0: zeros), then the layer's ack, as on a computed chunk (the engine still counts layers_per_chunk acks).
         """
         ttnn = self._ttnn
+        model = self.model
         for k, i in enumerate(self.layer_ids):
             c = st.window[i]
-            if c.snap is not None:  # (cap 0, a prompt shorter than a block: all 128 rows zero)
+            # (cap 0, a prompt shorter than a block: all 128 rows zero; DECODER_SKIP=decode, FIX.28: the decoder's
+            # snapshots are never written, as on a computed chunk)
+            if c.snap is not None and not (model.skip_mode == "decode" and i in model.decoder):
                 c.write_snapshot(cap)
             if d2h is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=metadata_msg)
@@ -458,15 +493,20 @@ def contract_state_pcc(spec, runtime, kv, slot, length, golden) -> dict:
     from loguru import logger
 
     from models.demos.common.bringup.core import metrics
-    from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import _pcc
+    from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import WINDOW_UNWRITTEN, _pcc
 
     st = runtime.state(kv, slot)
     out, exact, bad = {}, {}, []
+    # FIX.28: DECODER_SKIP=decode never computes the decoder's windows (layers 20-39; decode rebuilds them from P):
+    # their window ring is not judged; every other fixed state is (layer 20's compressor partial: its kv_only head)
+    unwritten = WINDOW_UNWRITTEN.get(int(slot), frozenset())
+    if unwritten:
+        logger.info(f"  window_kv of layers {sorted(unwritten)} not judged: DECODER_SKIP=decode never writes it")
     for layer in runtime.layer_ids:
         gold = golden.state(layer, at=length)
         dev = st.to_torch(layer, length)
         for name in spec.state_fixed:
-            if name not in gold or name not in dev:
+            if name not in gold or name not in dev or (name == "window_kv" and layer in unwritten):
                 continue
             if not gold[name].is_floating_point():
                 eq = torch.equal(dev[name].long().flatten(), gold[name].long().flatten())

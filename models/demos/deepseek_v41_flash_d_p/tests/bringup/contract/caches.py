@@ -210,9 +210,12 @@ class GoldenKV:
     OV-16): the last min(window, hi - lo) positions of the range, mode "last-window", limit R.state_threshold (the ring
     drift). ``window="all"``: every position, limit R.state_threshold."""
 
-    def __init__(self, window: str = "all"):
+    def __init__(self, window: str = "all", handoffs: bool = False):
         assert window in ("all", "last", "drift"), window
         self.window = window
+        # FIX.28: a layer without dumps also takes the window rows of the golden's serving handoff snapshots
+        # (reference/handoff.py, F264: e.g. DECODER_SKIP=decode's stop P), where no other snapshot holds them
+        self.handoffs = handoffs
         self._official = None
         self.drift_log = []  # (what, layer, channel, device pcc, limit, official pcc) of every "drift" comparison
         # P.26 (owner 2026-11-01, diagnostics, never gated): next to every window-KV PCC check the relative L2 error
@@ -271,6 +274,15 @@ class GoldenKV:
                 n = ring.shape[0]
                 for q in range(max(0, at - n), at):
                     rows.setdefault(q, ring[q % n])
+            if self.handoffs:  # (FIX.28: only positions no regular snapshot holds, so those rows stay as they were)
+                from models.demos.common.bringup.reference.handoff import index as handoff_index
+
+                for at in sorted((handoff_index(self.g.dir) or {}).get("points", []), reverse=True):
+                    ring = self.g.state(layer, at=at)["window_kv"]
+                    ring = ring.reshape(-1, ring.shape[-1])
+                    n = ring.shape[0]
+                    for q in range(max(0, at - n), at):
+                        rows.setdefault(q, ring[q % n])
             pos = sorted(rows)
             self._ring[layer] = (
                 torch.tensor(pos, dtype=torch.int64),

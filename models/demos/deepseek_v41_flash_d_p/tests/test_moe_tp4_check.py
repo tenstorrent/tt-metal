@@ -66,7 +66,7 @@ from models.demos.deepseek_v41_flash_d_p.tests import moe_tp_model as M
 
 S = spec()
 LAYER = 20  # the real routing's layer (P.55b's)
-LEAD = 40  # matmuls (4096^2, 11 x 10 cores: rule 18) ahead of each timed window (DS41-243)
+LEAD = 40  # matmuls (4096^2, 11 x 10 cores: rule 18) ahead of each timed window (DS41-248)
 REPS = 5  # timed calls a routing
 REPS_F = 3  # timed flat calls a layer
 SAMPLE = 16  # tokens a chip in the accuracy check

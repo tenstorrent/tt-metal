@@ -734,6 +734,180 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   tt-d-gen's prefix-hit request must carry the slot's id history below actual_start for the engram tail (the same
   slot has it; a migrated prefix needs load_tokens), as for every follow-up today.
 
+## FIX.28 (overseer, OWNER 2026-11-13): the gate tests run DECODER_SKIP=decode too
+
+- What. The gate tests drive the skipped path themselves, on the same model load (loaded with the shipped
+  DECODER_SKIP=off; `TtDS41Model.use_decoder_skip("decode")` now works on an off-loaded model: the decoder lists are
+  host-only, built by `_build_decoder`, dropped again by `use_decoder_skip("off")`). The full-path checks are unchanged
+  and run first.
+  - test_determinism: after the full-path check, `check(..., run=decode_sequence, suffix="_decoder_skip")`
+    (testing/model_determinism.py takes `run` / `suffix`). Per prompt (novel, code), 3 runs (cold, warm): a 4-chunk
+    prompt (N 20480) stops at P = (N-128)//64*64 = 20352 (tt/attention.decoder_skip_stop); request A [0, 7680), then
+    request B from 7552 with global_write_start 7680 (replay of [7552, 7680), no history write) up to P; every chunk
+    last=False. Compared bit for bit: layers 0-19's snapshots after each chunk, every history cache decode reads over
+    [0, P) (layer 20's KV head included) and layers 0-19's rings.
+  - test_contract: hooks.contract_variants -> testing/contract.py `variants` (F266): a request [0, P) on the next slot,
+    P = 10048 for the contract's 10208 tokens, each chunk global_write_start = actual_start, last=False; the same ack /
+    ack-timing / producer / independent / fixed-state checks, judged at P against FIX.26's handoff golden at P
+    (hooks.contract_handoffs adds decoder_skip_stop; golden made with BRINGUP_CPU_THREADS=16, DS41-241), plus
+    nothing written in [P, N). Metrics suffixed `_decoder_skip`; `contract_checks_failed` counts both requests.
+  - test_adapter_acks: `decoder_skip_requests`: slot 0 end P (10048) and slot 1 end P+40 (10088: not a multiple of
+    64; serving_contract.md P.49 rule: served end = end//64*64 = P, checked); acks per layer per chunk, history at
+    every ack, layers 0-19's snapshots at the cap, final history [0, P) and snapshots at P vs the golden
+    (caches.GoldenKV(handoffs=True)), [P, N) unwritten.
+  - Under decode only layers 20-39's window snapshot / ring are not judged (never written; decode does not read
+    them): kv_contract.WINDOW_UNWRITTEN, adapter.contract_state_pcc, the cap-0 path in adapter.py (DS41-240,
+    rewritten).
+- Results (8x4, 40 layers, gate --check, all PASS): ladder err_final_hidden 0.1321 (limit 0.2422), top5 1.0;
+  determinism_max_abs_diff 0 (full) and determinism_max_abs_diff_decoder_skip 0 (decode: 5 chunks per sequence, 3
+  runs x 2 prompts, states 0, 15.9 s); contract (full / decode): contract_checks_failed 0 / 0, acks_early 0 / 0, 800 /
+  800 ack blocks, state judged at 10176 / 10048, window ring PCC 0.98793 (limit 0.94787) / 0.98938 (limit 0.96071),
+  compress_kv 0.98877 / 0.98868 (limits 0.9370 / 0.9366), index_k 0.99334 / 0.99329 (0.9465 / 0.9463), engram tail
+  exact; unwritten_records_changed_decoder_skip 0 of 60; adapter acks: decode_acks_failures 0, served end 10048 for
+  both requests, 0 of 120 records past P changed; test_decoder_skip_decode served_bytes_differ 0 of 20,912.
+- New metrics and limits: `determinism_max_abs_diff_decoder_skip` == 0 (in this gate); the `*_decoder_skip` PCC
+  limits come from the same rule as the full path (calib x official drift at the judged point); no existing limit
+  changed. Suggested lines for P.51's gate: `determinism_max_abs_diff_decoder_skip == 0`,
+  `contract_checks_failed_decoder_skip == 0`, `acks_early_decoder_skip == 0`,
+  `unwritten_records_changed_decoder_skip == 0`, `decode_acks_failures == 0` (tasks.yaml not edited).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.28 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## FIX.29 (overseer fix, OWNER 2026-11-13: "LOAD THE MODEL ONLY ONCE") - one model load per gate
+
+What changed
+- One load path for the model: `tt/runners/adapter.load_model` (TtDS41Model). Both the bring-up hook
+  (`bringup/hooks.py device_model`) and the serving runtime (`DS41PrefillRuntime.__init__`) call it, so the
+  contract tests still build the model through the engine's adapter, and that is the same load as everyone else's.
+  load_model goes through `testing/batch.shared_model`: outside a batch process it just loads (and counts); inside one
+  it returns the batch's model (loaded once, RoPE for the longest sequence any test needs, the LM head if one needs it).
+- `testing/batch.shared_model` (framework): one cache per process; reuse only when key / mesh / layers / config
+  (chunk, expert cache, checkpoint) / load-time switch values (hooks.batch_settings, read from the environment) match
+  and the seq / LM head suffice; else a warned, counted reload. hooks.batch_call_settings = (PREFILL_END,): read per
+  chunk, so a test may change it on the shared model. Every real load records `model_loads` (value: this process;
+  `total`: running total across processes, DS41-242). After each run: Settings snapshots re-read (a run's monkeypatch
+  is undone), gc, the run's changed metrics and result files written to the plan results.
+- `core/batch.py`: `shareable()` = SHARED_TESTS (now also test_contract.py, test_contract_acks.py) or a test file
+  declaring `BATCH_SHARED = True` (tests/test_determinism.py, test_decoder_skip_decode.py,
+  bringup/contract/test_adapter_acks.py, test_prefill_end.py, test_window_snapshot.py). `gate_groups` /
+  `gate_entries`: consecutive units of one model configuration form one process (determinism runs first: FIX.25's
+  cold sequence); hints now always cover target.seq and the ladders' seqs.
+- `core/gate.py run_units` + `_run_group`: the units that will run (not kept / reused) are grouped; a group of >= 2
+  runs as ONE batch process (logs/<task>.check.shared/: plan, results, per-unit logs, process.log); each unit then gets
+  its own rc, metrics, result files and log section, so verdicts, stamps and the delta work as before; a unit the
+  process never reached gets rc 1 with the reason. `gate_model_loads` = model loads of this gate's processes.
+- test_decoder_skip_decode: no longer loads with DECODER_SKIP=decode (monkeypatch); it asserts the model is as loaded
+  (shipped off), runs `use_decoder_skip("decode")` / off per request, and restores `loaded_skip` at the end. Truly
+  load-time switches (a different process / reload): DECODER_SKIP=exact / replay128 (replay128 builds the tail
+  model), DEEP_LAYERS, WINDOW_KV_KEEP, every weight / format switch; decode is host lists only (FIX.28).
+- (2) Agents' command: `scripts/run_safe_pytest.sh --one-process --run-all <test> <test> ...` (one process, the
+  model loaded once; BRINGUP_BATCH_KEEP_GOING=1 runs past a failure). bringup-engineer.md rule 3 tells agents.
+- Diagnostic only: `BRINGUP_INJECT=rowshift2` (testing/batch.inject): the run's 2nd embed call gets its ids rolled
+  by one (an off-by-one, once: not repeatable), undone after the run. Never in a gate.
+
+Measured (8x4, 40 layers, FIX.28's gate command as is)
+- Loads: 5 (FIX.28, one per unit) -> 1 (gate_model_loads 1; load 214 s).
+- Wall: FIX.28 units 352 + 342 + 340 + 485 + 468 = 1987 s (33 min) -> FIX.29 gate 728 s (12 min; the shared process
+  717 s: determinism 331 incl. the load, ladder 68, contract 23, acks 133, decode 137).
+- Metrics vs results/FIX.28.json: 502 identical (every err_*, top5, determinism 0 / 0, contract, acks,
+  served_bytes_differ 0 of 20,912, ...); 10 differ, all timing or new: prefill_seconds / chunk_seconds_c10 68.1 ->
+  10.3 s (the ladder's first chunk is no longer the process's cold one), model_load_s 206.8 -> 213.6,
+  determinism_s 96.2 -> 95.7, determinism_s_decoder_skip 15.9 -> 16.8, decode_test_chunk_wall_ms off / decode
+  287.0 / 191.1 -> 284.5 / 187.3; new: gate_model_loads 1, model_loads 1, model_shared 1.
+- Injected failure still caught in the shared process (BRINGUP_INJECT=rowshift2, `--one-process`):
+  model test_determinism FAIL ("identical inputs gave different outputs ... first differing chunk 1", max |diff|
+  4.5); test_contract FAIL (producer read-back PCC compress_kv 0.736 < 0.937, index_k 0.850 < 0.946);
+  test_adapter_acks FAIL (layer 0 snapshot pcc 0.170 < 0.998); test_decoder_skip_decode FAIL (novel N 300: 128 of
+  128 records differ off vs decode). Contract, acks and decode ran in one process past each other's failure
+  (BRINGUP_BATCH_KEEP_GOING=1), one load.
+- CPU selftests: selftest/test_gate_one_process.py (one process, gate_model_loads 1; separate processes count 2 and
+  fail; a failing shared run fails its unit and stops), test_one_process.py / test_model_determinism.py updated
+  (the contract test may share now). The full selftest suite's other failures are the same at HEAD (checked on a
+  clean worktree of HEAD for the gate-related files).
+
+Shared / not shared, and why
+- Shared in one process: the mesh, the model weights, the program cache, the engram table.
+- Not shared: each test's KV caches and states (freed after each run; the adapter's slabs are never freed by the
+  model, only its own buffers), its environment, results, log and pytest session (test modules re-imported).
+- Still another process / load: a unit with another switch value in its command (model_key), a test that sets a
+  load-time switch itself (reload, warned and counted in gate_model_loads), a test file not declared shareable.
+
+Re-run
+- `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.29 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
+- Several tests by hand: `scripts/run_safe_pytest.sh --one-process --run-all <test files>`
+
+## FIX.31 (overseer fix, OWNER 2026-11-13: "bookkeeping eats the Galaxy") - count every device run once
+
+What changed (framework only; no model, test or fork code)
+- (1) Every `scripts/run_safe_pytest.sh` run of a bring-up spec files its result (core/runrec.py, called by
+  tt_safe_run.sh `ttrun_runrec_begin` / its EXIT hook `ttrun_runrec_end`): key = tests + measuring pytest args (no
+  precompile flags, no --run-all, no --one-process) + `stamps.measuring_env` + code key + goldens key + waivers;
+  records in runs/<run>/stamps/_runs/<key>.json (newest first, result files kept). A `BRINGUP_BATCH_CMD` batch
+  (--one-process, F259 unit_command) becomes the same plan as a file first, so each of its runs is filed. The gate
+  (`core/gate._lookup`) reuses a unit from: its stamp; its stamp made before FIX.31 (legacy code / env key aliased,
+  `stamps.ensure_aliases`, runs/<run>/stamps/code_aliases.json); every run's newest runner record, all PASS; another
+  task's gate record of the same runs (old records: command recovered by its hash from that task's gate). Never a
+  FAIL / HANG / NOT RUN, never an older PASS behind a newer failure.
+- `stamps.env_key` = `measuring_env`: without TT_METAL_CACHE, TT_METAL_HOME when it is this checkout, the launch
+  variables (BRINGUP_BATCH*, BRINGUP_HOST_MEM_*, BRINGUP_DEVJOB_DIR, BRINGUP_RUNREC). DS41-244: a shell's gate
+  (e8e6...) and the orchestrator's (4413...) were different keys, so `gate --status` called passes stale.
+- (2) `overseer fix ... --unit TASK#label --selftest <file>`: the fix's gate is its selftests + the named units only
+  (raw segments of the task, BRINGUP_TASK=<task>), with the limits those units recorded (newest PASS in the store).
+  Without them the old chaining stays. A model-level unit still brings FIX.25's determinism unit (owner: no exemption).
+- (3) `stamps.BOOKKEEPING`: gate.py, batch.py, run_safe_pytest.sh, tt_safe_run.sh count in the code key by their
+  measuring part only (python: top-level defs by name; shell: functions / `# --- <title> ---` sections). Listed =
+  bookkeeping; anything unlisted (a new function too) counts. Measuring parts kept: gate.py `gate_env`, `_run_group`
+  and imports; batch.py `parse`, `hints`, `gate_entries`, `plan_from_cmd`, ITEM_VARS, ...; the safe runner's card,
+  env, pytest command, hang / reset. core/hostmem.py, runrec.py, multigate.py: wholly bookkeeping.
+- (4) An agent ended by an API / auth / overload error (orchestrator.API_ERROR: 403 / 529 / overloaded / Cloudflare)
+  is INFRA: no attempt charged, no gate (changed tree or not), back-off 60 s doubling to 30 min, 8 in a row stops the
+  task for a person; a cut-off attempt's changes are named in the next brief.
+- (5) core/multigate.prerun: `pending_full_gates(include=[X.3])` collects every pending unit of the picks and the
+  milestone, drops what each gate would keep / reuse, runs each run once (dedup by run keys) in one batch process per
+  model configuration (grouped by key, not adjacency; past failures), then each task's gate takes its results
+  (`run_gate(pre=...)`): own verdict, metrics, commit. `with_determinism` makes the check its own unit (never inside
+  another unit's command: P.51's ladder re-ran). `batch.launch_form`: a unit without --no-precompile joins a shared
+  process with kernels compiled on demand, the log says so; `batch.why_not` logs why a unit runs alone.
+  `batch.model_key` folds a switch at its test-process value into unset (DS41-245: ENGRAM_TABLE=resident is NOT
+  folded; its test value is mmap).
+- (6) watch: a live gate (runs/<run>/live/gate-<pid>-<task>.json, written by run_gate), a safe-runner run
+  (live/<pid>.json) or a chain (`python -m ...watch live --pid $$`) keeps the watch waiting; results land in
+  runs/<run>/gates.log (`pid=` lines; the orchestrator's own skipped, `gate check` lines never wake it); `--grace`
+  (60 s) bridges a chain's gap.
+
+Decisions
+- Precompile inside a batch: not done (disagree with "precompile once, then batch"): the up_front_collect pass would
+  run test_batch.py's whole plan under NO_DISPATCH, and testing/batch.shared_model would keep the model that pass
+  built from shape-only tensors for the real pass. F151 already drops the pass for model-level steps (kernels cached).
+- model_key and gate_groups are launch: the device side reloads whenever a load-time switch differs
+  (testing/batch.shared_model compares hooks.batch_settings), so a key fold cannot share a wrong model.
+- Code key: legacy (1117c19bb2f25445) of HEAD 82a197f0edf == FIX.30's records; new key of HEAD == today's tree
+  (b4e915a478bc066f) after every FIX.31 edit: the edits are all bookkeeping.
+
+Selftests (CPU, through the safe runner): selftest/test_count_runs_once.py (20), test_back_to_back_gates.py (6),
+test_fix_claim_and_infra.py (7), test_watch.py (+4); updated test_model_determinism.py / test_one_process.py (the
+determinism unit is its own). Full selftest suite: 183 failures, 180 of them identical at HEAD (clean worktree;
+missing tale-of-two-cities.txt.bz2 and others), the other 3 were these updated tests.
+
+Re-run
+- `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.31 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
+- selftests: `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/selftest/test_count_runs_once.py` (etc.)
+
+Measured (8x4, `gate FIX.31 --check`, after the last edit)
+- Units: 5; reused 3, run 2. FIX.31#test_determinism: X.3's pass on the same tree (19:35, a shell's env key aliased);
+  FIX.30#test_ladder: X.3's pass of the same runs (X.3's command has --no-precompile, FIX.30's not); the CPU selftest
+  FIX.30#test_one_process: a hand run filed by the safe runner. Run: test_profile (2 runs) + test_positions in ONE
+  process, one model load (131 s): 316 s device, gate 322 s. FIX.30 ran the same two units in 2613 + 819 = 3432 s
+  (gate_model_loads 4 -> 1).
+- Not 0 device minutes: FIX.30's own records carry env key 6d56329acc1a26b2, which no current launcher reproduces
+  and whose contents were never stored (DS41-244); profile and positions had no other pass on this tree.
+- Metrics vs results/FIX.30.json: accuracy identical (err_final_hidden 0.13964838470398958 both, top5 1.0, op_rows 1538,
+  pos_chunk 5120); timing within noise (prefill_ms_full 1916.5 -> 1918.2, chunk_wall_ms 182.6 -> 183.5,
+  device_ms_total 172.52 -> 172.12).
+- First check attempt failed in FIX.30's selftest test_a_runs_record_gives_its_configuration_a_need...: not hermetic
+  (asserted BRINGUP_HOST_MEM_NEED_GB unset; the gate now has a measured need for that unit). Fixed in the test.
+- Note: selftest/* is NO_MEASURE (F120), so a selftest edit does not change the code key; a selftest gate unit is
+  only re-run when its newest run record failed.
+
 ## P.52 (perf, attempt 2): the MoE expert-replica work (P.45 / P.46 / P.47) ported onto model_bringup
 - Expected per chunk (written before any device run; perf_guide sections 1-2): MOE_REPLICAS=runtime with no copies
   vs off = 0 ms device (one more, empty expert slot a chip: the flat experts skip a slot with no tokens; P.47 measured
@@ -789,17 +963,17 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   - MOE_REPLICA_DEMO=rotate (diagnostic, default off): a new 32-copy neighbour table on one layer before every chunk run
     (tt/model.py begin_chunk -> adapter.replica_demo), for step 3 only.
 - Step 1 microbenchmark (tests/test_moe_fill_piggyback.py; carrier layer 20, copies into layer 19; combine device time,
-  slowest chip, median; fill on / off alternating in one window behind 100 matmuls, DS41-243): no job -0.5 %. Added %
+  slowest chip, median; fill on / off alternating in one window behind 100 matmuls, DS41-248): no job -0.5 %. Added %
   (hidden % of pieces), cap 4: 1/4 slot a call pair -1.3 (92.5), neighbour 32 +0.2 (95.1), random 32 +88 (55.5);
   1/8 -0.2 / -0.5 / +2.6 (86.6); 1/16 -0.7 / 0.0 / -0.6 (96.6); 1/32 +0.8 / -0.1 / -0.2 (100). cap 1: random 1/16 +23.
   Whole slot a call (earlier run, no lead): +90 % pair .. +760 % random. Every slot bit-exact, done words exact, 100
-  calls back to back no hang, carrier outputs bit-identical. PASS (< 5 %) at <= 1/8 slot a call; DS41-241.
+  calls back to back no hang, carrier outputs bit-identical. PASS (< 5 %) at <= 1/8 slot a call; DS41-246.
 - Step 2 (same test, section 3): set_replicas(neighbour table) queues 32 copies, none mapped; the filled layer's own call
   while pending carries none and its output is unchanged; mapped after 18 carrier calls (1 wait + 16 + 1 fence);
   slots bit-exact; output with the table bit-identical to none mapped, rows reach the spare slots; half the chips
   changed: unmapped at once, mapped after 18 calls; emptied: unmapped. All checks ok.
 - Step 3: NOT measured. The first profile (MOE_FILL=serial + MOE_REPLICA_DEMO=rotate, rung last) hung the board in the
-  timed runs (DS41-242). Per the owner's safety rule: stopped, no reset, no further device run (so no final gate
+  timed runs (DS41-247). Per the owner's safety rule: stopped, no reset, no further device run (so no final gate
   --check after the clang-format pass; the format changed whitespace only, the unit test_moe_fill_piggyback passed on
   the code before it).
 - What limits it: a call can hide ~1/8-1/16 of a slot a source port; one layer's copies a call; at most 4 copies a
@@ -826,7 +1000,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   after a device prefill of chunks 0-9 (the real chunk 10, then two re-runs on the profile's steady path), random ids
   (the p51200 position profile's tokens, fresh state: one compile run, then three). Per run and layer: every slot's
   tokens and the program's per-chip device time. tests/moe_exact_model.py (CPU, numpy) fits the per-chip expert time
-  and plans the exact split per layer, max mode and deadline mode (definitions in its docstring; DS41-244 detail).
+  and plans the exact split per layer, max mode and deadline mode (definitions in its docstring; DS41-249 detail).
   720 layer plans run in a spawn pool (~7 s; spawn, not fork, so no child inherits the open mesh).
 - Prefix: the device's own chunks 0-9, not the golden prefix, for both prompts (the code prompt has no golden; P.45's
   count files were made the same way). The quick rung's chunk is chunk 10 at 51,200, so "quick" and "51,200" are the
@@ -845,7 +1019,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   results/P.55a_exact_bound.json and the unit log.
 - Verdict (owner's line, < ~5 ms a chunk surviving = NO-GO): novel GO (10.1), code NO-GO (2.9), random ids GO (16.5).
   The test does not decide for the owner; step 2 was not started.
-- What limits it (DS41-244): the light chips sit on the DRAM floor (12 experts x 38.9 us = 0.467 ms) and reach their
+- What limits it (DS41-249): the light chips sit on the DRAM floor (12 experts x 38.9 us = 0.467 ms) and reach their
   replica before any whole-expert copy can land (>= 0.75 ms on one link pair), so the receivers idle ~0.3 ms; most
   of the loss comes back if a copy is split over two paths. Also: ~94 % of the copies outlast the home's own compute
   of the expert (the zero-extra-read source window); the dispatch's imbalance and the combine's link traffic are not
@@ -908,7 +1082,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   task has no A/B switch entry, so it ran the defaults (MOE_REPLICAS=off, and not DS41_ENGRAM_TABLE=resident, which
   P.52 / P.53's measures set: 182-185 ms). The wall is not comparable with theirs; no code on the off path changed
   (the stock combine's kernel compiles without REC_FILL / REC_FX). The orchestrator's A/B sets the switches.
-- What limits it (DS41-245): a link carries ~7 GB/s of copy while the combine's main loop runs (rows first, the experts
+- What limits it (DS41-250): a link carries ~7 GB/s of copy while the combine's main loop runs (rows first, the experts
   streaming weights from the same DRAM; 47 us a 340 KiB block), ~20 GB/s after (17 us); one link averages 15.5 GB/s,
   the same as expert_slot_copy. So a whole expert lands at 0.76-0.89 ms on a pair, ~1.25 ms through trees, after a
   light receiver's own work (0.47 ms in P.55a's real chunk, 0.63 here): no copy is on time; the receiver waits.
@@ -946,7 +1120,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
     the replica's own compute, ~0.05-0.1 ms of a ~0.9 ms gap). While any layer has a stream plan, every MoE call of
     the block runs the exact program (empty jobs where none): the flag words alternate by call parity (a stock call in
     between would leave a parity unzeroed).
-  - Planner: NOT on device (DS41-248). The plans are computed on the host (tests/moe_exact_model.Plan, P.55a's A / B)
+  - Planner: NOT on device (DS41-253). The plans are computed on the host (tests/moe_exact_model.Plan, P.55a's A / B)
     from a counting run of the same chunk; a device planner fed the same counts plans the same, so the numbers below
     leave out only its own cost and a count exchange. Fallback c' (fill): set_exact(fill=True), spare slots filled by
     expert_slot_copy before the chunk (outside the profiled window).
@@ -968,7 +1142,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   receiver's spare slot spoiled first: the wait works). Copy cost in these real chunks (OV-40 (3)): a layer with copies
   2.10 ms (novel, 23 layers) / 1.98 (code, 8) vs 0.93 / 0.96 with the same split's copies in place and 1.62 / 1.51 off;
   layers without copies +0.07 / +0.02 ms (the exact program with empty jobs, after a copy layer's skew).
-- What limits it (DS41-246): a copy tree lands 1.25 ms (one tree, P.55b) to ~1.9 ms (19 receivers of one expert) into
+- What limits it (DS41-251): a copy tree lands 1.25 ms (one tree, P.55b) to ~1.9 ms (19 receivers of one expert) into
   the layer, while the off layer's busiest chip is done at 1.0-1.9 ms; the plan assumed 0.89 ms and its model
   predicted 1.21 ms for the copy layers (measured 2.10). Recalibrated (P.55a's model, whole-copy wait): 1.25 ms a copy
   -> novel 0.77 ms a chunk (0 of 44 copies on time), code 0.06; 1.6 ms -> 0. The split itself is worth 12-24 ms
@@ -979,7 +1153,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   (DS41-228).
 - Cores: none added (rule 18 holds: the port cores and the flat expert's cores, inside the 11 x 10 cap). Host: 6
   runtime args a flat weight-reader core and the port's token, written every exact call.
-- Gotchas: DS41-247 (the steady path's first re-run is no baseline: attempt 1 read 4256 max diff, all of it the
+- Gotchas: DS41-252 (the steady path's first re-run is no baseline: attempt 1 read 4256 max diff, all of it the
   baseline); the flat expert's biggest-first order (a receiver's replica would go first); flag parity (above).
 - Re-run: `gate P.55c --spec <spec> --check --unit 'P.55c#test_moe_exact_replicas'` (~5 min on the 8x4, devjob);
   `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.55c`.
@@ -1049,7 +1223,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   the same (novel 44.06, code 42.04 ms): the extra copies are marginal; device novel 174.9 -> 156.0, code 162.3 ->
   152.5 (planner 4.0 / 5.2 ms). Default stays 125 (P.53's validated hiding).
 - Planner cost: core phases (cycles, chip 0, full model): reads 1.2k, counts wait 20k (15 us; 284k in the host-bound
-  4-layer quick model = launch skew, DS41-243), plan 36-50k, map + writes 7k after trims (36k before: base map tile
+  4-layer quick model = launch skew, DS41-248), plan 36-50k, map + writes 7k after trims (36k before: base map tile
   precomputed, five-step msb, batched job page read-modify-write). Program ~0.1-0.13 ms a layer = 4-5 ms a chunk.
 - What limits it: (1) the wall: the chunk is host-bound (~190 ms wall vs ~157 device), so the device gain does not
   show in the clean wall per chunk; (2) the planner's 4-5 ms a chunk (a 32-chip program a layer, the exchange's skew);
@@ -1057,7 +1231,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   chunk 10 vs 160.8 here); (5) DECODER_SKIP modes that skip layers on some chunks break the 40-call rhythm: the guard
   then runs those layers off.
 - Gotchas: this Galaxy is Blackhole (-mcpu=tt-bh): job pages are written whole (1 KB read-modify-write) to keep DRAM
-  accesses 64 B aligned; DS41-250 (NONE); G's epoch starts at 1 so zeroed layer states read empty.
+  accesses 64 B aligned; DS41-255 (NONE); G's epoch starts at 1 so zeroed layer states read empty.
 - stock ttnn.copy (router bias <- load-time bias) is the guard's device copy, not a compute op; no INDEX op applies.
   Cores: planner 1 + up to 4 sender cores a chip (rule 18 holds); the combine adds none.
 - Re-run: `gate P.56 --spec <spec> --check --unit 'P.56#test_moe_prev_replicas'` (~8 min, devjob);
@@ -1141,7 +1315,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Trace verdict: FEASIBLE at a fixed position (prototype), NOT yet chunk to chunk. Prototype (layer 21, side off, 47
   programs, input cloned each run): capture after 3 warm runs, no capture error, 20 replays bit-identical, no hang;
   host a layer 6.45 -> 0.020 ms, device a layer 3.93 -> 3.54 ms (trace_bit_identical 1). Blockers (detail in
-  known_issues_detail.md, DS41-251): per-start host args (rope slices, kv-write positions, window rows, scalars,
+  known_issues_detail.md, DS41-256): per-start host args (rope slices, kv-write positions, window rows, scalars,
   slice_write offsets, ckv row0, indexer start / kv_len) - per-start traces or start as a device tensor; per-chunk
   stores allocated in the chunk (top-k / candidates) - preallocate; token ids input buffer; engram wait inside layer 1;
   P.56's host ring slot and guard. Not blockers: host reads (0), CCL semaphores / device call counters (replayed fine),
@@ -1172,7 +1346,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   1.125); fused head top-K <= 16 (TP4 run at 2 / 3 / 4 experts a token, TP8 at 1 / 2, cost fitted vs K / vs chips a
   row goes to and taken at 6 experts); routing planner N x slots <= 1024 (head-driven runs at 32 slots a chip, the
   compute runs at the true 48 / 2 x 48).
-- Results (gate unit P.58; DS41-252, detail in known_issues_detail.md):
+- Results (gate unit P.58; DS41-257, detail in known_issues_detail.md):
 
   | chunk 10 at 51,200, device ms | novel | code |
   |---|---|---|
@@ -1211,7 +1385,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Expected per chunk (written before any device run; perf_guide 1-2, 5): device -4 to -8 ms (chunk 10, MOE_REPLICAS off),
   all in the experts phase (routed_experts_combine; P.56 off: 54.7 ms novel / 48.2 code a chunk). Reason: Marko's
   one-chip benchmark (12 experts x M rows) gives -21 % at M 256 and -17 % at M 2048, ~0 at M 64; our busiest chip has
-  ~4,000 token-slots a layer (~M 330 uniform) but the light chips sit at the DRAM floor (DS41-244), so only the busiest
+  ~4,000 token-slots a layer (~M 330 uniform) but the light chips sit at the DRAM floor (DS41-249), so only the busiest
   chip's row term (B, per 32-row tile) shrinks: ~-0.1 to -0.2 ms a layer. With P.56 prev the gain is smaller (the
   busiest chip already offloaded). Host: 0 (same program count; a different compile define only). Caveat: the change
   does nothing when the plan's sub-block is 128 rows (x block 34,816 B: 4 pieces of 8,704 B already); it acts only at
@@ -1304,8 +1478,8 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   which a device-side slot would not remove).
 - Where the host time really went (tests/test_moe_prev_host_probe.py, a diagnostic: 4-layer model, novel chunks 0..3,
   plus temporary C++ timers in the combine's launch, removed): handing every call ring[0] (a fixed jobs address) did
-  NOT help (978 vs 856 us a combine call), so P.57's "ring slot chosen on the host" was not the cost (DS41-251's
-  attribution: contradicted, DS41-254). The cost was routed_experts_combine_program_factory.cpp set_fill: with the
+  NOT help (978 vs 856 us a combine call), so P.57's "ring slot chosen on the host" was not the cost (DS41-256's
+  attribution: contradicted, DS41-259). The cost was routed_experts_combine_program_factory.cpp set_fill: with the
   exact fill every cache hit rewrote every fill port's args and every flat-expert weight reader's wait args on 32
   chips (a new token and jobs address each call): ~350-470 us of a ~810-930 us launch (off: ~440-520 us, set_fill 1).
 - What changed (MOE_PREV_HOST=device, the new default; legacy = P.56 as built, selectable):
@@ -1349,7 +1523,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   device 153 novel), so the wall gains less than the host (-9.8 / -8.5); prev now beats off on the clean wall for novel
   (179.3 vs 181.0) and is ~3 ms behind on code (175.0 vs 172.2). What is left of P.56's host: planner ~3.8 ms + the
   combine's ~0.8 ms over off. Trace (P.61): the combine's fill args are now the same every call (no host value), one
-  of DS41-251's blockers gone; the guard stays on the host (it decides per layer, ready on steady chunks).
+  of DS41-256's blockers gone; the guard stays on the host (it decides per layer, ready on steady chunks).
 - Cores: none added (rule 18 unchanged). Prepared: the planner and reset stay prepared (OV-23); the combine is a C++ op.
 - Re-run: `gate P.60 --spec <spec> --check --unit 'P.60#test_moe_prev_replicas'` (~7 min, devjob); host probe
   `PROBE_VARIANTS=off,legacy,device [PROBE_PLANNER=1] scripts/run_safe_pytest.sh --run-all --no-precompile
@@ -1383,10 +1557,10 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   MOE_BLOCK_SRC=main with its own head; MOE_REPLICAS off or prev with MOE_PREV_HOST=device); anything else, the
   decoder tail and DEEP_LAYERS=tail's source layer run eager. No device_params change: with trace_region_size 0 Metal
   puts the trace's command buffer top-down in DRAM (tt_metal/distributed/mesh_trace.cpp:65).
-- Decisions: (1) DS41-255: every DRAM buffer the capture allocates stays allocated while the trace lives (frees held,
+- Decisions: (1) DS41-260: every DRAM buffer the capture allocates stays allocated while the trace lives (frees held,
   op outputs kept, a graph capture raises on a DRAM buffer allocated and freed inside the capture): 9.66 MiB a chip a
   layer, ~386 MiB for 40 layers a key (the gate's prev test has 2 keys: off and prev). L1 (the block's arena) is freed
-  as in the eager call. (2) DS41-256: a capture first waits for the engram worker's uploads. (3) DS41-257: the
+  as in the eager call. (2) DS41-261: a capture first waits for the engram worker's uploads. (3) DS41-262: the
   rt profiler's accounting of replays (testing/profiler.py trace_replay / remap_replays), so device_ms_total and the
   sections stay right with the change on. (4) P.56's guard stays a host decision outside the trace (the brief said
   "device-side"): it issues nothing on a steady chunk, so it is no blocker and needs no new device program.
@@ -1429,7 +1603,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   per-op experts / planner columns read 0 under the trace: its spy times the launches, which a replay does not make),
   the profile (chunk_wall_ms 164.2, device_ms_total 141.52).
 - Next (not done): the remaining wall - device (~15 ms a chunk) is eager idle at the chunk's start and layer 1's
-  engram wait (DS41-251 fix 4: the engram job one chunk ahead), and ~2.7 ms at the 40 replay boundaries (Metal's drain
+  engram wait (DS41-256 fix 4: the engram job one chunk ahead), and ~2.7 ms at the 40 replay boundaries (Metal's drain
   before each replay: fewer, longer traces need the attention's start-dependent arguments on the device).
 
 ## P.62 (perf, attempt 1): why prev costs host over off, accounted call by call; MOE_PREV_HOST2 legacy | lean
@@ -1462,7 +1636,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   Every other op's difference changes sign between runs (+-0.1..0.8 ms each, both directions: noise). The engram
   wait in host differs by -1.9..+0.5 ms between sides (clean) and -2..-3.4 ms (instrumented: a slower main thread
   waits less at layer 14). P.60's "~2.5 ms not attributed" was this noise (one pass a side; a pass's mean swings +-4
-  ms, DS41-259). So prev's host over off = one extra 32-chip launch a MoE layer (~93-102 us) + the combine's fill path
+  ms, DS41-264). So prev's host over off = one extra 32-chip launch a MoE layer (~93-102 us) + the combine's fill path
   (~15-38 us a call) + ~5 us Python a call; nothing else.
 - STEP 2, what lean (MOE_PREV_HOST2=lean, default) changes, bit-identical (same programs' work, same plans):
   (1) planner and reset as ONE mesh program (kernel compile arg 21 MESH1: the chip's position from the routing
@@ -1472,7 +1646,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   fill_off() / set_mode() re-arm); (3) after() without per-call settings reads. Gate unit (one pass a side) host us a
   call lean vs device: planner 85.3-85.5 vs 91.5-92.2, before 2.0-2.1 vs 6.7; combine 352-354 vs 352-357 (off
   336-341): lean saves ~11 us a call = ~0.45 ms a chunk. Expected -2 to -3 ms: missed, because one mesh program costs
-  the same to launch as 32 (DS41-258: on a prepared hit only per-device dispatch is left).
+  the same to launch as 32 (DS41-263: on a prepared hit only per-device dispatch is left).
 - Not done, with the reason:
   - Fold the planner into the fused head: the head drives the fabric on every link (x all-gather, reduce-scatter,
     routing exchange); the planner's senders need their own connection per direction on the same EDM channels.
@@ -1550,7 +1724,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   watcher core; the standalone folded planner 1 core a chip (the watcher cell), once a chunk.
 - Results (tests/test_prev_host_account.py, P62_SIDES=off,prev:lean:launch,prev:lean:folded, 10 alternating clean
   rounds a side, chunks 1..10 of fresh requests; host = to the last enqueue, busy = host - engram wait, wall = to the
-  sync; the test's prev:lean side fixed first, DS41-262):
+  sync; the test's prev:lean side fixed first, DS41-267):
 
   | prompt | side | host ms | busy ms | wall ms | prev - off host (busy +- se) |
   |---|---|---|---|---|---|
@@ -1573,8 +1747,8 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   quick min layer PCC 0.60548579 at L39 (= P.52-P.62), host transfers per layer 0, clean wall 167.1 ms (spread 5.5;
   P.62's measure 171.3); p51200 (random ids) device_ms_total 155.65 (P.62 156.49), device_ms_experts 74.59 (75.99),
   wall 176.0 (spread 50.7, loadavg 7-9), host overhead 20.4, 1656 launches (run_prepared not counted).
-- Gotchas: DS41-260 (the head's patch store is per variant: the first tail run planned layer 0 at the wrong ordinals
-  because the tail's descriptor arg was never patched); DS41-261 (no free head core); DS41-262 (P.62's accounting
+- Gotchas: DS41-265 (the head's patch store is per variant: the first tail run planned layer 0 at the wrong ordinals
+  because the tail's descriptor arg was never patched); DS41-266 (no free head core); DS41-267 (P.62's accounting
   prev:lean side was P.60's device path). Fork suites not run (OV-25).
 - Re-run: accounting `P62_SIDES=off,prev:lean:launch,prev:lean:folded scripts/run_safe_pytest.sh --run-all
   --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_prev_host_account.py` (~8 min, devjob); gate unit
@@ -1595,7 +1769,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   ~340 us = patching 3.6 us x 32 chips (~2,640 args a chip, the moved groups written) + ~220 enqueue. One patch
   ~8 ns = GetRuntimeArgs (get_kernel's two hash lookups + a shared_ptr copy). Metal's enqueue already packs a
   multi-device program once and copies it per device (fd_mesh_command_queue.cpp write_program_commands_to_devices),
-  so a mesh program saves the patch loop's x32, not the per-device copies (DS41-258).
+  so a mesh program saves the patch loop's x32, not the per-device copies (DS41-263).
 - Decision: not ONE mesh program (the task's literal ask). The probe says the cost a mesh program removes is the patch
   loop; caching each patched arg's RuntimeArgsData* per program removes most of it with no kernel change, no fabric
   rewrite of two 110-core ops and no hang risk. What a mesh program would still add on top: the remaining ~3 us
@@ -1611,7 +1785,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   245.7 / 249.4 (novel / code; P.62 lean 352-354, P.60 device in this run 250.6 / 251.6 - its own hit also on). prev
   chunks 1..10: novel host 155.6 / wall 166.5 / device 149.85 ms; code 156.3 / 165.2 / 145.16 (P.62b's gate unit:
   host ~164-170). off: code host 151.0 / wall 166.8 / device 155.9; novel off host 242.6 / wall 260.2 is a slow side
-  (chunk 1 already 163 ms, most chunks ~250: host load, loadavg ~12; one pass a side, DS41-259). maxdiff 0, mirror 0
+  (chunk 1 already 163 ms, most chunks ~250: host load, loadavg ~12; one pass a side, DS41-264). maxdiff 0, mirror 0
   mismatches of 477, plans as P.62b.
 - `measure --task P.63` parts (change on: MESH_PROGRAMS=on ENGRAM_TABLE=resident): determinism 0 (novel, code,
   state); quick min layer PCC 0.60548579 at L39 (= P.52-P.62b: the same output bytes), host transfers per layer 0,
@@ -1635,12 +1809,12 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   with identical runtime args; table = a DRAM buffer (the same on every chip) holding, per chip, what differs; a chip
   finds its row by its fabric chip id (my_device_id in the routing table in its L1, DS41-225's pattern). us a call =
   host time of one op launch.
-- STEP 1, what differs between the 32 programs (DS41_MESH_DIFF=<prefix>, diagnostic, 2-layer probe; DS41-264):
+- STEP 1, what differs between the 32 programs (DS41_MESH_DIFF=<prefix>, diagnostic, 2-layer probe; DS41-269):
   head - kernels, cores, CBs, semaphores, compile args the same; 4 defines carry the chip index; 4,280 per-core args a
   chip differ (compute kernels included, lists of chip-dependent length); patched addresses at chip-dependent indices.
   combine - port and accumulator cores differ by chip (placed next to each chip's Ethernet cores), so CBs and
   semaphores differ; 3,047 args a chip differ. And each launch copies its args to every chip: ~83 KB (head) / ~79 KB
-  (combine) a chip (DS41-265) - the ~220 us "enqueue" a mesh program keeps (DS41-258), and why per-chip data must not
+  (combine) a chip (DS41-270) - the ~220 us "enqueue" a mesh program keeps (DS41-263), and why per-chip data must not
   go into the args.
 - Built (head only): fork option `fused_head(mesh_program=)`, hashed; model setting MESH_PROGRAMS2 (tt/settings.py).
   common/mesh_uniform.cpp assembles the mesh program from the per-chip descriptors (args padded to each kernel's
@@ -1665,8 +1839,8 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   unchanged); MESH_PROGRAMS2=on raises at model load (a clean error, not another hang and reset). The A/B "change on"
   side (MESH_PROGRAMS2=on) will therefore fail at load: do not expect a measurement from this attempt.
 - Next (for whoever picks it up): find the hang off the 8x4 first (2x2 or loudbox with TT_METAL_WATCHER, or slow
-  dispatch); suspects in DS41-266's detail (compute flag release, the row's NOC read, desc decoding). Before more
-  work, weigh it: DS41-265 says the args' bytes copied 32x (~2.6 MB a head call) are the bigger host cost, and a mesh
+  dispatch); suspects in DS41-271's detail (compute flag release, the row's NOC read, desc decoding). Before more
+  work, weigh it: DS41-270 says the args' bytes copied 32x (~2.6 MB a head call) are the bigger host cost, and a mesh
   program keeps them; fewer arg bytes (common args, a DRAM arg table per layer) would cut host time for both paths.
 - Cores (rule 18): none changed (the same kernels on the same cores). Prepared (OV-23): no Python-built op touched.
   Fork suites not run (OV-25). Gate not run (stopped after the hang).
@@ -1675,7 +1849,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   models/demos/deepseek_v41_flash_d_p/tests/test_mesh_program_probe.py -s` (~1 min); mesh side needs
   PROBE_ALLOW_MESH=1 and PROBE_SIDES=on,mesh.
 
-> Overseer, 2026-11-14 15:45: P.63b was STOPPED and its code REVERTED (mesh head hung the 8x4 on first launch; DS41-264/265: small payoff for a large rewrite). Its diff is kept in /scratch/dnijemcevic/replication/p63b/. The entries DS41-264..266 stay as findings.
+> Overseer, 2026-11-14 15:45: P.63b was STOPPED and its code REVERTED (mesh head hung the 8x4 on first launch; DS41-269/270: small payoff for a large rewrite). Its diff is kept in /scratch/dnijemcevic/replication/p63b/. The entries DS41-269..271 stay as findings.
 
 ## P.64 (perf, attempt 1): fewer attention-side launches - the window write as one prepared program (ATTN_FUSE legacy | on)
 - Census first (tests/test_attn_launch_census.py, new, diagnostic; 8 layers 0,1,2,3,14,20,21,24, novel chunk 3, legacy):
@@ -1729,7 +1903,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   | prompt | side | host ms | wall ms | device ms | (P.63 gate unit, same side: host / wall / device) |
   |---|---|---|---|---|---|
   | novel | prev | 144.4 | 162.9 | 148.33 | 155.6 / 166.5 / 149.85 |
-  | novel | off | 207.4 | 235.2 | 167.71 | slow side again (P.63 242.6 / 260.2; DS41-259) |
+  | novel | off | 207.4 | 235.2 | 167.71 | slow side again (P.63 242.6 / 260.2; DS41-264) |
   | code | prev | 150.0 | 164.5 | 144.89 | 156.3 / 165.2 / 145.16 |
   | code | off | 146.9 | 169.7 | 156.07 | 151.0 / 166.8 / 155.9 |
 
@@ -1760,7 +1934,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   high_bw_all_gather 92 calls x ~106 us and mhc_post 82 x ~100 us. 80 of the 92 gathers are the window snapshot
   (tt/attention.write_snapshot: 2 gathers of every chip's whole 192-row ring a layer), followed by 1-2 slices, a concat
   and update_padded_kv_cache: 4-6 launches, ~470 us host a layer. mhc_post is a C++ fork op at ~100 us, already at the
-  floor of one launch on 32 chips (DS41-258), so only folding it into another program would remove it: not this pick.
+  floor of one launch on 32 chips (DS41-263), so only folding it into another program would remove it: not this pick.
   The change: one prepared program a layer (tt/snapshot_send.py) that copies the owner chip's 128 snapshot rows
   straight into every chip's slab over a fabric broadcast tree (1-hop unicasts: the owner's column first, then each
   row), block by block. Host: 4-6 launches -> 1 (~100-130 us prepared), about -350 us a layer, so -12 to -15 ms a chunk
@@ -1800,8 +1974,8 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Expected vs got: launches -240 a chunk (exact; 6 a layer at p51200 -> 1); host -12 to -15 ms expected, per-call
   numbers give -9.8 ms (40 x 244 us), p51200 host_launch_ms -20.3; device 0 to -3 expected, got -3.3 to -5.2 ms (the
   gathers' link time was bigger than I guessed: 163 us a layer); wall -1 to -6 ms on real chunks (one pass a side,
-  +-4 ms noise, DS41-259), -5.7 at p51200. The orchestrator's A/B gives the on / off table.
-- Not done: mhc_post (82 calls ~100 us, a C++ fork op already at one launch's floor on 32 chips, DS41-258: only
+  +-4 ms noise, DS41-264), -5.7 at p51200. The orchestrator's A/B gives the on / off table.
+- Not done: mhc_post (82 calls ~100 us, a C++ fork op already at one launch's floor on 32 chips, DS41-263: only
   folding it into a neighbouring program removes it) and the other 12 all_gathers (compressor layers): next picks.
   The tree's device time could drop further with sub-block pipelining (depth 6 x 32 KB blocks); not needed for the
   host goal.
@@ -1853,7 +2027,7 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   host_launch_calls 1136 (= P.65), host overhead 17.4 (18.3). The p51200 chunk is device-bound (wall ~ device + 17):
   the host cut cannot show there.
 - Gate `P.66 --check`: PASS (determinism + ladder last, test_moe_prev_replicas, test_profile x2; 1200 s). Its
-  prev-replicas unit (change on only, one pass a side, +-4 ms noise, DS41-259), chunks 1..10, host / wall / device
+  prev-replicas unit (change on only, one pass a side, +-4 ms noise, DS41-264), chunks 1..10, host / wall / device
   ms: novel off 131.3 / 172.2 / 162.75, prev lean 141.0 / 169.9 / 146.05; code off 134.0 / 166.3 / 152.50, prev lean
   134.9 / 158.8 / 141.80; maxdiff 0, repeat 0, mirror 0 mismatches. The on / off difference is the alternated probe
   above, not these single passes.
@@ -1867,3 +2041,82 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   nothing padded. Cores (rule 18): unchanged (the same ops on the same grids). Fork suites not run (OV-25).
 - Re-run: `P66_CLEAN=4 PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_lean_py.py -s` (~9 min with the load; devjob).
+
+## P.67 (perf, attempt 1): the replica branch's wins merged into model_bringup (owner 2026-11-14)
+- How merged: NOT git merge / cherry-pick commits; one 3-way apply (`git apply -3`) of
+  `git diff 6bdf324e716 b9a45fb0b80 -- . ':(exclude)models/demos/deepseek_v41_flash_d_p/bringup/ledgers'` (the
+  branch's whole code / test / fork / knowledge delta since the fork point, without its ledger), so the orchestrator's
+  commit is an ordinary one (no MERGE_HEAD). Every file only the branch changed is byte-equal to b9a45fb0b80 (after
+  the id renumbering below); tt/attention.py and tt/model.py merged without conflict (model_bringup's P.51
+  decoder_skip_stop / FIX.28 use_decoder_skip + _build_decoder kept beside the branch's lean / moe_trace / replica
+  hooks); orchestrator.py: both sides had the same rel() fix (a05a31f806b == 894ffd47779), nothing to merge.
+- known_issues id clash: model_bringup added DS41-241..245 (FIX.28-FIX.31) and rewrote DS41-240; the branch added
+  DS41-241..269. Kept model_bringup's 240..245 as they are (its ledger refers to them); the branch's 241..269 are
+  renumbered +5 -> DS41-246..274 in every file the branch brought (known_issues, known_issues_detail, BREADCRUMBS,
+  code comments, tests, fork CHANGELOG / README; also the forms DS41-a..b and DS41-a/b). The branch's ledger, which
+  still says the old numbers, stays on the branch. BREADCRUMBS / repo_map: both sides' sections kept.
+- Defaults as on the branch: EXPERT_X_PIECES=min8k, MOE_REPLICAS=prev, MOE_FILL=piggyback, MOE_PREV_HOST=device,
+  MOE_PREV_HOST2=lean, MOE_PLANNER=folded, MESH_PROGRAMS=on, ATTN_FUSE=on, CHEAP_CCL=on, LEAN_PY=on, MOE_TRACE=off;
+  model_bringup's COMBINE_SPLIT=on, DECODER_SKIP (off default; decode via use_decoder_skip), PREFILL_END=cap kept.
+- Decoder skip vs replicas: expert_prev's guard uses a layer's plan only when its next call is >= NCALL ordinals
+  later; a chunk that skips layers 21-39 makes fewer MoE calls, so the next chunk's layers run replicas off (host
+  only, no transfer) - correct, a missed gain on skipped chunks only. Checked on the gate's test_decoder_skip_decode.
+- Expected per chunk (before measuring; perf_guide 1-2), the A/B's last golden chunk vs today's model_bringup
+  (X.3: wall 182.2 ms, device 171.9, host overhead 10.4): device -10 to -15 ms (P.56 replicas + P.59 x pieces;
+  workload-dependent, the branch measured on novel chunks), host -20 to -30 ms of launch work (P.60-P.66) of which
+  only the part on the critical path shows: wall ~182 -> ~160 ms (the branch's P.66: 159.4 ms, spread 5.5).
+  Rebuild: `cmake --build build_Release --target install -j 48` (40 s).
+- Gotcha (DS41-275): the first `orchestrator measure --task P.67` ran the 'new' side without ab.env
+  (DS41_ENGRAM_TABLE=resident; unset = mmap under pytest, DS41-245) and showed the merge 29 ms SLOWER (quick 211.9,
+  p51200 226.7 ms, not settled) although device fell 35 ms. Fixed measure() in orchestrator.py to run ab.before picks
+  with ab.env on both sides, as ab_report() already does (F230); re-measured.
+- Measured (measure --task P.67, one process, both sides DS41_ENGRAM_TABLE=resident), before -> after:
+  quick (last golden chunk) wall 182.8 -> 157.9 ms (spread 8.4 / 8.1), errors identical (worst err_state_window_kv_L25
+  0.147 / limit 0.197, min layer PCC 0.6055 both); p51200 wall 202.9 -> 166.9 ms (spread 11.7 / 32.5), device
+  187.3 -> 152.0 ms (experts 105.8 -> 74.9, ffn_residual 11.3 -> 7.4, attention 48.1 -> 47.8), host launches
+  1656 -> 1136 (122.4 -> 89.1 ms), host_overhead 15.6 -> 14.9, cProfile 204.7 -> 170.8; determinism 0 both sides.
+  Expected -20 ms wall: got -25 (quick) / -36 (p51200); device -35 ms, more than the -10..-15 expected.
+- Prepared (OV-23): no new Python-built op beyond the branch's (the branch's own P.56-P.66 notes cover them). OV-3:
+  nothing padded. Cores (rule 18): unchanged from the branch. Fork suites not run (OV-25).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --task P.67` (devjob, ~8 min).
+- Gate (`gate P.67 --check`): first full run FAILED one unit: test_decoder_skip_decode, served_bytes_differ = 16
+  (novel / code N 5248 P 5120 and N 10368 P 10240: 4 records each, ('0_window_kv', layer 0, rows 0/32/64/96): layer
+  0's served window snapshot of the DECODER_SKIP=off run != the decode run; every other case 0); the one-process
+  batch stopped there, so contract / acks / determinism / replica units did not run. Then the same test passed with
+  DS41_CHEAP_CCL=legacy (0 differ), with DS41_ATTN_FUSE=legacy (0 differ), and AGAIN WITH BOTH ON
+  (`gate --check --unit P.67#test_decoder_skip_decode`, 0 differ): an intermittent race, 1 of 4 runs; the legacy
+  passes do not localize it. DS41-276. Second full `gate P.67 --check`: every unit PASS (ladder, profile wall 159.1 ms
+  / device 143.9 ms, decoder skip, determinism x2, contract, acks, replica test). Not fixed: the owner should know
+  the decode-skip snapshot path has a flake after this merge (suspects: P.64's fused window write and P.65's
+  SnapshotSend, both new fabric programs on core row 0 with no cross-chip barrier between them).
+
+## FIX.32 (overseer fix, attempt 1): the P.67 "served-snapshot race" was a prepared-program cache key (DS41-277)
+- Step 1 (first): ATTN_FUSE and CHEAP_CCL defaults set to legacy (code and 'on' kept). Proof: test_decoder_skip_decode
+  20 times in one process after test_determinism on the same model (the order of the failing P.67 batch), both
+  legacy: 20 of 20 PASS, served_bytes_differ 0 every run (tests/test_snapshot_race_loop.py, new).
+- Cause (not a race): `SnapshotSend._pp` (P.65, tt/snapshot_send.py) cached one prepared program per block pattern.
+  Its TensorAccessor compile-time args hold the slab's shape, and an ND-sharded accessor takes the outermost page
+  coordinate as page_id % tensor_shape[0] (tt_metal/hw/inc/api/tensor/tensor_accessor.h:445). test_determinism runs
+  whole chunks on ladder caches with their own 1-batch slab ([1, 1, 128, 512]) and so builds the steady pattern's
+  program (31, 31, 31, 31: the last chip owns the 4 blocks). Reused for the engine's [slots x layers, 1, 128, 512]
+  slab, every (slot, layer) write landed in batch 0 = slot 0, layer 0. In the test only chunk-aligned stops use that
+  pattern; slot 0 layer 0 then holds the last write, the others stale bytes that are equal in both slots, hence exactly
+  4 records (layer 0) a case. The failing P.67 batch had 4 of 4 such cases differ (deterministic), the 3 passing runs
+  were processes without test_determinism first.
+- Evidence: tests/test_snapshot_send_geometry.py (new, ~10 s): own 1-batch slab first, then an engine-like 3-batch
+  slab at batch 2. Before the fix: 64 failures (all 32 chips: batch 2 not written, batch 0 overwritten). After: 0.
+  Model level before the fix (test_determinism, then CHEAP_CCL=on alone, 2 runs): 2 of 2 FAIL, served_bytes_differ 16,
+  the gate's exact records; DIAG: layers 0 and 1 wrong on every chip against the owner's ring.
+- Fix: the program cache key is (pattern, ring geometry, slab geometry), geometry = shape, dtype, layout, memory
+  config (`snapshot_send._geom`). Not a barrier or semaphore change: the fabric ordering was sound (the router flushes
+  the write, acked, before a fused increment: fabric_edm_packet_transmission.hpp flush_write_to_noc_pipeline).
+  WindowSend (P.64) builds its programs once too, but its io tensors (region, kept tail, rows, ring) have one interleaved
+  geometry in every path (asserted in pages and bytes), so it is left as is.
+- Step 2 proof (one process: test_determinism with both on, then 20 runs a side): both on 20 / 20 PASS, ATTN_FUSE alone
+  20 / 20, CHEAP_CCL alone 20 / 20, served_bytes_differ 0 in all 60 runs. Bit-identical to legacy: tests/
+  test_snapshot_send.py (legacy == on == definition, every chip, 6 cases) and tests/test_window_write_fused.py (5 piece
+  patterns, every chip) pass. Host us of the snapshot call with the key: 112.3 (P.65: 108.2; geometry probe 94.3).
+- Step 3: both defaults back to on.
+- Cost of legacy vs on (test_moe_prev_replicas, chunks 1..10 mean, shipped prev lean path, host / wall / device ms):
+  see the table below (legacy: env DS41_ATTN_FUSE=legacy DS41_CHEAP_CCL=legacy; on: the gate's unit, same code).

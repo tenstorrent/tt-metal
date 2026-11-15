@@ -56,7 +56,7 @@ LAYER = 20
 REPS = 6  # exact calls a timing window (as many stock calls between them)
 LAT = 5  # synced exact calls whose stamps are read
 B2B = 100
-LEAD = 100  # matmuls (4096^3, 11 x 10 = 110 cores: rule 18) ahead of each timed window (DS41-243)
+LEAD = 100  # matmuls (4096^3, 11 x 10 = 110 cores: rule 18) ahead of each timed window (DS41-248)
 KERNELS = "routed_experts_combine/device/kernels"
 MESH = pytest.mark.parametrize("mesh_device", [tuple(S.mesh)], indirect=True, ids=["x".join(map(str, S.mesh))])
 BOX = pytest.mark.parametrize("device_params", [harness.device_params(S)], indirect=True, ids=["box"])

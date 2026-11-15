@@ -531,7 +531,7 @@ TABLE = {
         "expert_slot_copy). No device planner: the head assigns slots before any chip knows the others' counts, so the "
         "plans come from a counting run (tests/test_moe_exact_replicas.py); without a plan exact == runtime in a chunk. "
         "Measured (P.55c, chunk 10 at 51,200, device ms a chunk off -> fill -> exact): novel 185.9 -> 161.5 -> 195.0, "
-        "code 170.5 -> 158.3 -> 175.6 (DS41-246). prev = P.56 (owner 2026-11-13, EXPERIMENTAL; needs MOE_FILL=piggyback): "
+        "code 170.5 -> 158.3 -> 175.6 (DS41-251). prev = P.56 (owner 2026-11-13, EXPERIMENTAL; needs MOE_FILL=piggyback): "
         "the runtime layout; after every MoE call a device planner (tt/expert_prev.py, kernels/moe_prev_planner.cpp: "
         "the chips' counts exchanged over the fabric, no host round trip) plans that layer's NEXT call (the next chunk): "
         "hot experts of the busiest chips, receivers (least loaded, one spare slot a chip), the token shares (the "
@@ -569,7 +569,7 @@ TABLE = {
         ("launch", "folded"),
         "P.62b (owner 2026-11-14, MOE_REPLICAS=prev with MOE_PREV_HOST=device and MOE_PREV_HOST2=lean only): where "
         "P.56's planner runs. launch = P.62 as built: one planner program a MoE call (sender cores exchange the counts, "
-        "a planner core plans; ~90 us of host a call, DS41-258). folded = no planner launch a call: the combine's link-0 "
+        "a planner core plans; ~90 us of host a call, DS41-263). folded = no planner launch a call: the combine's link-0 "
         "port senders send the chip's counts row after their main loop (routed_experts_combine prev_counts), and the "
         "NEXT MoE call's fused head plans it on its watcher core after its own work (fused_head tail, "
         "kernels/prev_planner.hpp; its L1 the arena past the head's; no core added: the head holds all 110); the "
@@ -587,7 +587,7 @@ TABLE = {
         "call (P.63 probe, 8x4). on = each program keeps a pointer to each patched arg's runtime-args record, filled "
         "on its first hit (fork option cached_slots): the same values written, no lookups. Not a single mesh program: "
         "the probe found the per-program patch loop, not the per-device dispatch, to be what a mesh program would "
-        "remove (DS41-258). Host only: outputs bit-identical",
+        "remove (DS41-263). Host only: outputs bit-identical",
     ),
     "ATTN_FUSE": Setting(
         "on",
@@ -610,7 +610,9 @@ TABLE = {
         "the owner's rows sliced and concatenated, then ttnn.bringup.update_padded_kv_cache: 4-6 launches a layer. "
         "on = one prepared program (tt/snapshot_send.SnapshotSend): each chip copies the blocks it holds, the owner "
         "chip's 128 rows go to every chip's slab over a broadcast tree of 1-hop fabric unicasts (the owner's column, "
-        "then each row); 1 launch a layer, no gather buffer. Data movement only: outputs bit-identical",
+        "then each row); 1 launch a layer, no gather buffer. Data movement only: outputs bit-identical. FIX.32 (DS41-277): "
+        "its prepared programs are keyed by block pattern AND the ring's / slab's geometry (a program built for a "
+        "1-batch slab wrote every engine slab's snapshot into batch 0)",
     ),
     "LEAN_PY": Setting(
         "on",

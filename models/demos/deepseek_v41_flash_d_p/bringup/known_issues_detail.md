@@ -1269,7 +1269,7 @@ the owner decides from P.50's A/B).
 - Measured (8x4, chunk 10 = tokens [51200, 56320), MOE_REPLICAS=off, 3 profiled runs a workload, real-time profiler):
   routed_experts_combine (experts + combine, one program a chip) summed over 40 layers, slowest chip / shortest chip:
   novel 56.3 / ~50 ms, code 47.0 / ~39 ms, random ids (the p51200 position profile) 63.2 / ~58 ms. The shortest
-  chip is the one that started last at the start barrier (DS41-243), so it is the work without host-dispatch skew.
+  chip is the one that started last at the start barrier (DS41-248), so it is the work without host-dispatch skew.
 - Per-chip time model, fitted on those 360 layer calls (tests/moe_exact_model.py `fit`):
   `reach_k = max(A x active experts, B x row tiles)`, layer = C0 + max_k reach_k; A = 19.9 MB / 512 GB/s = 38.9 us
   (rmse 0.068 ms at A, 0.073 at 1.5 A, 0.100 at 2 A: the data prefer the DRAM rate), B = 7.55 us a 32-row tile,
@@ -1341,7 +1341,7 @@ receivers of one expert, depth ~5), when the off layer's busiest chip is done at
 cannot arrive before the receiver would have to start the replica.
 
 ## P.56's own host cost makes the chunk host-bound; a one-layer trace replays bit-identical
-DS41-251: where the host time of a chunk goes (P.57, 8x4, 2026-11-14).
+DS41-256: where the host time of a chunk goes (P.57, 8x4, 2026-11-14).
 Measured by tests/test_host_bound.py (one process, shipped settings + MOE_FILL=piggyback, ENGRAM_TABLE=resident; side
 off = MOE_REPLICAS=prev switched off in the loaded model). host = first host call to the last op enqueued; wall = to
 the end of the closing sync; device = program real-time profiler, slowest chip a program, summed.
@@ -1388,7 +1388,7 @@ Trace blockers for a chunk-to-chunk trace (code reading at b8a57740c25):
    device call counters replay fine in a fixed call sequence: the prototype), allocations inside the capture.
 
 ## TP experts lose to EP on the flat op: a 32-row tile barely gets cheaper as the expert narrows
-(DS41-252, P.58, Galaxy 8x4, tests/test_moe_tp4_check.py; real-time profiler, slowest chip, median.)
+(DS41-257, P.58, Galaxy 8x4, tests/test_moe_tp4_check.py; real-time profiler, slowest chip, median.)
 
 - Calibration of `ttnn.bringup.moe_block_main.flat_routed_expert` alone, bfp4 weights_nk, 11 x 10 cap:
 
@@ -1415,7 +1415,7 @@ Trace blockers for a chunk-to-chunk trace (code reading at b8a57740c25):
   and <= 16 (routing rows in 64 B), routing planner N x slots <= 1024 (head_plan.cpp), flat op <= 64 slots a chip.
 
 ## P.56's combine host cost was its per-call fill arg rewrites, not the ring slot choice
-(DS41-254, P.60, Galaxy 8x4, 2026-11-14.)
+(DS41-259, P.60, Galaxy 8x4, 2026-11-14.)
 
 - Probe (tests/test_moe_prev_host_probe.py, 4 layers, novel chunks 0..3, median host us a combine call; plus
   temporary C++ timers per pass of 16 calls): off ~440-520; prev legacy ~810-930, of it set_fill ~350-470 (fill
@@ -1431,7 +1431,7 @@ Trace blockers for a chunk-to-chunk trace (code reading at b8a57740c25):
 
 ## The fused head's and the combine's per-chip programs differ in structure, not only in arg values
 
-(DS41-264; P.63b.) What one program for the whole mesh needs.
+(DS41-269; P.63b.) What one program for the whole mesh needs.
 
 Diff of the 32 per-chip programs (DS41_MESH_DIFF=<prefix>, diagnostic; common/mesh_uniform.cpp
 mesh_uniformity_report / mesh_views_dump; 8x4, novel chunk 1, MOE_REPLICAS=prev):
@@ -1456,7 +1456,7 @@ Mechanism built (MESH_PROGRAMS2=on, fork option mesh_program; head only, the com
 
 ## The first mesh fused-head launch (MESH_PROGRAMS2=on) hung the 8x4
 
-(DS41-266; P.63b.) 1-layer probe, sides on (P.63) then mesh; on ran clean and bit-identical; the mesh head's
+(DS41-271; P.63b.) 1-layer probe, sides on (P.63) then mesh; on ran clean and bit-identical; the mesh head's
 first launch timed out (metal_context.cpp:806), then PCIe MMIO timeouts; triage could not attach; the safe runner
 reset and recovered the box ("All Detected Links are healthy"). No further device run (owner safety rule).
 Candidates, in the order to check (on a 2x2 first, or in slow dispatch with the watcher):

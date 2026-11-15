@@ -15,7 +15,7 @@ Each workload's chunk 10 runs PROFILED_RUNS times profiled (novel / code: the re
 profile's steady-state path; randids: one compile run first). Per run and layer: the router's counts (every slot's
 tokens, from the head's counts buffer) and the device time of the layer's routed_experts_combine program (experts +
 combine, one program a chip), sparse_dispatch_2d and fused_head, per chip (the ops wrapped to know their program ids).
-The experts+combine time used is the shortest chip's (the chip that started last: DS41-243, the others' extra is the
+The experts+combine time used is the shortest chip's (the chip that started last: DS41-248, the others' extra is the
 wait for the late chips' host dispatch at the start barrier); the slowest chip's is recorded too.
 
 CPU part (tests/moe_exact_model.py, its docstring defines every term): a per-chip expert-time model fitted on all the

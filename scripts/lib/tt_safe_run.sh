@@ -66,6 +66,8 @@ _ttrun_run_exit_hooks() {
 # ---------------------------------------------------------------------------
 ttrun_init() {
     REPO_DIR="$(cd "${_TTRUN_LIB_DIR}/../.." && pwd)"
+    # FIX.30: host memory before / during / after a device process (bring-up framework; stdlib only, optional)
+    TTRUN_HOSTMEM="${REPO_DIR}/models/demos/common/bringup/core/hostmem.py"
     TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
     TRIAGE_LOG="/tmp/tt-safe-run-triage-$$.log"
     WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
@@ -348,10 +350,21 @@ ttrun_run_child() {
     trap '_ttrun_signal_cleanup INT'  SIGINT
     "$@" > >(tee "$stdout_log") 2>&1 &
     CHILD_PID=$!
+    # FIX.30: the child's host memory, sampled from outside its tree (a SIGKILLed child still leaves its record)
+    local hostmem_watch=""
+    if [[ -f "$TTRUN_HOSTMEM" ]] && command -v python3 >/dev/null 2>&1; then
+        hostmem_watch="${stdout_log}.hostmem.json"
+        rm -f "$hostmem_watch"
+        python3 -I "$TTRUN_HOSTMEM" watch --pid "$CHILD_PID" --out "$hostmem_watch" >/dev/null 2>&1 &
+    fi
     wait "$CHILD_PID"
     EXIT_CODE=$?
-    wait 2>/dev/null  # let tee flush before anyone greps the log
+    wait 2>/dev/null  # let tee flush before anyone greps the log (and the host-memory watcher end)
     CHILD_PID=""
+    if [[ -n "$hostmem_watch" ]]; then
+        python3 -I "$TTRUN_HOSTMEM" report --watch "$hostmem_watch" --rc "$EXIT_CODE" 2>/dev/null || true
+        rm -f "$hostmem_watch"
+    fi
     # Kill any orphans the child left behind.
     pkill -9 -P $$ 2>/dev/null || true
 }
@@ -406,6 +419,35 @@ ttrun_dump_hang_logs() {
 }
 
 ttrun_cleanup_tmp() { rm -f "$TRIAGE_LOG" "$@"; }
+
+# ttrun_runrec_begin <args...> (FIX.31): file this run in the bring-up stamp store (core/runrec.py) when BRINGUP_SPEC
+# names a spec: its identity (tests, measuring env, code key) now, its result at exit (an EXIT hook). A batch given as
+# BRINGUP_BATCH_CMD becomes the same plan as a file, so each of its runs is filed. Bookkeeping only: any failure is one
+# line and never changes the run or its exit code. BRINGUP_RUNREC=0 turns it off.
+ttrun_runrec_begin() {
+    [[ -n "${BRINGUP_SPEC:-}" && "${BRINGUP_RUNREC:-1}" != 0 ]] || return 0
+    TTRUN_RUNREC_STATE="/tmp/safe-pytest-runrec-$$.json"
+    if [[ -n "${BRINGUP_BATCH_CMD:-}" && -z "${BRINGUP_BATCH:-}" ]]; then
+        TTRUN_RUNREC_PLAN="/tmp/safe-pytest-batch-plan-$$.json"
+        if (cd "$REPO_DIR" && PYTHONPATH="$REPO_DIR" python3 -m models.demos.common.bringup.core.runrec plan \
+                --cmd "$BRINGUP_BATCH_CMD" --out "$TTRUN_RUNREC_PLAN"); then
+            export BRINGUP_BATCH="$TTRUN_RUNREC_PLAN"
+        fi
+    fi
+    (cd "$REPO_DIR" && PYTHONPATH="$REPO_DIR" python3 -m models.demos.common.bringup.core.runrec begin \
+        --state "$TTRUN_RUNREC_STATE" -- "$@") || true
+    ttrun_on_exit ttrun_runrec_end
+}
+ttrun_runrec_end() {
+    local ec="$1"
+    [[ -n "${TTRUN_RUNREC_STATE:-}" && -f "$TTRUN_RUNREC_STATE" ]] || return 0
+    (cd "$REPO_DIR" && PYTHONPATH="$REPO_DIR" python3 -m models.demos.common.bringup.core.runrec end \
+        --state "$TTRUN_RUNREC_STATE" --rc "$ec") >/dev/null 2>&1 || true
+    if [[ -n "${TTRUN_RUNREC_PLAN:-}" ]]; then
+        rm -f "$TTRUN_RUNREC_PLAN" "${TTRUN_RUNREC_PLAN}.results.json"
+    fi
+    return 0
+}
 
 # Registered by run_safe_pytest.sh: total wall-clock from card acquired to exit,
 # always the last line. Nothing is printed for exits before a run began.
