@@ -67,9 +67,8 @@ class Entry:
     param_ref: str | None = None  # optimizer state: the key of the parameter it belongs to
     state_path: tuple[str, ...] = ()  # optimizer state: the path of dict keys in the optimizer's state dict
     # Per dim, how many shards the mesh axes other than the tensor's FSDP axis split it into at save: the TP split,
-    # which decides the row order of a fused weight (FSDP splits rows already in canonical order). None in a
-    # checkpoint written before the field existed.
-    tp_split: tuple[int, ...] | None = None
+    # which decides the row order of a fused weight (FSDP splits rows already in canonical order).
+    tp_split: tuple[int, ...] = field(kw_only=True)
 
 
 @dataclass
@@ -126,7 +125,7 @@ class Index:
     def from_json(value: dict) -> "Index":
         if value.get("format") != FORMAT:
             raise VersionError(f"not a {FORMAT} index: format={value.get('format')!r}")
-        version = int(value.get("version", 0))
+        version = int(value["version"])
         if version > VERSION:
             raise VersionError(f"index version {version} is newer than the supported {VERSION}")
         files = [
@@ -137,18 +136,18 @@ class Index:
                 int(f["writer"]["mesh_id"]),
                 tuple(f["writer"]["coord"]),
             )
-            for f in value.get("files", [])
+            for f in value["files"]
         ]
-        entries = {key: _entry_from_json(key, e) for key, e in value.get("state", {}).items()}
-        scalars = {key: _scalar_from_json(v) for key, v in value.get("scalars", {}).items()}
+        entries = {key: _entry_from_json(key, e) for key, e in value["state"].items()}
+        scalars = {key: _scalar_from_json(v) for key, v in value["scalars"].items()}
         return Index(
-            checkpoint_id=str(value.get("checkpoint_id", "")),
-            world=dict(value.get("world", {})),
+            checkpoint_id=str(value["checkpoint_id"]),
+            world=dict(value["world"]),
             files=files,
             entries=entries,
             scalars=scalars,
-            created=str(value.get("created", "")),
-            writer_software=dict(value.get("writer_software", {})),
+            created=str(value["created"]),
+            writer_software=dict(value["writer_software"]),
             format=FORMAT,
             version=version,
         )
@@ -193,8 +192,7 @@ def _entry_to_json(entry: Entry) -> dict:
         value["param_ref"] = entry.param_ref
     if entry.state_path:
         value["state_path"] = list(entry.state_path)
-    if entry.tp_split is not None:
-        value["tp_split"] = list(entry.tp_split)
+    value["tp_split"] = list(entry.tp_split)
     return value
 
 
@@ -225,29 +223,27 @@ def _entry_from_json(key: str, value: dict) -> Entry:
         )
         for i in range(n)
     ]
-    tp_split = value.get("tp_split")
-    if tp_split is not None:
-        if (
-            not isinstance(tp_split, list)
-            or len(tp_split) != len(value["global_shape"])
-            or not all(isinstance(s, int) and s >= 1 for s in tp_split)
-        ):
-            raise CheckpointError(f"index entry {key!r}: malformed tp_split {tp_split!r}")
-        tp_split = tuple(tp_split)
+    tp_split = value["tp_split"]
+    if (
+        not isinstance(tp_split, list)
+        or len(tp_split) != len(value["global_shape"])
+        or not all(isinstance(s, int) and s >= 1 for s in tp_split)
+    ):
+        raise CheckpointError(f"index entry {key!r}: malformed tp_split {tp_split!r}")
     return Entry(
         key=key,
         role=str(value["role"]),
         dtype=str(value["dtype"]),
-        layout=str(value.get("layout", "TILE")),
+        layout=str(value["layout"]),
         global_shape=tuple(value["global_shape"]),
         canonical_shape=tuple(value["canonical_shape"]),
         transform=transform_from_json(value["transform"]),
         label=Label.from_json(value["label"]),
-        live_keys=tuple(value.get("live_keys", [key])),
+        live_keys=tuple(value["live_keys"]),
         chunks=chunks,
         param_ref=value.get("param_ref"),
         state_path=tuple(value.get("state_path", [])),
-        tp_split=tp_split,
+        tp_split=tuple(tp_split),
     )
 
 
@@ -283,7 +279,7 @@ def step_dir_name(step: int, prefix: str = "") -> str:
 
 
 def parse_dir_name(name: str) -> tuple[str, int] | None:
-    """``(prefix, step)`` of a checkpoint directory name, legacy unpadded names included, or None."""
+    """``(prefix, step)`` of a checkpoint directory name, or None."""
     match = _DIR_NAME.match(os.path.basename(name.rstrip("/")))
     if not match:
         return None
@@ -487,7 +483,7 @@ def read_header_json(directory: str) -> dict:
 
 def read_user_header(directory: str) -> dict:
     """The custom user-defined header dict passed to ``save``, without touching any device."""
-    return read_header_json(directory).get("user", {})
+    return read_header_json(directory)["user"]
 
 
 def data_file_name(world_rank: int, mesh_id: int, coord: Sequence[int]) -> str:

@@ -64,6 +64,7 @@ def _index() -> Index:
             label,
             ("model/Llama/fc/weight", "model/Llama/tok_emb/weight"),
             chunks,
+            tp_split=(1, 1, 2, 1),
         ),
         "optimizer/exp_avg/model/Llama/fc/weight": Entry(
             "optimizer/exp_avg/model/Llama/fc/weight",
@@ -78,6 +79,7 @@ def _index() -> Index:
             [chunks[0]],
             param_ref="model/Llama/fc/weight",
             state_path=("exp_avg",),
+            tp_split=(1, 1, 2, 1),
         ),
         "model/Llama/blocks/0/attention/qkv_linear/weight": Entry(
             "model/Llama/blocks/0/attention/qkv_linear/weight",
@@ -123,10 +125,7 @@ def test_index_round_trips_through_json_with_columnar_chunks():
     assert decoded.files == index.files
     assert decoded.scalars == index.scalars and type(decoded.scalars["optimizer/amsgrad"]) is bool
     assert decoded.live_key_map()["model/Llama/tok_emb/weight"] == "model/Llama/fc/weight"
-    qkv = "model/Llama/blocks/0/attention/qkv_linear/weight"
-    assert encoded["state"][qkv]["tp_split"] == [1, 1, 2, 1] and decoded.entries[qkv].tp_split == (1, 1, 2, 1)
-    assert "tp_split" not in encoded["state"]["model/Llama/fc/weight"], "an entry without it, as an older writer's"
-    assert decoded.entries["model/Llama/fc/weight"].tp_split is None
+    assert all(entry["tp_split"] == [1, 1, 2, 1] for entry in encoded["state"].values()), "every entry records it"
 
 
 def test_a_malformed_tp_split_is_refused(expect_error):
@@ -214,8 +213,6 @@ def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
     os.makedirs(ckpt)
     write_header(ckpt, {"format": "ttml-dcp", "version": 1, "user": {"step": 1, "run": "a"}, "train_state": {}})
     assert read_user_header(ckpt) == {"step": 1, "run": "a"}
-    write_header(ckpt, {"format": "ttml-dcp", "version": 1})
-    assert read_user_header(ckpt) == {}, "a header without a user dict reads as empty"
 
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
@@ -284,6 +281,12 @@ def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, exp
     with open(index_path, "w") as f:
         json.dump(value, f)  # a required column missing
     with expect_error(IncompleteCheckpointError, "not a readable index"):
+        read_index(final)
+    value = json.loads(text)
+    del value["state"]["model/Llama/fc/weight"]["layout"]
+    with open(index_path, "w") as f:
+        json.dump(value, f)  # a field every save writes, missing: no default stands in for it
+    with expect_error(IncompleteCheckpointError, r"not a readable index \(KeyError: 'layout'\)"):
         read_index(final)
     with open(os.path.join(final, "header.json"), "w") as f:
         f.write("{")

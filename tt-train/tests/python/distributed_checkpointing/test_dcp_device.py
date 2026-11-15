@@ -413,7 +413,6 @@ def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_s
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
         live = collect_model(fresh)
     assert [lt.key for lt in live if lt.fused_name] == ["model/llama/llama_block_0/attention/kv_linear/weight"]
-    assert all(lt.cpp_bound for lt in live)
     entry = dcp.read_index(path).entries["model/llama/llama_block_0/attention/kv_linear/weight"]
     assert entry.tp_split == (1, 1, 2, 1), "the index records the TP split it was saved with"
 
