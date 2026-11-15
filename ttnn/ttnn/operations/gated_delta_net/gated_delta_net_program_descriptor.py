@@ -47,6 +47,10 @@ DST_FULL_SYNC = False
 # R-BCAST (decode R-VSPLIT): of each key head's r * pieces cores, the first preps q (conv + L2 norm) and the
 # second k, once each, and multicast qn / kn to the others, which read and prep only their v columns.
 SHARE_QK_PREP = True
+# R-QKCORE (decode R-STEP, one tile row of sequences): per key head a q core and a k core convolve and L2-normalize the
+# key head's q (k) columns of every sequence of the tile row at once and multicast qn (kn) to the key head's pair cores,
+# which read and convolve only their v columns. Pair cores run consecutive sequences of one value head.
+SHARE_QK_CORES = True
 # R-PREP (chunked R-VSPLIT): the per-tile-row preparation, which depends on the token rows alone (gates, conv,
 # L2 norm, [Kn Kn^T; Qn Kn^T], chunk vectors, L and QD), runs on the cores R-VSPLIT leaves idle: per (sequence,
 # key head) up to MAX_PREP_CORES_PER_GROUP prep cores take its tile rows round robin and write each prepped
@@ -74,7 +78,9 @@ O_IN_DEPTH = 2  # R-PREP: a prep core's tile rows of chunk outputs o in flight (
 O_ACC_DEPTH = 2  # R-PREP: a state core's tile rows of o awaiting its writer
 PREP_SEND_HEADS = None  # R-PREP: head blocks a prep core holds for its writer; None = one tile row's (r)
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
-STATE_IN_DEPTH = 1  # pair states (S0) in flight
+# Per-unit inputs (S0, conv / gate / norm weights) in flight on a core that runs several units: the next unit's reads
+# overlap this unit's compute instead of waiting for its last pop (decode B=16: 2 units on most cores).
+UNIT_INPUT_DEPTH = 2
 STATE_OUT_DEPTH = 1  # finished pair states awaiting the writer
 CONV_ACC_DEPTH = 1  # partial tap sum: compute-to-compute, one compute thread, so depth 1
 
@@ -155,6 +161,7 @@ LANDED_FIRST_SEM_ID = 1
 # Kernel roles: local = prep and state on the same core (R-STEP / R-VSPLIT / R-CHUNK / R-BCAST); R-PREP splits
 # them over prep and state cores.
 ROLE_LOCAL, ROLE_PREP, ROLE_STATE = 0, 1, 2
+ROLE_QK = 3  # R-QKCORE q / k core (its qk role says which)
 # Per-core q/k prep role (R-BCAST): own = preps its own q and k (no sharing); q / k injector = preps qn / kn and
 # multicasts it, receives the other; receiver = receives both.
 QK_OWN, QK_Q_INJECTOR, QK_K_INJECTOR, QK_RECEIVER = 0, 1, 2, 3
@@ -198,20 +205,21 @@ def _kernel_defines():
         "ROLE_LOCAL",
         "ROLE_PREP",
         "ROLE_STATE",
+        "ROLE_QK",
     ]
     return [(f"GDN_{n}", str(globals()[n])) for n in names]
 
 
 # Pages per CB; each entry is (index list sharing one allocation, pages). Vt here is the piece's column
 # block (v_block_tiles); pieces > 1 adds the partial-sum combine buffers, chunked the R-CHUNK buffers.
-def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0):
+def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_depth=1):
     n_state = Kt * Vt
     trb = TOKEN_TILE_ROWS_PER_BLOCK
     return [
-        ((CB_STATE_IN, CB_STATE_IN_MM), n_state * STATE_IN_DEPTH),
+        ((CB_STATE_IN, CB_STATE_IN_MM), n_state * unit_depth),
         ((CB_STATE, CB_STATE_MM), n_state),
         ((CB_STATE_OUT,), n_state * STATE_OUT_DEPTH),
-        ((CB_CONV_W,), (1 if conv_on_fpu else CONV_TAPS) * (2 * Kt + Vt)),
+        ((CB_CONV_W,), (1 if conv_on_fpu else CONV_TAPS) * (2 * Kt + Vt) * unit_depth),
         ((CB_WINDOW,), CONV_TAPS * _window_group_cols(Kt, Vt, pieces) * WINDOW_DEPTH),
         ((CB_CONV_ACC,), 0 if conv_on_fpu else CONV_ACC_DEPTH),
         ((CB_Y_QK,), 2 * Kt * trb),
@@ -227,14 +235,14 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0):
         ((CB_KNT,), Kt * trb),
         ((CB_D,), trb),
         ((CB_GATE_IN,), 2 * ROW_DEPTH),
-        ((CB_GATE_W,), 2),
+        ((CB_GATE_W,), 2 * unit_depth),
         ((CB_GATES,), 2 * trb),
         ((CB_TOK_COEF,), (CHUNK_COEF_PAGES if chunked else TOK_COEF_PAGES) * TOK_COEF_DEPTH),
         ((CB_READS,), 2 * Vt),
         ((CB_U, CB_U_F32), Vt),
         ((CB_O_ACC,), Vt * trb),
         ((CB_Z,), Vt * ROW_DEPTH),
-        ((CB_NORM_W,), Vt),
+        ((CB_NORM_W,), Vt * unit_depth),
         ((CB_OUT_ROWS,), Vt * ROW_DEPTH),
         ((CB_SCRATCH,), 1),
         # conv_state history rows, then single token rows, of one window group: one aligned span per column each
@@ -484,6 +492,23 @@ def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked,
     return None
 
 
+def _qk_core_units(batch, tokens, value_heads, key_heads, Kt, Vt, pieces, num_cores):
+    """R-QKCORE plan: units (sequences of one value head) per pair core, or None. Needs decode with every sequence in
+    one tile row, one pair per unit (R-STEP), 2 Hk idle cores for the q / k cores, and a v-only window group whose FPU
+    conv batch also divides the pair's columns (compute's CONV_BATCH)."""
+    if not (SHARE_QK_CORES and tokens == 1 and pieces == 1 and batch <= TILE):
+        return None
+    batch_cols = _largest_divisor_at_most(Vt, 4)
+    if (2 * Kt + Vt) % batch_cols:
+        return None
+    ratio = value_heads // key_heads
+    pair_cores = num_cores - 2 * key_heads
+    for per_core in range(1, batch + 1):
+        if key_heads * ratio * -(-batch // per_core) <= pair_cores:
+            return per_core
+    return None
+
+
 def _core_ranges(cores):
     return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
@@ -556,20 +581,57 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         for core in ttnn.corerange_to_cores(group, row_wise=True):
             first_unit = next_block * units_per_block
             last_unit = min(num_units, (next_block + per_core) * units_per_block)
-            assignment.append((core, first_unit, last_unit - first_unit))
+            assignment.append((core, first_unit, last_unit - first_unit, 1))
             next_block += per_core
-    assert pieces == 1 or all(count == 1 for _, _, count in assignment)
+    assert pieces == 1 or all(count == 1 for _, _, count, _ in assignment)
     ratio = value_heads // key_heads
     token_dtype = mixed_qkv.dtype
     conv_on_fpu = _conv_on_fpu(token_dtype)
     grid_cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
-    state_cores = [core for core, _, _ in assignment]
+    # R-QKCORE: pair cores grouped by key head (row-major, cores_per_kh each: value head j of the key head, sequences
+    # s0, s0 + 1, ... at unit stride Hv), then the q and k core of each key head.
+    qk_per_core = _qk_core_units(batch, tokens, value_heads, key_heads, Kt, Vt, pieces, num_grid_cores)
+    qk_cores = []  # (core, key head, qk role)
+    if qk_per_core:
+        assignment = []
+        for hk in range(key_heads):
+            for j in range(ratio):
+                for s0 in range(0, batch, qk_per_core):
+                    first = s0 * value_heads + hk * ratio + j
+                    assignment.append((grid_cores[len(assignment)], first, min(qk_per_core, batch - s0), value_heads))
+        cores_per_kh = len(assignment) // key_heads
+        for hk in range(key_heads):
+            for role in (QK_Q_INJECTOR, QK_K_INJECTOR):
+                qk_cores.append((grid_cores[len(assignment) + len(qk_cores)], hk, role))
+        all_cores = _core_ranges([core for core, _, _, _ in assignment] + [core for core, _, _ in qk_cores])
+    state_cores = [core for core, _, _, _ in assignment]
     state_set = {(c.x, c.y) for c in state_cores}
     spare = [c for c in grid_cores if (c.x, c.y) not in state_set]
     prep = _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, token_dtype, len(spare))
     if prep is None:
         inbox = 0
-        cb_plan = _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces, chunked, tokens)
+        # The deepest per-unit input depth that fits L1 (1 when every core runs one unit).
+        unit_depth = min(UNIT_INPUT_DEPTH, max(count for _, _, count, _ in assignment))
+
+        def local_plan(depth):
+            plan = _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces, chunked, tokens, depth)
+            if not qk_cores:
+                return plan
+            # One plan on pair and q / k cores (the multicast lands at one cb_kq_rows address everywhere): window
+            # groups of Vt (pair) or Kt (q / k core) columns, a q / k core's staged current-row and conv_state tiles,
+            # its qn / kn stage.
+            cs_tiles = -(-HISTORY * batch // TILE)
+            sizes = {
+                CB_WINDOW: CONV_TAPS * max(Kt, v_block_tiles) * WINDOW_DEPTH,
+                CB_HIST_STAGE: max(2 * v_block_tiles, Kt * (1 + cs_tiles)),
+                CB_QK_STAGE: Kt,
+            }
+            return [(idx, sizes.get(idx[0], pages)) for idx, pages in plan]
+
+        cb_plan = local_plan(unit_depth)
+        while unit_depth > 1 and _plan_bytes(cb_plan, token_dtype) > L1_BUDGET:
+            unit_depth -= 1
+            cb_plan = local_plan(unit_depth)
         assert _plan_bytes(cb_plan, token_dtype) <= L1_BUDGET
     else:
         per_group, inbox = prep
@@ -578,7 +640,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     # NoC coordinates of the core running each unit (R-VSPLIT peers).
     unit_noc = {}
     unit_cores = []  # logical core of each unit when one unit per core (R-VSPLIT)
-    for core, first_unit, _ in assignment:
+    for core, first_unit, _, _ in assignment:
         noc_core = device.worker_core_from_logical_core(core)
         unit_noc[first_unit] = (noc_core.x, noc_core.y)
         unit_cores.append(core)
@@ -589,7 +651,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     qk_group = (value_heads // key_heads) * pieces
     qk_channels = []
     if _share_qk(pieces, tokens):
-        order = [(core.y, core.x) for core, _, _ in assignment]
+        order = [(core.y, core.x) for core, _, _, _ in assignment]
         assert order == sorted(order), "units must be assigned in row-major core order"
         # One round per channel per call: no handshake (each receiver's landing CB is untouched before it) and a
         # flag signal linked behind the payload (a counter would wait a write barrier per rectangle). The
@@ -607,7 +669,25 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             for sender in (0, 1)
         ]
 
+    if qk_cores:
+        # Group kh = the key head's cores_per_kh pair cores (consecutive in row-major order); its senders are the
+        # key head's q core (channel q) and k core (channel k), outside the group. One flag-signalled round per call.
+        config = ttnn.McastConfig(noc=ttnn.NOC.RISCV_1_default, handshake=False, data_ready=ttnn.McastDataReady.Flag)
+        qk_channels = [
+            ttnn.Mcast(
+                device,
+                config,
+                _core_ranges(state_cores),
+                cores_per_kh,
+                ttnn.McastExplicitFixedSenderConfig([core for core, _, r in qk_cores if r == role]),
+                ttnn.McastCoreOrder.RowMajor,
+            )
+            for role in (QK_Q_INJECTOR, QK_K_INJECTOR)
+        ]
+
     def qk_role(unit):
+        if qk_cores:
+            return QK_RECEIVER
         if not qk_channels:
             return QK_OWN
         return {0: QK_Q_INJECTOR, 1: QK_K_INJECTOR}.get(unit % qk_group, QK_RECEIVER)
@@ -619,12 +699,12 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         groups = tile_rows * (unit_cols // group_cols)
         return min(WINDOW_DEPTH, groups), CONV_TAPS * group_cols * token_tile_bytes
 
-    def unit_zeroing(first_unit, count):
+    def unit_zeroing(first_unit, count, stride):
         groups, group_cols = 0, 0
-        for unit in range(first_unit, first_unit + count):
+        for unit in range(first_unit, first_unit + count * stride, stride):
             tile_rows = _seq_tile_rows(unit // pieces // value_heads, tokens)
             unit_cols = v_block_tiles + {QK_OWN: 2 * Kt, QK_RECEIVER: 0}.get(qk_role(unit), Kt)
-            group_cols = unit_cols if pieces > 1 else _window_group_cols(Kt, v_block_tiles, pieces)
+            group_cols = unit_cols if pieces > 1 or qk_cores else _window_group_cols(Kt, v_block_tiles, pieces)
             groups += tile_rows * (unit_cols // group_cols)
         return window_zeroing(group_cols, group_cols, groups)
 
@@ -745,6 +825,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         unit_v = ratio * Vt if role == ROLE_PREP else v_block_tiles
         role_pieces = 1 if role == ROLE_PREP else pieces
         group_cols = _window_group_cols(Kt, unit_v, role_pieces)
+        if qk_cores:
+            group_cols = 1 if role == ROLE_QK else v_block_tiles  # q / k core: per column; pair core: per unit
         reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
         reader_ct += [ROW_STAGE_SLOTS if row_stage_bytes else 0, int(conv_on_fpu), group_cols, WINDOW_DEPTH]
         reader_ct += [pieces, int(chunked), role, inbox, *reader_accessor_ct]
@@ -761,7 +843,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             pieces,
             group_cols,
             int(chunked),
-            int(bool(qk_channels)),
+            int(bool(qk_channels) and role != ROLE_QK),
             role,
             ratio,
         ]
@@ -771,10 +853,10 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     roles = {}  # role -> (cores, reader rt, writer rt, compute rt)
     state_role = ROLE_LOCAL if prep is None else ROLE_STATE
     rts = (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs())
-    for core, first_unit, count in assignment:
+    for core, first_unit, count, stride in assignment:
         role = qk_role(first_unit)  # R-BCAST runs one unit per core
-        zero_slots, zero_slot_bytes = unit_zeroing(first_unit, count) if prep is None else (0, 0)
-        rows = [0, 1]  # tile rows: every one of the unit's sequence
+        zero_slots, zero_slot_bytes = unit_zeroing(first_unit, count, stride) if prep is None else (0, 0)
+        rows = [0, 1, stride]  # tile rows: every one of the unit's sequence; then the unit stride
         producers = []
         if prep is not None:
             group_first = first_unit - first_unit % (ratio * pieces)
@@ -795,7 +877,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             my_rows = len(range(q, _seq_tile_rows(seq, tokens), stride))
             group_cols = _window_group_cols(Kt, ratio * Vt, 1)
             zero_slots, zero_slot_bytes = window_zeroing(2 * Kt + ratio * Vt, group_cols, my_rows)
-            rows = [q, stride]
+            rows = [q, stride, 1]
             consumers = [c for u in range(ratio * pieces) for c in unit_noc[group_first + u]]
             # A head block goes to the head's pieces: one multicast per row run.
             for j in range(ratio):
@@ -807,6 +889,16 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             )
             rts[2][core.x][core.y] = [group_first, 1, tokens, v_eps_bits, QK_OWN] + rows
         roles[ROLE_PREP] = (prep_cores, *rts)
+    if qk_cores:
+        # A q / k core's "unit" is its key head; its count the sequences (token rows 0..B-1 of the decode tile row).
+        rts = (ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs())
+        zero_slots, zero_slot_bytes = Kt, CONV_TAPS * token_tile_bytes  # one slot per column, never reused
+        for core, hk, role in qk_cores:
+            rows = [0, 1, 1]
+            rts[0][core.x][core.y] = reader_addrs + [hk, batch, tokens, role, zero_slots] + rows
+            rts[1][core.x][core.y] = writer_addrs + [hk, batch, tokens, role, zero_slots, zero_slot_bytes] + rows
+            rts[2][core.x][core.y] = [hk, batch, tokens, v_eps_bits, role] + rows
+        roles[ROLE_QK] = ([core for core, _, _ in qk_cores], *rts)
 
     modes = list(getattr(compute_kernel_config, "unpack_to_dest_mode", []) or [])
     if len(modes) < NUM_CB_SLOTS:
@@ -822,7 +914,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     kernels = []
     writers = []
     for role, (cores, reader_rt, writer_rt, compute_rt) in roles.items():
-        ranges = _core_ranges(cores) if prep_units else all_cores
+        ranges = _core_ranges(cores) if len(roles) > 1 else all_cores
         reader_ct, writer_ct, compute_ct = role_ct(role)
         reader_config, writer_config = ttnn.ReaderConfigDescriptor(), ttnn.WriterConfigDescriptor()
         if role == ROLE_PREP and PREP_SEND_NOC_1:
@@ -873,12 +965,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     # The writer carries the q and k multicast channels (absent outside R-BCAST, so one kernel source).
     next_sem = QK_MCAST_FIRST_SEM_ID
     for prefix, channel in zip(("qkq", "qkk"), qk_channels or (None, None)):
-        for writer in writers:
-            if channel is None:
+        if channel is None:
+            for writer in writers:
                 ttnn.attach_absent_mcast(writer, prefix)
-            else:
-                channel.attach(descriptor, prefix, [writer], next_sem)
-        if channel is not None:
+        else:
+            channel.attach(descriptor, prefix, writers, next_sem)
             next_sem = channel.next_semaphore_id()
     descriptor.kernels = kernels
     return descriptor

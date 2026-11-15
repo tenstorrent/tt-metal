@@ -44,6 +44,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
@@ -164,7 +165,8 @@ constexpr uint32_t ROLE = get_compile_time_arg_val(11);   // GDN_ROLE_*
 constexpr uint32_t RATIO = get_compile_time_arg_val(12);  // value heads per key head
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;              // Vb is then the key head's r * Vt v columns
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
-static_assert(CHUNKED || ROLE == GDN_ROLE_LOCAL, "R-PREP is a chunked regime");
+constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: conv + L2 norm of one key head's q or k, every sequence
+static_assert(CHUNKED || ROLE == GDN_ROLE_LOCAL || QK_CORE, "R-PREP is a chunked regime");
 // A prep core's conv output v is scaled by beta per head (head_prep) before it is sent.
 constexpr uint32_t cb_v_out = PREP ? cb_v_prep : cb_v;
 // R-PREP head block (descriptor IN_MAT_PAGES): [beta exp(c) (*) kn, exp(c) (*) qn | kn^T (*) exp(c_last - c)^T | M, QD
@@ -236,11 +238,12 @@ ALWI void wait_sfpu_before_fpu() {
 #endif
 }
 
-// Valid token rows [row_lo, row_hi) of a tile row (tile-local). When they sit in one 4-row band, the
-// row-local SFPU ops run on that band of both faces only (4 of 32 vector ops, sfpu_tile_scope); rows
-// outside it keep their pre-op DEST values, which no valid row reads.
+// Valid token rows [row_lo, row_hi) of a tile row (tile-local). When they sit in fewer than all eight 4-row bands,
+// the row-local SFPU ops run on those bands of both faces only (4 of 32 vector ops per band, sfpu_tile_scope); rows
+// outside them keep their pre-op DEST values, which no valid row reads.
 struct RowScope {
-    uint32_t band;  // band index 0..7, or FULL_TILE
+    uint32_t band;       // first band index 0..7, or FULL_TILE
+    uint32_t bands = 1;  // bands [band, band + bands)
     static constexpr uint32_t FULL_TILE = 0xffffffffu;
     // R-CHUNK runs whole tiles: its calls are prefill (tile rows mostly full), and dropping the band
     // variants keeps the math thread's code inside the kernel-config text budget.
@@ -252,27 +255,37 @@ struct RowScope {
         if constexpr (QK_SHARED) {
             return {row_lo >> 2};
         }
-        return {(row_lo >> 2) == ((row_hi - 1) >> 2) ? (row_lo >> 2) : FULL_TILE};
+        const uint32_t bands = ((row_hi - 1) >> 2) - (row_lo >> 2) + 1;
+        if (bands == 1 || (QK_CORE && bands < 8)) {
+            return {row_lo >> 2, bands};
+        }
+        return {FULL_TILE};
     }
     bool full() const { return CHUNKED || (!QK_SHARED && band == FULL_TILE); }
+    // Several bands only on a q / k core (rows 0..B-1): every other build scopes one band (else the whole tile) and
+    // takes it at compile time, as its math thread sits near the kernel-config text budget.
+    uint32_t band_end() const { return QK_CORE ? band + bands : band + 1; }
 };
 
-// One SFPU body of ITERATIONS=2 (one 4-row band, both column parities) on `band` of both faces of its half.
+// One SFPU body of ITERATIONS=2 (one 4-row band, both column parities) on each band of the scope, both faces of its
+// half.
 template <typename Body>
-ALWI void sfpu_band(uint32_t dst, uint32_t band, Body body) {
+ALWI void sfpu_band(uint32_t dst, RowScope scope, Body body) {
 #ifdef TRISC_MATH
-    _llk_math_eltwise_sfpu_start_(dst);
-    if (band >= 4) {
+    for (uint32_t band = scope.band; band < scope.band_end(); ++band) {
+        _llk_math_eltwise_sfpu_start_(dst);
+        if (band >= 4) {
+            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+        }
+        for (uint32_t b = 0; b < (band & 3); ++b) {
+            math::inc_dst_addr<4>();
+        }
+        body();
         _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+        body();
+        _llk_math_eltwise_sfpu_done_();
     }
-    for (uint32_t b = 0; b < (band & 3); ++b) {
-        math::inc_dst_addr<4>();
-    }
-    body();
-    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-    body();
-    _llk_math_eltwise_sfpu_done_();
 #endif
 }
 
@@ -281,7 +294,7 @@ ALWI void silu_scoped(uint32_t dst, RowScope scope) {
         silu_tile(dst);
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_silu<DST_ACCUM_MODE, 2>(); });
+        sfpu_band(dst, scope, [] { ckernel::sfpu::calculate_silu<DST_ACCUM_MODE, 2>(); });
 #endif
     }
 }
@@ -292,7 +305,7 @@ ALWI void softplus_scoped(uint32_t dst, RowScope scope) {
         softplus_tile(dst, ONE_BITS, ONE_BITS, SOFTPLUS_THRESHOLD_BITS);
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(dst, scope.band, [] {
+        sfpu_band(dst, scope, [] {
             ckernel::sfpu::calculate_softplus<APPROX, DST_ACCUM_MODE, 2>(ONE_BITS, ONE_BITS, SOFTPLUS_THRESHOLD_BITS);
         });
 #endif
@@ -304,7 +317,7 @@ ALWI void exp_scoped(uint32_t dst, RowScope scope) {
         exp_tile<false>(dst);
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_exponential<false, DST_ACCUM_MODE, false, 2>(); });
+        sfpu_band(dst, scope, [] { ckernel::sfpu::calculate_exponential<false, DST_ACCUM_MODE, false, 2>(); });
 #endif
     }
 }
@@ -314,7 +327,7 @@ ALWI void negative_scoped(uint32_t dst, RowScope scope) {
         negative_tile(dst);
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(dst, scope.band, [] { ckernel::sfpu::_calculate_negative_<APPROX, 2>(); });
+        sfpu_band(dst, scope, [] { ckernel::sfpu::_calculate_negative_<APPROX, 2>(); });
 #endif
     }
 }
@@ -324,7 +337,7 @@ ALWI void sigmoid_scoped(uint32_t dst, RowScope scope) {
         sigmoid_tile(dst);
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_sigmoid<false, DST_ACCUM_MODE, 2>(); });
+        sfpu_band(dst, scope, [] { ckernel::sfpu::calculate_sigmoid<false, DST_ACCUM_MODE, 2>(); });
 #endif
     }
 }
@@ -334,7 +347,7 @@ ALWI void square_scoped(uint32_t dst, RowScope scope) {
         square_tile(dst);
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_square<APPROX, DST_ACCUM_MODE, 2>(); });
+        sfpu_band(dst, scope, [] { ckernel::sfpu::calculate_square<APPROX, DST_ACCUM_MODE, 2>(); });
 #endif
     }
 }
@@ -349,7 +362,7 @@ ALWI void binop_scalar_scoped(uint32_t dst, uint32_t scalar_bits, RowScope scope
         }
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(dst, scope.band, [=] {
+        sfpu_band(dst, scope, [=] {
             ckernel::sfpu::calculate_binop_with_scalar<APPROX, BINOP_MODE, 2, DST_ACCUM_MODE>(scalar_bits);
         });
 #endif
@@ -361,7 +374,7 @@ ALWI void rsqrt_scoped(uint32_t dst, RowScope scope) {
         rsqrt_tile(dst);
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_rsqrt<APPROX, 2, DST_ACCUM_MODE, false>(); });
+        sfpu_band(dst, scope, [] { ckernel::sfpu::calculate_rsqrt<APPROX, 2, DST_ACCUM_MODE, false>(); });
 #endif
     }
 }
@@ -379,8 +392,7 @@ ALWI void binary_scoped(uint32_t d0, uint32_t d1, uint32_t out, RowScope scope) 
         }
     } else {
 #ifdef TRISC_MATH
-        sfpu_band(
-            0, scope.band, [=] { ckernel::sfpu::calculate_sfpu_binary<APPROX, OP, 2, DST_ACCUM_MODE>(d0, d1, out); });
+        sfpu_band(0, scope, [=] { ckernel::sfpu::calculate_sfpu_binary<APPROX, OP, 2, DST_ACCUM_MODE>(d0, d1, out); });
 #endif
     }
 }
@@ -393,12 +405,14 @@ ALWI void mul_bcast_col_scoped(uint32_t data, uint32_t col, RowScope scope) {
     } else {
 #ifdef TRISC_MATH
         using namespace ckernel::sfpu;
-        _llk_math_eltwise_sfpu_start_(0);
-        const uint32_t left = (scope.band >= 4 ? FACE2_BASE : FACE0_BASE) + (scope.band & 3) * ROW_BAND_STRIDE;
-        const uint32_t right = left + (FACE1_BASE - FACE0_BASE);
-        _process_col_bcast_row_band_<ckernel::BinaryOp::MUL>(
-            col * DEST_TILE_SIZE_RAW + left, left, right, data * DEST_TILE_SIZE_RAW, data * DEST_TILE_SIZE_RAW);
-        _llk_math_eltwise_sfpu_done_();
+        for (uint32_t band = scope.band; band < scope.band_end(); ++band) {
+            _llk_math_eltwise_sfpu_start_(0);
+            const uint32_t left = (band >= 4 ? FACE2_BASE : FACE0_BASE) + (band & 3) * ROW_BAND_STRIDE;
+            const uint32_t right = left + (FACE1_BASE - FACE0_BASE);
+            _process_col_bcast_row_band_<ckernel::BinaryOp::MUL>(
+                col * DEST_TILE_SIZE_RAW + left, left, right, data * DEST_TILE_SIZE_RAW, data * DEST_TILE_SIZE_RAW);
+            _llk_math_eltwise_sfpu_done_();
+        }
 #endif
     }
 }
@@ -423,11 +437,13 @@ ALWI void bcast_row_scoped(uint32_t data, uint32_t row, RowScope scope) {
         TT_SFPLOAD(p_sfpu::LREG5, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[1]);
         TT_SFPLOAD(p_sfpu::LREG6, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[2]);
         TT_SFPLOAD(p_sfpu::LREG7, IM, ADDR_MOD_7, row0 + COL_GROUP_OFFSETS[3]);
-        _process_row_bcast_data_band_<OP>(
-            data * DEST_TILE_SIZE_RAW,
-            data * DEST_TILE_SIZE_RAW,
-            scope.band >= 4 ? FACE2_BASE : FACE0_BASE,
-            (scope.band & 3) * ROW_BAND_STRIDE);
+        for (uint32_t band = scope.band; band < scope.band_end(); ++band) {
+            _process_row_bcast_data_band_<OP>(
+                data * DEST_TILE_SIZE_RAW,
+                data * DEST_TILE_SIZE_RAW,
+                band >= 4 ? FACE2_BASE : FACE0_BASE,
+                (band & 3) * ROW_BAND_STRIDE);
+        }
         _llk_math_eltwise_sfpu_done_();
 #endif
     }
@@ -572,7 +588,7 @@ ALWI void conv_block_fpu(RowScope scope, UnitCols cols, uint32_t first, uint32_t
     if (v_range) {
         cb_reserve_back(cb_v_out, Vb);
     }
-    static_assert(pair_cols % CONV_BATCH == 0, "window groups tile the unit's columns");
+    static_assert(QK_CORE || pair_cols % CONV_BATCH == 0, "window groups tile the unit's columns");
     for (uint32_t col0 = first; col0 < last; col0 += CONV_BATCH) {
         const uint32_t n = last - col0 < CONV_BATCH ? last - col0 : CONV_BATCH;
         cb_wait_front(cb_window, GDN_CONV_TAPS * n);
@@ -1489,6 +1505,7 @@ void kernel_main() {
     const uint32_t qk_role = get_arg_val<uint32_t>(4);
     const uint32_t tr_offset = get_arg_val<uint32_t>(5);  // R-PREP prep core: tile rows offset, + stride, ...
     const uint32_t tr_stride = get_arg_val<uint32_t>(6);
+    const uint32_t unit_stride = get_arg_val<uint32_t>(7);  // units first_unit, + stride, ... (R-QKCORE: Hv)
 
     // R-PREP allocates each role only its own buffers: start up on buffers the role has.
     if constexpr (PREP) {
@@ -1503,6 +1520,24 @@ void kernel_main() {
         prep_main(bufs, first_unit, T, tr_offset, tr_stride, v_eps_bits);
     } else if constexpr (STATE) {
         state_main(bufs, first_unit, T);
+    } else if constexpr (QK_CORE) {
+        // num_units = the sequences B (token rows 0..B-1); qn or kn of the Kt columns -> cb_qk_stage (writer
+        // multicasts).
+        const bool is_q = qk_role == GDN_QK_Q_INJECTOR;
+        const UnitCols cols{is_q ? 0u : Kt, Kt};
+        const RowScope scope = RowScope::of(0, num_units);
+        cb_wait_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);
+        {
+            DeviceZoneScopedN("QK-CONV");
+            if constexpr (CONV_ON_FPU) {
+                conv_block_fpu(scope, cols, 0, Kt);
+            } else {
+                conv_block(scope, cols, 0, Kt);
+            }
+        }
+        DeviceZoneScopedN("QK-L2");
+        qk_part_block(bufs, is_q, scope);
+        cb_pop_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);
     } else {
         constexpr bool qk_shared = QK_SHARED;  // every core of an R-BCAST program has a shared role
         // Compile-time outside R-BCAST (every q/k column), so those builds fold the column mapping away.
@@ -1516,7 +1551,8 @@ void kernel_main() {
             cb_wait_front(cb_tri_mask, 2);  // reader-built once (mask, identity), held for the kernel
         }
 
-        for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
+        for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
+            const uint32_t unit = first_unit + unit_idx * unit_stride;
             const uint32_t seq_lo = (unit / PIECES / Hv) * T;
             const uint32_t seq_hi = seq_lo + T;
             const uint32_t first_tr = seq_lo / TILE_ROWS;
@@ -1552,11 +1588,15 @@ void kernel_main() {
                     }
                     qk_finish_block(bufs, scope);
                 } else {
-                    if constexpr (CONV_ON_FPU) {
-                        conv_block_fpu(scope, cols, 0, cols.count());
-                    } else {
-                        conv_block(scope, cols, 0, cols.count());
+                    {
+                        DeviceZoneScopedN("C-CONV");
+                        if constexpr (CONV_ON_FPU) {
+                            conv_block_fpu(scope, cols, 0, cols.count());
+                        } else {
+                            conv_block(scope, cols, 0, cols.count());
+                        }
                     }
+                    DeviceZoneScopedN("C-L2");
                     l2norm_block(bufs, scope);
                 }
                 cb_reserve_back(cb_o_acc, Vb);
@@ -1564,6 +1604,7 @@ void kernel_main() {
                     chunk_step(bufs, token == 0, token + (hi - lo) == T, hi - 1 - base_row);
                     token += hi - lo;
                 } else {
+                    DeviceZoneScopedN("C-STEP");
                     for (uint32_t row = lo; row < hi; ++row, ++token) {
                         token_step(bufs, token == 0, token == T - 1, row == lo, scope);
                     }
@@ -1576,7 +1617,10 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_knT, Kt);
                 cb_pop_front(cb_v, Vb);
-                rmsnorm_gate_block<cb_o_acc, 1>(bufs, v_eps_bits, scope);
+                {
+                    DeviceZoneScopedN("C-RMS");
+                    rmsnorm_gate_block<cb_o_acc, 1>(bufs, v_eps_bits, scope);
+                }
             }
             cb_pop_front(cb_conv_w, conv_w_pages);
             cb_pop_front(cb_gate_w, 2);

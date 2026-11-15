@@ -59,6 +59,7 @@ constexpr uint32_t INBOX_SLOTS = get_compile_time_arg_val(9) > 0 ? get_compile_t
 constexpr uint32_t RATIO = get_compile_time_arg_val(10);               // value heads per key head
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
+constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: multicasts its key head's qn or kn, nothing else
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
@@ -71,7 +72,8 @@ FORCE_INLINE uint32_t elem_index(uint32_t r, uint32_t c) {
 
 // store_rows_block: n output tiles from cb_out_rows to pages first_page.. of tile row [base_row, +32), whole tiles
 // when [lo, hi) is the whole tile row, else face-row segments of those rows only.
-template <typename Accessor>
+// RETIRE = false leaves the barrier and the pop to the caller.
+template <bool RETIRE = true, typename Accessor>
 void store_rows(const Accessor& out_acc, uint32_t n, uint32_t first_page, uint32_t base_row, uint32_t lo, uint32_t hi) {
     cb_wait_front(cb_out_rows, n);
     const uint32_t out_base = get_read_ptr(cb_out_rows);
@@ -88,8 +90,10 @@ void store_rows(const Accessor& out_acc, uint32_t n, uint32_t first_page, uint32
             }
         }
     }
-    noc_async_write_barrier();
-    cb_pop_front(cb_out_rows, n);
+    if constexpr (RETIRE) {
+        noc_async_write_barrier();
+        cb_pop_front(cb_out_rows, n);
+    }
 }
 
 // One multicast write per rectangle of the runtime-arg list at `arg` (count, then x_lo, y_lo, x_hi, y_hi, cores each),
@@ -250,8 +254,10 @@ void prep_writer(
 // group, so a send from another address loops back and is complete when send() returns); every core receives
 // the parts it did not prep. Every core has the same CB layout and R-BCAST hands off one block per core, so a
 // receiver's write pointer is the address the injector targets.
+// R-QKCORE pair cores receive once per call (`receive` on the first unit only): a later unit re-pushes the same
+// rows, which compute's pop left in place (cb_kq_rows holds exactly one block, so the write pointer wraps onto them).
 template <typename QChannel, typename KChannel>
-void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t qk_role, uint32_t Kt) {
+void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t qk_role, uint32_t Kt, bool receive) {
     Noc noc;
     const uint32_t part_bytes = Kt * STATE_TILE_BYTES;
     cb_reserve_back(cb_kq_rows, 2 * Kt);
@@ -272,10 +278,10 @@ void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t
         }
         cb_pop_front(cb_qk_stage, Kt);
     }
-    if (!q_injector) {
+    if (!q_injector && receive) {
         q_channel.optional_receiver(noc)->receive();
     }
-    if (!k_injector) {
+    if (!k_injector && receive) {
         k_channel.optional_receiver(noc)->receive();
     }
     cb_push_back(cb_kq_rows, 2 * Kt);
@@ -283,6 +289,18 @@ void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t
 }
 
 }  // namespace
+
+// Issues the piece's Kt x Vb state tiles of cb_state_out to recurrent_state_out (pair state page `first_page` on);
+// the caller barriers and pops.
+template <uint32_t Kt, uint32_t Vt, uint32_t Vb, typename Accessor>
+void store_state(const Accessor& state_out, uint32_t first_page) {
+    cb_wait_front(cb_state_out, Kt * Vb);
+    const uint32_t state_base = get_read_ptr(cb_state_out);
+    for (uint32_t i = 0; i < Kt * Vb; ++i) {
+        const uint32_t page = first_page + (i / Vb) * Vt + i % Vb;
+        noc_async_write(state_base + i * STATE_TILE_BYTES, state_out.get_noc_addr(page), STATE_TILE_BYTES);
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
@@ -310,6 +328,7 @@ void kernel_main() {
     const uint32_t zero_slot_bytes = get_arg_val<uint32_t>(arg++);  // one window group
     const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);        // tile rows handled: offset, + stride, ...
     const uint32_t tr_stride = get_arg_val<uint32_t>(arg++);
+    const uint32_t unit_stride = get_arg_val<uint32_t>(arg++);  // units first_unit, + stride, ... (R-QKCORE: Hv)
     // R-VSPLIT: NoC (x, y) of the pair's piece cores in piece order (this core included). The host runs
     // one unit per core then, so every piece of a pair walks the same tile rows in lockstep.
     uint32_t peer_x[PIECES];
@@ -350,8 +369,35 @@ void kernel_main() {
         prep_writer<Kt, Vt, Hv>(out_acc, first_unit, T, tr_offset, tr_stride, arg);
         return;
     }
+    if constexpr (QK_CORE) {
+        // qn lands in cb_kq_rows tiles [Kt, 2Kt) of the key head's pair cores, kn in [0, Kt): their untouched base.
+        Noc noc;
+        const uint32_t part_bytes = Kt * STATE_TILE_BYTES;
+        const uint32_t kn_dst = get_write_ptr(cb_kq_rows);
+        cb_wait_front(cb_qk_stage, Kt);
+        DeviceZoneScopedN("QK-SEND");
+        if (qk_role == GDN_QK_Q_INJECTOR) {
+            q_channel.optional_sender(noc)->send(get_read_ptr(cb_qk_stage), kn_dst + part_bytes, part_bytes);
+        } else {
+            k_channel.optional_sender(noc)->send(get_read_ptr(cb_qk_stage), kn_dst, part_bytes);
+        }
+        cb_pop_front(cb_qk_stage, Kt);
+        return;
+    }
 
-    for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
+    // A unit's last output rows and its state are written without waiting: the barrier and the pops wait until the
+    // next unit's store point, after its coefficients and q/k rows are handed to compute.
+    bool retiring = false;
+    auto retire = [&]() {
+        if (retiring) {
+            noc_async_write_barrier();
+            cb_pop_front(cb_out_rows, Vb);
+            cb_pop_front(cb_state_out, n_state);
+            retiring = false;
+        }
+    };
+    for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
+        const uint32_t unit = first_unit + unit_idx * unit_stride;
         const uint32_t pair = unit / PIECES;
         const uint32_t piece = unit % PIECES;
         const uint32_t v_first = piece * Vb;
@@ -396,7 +442,8 @@ void kernel_main() {
             }
 
             if (!CHUNKED && qk_role != GDN_QK_OWN) {
-                land_qk_rows(q_channel, k_channel, qk_role, Kt);
+                DeviceZoneScopedN("WR-LAND");
+                land_qk_rows(q_channel, k_channel, qk_role, Kt, unit_idx == 0);
             }
 
             // ---- partial sum o^2 all-gather (R-VSPLIT) ----
@@ -445,17 +492,22 @@ void kernel_main() {
                 cb_push_back(cb_osum_gather, PIECES);
             }
 
-            store_rows(out_acc, Vb, tr * out_width_tiles + head * Vt + v_first, base_row, lo, hi);
+            // The state is final after the last tile row's update, before compute's RMS norm produces the output
+            // rows: its writes go out first and overlap that norm.
+            retire();
+            if (tr == last_tr) {
+                store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
+                store_rows<false>(out_acc, Vb, tr * out_width_tiles + head * Vt + v_first, base_row, lo, hi);
+                retiring = true;
+            } else {
+                store_rows(out_acc, Vb, tr * out_width_tiles + head * Vt + v_first, base_row, lo, hi);
+            }
         }
-
-        // ---- store_state_block ----
-        cb_wait_front(cb_state_out, n_state);
-        const uint32_t state_base = get_read_ptr(cb_state_out);
-        for (uint32_t i = 0; i < n_state; ++i) {
-            const uint32_t page = pair * Kt * Vt + (i / Vb) * Vt + v_first + i % Vb;
-            noc_async_write(state_base + i * STATE_TILE_BYTES, state_out.get_noc_addr(page), STATE_TILE_BYTES);
+        if constexpr (STATE) {
+            store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
+            noc_async_write_barrier();
+            cb_pop_front(cb_state_out, n_state);
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_state_out, n_state);
     }
+    retire();
 }
