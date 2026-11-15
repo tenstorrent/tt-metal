@@ -252,10 +252,13 @@ class Qwen36DecoderLayer:
             self.is_full_attention or self.num_devices < 2 or mode != "prefill" or gdn_recurrent or gdn_collect
         ):
             raise ValueError("gdn_checkpoint and gdn_masks need a GDN layer in a TP single-sequence prefill")
-        # kv_only (the MTP drafter's KV maintenance): run the attention only as far as its paged KV write and return
-        # None; the residual, the ffn norm and the MLP would only feed an output that no caller reads.
-        if kv_only and not (self.is_full_attention and self.num_devices > 1 and mode == "decode"):
-            raise ValueError("kv_only needs a TP full-attention decode")
+        # kv_only (the MTP drafter's KV maintenance and prompt KV warm-up): run the attention only as far as its paged
+        # KV write and return None; the residual, the ffn norm and the MLP would only feed an output that no caller
+        # reads.
+        if kv_only and not (
+            self.is_full_attention and self.num_devices > 1 and (mode == "decode" or page_table is not None)
+        ):
+            raise ValueError("kv_only needs a TP full-attention decode or paged prefill")
         # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
         # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
         # until capture_verify_trace allocates them.
@@ -330,6 +333,7 @@ class Qwen36DecoderLayer:
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
                             sp=sp,
+                            kv_only=kv_only,
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)

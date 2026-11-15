@@ -31,7 +31,8 @@ persistent ``state_page_idx`` tensor, which names the pages of the block of each
   block holds 8.5 float32 pages per bank, so the pages of an odd block start half a page later than those of an even
   one.
 * zero_blocks clears blocks that vLLM gives to the attention group: float32 state bytes read as bfloat16 can be NaN
-  or Inf at positions that attention masks.
+  or Inf at positions that attention masks. Once captured (record_traces), each group of blocks is one trace replay
+  of the same fills.
 * A speculative verify (Qwen36MTPContractForCausalLM) runs gdn_spec_step with conv_hist on the blocks: row r reads its
   full state from start_blocks[r] and writes the full state after query token t, history included, into windows[r, t]
   (kv_cache_spec.GdnBlockLayout.verify_tables). So every block holds a complete state after every step, and no model
@@ -331,6 +332,7 @@ class GdnBlockState:
             mesh_mapper=rep,
         )
         self._zero_refs = []
+        self._zero_trace = None  # the captured zeroing of one group of blocks (record_traces)
         self._group_names = None
         self._group_layers = None
         self._decode_blocks = {}  # group -> blocks of the decode rows that the index tensors hold
@@ -634,9 +636,15 @@ class GdnBlockState:
         return True
 
     def record_traces(self):
+        """Capture the block writes and the block zeroing (_record_write_traces, _record_zero_trace). After warmup, in
+        the traced warmup phase. Idempotent."""
+        self._record_write_traces()
+        self._record_zero_trace()
+
+    def _record_write_traces(self):
         """Capture the block writes that warmup compiled on the trace page tables (_write_trace_body), one trace per
         variant; later writes replay them (_replay_write). Only intermediates are allocated, and freed, inside a
-        capture. After warmup, in the traced warmup phase. Idempotent."""
+        capture."""
         if self._write_traces or not self._warmed_variants:
             return
         before = _trace_region_bytes(self.mesh)
@@ -781,14 +789,40 @@ class GdnBlockState:
             )
             ttnn.copy_host_to_device_tensor(host, self._zero_table)
             refs.append(host)
-            for k, v in self.kv_caches:
-                ttnn.experimental.paged_fill_cache(k, self._zero, self._zero_table, batch_idx=0)
-                ttnn.experimental.paged_fill_cache(v, self._zero, self._zero_table, batch_idx=0)
+            if self._zero_trace is not None:
+                ttnn.execute_trace(self.mesh, self._zero_trace, cq_id=0, blocking=False)
+            else:
+                self._zero_body()
         self._zero_refs = refs
 
+    def _zero_body(self):
+        """Zero the blocks that _zero_table names in every K and V buffer: two fills per layer slot."""
+        for k, v in self.kv_caches:
+            ttnn.experimental.paged_fill_cache(k, self._zero, self._zero_table, batch_idx=0)
+            ttnn.experimental.paged_fill_cache(v, self._zero, self._zero_table, batch_idx=0)
+
+    def _record_zero_trace(self):
+        """Capture the zeroing of one group of blocks (_zero_body), which warmup compiled; zero_blocks then replays it
+        per group, without waiting. The fills write in place and allocate nothing."""
+        if self._zero_trace is not None or not self._warmed:
+            return
+        before = _trace_region_bytes(self.mesh)
+        tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        self._zero_body()
+        ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+        self._zero_trace = tid
+        after = _trace_region_bytes(self.mesh)
+        size = "unknown" if None in (before, after) else f"{(after - before) / 2**20:.2f} MiB"
+        logger.info(f"KV cache block zeroing captured: {2 * len(self.kv_caches)} fills per replay, trace region {size}")
+
     def release(self):
-        """Release the captured writes and unbind the GDN layers from the blocks, before the K and V buffers are freed."""
+        """Release the captured writes and zeroing and unbind the GDN layers from the blocks, before the K and V
+        buffers are freed."""
         self.release_write_traces()
+        if self._zero_trace is not None:
+            ttnn.synchronize_device(self.mesh)
+            ttnn.release_trace(self.mesh, self._zero_trace)
+            self._zero_trace = None
         for dn in self.layers.values():
             dn.state_blocks = None
         self.layers = {}

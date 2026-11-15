@@ -1314,12 +1314,16 @@ class TPAttention:
         chunk_start_idx_tensor=None,
         user_id=0,
         sp=None,
+        kv_only=False,
     ):
         """Paged-KV prefill for one chunk: fill cache + chunked SDPA over prior chunks.
 
         x is K-sharded when the fused in-proj path is active (same contract as ``forward_prefill``).
         chunk_start_idx_tensor: optional device offset for FLEXIBLE chunked SDPA (one program
         per trace/bucket). chunk_start_idx (int) still sizes the page table host-side.
+        kv_only (the MTP drafter's prompt KV warm-up): compute and write K and V into the paged cache by the same
+        operations, then return None; Q and the gate are freed unused (no Q norm or RoPE, SDPA, gate, wo or
+        reduce-scatter).
         sp: tt/sp.py SeqParallel: x holds this mesh row's S of the R*S tokens of a from-zero-state sequence split over
         the rows. K/V are all-gathered over the rows so the cache fill writes all R*S tokens (chunk_page_table must
         cover them) and the chunked SDPA runs this row's queries; chunk_start_idx_tensor holds this row's offset r*S.
@@ -1328,6 +1332,8 @@ class TPAttention:
         (a from-zero single-pass prefill that is never decoded from).
         """
         assert self.use_paged and self.paged_k is not None, "forward_prefill_paged requires a bound paged KV cache"
+        if kv_only and sp is not None:
+            raise ValueError("kv_only writes the K and V of one sequence; it takes no sequence-parallel split")
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         if chunk_start_idx is None:
             chunk_start_idx = 0
@@ -1338,17 +1344,23 @@ class TPAttention:
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
         _qk_mc = tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG)  # DRAM above S=2048
-        q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=_qk_mc),
-            tw["q_norm"],
-            memory_config=_qk_mc,
-        )
+        if kv_only:
+            # Q and the gate feed only the SDPA and the gate multiply; K and V are separate head-split outputs.
+            ttnn.deallocate(q)
+            ttnn.deallocate(gate_flat)
+        else:
+            q = ttnn.multiply(
+                ttnn.rms_norm(q, epsilon=1e-6, memory_config=_qk_mc),
+                tw["q_norm"],
+                memory_config=_qk_mc,
+            )
         k = ttnn.multiply(
             ttnn.rms_norm(k, epsilon=1e-6, memory_config=_qk_mc),
             tw["k_norm"],
             memory_config=_qk_mc,
         )
-        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
+        if not kv_only:
+            q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
         S_kv = S  # K/V rows this call writes to the cache
@@ -1400,6 +1412,8 @@ class TPAttention:
                 ttnn.deallocate(v_fill)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
+        if kv_only:
+            return None
 
         # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
         # makes the KV cache bf8 -> full bf8 matmul

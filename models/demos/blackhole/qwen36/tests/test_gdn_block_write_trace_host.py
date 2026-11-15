@@ -141,6 +141,9 @@ def _state(block_size=1024):
     st._trace_sources = {}
     st._warmed_variants = ()
     st._write_order = None
+    st._zero_trace = None
+    st._warmed = False
+    st.kv_caches = []
     return st, plugin
 
 
@@ -331,7 +334,7 @@ def test_warmup_runs_the_captured_writes_before_any_capture(device, monkeypatch)
         assert {repr(t) for w in warm for t in _leaves(w[1])} == {f"{n}{i}" for i in st.layers for n in names}
         assert {w[4] for w in warm} == tables
     st.record_traces()
-    assert len(device.traces) == 2
+    assert len(st._write_traces) == 2
 
 
 def test_capture_needs_warmup_and_is_idempotent(device):
