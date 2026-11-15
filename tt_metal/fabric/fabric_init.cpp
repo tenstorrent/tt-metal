@@ -89,7 +89,7 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
     std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
     // The router trusts a sender channel's connection semaphore to read "unused" at start, which only the last run's
     // teardown guarantees. A router's channels move with its own sender counts, so start every run from zero.
-    const std::vector<uint32_t> sender_bookkeeping_zeros(
+    std::vector<uint32_t> sender_bookkeeping_zeros(
         (router_config.sender_channels_bookkeeping_end - router_config.sender_channels_bookkeeping_start) /
             sizeof(uint32_t),
         0);
