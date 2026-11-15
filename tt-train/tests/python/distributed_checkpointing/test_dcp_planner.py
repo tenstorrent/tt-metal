@@ -18,12 +18,13 @@ from dcp_oracle import (
     FakeCheckpoint,
     arange,
     assert_shards_equal,
-    canonical_of,
     device_global,
     expected_shards,
+    per_shard_fused,
     world,
 )
 
+from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import (
     CheckpointError,
     CoverageError,
@@ -106,20 +107,46 @@ def test_identity_weight_back_to_tp8_dp4(src_label):
     ids=["tp8->fsdp32", "tp8->tp4", "tp8->single", "tp4->tp8", "fsdp32->tp8", "tp8->tp8"],
 )
 def test_fused_qkv_reorders_segments_across_tp_sizes(src_label, src_tp, dst_label, dst_tp):
-    src_t = fused_segments(2, QKV, src_tp)
-    dst_t = fused_segments(2, QKV, dst_tp)
-    plan, shards, expected = _round_trip(src_label, src_t, dst_label, dst_t, (1, 1, 256, 32))
-    assert_shards_equal(shards, expected)
+    # The device arrays are built by slicing (per_shard_fused), independently of fused_segments, so a transform that
+    # put the segments in the wrong order would load rows the expected arrays do not hold.
+    canonical = arange((1, 1, 256, 32))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (per_shard_fused(canonical, QKV, src_tp, dim=2), src_label, fused_segments(2, QKV, src_tp))})
+    plan, shards = ckpt.load({"w": (dst_label, fused_segments(2, QKV, dst_tp), (1, 1, 256, 32))})
+    assert_shards_equal(shards["w"], expected_shards(per_shard_fused(canonical, QKV, dst_tp, dim=2), dst_label))
     if src_tp == dst_tp and src_label is dst_label:
         assert plan.fast_path_keys == ["w"]
 
 
 def test_fused_qkv_device_order_differs_per_tp_so_a_naive_load_would_be_wrong():
     canonical = arange((1, 1, 256, 4))
-    tp8 = device_global(canonical, fused_segments(2, QKV, 8), (1, 1, 256, 4))
-    tp1 = device_global(canonical, Identity(), (1, 1, 256, 4))
-    assert not np.array_equal(tp8, tp1), "the test would prove nothing if the layouts agreed"
-    np.testing.assert_array_equal(canonical_of(tp8, fused_segments(2, QKV, 8), canonical.shape), canonical)
+    tp8_rows = per_shard_fused(canonical, QKV, 8, dim=2)
+    assert not np.array_equal(tp8_rows, canonical), "the test would prove nothing if the layouts agreed"
+    # Saved without the declaration, the TP8 rows load onto one device in their TP8 order: Q, K and V interleaved.
+    naive = FakeCheckpoint()
+    naive.save({"w": (tp8_rows, TP8, Identity())})
+    _, shards = naive.load({"w": (SINGLE, Identity(), (1, 1, 256, 4))})
+    assert not np.array_equal(shards["w"][()], canonical)
+    # With it, the same rows load in canonical order.
+    declared = FakeCheckpoint()
+    declared.save({"w": (tp8_rows, TP8, fused_segments(2, QKV, 8))})
+    _, shards = declared.load({"w": (SINGLE, Identity(), (1, 1, 256, 4))})
+    np.testing.assert_array_equal(shards["w"][()], canonical)
+
+
+def test_destination_boxes_follow_the_label_literally():
+    # Written out by hand rather than derived from chunk_boxes: a collapsed label numbers its shards in row-major
+    # device order, and two axes sharding one dim nest outermost first.
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (arange((1, 1, 256, 8)), SINGLE, Identity())})
+    collapsed = world([S(2)], (8,), mesh_shape=(2, 4))
+    plan, _ = ckpt.load({"w": (collapsed, Identity(), (1, 1, 256, 8))})
+    assert plan.keys["w"].boxes == {(j,): Box((0, 0, 32 * j, 0), (1, 1, 32, 8)) for j in range(8)}
+    nested = world([S(2), S(2)], (2, 4))
+    plan, _ = ckpt.load({"w": (nested, Identity(), (1, 1, 256, 8))})
+    assert plan.keys["w"].boxes == {
+        (a, b): Box((0, 0, 32 * (4 * a + b), 0), (1, 1, 32, 8)) for a in range(2) for b in range(4)
+    }
 
 
 def test_padded_vocab_across_tp_sizes_fills_new_padding_and_keeps_old_padding_on_the_same_layout():
