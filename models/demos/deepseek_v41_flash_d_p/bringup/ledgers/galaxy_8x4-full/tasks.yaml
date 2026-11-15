@@ -1521,6 +1521,45 @@ tasks:
       test_skip_positions.py (the settings'' env name); every point''s metrics are recorded, not only p51200''s.'
     gate_tasks:
     - X.3
+- id: FIX.35
+  title: 'OWNER 2026-11-15: measured end-to-end prefill 0 -> 1M (DECODER_SKIP=decode), cumulative wall at 51k..1M, host vs
+    device per chunk'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - FIX.34
+  gate:
+    cmd: DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py
+    metrics:
+      e2e_wall_s_p1024000: '> 0'
+      e2e_tok_s_p1024000: '> 0'
+      e2e_tok_s_p51200: '> 0'
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  brief:
+    details: 'OWNER 2026-11-15: MEASURE (not estimate) a whole prefill from position 0 to 1,024,000 in the realistic setting,
+      to prove host time does not interfere. Write models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py; change
+      no model code. Setting: DS41_DECODER_SKIP=decode, shipped defaults otherwise; ONE request of 200 chunks of 5120 real
+      tokens (no repeated chunk: build ~1M tokens of real text, e.g. the canonical prompt plus further distinct real documents,
+      tokenized; say what), every chunk begin_chunk(.., last=False), driven exactly as the serving runtime drives it: chunks
+      enqueued back to back, NO host readback or sync between chunks except what the runtime itself does (if the runtime syncs
+      per chunk, do the same and say so). Warm: the programs compiled first (a short warm-up request), then the timed request.
+      Record: (a) cumulative wall from the first host call to the final sync, read at the chunk boundaries 51200, 128000,
+      256000, 512000, 768000, 1024000 (a sync at those 6 boundaries only is allowed if needed to read the clock; report its
+      cost, or measure separate runs ending at each point instead); tok/s = tokens / cumulative wall; (b) per chunk: host
+      ms (first host call of the chunk to its last enqueue returning), device ms (the device''s own busy time for the chunk:
+      device profiler or the timeline, whichever does not perturb the unprofiled run; a separate profiled pass is fine), and
+      the device idle gap between consecutive chunks; (c) a verdict: is the run device-bound (host ahead of the device on
+      every chunk, gaps ~0) or does host time show up in the wall; compare cumulative wall with the sum of device ms. Also
+      compare with FIX.34''s per-chunk numbers (results/FIX.34.json). Output a markdown table and metrics: e2e_wall_s_p<point>,
+      e2e_tok_s_p<point>, host_ms_mean/max, device_ms_mean, gap_ms_mean/max, host_bound_chunks. The same test must run unchanged
+      on the replica branch. One process, load once. Report plainly, short.'
+    gate_tasks:
+    - FIX.34
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
