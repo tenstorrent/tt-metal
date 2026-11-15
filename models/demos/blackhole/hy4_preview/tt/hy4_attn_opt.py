@@ -253,8 +253,13 @@ class Hy4AttentionOpt(Hy4Attention):
                 sl = [ttnn.slice(fp, [0, 0, 0, of[i]], [1, 1, S, of[i + 1]]) for i in range(len(of) - 1)]
                 ttnn.deallocate(fp)
             qa_c, kv, g_raw = sl[0], sl[1], sl[2]
-            d["g"] = ttnn.sigmoid(g_raw)
-            ttnn.deallocate(g_raw)
+            if (
+                os.environ.get("HY4_GATE_FOLD", "0") == "1"
+            ):  # sigmoid applied inside the o-path multiply (back(..., gfold=True)): one op less per layer
+                d["g"], d["gfold"] = g_raw, True
+            else:
+                d["g"] = ttnn.sigmoid(g_raw)
+                ttnn.deallocate(g_raw)
             if self.has_indexer:
                 d["ik"], d["iw"] = sl[3], sl[4]
         else:
@@ -302,12 +307,16 @@ class Hy4AttentionOpt(Hy4Attention):
         ttnn.deallocate(q_pe)
         return d
 
-    def back(self, o, o_lat, g):
+    def back(self, o, o_lat, g, gfold=False):
         """o_lat [1,8,S,512] -> value up-projection, gate, o_proj, all-reduce -> [1,1,S,6144]."""
         mc = ttnn.L1_MEMORY_CONFIG if o.l1 else None
         x = ttnn.matmul(o_lat, self.w_uv_t, compute_kernel_config=self.ckc, memory_config=mc)
         x = ttnn.experimental.nlp_concat_heads(x, memory_config=mc or ttnn.DRAM_MEMORY_CONFIG)
-        og = ttnn.multiply(x, g)
+        if gfold:
+            og = ttnn.multiply(x, g, input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)])
+            ttnn.deallocate(g)
+        else:
+            og = ttnn.multiply(x, g)
         sk = self._skinny_o(og)
         part = sk if sk is not None else self._lin(o, og, self.w_o, "o_proj")
         ttnn.deallocate(og)
@@ -402,5 +411,5 @@ class Hy4AttentionOpt(Hy4Attention):
             d["qfull"] = ttnn.to_memory_config(d["qfull"], ttnn.DRAM_MEMORY_CONFIG)
         o_lat = self._sparse_decode(d["qfull"], kvc, ids, False)
         self._tap("o_lat", o_lat)
-        out = self.back(o, o_lat, d["g"])
+        out = self.back(o, o_lat, d["g"], d.get("gfold", False))
         return out, ids

@@ -24,8 +24,11 @@ void kernel_main() {
     constexpr uint32_t ROWMODE =
         get_compile_time_arg_val(12);  // 1: read the whole score row (N bf16) into L1 once and index it locally (no
                                        // per-id 64 B random DRAM reads: 59 -> ~10 us at S=1, 1M); 0: per-id reads
+    constexpr uint32_t OUTB = get_compile_time_arg_val(
+        13);  // 0: vals/gids [rows,K]; B > 0 (HY4_IDX_BLK=1): vals/gids [rows/B, B*K] (block b of row s at page s,
+              // offset b*K): the layout the next stage reads, no reshape copy
     constexpr uint32_t KP = K / SPLIT;
-    constexpr auto sc_args = TensorAccessorArgs<13>();
+    constexpr auto sc_args = TensorAccessorArgs<14>();
     constexpr auto ids_args = TensorAccessorArgs<sc_args.next_compile_time_args_offset()>();
     constexpr auto col_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
     constexpr auto val_args = TensorAccessorArgs<col_args.next_compile_time_args_offset()>();
@@ -44,8 +47,9 @@ void kernel_main() {
     const auto sc_acc = TensorAccessor(sc_args, sc_addr, N * 2);
     const auto ids_acc = TensorAccessor(ids_args, ids_addr, K * 4);
     const auto col_acc = TensorAccessor(col_args, col_addr, 64);
-    const auto val_acc = TensorAccessor(val_args, val_addr, K * 2);
-    const auto gid_acc = TensorAccessor(gid_args, gid_addr, K * 4);
+    constexpr uint32_t OB = OUTB ? OUTB : 1;
+    const auto val_acc = TensorAccessor(val_args, val_addr, K * 2 * OB);
+    const auto gid_acc = TensorAccessor(gid_args, gid_addr, K * 4 * OB);
     experimental::CB cbi(cb_ids), cbs(cb_stage), cbv(cb_val), cbg(cb_gid), cbc(cb_col);
     cbi.reserve_back(1);
     cbs.reserve_back(1);
@@ -101,8 +105,12 @@ void kernel_main() {
                 gids[i] = 0xFFFFFFFFu;
             }
         }
-        noc.async_write(cbv, val_acc, KP * 2, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = part * KP * 2});
-        noc.async_write(cbg, gid_acc, KP * 4, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = part * KP * 4});
+        const uint32_t opage = row / OB;  // OB = 1 when not blocked
+        const uint32_t oblk = OUTB ? (row % OB) * K : 0;
+        noc.async_write(
+            cbv, val_acc, KP * 2, {.offset_bytes = 0}, {.page_id = opage, .offset_bytes = (oblk + part * KP) * 2});
+        noc.async_write(
+            cbg, gid_acc, KP * 4, {.offset_bytes = 0}, {.page_id = opage, .offset_bytes = (oblk + part * KP) * 4});
         noc.async_write_barrier();
     }
 }

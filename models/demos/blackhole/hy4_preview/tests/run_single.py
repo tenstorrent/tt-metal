@@ -156,6 +156,22 @@ def main():
                     ttnn.execute_trace(md, dec.trace, cq_id=0, blocking=False)
                 ttnn.synchronize_device(md)
                 tr = (time.perf_counter() - t1) / 10
+                try:  # attn-fusion: save the last-step logits of this ctx and compare with the REF run's (same synthetic fill, same inputs)
+                    torch.save(lgs.to(torch.bfloat16), f"{OUT}/ctxlg_{TAG}_{C}.pt")
+                    rp = f"{OUT}/ctxlg_{REF}_{C}.pt"
+                    if REF and os.path.exists(rp):
+                        rl = torch.load(rp).float()
+                        res(
+                            event="ctx_vs_ref",
+                            ctx=C,
+                            pcc=[
+                                round(float(torch.corrcoef(torch.stack([lgs[r].float(), rl[r]]))[0, 1]), 6)
+                                for r in range(lgs.shape[0])
+                            ],
+                            argmax_agree=[bool(lgs[r].argmax() == rl[r].argmax()) for r in range(lgs.shape[0])],
+                        )
+                except Exception as e:  # noqa
+                    res(event="ctx_vs_ref_err", err=str(e)[:200])
                 res(
                     event="ctx_decode",
                     ctx=C,
