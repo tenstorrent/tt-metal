@@ -64,6 +64,12 @@ CASES = {
         _world("1x4", "dp,fsdp", ("--fsdp",), "bh_qb_1_4_ring_ring.textproto"),
         4,
     ),
+    # The fused qkv bias and LoRA's fused lora_B, trained, from TP2 onto one device.
+    "1x2_tp_bias_lora->single": (
+        _world("1x2", "dp,tp", ("--tp", "--bias", "--lora"), "bh_1_2_line_line.textproto"),
+        _world("1x1", "dp,tp", ("--bias", "--lora"), None),
+        2,
+    ),
     "1x2_tp_tied->1x2_fsdp": (
         _world("1x2", "dp,tp", ("--tp", "--tie"), "bh_1_2_line_line.textproto"),
         _world("1x2", "dp,fsdp", ("--fsdp", "--tie"), "bh_1_2_line_line.textproto"),

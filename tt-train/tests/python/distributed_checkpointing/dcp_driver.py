@@ -36,7 +36,7 @@ import ttml.distributed_checkpointing as dcp
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
-from ttml.modules import Parameter
+from ttml.modules import LoraConfig, LoraModel, Parameter
 from ttml.sharding import Sharding
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
@@ -92,15 +92,22 @@ def strip_fused_declarations(model) -> int:
     return removed
 
 
-def build(tp: bool, fsdp: bool, tie: bool, sizes: dict):
+def build(tp: bool, fsdp: bool, tie: bool, sizes: dict, bias: bool = False, lora: bool = False):
+    """The tiny Llama of a world and its AdamW. ``bias`` gives the attention projections biases, so the fused qkv has a
+    fused bias; ``lora`` puts ttml's LoRA on qkv (LoraColumnParallelLinear under TP), trains only lora_A, lora_B and
+    the biases, and leaves the frozen base weights at their seeded values."""
     config = LlamaConfig(
         **{**TINY, **sizes},
+        attention_bias=bias,
         use_tp=tp,
         weight_tying=WeightTyingType.Enabled if tie else WeightTyingType.Disabled,
         # A tied LM head is vocab-parallel, so the embedding must share that layout (LlamaConfig refuses otherwise).
         embedding_placement=EmbeddingPlacement.VocabParallel if (tp and tie) else EmbeddingPlacement.Replicated,
     )
     model = Llama(config)
+    if lora:
+        # Injects into model in place; the wrapper itself is not needed.
+        LoraModel(model, LoraConfig(rank=8, target_modules=[r"qkv_linear$"], is_bias_trainable=True))
     if fsdp:
         ttml.fsdp.fully_shard(model)
     params = model.parameters()
@@ -227,7 +234,7 @@ def canonicalize(name: str, array: np.ndarray, config: LlamaConfig, tp: int) -> 
         config.num_key_value_heads * head_dim,
     )
     intermediate = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
-    if name.endswith("qkv_linear/weight"):
+    if name.endswith("qkv_linear/weight") or name.endswith("qkv_linear/lora_B"):
         return uninterleave(array, 2, qkv, tp)
     if name.endswith("qkv_linear/bias"):
         return uninterleave(array, 3, qkv, tp)
@@ -355,6 +362,8 @@ def main(argv=None) -> int:
     parser.add_argument("--tp", action="store_true", help="build the model tensor-parallel over the 'tp' axis")
     parser.add_argument("--fsdp", action="store_true", help="fully_shard the model over the 'fsdp' axis")
     parser.add_argument("--tie", action="store_true", help="tie the embedding and the LM head")
+    parser.add_argument("--bias", action="store_true", help="give the attention projections biases (a fused qkv bias)")
+    parser.add_argument("--lora", action="store_true", help="put LoRA on qkv and train only the adapters and biases")
     parser.add_argument("--steps", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--mgd", default=None, help="mesh graph descriptor to set before opening the mesh")
@@ -414,7 +423,7 @@ def main(argv=None) -> int:
         print(f"MESH_OPEN_FAILED: {str(err).splitlines()[0]}")
         return MESH_OPEN_FAILED
     try:
-        config, model, params, optimizer = build(args.tp, args.fsdp, args.tie, sizes)
+        config, model, params, optimizer = build(args.tp, args.fsdp, args.tie, sizes, args.bias, args.lora)
         if args.strip_fused:
             print(f"stripped {strip_fused_declarations(model)} fused_segments declarations")
         if args.command == "save":
