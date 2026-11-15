@@ -49,6 +49,12 @@ public:
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) = 0;
     virtual std::string name() const = 0;
+    // (scale, shift) for padded_slice to apply silu(x * scale + shift) to each input slice; none by default.
+    virtual std::pair<std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> input_prologue() const {
+        return {std::nullopt, std::nullopt};
+    }
+    // Called with the slice index before each run_L1_op (0 when the op runs unsliced).
+    virtual void start_slice(uint32_t /*slice_index*/) {}
 };
 
 Op2DSliceConfig determine_slice_config(

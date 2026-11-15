@@ -19,7 +19,7 @@ from ....layers.normalization import DistributedLayerNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
-from ....utils.matmul import register_matmul_configs
+from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
 from ....utils.substate import rename_substate
 from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
 
@@ -67,19 +67,49 @@ STATE_PREFIXES = (
 )
 
 
+# proj_out at 4096x4096 (rows per device: no text / 1024 / 2048 text bucket): N block 8 = the core's whole 8 N tiles
+PROJ_OUT_4096_CONFIG = FusedMMRSConfig(
+    compute_with_storage_grid_size=ttnn.CoreCoord(12, 8),
+    M_block_size=6,
+    K_block_size=8,
+    N_block_size=8,
+    subblock_h=2,
+    subblock_w=2,
+    num_buffers_per_channel=None,
+    chunk_width_in_mm_blocks=1,
+)
+register_fused_mmrs_configs(
+    {ttnn.CoreCoord(12, 10): {(m, 3072, 3072): PROJ_OUT_4096_CONFIG for m in (8192, 8320, 8960)}}
+)
+
+
+# SP8 x TP4 MLP shapes (M, 3072, N) whose heuristic blocking overflows L1 on the 12x9 worker grid of a Galaxy. M is the
+# single stage's rows per device: (image + reference bucket + text bucket) / 8, e.g. 4608 = 2048 output + a 4 MP
+# reference bucket + 4096 text rows, 10368 = 4096 output + a 4 MP reference bucket + 1024 text rows; the blockings
+# follow the neighbouring shapes
 register_matmul_configs(
     {
         "12x9": {
             (2560, 3072, 4608): (4, 8, 16, (1, 4)),
             (3072, 3072, 4608): (4, 8, 16, (1, 4)),
+            (4224, 3072, 2304): (4, 8, 8, (1, 4)),
+            (4224, 3072, 4608): (4, 8, 16, (1, 4)),
+            (4352, 3072, 2304): (4, 8, 8, (1, 4)),
+            (4352, 3072, 4608): (4, 8, 16, (1, 4)),
             (4608, 3072, 2304): (4, 8, 8, (1, 4)),
             (4608, 3072, 4608): (4, 8, 16, (1, 4)),
             (8192, 3072, 2304): (11, 8, 8, (1, 4)),
             (8192, 3072, 4608): (6, 8, 16, (1, 4)),
+            (8448, 3072, 2304): (8, 8, 8, (1, 4)),
+            (8448, 3072, 4608): (6, 8, 16, (1, 4)),
             (8704, 3072, 2304): (8, 8, 8, (1, 4)),
             (8704, 3072, 4608): (6, 8, 16, (1, 4)),
             (9216, 3072, 2304): (8, 8, 8, (1, 4)),
             (9216, 3072, 4608): (6, 8, 16, (1, 4)),
+            (10368, 3072, 2304): (8, 8, 8, (1, 4)),
+            (10368, 3072, 4608): (6, 8, 16, (1, 4)),
+            (10496, 3072, 2304): (8, 8, 8, (1, 4)),
+            (10496, 3072, 4608): (6, 8, 16, (1, 4)),
             (10752, 3072, 2304): (8, 8, 8, (1, 4)),
             (10752, 3072, 4608): (6, 8, 16, (1, 4)),
         }
@@ -287,7 +317,13 @@ class Flux3KleinEarlyStacks(Module):
     """The per-mode blocks that run before the modes are joined."""
 
     def __init__(
-        self, *, device: ttnn.MeshDevice, ccl_manager: CCLManager, parallel_config: DiTParallelConfig, is_fsdp: bool
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+        linear1: bool,
     ) -> None:
         super().__init__()
         self._ring = ccl_manager.topology == ttnn.Topology.Ring
@@ -297,7 +333,11 @@ class Flux3KleinEarlyStacks(Module):
                 mode,
                 ModuleList(
                     Flux3KleinTransformerBlock(
-                        device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+                        device=device,
+                        ccl_manager=ccl_manager,
+                        parallel_config=parallel_config,
+                        is_fsdp=is_fsdp,
+                        linear1=linear1,
                     )
                     for _ in range(EARLY_DEPTH)
                 ),
@@ -365,6 +405,7 @@ class Flux3KleinTransformer(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        linear1: bool = False,
     ) -> None:
         super().__init__()
         tp_axis = parallel_config.tensor_parallel.mesh_axis
@@ -388,11 +429,15 @@ class Flux3KleinTransformer(Module):
             flow_map=flow_map, device=device, ccl_manager=ccl_manager, parallel_config=parallel_config
         )
         self.early = Flux3KleinEarlyStacks(
-            device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+            device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp, linear1=linear1
         )
         self.single_blocks = ModuleList(
             Flux3KleinTransformerBlock(
-                device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+                device=device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_fsdp=is_fsdp,
+                linear1=linear1,
             )
             for _ in range(SINGLE_DEPTH)
         )
@@ -431,6 +476,14 @@ class Flux3KleinTransformer(Module):
         buffer = self._logical_n[sample][stage]
         ttnn.copy_host_to_device_tensor(self._logical_n_tensor(n, on_host=True), buffer)
         return buffer
+
+    def write_logical_n(self, plan: Flux3KleinPlan, *, sample: int) -> None:
+        """Write ``plan``'s attended lengths into the logical_n buffers it refers to. A plan reused across requests keeps
+        the buffers, not their values: another request with other lengths may have written them since."""
+        layout = plan.layout
+        for mode in plan.early_logical_n:
+            self._write_logical_n(sample, mode, layout.attended(mode))
+        self._write_logical_n(sample, "single", layout.attended())
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for src, dst in STATE_PREFIXES:

@@ -5,6 +5,8 @@
 #pragma once
 
 #include <optional>
+#include <vector>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -40,6 +42,12 @@ struct Conv2dDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    // The epilogue_stats page base, left out of the program hash: every DRAM slice runs the same program.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& args,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output_tensor,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
@@ -69,7 +77,8 @@ conv_op_l1_usage calculate_L1_usage(
     bool is_1d_depthwise_conv,
     uint32_t input_channels_padded,
     bool skip_act_cb_create = false,
-    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt,
+    bool epilogue_stats = false);
 
 Tensor conv2d(
     const Tensor& a,
@@ -91,6 +100,9 @@ Tensor conv2d(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader);
+    std::optional<bool> force_split_reader,
+    const std::optional<Tensor>& epilogue_stats = std::nullopt,
+    uint32_t epilogue_stats_page_base = 0,
+    uint32_t epilogue_stats_slice_stride = 0);
 
 }  // namespace ttnn::prim

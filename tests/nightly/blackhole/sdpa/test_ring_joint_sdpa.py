@@ -596,6 +596,7 @@ def open_ring_joint_sdpa_runtime(
     mesh_config,
     *,
     fp32_dest_acc_en: bool = False,
+    dst_full_sync_en: bool = False,
     trace_region_size: int = 0,
     topology: Topology = None,
     reserve_llk_kernel_config: bool = True,
@@ -666,6 +667,7 @@ def open_ring_joint_sdpa_runtime(
                 math_approx_mode=False,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 packer_l1_acc=False,
+                dst_full_sync_en=dst_full_sync_en,
             ),
         )
     except Exception:
@@ -863,7 +865,9 @@ def call_sdpa(
     kv_cache_layer_idx=None,
     circular_kv_cache=False,
     kv_valid_end_tensor=None,
+    ccl_core_grid_offset=None,
 ):
+    """The all-gather runs on column ccl_column, or row-major from ccl_core_grid_offset when given."""
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
         tt_k,
@@ -887,8 +891,8 @@ def call_sdpa(
         mesh_device=mesh_device,
         topology=topology,
         subdevice_id=worker_sub_device_id,
-        ccl_core_grid_offset=(ccl_column, 0),
-        use_column_major_ccl=True,
+        ccl_core_grid_offset=(ccl_column, 0) if ccl_core_grid_offset is None else ccl_core_grid_offset,
+        use_column_major_ccl=ccl_core_grid_offset is None,
         scale=scale,
         kv_cache_batch_idx=kv_cache_batch_idx,
         kv_actual_isl=kv_actual_isl,
@@ -1233,6 +1237,7 @@ def run_ring_joint_sdpa_model_configs(
     runtime: RingJointSDPARuntime = None,
     fp32_dest_acc_en: bool = False,
     use_attention_sink: bool = False,
+    streaming_fp32_dest: bool = False,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -1412,6 +1417,7 @@ def run_ring_joint_sdpa_model_configs(
                 q_chunk_size=q_chunk_size,
                 k_chunk_size=k_chunk_size,
                 exp_approx_mode=False,
+                streaming_fp32_dest=streaming_fp32_dest,
             )
 
             reference_output = None
@@ -5588,6 +5594,156 @@ def test_ring_joint_attention_sdpa_accuracy(model_name, fp32_dest_acc_en):
         rmse_threshold=rmse_threshold,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
+
+
+@pytest.mark.parametrize("model_name", ["wan2_2_1xGLX"])
+def test_ring_joint_attention_sdpa_streaming_fp32_dest_accuracy(model_name):
+    """streaming_fp32_dest at the fp32-dest thresholds."""
+    model = MODEL_CONFIGS[model_name]
+    qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=True)
+    assert qk_configs, f"{model.name}: no q/k config fits with fp32 dest"
+    # The output depends on k_chunk_size only: one q chunk per k chunk is enough
+    q_chunk = min(q for q, _ in qk_configs)
+    run_ring_joint_sdpa_model_configs(
+        MESH_CONFIG,
+        model,
+        [(q, k) for q, k in qk_configs if q == q_chunk],
+        pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        fp32_dest_acc_en=True,
+        streaming_fp32_dest=True,
+    )
+
+
+@pytest.mark.parametrize("model_name", ["wan2_2_1xGLX"])
+def test_ring_joint_attention_sdpa_streaming_fp32_dest_determinism(model_name):
+    """Two calls on the streaming fp32-dest path give identical bytes."""
+    model = MODEL_CONFIGS[model_name]
+    run_ring_joint_sdpa_model_configs(
+        MESH_CONFIG,
+        model,
+        get_model_qk_configs(model, fp32_dest_acc_en=True)[:1],
+        num_iterations=2,
+        fp32_dest_acc_en=True,
+        streaming_fp32_dest=True,
+    )
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
+def test_ring_joint_attention_sdpa_dst_full_sync_accuracy(fp32_dest_acc_en):
+    """dst_full_sync_en doubles the dest tiles the factory sizes subblocks for, so the compute kernel must be built in
+    full-sync mode too: with fp32 dest a half-sync kernel sees half the dest the subblocks were sized for and does not
+    compile. The bf16 case runs full sync end to end."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS["wan2_2_1xGLX"]
+    qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=fp32_dest_acc_en)[:1]
+    assert qk_configs, f"{model.name}: no q/k config fits with fp32_dest_acc_en={fp32_dest_acc_en}"
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, fp32_dest_acc_en=fp32_dest_acc_en, dst_full_sync_en=True)
+    try:
+        run_ring_joint_sdpa_model_configs(
+            mesh_config,
+            model,
+            qk_configs,
+            pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD,
+            rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+            runtime=runtime,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_attention_sdpa_ccl_row_cores(expect_error):
+    """ccl_row_sdpa_start_x also runs SDPA on the CCL row's cores that the all-gather leaves free. Only the core each
+    (head, Q chunk) unit runs on changes, so the output equals the rectangle's byte for byte. A start column inside
+    the all-gather's cores is refused."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS["wan2_2_1xGLX"]
+    assert not model.is_causal and not model.is_balanced
+    nhq, nhk, nhv = scaled_model_heads_for_mesh(model, mesh_config)
+    sq = model.seq_len * mesh_config.sp_size
+    q_chunk_size, k_chunk_size = get_model_qk_configs(model)[0]
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh_device = runtime.mesh_device
+        full_grid = mesh_device.compute_with_storage_grid_size()
+        grid = (full_grid.x, full_grid.y - 1)
+        torch.manual_seed(1234)
+        Q = torch.randn(BATCH_SIZE, nhq, sq, model.d_q)
+        K = torch.randn(BATCH_SIZE, nhk, sq, model.d_k)
+        V = torch.randn(BATCH_SIZE, nhv, sq, model.d_v)
+
+        dims = [None, None]
+        dims[runtime.sp_axis] = 2
+        gathered_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            dims[runtime.tp_axis] = 1
+            gathered_dims[runtime.tp_axis] = 1
+
+        def to_device(t, dtype, shard_dims):
+            return ttnn.from_torch(
+                t,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
+
+        tt_q = to_device(Q, model.q_dtype, dims)
+        tt_k = to_device(K, model.kv_dtype, dims)
+        tt_v = to_device(V, model.kv_dtype, dims)
+        p_buf_k = to_device(torch.zeros_like(K), model.kv_dtype, gathered_dims)
+        p_buf_v = to_device(torch.zeros_like(V), model.kv_dtype, gathered_dims)
+        fence_persistent_buffers(mesh_device)
+        composer = ttnn.create_mesh_composer(
+            mesh_device, ttnn.MeshComposerConfig(*[-1 if d is None else d for d in dims])
+        )
+
+        def run(ccl_row_sdpa_start_x):
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=q_chunk_size,
+                k_chunk_size=k_chunk_size,
+                exp_approx_mode=False,
+                ccl_row_sdpa_start_x=ccl_row_sdpa_start_x,
+            )
+            tt_out = call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                sq,
+                is_causal=False,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=p_buf_v,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=None,
+                ccl_core_grid_offset=(0, grid[1]),
+            )
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :sq, :]
+
+        all_gather_cores = 2 * runtime.num_links
+        rectangle = run(None)
+        with_ccl_row = run(all_gather_cores)
+        assert_pcc_rmse(
+            torch_sdpa_reference(Q, K, V, is_causal=False),
+            rectangle,
+            DEFAULT_PCC_THRESHOLD,
+            DEFAULT_RMSE_THRESHOLD,
+            "rectangle",
+        )
+        assert torch.equal(rectangle, with_ccl_row), "the CCL row's cores changed the output"
+        with expect_error(RuntimeError, "ccl_row_sdpa_start_x"):
+            run(all_gather_cores - 1)
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
 
 @pytest.mark.parametrize(

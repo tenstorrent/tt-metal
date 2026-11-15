@@ -213,6 +213,7 @@ class ColParallelLinear(Module):
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+        self._ag_num_buffers_per_channel = 24 if is_blackhole() else 48
         self.chunks = chunks
         # Per-chunk output widths in ELEMENTS (global, pre-TP-shard); None => uniform N/chunks.
         self.chunk_sizes = chunk_sizes
@@ -494,7 +495,7 @@ class ColParallelLinear(Module):
                 force_transpose=force_transpose,
                 transpose_core_grid=transpose_core_grid,
                 num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                num_buffers_per_channel=self._ag_num_buffers_per_channel,
                 chunks=self.chunks if self.chunks is not None else 1,
                 # Op's N is per-device, so pass per-device widths (each global width is % TP == 0).
                 chunk_sizes=(
@@ -730,8 +731,13 @@ class RowParallelLinear(Module):
         dtype=None,
         use_persistent_buffer: bool = True,
         mmrs_config=None,
+        rs_barrier: bool = False,
     ) -> ttnn.Tensor:
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
+
+        ``rs_barrier``: the reduce-scatter handshakes with its ring peers (barrier semaphore) before writing into them,
+        even with persistent buffers. Needed when no other collective on this axis separates the previous op from this
+        one: without it a peer that runs ahead writes partial sums into this device while it still runs the op before.
 
         Computes: output = addcmul_a + scalar * rs_result * addcmul_b
 
@@ -805,7 +811,11 @@ class RowParallelLinear(Module):
             topology=self.ccl_manager.topology,
             cluster_axis=self.mesh_axis,
             compute_kernel_config=compute_kernel_config or self.compute_config,
-            barrier_semaphore=None if use_persistent_buffer else self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+            barrier_semaphore=(
+                self.ccl_manager.get_barrier_semaphore(self.mesh_axis)
+                if rs_barrier or not use_persistent_buffer
+                else None
+            ),
             using_persistent_buffers=use_persistent_buffer,
             optional_rs_output_tensor=rs_output_buffer,
             fused_ternary_scalar=scalar,

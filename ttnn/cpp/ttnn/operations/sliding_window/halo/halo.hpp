@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/halo/device/halo_device_operation_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -18,6 +19,7 @@ Tensor halo(
     bool remote_read = false,
     bool transpose_mcast = true,
     bool is_out_tiled = true,
-    bool config_tensors_in_dram = false);
+    bool config_tensors_in_dram = false,
+    const prim::HaloOptionalInputs& optional_inputs = {});
 
 }  // namespace ttnn

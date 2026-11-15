@@ -11,6 +11,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
+#include "grouped_n_split.hpp"
 
 namespace detail {
 template <typename... Args, uint32_t... Indexes>

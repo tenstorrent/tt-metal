@@ -50,6 +50,8 @@ class Flux2VaeDecoder(Module):
         ccl_manager: CCLManager | None,
         use_conv3d: bool = False,
         local_query_attention: bool = False,
+        group_norm_2d: bool = False,
+        local_attention: bool = False,
     ) -> None:
         super().__init__()
 
@@ -63,6 +65,8 @@ class Flux2VaeDecoder(Module):
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
             use_conv3d=use_conv3d,
             local_query_attention=local_query_attention,
+            group_norm_2d=group_norm_2d,
+            local_attention=local_attention,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -158,7 +162,7 @@ class Flux2VaeDecoder(Module):
         return z
 
     @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
-    def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
+    def forward(self, z: ttnn.Tensor, /, *, gather_hw: bool = True) -> ttnn.Tensor:
         # Input arrives H-sharded when SP is active (preprocess_and_unpatchify uses per-device
         # H), or replicated when SP is off — both cases work for post_quant_conv (per-position
         # Linear) and the SP-aware conv pyramid below.
@@ -176,7 +180,7 @@ class Flux2VaeDecoder(Module):
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
         z = self.conv_out.forward(z)
-        return _all_gather_hw(self._ctx, z)
+        return _all_gather_hw(self._ctx, z) if gather_hw else z
 
 
 # https://github.com/black-forest-labs/flux2/blob/6bb103559da75b67d75bf77cebba0027ba412ebc/src/flux2/autoencoder.py#L189

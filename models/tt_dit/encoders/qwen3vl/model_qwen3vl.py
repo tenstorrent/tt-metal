@@ -21,6 +21,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
+from ...utils.mochi import get_rot_transformation_mat, rope_halfsplit_to_interleaved, rope_halfsplit_to_interleaved_perm
 from ...utils.padding import torch_pad
 
 if TYPE_CHECKING:
@@ -54,6 +55,10 @@ class Qwen3VlContext:
     # Ring K/V gather rows to allocate, so every sequence length up to it shares one buffer pair.
     kv_gather_capacity: int | None = None
     use_persistent_ccl_buffers: bool = True
+    # Hidden states stay [batch, 1, seq, hidden] through the decoder layers.
+    rank4_hidden_states: bool = False
+    # RoPE with the fused rotary_embedding_llama on the interleaved layout (see `_apply_rope`).
+    fused_rope: bool = False
 
     def __post_init__(self) -> None:
         if self.sp_axis is None:
@@ -149,6 +154,8 @@ class Qwen3VlTextEncoder(Module):
         high_fidelity_linears: bool = False,
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
+        rank4_hidden_states: bool = False,
+        fused_rope: bool = False,
     ) -> None:
         super().__init__()
 
@@ -210,6 +217,8 @@ class Qwen3VlTextEncoder(Module):
             sp_axis=sp_axis,
             kv_gather_capacity=kv_gather_capacity,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+            rank4_hidden_states=rank4_hidden_states,
+            fused_rope=fused_rope,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -242,6 +251,8 @@ class Qwen3VlTextEncoder(Module):
         # Qwen3-VL checkpoint. The rope tables are built at this width, so it must agree.
         self._head_dim = head_dim if head_dim is not None else hidden_size // num_attention_heads
         self._rope_theta = rope_theta
+        self._rank4_hidden_states = rank4_hidden_states
+        self._fused_rope = fused_rope
         # When set, forward returns the raw hidden states after each of these decoder layers
         # (no final norm) — the Ideogram4 multi-layer feature tap. Otherwise returns the
         # final normalized hidden state.
@@ -324,6 +335,9 @@ class Qwen3VlTextEncoder(Module):
 
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
+        if self._rank4_hidden_states:
+            hidden_states = ttnn.unsqueeze(hidden_states, 1)
+            deepstack_rows = [ttnn.unsqueeze(rows, 1) for rows in deepstack_rows]
 
         for layer_idx, decoder_layer in enumerate(self.layers):
             hidden_states = decoder_layer.forward(
@@ -341,6 +355,8 @@ class Qwen3VlTextEncoder(Module):
         if self._activation_layers is None:
             # default: final normalized hidden state
             captured = [self.norm.forward(hidden_states)]
+        if self._rank4_hidden_states:
+            captured = [ttnn.squeeze(x, 1) for x in captured]
 
         if self._sp_axis is not None:
             captured = [
@@ -400,7 +416,7 @@ class Qwen3VlTextEncoder(Module):
     def create_rope_tensors(
         self, batch_size: int, sequence_length: int, attention_mask: torch.Tensor | None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        return create_rope_tensors(
+        cos, sin = create_rope_tensors(
             batch_size,
             sequence_length,
             attention_mask,
@@ -408,6 +424,7 @@ class Qwen3VlTextEncoder(Module):
             self._rope_theta,
             self._mrope_section,
         )
+        return rope_halfsplit_to_interleaved(cos, sin, self._head_dim) if self._fused_rope else (cos, sin)
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L684
@@ -544,8 +561,27 @@ class Qwen3VlAttention(Module):
         self._sp_axis = ctx.sp_axis
         self._sp_factor = ctx.device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
         self._kv_gather_capacity = ctx.kv_gather_capacity
+        self._rank4_hidden_states = ctx.rank4_hidden_states
+        self._fused_rope = ctx.fused_rope
+        if ctx.fused_rope:
+            self._rope_trans_mat = tensor.bf16_tensor(get_rot_transformation_mat(), device=ctx.device)
+            self._rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                ctx.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+            )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if self._fused_rope:
+            perm = rope_halfsplit_to_interleaved_perm(self._head_dim)
+            for key in ("q_proj.weight", "k_proj.weight"):
+                if key in state:
+                    state[key] = state[key].unflatten(0, [-1, self._head_dim])[:, perm].flatten(0, 1)
+            for key in ("q_norm.weight", "k_norm.weight"):
+                if key in state:
+                    state[key] = state[key][..., perm]
+
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
             q = q.unflatten(0, [self._group_count, self._group_size, self._head_dim])
             k = k.unflatten(0, [self._group_count, 1, self._head_dim])
@@ -608,7 +644,7 @@ class Qwen3VlAttention(Module):
         x = self.qkv_proj.forward(x)
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            ttnn.unsqueeze(x, 1),
+            x if self._rank4_hidden_states else ttnn.unsqueeze(x, 1),
             num_heads=self._num_local_heads,
             num_kv_heads=self._num_local_kv_heads,
             transpose_k_heads=False,
@@ -619,8 +655,16 @@ class Qwen3VlAttention(Module):
         k = self.k_norm.forward(k)
 
         cos, sin = pos_embeds
-        q = _apply_rope(q, cos, sin)
-        k = _apply_rope(k, cos, sin)
+        if self._fused_rope:
+            q = ttnn.experimental.rotary_embedding_llama(
+                q, cos, sin, self._rope_trans_mat, compute_kernel_config=self._rope_compute_kernel_config
+            )
+            k = ttnn.experimental.rotary_embedding_llama(
+                k, cos, sin, self._rope_trans_mat, compute_kernel_config=self._rope_compute_kernel_config
+            )
+        else:
+            q = _apply_rope(q, cos, sin)
+            k = _apply_rope(k, cos, sin)
 
         if self._sp_axis is not None:
             assert attention_bias is None, "SP decoder attention supports only the causal path (attention_bias=None)"
@@ -636,7 +680,10 @@ class Qwen3VlAttention(Module):
                 compute_kernel_config=self._sdpa_compute_kernel_config,
             )
 
-        x = ttnn.transformer.concatenate_heads(x)
+        if self._rank4_hidden_states:
+            x = ttnn.experimental.nlp_concat_heads(x)
+        else:
+            x = ttnn.transformer.concatenate_heads(x)
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
@@ -819,13 +866,10 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tens
     # Half-split RoPE (rotate_half), matching the HF reference layout directly. Holds PCC >=0.99
     # (real weights) and 0.9899-0.9953 per tapped layer (random init, bf16 error over 36 layers).
     #
-    # The denoiser instead permutes Q/K + cos/sin to the interleaved (adjacent-pair) layout to use
-    # the fused ttnn.experimental.rotary_embedding_llama (rope_halfsplit_to_interleaved*); that
-    # conversion is numerically neutral there. Not adopted here: it needs a head_dim channel
-    # permutation baked into the qkv weights, and the encoder RoPE is a negligible slice of latency
-    # (the encoder is ~1.5% of end-to-end), so the fused op buys ~nothing. If it is ever adopted,
-    # cos/sin must be converted to adjacent-pair along with the rotate -- mixing the two layouts
-    # regresses PCC silently.
+    # `fused_rope` instead permutes Q/K + cos/sin to the interleaved (adjacent-pair) layout of the
+    # fused ttnn.experimental.rotary_embedding_llama (rope_halfsplit_to_interleaved*): the q/k
+    # projection rows, the q/k norm weights and `create_rope_tensors` change together -- mixing the
+    # two layouts regresses PCC silently.
     return x * cos + _rotate_half(x) * sin
 
 
