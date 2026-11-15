@@ -210,3 +210,94 @@ reader 14 us and writer 5 us are hidden. Next: share the q/k conv + L2 norm (+ G
 head across its 12 cores (R-BCAST / split prep across pieces), which removes most of the 28 us of replicated
 prep; then R-SEG to use the 62 idle cores. Not done here: both are separate cross-core topologies; and the
 chunked compute sits near the 70688 B kernel-config text limit, so any added compute code needs a size cut.
+
+### [ ] Refinement 5 — Decode B=1: remove the loopback copies and share the q/k preparation per key head
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES[0]` (`perf_decode_b1`, flagged PERF FOCUS; goal 5.3 us, DRAM bank bound
+4.8 us). Measured on this op at bd772ee (operator, device kernel duration, median of 11 launches): 34.0 us
+on 48 cores, 7.1x the bound; DRAM is 14% used, so no DRAM resource limits the kernel. Per-core zones
+(captures generated/chip_runs/gdn_v01_d1_*): NCRISC spans 21.8 us; TRISC_0 spends 51% of its 32.4 us in
+cb_wait_front (about 16.5 us waiting for its first input), then about 16 us of serial compute with the
+engines busy 19% of the window (vector engine 14%, matrix engine 5%; FPU instruction waits at the head of
+math 42%, unpack stalled 9%): fixed per-phase setup on very little work. NoC trace per launch: DRAM -> core
+1,130,496 B in 3,840 packets (about 80 per core, about 290 B each); core -> DRAM 804,864 B in 768 packets;
+core -> core 589,824 B in 144 flows; and 7,274,496 B in 13,872 packets that every core's BRISC reads from
+ITSELF over NOC1 (288 stateful 512 B reads, 151,552 B per core): more bytes than the whole call moves over
+DRAM, spent on a copy or a zero-fill inside one core's L1. Three regions, largest first:
+(1) the input side, about 16 to 22 us: 48 cores each issue about 80 small DRAM reads and 8 of 9 window
+columns (q and k of the key head) are read and prepared by all 12 cores of that key head. Build the deferred
+R-BCAST of op_design.md: per key head one core reads the q/k columns once, runs conv + L2 norm once and
+hands kn/qn (and what the pieces need of them) to the other cores of that key head (`shared_input_reuse`,
+`mcast_topology`); the per-piece cores then read only their own v columns, state slice, z and gates. Fewer,
+larger DRAM requests (aligned spans of 2 KiB and more, `read_coalescing`).
+(2) the loopback traffic: replace the self-addressed NoC reads by what they stand for (a local fill or a
+plain L1 copy sized to the rows that are live; no window zeroing that the live-row scope makes
+unnecessary), or show by measurement that they are free.
+(3) the serial compute chain, about 16 us: per-phase init / reconfig / unpack setup dominates a one-row
+workload; fuse phases that share a format and a DEST state, hoist setup that does not change between
+phases, and keep the work scoped to the live rows.
+No SUPPORTED change.
+
+**Verifier notes**: must not slow `model_prefill_4096` (6.41 ms at bd772ee), decode B=8 (74.0 us) or
+B=16 (148.4 us); those shapes may take the same sharing where it helps (at B=16 every key head's q/k is
+also read by its 3 value-head pairs). The compute kernel's kernel-config text is near its size limit
+(a NoC-traced build of the prefill shape already fails with `state.offset <= max_size`): do not grow it;
+prefer removing code paths that the new scheme supersedes.
+
+**Done when**: measured device-ns on `perf_decode_b1` improves and moves toward 5.3 us, its precision
+gates hold, the golden suite is green, no regression across the config-spanning guard set of Refinement 2
+plus `model_prefill_4096`.
+
+### [ ] Refinement 6 — Prefill: take the per-row preparation off the ordered path
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES[3]` (`model_prefill_4096`). Measured on this op at bd772ee (operator,
+median of 11 launches): 6.41 ms on 48 cores, 1.57 us per token, 50.1 us per 32-token tile row, 128 tile
+rows in order; `compute_util`: COMPUTE BOUND (engine), vector engine 53% of the window, matrix engine 4%;
+62 of 110 cores idle. The op it replaces in the model runs this shape in 1.28 ms, so the model cannot
+take this op for prefill before it is at least there: the aim is well under 1.28 ms. The changelog's own
+split per tile row per core: gates 4, conv 13, L2 norm 11, chunk step 16, RMS norm 6 us (reader 14 and
+writer 5 hidden behind compute). Only the chunk step carries the state from one tile row to the next:
+gates, conv, L2 norm (34 of the 50 us) depend on the token rows alone, and the RMS norm on o alone. Take
+them off the ordered path: (a) prepare tile rows in parallel on the idle cores (several prep cores per
+key head / per pair feeding the core that owns the state in order, or the prep of tile row n+1 running
+while the chunk step of row n runs), so that the ordered part per tile row is the chunk step alone;
+(b) share the q/k prep per key head as in Refinement 5; (c) then shorten the chunk step itself (its
+matrix products on Kt x Vt tiles; the segment-pair form R-SEG of op_design.md if cores are still idle).
+Decide each by measurement. No SUPPORTED change.
+
+**Verifier notes**: the carried state and exp(g) stay float32 at every chunk boundary; the state-carry
+loose cases gate the state at 0.002 relative RMS. The compute kernel is near the kernel-config size
+limit: split work across kernels / cores rather than adding paths to one kernel. Must not slow
+`perf_decode_b1`, decode B=8 or B=16.
+
+**Done when**: measured device-ns on `model_prefill_4096` improves by a large factor over 6.41 ms (aim:
+under 1.28 ms), precision gates and every state-carry case hold, the golden suite is green, no
+regression on the decode model cases.
+
+### [ ] Refinement 7 — Decode B=8 and B=16: the input side at a full grid
+
+**Type**: perf
+
+**Goal**: `feature_spec.LOOSE_CASES[1]` and `[2]` (`model_decode_b8`, `model_decode_b16`). Measured on
+this op at bd772ee (operator, median of 11 launches): B=8 74.0 us on 96 cores (DRAM bank bound for its
+bytes 26.4 us, goal 29.3 us), B=16 148.4 us on 110 cores (bound 51.7 us, goal 57.5 us). Per-core spans
+B=16: min 40, median 103, max 151 us; compute waits for input 53% (B=8: 56%); busy-time balance 1.01,
+so the slow cores wait, they do not work more; `grid_check`: SHARED STARVED, grid row y3 at 138% of the
+median and y11 at 39%. The fastest core takes 40 us, about what B=1 takes: everything above that is the
+input side saturating as pairs are added. Captures: generated/chip_runs/gdn_v01_d8_*, gdn_v01_d16_*.
+Levers, by measurement: fewer and larger DRAM requests per core (whole aligned tiles / spans of 2 KiB
+and more, several in flight, one barrier per group); q/k of a key head read and prepared once for its 3
+value-head pairs and for all pieces; requests spread evenly over the DRAM banks and over both NoCs so
+that no bank or link is shared by many readers (`noc_placement`, bank stagger); the state (most of the
+bytes: 786 KB per sequence each way) read and written in large aligned transfers. No SUPPORTED change.
+
+**Verifier notes**: B=16 has 192 pairs on 110 cores (2 pairs on most cores): check the per-core order
+of the two pairs does not serialize their reads behind each other's compute. Must not slow
+`perf_decode_b1` or `model_prefill_4096`.
+
+**Done when**: measured device-ns on both cases improves toward the goals, precision gates hold, the
+golden suite is green, no regression on `perf_decode_b1` and `model_prefill_4096`.
