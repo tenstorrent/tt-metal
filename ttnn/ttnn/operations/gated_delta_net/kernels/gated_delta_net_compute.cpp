@@ -45,39 +45,38 @@ namespace ckl = compute_kernel_lib;
 
 namespace {
 
-constexpr uint32_t cb_state_in = 0;
-constexpr uint32_t cb_state_in_mm = 1;
-constexpr uint32_t cb_state = 2;
-constexpr uint32_t cb_state_mm = 3;
-constexpr uint32_t cb_state_out = 4;
-constexpr uint32_t cb_conv_w = 5;
-constexpr uint32_t cb_window = 6;
-constexpr uint32_t cb_y_qk = 7;
-constexpr uint32_t cb_v = 8;
-constexpr uint32_t cb_sq = 9;
-constexpr uint32_t cb_rinv = 10;
-constexpr uint32_t cb_kq_rows = 11;
-constexpr uint32_t cb_knT = 12;
-constexpr uint32_t cb_d = 13;
-constexpr uint32_t cb_gate_in = 14;
-constexpr uint32_t cb_gate_w = 15;
-constexpr uint32_t cb_gates = 16;
-constexpr uint32_t cb_tok_coef = 17;
-constexpr uint32_t cb_reads = 18;
-constexpr uint32_t cb_u = 19;
-constexpr uint32_t cb_o_acc = 20;
-constexpr uint32_t cb_z = 21;
-constexpr uint32_t cb_norm_w = 22;
-constexpr uint32_t cb_out_rows = 23;
-constexpr uint32_t cb_reduce_scaler = 24;
-constexpr uint32_t cb_u_f32 = 25;
-constexpr uint32_t cb_conv_acc = 26;
-constexpr uint32_t cb_sq_o = 28;
-constexpr uint32_t cb_rinv_o = 29;
+// CB indices and GDN_* spec constants are host defines (gated_delta_net_program_descriptor.py).
+constexpr uint32_t cb_state_in = GDN_CB_STATE_IN;
+constexpr uint32_t cb_state_in_mm = GDN_CB_STATE_IN_MM;
+constexpr uint32_t cb_state = GDN_CB_STATE;
+constexpr uint32_t cb_state_mm = GDN_CB_STATE_MM;
+constexpr uint32_t cb_state_out = GDN_CB_STATE_OUT;
+constexpr uint32_t cb_conv_w = GDN_CB_CONV_W;
+constexpr uint32_t cb_window = GDN_CB_WINDOW;
+constexpr uint32_t cb_y_qk = GDN_CB_Y_QK;
+constexpr uint32_t cb_v = GDN_CB_V;
+constexpr uint32_t cb_sq = GDN_CB_SQ;
+constexpr uint32_t cb_rinv = GDN_CB_RINV;
+constexpr uint32_t cb_kq_rows = GDN_CB_KQ_ROWS;
+constexpr uint32_t cb_knT = GDN_CB_KNT;
+constexpr uint32_t cb_d = GDN_CB_D;
+constexpr uint32_t cb_gate_in = GDN_CB_GATE_IN;
+constexpr uint32_t cb_gate_w = GDN_CB_GATE_W;
+constexpr uint32_t cb_gates = GDN_CB_GATES;
+constexpr uint32_t cb_tok_coef = GDN_CB_TOK_COEF;
+constexpr uint32_t cb_reads = GDN_CB_READS;
+constexpr uint32_t cb_u = GDN_CB_U;
+constexpr uint32_t cb_o_acc = GDN_CB_O_ACC;
+constexpr uint32_t cb_z = GDN_CB_Z;
+constexpr uint32_t cb_norm_w = GDN_CB_NORM_W;
+constexpr uint32_t cb_out_rows = GDN_CB_OUT_ROWS;
+constexpr uint32_t cb_reduce_scaler = GDN_CB_REDUCE_SCALER;
+constexpr uint32_t cb_u_f32 = GDN_CB_U_F32;
+constexpr uint32_t cb_conv_acc = GDN_CB_CONV_ACC;
+constexpr uint32_t cb_sq_o = GDN_CB_SQ_O;
+constexpr uint32_t cb_rinv_o = GDN_CB_RINV_O;
 
 constexpr uint32_t TILE_ROWS = 32;
-constexpr uint32_t CONV_TAPS = 4;
-constexpr uint32_t TOK_COEF_PAGES = 3;
 constexpr uint32_t COEF_ALPHA = 0;      // alpha_p in every row
 constexpr uint32_t COEF_BETA_SEL = 1;   // beta_p at row p, 0 elsewhere
 constexpr uint32_t COEF_ALPHA_SEL = 2;  // alpha_p at row p, 0 elsewhere
@@ -182,8 +181,8 @@ ALWI void conv_two_taps(uint32_t col, uint32_t tap0) {
     load(cb_window, tap0, 0);
     load(cb_window, tap0 + 1, 2);
     begin_loads(cb_conv_w);
-    load(cb_conv_w, CONV_TAPS * col + tap0, 1);
-    load(cb_conv_w, CONV_TAPS * col + tap0 + 1, 3);
+    load(cb_conv_w, GDN_CONV_TAPS * col + tap0, 1);
+    load(cb_conv_w, GDN_CONV_TAPS * col + tap0 + 1, 3);
     sfpu_bcast_row_init();
     sfpu_mul_bcast_row(0, 1);
     sfpu_mul_bcast_row(2, 3);
@@ -198,11 +197,11 @@ ALWI void conv_block() {
     cb_reserve_back(cb_y_qk, 2 * Kt);
     cb_reserve_back(cb_v, Vt);
     for (uint32_t col = 0; col < pair_cols; ++col) {
-        cb_wait_front(cb_window, CONV_TAPS);
+        cb_wait_front(cb_window, GDN_CONV_TAPS);
         cb_reserve_back(cb_conv_acc, 1);
         // Taps (0, 1) seed the partial sum, taps (2, 3) add onto it by packer L1 accumulation.
 #pragma GCC unroll 1
-        for (uint32_t tap0 = 0; tap0 < CONV_TAPS; tap0 += 2) {
+        for (uint32_t tap0 = 0; tap0 < GDN_CONV_TAPS; tap0 += 2) {
             conv_two_taps(col, tap0);
             tile_regs_wait();
             pack_reconfig_l1_acc(tap0 == 0 ? 0 : 1);
@@ -211,7 +210,7 @@ ALWI void conv_block() {
             tile_regs_release();
         }
         cb_push_back(cb_conv_acc, 1);
-        cb_pop_front(cb_window, CONV_TAPS);
+        cb_pop_front(cb_window, GDN_CONV_TAPS);
 
         cb_wait_front(cb_conv_acc, 1);
         tile_regs_acquire();
@@ -381,7 +380,7 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         ckl::MatmulBlockShape::of(2, Vt / MM_SUBBLOCK_W, 1, MM_SUBBLOCK_W, Kt, 1));
 
     // token vector (5b): u = beta_sel (*)col (v - alpha (*)col rk); o = alpha_sel (*)col ro + d (*)col u
-    cb_wait_front(cb_tok_coef, TOK_COEF_PAGES);
+    cb_wait_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
     cb_wait_front(cb_reads, 2 * Vt);
     cb_reserve_back(cb_u, Vt);
     cb_reserve_back(cb_u_f32, Vt);
@@ -484,7 +483,7 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
     }
     cb_pop_front(cb_u, Vt);
     cb_pop_front(cb_u_f32, Vt);
-    cb_pop_front(cb_tok_coef, TOK_COEF_PAGES);
+    cb_pop_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
 }
 
 // ---------------------------------------------------------------- rmsnorm_gate_block
@@ -541,7 +540,7 @@ void kernel_main() {
         const uint32_t seq_hi = seq_lo + T;
         const uint32_t first_tr = seq_lo / TILE_ROWS;
         const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
-        cb_wait_front(cb_conv_w, CONV_TAPS * pair_cols);
+        cb_wait_front(cb_conv_w, GDN_CONV_TAPS * pair_cols);
         cb_wait_front(cb_gate_w, 2);
         cb_wait_front(cb_norm_w, Vt);
 
@@ -567,7 +566,7 @@ void kernel_main() {
 
             rmsnorm_gate_block(bufs, v_eps_bits);
         }
-        cb_pop_front(cb_conv_w, CONV_TAPS * pair_cols);
+        cb_pop_front(cb_conv_w, GDN_CONV_TAPS * pair_cols);
         cb_pop_front(cb_gate_w, 2);
         cb_pop_front(cb_norm_w, Vt);
     }

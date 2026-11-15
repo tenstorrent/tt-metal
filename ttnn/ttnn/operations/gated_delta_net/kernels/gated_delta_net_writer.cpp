@@ -14,17 +14,17 @@
 
 namespace {
 
-constexpr uint32_t cb_state_out = 4;
-constexpr uint32_t cb_gates = 16;
-constexpr uint32_t cb_tok_coef = 17;
-constexpr uint32_t cb_out_rows = 23;
+// CB indices and GDN_* spec constants are host defines (gated_delta_net_program_descriptor.py).
+constexpr uint32_t cb_state_out = GDN_CB_STATE_OUT;
+constexpr uint32_t cb_gates = GDN_CB_GATES;
+constexpr uint32_t cb_tok_coef = GDN_CB_TOK_COEF;
+constexpr uint32_t cb_out_rows = GDN_CB_OUT_ROWS;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t TILE_BYTES = 4096;
 constexpr uint32_t TILE_WORDS = 1024;
 constexpr uint32_t SEG_BYTES = 64;
 constexpr uint32_t FACE_BYTES = 1024;
-constexpr uint32_t TOK_COEF_PAGES = 3;
 
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
 
@@ -73,7 +73,7 @@ void kernel_main() {
                 const uint32_t p = row - base_row;
                 const uint32_t alpha = gates[elem_index(p, gate_col)];
                 const uint32_t beta = gates[TILE_WORDS + elem_index(p, gate_col)];
-                cb_reserve_back(cb_tok_coef, TOK_COEF_PAGES);
+                cb_reserve_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
                 volatile tt_l1_ptr uint32_t* coef =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tok_coef));
                 for (uint32_t r = 0; r < TILE_ROWS; ++r) {
@@ -83,7 +83,7 @@ void kernel_main() {
                     coef[TILE_WORDS + e] = at_p ? beta : 0u;
                     coef[2 * TILE_WORDS + e] = at_p ? alpha : 0u;
                 }
-                cb_push_back(cb_tok_coef, TOK_COEF_PAGES);
+                cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
             }
             cb_pop_front(cb_gates, 2);
 

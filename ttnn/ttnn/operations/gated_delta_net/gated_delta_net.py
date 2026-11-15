@@ -9,10 +9,13 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .gated_delta_net_program_descriptor import L1_BUDGET, create_program_descriptor, l1_footprint_bytes
-
-TILE = 32
-HISTORY = 3
+from .gated_delta_net_program_descriptor import (
+    HISTORY,
+    L1_BUDGET,
+    TILE,
+    create_program_descriptor,
+    l1_footprint_bytes,
+)
 
 
 def default_compute_kernel_config():
@@ -59,7 +62,7 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "fp32_dest_acc_en": [True],
     "alignment": ["tile_aligned", "h_non_aligned"],
-    "sequence_mode": ["decode", "prefill"],
+    "sequence_mode": ["decode", "prefill", "batched_prefill"],
 }
 
 # ---------------------------------------------------------------------------

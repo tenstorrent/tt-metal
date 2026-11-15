@@ -15,8 +15,11 @@ compute page is Float32 (audit 2: no 16-bit page carries a DEST result).
 | cb_window | `4*max(Kt, Vt)*WINDOW_DEPTH` | 4*max(Kt,Vt) per group; capacity x2 for double buffering | {pair: streams, t: streams (1 tile row), K: streams (q, k groups pass through), V: streams (v group), c: spans one group, j: spans 4} | Float32 (U2D) | reader | compute | per channel group | double buffered (depth 2: reader assembles group g+1 during conv of g); not shared: concurrent with every per-tile-row buffer |
 | cb_y_qk | `2*Kt` | 2Kt | {pair: streams, t: spans 1 tile row (32 rows), K: spans Kt (q and k groups), V: streams (n/a), c: spans q,k groups, j: streams (collapsed)} | Float32 (U2D) | compute | compute | conv -> l2norm of one tile row | not with cb_kq_rows: different unpack mode (the L2 sums need U2D fp32, the matmul in0 needs srcA/srcB); not with cb_v: cb_v outlives it (kept through the token loop) |
 | cb_v | `Vt` | Vt | {pair: streams, t: spans 1 tile row, K: streams, V: spans Vt, c: v group, j: streams} | Float32 (U2D) | compute | compute | conv -> end of recurrence_block | concurrent with the token loop: no sharing |
-| cb_sq | `max(Kt, Vt)` | Kt (L2) or Vt (RMS) | {pair: streams, t: spans 1 tile row, K: spans Kt in l2norm, V: spans Vt in rmsnorm, c: streams, j: streams} | Float32 (U2D) | compute | compute | inside l2norm, then inside rmsnorm | shared across q, k, d and o squares (disjoint phases) |
-| cb_rinv | 2 | 2 column-0 tiles (q and k rsqrt) | {pair: streams, t: spans 1 tile row (column vector), K: streams (reduced), V: streams (reduced in rmsnorm), c: streams, j: streams} | Float32 (U2D) | compute | compute | inside l2norm, then rmsnorm | shared between L2 and RMS phases |
+| cb_sq | `Kt` | Kt (q, k, then qn*kn squares/products) | {pair: streams, t: spans 1 tile row, K: spans Kt, V: streams, c: streams, j: streams} | Float32 (U2D) | compute | compute | inside l2norm | shared by the q, k and d reductions (disjoint, same Kt block); not with the RMS squares: pushed in Kt blocks and read by index, sharing with Vt-block pushes left a block wrapped past the CB end (measured: wrong RMS factor) |
+| cb_sq_o | `Vt` | Vt | {pair: streams, t: spans 1 tile row, K: streams, V: spans Vt, c: streams, j: streams} | Float32 (U2D) | compute | compute | inside rmsnorm | split from cb_sq (wrap, above) |
+| cb_rinv | 2 | rsqrt q, k (column-0 tiles) | {pair: streams, t: spans 1 tile row; others streams (reduced)} | Float32 (U2D) | compute | compute | inside l2norm | not with cb_rinv_o, same wrap reason |
+| cb_rinv_o | 1 | 1 | {pair: streams, t: spans 1 tile row; others streams (reduced)} | Float32 (U2D) | compute | compute | inside rmsnorm | split from cb_rinv (wrap) |
+| cb_conv_acc | `CONV_ACC_DEPTH` = 1 | 1 | {pair: streams, t: spans 1 tile row, c: one column tile; others streams} | Float32 (U2D) | compute | compute | per column tile | partial tap sum (taps 0,1 packed, taps 2,3 added by packer L1 accumulation): a fp32 half-sync DEST window holds 4 tiles and every unpack-to-DEST load of a window precedes its first SFPU op, so the 8 tap/weight tiles of a column need two windows. Was capacity 2 in the build: compute-to-compute with one compute thread buys nothing from a second page; set to 1 by the verifier |
 | cb_kq_rows | `2*Kt` | 2Kt | {pair: streams, t: spans 1 tile row, K: spans Kt, V: streams, c: q,k groups, j: streams} | Float32 (std) | compute | compute | tile row | concurrent with the token loop (read matmul in0 every token) |
 | cb_knT | `Kt` | Kt | {pair: streams, t: spans 1 tile row (tokens on columns), K: spans Kt, V: streams, c: k group, j: streams} | Float32 (std) | compute | compute | tile row | concurrent with the token loop (increment in0 every token) |
 | cb_d | 1 | 1 (column-0 tile) | {pair: streams, t: spans 1 tile row, K: streams (reduced), V: streams, c: streams, j: streams} | Float32 (U2D) | compute | compute | tile row | concurrent with the token loop; 1 page constant in every axis but t |
@@ -25,17 +28,18 @@ compute page is Float32 (audit 2: no 16-bit page carries a DEST result).
 | cb_gates | 2 | 2 (alpha, beta) | {pair: streams, t: spans 1 tile row, K, V, c, j: streams} | Float32 (std; dataflow reads elements) | compute | writer | tile row | consumed by the writer across the whole token loop: concurrent |
 | cb_tok_coef | `3*TOK_COEF_DEPTH` | 3 (one token) | {pair: streams, t: streams (one token per fill), K, V, c, j: streams} | Float32 (U2D) | writer | compute | token | depth 2 so the writer runs one token ahead; not shared: concurrent with every token-loop buffer |
 | cb_reads | `2*Vt` | 2Vt | {pair: streams, t: streams (one token), K: streams (contracted), V: spans Vt, c, j: streams} | Float32 (U2D) | compute | compute | token | not with cb_u: cb_reads is consumed while cb_u is produced in the same op (concurrent); different unpack mode |
-| cb_u | `Vt` | Vt | {pair: streams, t: streams (one token), K: streams, V: spans Vt, c, j: streams} | Float32 (std) | compute | compute | token (vector op -> update) | different unpack mode from cb_reads / cb_o_acc (matmul in1) |
+| cb_u (+ alias cb_u_f32) | `Vt` | Vt | {pair: streams, t: streams (one token), K: streams, V: spans Vt, c, j: streams} | Float32 (std) | compute | compute | token (vector op -> update) | alias cb_u_f32 is a second format descriptor over the same allocation: u feeds the increment matmul (srcB view) and the fp32 o term (U2D view); lockstep push/pop |
 | cb_o_acc | `Vt` | Vt | {pair: streams, t: spans 1 tile row (one row per token, packer L1 accumulation), K: streams, V: spans Vt, c, j: streams} | Float32 (U2D) | compute | compute | tile row | live through the token loop: concurrent with cb_u, cb_reads |
 | cb_z | `Vt*ROW_DEPTH` | Vt | {pair: streams, t: spans 1 tile row, K: streams, V: spans Vt, c, j: streams} | Float32 (U2D; input dtype) | reader | compute | tile row | double buffered across tile rows |
 | cb_norm_w | `Vt` | Vt | {pair: streams (refilled per pair), t: streams (constant), K: streams, V: spans Vt, c, j: streams} | Float32 (U2D) | reader | compute | pair | constant per pair |
 | cb_out_rows | `Vt*ROW_DEPTH` | Vt | {pair: streams, t: spans 1 tile row, K: streams, V: spans Vt, c, j: streams} | Float32 (output dtype) | compute | writer | tile row | pack-into-destination (no intermediate between the norm chain and the writer); double buffered |
 | cb_reduce_scaler | 1 (2048 B page) | 1 | {pair, t, K, V, c, j: streams (constant)} | Float16_b (bf16-packed SUM scaler 1.0) | reader | compute | kernel | constant; literal 1 page |
+| cb_scratch | 1 | 3 rows | reader-private | Float32 | reader | reader | conv_state_out copy | 64 B row staging for the bit-exact conv_state_out copy; never seen by compute |
 
 Inventory decisions (Rule 3): conv packs straight into cb_y_qk / cb_v (no tap-sum
 intermediate); L2 scale packs straight into cb_kq_rows; the RMS norm chain packs into the writer's
 cb_out_rows; O accumulates in place by packer L1 accumulation (no read-modify-write buffer);
-cb_sq and cb_rinv are shared by the L2 and RMS phases; the state buffers are distinct only where
+cb_sq and cb_rinv were planned as shared by the L2 and RMS phases and split in the build (wrap, see their rows); the state buffers are distinct only where
 pipelining across pairs or T = 1 makes their lifetimes overlap. No L1 budget solve, safety fraction
 or blocking search exists: the footprint is a closed form checked once on host.
 
@@ -45,7 +49,7 @@ or blocking search exists: the footprint is a closed form checked once on host.
 |--------|-------|---------------------------|
 | Kt = K/32 | 1..4 in INPUTS (K <= 128) | `footprint <= L1_BUDGET` (host check in validate step 5); K multiple of 32 (alignment tagger: `w_non_aligned` refused) |
 | Vt = V/32 | 1..4 in INPUTS (V <= 128) | same |
-| STATE_IN_DEPTH, STATE_OUT_DEPTH | 1 | host constants |
+| STATE_IN_DEPTH, STATE_OUT_DEPTH, CONV_ACC_DEPTH | 1 | host constants |
 | WINDOW_DEPTH, ROW_DEPTH, TOK_COEF_DEPTH | 2 | host constants |
 | B, T, N, Hv, Hk, C | unbounded | appear in no capacity expression (work and DRAM traffic only) |
 | L1_BUDGET | `device L1 size - L1 reserved base` queried on host (1460288 B usable per risks.md R11) | device query |
@@ -54,17 +58,20 @@ or blocking search exists: the footprint is a closed form checked once on host.
 
 ```
 footprint = 4096 * ( Kt*Vt*(STATE_IN_DEPTH + 1 + STATE_OUT_DEPTH)
-                   + 13*Kt + 10*Vt + 2*ROW_DEPTH*Vt
-                   + max(Kt, Vt)*(4*WINDOW_DEPTH + 1)
-                   + 2*ROW_DEPTH + 3*TOK_COEF_DEPTH + 7 )
+                   + 14*Kt + 11*Vt + 2*ROW_DEPTH*Vt
+                   + 4*max(Kt, Vt)*WINDOW_DEPTH
+                   + CONV_ACC_DEPTH + 2*ROW_DEPTH + 3*TOK_COEF_DEPTH + 9 )
           + 2048
 ```
+
+This is `l1_footprint_bytes(Kt, Vt)` in `gated_delta_net_program_descriptor.py` (summed from
+`_cb_plan`, the one place CB page counts are written).
 
 Scaling: the state term scales with Kt*Vt and the two state depths; cb_conv_w, the per-tile-row
 buffers and the token buffers scale linearly with Kt and Vt; cb_window with max(Kt, Vt) and
 WINDOW_DEPTH; nothing scales with B, T, N, Hv or C. At Kt = Vt = 4 with Phase 0 depths:
-209 pages + 2048 B = 858112 B (0.59 of 1460288 B). At Kt = 2, Vt = 1 (the K > V entry): 81 pages +
-2048 B = 333824 B.
+216 pages + 2048 B = 886784 B (0.61 of 1460288 B). At Kt = 2, Vt = 1 (the K > V entry): 85 pages +
+2048 B = 350208 B.
 
 ## Data-movement budget
 
@@ -99,19 +106,8 @@ cross-core 0 B in both.
 > per pair, not by DRAM; the multicast layers onto the built structure (the injector is the pair
 > core with `h % r == 0`, receivers skip the q/k conv and L2 norm), so R-STEP keeps it reachable.
 
-## Implementation deltas (Phase 0 build)
-
-| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
-|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| cb_sq | `Kt` (was `max(Kt, Vt)`) | Kt | {t: spans 1 tile row, K: spans Kt; others streams} | Float32 (U2D) | compute | compute | inside l2norm | not with the RMS squares: pushed in Kt blocks and read by index; sharing with Vt-block pushes left a block wrapped past the CB end (measured: wrong RMS factor) |
-| cb_rinv | 2 | rsqrt q, k | {t: spans 1 tile row; others streams} | Float32 (U2D) | compute | compute | inside l2norm | not with cb_rinv_o, same wrap reason |
-| cb_sq_o | `Vt` | Vt | {t: spans 1 tile row, V: spans Vt} | Float32 (U2D) | compute | compute | inside rmsnorm | split from cb_sq (wrap) |
-| cb_rinv_o | 1 | 1 | {t: spans 1 tile row} | Float32 (U2D) | compute | compute | inside rmsnorm | split from cb_rinv (wrap) |
-| cb_conv_acc | `CONV_ACC_DEPTH` = 2 | 1 | {c: one column tile; t: 1 tile row} | Float32 (U2D) | compute | compute | per column tile | partial tap sum (taps 0,1 packed, taps 2,3 added by packer L1 accumulation): a DEST window holds 4 tiles and every unpack-to-DEST load of a window is issued before its first SFPU op, so the 8 tap/weight tiles of a column need two windows |
-| cb_u_f32 | alias of cb_u (`Vt`) | Vt | as cb_u | Float32 (U2D view) | compute | compute | token | second format descriptor over cb_u's allocation: u feeds the increment matmul (srcB view) and the fp32 o term (U2D view); lockstep push/pop |
-| cb_scratch | 1 | 3 rows | reader-private | Float32 | reader | reader | conv_state_out copy | 64 B row staging for the bit-exact conv_state_out copy |
+## Notes
 
 cb_tok_coef pages are (alpha in every row, beta at row p, alpha at row p): `o = alpha_sel * ro + d * u`
 needs no separate select multiply. cb_window hands off one column tile (4 tap pages) at a time with
 capacity `4 * max(Kt, Vt) * WINDOW_DEPTH`, so mixed q/k/v group sizes never wrap a block.
-Footprint at Kt = Vt = 4 with these deltas: 223 fp32 pages + 2048 B = 915456 B (0.63 of L1_BUDGET).

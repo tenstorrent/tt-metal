@@ -30,9 +30,10 @@ TOK_COEF_DEPTH = 2  # tokens of coefficient pages in flight
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 STATE_IN_DEPTH = 1  # pair states (S0) in flight
 STATE_OUT_DEPTH = 1  # finished pair states awaiting the writer
-CONV_ACC_DEPTH = 2  # column tiles of the partial tap sum in flight
+CONV_ACC_DEPTH = 1  # partial tap sum: compute-to-compute, one compute thread, so depth 1
 
-CONV_TAPS = 4  # spec constant (history 3 + current token), not a knob
+HISTORY = 3  # spec constant: conv_state rows per sequence
+CONV_TAPS = HISTORY + 1  # history rows + current token, not a knob
 TOK_COEF_PAGES = 3  # alpha (all rows), beta at row p, alpha at row p
 L1_BUDGET = 1460288  # usable L1 per Blackhole worker core (risks.md R11)
 
@@ -68,6 +69,12 @@ CB_SCRATCH = 27
 CB_SQ_O = 28
 CB_RINV_O = 29
 NUM_CB_SLOTS = 64
+
+
+def _kernel_defines():
+    """CB indices and spec constants for all three kernels (as GDN_<name>): defined here once, never restated."""
+    names = [n for n in globals() if n.startswith("CB_")] + ["HISTORY", "CONV_TAPS", "TOK_COEF_PAGES"]
+    return [(f"GDN_{n}", str(globals()[n])) for n in names]
 
 
 # Pages per CB; each entry is (index list sharing one allocation, pages, page bytes, unpack-to-dest).
@@ -236,7 +243,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for core, first_pair, count in assignment:
-        reader_rt[core.x][core.y] = reader_addrs + [first_pair, count, tokens, batch]
+        reader_rt[core.x][core.y] = reader_addrs + [first_pair, count, tokens]
         writer_rt[core.x][core.y] = writer_addrs + [first_pair, count, tokens]
         compute_rt[core.x][core.y] = [first_pair, count, tokens, _float_bits(value_dim * epsilon)]
 
@@ -247,12 +254,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         modes[idx] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_kernel_config.unpack_to_dest_mode = modes
 
+    defines = _kernel_defines()
     kernels = [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "gated_delta_net_reader.cpp"),
             core_ranges=all_cores,
             compile_time_args=reader_ct,
             runtime_args=reader_rt,
+            defines=defines,
             config=ttnn.ReaderConfigDescriptor(),
         ),
         ttnn.KernelDescriptor(
@@ -260,13 +269,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             core_ranges=all_cores,
             compile_time_args=writer_ct,
             runtime_args=writer_rt,
+            defines=defines,
             config=ttnn.WriterConfigDescriptor(),
         ),
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "gated_delta_net_compute.cpp"),
             core_ranges=all_cores,
             compile_time_args=compute_ct,
-            defines=[("INP_FLOAT32", "1")],
+            defines=defines + [("INP_FLOAT32", "1")],
             runtime_args=compute_rt,
             config=compute_kernel_config,
         ),
