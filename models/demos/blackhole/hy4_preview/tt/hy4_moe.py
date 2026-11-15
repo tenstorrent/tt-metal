@@ -29,6 +29,7 @@ class Hy4MoEBlock(DSV41MoEBlock):
         buffers=None,
         expert_state=None,
         router_mode=None,
+        tp32_only=None,
     ):
         self._topology, self._shared_in_moe = topology, shared_in_moe
         decode_cfg = self._configs(mesh_device, batch_per_device, topology, shared_in_moe)[0]
@@ -43,7 +44,7 @@ class Hy4MoEBlock(DSV41MoEBlock):
                 decode_cfg.dispatch_input_memory_config,
             )
         if (
-            os.environ.get("HY4_TP32_ONLY", "0") == "1"
+            os.environ.get("HY4_TP32_ONLY", "0") == "1" if tp32_only is None else tp32_only
         ):  # tp32-single: no ring expert weights, no dispatch/combine scratch (TP32 decode block only)
             self.decode = self._weightless_decode(mesh_device, decode_cfg, SimpleNamespace())
         elif expert_state is not None:

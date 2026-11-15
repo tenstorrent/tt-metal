@@ -247,12 +247,10 @@ class Hy4ChainLayer:
             from models.demos.blackhole.hy4_preview.tt.hy4_prefill_moe import Hy4UnifiedMoE
 
             tp32_only = (
-                os.environ.get("HY4_TP32_ONLY", "0") == "1"
-            )  # tp32-single: TP32 is the ONLY routed-expert copy (no ring weights, no prefill um)
+                os.environ.get("HY4_TP32_ONLY", "0") == "1" and not self.mtp
+            )  # product3: the MTP layer (one layer) keeps the ring experts (verify rows + prompt KV use its Hy4MoEBlock); tp32-single: TP32 is the ONLY routed-expert copy (no ring weights, no prefill um)
             if tp32_only:
-                assert (
-                    os.environ.get("HY4_MOE_TP32", "0") == "1" and not self.mtp
-                ), "HY4_TP32_ONLY needs HY4_MOE_TP32=1, MTP=0"
+                assert os.environ.get("HY4_MOE_TP32", "0") == "1", "HY4_TP32_ONLY needs HY4_MOE_TP32=1"
             W = load_moe_layer(L, W=ch.W, prefix="mtp.0." if self.mtp else None, load_experts=not tp32_only)
             self.t_read = time.time() - t0
             self.blk = Hy4MoEBlock(
@@ -260,6 +258,7 @@ class Hy4ChainLayer:
                 W,
                 batch_per_device=1,
                 buffers=ch.moe_buffers if os.environ.get("HY4_SHARE_MOE_BUF", "1") == "1" else None,
+                tp32_only=tp32_only,
             )
             if ch.moe_buffers is None:
                 ch.moe_buffers = (

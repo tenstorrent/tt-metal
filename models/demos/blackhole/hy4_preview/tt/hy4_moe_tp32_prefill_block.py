@@ -8,6 +8,8 @@ plan (host in v0) -> K1b/K2b (single weight copy, the decode W01/W2 v1 layout) -
 """
 import os
 
+import torch
+
 import ttnn
 from models.demos.blackhole.hy4_preview.tt.hy4_tp32_prefill import PlanTensors, Tp32PlanBuilder, Tp32PrefillExperts
 from models.demos.blackhole.hy4_preview.tt.hy4_tp32pf_plan import build_plan
