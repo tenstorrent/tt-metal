@@ -11,6 +11,7 @@ import json
 import threading
 
 import ttnn
+from dcp_oracle import tp_split_of
 
 from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing import _coordinator
@@ -38,7 +39,10 @@ def _label(placements, shape):
 
 
 def _info(key, placements, mesh_shape, local_shape, role="param"):
-    return TensorInfo(key, role, "BF16", "TILE", _label(placements, mesh_shape), tuple(local_shape), Identity())
+    label = _label(placements, mesh_shape)
+    return TensorInfo(
+        key, role, "BF16", "TILE", label, tuple(local_shape), Identity(), tp_split=tp_split_of(label, len(local_shape))
+    )
 
 
 def _record(rank, local_coords, mesh_id=0, shape=(1, 4)):
@@ -145,6 +149,7 @@ def _result(rank, files, entries, rng_text):
 
 
 def _entry(key, chunks, global_shape=(1, 1, 32, 64)):
+    label = _label([R, S(3)], (1, 4))
     return Entry(
         key=key,
         role="param",
@@ -153,9 +158,10 @@ def _entry(key, chunks, global_shape=(1, 1, 32, 64)):
         global_shape=global_shape,
         canonical_shape=global_shape,
         transform=Identity(),
-        label=_label([R, S(3)], (1, 4)),
+        label=label,
         live_keys=(key,),
         chunks=chunks,
+        tp_split=tp_split_of(label, len(global_shape)),
     )
 
 

@@ -293,7 +293,7 @@ def info_to_json(info: TensorInfo) -> dict:
         "live_keys": list(info.live_keys),
         "param_ref": info.param_ref,
         "state_path": list(info.state_path),
-        "tp_split": None if info.tp_split is None else list(info.tp_split),
+        "tp_split": list(info.tp_split),
     }
 
 
@@ -309,7 +309,7 @@ def info_from_json(value: dict) -> TensorInfo:
         live_keys=tuple(value["live_keys"]),
         param_ref=value["param_ref"],
         state_path=tuple(value["state_path"]),
-        tp_split=None if value["tp_split"] is None else tuple(int(n) for n in value["tp_split"]),
+        tp_split=tuple(int(n) for n in value["tp_split"]),
     )
 
 
