@@ -8,12 +8,16 @@ Per layer: router per row (unchanged Hy4Gate / skinny router) -> route words [T 
 -> reduce_scatter over the 8 columns (hidden) -> row-major -> reduce_scatter over the 4 rows (tokens) -> [1,1,T,HID/8].
 No dispatch, no combine, no tail, no expert mapping.
 """
+import os
+
 import torch
 
 import ttnn
 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32 import Tp32Experts
 
 HID = 6144
+PACK_U16 = os.environ.get("HY4_TP32_PACK", "") == "u16"
+RED_AG = os.environ.get("HY4_TP32_RED", "") == "ag"
 
 
 class Hy4MoeTp32Block:
@@ -64,6 +68,16 @@ class Hy4MoeTp32Block:
     def _pack_route(self, w, idx):
         """w bf16 RM [T,1,1,8], idx uint16 RM [T,1,1,8] -> int32 RM [1,1,1,16 T]: per token 8 ids then 8 words whose low 16 bits are the bf16 score bits."""
         T = self.T
+        if (
+            PACK_U16
+        ):  # row-major end to end: ids uint16 || bf16 score bits (bitcast) as uint16 [T,1,1,16] -> int32 words (same bytes as the tile path; experiment ab-2)
+            idx = ttnn.to_memory_config(idx, ttnn.DRAM_MEMORY_CONFIG)
+            w = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
+            r = ttnn.concat(
+                [ttnn.reshape(idx, [T, 1, 1, 8]), ttnn.bitcast(ttnn.reshape(w, [T, 1, 1, 8]), ttnn.uint16)], dim=3
+            )
+            r = ttnn.typecast(r, ttnn.int32)
+            return ttnn.reshape(r, [1, 1, 1, 16 * T])
         # the skinny router writes the dispatch formats (L1 sharded): bring both to interleaved DRAM first
         idx = ttnn.to_memory_config(idx, ttnn.DRAM_MEMORY_CONFIG)
         w = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
@@ -127,10 +141,16 @@ class Hy4MoeTp32Block:
             part = part2
         y = self._rs(part, 3, 1, ttnn.Topology.Ring)  # [1,1,Tt,HID/8]: summed over the 8 columns
         ttnn.deallocate(part)
-        y2 = self._rs(y, 3, 0, ttnn.Topology.Linear)  # [1,1,Tt,HID/32]: summed over the 4 rows too
-        ttnn.deallocate(y)
-        y3 = self._ag_rows(y2, 3)  # [1,1,Tt,HID/8]: all 32 chips summed, every row holds all Tt tokens
-        ttnn.deallocate(y2)
+        if RED_AG:  # one gather + local sum instead of RS rows + AG rows (HY4_TP32_RED=ag, experiment ab-1)
+            yg = self._ag_rows(y, 0)  # [4,1,Tt,HID/8]
+            ttnn.deallocate(y)
+            y3 = ttnn.sum(yg, dim=0, keepdim=True)
+            ttnn.deallocate(yg)
+        else:
+            y2 = self._rs(y, 3, 0, ttnn.Topology.Linear)  # [1,1,Tt,HID/32]: summed over the 4 rows too
+            ttnn.deallocate(y)
+            y3 = self._ag_rows(y2, 3)  # [1,1,Tt,HID/8]: all 32 chips summed, every row holds all Tt tokens
+            ttnn.deallocate(y2)
         z = ttnn.matmul(self.sel, y3, compute_kernel_config=self.ckc)  # [1,1,T,HID/8]: this row's own tokens
         ttnn.deallocate(y3)
         return z

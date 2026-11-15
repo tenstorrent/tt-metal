@@ -6,7 +6,9 @@ A subclass of the DSV4 ``DSV41MoEBlock`` (reused unchanged: _TailDecode, moe_tai
 hidden 6144, 256 experts, k 8, inter 2048, limit 10) and the gate (sigmoid, 256, k 8) differ.
 Placement: ``tt/hy4_moe_place.py`` (sequential: expert e on mesh column e // 32, row (e % 32) // 8).
 """
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import ttnn
 from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
@@ -40,7 +42,11 @@ class Hy4MoEBlock(DSV41MoEBlock):
                 decode_cfg.dispatch_input_expert_scores_memory_config,
                 decode_cfg.dispatch_input_memory_config,
             )
-        if expert_state is not None:
+        if (
+            os.environ.get("HY4_TP32_ONLY", "0") == "1"
+        ):  # tp32-single: no ring expert weights, no dispatch/combine scratch (TP32 decode block only)
+            self.decode = self._weightless_decode(mesh_device, decode_cfg, SimpleNamespace())
+        elif expert_state is not None:
             self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers, expert_state=expert_state)
         else:
             self._build_decode(mesh_device, decode_cfg, weights, shared_in_moe, buffers)
