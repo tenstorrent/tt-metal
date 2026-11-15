@@ -998,8 +998,30 @@ def shard_sel2(pair: int, r8: bool = True) -> bool:
     return on
 
 
+# rev 73 SEL2: dsa_shard.hpp r8_hist_packed / sel2_sum carry two counts per 32-bit word (16-bit halves), summed over a
+# lane's cores in registers -- exact while every count's total stays <= 65,535
+SEL2_MAX_COUNT = 0xFFFF
+
+
+def sel2_capacity_check(local_tokens: int) -> int:
+    """rev 73 SEL2 (GLM53_DSA_SHARD_SEL2): the local select's packed report / pull sums are exact while every count's
+    total <= SEL2_MAX_COUNT -- a count of the chip's closed local pools (one pooled key per KPOOL tokens, dsa_common.hpp).
+    `local_tokens`: the tokens one slot holds on EVERY chip (tt/dsa_shard.py ShardMap.local_cap of the cache's capacity)
+    -> its local pools; raises ValueError past 65,535 local pools (~8.4 M tokens on the 32-chip shard; the 1 M cache
+    holds 8,192). tt/stack_model.py allocate_kv_cache checks the cache it builds when SEL2 is on."""
+    kpool = header_constants("mla/dsa_common.hpp")["KPOOL"]
+    pools = -(-int(local_tokens) // kpool)
+    if pools > SEL2_MAX_COUNT:
+        raise ValueError(
+            f"GLM53_DSA_SHARD_SEL2=1: {pools} local pools per chip ({local_tokens} local tokens) > {SEL2_MAX_COUNT}: "
+            "the local select's packed 16-bit sums (dsa_shard.hpp sel2_sum) would overflow -- a smaller max_model_len, "
+            "or GLM53_DSA_SHARD_SEL2=0"
+        )
+    return pools
+
+
 def shard_prefilter(pair: int) -> bool:
-    """rev 75 GLM53_DSA_SHARD_PREFILTER (default 0): the exact merge pre-filter (dsa_shard.hpp PREFILTER, the kernels'
+    """rev 75 GLM53_DSA_SHARD_PREFILTER (default 0; on in tt/galaxy_defaults.py): the exact merge pre-filter (dsa_shard.hpp PREFILTER, the kernels'
     MLA_DSA_SHARD_PREFILTER; emulated by helper_merge prefilter=True): each merge helper reports the min over its lists
     of their TOPK / NCHIPS-th largest key, the coordinator broadcasts the min L, the helpers keep their keys >= L before
     the radix rounds -- the same T_g, k_rem and quotas over ~TOPK keys instead of NCHIPS x TOPK; the pair / the 2x4
@@ -1119,7 +1141,7 @@ RS1S_RELEASED_BY = "ag1"  # its link-0 / axis-0 connections open after AG1's wai
 
 
 def shard_rs1_split(pair: int) -> bool:
-    """rev 76 GLM53_DSA_SHARD_RS1_SPLIT (default 0): the 8x4 column scatter (RS1: the fp32 pass-0 / pass-1 slices, link
+    """rev 76 GLM53_DSA_SHARD_RS1_SPLIT (default 0; on in tt/galaxy_defaults.py): the 8x4 column scatter (RS1: the fp32 pass-0 / pass-1 slices, link
     1, bytes-bound on the column's middle link) over BOTH ethernet links -- the block of source p for destination q
     goes on link rs1_split_link(p, q): the rs1 lane keeps link 1's destinations, a second scatter lane (rs1a) sends
     link 0's after AG1 (link 0's holder on the column axis) closed it. The roots signal both lanes (the same counts, the
@@ -1151,6 +1173,53 @@ def rs1_split_srcs(p: int, n: int, link: int) -> tuple:
     got = [q for q in range(first, n, 2) if q != p]
     assert got == [q for q in range(n) if q != p and rs1_split_link(q, p) == link], (p, n, link, got)
     return first, n - first, 2
+
+
+def rs1_split_window_check(rs1_split: bool, dense_window: bool | None = None) -> None:
+    """rev 76 x GLM53_DSA_DENSE_WINDOW: refused at build (tt/tp_dsa_shard.py, tt/mk_mla.py). In an ALL-DENSE launch
+    (every row's context inside the dense window) the roots skip the split-K exchange and only signal the RS lanes
+    (att_dsa_shard_dm1.cpp all_dense), so nothing orders rs1a's close of link 0 (its waiter, after AG1) before the o_proj
+    AR lane 0 reopens link 0 for its own round (kernels/fabric_ar/lane_send.cpp FAR_LATE_OPEN): two workers could hold
+    one EDM sender channel -- a hang class. rs1 / rs2 on link 1 have the same structure with the split off (not refused
+    here: the dense window is opt-in, default 0, and was never validated with the sharded streams). dense_window None:
+    GLM53_DSA_DENSE_WINDOW (the knob of tt/prefill_tp.py dsa_dense_window)."""
+    if dense_window is None:
+        dense_window = os.environ.get("GLM53_DSA_DENSE_WINDOW", "0") == "1"
+    if rs1_split and dense_window:
+        raise ValueError(
+            "GLM53_DSA_SHARD_RS1_SPLIT=1 (a galaxy default) with GLM53_DSA_DENSE_WINDOW=1 (opt-in): in an all-dense "
+            "launch nothing orders the rs1a lane's close of fabric link 0 before the o_proj all-reduce lane 0 reopens "
+            "it (two workers on one EDM sender channel: a hang class) -- set GLM53_DSA_SHARD_RS1_SPLIT=0 to use the "
+            "dense window (rs1 / rs2 on link 1 have the same structure with the split off: the window is unvalidated "
+            "with the sharded streams either way)"
+        )
+
+
+def dsa_lane_count(n_free: int, helpers: int, chunks: int, env=os.environ) -> tuple:
+    """rev 60 MkMla.reserve_lane_cores' token-lane count (pure) -> (p, want): want = GLM53_MLA_DSA_LANES (default 8)
+    rounded down to a power of two <= chunks / helpers (every lane holds `helpers` merge helpers); p the same and also
+    <= n_free (the free cores; p < want: capped, MK_SHARD_LANES)"""
+    v, p, want = int(env.get("GLM53_MLA_DSA_LANES", "8")), 1, 1
+    while want * 2 <= min(v, chunks // max(1, helpers)):
+        want *= 2
+    while p * 2 <= min(v, chunks // max(1, helpers), int(n_free)):
+        p *= 2
+    return p, want
+
+
+def rs1_split_lane_check(n_free_on: int, helpers: int, chunks: int, env=os.environ) -> int:
+    """rev 76: the rs1a lane takes one free core ahead of the DSA token lanes' index cores (tt/tp_dsa_shard.py), so the
+    knob-off build has n_free_on + 1 free cores for them. Raises ValueError when that core lowers the token-lane count:
+    the knob-on build would no longer run the knob-off's lanes (knob-on == knob-off exactness). -> the lane count"""
+    on, _ = dsa_lane_count(n_free_on, helpers, chunks, env)
+    off, _ = dsa_lane_count(int(n_free_on) + 1, helpers, chunks, env)
+    if on < off:
+        raise ValueError(
+            f"GLM53_DSA_SHARD_RS1_SPLIT=1: the rs1a lane core leaves {n_free_on} free cores for the DSA token lanes -> "
+            f"{on} lanes vs {off} with the split off (GLM53_MLA_DSA_LANES, {helpers} merge helpers per lane): the build "
+            "would not equal the knob-off one -- free a core or set GLM53_DSA_SHARD_RS1_SPLIT=0"
+        )
+    return on
 
 
 def rs1_split_header_check() -> None:

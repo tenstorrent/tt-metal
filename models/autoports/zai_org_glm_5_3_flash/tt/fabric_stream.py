@@ -179,6 +179,9 @@ class _FabricStream:
     # rev 76 (tt/tp_dsa_shard.py GLM53_DSA_SHARD_RS1_SPLIT): the name of the stream whose consumers' signal releases this
     # one's link (its waiter signals after it closed the link) -- None: the AR lane of link_base releases it
     released_by = None
+    # rev 76 (FabricStreamScatter srcs=, the split RS1): position p -> (first source, sources, stride) of the waiter's
+    # strided sources (fs_send.cpp FS_SRC_STRIDE) -- None: every other position, in order
+    srcs = None
 
     def __init__(self, mesh, chunks: int, hidden: int, dst_rows: int, *, lanes=None, nb: int = 16, slots: int = 4,
                  wait: tuple | None = None, cons: tuple | None = None, link_base: int = 0,
@@ -240,6 +243,9 @@ class _FabricStream:
         assert tuple(self.lanes[0]) in {tuple(v) for v in score} and len(set(score)) == len(score), (score, self.lanes)
         mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
                                ttnn.ShardSpec(_crs(score), [1, words], ttnn.ShardOrientation.ROW_MAJOR))  # fmt: skip
+        # a shared sync tensor stays its owner's (release frees only an own one, as y: rs1a on rs1's, a SHARE_SYNC
+        # layer's streams on the first layer's)
+        self.own_sync = sync is None
         if sync is not None:  # shared: the same lane-0 core and the same word count
             assert tuple(sync.shape)[-1] == words and sync.memory_config() == mc, (tuple(sync.shape), words)
             self.sync = sync
@@ -325,7 +331,7 @@ class _FabricStream:
             rdefs.append(("FS_SCATTER", "1"))
             if self._split_args(p, dsts):
                 rdefs.append(("FS_WAIT2", "1"))
-            if getattr(self, "srcs", None) is not None:  # rev 76: the waiter's strided sources (fs_send.cpp)
+            if self.srcs is not None:  # rev 76: the waiter's strided sources (fs_send.cpp)
                 sdefs.append(("FS_SRC_STRIDE", "1"))
         if self.keypack:  # rev 68: fs_read.cpp packs the staged chunk, fs_send.cpp ships its first ppc pages
             yp = self.keypack[1] + 1
@@ -411,7 +417,7 @@ class _FabricStream:
         return self.y
 
     def release(self):
-        for t in (self.y, self.sync) if self.own_y else (self.sync,):
+        for t in ((self.y,) if self.own_y else ()) + ((self.sync,) if self.own_sync else ()):
             ttnn.deallocate(t)
 
 

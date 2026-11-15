@@ -113,6 +113,7 @@ class TPMlaShard(TPM.TPMla):
         self.rs1s = SP.shard_rs1_split(self.P)
         if self.rs1s:
             SP.rs1_split_header_check()  # the roots' / fs_send's / mk_mla's halves of the protocol agree with the plan
+            SP.rs1_split_window_check(True)  # GLM53_DSA_DENSE_WINDOW is refused with the split (link 0's close order)
             taken = {tuple(e) for e in ex}
             spare = [tuple(v) for v in free if tuple(v) not in taken]
             own = (stream_share.lane_core.get(SP.RS1S_NAME) if stream_share is not None else None) or None
@@ -138,7 +139,10 @@ class TPMlaShard(TPM.TPMla):
             rest = [v for v in free if tuple(v) not in {tuple(e) for e in ex}]
             # NCHIPS merge helpers per lane; rev 64 (GLM53_DSA_SHARD_KPH, the 8x4): NCHIPS / KPH -- KPH 4 (or "auto")
             # reserves up to 8 lane cores (GLM53_MLA_DSA_LANES, default 8; a cap by the free cores prints MK_SHARD_LANES)
-            self.ix_lane_cores = self.mk.reserve_lane_cores(rest, self.n // MK.shard_kph_reserve(self.n, self.P))
+            helpers = self.n // MK.shard_kph_reserve(self.n, self.P)
+            if self.rs1s:  # rev 76: rs1a took a core the knob-off build's token lanes may use -- never fewer lanes
+                SP.rs1_split_lane_check(len(rest), helpers, self.mk.chunks)
+            self.ix_lane_cores = self.mk.reserve_lane_cores(rest, helpers)
         for t in self.stream_ts:
             self.mk.shard_lanes_check(t, self.L, self.n, self.kph(t))
         self.link_audit, self.target_audit, self.header_audit, self.census, self.censuses = {}, {}, {}, {}, {}
@@ -652,7 +656,8 @@ class TPMlaShard(TPM.TPMla):
     def release_streams(self):
         for st in self.streams.values():
             for o in st["objs"].values():
-                o.release()  # (AG2 lands in AG1's y: only AG1 frees it)
+                o.release()  # (AG2 lands in AG1's y, rs1a in rs1's y / sync, a SHARE_SYNC layer's streams on the first
+                # layer's syncs: only the owner of a y / sync frees it -- _FabricStream.own_y / own_sync)
             for k in ("x_ag", "x_rs", "x_rs2", "x_rs2b", "q_asm"):
                 if st.get(k) is not None:
                     ttnn.deallocate(st[k])

@@ -28,6 +28,7 @@ import math
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_KDA
@@ -50,6 +51,7 @@ BF16, FP32 = ttnn.bfloat16, ttnn.float32
 TILE = 32
 HIDDEN = 4096
 KDIR = os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels")
+_LAZY_CAPTURE_LOGGED: list = []  # SpecMTP._replay's lazy-capture warning, once per process
 SPEC_REV = 6  # 6: SPEC_MODE 4 RING (GLM53_SPEC_MTP_SPARSE: the MTP layer's own DSA ring around the catch-up / chain); 5: SPEC_PARTIAL (an inactive group: rows -1, record c -1); 4: SPEC_GROUPS ACCEPT addresses user u's ring at slot u (K + 1) of each layer's tensor (R bases, not R x G); 3: ACCEPT moves the DSA rings (mk_mla rev 56); a define on every Stage 17 kernel (a long-lived process caches FILE_PATH binaries by path + args + defines)
 SEM_HEAD, SEM_HN = 0, 4  # kernels/head/head_common.hpp roles (owners: partial-sum all-gather; readers: hcat landed)
 
@@ -778,7 +780,7 @@ class SpecMTP:
         self.heads = None  # clones made in prepare() (the base head's h exists after its first call)
         self.traces = {}
         self.counters = dict(steps=0, boots=0, captures=0, enters=0, leaves=0, slot_copies=0, prefill_rows=0,
-                             prefill_launches=0)  # fmt: skip
+                             prefill_launches=0, lazy_captures=0)  # fmt: skip
 
     # ------------------------------------------------------------------ construction
     def _build_verify_stacks(self):
@@ -1391,6 +1393,18 @@ class SpecMTP:
         self.traces = {}
 
     def _replay(self, name: str, blocking: bool = False):
+        if not self.traces:
+            # a LAZY capture: StackBackend._capture_spec captures every step at the first decode capture (82b19a1646d);
+            # a replay before it (an untraced flow, or a step that capture missed) captures here, inside the decode --
+            # a multi-second stall the first time (mu5_alt_live6). Not an assert: no startup path proves every replay
+            # follows the capture. Counted per step, logged once per process
+            self.counters["lazy_captures"] = self.counters.get("lazy_captures", 0) + 1
+            if not _LAZY_CAPTURE_LOGGED:
+                _LAZY_CAPTURE_LOGGED.append(True)
+                logger.warning(
+                    f"SpecMTP: lazy capture of the speculative traces at the first replay ({name!r}, K {self.K}, groups "
+                    f"{self.groups}): the startup capture (StackBackend._capture_spec) did not run for this step"
+                )
         tr = self.capture()[name]
         if isinstance(tr, tuple):
             tr[1]()
@@ -1622,10 +1636,20 @@ class SpecSwitch:
         """EVERY step's traces at the backend's startup spec capture (StackBackend: spec.capture()). Through __getattr__
         only the current step captured: the alternate's step / boot traces then captured at its first entry, inside the
         decode (mu5_alt_live6 2026-11-13: 64 steps in 11.2 s, captures 2) -- a multi-second stall the first time 5..8
-        users are live. Returns the current step's traces (the single-step contract)."""
-        for x in self.steps:
-            x.capture()
+        users are live. Returns the current step's traces (the single-step contract). All or nothing: a step's capture
+        that raises releases every step's traces (each SpecMTP.capture releases its own half-captured set) and
+        re-raises -- a later capture never meets some steps captured and the others not."""
+        try:
+            for x in self.steps:
+                x.capture()
+        except BaseException:
+            self.release()
+            raise
         return self.steps[self.__dict__["cur"]].traces
+
+    def captured(self) -> bool:
+        """every step holds its traces (StackBackend._capture_spec: .traces is the current step's only)"""
+        return all(x.traces for x in self.steps)
 
     def release(self) -> None:
         for x in self.steps:

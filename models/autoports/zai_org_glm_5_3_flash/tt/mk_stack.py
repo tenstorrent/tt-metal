@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt import cb_guard
@@ -69,6 +70,7 @@ class _Capture:
 # the allocator before any AllocPool patches ttnn.empty: this module is imported before a pool can exist, so the
 # persistent (never re-requested) buffers of mk_moe / mk_experts take it instead of a pool slot
 REAL_EMPTY = ttnn.empty
+_POST_CAPTURE_LOGGED: list = []  # AllocPool's allocation-after-capture warning, once per process
 
 
 class AllocPool:
@@ -98,12 +100,35 @@ class AllocPool:
         # would serve two requests of one build); lend_child: lend_from reaches the child too (the DSA side's s1);
         # lend_alias: the alias (narrow-width / verify) builds borrow too (the DSA side's; the KDA side's never does)
         self.fam, self.lend_child, self.lend_alias = set(), True, True
+        # frozen after the first trace capture (StackBackend._capture -> freeze): every program was built (and its pool
+        # tensors allocated) before it, so a NEW tensor now -- a program first built after a capture -- would sit in L1
+        # / DRAM a captured trace may also use. Not refused (unvalidated on device): logged once, counted
+        self.frozen, self.post_capture_allocs = False, 0
+
+    def freeze(self) -> None:
+        """a trace was captured: allocations from now on are logged (once per process) and counted (+ the child's)"""
+        self.frozen = True
+        if self._child is not None:
+            self._child.freeze()
+
+    def _alloc(self, shape, a, kw):
+        """the real allocator (ttnn.empty before the pool), watched once the pool is frozen"""
+        if self.frozen:
+            self.post_capture_allocs += 1
+            if not _POST_CAPTURE_LOGGED:
+                _POST_CAPTURE_LOGGED.append(True)
+                logger.warning(
+                    f"AllocPool: a {tuple(int(v) for v in shape)} tensor allocated after the first trace capture (a "
+                    "program built after it): it may overlap a captured trace's buffers (counted: post_capture_allocs)"
+                )
+        return self.orig(shape, *a, **kw)
 
     def child(self) -> "AllocPool":
         """a separate pool (the layers' persistent hand-off buffers: never aliased with a build's intermediates)"""
         if self._child is None:
             self._child = AllocPool()
             self._child.fam = self.fam  # (one family: the child's own tensors never come back to the parent either)
+            self._child.frozen = self.frozen
             if self.lender is not None and self.lend_child:  # the same lender; shared claims keep the takes disjoint
                 self._child.lend_from(self.lender, self.claims)
         self._child.alias = self.alias
@@ -170,7 +195,7 @@ class AllocPool:
         lst = self.lists.setdefault(k, [])
         if i == len(lst):
             b = self._borrow(k)
-            lst.append(b if b is not None else self._own(self.orig(shape, *a, **kw)))
+            lst.append(b if b is not None else self._own(self._alloc(shape, a, kw)))
         self._take(lst[i])
         return lst[i]
 
@@ -202,7 +227,7 @@ class AllocPool:
             if vk is not None:
                 self.prefix_slots[pk] = vk
                 return self._take_prefix(vk)
-            lst.append(self._own(self.orig(pad if pad != want else shape, *a, **kw)))  # a tensor of its own
+            lst.append(self._own(self._alloc(pad if pad != want else shape, a, kw)))  # a tensor of its own
         self.real[k] = j + 1
         base = lst[j]
         if (
@@ -233,8 +258,8 @@ class AllocPool:
             hit = self.redo.get(ck)
             if hit is None:
                 nvk = self._prefix_alias(want, pad, k)
-                hit = ("prefix", nvk) if nvk is not None else ("own", self._own(self.orig(
-                    pad if pad != want else shape, *a, **kw)))  # fmt: skip
+                hit = ("prefix", nvk) if nvk is not None else ("own", self._own(self._alloc(
+                    pad if pad != want else shape, a, kw)))  # fmt: skip
                 self.redo[ck] = hit
                 break
             got = self.prefix_base[hit[1]] if hit[0] == "prefix" else hit[1]

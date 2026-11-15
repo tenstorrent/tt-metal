@@ -881,6 +881,15 @@ class StackBackend(ModelBackend):
             bpu = DSH.UNIT // bs
             nb_dev = OwnerBlockMap.local_blocks_for(self.tp, nb, max_batch, bpu)
             page_tokens = DSH.ShardMap(self.tp, bs).local_cap(bps * bs)  # a slot's local tokens on EVERY chip
+            from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+            # rev 73 SEL2 (a galaxy default): its packed 16-bit sums count this cache's local pools (<= 65,535)
+            try:
+                pair = SP.Geometry(*(int(v) for v in self.mesh.shape)).P
+            except (TypeError, ValueError):  # (a mesh without a shard geometry: TPMlaShard refuses it, no SEL2)
+                pair = 0
+            if SP.shard_sel2(pair):
+                SP.sel2_capacity_check(page_tokens)
             kv.extra["dsa_shard"] = (self.tp, nb_dev, bpu)
             kv.extra["bps_local"] = page_tokens // bs
         kv.extra["latent"] = {i: self.seq[i]["attn"].allocate_cache(nb_dev) for i in dsa}
@@ -2448,7 +2457,10 @@ class StackBackend(ModelBackend):
         L1 buffer allocated after the decode captures (n29h7s2 cf3e run 1756: a static-CB clash at 1,242,240 on cores
         0-0..2-0, TPMoE at the verify width). Idempotent (capture() returns the captured set)."""
         spec = getattr(self, "spec", None)
-        if spec is None or spec.traces:
+        # SpecSwitch (GLM53_SPEC_MULTI_ALT / _LONE): EVERY step's traces -- its .traces is the current step's only, so a
+        # switch whose current step was captured would skip the others (then captured lazily, inside the decode)
+        captured = getattr(spec, "captured", None) if spec is not None else None
+        if spec is None or (captured() if callable(captured) else spec.traces):
             return
         if os.environ.get("GLM53_L1_REPORT") == "1":
             l1_report(self.mesh, "spec capture (startup)", root=self)
@@ -2482,6 +2494,9 @@ class StackBackend(ModelBackend):
                 kv.extra["tee"].run()
         finally:
             ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+        for key in ("pool", "dsa_pool"):  # mk_stack.AllocPool.freeze: an allocation after a capture is logged / counted
+            if kv.extra.get(key) is not None:
+                kv.extra[key].freeze()
         if before is not None:  # tensors created inside the capture and still referenced after it (they would be
             # overwritten by the replay of an earlier trace): shape, dtype and who holds them
             import gc

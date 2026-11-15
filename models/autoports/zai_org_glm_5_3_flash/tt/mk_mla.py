@@ -66,6 +66,9 @@ SEM_INVH = 14  # mhc_pre's root -> every reader: the deferred 1/rms(h) tile land
 # tiles of the FPU rescales, AID = the identity tile; kernels/mla/att_c.cpp)
 ACB = dict(AQ=10, AK=11, AMASK=12, AINFO=13, AS=14, AM=15, AP=16, AE=17, APA=18, APB=19, ARX=20, ACOEF=21, ASEND=22,
            AOUT=23, ASCR=24, APAO=25, APBO=26, ARXO=27, ASENDO=28, ADIAG=29, AID=30)  # fmt: skip
+# CB_ARX: ONE stats message of STAT_TILES (m, l) fp32 pages (kernels/mla/att_common.hpp) -- rev 65 COMB's FOLD2 reads
+# round 2's stats over the rows round 1 wrote in the same two pages (att_c.cpp fold2; MkMla.__call__ asserts it)
+ATT_ARX_PAGES = 2
 ATT_NKMAX = 3  # row tiles per partial (kernels/mla/att_common.hpp NKMAX): ceil(65 / 32) for the 2051-row dense-exact
 # range on 32 chunk cores; DSA batches of selected pools hold <= 3 tiles too
 ACB1 = {k: v + 22 for k, v in ACB.items()}  # the attention CBs of the one-program half's owners: 32..52
@@ -1299,11 +1302,10 @@ class MkMla(_MlaBase):
         KPH on the 8x4) and <= len(free) (a cap by the free cores is printed: MK_SHARD_LANES);
         -> the cores taken (1 lane: none)"""
         assert self.dsa_shard and not self.co_cores, "reserve_lane_cores: the shard variant, once"
-        v, p, want = int(os.environ.get("GLM53_MLA_DSA_LANES", "8")), 1, 1
-        while want * 2 <= min(v, self.chunks // max(1, helpers)):
-            want *= 2
-        while p * 2 <= min(v, self.chunks // max(1, helpers), len(free)):
-            p *= 2
+        from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+        v = int(os.environ.get("GLM53_MLA_DSA_LANES", "8"))
+        p, want = SP.dsa_lane_count(len(free), helpers, self.chunks)  # (tp_dsa_shard's RS1-split check: the same count)
         if p < want:
             print(f"MK_SHARD_LANES capped: {p} lane cores of {want} (GLM53_MLA_DSA_LANES {v}, {helpers} merge helpers "
                   f"per lane, {len(free)} free cores)", flush=True)  # fmt: skip
@@ -1445,6 +1447,10 @@ class MkMla(_MlaBase):
             self.shard_lanes_check(t, int(shard.get("line", 1)), int(shard["C"]), int(shard.get("kph", 1)))
         if shard is not None and dsa_state is not None and dsa_state.get("window") is not None:
             # the dense window (the caller's replicated store): the split-K phase's all-dense pass + the latent write
+            if shard.get("rs1_split"):  # rev 76: refused with the split RS1 (link 0's close order: shard_plan)
+                from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+                SP.rs1_split_window_check(True, True)
             win = dsa_state["window"]
             assert int(win.shape[-2]) == 64 and int(win.shape[0]) % DSA_WIN_BLOCKS == 0, tuple(win.shape)
             s0 = int(dsa_state.get("s0", 0))
@@ -1595,6 +1601,14 @@ class MkMla(_MlaBase):
         kcores = mhc.kcores
         if shard is not None and shard.get("comb") and self.att_obf16(t):  # rev 65: the stats rotations ride CB_ARXO
             raise ValueError("GLM53_DSA_SHARD_COMB=1 needs fp32 O partials (GLM53_MLA_ATT_OBF16 / NKMAX > 3: bf16)")
+        if shard is not None and shard.get("comb"):
+            # FOLD2 (att_c.cpp fold2): round 2's stats message lands in CB_ARX, whose rows outside its slice are the
+            # pages round 1 rewrote (finite: no matmul meets an inf) -- only while CB_ARX is ONE STAT_TILES-page fp32
+            # message; a deeper CB would hand round 2 pages no round of this launch wrote
+            from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
+
+            st = SP.header_constants("mla/att_common.hpp")["STAT_TILES"]
+            assert ATT_ARX_PAGES == st == 2, ("COMB / FOLD2: CB_ARX = one 2-page fp32 stats message", ATT_ARX_PAGES, st)
         att_cbs = attention_cbs(kcores, ACB1, page_table, dsa_keys=self._dsa_k, dsa_cand=self.dsa_compact(),
                                 dsa_sb=self.dsa_sb(), nk=self.att_nkmax(t),
                                 obf16=self.att_obf16(t), shard_t=-(-t // self.att_lanes(t)) if shard is not None else 0,
@@ -2462,7 +2476,7 @@ def attention_cbs(cores, acb: dict, page_table, dsa_keys: int = 0, dsa_cand: boo
     return [cb(acb["AQ"], BF16, 2048, 16), cb(acb["AK"], BF16, 2048, nk * 16), cb(acb["AMASK"], FP32, 4096, 1),
             cb(acb["AINFO"], ttnn.uint32, 64, 1), cb(acb["AS"], FP32, 4096, nk), cb(acb["AM"], FP32, 4096, 1),
             cb(acb["AP"], BF16, 2048, nk), cb(acb["AE"], FP32, 4096, nk), cb(acb["APA"], FP32, 4096, 2),
-            cb(acb["APB"], FP32, 4096, 2), cb(acb["ARX"], FP32, 4096, 2), cb(acb["ACOEF"], FP32, 4096, 2),
+            cb(acb["APB"], FP32, 4096, 2), cb(acb["ARX"], FP32, 4096, ATT_ARX_PAGES), cb(acb["ACOEF"], FP32, 4096, 2),
             cb(acb["ASEND"], FP32, 4096, 2), cb(acb["AOUT"], BF16, 2048, 16), cb(acb["APAO"], odt, ob, 16),
             cb(acb["APBO"], odt, ob, 16), cb(acb["ARXO"], odt, ob, 16), cb(acb["ASENDO"], odt, ob, 16),
             cb(acb["ADIAG"], FP32, 4096, 2), cb(acb["AID"], FP32, 4096, 1),

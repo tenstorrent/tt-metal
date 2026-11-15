@@ -152,6 +152,46 @@ _PF_SPLIT_COSTS_DEFAULT = (
 )
 
 
+def pf_tail_split_mode(env=os.environ) -> tuple:
+    """GLM53_PF_TAIL_SPLIT (Glm53Generator._tail_split) -> (auto, k): "auto" -> (True, 0), an integer k >= 0 -> (False, k)
+    (0 / 1: off). Anything else raises ValueError -- at the generator's construction, not at a launch's first long
+    prefill."""
+    raw = (env.get("GLM53_PF_TAIL_SPLIT", "0") or "0").strip().lower()
+    if raw == "auto":
+        return True, 0
+    try:
+        k = int(raw)
+    except ValueError:
+        k = -1
+    if k < 0:
+        raise ValueError(
+            f"GLM53_PF_TAIL_SPLIT={raw!r}: 'auto' (the cost-table rule) or an integer k (0 = off; k >= 2: a request's "
+            "last chunk of up to k smallest-bucket pieces is split)"
+        )
+    return False, k
+
+
+def pf_split_costs(spec: Optional[str] = None) -> dict:
+    """GLM53_PF_SPLIT_COSTS (default the BH Galaxy 8x4 SEQ-1M key bench, _PF_SPLIT_COSTS_DEFAULT) -> {bucket: [(start,
+    ms), ...] ascending}: "bucket:start=ms,start=ms,...;bucket:...". A malformed table raises ValueError (checked at the
+    generator's construction)."""
+    if spec is None:
+        spec = os.environ.get("GLM53_PF_SPLIT_COSTS", "") or _PF_SPLIT_COSTS_DEFAULT
+    table = {}
+    try:
+        for part in spec.split(";"):
+            if not part.strip():
+                continue
+            bk, pts = part.split(":", 1)
+            table[int(bk)] = sorted((int(a), float(m)) for a, m in (x.split("=") for x in pts.split(",") if x.strip()))
+    except ValueError as e:
+        raise ValueError(f"GLM53_PF_SPLIT_COSTS={spec!r}: 'bucket:start=ms,...;bucket:...' ({e})") from None
+    empty = [b for b, pts in table.items() if not pts]
+    if empty:
+        raise ValueError(f"GLM53_PF_SPLIT_COSTS={spec!r}: no (start, ms) point for bucket(s) {empty}")
+    return table
+
+
 def plan_prefill(seq_len: int, start_pos: int = 0, chunk: int = PREFILL_CHUNK, align: int = MODEL_PREFILL_ALIGN):
     """Chunk plan for `seq_len` new tokens starting at absolute position `start_pos`: full `chunk`-token chunks and
     one partial last chunk padded to `align`. Any logical length >= 1 is accepted."""
@@ -1105,6 +1145,10 @@ class Glm53Generator(_ReadinessGenerator):
         }
         self._bindings: dict[int, _CacheBinding] = {}
         self._own: Optional[_CacheBinding] = None
+        # GLM53_PF_TAIL_SPLIT / GLM53_PF_SPLIT_COSTS: refused here (a typo stops the launch, not its first long prefill);
+        # the cost table is kept, the split mode is read per call (_tail_split)
+        pf_tail_split_mode()
+        self._split_costs = pf_split_costs()
 
     # ================================================================================================ context / slots
     @property
@@ -1651,17 +1695,8 @@ class Glm53Generator(_ReadinessGenerator):
         table (GLM53_PF_SPLIT_COSTS, default the BH Galaxy 8x4 SEQ-1M key bench): piecewise linear in the start, clamped
         at both ends; None for a bucket the table does not carry"""
         table = getattr(self, "_split_costs", None)
-        if table is None:
-            table = {}
-            spec = os.environ.get("GLM53_PF_SPLIT_COSTS", "") or _PF_SPLIT_COSTS_DEFAULT
-            for part in spec.split(";"):
-                if not part.strip():
-                    continue
-                bk, pts = part.split(":", 1)
-                table[int(bk)] = sorted(
-                    (int(a), float(m)) for a, m in (x.split("=") for x in pts.split(",") if x.strip())
-                )
-            self._split_costs = table
+        if table is None:  # (parsed at construction: pf_split_costs)
+            table = self._split_costs = pf_split_costs()
         pts = table.get(int(bucket))
         if not pts:
             return None
@@ -1686,9 +1721,7 @@ class Glm53Generator(_ReadinessGenerator):
         ~1 M offset 3 x 2,048 rows (~3.0 s) lose to one 8,192 replay (~2.5 s) while near the start of the window the
         pieces win (2 x 2,048 at 64 K ~0.8 s vs 8,192 ~1.9 s). Served AgentX warm turns (uncached suffix p50 ~2.4 K at
         offsets p50 ~65 K) are the target. The estimated saving is counted in prefill_split_ms_saved."""
-        mode = (os.environ.get("GLM53_PF_TAIL_SPLIT", "0") or "0").strip().lower()
-        auto = mode == "auto"
-        k = 0 if auto else int(mode)
+        auto, k = pf_tail_split_mode()
         tpp = getattr(self.backend, "tpp", None)
         if (not auto and k < 2) or not plans or tpp is None or len(tpp.buckets) < 2:
             return plans

@@ -858,7 +858,8 @@ class StackPrefixCache:
     its chain (the entry it attached, or its own previous chunk-end snapshot), the superseded one is not dominated /
     evicted but KEPT (``Entry.kept_prev``): a next turn that rewrites the previous prompt's tail shares a prefix
     ending between the two and resumes at the kept one. Bounds: one kept snapshot per chain -- keeping a newer one
-    releases (dominates) the one kept before it (``prev_of``: snapshot -> the snapshot kept for it); the device pool
+    releases (dominates) the one kept before it (``prev_of``: snapshot -> the snapshot kept for it); a kept snapshot a
+    new turn attaches is an ordinary entry again (that request's base; kept anew once it supersedes it); the device pool
     is not grown (GLM53_PREFIX_DEVICE_ENTRIES): a kept entry is the next device victim after the dominated ones, so
     it never displaces a latest snapshot, and it leaves the device to the host tier (spilled from
     GLM53_STACK_PREFIX_KEEP_PREV_MIN tokens, else dropped; the host tier's own LRU bounds the bytes).
@@ -1118,6 +1119,12 @@ class StackPrefixCache:
                             f"GLM53 stack prefix: keep-prev hit: generator slot {g} resumes at the kept superseded "
                             f"snapshot {s0} (first use)",
                         )
+                        # it is this request's base now, no longer a kept previous: an ordinary LRU entry (not the next
+                        # device victim, spilled like any other: PrefixStore._device_victim / _spill_victim) and no
+                        # chain's kept link (the chain it was kept for moving on must not release it); superseded
+                        # again by this request's next snapshot, commit keeps it anew (_keep_prev)
+                        e.kept_prev = False
+                        self.prev_of = {k: v for k, v in self.prev_of.items() if v != key}
                     logger.info(
                         f"GLM53 stack prefix: generator slot {g} attaches snapshot entry {e.device_entry} at {s0}"
                         + (" (restored from the host tier)" if host else "")
