@@ -44,6 +44,9 @@ namespace fifo = tensor_prefetcher_fifo;
 
 // The emulator runs a dispatch-engine poll loop orders of magnitude slower than silicon.
 constexpr auto kRetireTimeout = std::chrono::seconds(300);
+// Pause between polls of the engine's L1. A simulator serves every host access in turn, so a poll loop with no
+// pause can starve the prefetcher's worker thread and the command queue of the accesses they need to progress.
+constexpr auto kPollInterval = std::chrono::milliseconds(10);
 
 std::vector<uint32_t> read_words(
     distributed::MeshDevice& mesh_device, const CoreCoord& core, uint32_t addr, uint32_t bytes, CoreType core_type) {
@@ -90,6 +93,7 @@ struct DispatchEngineRegion {
         const auto deadline = std::chrono::steady_clock::now() + kRetireTimeout;
         uint32_t retired = slots_retired_by_every_kernel();
         while (fifo::count_behind(retired, target) && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(kPollInterval);
             retired = slots_retired_by_every_kernel();
         }
         return retired;
@@ -100,6 +104,7 @@ struct DispatchEngineRegion {
         const auto deadline = std::chrono::steady_clock::now() + kRetireTimeout;
         uint32_t written = read(fifo::kFifoWrOffset);
         while (fifo::count_behind(written, target) && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(kPollInterval);
             written = read(fifo::kFifoWrOffset);
         }
         return written;
