@@ -310,7 +310,7 @@ def load(
     stats["total_s"] = time.perf_counter() - t0
     return LoadResult(
         ckpt_dir,
-        header.get("user", {}),
+        header["user"],
         {k: index.scalars[k] for k in applied} if optimizer is not None else dict(index.scalars),
         plan.missing,
         plan.unexpected,

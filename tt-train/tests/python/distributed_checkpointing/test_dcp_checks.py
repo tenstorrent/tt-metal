@@ -189,7 +189,7 @@ def test_a_fused_looking_weight_loads_only_with_the_same_undescribed_tp_split(ex
     fsdp2 = _label([Placement.shard(2), Placement.replicate()], (2, 1))
     declared = {2: fused_segments(2, (64, 32, 32), 2), 4: fused_segments(2, (64, 32, 32), 4)}
 
-    def live(label, transform=Identity(), fsdp_axis=None, fused_name=True, cpp_bound=False):
+    def live(label, transform=Identity(), fsdp_axis=None, fused_name=True):
         info = TensorInfo(
             key,
             "param",
@@ -201,7 +201,7 @@ def test_a_fused_looking_weight_loads_only_with_the_same_undescribed_tp_split(ex
             (key,),
             tp_split=tp_split(label, fsdp_axis, 4),
         )
-        return LiveTensor(key, None, info, fused_name=fused_name, cpp_bound=cpp_bound)
+        return LiveTensor(key, None, info, fused_name=fused_name)
 
     saved_tp2 = _entry(key, tp2, Identity(), (1, 1, 2, 1))  # undeclared under TP2: its rows are in TP2's order
     check_undeclared_fusion(live(tp2), saved_tp2)  # the same TP size, undeclared on both sides: copied as it is
@@ -227,16 +227,6 @@ def test_a_fused_looking_weight_loads_only_with_the_same_undescribed_tp_split(ex
     assert saved_fsdp.tp_split == (1, 1, 1, 1)
     check_undeclared_fusion(live(single), saved_fsdp)
     check_undeclared_fusion(live(tp2, declared[2]), saved_fsdp)
-
-    # A checkpoint written before the TP split was recorded: a C++-bound weight must keep its split, a Python one is
-    # not checked.
-    old = _entry(key, tp2, Identity(), None)
-    check_undeclared_fusion(live(tp4), old)
-    check_undeclared_fusion(live(tp2, cpp_bound=True), old)
-    with expect_error(
-        LayoutError, r"leaves a TP split of \[1, 1, 2, 1\] per dim undescribed and the live model \[1, 1, 4, 1\]"
-    ):
-        check_undeclared_fusion(live(tp4, cpp_bound=True), old)
 
 
 class _Declaring:

@@ -64,6 +64,7 @@ def _index() -> Index:
             label,
             ("model/Llama/fc/weight", "model/Llama/tok_emb/weight"),
             chunks,
+            tp_split=(1, 1, 2, 1),
         ),
         "optimizer/exp_avg/model/Llama/fc/weight": Entry(
             "optimizer/exp_avg/model/Llama/fc/weight",
@@ -78,6 +79,7 @@ def _index() -> Index:
             [chunks[0]],
             param_ref="model/Llama/fc/weight",
             state_path=("exp_avg",),
+            tp_split=(1, 1, 2, 1),
         ),
         "model/Llama/blocks/0/attention/qkv_linear/weight": Entry(
             "model/Llama/blocks/0/attention/qkv_linear/weight",
@@ -123,10 +125,7 @@ def test_index_round_trips_through_json_with_columnar_chunks():
     assert decoded.files == index.files
     assert decoded.scalars == index.scalars and type(decoded.scalars["optimizer/amsgrad"]) is bool
     assert decoded.live_key_map()["model/Llama/tok_emb/weight"] == "model/Llama/fc/weight"
-    qkv = "model/Llama/blocks/0/attention/qkv_linear/weight"
-    assert encoded["state"][qkv]["tp_split"] == [1, 1, 2, 1] and decoded.entries[qkv].tp_split == (1, 1, 2, 1)
-    assert "tp_split" not in encoded["state"]["model/Llama/fc/weight"], "an entry without it, as an older writer's"
-    assert decoded.entries["model/Llama/fc/weight"].tp_split is None
+    assert all(entry["tp_split"] == [1, 1, 2, 1] for entry in encoded["state"].values()), "every entry records it"
 
 
 def test_a_malformed_tp_split_is_refused(expect_error):
