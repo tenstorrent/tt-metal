@@ -599,10 +599,15 @@ def test_high_bw_all_gather_external_semaphore_equivalence_matrix(
     )
 
 
+# The (2, 4) tests below are LoudBox tests. On a Galaxy the 2x4 corner of the 32 chips does not open (its fabric
+# routers time out in their first handshake, on main as well), so they skip there.
+_LOUDBOX_ONLY = {"require_exact_physical_num_devices": True}
+
+
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize(
     "device_params",
-    [pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D, 6144), id="fabric_2d_6k_payload")],
+    [pytest.param({**_device_params(ttnn.FabricConfig.FABRIC_2D, 6144), **_LOUDBOX_ONLY}, id="fabric_2d_6k_payload")],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
@@ -628,7 +633,7 @@ def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device, ag_traced
     "device_params,mesh_device",
     [
         pytest.param(
-            _device_params(ttnn.FabricConfig.FABRIC_2D, 6144),
+            {**_device_params(ttnn.FabricConfig.FABRIC_2D, 6144), **_LOUDBOX_ONLY},
             (2, 4),
             id="loudbox_fabric_2d_6k_payload",
         ),
@@ -714,7 +719,11 @@ def test_high_bw_all_gather_mesh_partition_output_on_tp_axis(mesh_device):
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param({**_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY), **_LOUDBOX_ONLY}, id="fabric_2d_torus_xy")],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device):
     """Gathering TP must preserve SP when both mesh axes shard the same tensor dimension."""
