@@ -54,6 +54,42 @@ Conv2dResultWithOptions conv2d(
     bool return_output_dim = false,
     bool return_weights_and_bias = false);
 
+// Work done inside conv2d instead of in separate ops; each is off when absent.
+struct Conv2dFusedOps {
+    // [1, C] BFLOAT16 TILE, passed together: the conv reads silu(x * scale + shift) instead of x (BFLOAT16 TILE input).
+    std::optional<Tensor> prologue_scale;
+    std::optional<Tensor> prologue_shift;
+    // ROW_MAJOR DRAM interleaved: the input's padding sticks, taken from neighbouring devices, laid out as
+    // sliding_window::ExternalHaloSpec describes. Height-sharded conv; on the DRAM path, an explicit DRAM_WIDTH slice
+    // config.
+    std::optional<Tensor> halo_boundary;
+};
+
+// ttnn::conv2d with fused_ops.
+Conv2dResultWithOptions conv2d_fused(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias,
+    const Conv2dFusedOps& fused_ops);
+
 }  // namespace ttnn
 
 namespace ttnn::operations::conv::conv2d {
