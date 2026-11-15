@@ -25,6 +25,7 @@ from dcp_oracle import (
 )
 
 from ttml.distributed_checkpointing._errors import (
+    CheckpointError,
     CoverageError,
     DtypeMismatchError,
     MissingKeyError,
@@ -209,6 +210,17 @@ def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
     entries = plan.entries()
     assert len(entries["model/blocks/3/w"].chunks) == 8
     assert {plan.files[c.file].coord[1] for c in entries["model/blocks/3/w"].chunks} == set(range(8))
+
+
+def test_two_live_tensors_under_one_key_are_refused(expect_error):
+    # A dict by key would keep one of them and silently not save or not load the other.
+    info = TensorInfo("w", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",))
+    with expect_error(CheckpointError, "w: two live tensors have this key; only one of them would be saved"):
+        create_save_plan([info, info], lambda c: data_file_name(0, 0, c))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (arange((1, 1, 64, 32)), SINGLE, Identity())})
+    with expect_error(CheckpointError, "only one of them would be loaded"):
+        create_load_plan(ckpt.index, [info, info])
 
 
 def test_mismatches_are_refused_before_any_read(expect_error):
