@@ -102,7 +102,7 @@ class Tp32PlanBuilder:
         npages = (nbytes + 2047) // 2048
         CB = 0
         cbs = [u32_cb(self.cs, CB, npages * 2048)]
-        impl = os.environ.get("TP32PF_PLAN_IMPL", "1")
+        impl = os.environ.get("TP32PF_PLAN_IMPL", "2")
         common = [
             route.buffer_address(),
             pt.plan.buffer_address(),
@@ -169,7 +169,7 @@ class Tp32PrefillExperts:
         self.xl1 = int(os.environ.get("TP32PF_XL1", "1"))
         self.split = int(os.environ.get("TP32PF_SPLIT", "0"))
         self.k1v = os.environ.get("TP32PF_K1", "c")
-        self.k2v = os.environ.get("TP32PF_K2", "b")
+        self.k2v = os.environ.get("TP32PF_K2", "f")
 
     def alloc(self, tt):
         cap = mt_cap(tt)

@@ -161,6 +161,12 @@ void kernel_main() {
             noc_async_write(reinterpret_cast<uint32_t>(scr) + pg * 2048, sa.get_noc_addr(pg), 2048);
         }
         noc_async_write_barrier();
+        // clear the hand-shake flags: L1 survives to the next launch (a stale magic would let ROLE 1 start before ROLE
+        // 0 zeroed the counters)
+        flags[0] = 0;
+        flags[1] = 0;
+        flags[2] = 0;
+        flags[3] = 0;
     } else {
         while (flags[0] != 0x5A5A5A5Au) {
         }

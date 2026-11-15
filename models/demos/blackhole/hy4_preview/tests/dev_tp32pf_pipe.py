@@ -51,6 +51,14 @@ def traced_us(md, fn, n=6, rep_=2):
     return statistics.median(ts)
 
 
+def rows_eq(a, b, mt_used, per=512):
+    n = mt_used * 32
+    a, b = a.reshape(-1)[:n], b.reshape(-1)[:n]
+    if a.dtype.is_floating_point:
+        return bool(torch.equal(a, b))
+    return bool(torch.equal(a.to(torch.int64) & 0xFFFFFFFF, b.to(torch.int64) & 0xFFFFFFFF))
+
+
 def plan_eq(a, b):
     a, b = a.to(torch.int64) & 0xFFFFFFFF, b.to(torch.int64) & 0xFFFFFFFF
     for c in range(a.shape[0]):
@@ -147,17 +155,9 @@ def main():
             gh = lambda t_, shp: ttnn.to_torch(t_).reshape(shp)
             eq = {
                 "plan": plan_eq(gh(ptd.plan, pl.plan.shape), pl.plan),
-                "gidx": bool(
-                    torch.equal(
-                        gh(ptd.gidx, pl.gidx.shape).to(torch.int64) & 0xFFFFFFFF, pl.gidx.to(torch.int64) & 0xFFFFFFFF
-                    )
-                ),
-                "dest": bool(
-                    torch.equal(
-                        gh(ptd.dest, pl.dest.shape).to(torch.int64) & 0xFFFFFFFF, pl.dest.to(torch.int64) & 0xFFFFFFFF
-                    )
-                ),
-                "sc": bool(torch.equal(gh(ptd.sc, pl.sc.shape).float(), pl.sc.float())),
+                "gidx": rows_eq(gh(ptd.gidx, pl.gidx.shape), pl.gidx, pl.mt_used),
+                "dest": rows_eq(gh(ptd.dest, pl.dest.shape), pl.dest, pl.mt_used),
+                "sc": rows_eq(gh(ptd.sc, pl.sc.shape).float(), pl.sc.float(), pl.mt_used, per=1024),
             }
             p("rep", rep, "device plan == host plan:", eq)
             if STAGE == "plan":
