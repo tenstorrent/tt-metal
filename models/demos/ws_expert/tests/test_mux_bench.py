@@ -17,7 +17,7 @@ import ttnn
 from models.demos.ws_expert.bench_util import aiclk_mhz, crs, kpath
 from models.demos.ws_expert.tests.test_ws_fab_bench import FAB
 from models.demos.ws_expert.ws_expert import noc, sharded_l1
-from models.demos.ws_expert.ws_fab import node
+from models.demos.ws_expert.ws_fab import FAB_DEFS, node
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
@@ -57,6 +57,7 @@ def launch(mesh, NC, nbuf, NPKT, PB, flush, mux=(6, 0)):
         compile_time_args=[NPKT, PB, slots.buffer_address(), cnt.buffer_address(), int(flush)]
         + list(fabric_mux.client_compile_time_args(num_clients=NC, channel_type=ctype, config=cfg)),
         runtime_args=cl_rt,
+        defines=FAB_DEFS,
         config=dm(1),
     )
     muxk = ttnn.KernelDescriptor(
@@ -64,6 +65,7 @@ def launch(mesh, NC, nbuf, NPKT, PB, flush, mux=(6, 0)):
         core_ranges=crs([mux]),
         compile_time_args=list(cfg.kernel_compile_time_args()),
         runtime_args=mx_rt,
+        defines=FAB_DEFS,
         config=dm(0),
         opt_level=fabric_mux.KernelBuildOptLevel.O3,
     )
