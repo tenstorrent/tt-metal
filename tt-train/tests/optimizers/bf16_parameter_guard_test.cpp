@@ -152,12 +152,13 @@ TEST_F(Fp32GradientIntoBf16OptimizerTest, MuonComposite) {
     expect_the_step_of_the_bf16_cast<optimizers::MuonComposite>(optimizers::MuonConfig{.lr = 0.05F});
 }
 
-// zero_grad drops the gradients, so the next backward's first add stores its gradient as it comes. A parameter that
-// had a gradient and gets none is still updated (momentum, weight decay): step() gives it a zero gradient, the same
-// update as the zeros zero_grad used to install, bit for bit.
-TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradDropsGradientsAndStepStillUpdatesTheirParameters) {
-    using Factory = std::function<std::unique_ptr<optimizers::OptimizerBase>(const serialization::NamedParameters &)>;
-    const std::array<std::pair<const char *, Factory>, 3> optimizers = {{
+namespace {
+
+// The optimizers whose zero_grad used to install zeros: they update a parameter that got no gradient.
+using OptimizerFactory =
+    std::function<std::unique_ptr<optimizers::OptimizerBase>(const serialization::NamedParameters &)>;
+std::array<std::pair<const char *, OptimizerFactory>, 3> optimizers_updating_without_a_gradient() {
+    return {{
         {"SGD",
          [](const auto &p) {
              return std::make_unique<optimizers::SGD>(p, optimizers::SGDConfig{.lr = 0.1F, .momentum = 0.9F});
@@ -172,9 +173,17 @@ TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradDropsGradientsAndStepStillUpda
              return std::make_unique<optimizers::MuonComposite>(p, optimizers::MuonConfig{.lr = 0.05F});
          }},
     }};
+}
+
+}  // namespace
+
+// zero_grad drops the gradients, so the next backward's first add stores its gradient as it comes. A parameter that
+// had a gradient and gets none is still updated (momentum, weight decay): step() gives it a zero gradient, the same
+// update as the zeros zero_grad used to install, bit for bit.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradDropsGradientsAndStepStillUpdatesTheirParameters) {
     auto *device = &autograd::ctx().get_device();
     const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 13U), device);
-    for (const auto &[name, make_optimizer] : optimizers) {
+    for (const auto &[name, make_optimizer] : optimizers_updating_without_a_gradient()) {
         SCOPED_TRACE(name);
         const auto cleared = parameter_with_grad(grad);
         const auto zeroed = parameter_with_grad(grad);
@@ -199,4 +208,37 @@ TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradDropsGradientsAndStepStillUpda
     optimizers::NoOp no_op(parameters);
     no_op.zero_grad();
     EXPECT_FALSE(parameters.at("theta")->is_grad_initialized());
+}
+
+// A trainer may call zero_grad more than once between two steps (GRPOTrainer does, after a step and before the next
+// backward). The second call finds no gradient to drop and must not forget the parameters the first one dropped: each
+// step without a gradient is still the step of a zero gradient, bit for bit, also after a step that installed zeros.
+TEST_F(Fp32GradientIntoBf16OptimizerTest, ZeroGradTwiceBetweenStepsStillUpdatesTheirParameters) {
+    auto *device = &autograd::ctx().get_device();
+    const auto grad = core::from_xtensor(test_utils::make_uniform_xarray<float>(kShape, -1.0F, 1.0F, 14U), device);
+    for (const auto &[name, make_optimizer] : optimizers_updating_without_a_gradient()) {
+        SCOPED_TRACE(name);
+        const auto cleared = parameter_with_grad(grad);
+        const auto zeroed = parameter_with_grad(grad);
+        auto cleared_optimizer = make_optimizer(cleared);
+        auto zeroed_optimizer = make_optimizer(zeroed);
+        cleared_optimizer->step();
+        zeroed_optimizer->step();
+
+        for (int round = 0; round < 2; ++round) {
+            SCOPED_TRACE(fmt::format("round {}", round));
+            const auto before = core::to_xtensor(cleared.at("theta")->get_value());
+            cleared_optimizer->zero_grad();
+            cleared_optimizer->zero_grad();
+            EXPECT_FALSE(cleared.at("theta")->is_grad_initialized());
+            zeroed.at("theta")->set_grad(core::zeros_like(zeroed.at("theta")->get_value()));
+            cleared_optimizer->step();
+            zeroed_optimizer->step();
+
+            const auto expected = core::to_xtensor(zeroed.at("theta")->get_value());
+            EXPECT_GT(test_utils::count_bit_mismatches(before, expected), 0U) << "the step must move the parameter";
+            EXPECT_EQ(
+                test_utils::count_bit_mismatches(expected, core::to_xtensor(cleared.at("theta")->get_value())), 0U);
+        }
+    }
 }
