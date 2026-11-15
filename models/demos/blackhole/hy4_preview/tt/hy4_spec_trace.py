@@ -171,6 +171,10 @@ class MTPRoundTail:
         self.tok = rows(
             torch.zeros(R, S).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
         )  # verify tokens [x_P, d_1..d_k] (input of the next verify)
+        self.park = rows(
+            torch.zeros(R, 1, 1, 1)
+        )  # 1.0 = idle (parked) row: its next-round state is forced to (PAD token, position 0, no drafts) ON DEVICE, exactly what a host reload would upload
+        self.padvec = rep(torch.tensor([120002.0] + [0.0] * (S - 1)).reshape(1, 1, 1, S))
         self.m_out = rows(torch.zeros(R, 1, 1, 1))
         self.a_out = rows(torch.zeros(R, 1, 1, W16))  # emitted tokens a_0..a_k of the round (host reads a_out + m_out)
         self.zeros_pad = rep(torch.zeros(1, 1, 1, W16 - S))
@@ -230,13 +234,16 @@ class MTPRoundTail:
             ttnn.deallocate(o)
         if self.sampling is not None:
             self.sampling.finish()
-        # next-round state
+        # next-round state (a parked row keeps (PAD, 0, no drafts): the same values ``load`` uploads for an idle row)
+        keep = ttnn.subtract(ttnn.multiply(self.park, -1.0), -1.0)  # 1 - park
         dcat = ttnn.concat(drafts, dim=3)  # [1,1,1,k]
         d_pad = ttnn.concat([dcat, self.neg_pad], dim=3)
-        ttnn.copy(d_pad, self.d_row)
+        d_eff = ttnn.subtract(ttnn.multiply(d_pad, keep), self.park)  # parked: -1 everywhere
+        ttnn.copy(d_eff, self.d_row)
         tok_f = ttnn.concat([nxt, dcat], dim=3)  # [1,1,1,S]: [x_{P'}, d_1..d_k]
-        ttnn.copy(self._u32_row(tok_f), self.tok)
-        ttnn.copy(p_new, self.pos)
+        tok_eff = ttnn.add(ttnn.multiply(tok_f, keep), ttnn.multiply(self.padvec, self.park))
+        ttnn.copy(self._u32_row(tok_eff), self.tok)
+        ttnn.copy(ttnn.multiply(p_new, keep), self.pos)
 
 
 class Hy4SpecRunner:
@@ -354,6 +361,21 @@ class Hy4SpecRunner:
         tr = self.trace if variant is None else self.traces[variant]
         ttnn.execute_trace(self.dec.md, tr, cq_id=0, blocking=False)
 
+    def set_park(self, park):
+        """per user flag (1 = idle row): the device parks it every round (see MTPRoundTail.park)."""
+        md = self.dec.md
+        R = int(md.shape[0])
+        mp = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=tuple(md.shape))
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor([float(x) for x in park]).reshape(R, 1, 1, 1),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mp,
+            ),
+            self.tail.park,
+        )
+
     def set_cap(self, cap):
         """per user max accepted drafts of the next round (host -> persistent device tensor, 4 floats)."""
         md = self.dec.md
@@ -369,13 +391,18 @@ class Hy4SpecRunner:
             self.tail.cap,
         )
 
-    def read_state(self):
-        """-> per user row dict(a=[a_0..a_k], m, pos, tok=[x_P', d_1..d_k], drafts=[d_1..d_k]) of the round just run: the small round outputs and the next-round state, read with ONE sync (non-blocking copies)."""
-        md, S, k = self.dec.md, self.S, self.k
-        R, c = int(md.shape[0]), int(md.shape[1])
+    def read_enqueue(self):
+        """enqueue the 5 small round outputs behind the last submitted trace (in CQ order, before any later trace overwrites them) and record an event: returns a handle for ``read_finish``."""
         t = self.tail
         hs = [ttnn.from_device(x, blocking=False) for x in (t.a_out, t.m_out, t.pos, t.d_row, t.tok)]
-        ttnn.synchronize_device(md)
+        return hs, ttnn.record_event(self.dec.md, 0)
+
+    def read_finish(self, handle):
+        """wait for the event of a ``read_enqueue`` (NOT for traces enqueued after it) and parse."""
+        md, S, k = self.dec.md, self.S, self.k
+        hs, ev = handle
+        ttnn.event_synchronize(ev)
+        R, c = int(md.shape[0]), int(md.shape[1])
         g = [ttnn.get_device_tensors(h) for h in hs]
         out = []
         for r in range(R):
@@ -392,6 +419,10 @@ class Hy4SpecRunner:
                 )
             )
         return out
+
+    def read_state(self):
+        """-> per user row dict(a, m, pos, tok, drafts) of the round just run (blocking: waits for the event of the read, i.e. for everything enqueued before it)."""
+        return self.read_finish(self.read_enqueue())
 
     def read(self):
         """-> per user row (emitted tokens a_0..a_m, m, new P): blocking read of the small per-round outputs."""

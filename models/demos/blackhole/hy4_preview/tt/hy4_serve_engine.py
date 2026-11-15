@@ -140,12 +140,36 @@ class Hy4Engine:
         self.rounds = 0
         self.t_round = 0.0
         self.warm_done = False
+        # round pipelining (HY4_SPEC_PIPE=1): the device state of a round is resident, so round N+1 is submitted right behind the read-back of round N (speculatively: same caps / variant / params, no transition).
+        # The host work between two ``round`` calls (plugin accept walk, proposal, scheduling, streaming) then overlaps the device time of the next round. A mismatch (finished request, admission, other caps / variant,
+        # mirror != plugin block) drains the speculative round, discards it and reloads the mirror (the junk KV rows it wrote lie at positions >= the pending position and are overwritten before being read).
+        self.pipe = os.environ.get("HY4_SPEC_PIPE", "0") == "1"
+        self.inflight = None
+        self.pipe_idle = (
+            os.environ.get("HY4_SPEC_PIPE_IDLE", "1") == "1"
+        )  # speculate also with idle (parked) rows: their device state drifts instead of being re-parked every round
+        self.pipe_discards = 0
+        self.pipe_hits = 0
+        self.pipe_resync = int(os.environ.get("HY4_SPEC_PIPE_RESYNC", "256"))
+        self._since_load = 0
+        self.tl = [] if os.environ.get("HY4_ROUND_TL", "0") == "1" else None
+
+    def drain(self):
+        """wait for an in-flight speculative round and drop it (state on device advanced past the mirror: reload before the next round). Called before anything else touches the device (prefill, seed)."""
+        if self.inflight is not None:
+            ttnn.synchronize_device(self.md)
+            self.inflight = None
+            self.dirty = True
+            self.q_valid = False
+            self.params_dirty = True
+            self.pipe_discards += 1
 
     # ------------------------------------------------------------------------------------------------ prefill
     def prefill(self, prompts_by_row, sampling=None):
         """prompts_by_row {mesh row: list[int]} -> {row: first token}. ``sampling`` {row: (temperature, top_k, top_p, seed)}. Direct-to-pool chunked prefill (+ MTP prompt KV + seed round in spec mode).
         The other mesh rows keep their pool pages (masked writes) and their decode state."""
         t0 = time.perf_counter()
+        self.drain()
         rows = sorted(prompts_by_row)
         prompts = [prompts_by_row.get(r, [PAD]) for r in range(ROWS)]
         res = self.pp.prefill(
@@ -183,6 +207,7 @@ class Hy4Engine:
             elif not self.live[r]:
                 pend[r], pos[r] = PAD, 0
         rn.load(pend, pos, [[-1] * K for _ in range(ROWS)], cap=[0] * ROWS)
+        rn.set_park([0] * ROWS)  # the seed tail must not park the rows being seeded
         a_seed = ttnn.from_torch(
             torch.tensor([[pend[r]] * S for r in range(ROWS)], dtype=torch.int32).reshape(ROWS * S, 1),
             device=md,
@@ -228,6 +253,17 @@ class Hy4Engine:
         plugin_block {row: (tokens [S], pos)} overrides the mirror when the plugin's candidate block differs. Returns per row dict(a, m, pos, drafts, tok).
         """
         rn = self.runner
+        tA = time.perf_counter()
+        pf = os.environ.get("HY4_SPEC_PIPE_FILE")
+        if pf and self.rounds % 16 == 0:  # live A/B switch (a file holding 0 / 1) without a reboot
+            try:
+                with open(pf) as fh:
+                    want = fh.read().strip() == "1"
+                if want != self.pipe:
+                    self.drain()
+                    self.pipe = want
+            except OSError:
+                pass
         for r in range(ROWS):
             if not self.live[r]:
                 caps[r] = 0
@@ -244,36 +280,71 @@ class Hy4Engine:
                     self.drafts[r] = dr[:c] + [-1] * (self.K - c)
                     self.dirty = True
                     self.q_valid = False
-        if self.dirty or idle:
-            rn.load(self.pend, self.pos, self.drafts, cap=caps)
-            self.dirty = False
-        else:
-            rn.set_cap(caps)
         v = "S" if (want_sampled and self.sampled) else "G"
-        if v == "S":
-            if temps is not None:
-                new = (list(temps), list(seeds))
-                if new != (self.temp, self.seeds) or self.params_dirty:
-                    self.temp, self.seeds = new
-                    self.params_dirty = True
-            if self.params_dirty:
-                self.samp.set_params([1e4 if t <= 0 else 1.0 / t for t in self.temp], self.seeds)
-                self.params_dirty = False
-            if not self.q_valid:
-                self.samp.load_onehot(self.drafts)
-                self.q_valid = True
+        park = tuple(0.0 if lv else 1.0 for lv in self.live)
+        key = (
+            park,
+            tuple(caps),
+            v,
+            tuple(temps) if (v == "S" and temps is not None) else None,
+            tuple(seeds) if (v == "S" and seeds is not None) else None,
+        )
+        hit = self.inflight is not None and not self.dirty and self.inflight == key
+        if self.inflight is not None and not hit:
+            self.drain()
+        tB = time.perf_counter()
+        if hit:
+            self.pipe_hits += 1
         else:
-            self.q_valid = False
-        t0 = time.perf_counter()
-        rn.submit(v)
-        st = rn.read_state()
-        self.t_round += time.perf_counter() - t0
+            if self.dirty or (idle and not self.pipe) or (self.pipe and self._since_load >= self.pipe_resync):
+                rn.load(self.pend, self.pos, self.drafts, cap=caps)
+                self.dirty = False
+                self._since_load = 0
+                if idle:
+                    for r in range(ROWS):
+                        if not self.live[r]:
+                            self.pend[r], self.pos[r] = PAD, 0
+            else:
+                rn.set_cap(caps)
+            rn.set_park(park)
+            if v == "S":
+                if temps is not None:
+                    new = (list(temps), list(seeds))
+                    if new != (self.temp, self.seeds) or self.params_dirty:
+                        self.temp, self.seeds = new
+                        self.params_dirty = True
+                if self.params_dirty:
+                    self.samp.set_params([1e4 if t <= 0 else 1.0 / t for t in self.temp], self.seeds)
+                    self.params_dirty = False
+                if not self.q_valid:
+                    self.samp.load_onehot(self.drafts)
+                    self.q_valid = True
+            else:
+                self.q_valid = False
+            rn.submit(v)
+        tC = time.perf_counter()
+        rd = rn.read_enqueue()  # behind the (possibly speculative) round, before the next one
+        self.inflight = None
+        if self.pipe and self._since_load < self.pipe_resync and (not idle or self.pipe_idle):
+            rn.submit(v)  # speculative next round: same caps / variant / params
+            self.inflight = key
+            self._since_load += 1
+        tD = time.perf_counter()
+        st = rn.read_finish(rd)
+        tE = time.perf_counter()
+        self.t_round += tE - tB
         self.rounds += 1
+        if self.tl is not None:
+            self.tl.append(
+                dict(
+                    t=tA, prep=tB - tA, upload_submit=tC - tB, read_enq_spec_submit=tD - tC, wait_read=tE - tD, hit=hit
+                )
+            )
         for r in range(ROWS):
             if self.live[r]:
                 self.pend[r], self.pos[r] = st[r]["tok"][0], st[r]["pos"]
                 self.drafts[r] = list(st[r]["drafts"])
-        if idle:
+        if idle and not self.pipe:
             for r in range(ROWS):
                 if not self.live[r]:
                     self.pend[r], self.pos[r] = PAD, 0

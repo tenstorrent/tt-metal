@@ -35,8 +35,11 @@ void kernel_main() {
     noc_async_read(r_acc.get_noc_addr(0), rt_l1, T * 64);
     noc_async_read_barrier();
     uint16_t active[128];
-    const uint32_t na_all = tp_build_plan(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt_l1), T, active);
-    const uint32_t na = (na_all > grp) ? (na_all - grp + 2) / 3 : 0;  // experts of this group: active[3 q + grp]
+    const uint32_t na = tp_build_plan_grp(
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt_l1),
+        T,
+        active,
+        grp);  // experts e % 3 == grp, ascending: active[q]
 
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     auto& cbi = get_local_cb_interface(cb_w);
@@ -78,7 +81,7 @@ void kernel_main() {
         const uint64_t base = get_noc_addr_from_bank_id<true>(bank, w01_addr);
         noc_async_read_one_packet_set_state<true>(base, PA, vc);
         for (uint32_t a = 0; a < na; ++a) {
-            block(base, (uint32_t)active[3 * a + grp] * 4 * PA, 4, PA);
+            block(base, (uint32_t)active[a] * 4 * PA, 4, PA);
         }
         flush();
     }
@@ -88,7 +91,7 @@ void kernel_main() {
         noc_async_read_one_packet_set_state<true>(base, PC, vc);
         for (uint32_t s = 0; s < NSB; ++s) {
             for (uint32_t a = 0; a < na; ++a) {
-                block(base, (s * 256 + (uint32_t)active[3 * a + grp]) * PC, 1, PC);
+                block(base, (s * 256 + (uint32_t)active[a]) * PC, 1, PC);
             }
         }
         flush();

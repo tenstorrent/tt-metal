@@ -50,7 +50,7 @@ class Tp24Experts(Tp32Experts):
     def cb_bytes(T):
         R = 2 if T <= 2 else 4 if T <= 4 else 8
         MT = 2 if T > 8 else 1
-        nq = (min(8 * T, 256) + 2) // 3
+        nq = min(8 * T, 86)
         nj = (nq + 7) // 8
         return {
             "x": 24 * 64 * R * MT,
@@ -72,7 +72,7 @@ class Tp24Experts(Tp32Experts):
         md = self.md
         MT = 2 if T > 8 else 1
         R = 2 if T <= 2 else 4 if T <= 4 else 8
-        NQ = (min(8 * T, 256) + 2) // 3  # max experts of one group
+        NQ = min(8 * T, 86)  # max experts of one group (e % 3 == g: at most 86 of the 256 ids)
         NJMAX = (NQ + 7) // 8
         cores = self.cores
         core_set = _core_set(cores)

@@ -269,6 +269,13 @@ class Hy4PoolDecoder(Hy4Decoder):
         """use the rope tables / write rows of a SpecDerive (device-derived from the resident position) instead of host set_inputs."""
         self.cos, self.sin, self.c128, self.s128 = sd.cos, sd.sin, sd.c128, sd.s128
 
+    def _dump(self, name, i, t):
+        """diagnostic (verify-round track): self.dump = list -> host copies [32 devices, ...] of intermediate tensors (eager runs only)."""
+        d = getattr(self, "dump", None)
+        if d is not None:
+            ttnn.synchronize_device(self.md)
+            d.append((name, i, ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.md, dim=0)).float()))
+
     def step_verify(self):
         """one verify step on S rows per user (tokens self.tok [1,S] per device; positions P..P+S-1 via ctx / tabs filled by SpecDerive.derive) -> (hn bf16 [1,1,S,D] post model.norm rows, logits [1,1,S,V/8])."""
         assert (
@@ -296,10 +303,14 @@ class Hy4PoolDecoder(Hy4Decoder):
                 h, _, pp_a, x = ly.ihcf_a.pre(x, wa, y=y, pp_prev=pp_m, x_out=x)
                 ttnn.deallocate(y)
             a = self._attn(ly, None, h)
+            self._dump("h_in", i, h)
+            self._dump("attn", i, a)
             ttnn.deallocate(h)
             h2, _, pp_m, x = ly.ihcf_m.pre(x, wm, y=a, pp_prev=pp_a, x_out=x)
             ttnn.deallocate(a)
+            self._dump("h2", i, h2)
             y = self._mlp_rows(i, ly, h2)
+            self._dump("mlp", i, y)
             ttnn.deallocate(h2)
         last = ch.layers[-1]
         _, _, _, x = last.ihcf_m.pre(x, last.ihcf_m.norm_weight(last.hw_post, S), y=y, pp_prev=pp_m, x_out=x)

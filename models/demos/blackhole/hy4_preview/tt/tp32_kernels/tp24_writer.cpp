@@ -88,8 +88,8 @@ void kernel_main() {
     noc_async_read(r_acc.get_noc_addr(0), rt_l1, T * 64);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* route = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt_l1);
-    const uint32_t na_all = tp_build_plan(route, T, active);
-    const uint32_t na = (na_all > grp) ? (na_all - grp + 2) / 3 : 0;  // experts of this group
+    const uint32_t na =
+        tp_build_plan_grp(route, T, active, grp);  // experts of this group: e % 3 == grp, ascending (row-independent)
     const uint32_t nj = (na > me) ? (na - me + NC - 1) / NC : 0;
     {
         cbmeta.reserve_back(1);
@@ -106,7 +106,7 @@ void kernel_main() {
             const uint32_t j = jm / MT, m = jm % MT;
             volatile tt_l1_ptr uint16_t* tile =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cbsc.get_write_ptr() + jm * PNB);
-            const uint32_t e = active[3 * (me + NC * j) + grp];
+            const uint32_t e = active[me + NC * j];
             for (uint32_t r = 0; r < 8; ++r) {
                 uint16_t s = 0;
                 const uint32_t rg = 8 * m + r;
