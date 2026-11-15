@@ -2973,6 +2973,8 @@ class ModelArgs:
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
+        # kept as given (int or list) for the stop-token list; self.eos_token_id below drops a single int
+        self.config_eos_token_id = eos_token_id
         self.image_token_index = config.get("image_token_index", None)
 
         # Try to get text_config, if it doesn't exist everything is text config
@@ -4340,7 +4342,7 @@ class ModelArgs:
             # The checkpoint lists every id that ends a turn (e.g. Gemma <end_of_turn>), not only the tokenizer eos
             tokenizer.stop_tokens = build_stop_tokens(
                 tokenizer.eos_token_id,
-                getattr(self, "eos_token_id", None),
+                getattr(self, "config_eos_token_id", None),
                 self._load_generation_config_eos(),
                 extra,
             )

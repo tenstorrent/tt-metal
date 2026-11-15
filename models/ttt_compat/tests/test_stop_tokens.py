@@ -24,3 +24,7 @@ def test_phi3_extra_id_is_appended():
 
 def test_none_tokenizer_eos_is_skipped():
     assert build_stop_tokens(None, None, [5]) == [5]
+
+
+def test_config_int_eos_kept_without_generation_config():
+    assert build_stop_tokens(2, 3, None) == [2, 3]
