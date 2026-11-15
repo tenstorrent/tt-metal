@@ -17,3 +17,4 @@
 {"event":"test_run","status":"pass","tests":"test_gated_delta_net_chunk.py (41), perf model_prefill_4096","note":"R-PREP first build: 6.41 -> 2.27 ms on 108 cores","ts":"2026-11-15T03:03:00+00:00"}
 {"event":"fix_applied","what":"R-PREP: RMS on prep cores, grant-ahead inbox, multicast sends, M=(I+L)^-1 on prep, 2 pieces under R-PREP","perf":"model_prefill_4096 2.27 -> 1.27-1.31 ms","ts":"2026-11-15T03:31:31+00:00"}
 {"event":"fix_applied","what":"prescaled head blocks (state part without broadcasts), per-role CB allocation, inbox depth 8, unicast for one-core rects, PREP_MIN_TILE_ROWS=4, producer cap 32","perf":"model_prefill_4096 1.29 -> ~1.10 ms","tests":"unit 154/154, golden+regression 108/108","ts":"2026-11-15T04:05:07+00:00"}
+{"event":"test_run","refinement":7,"status":"pass","unit_dir":"165/165","golden":"108/108","perf_us":{"model_decode_b8":[62,49.9],"model_decode_b16":[132.2,86],"perf_decode_b1":[26.3,26.5]},"ts":"2026-11-15T04:56:32+00:00"}

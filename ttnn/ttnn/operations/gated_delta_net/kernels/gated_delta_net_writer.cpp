@@ -21,6 +21,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "gated_delta_net_qk_rows.hpp"
 
 namespace {
 
@@ -31,6 +32,8 @@ constexpr uint32_t cb_tok_coef = GDN_CB_TOK_COEF;
 constexpr uint32_t cb_out_rows = GDN_CB_OUT_ROWS;
 constexpr uint32_t cb_window = GDN_CB_WINDOW;
 constexpr uint32_t cb_window_zeroed = GDN_CB_WINDOW_ZEROED;
+constexpr uint32_t cb_hist_stage = GDN_CB_HIST_STAGE;
+constexpr uint32_t cb_scratch = GDN_CB_SCRATCH;
 constexpr uint32_t cb_osum_part = GDN_CB_OSUM_PART;
 constexpr uint32_t cb_osum_gather = GDN_CB_OSUM_GATHER;
 constexpr uint32_t cb_kq_rows = GDN_CB_KQ_ROWS;
@@ -370,12 +373,29 @@ void kernel_main() {
         return;
     }
     if constexpr (QK_CORE) {
-        // qn lands in cb_kq_rows tiles [Kt, 2Kt) of the key head's pair cores, kn in [0, Kt): their untouched base.
+        // Window: per column, zero its slot, copy the history rows from history_split(B) on, hand it to the reader.
         Noc noc;
+        CircularBuffer window_buf(cb_window);
+        const uint32_t batch = num_units;
+        const uint32_t cs_tiles = (GDN_HISTORY * batch + TILE_ROWS - 1) / TILE_ROWS;
+        const uint32_t cs_stage = get_write_ptr(cb_hist_stage) + Kt * OUT_TILE_BYTES;
+        const uint32_t win = get_write_ptr(cb_window);
+        constexpr uint32_t slot_bytes = GDN_CONV_TAPS * OUT_TILE_BYTES;
+        cb_wait_front(cb_scratch, 1);  // staging landed
+        for (uint32_t col = 0; col < Kt; ++col) {
+            noc.async_write_zeros(window_buf, slot_bytes, {.offset_bytes = col * slot_bytes});
+            noc.write_zeros_l1_barrier();
+            gdn::copy_history_rows<OUT_TILE_BYTES, GDN_HISTORY>(
+                cs_stage + col * cs_tiles * OUT_TILE_BYTES, win + col * slot_bytes, gdn::history_split(batch), batch);
+            noc_async_read_barrier();
+            cb_reserve_back(cb_window_zeroed, 1);
+            cb_push_back(cb_window_zeroed, 1);
+        }
+        cb_pop_front(cb_scratch, 1);
+        // qn lands in cb_kq_rows tiles [Kt, 2Kt) of the key head's pair cores, kn in [0, Kt): their untouched base.
         const uint32_t part_bytes = Kt * STATE_TILE_BYTES;
         const uint32_t kn_dst = get_write_ptr(cb_kq_rows);
         cb_wait_front(cb_qk_stage, Kt);
-        DeviceZoneScopedN("QK-SEND");
         if (qk_role == GDN_QK_Q_INJECTOR) {
             q_channel.optional_sender(noc)->send(get_read_ptr(cb_qk_stage), kn_dst + part_bytes, part_bytes);
         } else {
@@ -386,14 +406,26 @@ void kernel_main() {
     }
 
     // A unit's last output rows and its state are written without waiting: the barrier and the pops wait until the
-    // next unit's store point, after its coefficients and q/k rows are handed to compute.
-    bool retiring = false;
+    // next unit's store point, after its coefficients and q/k rows are handed to compute. A non-last unit's state is
+    // also issued only there (issuing blocks this RISC while the NoC is congested; cb_state_out holds two states).
+    bool retiring = false;                 // output rows (and an issued state) await the barrier and their pops
+    bool state_issued = false;             // the state at the front of cb_state_out has been issued
+    uint32_t pending_state = 0xffffffffu;  // first state page of an unissued finished state
     auto retire = [&]() {
+        if (pending_state != 0xffffffffu) {
+            store_state<Kt, Vt, Vb>(state_out, pending_state);
+            pending_state = 0xffffffffu;
+            state_issued = true;
+        }
         if (retiring) {
             noc_async_write_barrier();
             cb_pop_front(cb_out_rows, Vb);
-            cb_pop_front(cb_state_out, n_state);
             retiring = false;
+        }
+        if (state_issued) {
+            noc_async_write_barrier();
+            cb_pop_front(cb_state_out, n_state);
+            state_issued = false;
         }
     };
     for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
@@ -442,7 +474,6 @@ void kernel_main() {
             }
 
             if (!CHUNKED && qk_role != GDN_QK_OWN) {
-                DeviceZoneScopedN("WR-LAND");
                 land_qk_rows(q_channel, k_channel, qk_role, Kt, unit_idx == 0);
             }
 
@@ -496,7 +527,12 @@ void kernel_main() {
             // rows: its writes go out first and overlap that norm.
             retire();
             if (tr == last_tr) {
-                store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
+                if (unit_idx + 1 == num_units) {
+                    store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
+                    state_issued = true;
+                } else {
+                    pending_state = pair * Kt * Vt + v_first;
+                }
                 store_rows<false>(out_acc, Vb, tr * out_width_tiles + head * Vt + v_first, base_row, lo, hi);
                 retiring = true;
             } else {

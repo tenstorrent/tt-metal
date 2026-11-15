@@ -44,7 +44,6 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/debug/kernel_profiler.hpp"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
@@ -1527,15 +1526,11 @@ void kernel_main() {
         const UnitCols cols{is_q ? 0u : Kt, Kt};
         const RowScope scope = RowScope::of(0, num_units);
         cb_wait_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);
-        {
-            DeviceZoneScopedN("QK-CONV");
-            if constexpr (CONV_ON_FPU) {
-                conv_block_fpu(scope, cols, 0, Kt);
-            } else {
-                conv_block(scope, cols, 0, Kt);
-            }
+        if constexpr (CONV_ON_FPU) {
+            conv_block_fpu(scope, cols, 0, Kt);
+        } else {
+            conv_block(scope, cols, 0, Kt);
         }
-        DeviceZoneScopedN("QK-L2");
         qk_part_block(bufs, is_q, scope);
         cb_pop_front(cb_conv_w, (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * Kt);
     } else {
@@ -1588,15 +1583,11 @@ void kernel_main() {
                     }
                     qk_finish_block(bufs, scope);
                 } else {
-                    {
-                        DeviceZoneScopedN("C-CONV");
-                        if constexpr (CONV_ON_FPU) {
-                            conv_block_fpu(scope, cols, 0, cols.count());
-                        } else {
-                            conv_block(scope, cols, 0, cols.count());
-                        }
+                    if constexpr (CONV_ON_FPU) {
+                        conv_block_fpu(scope, cols, 0, cols.count());
+                    } else {
+                        conv_block(scope, cols, 0, cols.count());
                     }
-                    DeviceZoneScopedN("C-L2");
                     l2norm_block(bufs, scope);
                 }
                 cb_reserve_back(cb_o_acc, Vb);
@@ -1604,7 +1595,6 @@ void kernel_main() {
                     chunk_step(bufs, token == 0, token + (hi - lo) == T, hi - 1 - base_row);
                     token += hi - lo;
                 } else {
-                    DeviceZoneScopedN("C-STEP");
                     for (uint32_t row = lo; row < hi; ++row, ++token) {
                         token_step(bufs, token == 0, token == T - 1, row == lo, scope);
                     }
@@ -1617,10 +1607,7 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_knT, Kt);
                 cb_pop_front(cb_v, Vb);
-                {
-                    DeviceZoneScopedN("C-RMS");
-                    rmsnorm_gate_block<cb_o_acc, 1>(bufs, v_eps_bits, scope);
-                }
+                rmsnorm_gate_block<cb_o_acc, 1>(bufs, v_eps_bits, scope);
             }
             cb_pop_front(cb_conv_w, conv_w_pages);
             cb_pop_front(cb_gate_w, 2);

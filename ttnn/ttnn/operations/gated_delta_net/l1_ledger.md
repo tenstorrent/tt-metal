@@ -1,4 +1,4 @@
-# L1 ledger: gated_delta_net (regimes R-STEP, R-VSPLIT, R-CHUNK, R-BCAST and R-PREP)
+# L1 ledger: gated_delta_net (regimes R-STEP, R-VSPLIT, R-CHUNK, R-BCAST, R-PREP and R-QKCORE)
 
 Refinement 3 (R-VSPLIT): a core runs one unit = one piece of a pair, owning `Vb = Vt / pieces` state
 columns (`v_block_tiles`; R-STEP is `Vb = Vt`). Every `Vt` below is the unit's `Vb`; capacities are
@@ -74,7 +74,9 @@ or blocking search exists: the footprint is a closed form checked once on host.
 | Kt = K/32 | 1..4 in INPUTS (K <= 128) | `footprint <= L1_BUDGET` (host check in validate step 5); K multiple of 32 (alignment tagger: `w_non_aligned` refused) |
 | Vt = V/32 | 1..4 in INPUTS (V <= 128) | same |
 | Vb = Vt / pieces | 1..Vt | `_value_pieces`: largest divisor of Vt (<= MAX_PIECES = 4, the combine's DEST window) with B*Hv*pieces <= grid cores (one unit per core), else 1; the descriptor re-checks `l1_footprint_bytes(Kt, Vb, dtype, pieces) <= L1_BUDGET` |
-| STATE_IN_DEPTH, STATE_OUT_DEPTH, CONV_ACC_DEPTH | 1 | host constants |
+| unit_depth = min(UNIT_INPUT_DEPTH, units per core) | 1..2 | host: 2 on cores that run several units (decode B=16), lowered until the plan fits L1 |
+| STATE_IN_DEPTH, STATE_OUT_DEPTH | 2, capped at unit_depth | host constants |
+| CONV_ACC_DEPTH | 1 | host constant |
 | WINDOW_DEPTH, ROW_DEPTH, TOK_COEF_DEPTH | 2 | host constants |
 | B, T, N, Hv, Hk, C | unbounded | appear in no capacity expression (work and DRAM traffic only) |
 | L1_BUDGET | `device L1 size - L1 reserved base` queried on host (1460288 B usable per risks.md R11) | device query |
@@ -200,6 +202,31 @@ conv_state, conv_weight read once per (key head, tile row) by its prep core (q/k
 head, v 1). NoC per tile row and key head: r head blocks of 15 fp32 tiles (60 KB) multicast to the head's 2
 pieces (one row run, two runs when a head straddles a virtual-column gap or a row), r Vt unicast v tiles (48 KB),
 r Vt o tiles back (48 KB), 2 r pieces grant / landed semaphore increments.
+
+## R-QKCORE (Refinement 7)
+
+One plan on pair and q / k cores (the multicast lands at the same cb_kq_rows address everywhere: identical CB layout,
+as R-BCAST). Changes against R-STEP decode, u = unit_depth (2 when a core runs several units):
+
+| CB | Capacity (pages) | Change | Why / shares with |
+|----|------------------|--------|-------------------|
+| cb_state_in (+ mm) | `Kt*Vb*min(STATE_IN_DEPTH, u)` | 1 -> u | the next unit's S0 is read while this unit computes; STATE_IN_DEPTH = 1 measured 95.5 vs 93 us at B=16 |
+| cb_state_out | `Kt*Vb*min(STATE_OUT_DEPTH, u)` | 1 -> u | the writer issues a non-last unit's state only after the next unit's coefficients and q/k rows (issuing blocks the writer under NoC back-pressure), so compute's next update needs the second slot |
+| cb_conv_w, cb_gate_w, cb_norm_w | x u | 1 -> u | per-unit weights in flight; a same-head next unit copies them from the previous slot (local NoC copy) instead of re-reading page 0 of each small tensor, which all sits in one DRAM bank |
+| cb_window | `4*max(Kt, Vb)*WINDOW_DEPTH` | G = Vb on pair cores (v only, one group per unit), 1 column per group on a q / k core | the q / k core hands each column over as soon as its rows are gathered, so conv overlaps the next column's copies |
+| cb_hist_stage | `max(2*Vb, Kt*(1 + cs), 1 + 2*cs)`, cs = ceil(3B/32) | q / k core: its Kt current-row tiles and Kt*cs conv_state tiles (read whole), then for conv_state_out one x tile, cs input and cs output tiles | the window gather and the conv_state_out pass are sequential (the writer's slot tokens close the gather), so they share the staging |
+| cb_qk_stage | `Kt` | as R-BCAST | the q / k core's qn or kn, multicast source |
+| cb_scratch | 1 | q / k core: reader -> writer token "staging landed" | the writer copies the history rows from history_split(B) on out of the reader's staging |
+| cb_window_zeroed | `WINDOW_DEPTH` | q / k core: one token per column, pushed after the writer zeroed the slot and copied its rows | |
+
+Footprint (bf16, Kt = Vt = 4, B = 16, u = 2): 800896 B per core (0.55 of the budget; state 128 KB in, 64 KB working, 128 KB out).
+
+R-QKCORE data movement (decode B=8 / 16, bf16): recurrent_state 1 crossing each way (6.3 / 12.6 MB per direction);
+mixed_qkv and conv_state q/k columns 1 whole-tile crossing per key head (R-STEP read them as B r row spans), v
+columns one row span per pair; conv_weight q/k once per key head, v once per pair core; b, a, A_log, dt_bias,
+norm_weight once per pair core (later units copy them locally); conv_state_out whole tiles once (Ct column tiles
+over the 2 Hk q / k cores; R-STEP wrote it as 3 B r row segments per column). Cross-core: 2 Hk multicasts of Kt fp32
+tiles (16 KiB) to the key head's pair cores.
 
 ## Notes
 
