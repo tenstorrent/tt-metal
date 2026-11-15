@@ -40,7 +40,7 @@ void kernel_main() {
         const auto s_shift = TensorAccessor(tensor::shift_src);
         dfb_scale.reserve_back(num_tiles_per_row);
         dfb_shift.reserve_back(num_tiles_per_row);
-        for (uint32_t t = 0; t < num_tiles_per_row_this_core; ++t) {
+        for (uint32_t t = 0; t < num_tiles_per_row; ++t) {
             noc.async_read(s_scale, dfb_scale, tile_size, {.page_id = t}, {.offset_bytes = t * tile_size});
             noc.async_read(s_shift, dfb_shift, tile_size, {.page_id = t}, {.offset_bytes = t * tile_size});
         }
