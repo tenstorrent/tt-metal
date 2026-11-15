@@ -648,3 +648,80 @@ flush delays the next launch past the ack. Fix: `gdn::NocDrainOnReturn` (declare
 passes 3 of 3 after; `hang_t.sh 0 T` passes 12 of 12 calls at T = 64, 128, 256, 384, 500, 512, 640. Guard set
 unchanged (device us: B=1 22.2-23.0, B=8 39.4-41.5, B=16 71.2-73.2, f32 29.8-31.0, T=96 54.5-55.2, B=2 T=40
 125.5-125.9, T=4096 910.4-911.6).
+
+### [ ] Refinement 17 — Split the kernels by role so that instrumented builds fit
+
+**Type**: refactor
+
+**Goal**: an enabler for the two perf entries after it. The compute kernel source is 79.6 KB and one
+binary carries every role (q / k core, piece, preparation, state, decode pair); since refinement 5
+every instrumented build (NoC event trace, per-zone profiler markers on all roles) exceeds the
+kernel-config text limit of 70,688 B, so nobody has had a NoC trace or link / bank shares of this op
+since then and the last three perf entries worked from ablations only. Split compute (and, where it
+pays, reader and writer) into one kernel source per role, with the shared code in headers, and have
+the program factory place the role's kernel on the role's core ranges. Behaviour, CB layout, runtime
+arguments and the descriptor cache (refinement 13) stay as they are; core ranges per role stay merged
+rectangles where they are today.
+
+**Verifier notes**: results bit-identical to before on every golden cell and on the in-place and
+next-program tests (refinement 16's `NocDrainOnReturn` must be in every dataflow kernel of every
+role). Record the text size of every kernel binary per role, plain and with the NoC trace build, in
+the Outcome.
+
+**Done when**: every role's kernel builds with NoC tracing and with profiler zones under the limit,
+one NoC-traced run of model_decode_b1 and model_decode_b16 completes and its capture path is in the
+Outcome, golden green, device kernel time of the guard set unchanged (within the spread), host time
+per repeat call not worse than refinement 13 left it (330 us prefill T=128, 112 us decode B=1).
+
+### [ ] Refinement 18 — Decode B=1: shorten the serial q / k chain
+
+**Type**: perf
+
+**Goal**: model_decode_b1 is at 22.0 us against a DRAM bound of 4.8 us (target 5.3 us) and has not
+moved since refinement 9; the state data (786 KB in, 786 KB out over 48 cores) is not what binds. What
+binds is a serial chain per key head before any state core can start: read window and conv weight ->
+4-tap conv + SiLU over the q | k columns -> L2 norm of q and of k (a full-row reduction, then a
+scale) -> multicast to the cores of that key head -> state update -> output -> RMS norm and gate ->
+write. Measure first with per-zone markers on one key head's chain (now possible after refinement 17):
+time from kernel start to (a) inputs landed, (b) conv done, (c) norms done, (d) k / q landed on the
+last state core, (e) state update done, (f) output written; put that table in the Outcome. Then cut
+the longest links. Levers, in the order the earlier outcomes suggest: (1) split the q / k
+preparation of a key head over 2 to 4 idle cores (72 of the 120 cores are idle at B=1), each doing a
+column range of the conv and a partial sum of squares, with the partial sums combined on one core and
+the scale applied by the receivers; (2) hand k and q over in half tiles or as soon as each is ready
+rather than both after the second norm; (3) start the state read and exp(g) / beta at kernel start so
+that they never wait for q / k (check that they do not today); (4) the state cores start u_t on the
+k columns they have while the rest arrives; (5) remove fixed setup on the critical cores (CB
+reservations, semaphore round trips, runtime-argument parsing) that the markers show before (a).
+
+**Verifier notes**: guard set model_decode_b8, model_decode_b16, prefill T=128, model_prefill_4096
+must not regress. Accuracy gates unchanged (state-carry cases at 0.002). The in-place and
+next-program tests stay green.
+
+**Done when**: model_decode_b1 device kernel time is below 17 us (median of 11 after launch 1) or the
+marker table shows which link cannot be shortened and why, golden green, no regression on the guard
+set.
+
+### [ ] Refinement 19 — Decode B=16: state reads issued earlier (second producer on the writer RISC)
+
+**Type**: perf
+
+**Goal**: model_decode_b16 is at 73 us against a bound of 51.7 us (target 57.5 us). Refinement 15
+found: without any state write it would be 65.3 us; the critical path is the S0 reads of the pair
+cores in NoC rows y = 5-6, issued at 26 to 34 us (unit 1 at 42 to 47 us) because those cores' window /
+weight / gate reads land late, and every early write delays them further. Do what that outcome names
+as next: the writer RISC is idle in that phase, so let it read S0 on its own NoC into a second CB (or
+into the same CB under a simple hand-over) from kernel start, so that the state of unit 0 and unit 1
+is in L1 before the small inputs are; order the small-input reads of the late cores first; check with
+a NoC trace (refinement 17) which links the y = 5-6 rows share with the write-back and whether a
+different bank / NoC assignment for those rows removes the contention. Same idea at B=8 where it
+applies (39.6 us against a target of 29.3 us).
+
+**Verifier notes**: guard set model_decode_b1, model_decode_b8, prefill T=128, model_prefill_4096 must
+not regress; bit-identical outputs including in place; in-place aliasing stays correct when the same
+DRAM buffer is read by one RISC and written by the other (the read of every address completes before
+its write is issued); next-program test green.
+
+**Done when**: model_decode_b16 is below 68 us and model_decode_b8 not worse (median of 11 after
+launch 1), or the trace shows the reads cannot be issued earlier and why; golden green, no regression
+on the guard set.
