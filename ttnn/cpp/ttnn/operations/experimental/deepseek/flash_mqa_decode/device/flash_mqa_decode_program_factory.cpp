@@ -362,6 +362,10 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
     const uint32_t max_len = ring_capacity / args.k_chunk_size + 1 + selected_capacity / args.k_chunk_size;
     const uint32_t max_shared_chunks = ((share_reads ? max_len : max_shared_len) + num_s_blocks - 1) / num_s_blocks;
     const bool per_row_selected = has_selected && !dense && selected_capacity > 0 && !share_reads;
+    // Sliding layers: the S-block columns whose leaders read the first chunks (see the reader) sit helper_offset
+    // columns after the columns they help. Helping from the idle columns (ring_chunks + 1) measured slower than each
+    // column's own leaders (0).
+    constexpr uint32_t helper_offset = 0;
 
     const tt::DataFormat bf16_df = tt::DataFormat::Float16_b;
     const tt::DataFormat kv_df = datatype_to_dataformat_converter(kv.dtype());
@@ -509,6 +513,7 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         {"cb_cs", cb_cs},
         {"cb_cs_raw", cb_cs_raw},
         {"q_semaphore_id", q_semaphore_id},
+        {"helper_offset", helper_offset},
         {"kv_semaphore_id", kv_semaphore_id},
         {"num_head_groups", num_head_groups},
         {"share_reads", share_reads ? 1u : 0u},
@@ -631,6 +636,14 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         }
         for (uint32_t y = 0; y < num_head_groups * row_groups; ++y) {
             const auto noc = device->worker_core_from_logical_core(CoreCoord(s_block, y));
+            reader_args.emplace_back(static_cast<uint32_t>(noc.x));
+            reader_args.emplace_back(static_cast<uint32_t>(noc.y));
+        }
+        // The column a helper S-block helps (its own column otherwise, unused).
+        const uint32_t helped =
+            s_block >= helper_offset && s_block - helper_offset < num_s_blocks ? s_block - helper_offset : s_block;
+        for (uint32_t y = 0; y < num_head_groups * row_groups; ++y) {
+            const auto noc = device->worker_core_from_logical_core(CoreCoord(helped, y));
             reader_args.emplace_back(static_cast<uint32_t>(noc.x));
             reader_args.emplace_back(static_cast<uint32_t>(noc.y));
         }
