@@ -479,8 +479,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(6));
     st[48] = t_cred;
     st[49] = t_empty;
-    st[50] = n_fwd;
-    st[51] = n_credit;
+    st[58] = n_fwd;
+    st[59] = n_credit;
     for (uint32_t i = 0; i < 4; ++i) {
         st[470 + i] = tot[i];
         st[474 + i] = mx[i];
