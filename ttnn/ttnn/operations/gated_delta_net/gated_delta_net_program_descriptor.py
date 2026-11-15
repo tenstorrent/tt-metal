@@ -149,6 +149,15 @@ EARLY_S0 = 0
 # Finished pair states awaiting the writer, at most unit_depth: the writer issues a core's non-last state after the next
 # unit's coefficients, so compute's next update must not wait for it.
 STATE_OUT_DEPTH = 2
+# R-QKCORE pair cores: the NoC every core writes its final state on (None: its writer's). A core whose writer is on the
+# other NoC (SWAP_NOC_ROWS) hands every state tile to its reader instead.
+STATE_WRITE_NOC = None
+# R-QKCORE pair cores writing on STATE_WRITE_NOC (or every core when it is None): the reader also writes every
+# STATE_SPLIT-th final-state tile, on the other NoC (0: none).
+STATE_SPLIT = 0
+# R-QKCORE pair cores running several units: the reader writes the final states of all but the last unit, as compute
+# packs them (the writer would issue them only at the next unit's store point), the writer the last unit's.
+STATE_READER_EARLY_UNITS = False
 CONV_ACC_DEPTH = 1  # partial tap sum: compute-to-compute, one compute thread, so depth 1
 
 HISTORY = 3  # spec constant: conv_state rows per sequence
@@ -222,6 +231,7 @@ CB_IN_VEC = 47
 CB_IN_V = 48
 CB_V_PREP = 49
 CB_ZW = 50  # R-PREP prep core: norm_weight (*)row silu(z) of its rows, ahead of the o that the RMS norm scales
+CB_STATE_DONE = 51  # STATE_SPLIT: reader-to-writer token per final state, once the reader's tiles of it have left
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
@@ -585,7 +595,8 @@ def _row_stage_bytes(token_tile_bytes):
 def _plan_bytes(plan, dtype):
     token_bytes = _tile_bytes(dtype)
     cb_bytes = sum(pages * (token_bytes if indices[0] in TOKEN_CBS else FP32_TILE_BYTES) for indices, pages in plan)
-    return cb_bytes + BF16_TILE_BYTES + SIGNAL_PAGE_BYTES * WINDOW_DEPTH + _row_stage_bytes(token_bytes)
+    signal_bytes = SIGNAL_PAGE_BYTES * (WINDOW_DEPTH + STATE_OUT_DEPTH)  # cb_window_zeroed, cb_state_done
+    return cb_bytes + BF16_TILE_BYTES + signal_bytes + _row_stage_bytes(token_bytes)
 
 
 def l1_cb_budget(device):
@@ -833,7 +844,7 @@ def compute_config_key(config):
 # Buffer addresses are the reader's and writer's common runtime args, in this order; every other argument is a
 # function of the program cache key.
 def reader_addresses(inputs, outputs):
-    return [t.buffer_address() for t in inputs] + [outputs[1].buffer_address()]
+    return [t.buffer_address() for t in inputs] + [outputs[1].buffer_address(), outputs[2].buffer_address()]
 
 
 def writer_addresses(outputs):
@@ -1191,6 +1202,33 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ],
         )
     )
+    # The reader writes its share after all of its reads, so only on cores whose states all fit in cb_state_out.
+    out_states = min(STATE_OUT_DEPTH, unit_depth) if prep is None else 0
+
+    def reader_share(core, count):
+        """Final-state tiles the reader writes (gdn::state_tile_on_reader): R-QKCORE pair cores only."""
+        if not qk_cores or count > out_states:
+            return 0
+        writer_noc = 0 if SWAP_NOC_ROWS and core.y < SWAP_NOC_ROWS else 1
+        return 1 if STATE_WRITE_NOC is not None and writer_noc != STATE_WRITE_NOC else STATE_SPLIT
+
+    def reader_units(count):
+        """Leading units whose final states the reader writes whole."""
+        return count - 1 if qk_cores and STATE_READER_EARLY_UNITS and count <= out_states else 0
+
+    state_split = any(reader_share(c, n) or reader_units(n) for c, _, n, _ in assignment)
+    if state_split:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=SIGNAL_PAGE_BYTES * STATE_OUT_DEPTH,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_STATE_DONE, data_format=ttnn.bfloat16, page_size=SIGNAL_PAGE_BYTES
+                    )
+                ],
+            )
+        )
     cbs.append(
         ttnn.CBDescriptor(
             total_size=BF16_TILE_BYTES,
@@ -1204,7 +1242,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     )
 
     # ---- compile-time args per role (a prep core's unit is a key head: its r value heads' v columns) ----
-    reader_tensors = (*inputs, conv_state_out)
+    reader_tensors = (*inputs, conv_state_out, recurrent_state_out)
     # Token tile bytes, state tile bytes.
     geometry_ct = [token_tile_bytes, FP32_TILE_BYTES]
     reader_accessor_ct = [arg for t in reader_tensors for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
@@ -1276,12 +1314,15 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         if prep is not None:
             group_first = first_unit - first_unit % (heads * pieces)
             producers = [len(group_producers[group_first]) // 2] + group_producers[group_first]
-        rts[0][core.x, core.y] = [first_unit, count, tokens, role, zero_slots] + rows + producers + cs_args(core)
+        share = [reader_units(count), reader_share(core, count)] if state_split else []
+        rts[0][core.x, core.y] = (
+            [first_unit, count, tokens, role, zero_slots] + rows + producers + cs_args(core) + share
+        )
         # R-VSPLIT: NoC coordinates of the pair's piece cores, in piece order.
         group_first = first_unit - first_unit % pieces
         peers = [c for s in range(pieces) for c in unit_noc[group_first + s]] if pieces > 1 else []
         rts[1][core.x, core.y] = (
-            [first_unit, count, tokens, role, zero_slots, zero_slot_bytes] + rows + peers + producers
+            [first_unit, count, tokens, role, zero_slots, zero_slot_bytes] + rows + peers + producers + share
         )
         rts[2][core.x, core.y] = [first_unit, count, tokens, v_eps_bits, role] + rows
     roles[state_role] = (state_cores, *rts)
@@ -1368,6 +1409,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
         ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
         ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
+        ("GDN_STATE_SPLIT", str(int(state_split))),
         ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
     ]
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).

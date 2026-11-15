@@ -5,11 +5,15 @@
 with shared tile rows, prefill over several tile rows, batched prefill): a correctness gate plus a fixed
 launch count for `run_safe_pytest.sh --profile` device-kernel-time measurement."""
 
+import ast
+import os
+
 import pytest
 import torch
 
 import ttnn
 from ttnn.operations.gated_delta_net import gated_delta_net
+from ttnn.operations.gated_delta_net import gated_delta_net_program_descriptor as gdn_pd
 from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net import (
     ORDER,
     compute_config,
@@ -19,6 +23,11 @@ from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net impor
 from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_bf16 import _rel_metrics
 
 LAUNCHES = 3
+# Knob overrides for A/B measurement, e.g. GDN_KNOBS="STATE_SPLIT=0".
+EXPERIMENT = {
+    name: ast.literal_eval(value)
+    for name, value in (item.split("=") for item in os.environ.get("GDN_KNOBS", "").split(",") if item)
+}
 
 
 def _to_device(tensors, device, token_dtype):
@@ -46,7 +55,10 @@ def _to_device(tensors, device, token_dtype):
         pytest.param(((1, 4096, 2560), (1, 12, 128, 128)), ttnn.bfloat16, id="model_prefill_4096"),
     ],
 )
-def test_perf_decode(device, inputs, token_dtype):
+def test_perf_decode(device, monkeypatch, inputs, token_dtype):
+    for name, value in EXPERIMENT.items():
+        monkeypatch.setattr(gdn_pd, name, value)
+    gdn_pd.clear_program_cache()
     torch.manual_seed(0)
     tensors = make_inputs(inputs)
     if token_dtype == ttnn.bfloat16:

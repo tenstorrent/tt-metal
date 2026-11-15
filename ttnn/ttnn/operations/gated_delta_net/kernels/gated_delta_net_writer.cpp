@@ -68,6 +68,8 @@ constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;  // R-PREP q / k core: writes
 constexpr bool HOLD_QK = GDN_HOLD_QK != 0;     // compute holds the landed q/k rows for every unit (see compute)
 constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;   // compute normalizes unit u after unit u + 1's token step
 constexpr uint32_t STATE_STAGGER = GDN_STATE_STAGGER;  // compute's rotation of the final-state tiles (see compute)
+constexpr bool STATE_SPLIT = GDN_STATE_SPLIT != 0;     // the reader writes this core's reader_share of the state tiles
+constexpr uint32_t cb_state_done = GDN_CB_STATE_DONE;  // STATE_SPLIT: the reader's tiles of a state have left
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 constexpr uint32_t ONE_BITS = 0x3f800000u;  // 1.0f
 
@@ -352,20 +354,30 @@ void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t
 
 }  // namespace
 
-// Issues the piece's Kt x Vb state tiles of cb_state_out to recurrent_state_out (pair state page `first_page` on);
-// the caller barriers and pops.
+// Issues the piece's Kt x Vb state tiles of cb_state_out to recurrent_state_out (pair state page `first_page` on),
+// except the reader's (reader_share); the caller barriers and calls pop_state.
 template <uint32_t Kt, uint32_t Vt, uint32_t Vb, typename Accessor>
-void store_state(const Accessor& state_out, uint32_t first_page) {
+void store_state(
+    const Accessor& state_out, uint32_t first_page, uint32_t unit_idx, uint32_t reader_units, uint32_t reader_share) {
     // Compute pushes the final state in update batches: each tile goes out as soon as it is packed.
     const uint32_t state_base = get_read_ptr(cb_state_out);
-    constexpr uint32_t n = Kt * Vb;
-    const uint32_t rot = (first_page / (Kt * Vt) * STATE_STAGGER) % n;
-    for (uint32_t j = 0; j < n; ++j) {
+    for (uint32_t j = 0; j < Kt * Vb; ++j) {
+        if (gdn::state_tile_on_reader(unit_idx, j, reader_units, reader_share)) {
+            continue;
+        }
         cb_wait_front(cb_state_out, j + 1);
-        const uint32_t i = j + rot < n ? j + rot : j + rot - n;
-        const uint32_t page = first_page + (i / Vb) * Vt + i % Vb;
+        const uint32_t page = gdn::state_out_page<Kt, Vt, Vb>(first_page, j, STATE_STAGGER);
         noc_async_write(state_base + j * STATE_TILE_BYTES, state_out.get_noc_addr(page), STATE_TILE_BYTES);
     }
+}
+
+// Frees the front state of cb_state_out (its writes have completed), once the reader's have too (reader_writes).
+FORCE_INLINE void pop_state(uint32_t n_state, bool reader_writes) {
+    if (STATE_SPLIT && reader_writes) {
+        cb_wait_front(cb_state_done, 1);
+        cb_pop_front(cb_state_done, 1);
+    }
+    cb_pop_front(cb_state_out, n_state);
 }
 
 void kernel_main() {
@@ -417,6 +429,11 @@ void kernel_main() {
             producer_y[q] = get_arg_val<uint32_t>(arg++);
         }
     }
+    // STATE_SPLIT: the reader's final-state tiles (gdn::state_tile_on_reader).
+    const bool split_args = STATE_SPLIT && !QK_CORE && !PREP && !PREP_QK && !STATE;
+    const uint32_t reader_units = split_args ? get_arg_val<uint32_t>(arg++) : 0;
+    const uint32_t reader_share = split_args ? get_arg_val<uint32_t>(arg++) : 0;
+    const bool reader_writes = reader_units != 0 || reader_share != 0;
 
     // Zero the window groups the reader will use once (it keeps rows outside the token rows zero from then
     // on), one slot at a time with a token per slot so the reader starts on slot 0 without waiting for
@@ -499,9 +516,10 @@ void kernel_main() {
     bool retiring = false;                 // output rows (and an issued state) await the barrier and their pops
     bool state_issued = false;             // the state at the front of cb_state_out has been issued
     uint32_t pending_state = 0xffffffffu;  // first state page of an unissued finished state
+    uint32_t pending_unit = 0;             // its unit index on this core
     auto retire = [&]() {
         if (pending_state != 0xffffffffu) {
-            store_state<Kt, Vt, Vb>(state_out, pending_state);
+            store_state<Kt, Vt, Vb>(state_out, pending_state, pending_unit, reader_units, reader_share);
             pending_state = 0xffffffffu;
             state_issued = true;
         }
@@ -512,7 +530,7 @@ void kernel_main() {
         }
         if (state_issued) {
             noc_async_write_barrier();
-            cb_pop_front(cb_state_out, n_state);
+            pop_state(n_state, reader_writes);
             state_issued = false;
         }
     };
@@ -622,10 +640,11 @@ void kernel_main() {
                 // T = 1: the unit's only tile row. The last unit's state goes out before the previous unit's rows,
                 // which compute produces only after that state's update.
                 if (unit_idx + 1 == num_units) {
-                    store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
+                    store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first, unit_idx, reader_units, reader_share);
                     state_issued = true;
                 } else {
                     pending_state = pair * Kt * Vt + v_first;
+                    pending_unit = unit_idx;
                 }
                 if (unit_idx > 0) {
                     store_rows<false>(out_acc, Vb, lag_page, lag_base, lag_lo, lag_hi);
@@ -639,10 +658,11 @@ void kernel_main() {
             }
             if (tr == last_tr) {
                 if (unit_idx + 1 == num_units) {
-                    store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
+                    store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first, unit_idx, reader_units, reader_share);
                     state_issued = true;
                 } else {
                     pending_state = pair * Kt * Vt + v_first;
+                    pending_unit = unit_idx;
                 }
                 store_rows<false>(out_acc, Vb, tr * out_width_tiles + head * Vt + v_first, base_row, lo, hi);
                 retiring = true;
@@ -651,9 +671,9 @@ void kernel_main() {
             }
         }
         if constexpr (STATE) {
-            store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
+            store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first, unit_idx, reader_units, reader_share);
             noc_async_write_barrier();
-            cb_pop_front(cb_state_out, n_state);
+            pop_state(n_state, reader_writes);
         }
     }
     if (lag) {

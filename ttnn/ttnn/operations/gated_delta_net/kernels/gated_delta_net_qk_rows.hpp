@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: (c) 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// R-QKCORE window gather, shared by the q / k core's reader (NCRISC) and writer (BRISC), which split the rows.
+// R-QKCORE helpers shared by the reader (NCRISC) and writer (BRISC): the q / k core window gather, which they split
+// by rows, and the final-state tile order, which pair cores split by tiles (GDN_STATE_SPLIT).
 
 #pragma once
 
@@ -31,6 +32,22 @@ FORCE_INLINE void copy_history_rows(uint32_t cs_col, uint32_t col_win, uint32_t 
             noc_async_read_one_packet_with_state(src + FACE_BYTES, dst + FACE_BYTES);
         }
     }
+}
+
+// recurrent_state_out page of the j-th final-state tile compute packs for the piece whose first page is first_page:
+// compute runs the Kt x Vb tiles rotated by (pair * stagger) mod Kt Vb (writer and reader, which split the tiles).
+template <uint32_t Kt, uint32_t Vt, uint32_t Vb>
+FORCE_INLINE uint32_t state_out_page(uint32_t first_page, uint32_t j, uint32_t stagger) {
+    constexpr uint32_t n = Kt * Vb;
+    const uint32_t rot = (first_page / (Kt * Vt) * stagger) % n;
+    const uint32_t i = j + rot < n ? j + rot : j + rot - n;
+    return first_page + (i / Vb) * Vt + i % Vb;
+}
+
+// Final-state tile j of a core's unit_idx-th unit is the reader's when the unit is one of its first reader_units, or
+// j % share == share - 1 (share 0: none, 1: all). Both are per-core runtime args.
+FORCE_INLINE bool state_tile_on_reader(uint32_t unit_idx, uint32_t j, uint32_t reader_units, uint32_t share) {
+    return unit_idx < reader_units || (share != 0 && j % share == share - 1);
 }
 
 // Rows [0, split) are the reader's, [split, B) the writer's.

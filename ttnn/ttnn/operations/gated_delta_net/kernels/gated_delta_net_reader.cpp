@@ -89,6 +89,13 @@ constexpr bool EARLY_S0 = GDN_EARLY_S0 != 0;
 // conv_state_out is conv_state: a core overwrites conv_state rows / columns other cores read only after their reads
 // have landed (each reader signals the writer's GDN_CS_READ_SEM_ID).
 constexpr bool CS_IN_PLACE = GDN_CS_IN_PLACE != 0;
+// R-QKCORE pair cores: this reader writes its share of the final-state tiles on its NoC (runtime reader_share, see
+// gdn::state_tile_on_reader), the writer the rest on the other one. It never pops cb_state_out: it follows compute's
+// pushes by the received count and signals the writer, which pops a state only after both parts have left
+// (cb_state_done).
+constexpr bool STATE_SPLIT = GDN_STATE_SPLIT != 0;
+constexpr uint32_t cb_state_out = GDN_CB_STATE_OUT;
+constexpr uint32_t cb_state_done = GDN_CB_STATE_DONE;
 static_assert((STAGE_SLOTS == 0) == (SEG_BYTES % READ_ALIGN == 0), "row staging iff a face row is sub-alignment");
 
 // Byte offset of the left half of tile row p (faces 0/2); the right half is FACE_BYTES further.
@@ -261,6 +268,7 @@ void kernel_main() {
     constexpr auto dt_bias_args = TensorAccessorArgs<a_log_args.next_compile_time_args_offset()>();
     constexpr auto norm_w_args = TensorAccessorArgs<dt_bias_args.next_compile_time_args_offset()>();
     constexpr auto conv_state_out_args = TensorAccessorArgs<norm_w_args.next_compile_time_args_offset()>();
+    constexpr auto state_out_args = TensorAccessorArgs<conv_state_out_args.next_compile_time_args_offset()>();
 
     // Buffer addresses are common runtime args: a cached program patches them per call without per-core args.
     uint32_t addr = 0;
@@ -275,6 +283,9 @@ void kernel_main() {
     const auto dt_bias = TensorAccessor(dt_bias_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
     const auto norm_w = TensorAccessor(norm_w_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
     const auto conv_state_out = TensorAccessor(conv_state_out_args, get_common_arg_val<uint32_t>(addr++), TILE_BYTES);
+    const auto state_out = TensorAccessor(state_out_args, get_common_arg_val<uint32_t>(addr++), STATE_TILE_BYTES);
+    // Compute pushes no final state before this reader has supplied S0: the count now is the base of every state's.
+    const uint16_t state_out_pushed0 = STATE_SPLIT ? reg_read((uintptr_t)get_cb_tiles_received_ptr(cb_state_out)) : 0;
     uint32_t arg = 0;
     const uint32_t first_unit = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
@@ -468,6 +479,8 @@ void kernel_main() {
         }
         cs_reads = get_arg_val<uint32_t>(arg++);
     }
+    const uint32_t reader_units = STATE_SPLIT ? get_arg_val<uint32_t>(arg++) : 0;
+    const uint32_t reader_share = STATE_SPLIT ? get_arg_val<uint32_t>(arg++) : 0;
 
     uint32_t kq_rows_landed = 0;  // PREP_SHARE_QK prep core: tile rows of qn / kn handed to compute
     uint32_t prev_head = 0xffffffffu;
@@ -928,6 +941,34 @@ void kernel_main() {
                 }
                 noc_async_write_barrier();
             }
+        }
+    }
+
+    // Only after every read: the host gives a core a share only if cb_state_out holds all of its states, so compute
+    // never waits on these writes for space.
+    if (STATE_SPLIT && !PREP && !PREP_QK && !STATE && (reader_units != 0 || reader_share != 0)) {
+        // The k-th state (unit k) occupies cb_state_out tiles [k n_state, (k + 1) n_state) modulo its size.
+        const auto& state_cb = get_local_cb_interface(cb_state_out);
+        const uint32_t fifo_base = state_cb.fifo_limit - state_cb.fifo_size;
+        const uint32_t fifo_tiles = state_cb.fifo_size / STATE_TILE_BYTES;
+        const uintptr_t pushed_ptr = (uintptr_t)get_cb_tiles_received_ptr(cb_state_out);
+        for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
+            const uint32_t unit = first_unit + unit_idx * unit_stride;
+            const uint32_t first_page = (unit / PIECES) * Kt * Vt + (unit % PIECES) * Vb;
+            for (uint32_t j = 0; j < n_state; ++j) {
+                if (!gdn::state_tile_on_reader(unit_idx, j, reader_units, reader_share)) {
+                    continue;
+                }
+                const uint32_t tile = unit_idx * n_state + j;
+                while ((uint16_t)((uint16_t)reg_read(pushed_ptr) - state_out_pushed0) <= tile) {
+                }
+                const uint32_t page = gdn::state_out_page<Kt, Vt, Vb>(first_page, j, GDN_STATE_STAGGER);
+                noc_async_write(
+                    fifo_base + (tile % fifo_tiles) * STATE_TILE_BYTES, state_out.get_noc_addr(page), STATE_TILE_BYTES);
+            }
+            noc_async_write_barrier();
+            cb_reserve_back(cb_state_done, 1);
+            cb_push_back(cb_state_done, 1);
         }
     }
 }
