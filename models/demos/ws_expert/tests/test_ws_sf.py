@@ -27,39 +27,32 @@ from models.demos.ws_expert.tests.test_ws_fab_bench import (
     make_inputs_owned,
 )
 from models.demos.ws_expert.ws_group import GCfg
-from models.demos.ws_expert.ws_sf import RCfg, build_sf, hops, ring_schedule, rings, snake, torus_cycles
+from models.demos.ws_expert.ws_sf import INJ, TERM, RCfg, build_sf, conveyor, flow, make_tables, rings, torus_cycles
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
 
 
-def check_schedule(shape, rc: RCfg, cfg: GCfg):
-    """Every chip receives every slice of every expert it does not own exactly once, the owner injects each slice into
-    both directions of its lane, and each chip's outgoing stream on a ring is exactly the next chip's incoming one.
-    Returns the incoming packets per chip and ring (load balance)."""
+def check_schedule(shape, rc: RCfg, cfg: GCfg, seqs):
+    """The ring orders (ws_sf.conveyor): each chip's outgoing stream on a ring is exactly the next chip's incoming one,
+    only owners inject, and every chip receives every slice of every expert it does not own exactly once. Returns the
+    incoming packets per chip and ring (load balance)."""
     R, Cn = shape
     NCHIP = R * Cn
-    NCH = (2 * cfg.KT + cfg.PAIRS * cfg.DCOLS) // rc.CHT
-    rl = rings(shape, rc)
-    NL = len(rl) // 2
     got = [Counter() for _ in range(NCHIP)]
     load = {}
-    for lane, d, cyc, _ in rl:
-        N = len(cyc)
-        streams = {}
-        for rc_ in cyc:
-            me = rc_[0] * Cn + rc_[1]
-            sch = ring_schedule(cfg.nexp, NCHIP, cfg.G, cfg.GC, NL, NCH, hops(cyc, rc_, d, Cn), d, lane, N)
-            streams[rc_] = sch
-            for kind, e, n, c, u in sch:
-                if kind != 0 and u == 0:
-                    got[me][(e, c)] += 1
-            load[(me, lane, d)] = sum(k != 0 for k, *_ in sch)
-        for i, rc_ in enumerate(cyc):
-            nx = cyc[(i + (1 if d == 0 else -1)) % N]
-            out = [t[1:] for t in streams[rc_] if t[0] != 2]
-            inc = [t[1:] for t in streams[nx] if t[0] != 0]
-            assert out == inc, f"ring lane {lane} dir {d}: stream {rc_} -> {nx} differs"
+    for f, (lane, d, cyc, _) in enumerate(rings(shape, rc)):
+        fl = flow(cyc, d, Cn)
+        for i, chip in enumerate(fl):
+            nx = fl[(i + 1) % len(fl)]
+            out = [t[1:] for t in seqs[(chip, f)] if t[0] != TERM]
+            inc = [t[1:] for t in seqs[(nx, f)] if t[0] != INJ]
+            assert out == inc, f"ring {f}: stream {chip} -> {nx} differs"
+            for kind, e, c, u in seqs[(chip, f)]:
+                assert kind != INJ or e % NCHIP == chip
+                if kind != INJ and u == 0:
+                    got[chip][(e, c)] += 1
+            load[(chip, f)] = sum(k != INJ for k, *_ in seqs[(chip, f)])
     for me in range(NCHIP):
         want = {(e, (e % cfg.G) * cfg.GC + j) for e in range(cfg.nexp) if e % NCHIP != me for j in range(cfg.GC)}
         assert set(got[me]) == want and all(v == 1 for v in got[me].values()), f"chip {me} receives a wrong slice set"
@@ -70,13 +63,13 @@ def check_schedule(shape, rc: RCfg, cfg: GCfg):
 def test_sf_schedule(shape, nexp):
     cfg = GCfg(nexp=nexp, G=4)
     rc = RCfg() if shape[0] == 2 else RCfg(cycles=torus_cycles(*shape))
-    load = check_schedule(shape, rc, cfg)
-    per_ring = Counter()
-    for (me, lane, d), v in load.items():
-        per_ring[(lane, d)] += v
+    seqs, steps = conveyor(shape, rc, cfg)
+    load = check_schedule(shape, rc, cfg, seqs)
+    out_max = max(sum(k != TERM for k, *_ in sq) for sq in seqs.values())
     logger.info(
-        f"WSS schedule {shape}: incoming packets a chip and ring min {min(load.values())} max {max(load.values())}; "
-        f"per ring {dict(per_ring)}"
+        f"WSS schedule {shape} {nexp} experts: incoming packets a chip and ring min {min(load.values())} max "
+        f"{max(load.values())}; conveyor model {steps} steps for at most {out_max} packets a link "
+        f"({100 * out_max / steps:.1f}% busy)"
     )
     assert max(load.values()) - min(load.values()) <= max(load.values()) // 4
 
@@ -108,11 +101,15 @@ def fwd_report(rc: RCfg, nf, sst_chip, clk):
 
 def run(mesh, cfg: GCfg, rc: RCfg, Ms, dev, refs, tag, warm=WARM, meas=MEAS):
     chips = list(range(mesh.get_num_devices()))
+    tabs = make_tables(mesh, cfg, rc)
+    check_schedule(tuple(mesh.shape), rc, cfg, tabs["seqs"])
     clk = aiclk_mhz(0)
     nf = len(rings(tuple(mesh.shape), rc))
     rows, fw = [], None
     for i in range(warm + meas):
-        mpd, io, st, sst = build_sf(mesh, cfg, rc, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], dev["out_t"])
+        mpd, io, st, sst = build_sf(
+            mesh, cfg, rc, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], dev["out_t"], tabs
+        )
         ttnn.synchronize_device(mesh)  # (every chip's fresh credit words are written before any chip starts)
         ttnn.generic_op(io, mpd)
         ttnn.synchronize_device(mesh)
@@ -172,7 +169,6 @@ def rcfg_from_env(**kw):
 def test_ws_sf_tray(mesh_device, M):
     """Stage A: one 2 x 4 tray, the row-snake cycle (0,0)..(0,3),(1,3)..(1,0), both directions x 2 links."""
     cfg, rc = GCfg(nexp=32, G=4), rcfg_from_env()
-    check_schedule(tuple(mesh_device.shape), rc, cfg)
     Ms = [M] * cfg.nexp
     dev, refs = make_inputs(mesh_device, cfg, rc.CHT, Ms)
     warm = int(os.environ.get("WS_SF_WARM", WARM))
@@ -189,7 +185,6 @@ def test_ws_sf_glx(mesh_device, nexp, T, M):
     nchip = mesh_device.get_num_devices()
     cfg = GCfg(nexp=nexp, G=4, T=T)
     rc = rcfg_from_env(cycles=torus_cycles(*tuple(mesh_device.shape)), own_slices=True)
-    check_schedule(tuple(mesh_device.shape), rc, cfg)
     Ms = [M] * cfg.nexp
     dev, refs = make_inputs_owned(mesh_device, cfg, rc.CHT, Ms, nchip)
     warm = int(os.environ.get("WS_SF_WARM", WARM))

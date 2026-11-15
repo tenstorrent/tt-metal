@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // ws_expert store-and-forward forwarder, NCRISC (NOC1): owns the fabric connection to the next chip of this directed
-// ring and walks the ring's stream (wr_seq.hpp) in order:
+// ring and walks the ring's order table (wr_seq.hpp, loaded into CB 2 by the BRISC) in order:
 //   INJ:  sends the chunk the BRISC read into CB 0;
 //   FWD:  once staging slot k % S has arrived, sends it on;
 //   TERM: nothing to send (the BRISC lands it).
@@ -14,15 +14,17 @@
 // this ring's upstream chip, and it sends the count on as a fabric inline write into upstream's W_DFREE word. This
 // core does the same for its pair: W_RELAY changes go to the next chip, batched by CRB while packets are flowing.
 // Every wait polls the relay, so credits keep moving while this ring is blocked.
-// Deadlock: every forwarder, lander and injector handles packets in the same global expert-major order, and the
-// staging slots are FIFOs between neighbours, so the least expert e with unfinished work always progresses: every
-// slot on its path holds only packets <= e, its terminal chip needs no downstream space, and its group slots were
-// freed by expert e - 2G, which has fully landed. No bubble is needed for injection.
+// Deadlock freedom: the tables are the time order of a synchronous model of all rings (ws_sf.conveyor) in which each
+// packet goes on the moment it arrives and every expert e is injected only after experts <= e - 2G of its group have
+// reached every chip. Each wait here is on an event that comes earlier in that model's time (the previous table entry,
+// the packet's previous hop, the downstream slot freed S packets earlier, and for landing the group slot freed by
+// expert e - 2G, all of whose packets landed earlier), so no cycle of waits can form, whatever the real timing.
 // At the end the core keeps relaying until its pair's last count went out and downstream returned all its slots, so
 // no fabric write lands after the program ends.
-// RT: 0 dir, 1 lane, 2 N, 3 my mesh id, 4 next chip id, 5 next chip's forwarder (same ring) xy, 6 pair xy (this chip),
-//     7 next chip's pair xy, 8.. hop[NCHIP] along dir, hop[NCHIP] along the opposite direction, then fabric args
-// CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 CHT, 5 G, 6 GC, 7 NCHIP, 8 NL, 9 S, 10 words, 11 CRB
+// RT: 0 table length, 1 packets in (FWD + TERM), 2 packets out (INJ + FWD), 3 packets in on the pair's ring,
+//     4 my mesh id, 5 next chip id, 6 next chip's forwarder (same ring) xy, 7 pair xy (this chip), 8 next chip's pair
+//     xy, then fabric args
+// CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 CHT, 5 G, 6 GC, 7 NCHIP, 8 S, 9 words, 10 CRB
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -32,24 +34,15 @@
 using namespace tt::tt_fabric::mesh::experimental;
 
 void kernel_main() {
-    constexpr uint32_t NEXP = get_compile_time_arg_val(0), KT = get_compile_time_arg_val(1);
-    constexpr uint32_t KTD = get_compile_time_arg_val(2), DCOLS = get_compile_time_arg_val(3);
-    constexpr uint32_t CHT = get_compile_time_arg_val(4), G = get_compile_time_arg_val(5);
-    constexpr uint32_t GC = get_compile_time_arg_val(6), NCHIP = get_compile_time_arg_val(7);
-    constexpr uint32_t NL = get_compile_time_arg_val(8), S = get_compile_time_arg_val(9);
-    constexpr uint32_t words = get_compile_time_arg_val(10), CRB = get_compile_time_arg_val(11);
-    constexpr uint32_t NCH = (KT * 2 + KTD * DCOLS) / CHT;
+    constexpr uint32_t CHT = get_compile_time_arg_val(4), S = get_compile_time_arg_val(8);
+    constexpr uint32_t words = get_compile_time_arg_val(9), CRB = get_compile_time_arg_val(10);
 
-    const uint32_t dir = get_arg_val<uint32_t>(0), lane = get_arg_val<uint32_t>(1), N = get_arg_val<uint32_t>(2);
-    const uint16_t my_mesh = get_arg_val<uint32_t>(3);
-    const uint8_t next_chip = get_arg_val<uint32_t>(4);
-    const uint32_t dxy = get_arg_val<uint32_t>(5), pxy = get_arg_val<uint32_t>(6), rxy = get_arg_val<uint32_t>(7);
-    uint32_t hop[NCHIP], hop_pair[NCHIP];
-    for (uint32_t o = 0; o < NCHIP; ++o) {
-        hop[o] = get_arg_val<uint32_t>(8 + o);
-        hop_pair[o] = get_arg_val<uint32_t>(8 + NCHIP + o);
-    }
-    size_t arg_idx = 8 + 2 * NCHIP;
+    const uint32_t len = get_arg_val<uint32_t>(0), total_in = get_arg_val<uint32_t>(1);
+    const uint32_t total_out = get_arg_val<uint32_t>(2), pair_in = get_arg_val<uint32_t>(3);
+    const uint16_t my_mesh = get_arg_val<uint32_t>(4);
+    const uint8_t next_chip = get_arg_val<uint32_t>(5);
+    const uint32_t dxy = get_arg_val<uint32_t>(6), pxy = get_arg_val<uint32_t>(7), rxy = get_arg_val<uint32_t>(8);
+    size_t arg_idx = 9;
     auto conn = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
     conn.open();
     PacketHeaderPool::reset();
@@ -67,17 +60,6 @@ void kernel_main() {
         invalidate_l1_cache();
         return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + w * 16);
     };
-
-    // stream totals: packets in (FWD + TERM) and out (INJ + FWD) on this ring, packets in on the pair's ring
-    uint32_t total_in = 0, total_out = 0, pair_in = 0;
-    wr::walk<NEXP, NCHIP, G, GC, NL, NCH>(hop, dir, lane, N, [&](uint32_t kind, uint32_t, uint32_t, uint32_t, uint32_t) {
-        total_in += kind != wr::INJ;
-        total_out += kind != wr::TERM;
-    });
-    wr::walk<NEXP, NCHIP, G, GC, NL, NCH>(
-        hop_pair, 1 - dir, lane, N, [&](uint32_t kind, uint32_t, uint32_t, uint32_t, uint32_t) {
-            pair_in += kind != wr::INJ;
-        });
 
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
     uint32_t t_arr = 0, t_dcred = 0, t_cb = 0, t_send = 0, t_drain = 0, n_relay = 0, t_first = 0, t_last = 0;
@@ -132,30 +114,33 @@ void kernel_main() {
         t_send += t_last - c1;
     };
 
-    wr::walk<NEXP, NCHIP, G, GC, NL, NCH>(
-        hop, dir, lane, N, [&](uint32_t kind, uint32_t, uint32_t, uint32_t, uint32_t) {
-            if (kind == wr::INJ) {
-                const uint32_t a0 = wall();
-                while (!cb_pages_available_at_front(0, CHT)) {
-                    service(true);
-                }
-                cb_wait_front(0, CHT);
-                t_cb += wall() - a0;
-                send(get_read_ptr(0));
-                cb_pop_front(0, CHT);
-            } else if (kind == wr::FWD) {
-                const uint32_t a0 = wall();
-                while (rd(wr::W_ARR) < k_in + 1) {
-                    service(true);
-                }
-                t_arr += wall() - a0;
-                send(stage + (k_in % S) * CHB);
-                ndone = ++k_in;
-            } else {
-                ndone = ++k_in;
+    while (rd(wr::W_TABLE) == 0) {
+    }
+    volatile tt_l1_ptr uint32_t* T = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(2));
+    for (uint32_t i = 0; i < len; ++i) {
+        const uint32_t kind = T[i] & 3;
+        if (kind == wr::INJ) {
+            const uint32_t a0 = wall();
+            while (!cb_pages_available_at_front(0, CHT)) {
+                service(true);
             }
-            service(false);
-        });
+            cb_wait_front(0, CHT);
+            t_cb += wall() - a0;
+            send(get_read_ptr(0));
+            cb_pop_front(0, CHT);
+        } else if (kind == wr::FWD) {
+            const uint32_t a0 = wall();
+            while (rd(wr::W_ARR) < k_in + 1) {
+                service(true);
+            }
+            t_arr += wall() - a0;
+            send(stage + (k_in % S) * CHB);
+            ndone = ++k_in;
+        } else {
+            ndone = ++k_in;
+        }
+        service(false);
+    }
     const uint32_t d0 = wall();
     while (free_sent < total_in || relayed < pair_in || rd(wr::W_DFREE) < sent) {
         service(true);
