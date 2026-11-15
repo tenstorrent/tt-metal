@@ -155,10 +155,17 @@ void append_fabric_vc2_connection_rt_args(
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be FabricStaticSizedChannelsAllocator");
 
-    // VC2 sender is at the last flat index: after all VC0 and VC1 senders.
+    // A process that did not build the fabric (a fabric manager launched it) has no published layout and takes the
+    // fabric-wide allocation.
+    const auto* router_layout =
+        fabric_context.get_builder_context().find_router_channel_layout(src_fabric_node_id, fabric_router_channel);
+
+    // VC2 sender is at the last flat index: after the router's own VC0 and VC1 senders.
     // Used for flat edm_config arrays (indexed across all VCs).
-    const auto num_vc0_senders = static_channel_allocator->get_num_sender_channels(0);
-    const auto num_vc1_senders = static_channel_allocator->get_num_sender_channels(1);
+    const auto num_vc0_senders = router_layout != nullptr ? router_layout->senders[0].size()
+                                                          : static_channel_allocator->get_num_sender_channels(0);
+    const auto num_vc1_senders = router_layout != nullptr ? router_layout->senders[1].size()
+                                                          : static_channel_allocator->get_num_sender_channels(1);
     const auto num_vc2_senders = static_channel_allocator->get_num_sender_channels(2);
     const auto vc2_sender_channel_flat = num_vc0_senders + num_vc1_senders;
     const auto total_sender_channels = num_vc0_senders + num_vc1_senders + num_vc2_senders;
@@ -213,11 +220,8 @@ void append_fabric_vc2_connection_rt_args(
     }
 
     // VC2 has exactly one sender channel. Its buffer sits after the router's own VC0 and VC1 senders, so it comes
-    // from the router's published layout. A process that did not build the fabric (a fabric manager launched it) has
-    // none and takes the fabric-wide allocation.
+    // from the router's published layout.
     static constexpr size_t vc2_id = 2;
-    const auto* router_layout =
-        fabric_context.get_builder_context().find_router_channel_layout(src_fabric_node_id, fabric_router_channel);
     const RouterChannelLayout::Channel vc2_channel =
         router_layout != nullptr
             ? router_layout->senders[vc2_id].at(0)
