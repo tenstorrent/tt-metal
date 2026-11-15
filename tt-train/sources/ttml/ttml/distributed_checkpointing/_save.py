@@ -121,11 +121,11 @@ def save(
 
     ``header`` is any JSON-encodable dict (the step, the config, ...), returned by ``load``. ``scheduler`` and
     ``dataloader`` are saved through their ``get_state_dict`` (JSON only; ``load`` hands their ``set_state_dict`` the
-    state as JSON types, so a tuple comes back as a list) and, with ``rng`` (default), so is the
-    state of every random generator training draws from: the ttml generator, python's, numpy's and torch's when
-    torch is imported; ``load`` restores them on request. ``threads`` caps the writer threads (default: one per
-    device data file); ``max_inflight_bytes`` bounds the host buffers waiting to be written. An existing
-    ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules must be in their sharded state; with
+    state as JSON types, so a tuple comes back as a list) and, with ``rng`` (default), so is the state of every random
+    generator training draws from: the ttml generator (an mt19937 in ``AutoContext``), ``ttml.init``'s PCG64, python's,
+    numpy's, and torch's when torch is imported; ``load`` restores them on request. ``threads`` caps the writer threads
+    (default: one per device data file); ``max_inflight_bytes`` bounds the host buffers waiting to be written. An
+    existing ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules must be in their sharded state; with
     ``reshard_fsdp`` (default) they are resharded first.
 
     A replicated shard is written once, from one device of its replica group. Save does not check that the replicas
