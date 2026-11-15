@@ -12,14 +12,12 @@ module holds no device fixture of its own: the children need the chips.
 """
 
 import os
-import re
-import shutil
 import socket
 import sys
 
 import pytest
 from dcp_driver import MESH_OPEN_FAILED
-from dcp_harness import run_world
+from dcp_harness import DRIVER, TT_RUN, output_lines, run_world, tt_run_command
 
 # Each child is one process opening a mesh, training or loading a tiny Llama: about a minute warm, a few cold (the
 # whole module took 5 minutes warm and 13 cold on a loudbox). A hung child fails after 10 minutes, so one hang still
@@ -31,8 +29,6 @@ pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(2 * CHILD_TIMEOUT
 # spanning both processes (the ttnn dual-rank descriptor) is not used here: the driver's Llama hangs on it in a
 # reduce-scatter whose line crosses the processes, as in #65032 (test_dcp_multirank covers the protocol on it).
 TWO_MESHES_MGD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bh_two_2x2_meshes.textproto")
-DRIVER = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dcp_driver.py")]
-TT_RUN = shutil.which("tt-run")
 
 
 def _world(mesh: str, axes: str, flags: tuple[str, ...], mgd: str | None, ranks: int = 1):
@@ -118,11 +114,6 @@ CASES = {
 }
 
 
-_NOISE = re.compile(
-    r"nanobind|leaked (instance|type|function|keep_alive)|refleaks|skipped remainder|\| DEBUG |^Config\{"
-)
-
-
 def _command(args: list[str]) -> list[str]:
     """The driver command line; a world with ``--ranks N`` runs under tt-run, every rank on this host."""
     if "--ranks" not in args:
@@ -130,18 +121,7 @@ def _command(args: list[str]) -> list[str]:
     args = list(args)
     at = args.index("--ranks")
     del args[at : at + 2]
-    mgd = args[args.index("--mgd") + 1]
-    return [
-        TT_RUN,
-        "--mesh-graph-descriptor",
-        mgd,
-        "--hosts",
-        socket.gethostname(),
-        "--mpi-args",
-        "--tag-output",
-        *DRIVER,
-        *args,
-    ]
+    return tt_run_command(args[args.index("--mgd") + 1], socket.gethostname(), args)
 
 
 def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
@@ -150,8 +130,7 @@ def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
     if "--ranks" in args and TT_RUN is None:
         pytest.skip(f"{what}: tt-run is not installed")
     proc = run_world(_command(args), env, CHILD_TIMEOUT_S)
-    # The interpreter's exit prints a long nanobind leak report after any traceback; keep the lines that matter.
-    lines = [ln for ln in (proc.stdout + proc.stderr).splitlines() if not _NOISE.search(ln)]
+    lines = output_lines(proc)
     opened = not any("MESH_OPEN_FAILED" in ln for ln in lines)  # tt-run may not carry a rank's exit status
     if proc.returncode == MESH_OPEN_FAILED or not opened:  # only the descriptor-fabric mismatch: the QuietBox 1x4 ring
         reason = next((ln for ln in lines if "MESH_OPEN_FAILED" in ln), "no reason given")

@@ -17,15 +17,13 @@ system temporary directory otherwise. Without ``tt-run`` the module skips.
 
 import os
 import random
-import shutil
-import tempfile
 
 import numpy as np
 import pytest
 import torch
 import ttnn
 from dcp_oracle import Loader
-from dcp_harness import ranks_in_step
+from dcp_harness import ranks_in_step, two_rank_world
 from dcp_shards import assert_same, optimizer_state, param_shards
 from tp_block import TPBlock, fresh_tp, train_step
 
@@ -42,32 +40,13 @@ NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 @pytest.fixture(scope="module")
 def two_ranks():
-    if not ttnn.using_distributed_env():
-        pytest.skip("needs two ranks co-owning a [1, 4] mesh; launch with tt-run")
-    ttml.open_device_mesh(ttml.Mesh(MESH, ("dp", "tp")))
-    try:
-        size = int(ttnn.distributed_context_get_size())
-        if size != 2:
-            pytest.skip(f"needs exactly two ranks, launched with {size}")
-        rank = int(ttnn.distributed_context_get_rank())
+    with two_rank_world(MESH, "multirank", "two ranks co-owning a [1, 4] mesh") as (rank, root):
         local = [
             tuple(c)
             for c in ttml.autograd.AutoContext.get_instance().get_device().get_view().get_local_mesh_coord_range()
         ]
         assert local == [(0, 2 * rank), (0, 2 * rank + 1)], f"rank {rank} holds {local}"
-        ctx = ttml.autograd.AutoContext.get_instance()
-        ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
-        root = os.path.join(os.environ.get("DCP_SHARED_TMP", tempfile.gettempdir()), f"dcp-multirank-{os.getuid()}")
-        if rank == 0:
-            shutil.rmtree(root, ignore_errors=True)
-            os.makedirs(root, exist_ok=True)
-        ttnn.distributed_context_barrier()
         yield rank, local, root
-        ttnn.distributed_context_barrier()
-        if rank == 0:
-            shutil.rmtree(root, ignore_errors=True)
-    finally:
-        ttml.close_device_mesh()
 
 
 @pytest.fixture(autouse=True)

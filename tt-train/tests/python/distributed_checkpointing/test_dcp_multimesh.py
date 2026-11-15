@@ -19,12 +19,10 @@ otherwise. Without ``tt-run`` the module skips.
 
 import os
 import re
-import shutil
-import tempfile
 
 import pytest
 import ttnn
-from dcp_harness import ranks_in_step
+from dcp_harness import ranks_in_step, two_rank_world
 from dcp_shards import assert_same, optimizer_state, param_shards
 from tp_block import TPBlock, make_adamw, train_step
 
@@ -63,29 +61,10 @@ class _Pipeline(AbstractModuleBase):
 
 @pytest.fixture(scope="module")
 def two_meshes():
-    if not ttnn.using_distributed_env():
-        pytest.skip("needs two ranks with one [1, 2] mesh each; launch with tt-run")
-    ttml.open_device_mesh(ttml.Mesh(MESH, ("dp", "tp")))
-    try:
-        size = int(ttnn.distributed_context_get_size())
-        if size != 2:
-            pytest.skip(f"needs exactly two ranks, launched with {size}")
-        rank = int(ttnn.distributed_context_get_rank())
+    with two_rank_world(MESH, "multimesh", "two ranks with one [1, 2] mesh each") as (rank, root):
         local = local_coords()
         assert local == [(0, 0), (0, 1)], f"rank {rank} holds {local}"
-        ctx = ttml.autograd.AutoContext.get_instance()
-        ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
-        root = os.path.join(os.environ.get("DCP_SHARED_TMP", tempfile.gettempdir()), f"dcp-multimesh-{os.getuid()}")
-        if rank == 0:
-            shutil.rmtree(root, ignore_errors=True)
-            os.makedirs(root, exist_ok=True)
-        ttnn.distributed_context_barrier()
         yield rank, local, root
-        ttnn.distributed_context_barrier()
-        if rank == 0:
-            shutil.rmtree(root, ignore_errors=True)
-    finally:
-        ttml.close_device_mesh()
 
 
 @pytest.fixture(autouse=True)
