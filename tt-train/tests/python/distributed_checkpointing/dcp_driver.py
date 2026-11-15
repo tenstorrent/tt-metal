@@ -314,7 +314,7 @@ def reference(model, params, optimizer, scheduler, loader, config, seed: int) ->
     logits = model(tokens, mask)
     out["logits"] = full_logits(logits, config)
     ttml.autograd.AutoContext.get_instance().reset_graph()
-    restore_process_rng(generators)  # after the forward too, which draws from the ttml generator with dropout
+    restore_process_rng(generators)  # after the forward too, which draws from the ttml generator when dropout is on
     return out
 
 

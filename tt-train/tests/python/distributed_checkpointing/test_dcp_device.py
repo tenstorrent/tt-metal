@@ -422,11 +422,20 @@ def _ttml_draw():
     return ttnn.to_torch(ttnn.get_device_tensors(value)[0])
 
 
+def _adamw_stochastic_rounding(params):
+    """AdamW rounding its BF16 updates stochastically: every step draws from the ttml generator."""
+    cfg = ttml.optimizers.AdamWConfig.make(
+        lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0, stochastic_rounding=True
+    )
+    return ttml.optimizers.AdamW(params, cfg)
+
+
 def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
     """The scheduler, the dataloader and every generator continue exactly as the uninterrupted run would, and so
-    does the next training step, taken with the restored moments, step count and LR."""
+    does the next training step, taken with the restored moments, step count, LR and generator: the optimizer rounds
+    stochastically, so the step matches only if the ttml generator was restored, not reseeded."""
     ctx = ttml.autograd.AutoContext.get_instance()
-    model, params, opt = fresh_tp(DIM)
+    model, params, opt = fresh_tp(DIM, _adamw_stochastic_rounding)
     sched = CosineAnnealingScheduler(opt, T_max=8)
     loader = Loader()
     ctx.set_seed(123)
@@ -462,7 +471,7 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
         "torch": torch.rand(2).tolist(),
     }
 
-    model2, params2, opt2 = fresh_tp(DIM)
+    model2, params2, opt2 = fresh_tp(DIM, _adamw_stochastic_rounding)
     sched2 = CosineAnnealingScheduler(opt2, T_max=8)
     loader2 = Loader()
     ctx.set_seed(999)
@@ -492,6 +501,14 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
     assert torch.equal(_ttml_draw(), expected["ttml"])
     assert random.random() == expected["python"] and float(np.random.random()) == expected["numpy"]
     assert torch.rand(2).tolist() == expected["torch"]
+
+    # The negative control: everything restored but the generators, and the same step rounds differently.
+    model3, params3, opt3 = fresh_tp(DIM, _adamw_stochastic_rounding)
+    sched3 = CosineAnnealingScheduler(opt3, T_max=8)
+    ctx.set_seed(999)
+    dcp.load(path, model=model3, optimizer=opt3, scheduler=sched3)
+    train_step(model3, opt3, DIM, input_scale=0.5)
+    _assert_some_differ(_model_shards(params3), after_step)
 
     # Not asked for, not touched: a plain load leaves the generators alone.
     before = ctx.get_generator_state()
