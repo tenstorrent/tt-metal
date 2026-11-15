@@ -255,3 +255,64 @@ all weights (its own row's 3 owners + the other row's 3 teeth) while its vertica
 that link pair would need ~107 GB/s (~54 GB/s a link). Measured now: ~30 GB/s a hot link, ~69 GB/s into a chip.
 Next: a row trunk with vertical teeth (owner multicasts E/W in its row; each chip of that row forwards to its
 vertical neighbour) puts at most 4/8 on any link (ideal 3.5/8).
+
+## Stage 6: store-and-forward (ws_sf.py, kernels wr_*.cpp; branch mstaletovic/ws-sf)
+Every packet goes one fabric hop: a Hamiltonian cycle through all chips, per direction and link, is a directed ring
+with one forwarder core per chip (cores (9..10, 0..3), outside the 80 group cores). Lanes = (cycle, link); the 20
+group cores of an expert are dealt to the lanes (j % NL) and each slice goes both ways round its lane from its owner,
+stopping half way (the half-way chip alternates slice by slice).
+- Forwarder BRISC (wr_land): loads the ring's order table from DRAM, reads owned chunks from DRAM into CB 0 (RD 4 in
+  flight, SCB 6), lands passing packets from its S = 12 staging slots (CB 1, 13.8 KB each) into the group cores'
+  2-slot rings (warr inc fused after a slice's last packet).
+- Forwarder NCRISC (wr_fwd): walks the same table, sends INJ / FWD packets one hop (fused write + atomic inc into the
+  next chip's staging slot and arrival word) against per-hop staging credits; the freed count goes to the opposite-
+  direction forwarder on the same chip, which sends it upstream as a fabric inline write (CRB 2 batching).
+- Local lander (wf_sreader + wf_bsend WF_LOCAL, WS_ITEMS list); relay core (wr_relay) fans the group cores' freed-slot
+  counts out to the chip's landers. No owner-wide credits; nothing travels more than one hop.
+- Order without per-packet metadata: a synchronous conveyor model of all rings (hop time D = 3 packet times) gives
+  per chip and ring the time order of INJ / FWD / TERM entries (wr_seq.hpp); both RISCs follow it.
+
+Model (conveyor; link busy fraction = max link load / model steps):
+- expert-major order (all of an expert before the next): ~56%, independent of S (owners serialize round the ring);
+- conveyor order: tray 98% (async replay with S >= 8, hop latency <= 2, credit latency <= 6 packet times: 98.5-99%).
+| window (expert n reaches a chip after experts <= n - W of its group) | owners | tray 32 exp | 8 x 4 torus 128 exp |
+|---|---|---|---|
+| n - 2 (deadlocks on the device, see hang 1) | e % N | 98.4% | 46.8% |
+| n - 1 (safe) | e % N | 53.0% | 49.5% |
+| n - 1 (safe, current) | per slice, spread round the cycle | 98.3% | 77.3% |
+| n - 2 / n - 3 (would need a 3-slot group ring) | per slice | 99.4% / 99.4% | 86.8% / 89.4% |
+Owner queues split by n mod 3 change none of these: the window rule is monotone in n, so expert n + 1 is never ready
+while n is held, and an in-order owner queue never limits. The torus bubble is spatial (with whole-expert owners the
+experts in flight sit on a few adjacent chips); per-slice owners remove most of it, the rest is the window latency
+(16-hop paths at D = 3).
+Host checks: test_sf_schedule (stream consistency, slice coverage, local lists) and test_sf_replay (random-timing
+replay of the device semantics: forwarder RISCs, staging credits, slot credits with the down lag, local lander);
+the replay completes on the current tables and deadlocks on the n - 2 tables.
+
+Runs (hold 213192, bh-glx-120-b06u02, tray = chips 0-7, sub_2x4 descriptor, FABRIC_2D, payload 15232):
+- ws_sf_a (expert-major commit 9cf40e7fffc): host TypeError composing RT args (list += VectorUInt32); no device run.
+- ws_sf_a2 (tables, window n - 2), hang 1, first launch tray M 586: all forwarders polling (landers on arrival /
+  slot credit, local lander on slot credit), group cores waiting for weights. Cause: wg_compute's down rows lag
+  DN_LAG rows into the next expert, so a core frees expert n - 2's slot only once n - 1's weights are in; expert n's
+  first packet waited for that slot while n - 1's packets queued behind it. Reset exit 0, 32 boards re-initialised.
+  Fix 2ccf341f4a9: window n - 1, per-slice owners, per-group owner queues, local lander in model-time order.
+- ws_sf_a3 (2ccf341f4a9): sf_quick PASS (0 warm-up + 1 measured launch a case, cold):
+| M | util tile per chip (median, min-max) | weights in | ring out (send span) | pcc |
+|---|---|---|---|---|
+| 586 | 33.6% (33.3-33.8) | 68-69 GB/s | 14.1-14.6 GB/s | 0.99994 |
+| 2048 | 77.5% (77.2-78.2) | 47 GB/s | 11.0-11.3 GB/s | 0.99994 |
+  Fabric slots per connection (nbuf) 7. M 586 forwarder NCRISC (2.7 M cycles a ring): send 54%, arrival wait 14%,
+  downstream credit 2.5%, the rest bookkeeping / credit relays; BRISC landing 48%, arrival wait 33%. The rings run
+  at ~60% of a link: forwarder-issue-bound (each send waits for its 13.8 KB payload to leave L1, and the L1 inline
+  writes flush it too), not link-bound. WS_DEFER (860c7252813, not run yet) overlaps that drain with the next packet.
+  Hang 2 (sf_bench, M 586 warm-up, launch unknown): all cores alive and polling; forwarders 40-50% through
+  (240-303 of 600 INJ a ring and chip), local landers 38-48 of 80 slices waiting on slot credits, group cores at
+  expert 3-4 of 8 waiting for weights. On chips 0, 2, 5 and 7 the triage CB counters do not match the model's
+  expectation (the local lander's next slice's core shows enough freed slots, and a slice the lander should already
+  have landed is missing at its core); unexplained. WS_DIAG (e6a02c27c52) puts table positions, counts and the
+  credits seen into spare CB counters that the triage dump lists, for the next hang. Reset exit 0.
+- ws_sf_a4: device open failed ("Querying size for a host channel that does not exist"): chip 3 of the Galaxy lost
+  its host channel (IOMMU domain changed during another session's resets), not this code. ws_sf_a5 (pre-reset, diag
+  bench) stopped before its reset ran; no further Galaxy runs.
+Next: on a healthy Galaxy, ws_sf_a5 (cmds/ws_sf_a5.sh without its pre-reset): the WS_DIAG bench to pin down hang 2,
+then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean.

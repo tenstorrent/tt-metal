@@ -85,6 +85,98 @@ def test_sf_schedule(shape, nexp):
     assert max(load.values()) - min(load.values()) <= max(load.values()) // 4
 
 
+def replay(shape, rc: RCfg, cfg: GCfg, seed):
+    """Random-timing replay of the device semantics on the tables: per ring and chip the NCRISC walk (FWD waits for
+    the arrival, every send for a free downstream staging slot, S of them) and the BRISC landing (in order, a slice's
+    first packet waits until the group freed expert n - 2's slot); per chip the local lander in its list order; per
+    group the cores take expert n once all its slices are in and free n - 2's slot only once n - 1 started (the down
+    projection's lag). Actors advance in random order and steps; returns True if everything completes, False on a
+    deadlock (no actor can move)."""
+    import random
+
+    R, Cn = shape
+    NCHIP, G, GC, NE = R * Cn, cfg.G, cfg.GC, cfg.nexp // cfg.G
+    NCH = (2 * cfg.KT + cfg.PAIRS * cfg.DCOLS) // rc.CHT
+    seqs, _, last = conveyor(shape, rc, cfg)
+    items = local_items(shape, rc, cfg, last)
+    nxt = {}
+    for f, (lane, d, cyc, _) in enumerate(rings(shape, rc)):
+        fl = flow(cyc, d, Cn)
+        for i, chip in enumerate(fl):
+            nxt[(chip, f)] = (fl[(i + 1) % len(fl)], f)
+    inl = {k: [t for t in v if t[0] != INJ] for k, v in seqs.items()}
+    ni, kin, sent, arr, li = ({k: 0 for k in seqs} for _ in range(5))
+    have = [[[False] * GC for _ in range(cfg.nexp)] for _ in range(NCHIP)]
+    started = [[0] * G for _ in range(NCHIP)]
+    lpos = [0] * NCHIP
+    freed = lambda X, g: NE if started[X][g] >= NE else max(0, started[X][g] - 1)
+
+    def ncrisc(k):
+        if ni[k] >= len(seqs[k]):
+            return False
+        kind = seqs[k][ni[k]][0]
+        if kind == TERM:
+            kin[k] += 1
+        else:
+            dn = nxt[k]
+            if (kind != INJ and arr[k] < kin[k] + 1) or sent[k] - min(li[dn], kin[dn]) >= rc.S:
+                return False
+            sent[k] += 1
+            arr[dn] += 1
+            kin[k] += kind != INJ
+        ni[k] += 1
+        return True
+
+    def brisc(k):
+        if li[k] >= len(inl[k]) or arr[k] < li[k] + 1:
+            return False
+        _, e, c, u = inl[k][li[k]]
+        if u == 0 and e // G >= 2 and freed(k[0], e % G) < e // G - 1:
+            return False
+        li[k] += 1
+        have[k[0]][e][c % GC] |= u == NCH - 1
+        return True
+
+    def local(X):
+        if lpos[X] >= len(items[X]):
+            return False
+        c, e = items[X][lpos[X]] & 0xFF, items[X][lpos[X]] >> 8
+        if e // G >= 2 and freed(X, e % G) < e // G - 1:
+            return False
+        have[X][e][c % GC] = True
+        lpos[X] += 1
+        return True
+
+    def group(X, g):
+        n = started[X][g]
+        if n >= NE or not all(have[X][g + n * G]):
+            return False
+        started[X][g] += 1
+        return True
+
+    actors = [(ncrisc, k) for k in seqs] + [(brisc, k) for k in seqs] + [(local, X) for X in range(NCHIP)]
+    actors += [(lambda xg: group(*xg), (X, g)) for X in range(NCHIP) for g in range(G)]
+    rng = random.Random(seed)
+    moved = True
+    while moved:
+        rng.shuffle(actors)
+        moved = False
+        for fn, k in actors:
+            for _ in range(rng.randint(1, 6)):
+                if not fn(k):
+                    break
+                moved = True
+    return all(started[X][g] >= NE for X in range(NCHIP) for g in range(G))
+
+
+@pytest.mark.parametrize("shape,nexp", [((2, 4), 32), ((8, 4), 128)])
+def test_sf_replay(shape, nexp):
+    """The tables and local lander orders complete under random timing (no deadlock in the device semantics)."""
+    cfg = GCfg(nexp=nexp, G=4)
+    rc = RCfg() if shape[0] == 2 else RCfg(cycles=torus_cycles(*shape))
+    assert all(replay(shape, rc, cfg, seed) for seed in range(3))
+
+
 def make_inputs_spread(mesh, cfg: GCfg, rc: RCfg, Ms, seed=0):
     """Inputs for a whole-mesh run with owners per slice (ws_sf.owner_table): each chip's slices tensor holds only the
     slices it owns, slice j of expert e at local index (e // N) GC + j (WS_OWN_SLICES), weights drawn in bf16;
