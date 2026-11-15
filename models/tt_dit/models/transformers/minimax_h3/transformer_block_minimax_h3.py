@@ -20,7 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_core_grid
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_kwargs, agmm_pins
+from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
@@ -82,9 +82,11 @@ class MiniMaxH3TransformerBlock(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
+        agmm_mode: AgmmMode | str | None = None,
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
-        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms."""
+        no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms, and
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`)."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
@@ -128,6 +130,7 @@ class MiniMaxH3TransformerBlock(Module):
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
+            agmm_mode=agmm_mode,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -138,6 +141,34 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             **norm_kwargs,
         )
+        self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
+        # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
+        self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
+        # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
+        self._ff1_pins = self._mmrs_pin = None
+        if dynamic_length:
+            grid = mesh_device.compute_with_storage_grid_size()
+            if self.use_fused_agmm:
+                self._ff1_pins = agmm_pins(
+                    *self._ff1_kn,
+                    full_grid=grid,
+                    num_links=ccl_manager.num_links,
+                    compute_kernel_config=self.mm_compute_kernel_config,
+                    mode=agmm_mode,
+                )
+            if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
+                self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
+        # ff1 runs its pins' compute config (the same in every length class), ff2 the block's.
+        ff1_compute_kernel_config = self.mm_compute_kernel_config
+        if self._ff1_pins is not None:
+            ff1_compute_kernel_config = next(iter(self._ff1_pins.values())).compute_kernel_config
         # The reference's SwiGLU is `up, gate = proj(x).chunk(2); up * silu(gate)`, which is the
         # `gate_is_first=False` layout `ColParallelLinear` already assumes for activation_fn="swiglu".
         self.ff = ParallelFeedForward(
@@ -149,6 +180,8 @@ class MiniMaxH3TransformerBlock(Module):
             mesh_axis=self.tp_mesh_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
+            ff1_compute_kernel_config=ff1_compute_kernel_config,
+            ff2_compute_kernel_config=self.mm_compute_kernel_config,
         )
         self.adaln_proj = ColParallelLinear(
             time_embed_dim,
@@ -159,27 +192,8 @@ class MiniMaxH3TransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
-
-        self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         self._fold_norm_weight = os.environ.get("MINIMAX_H3_FOLD_NORM_WEIGHT", "1") == "1"
         self._eye_tables: dict[int, ttnn.Tensor] = {}
-        # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
-        self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
-        # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
-        self._ff1_pins = self._mmrs_pin = None
-        if dynamic_length:
-            grid = mesh_device.compute_with_storage_grid_size()
-            if self.use_fused_agmm:
-                self._ff1_pins = agmm_pins(*self._ff1_kn, full_grid=grid, num_links=ccl_manager.num_links)
-            if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
-                self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
         # The dynamic-length modulation gathers: one-hot [rows, 32] @ table [32, hidden_local] through
         # minimal_matmul, whose program keeps only the M > N bit of the row count (fixed per selector kind).
         self._gather_config = None
@@ -434,7 +448,6 @@ class MiniMaxH3TransformerBlock(Module):
                 normed,
                 residual,
                 modulation(_GATE_MLP),
-                compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 force_transpose=False,
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
@@ -443,7 +456,6 @@ class MiniMaxH3TransformerBlock(Module):
             )
         ff_out = self.ff(
             normed,
-            compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
@@ -452,8 +464,11 @@ class MiniMaxH3TransformerBlock(Module):
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
 
     def _ff1_kwargs(self, normed: ttnn.Tensor) -> dict:
-        """ff1's blocking kwargs on the fused all-gather matmul (class pin, else the length-keyed swept table);
-        none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
+        """ff1's blocking kwargs on the fused all-gather matmul (class pin, else the length-keyed swept table); none
+        on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths. Its compute
+        config is set at construction."""
         if not self.use_fused_agmm:
             return {}
-        return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])
+        kwargs = agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2], self.mm_compute_kernel_config)
+        del kwargs["compute_kernel_config"]
+        return kwargs
