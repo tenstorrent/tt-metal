@@ -87,6 +87,18 @@ public:
      */
     void connect_to_downstream_channel(ComputeMeshRouterBuilder& downstream, uint32_t vc, uint32_t channel);
 
+    /**
+     * Settings two routers on one chip share for their link pairing: the NoC VC both use, and the
+     * core placement for link `link_idx` of `num_links`.
+     */
+    void apply_link_settings(
+        ComputeMeshRouterBuilder& peer,
+        uint32_t noc_vc,
+        uint32_t link_idx,
+        uint32_t num_links,
+        Topology topology,
+        bool is_galaxy);
+
     uint32_t get_downstream_sender_channel(
         bool is_2D_routing, eth_chan_directions downstream_direction, uint32_t vc) const;
 

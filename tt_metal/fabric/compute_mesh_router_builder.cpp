@@ -873,19 +873,27 @@ void ComputeMeshRouterBuilder::configure_connection(
     establish_connections_to_router(peer_compute);
     peer_compute.establish_connections_to_router(*this);
 
-    // Configure NOC VC based on link index (must be same for both routers)
-    auto edm_noc_vc = tt::tt_fabric::FabricEriscDatamoverConfig::DEFAULT_NOC_VC +
-                      (link_idx % tt::tt_fabric::FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS);
-    erisc_builder_->config.edm_noc_vc = edm_noc_vc;
-    peer_compute.erisc_builder_->config.edm_noc_vc = edm_noc_vc;
+    // NOC VC by link index (must be the same for both routers)
+    const auto edm_noc_vc = tt::tt_fabric::FabricEriscDatamoverConfig::DEFAULT_NOC_VC +
+                            (link_idx % tt::tt_fabric::FabricEriscDatamoverConfig::NUM_EDM_NOC_VCS);
+    apply_link_settings(peer_compute, edm_noc_vc, link_idx, num_links, topology, is_galaxy);
+}
 
-    // Apply core placement optimizations
+void ComputeMeshRouterBuilder::apply_link_settings(
+    ComputeMeshRouterBuilder& peer,
+    uint32_t noc_vc,
+    uint32_t link_idx,
+    uint32_t num_links,
+    Topology topology,
+    bool is_galaxy) {
+    erisc_builder_->config.edm_noc_vc = noc_vc;
+    peer.erisc_builder_->config.edm_noc_vc = noc_vc;
     core_placement::CorePlacementContext cctx{
         .topology = topology,
         .is_galaxy = is_galaxy,
         .num_links = num_links,
     };
-    core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer_compute.erisc_builder_, link_idx);
+    core_placement::apply_core_placement_optimizations(cctx, *erisc_builder_, *peer.erisc_builder_, link_idx);
 }
 
 void ComputeMeshRouterBuilder::configure_for_dispatch() {
