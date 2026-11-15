@@ -2361,3 +2361,46 @@ dnijemcevic/model_bringup).
 - Re-run: `PYTHONPATH=$PWD DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_full_prefill.py` (via devjob, ~7 min with the load), or
   `gate FIX.35 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## P.71 (overseer, OWNER 2026-11-15): measured end-to-end prefill 0 -> 1,024,000 on the replica branch (FIX.35's test)
+
+- Step 1 (committed, 8f5b33adfce): `git merge -s ours --no-commit dnijemcevic/model_bringup` (bf9e3fbbbe4), then
+  `tests/test_full_prefill.py` verbatim from bf9e3fbbbe4 and FIX.35's BREADCRUMBS section above. No helper was new:
+  contract caches / server_rules, testing/profile.cache_entries, profiler.require_rt, metrics.results_dir all exist
+  here. Id clash: FIX.35's DS41-280 / DS41-281 are model_bringup's (canonical text path; 3-chunk warm-up); here
+  DS41-280 is the replica guard entry. model_bringup's known_issues.md not brought over (not asked).
+- Only test edit (uncommitted, replica-only): `_replica_snap` (as P.69's) + `_replica_pass`: after the profiled
+  request, one more request of the same 200 chunks, untimed, synced and the counters read after each chunk
+  (`replicas_*`, `per_chunk_replicas_*`). Every timed request is untouched. Replicas on (MOE_REPLICAS=prev, default).
+- Replicas: ready 0/20 at chunk 0 (request reset), 20/20 on the other 199 chunks (3980 of 4000 calls); 10,568 new
+  copies (~53 a chunk), 30,603 dropped. The planner runs at period 20 (P.70, DS41-280's fix) under decode.
+- Results (8x4, gate P.71 --check, log logs/P.71.check.log), P.71 vs FIX.35 (results/FIX.35.json, model_bringup):
+
+| boundary | wall s P.71 / FIX.35 (diff) | tok/s P.71 / FIX.35 (diff) | sync ms P.71 / FIX.35 |
+|---|---|---|---|
+| 51200 | 0.98 / 1.01 (-0.03) | 52092 / 50460 (+3.2%) | 0.4 / 15.1 |
+| 128000 | 2.43 / 2.59 (-0.16) | 52729 / 49331 (+6.9%) | 11.7 / 16.3 |
+| 256000 | 4.94 / 5.17 (-0.23) | 51872 / 49520 (+4.7%) | 11.5 / 18.3 |
+| 512000 | 10.10 / 10.51 (-0.41) | 50704 / 48713 (+4.1%) | 14.5 / 24.6 |
+| 768000 | 15.54 / 16.02 (-0.48) | 49415 / 47938 (+3.1%) | 18.5 / 26.9 |
+| 1024000 | 21.18 / 21.87 (-0.69) | 48341 / 46823 (+3.2%) | 21.6 / 27.3 |
+
+| per chunk (mean) | P.71 | FIX.35 | diff |
+|---|---|---|---|
+| host enqueue ms (max) | 88.5 (138.2) | 86.1 (133.4) | +2.4 |
+| read-back ms (idle 2.4) | 17.1 | 22.6 | -5.6 |
+| call ms | 105.5 | 108.7 | -3.2 |
+| device ms, slowest chip (max) | 76.7 (93.9) | 80.7 (96.0) | -4.0 |
+| span ms, critical chip | 111.7 | 117.5 | -5.8 |
+| gap ms (max) | 5.29 (15.3) | 6.35 (21.2) | -1.07 |
+| sum device ms s | 15.34 | 16.14 | -0.80 |
+| host-bound chunks | 4 / 200 | 0 / 200 | +4 |
+| host >= device ms chunks | 196 / 200 | 159 / 200 | +37 |
+| first (cold) request s | 27.47 | 33.18 | -5.71 |
+
+- Verdict: still device-timeline-bound (4 chunks host-bound of 200; read-back waits ~15 ms beyond idle). Replicas
+  cut the slowest chip's program time 4 ms a chunk (-0.80 s) and the wall 0.69 s (-3.2%, +1,518 tok/s at 1M). The
+  host enqueue (88 ms) now exceeds program time on 196 chunks but not the critical chip's timeline (112 ms), so the
+  wall is set by the device's timeline (programs + ~35 ms a chunk of in-chunk idle: dispatch / CCL waits).
+  determinism_max_abs_diff 0. Critical chip 30 (FIX.35: 5).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.71 --spec <spec> --check` (devjob, ~11 min).

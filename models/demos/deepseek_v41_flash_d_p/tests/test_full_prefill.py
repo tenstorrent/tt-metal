@@ -46,6 +46,11 @@ chunk before a boundary uses its sync. Also host_ge_device_chunks (host_ms >= de
 vs the critical chip's timeline. Compared with FIX.34 (results/FIX.34.json: one chunk timed alone at p): the chunk
 starting at p here (the last chunk for p = 1024000).
 
+P.71 (replica branch, MOE_REPLICAS=prev, the branch default): after the profiled request, one more request of the
+same chunks, untimed, reads the replica guard's counters after every chunk (tt/moe_block_main_adapter.prev_stats:
+calls, ready, off, ...; and the device global state's cumulative new copies / pieces / dropped, a blocking read):
+replicas_* metrics and per_chunk_replicas_*. Outside every timed region: the walls above are unchanged.
+
 Metrics: e2e_wall_s_p<p>, e2e_tok_s_p<p>, sync_ms_p<p>, host_ms_mean / max, rb_ms_mean, call_ms_mean,
 device_ms_mean, span_ms_mean, gap_ms_mean / max, host_bound_chunks, host_ge_device_chunks, device_ms_sum_s,
 device_idle_between_s / inside_s, requests_until_warm, per_chunk_* lists, full_prefill_table (markdown, also printed).
@@ -403,12 +408,71 @@ def test_full_prefill(mesh_device, monkeypatch):
             flush=True,
         )
         metrics.record("prof_rt_dropped", rec.dropped)
+        _replica_pass(mesh_device, runtime, kv, inp, chunk)  # (P.71: untimed, after every timed request)
     finally:
         runtime._host_ids = orig
         for x in inp + inp_w:
             ttnn.deallocate(x)
 
     _report(runs, P, dev, chunk, total)
+
+
+def _replica_snap(mesh) -> dict:
+    """P.71 (as P.69's test_skip_positions._replica_snap): MOE_REPLICAS=prev's host guard counters and the device
+    global state's cumulative new copies / pieces / dropped (G words 2..4, chip 0), summed over the mesh's blocks.
+    Empty with replicas off. The device read is blocking: call it outside the timed regions only."""
+    from models.demos.deepseek_v41_flash_d_p.tt import moe_block_main_adapter as A
+
+    if not A.prev_on():
+        return {}
+    out = dict(A.prev_stats(mesh))
+    from models.demos.deepseek_v41_flash_d_p.tt.expert_prev import _read
+
+    for k in ("copies", "pieces", "dropped"):
+        out[k] = 0
+    for _, pr in A._PREV.values():
+        if pr.mesh is mesh:
+            g = _read(pr.G)
+            out["copies"] += int(g[2])
+            out["pieces"] += int(g[3])
+            out["dropped"] += int(g[4])
+    return out
+
+
+def _replica_pass(mesh, runtime, kv, inputs, chunk) -> None:
+    """P.71: one untimed request of the timed chunks, the replica counters read after every chunk (per-chunk deltas;
+    a device counter that went down was emptied by the request's reset at start 0: the new value then)."""
+    import ttnn
+
+    if not _replica_snap(mesh):
+        metrics.record("replicas_on", 0)
+        return
+    ttnn.synchronize_device(mesh)
+    per = []
+    prev = _replica_snap(mesh)
+    for k, x in enumerate(inputs):
+        s = k * chunk
+        runtime.prefill_chunk(x, kv, slot_id=0, actual_start=s, actual_end=s + chunk, request_id=k)
+        ttnn.synchronize_device(mesh)
+        cur = _replica_snap(mesh)
+        per.append({key: (cur[key] - prev.get(key, 0)) if cur[key] >= prev.get(key, 0) else cur[key] for key in cur})
+        prev = cur
+    metrics.record("replicas_on", 1)
+    keys = sorted(per[0])
+    for key in keys:
+        metrics.record(f"per_chunk_replicas_{key}", [int(d[key]) for d in per])
+        metrics.record(f"replicas_{key}_total", int(sum(d[key] for d in per)))
+    ready = [d.get("ready", 0) for d in per]
+    calls = [d.get("calls", 0) for d in per]
+    full = sum(1 for r, c in zip(ready, calls) if c and r == c)
+    metrics.record("replicas_chunks_all_ready", full)
+    summary = (
+        f"REPLICAS (untimed pass, {len(per)} chunks): ready/calls per chunk min {min(ready)}/{max(calls)}, "
+        f"chunks with every call ready {full}; chunk 0 {per[0]}; chunk 1 {per[1] if len(per) > 1 else None}; "
+        f"totals { {key: int(sum(d[key] for d in per)) for key in keys} }"
+    )
+    metrics.record("replicas_summary", summary)
+    print(summary, flush=True)
 
 
 def _fix34() -> dict:
