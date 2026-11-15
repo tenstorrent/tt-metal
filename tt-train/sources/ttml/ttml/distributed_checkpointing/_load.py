@@ -166,6 +166,36 @@ def _place(live: LiveTensor, arrays: dict[tuple, np.ndarray], device, local: set
     check_label_unchanged(live, "after set_value")
 
 
+class _DataFiles:
+    """The data files a load reads, opened and checked while the load is planned, so that a missing or truncated file
+    stops every rank before any rank places a tensor; open until the load ends."""
+
+    def __init__(self) -> None:
+        self.fds: dict[int, int] = {}
+        self.data_start: dict[int, int] = {}
+        self.paths: dict[int, str] = {}
+
+    def open(self, ckpt_dir: str, index: Index, plan: LoadPlan) -> None:
+        for file_index in sorted({r.file for kp in plan.keys.values() for r in kp.reads}):
+            record = index.files[file_index]
+            path = self.paths[file_index] = os.path.join(ckpt_dir, record.path)
+            if not os.path.isfile(path):
+                raise CheckpointError(f"data file {path} listed in the index is missing")
+            self.fds[file_index] = os.open(path, os.O_RDONLY)
+            size = os.fstat(self.fds[file_index]).st_size
+            if size != record.nbytes:
+                raise IncompleteCheckpointError(
+                    f"data file {path} is {size} bytes but the index records {record.nbytes}; the checkpoint is "
+                    "truncated or corrupt"
+                )
+            _, self.data_start[file_index] = read_file_header(path)
+
+    def close(self) -> None:
+        for fd in self.fds.values():
+            os.close(fd)
+        self.fds.clear()
+
+
 def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: int) -> None:
     """Re-raise ``err``, as a ``CheckpointError`` that says the live state is partly restored once a tensor was
     placed."""
@@ -281,51 +311,40 @@ def load(
             check_param_groups(optimizer, index.scalars, strict)  # before anything is placed
         return plan
 
+    files = _DataFiles()
+
     def plan_and_report() -> tuple[LoadPlan, bytes]:
         plan = plan_locally()
+        files.open(ckpt_dir, index, plan)  # before any rank places anything
         used = sorted({kp.entry.key for kp in plan.keys.values()})
         return plan, checked_payload(json.dumps(used).encode(), "this rank's planned keys")
 
-    plan, used_bytes = group.phase("planning the load", plan_and_report)
-    gathered = group.gather(used_bytes)
+    try:
+        plan, used_bytes = group.phase("planning the load", plan_and_report)
+        gathered = group.gather(used_bytes)
 
-    def judge() -> bytes | None:
-        if not group.is_coordinator:
-            return None
-        union_used = {key for part in gathered for key in json.loads(part.decode("utf-8"))}
-        return checked_payload(json.dumps(unexpected_keys(index, union_used, roles)).encode(), "the unexpected keys")
+        def judge() -> bytes | None:
+            if not group.is_coordinator:
+                return None
+            union_used = {key for part in gathered for key in json.loads(part.decode("utf-8"))}
+            return checked_payload(
+                json.dumps(unexpected_keys(index, union_used, roles)).encode(), "the unexpected keys"
+            )
 
-    plan.unexpected = json.loads(group.broadcast(group.phase("judging the unexpected entries", judge)))
-    if strict and plan.unexpected:
-        raise UnexpectedKeyError(
-            f"{len(plan.unexpected)} checkpoint entr(ies) have no live tensor: {plan.unexpected[:5]}"
-        )
-    stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
+        plan.unexpected = json.loads(group.broadcast(group.phase("judging the unexpected entries", judge)))
+        if strict and plan.unexpected:
+            raise UnexpectedKeyError(
+                f"{len(plan.unexpected)} checkpoint entr(ies) have no live tensor: {plan.unexpected[:5]}"
+            )
+        stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
 
-    def read_and_place() -> tuple[int, int, float, float, list[str]]:
-        fds: dict[int, int] = {}
-        data_start: dict[int, int] = {}
-        paths: dict[int, str] = {}
-        placed: list[str] = []
-        device = mesh_device()
-        bytes_read = 0
-        reads = 0
-        read_s = place_s = 0.0
-        try:
-            needed = {r.file for kp in plan.keys.values() for r in kp.reads}
-            for file_index in sorted(needed):
-                record = index.files[file_index]
-                path = paths[file_index] = os.path.join(ckpt_dir, record.path)
-                if not os.path.isfile(path):
-                    raise CheckpointError(f"data file {path} listed in the index is missing")
-                fds[file_index] = os.open(path, os.O_RDONLY)
-                size = os.fstat(fds[file_index]).st_size
-                if size != record.nbytes:
-                    raise IncompleteCheckpointError(
-                        f"data file {path} is {size} bytes but the index records {record.nbytes}; the checkpoint is "
-                        "truncated or corrupt"
-                    )
-                _, data_start[file_index] = read_file_header(path)
+        def read_and_place() -> tuple[int, int, float, float, list[str]]:
+            fds, data_start, paths = files.fds, files.data_start, files.paths
+            placed: list[str] = []
+            device = mesh_device()
+            bytes_read = 0
+            reads = 0
+            read_s = place_s = 0.0
             workers = 32 if threads is None else threads
             with ThreadPoolExecutor(max_workers=workers) as pool:
 
@@ -372,42 +391,42 @@ def load(
                     read_s += t_read_done - t_key
                     place_s += time.perf_counter() - t_read_done
                     reads += len(futures)
-        finally:
-            for fd in fds.values():
-                os.close(fd)
-        return bytes_read, reads, read_s, place_s, placed
+            return bytes_read, reads, read_s, place_s, placed
 
-    t1 = time.perf_counter()
-    bytes_read, reads, read_s, place_s, placed = group.phase("reading and placing the shards", read_and_place)
-    stats["read_and_place_s"] = time.perf_counter() - t1
-    stats["read_s"] = read_s
-    stats["place_s"] = place_s
-    stats["reads"] = float(reads)
-    stats["bytes_read"] = float(bytes_read)
+        t1 = time.perf_counter()
+        bytes_read, reads, read_s, place_s, placed = group.phase("reading and placing the shards", read_and_place)
+        stats["read_and_place_s"] = time.perf_counter() - t1
+        stats["read_s"] = read_s
+        stats["place_s"] = place_s
+        stats["reads"] = float(reads)
+        stats["bytes_read"] = float(bytes_read)
 
-    def restore_rest() -> tuple[list[str], list[str]]:
-        applied: list[str] = []
-        if optimizer is not None:
-            try:
-                applied = restore_scalars(optimizer, index.scalars)
-            except Exception as err:
-                _raise_partly_restored(err, "the optimizer scalars", placed, len(placed))
-        # After the optimizer scalars: a scheduler writes its last LRs back into the optimizer and has the last word.
-        restored = restore_train_state(
-            train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank
+        def restore_rest() -> tuple[list[str], list[str]]:
+            applied: list[str] = []
+            if optimizer is not None:
+                try:
+                    applied = restore_scalars(optimizer, index.scalars)
+                except Exception as err:
+                    _raise_partly_restored(err, "the optimizer scalars", placed, len(placed))
+            # After the optimizer scalars: a scheduler writes its last LRs back into the optimizer, having the last
+            # word.
+            restored = restore_train_state(
+                train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank
+            )
+            return applied, restored
+
+        applied, restored = group.phase("restoring the scalars and the train state", restore_rest)
+        stats["total_s"] = time.perf_counter() - t0
+        return LoadResult(
+            ckpt_dir,
+            header.get("user", {}),
+            {k: index.scalars[k] for k in applied} if optimizer is not None else dict(index.scalars),
+            plan.missing + missing_state,
+            plan.unexpected,
+            plan.fast_path_keys,
+            stats,
+            train_state=train_state,
+            restored=restored,
         )
-        return applied, restored
-
-    applied, restored = group.phase("restoring the scalars and the train state", restore_rest)
-    stats["total_s"] = time.perf_counter() - t0
-    return LoadResult(
-        ckpt_dir,
-        header.get("user", {}),
-        {k: index.scalars[k] for k in applied} if optimizer is not None else dict(index.scalars),
-        plan.missing + missing_state,
-        plan.unexpected,
-        plan.fast_path_keys,
-        stats,
-        train_state=train_state,
-        restored=restored,
-    )
+    finally:
+        files.close()  # every descriptor opened while planning, whichever phase ended the load

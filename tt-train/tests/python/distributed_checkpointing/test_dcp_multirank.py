@@ -185,3 +185,26 @@ def test_ranks_whose_optimizers_differ_are_refused(two_ranks, expect_error):
     ttnn.distributed_context_barrier()
     assert not os.path.exists(path) and not any(n.startswith("optimizers_differ.partial-") for n in os.listdir(root))
     ttnn.distributed_context_barrier()
+
+
+def test_a_truncated_file_on_one_rank_stops_every_rank_before_anything_is_placed(two_ranks, expect_error):
+    """Every rank opens and checks its data files while the load is planned, so a truncated file of rank 1's stops
+    rank 0 too before it places anything; rank 0 used to restore its tensors first."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    path = os.path.join(root, "truncated")
+    dcp.save(path, model=model)
+    ttnn.distributed_context_barrier()
+    if rank == 0:  # one of rank 1's files, through the shared directory
+        victim = next(f.path for f in dcp.read_index(path).files if f.world_rank == 1)
+        os.truncate(os.path.join(path, victim), 100)
+    ttnn.distributed_context_barrier()
+    fresh, fresh_params, _ = fresh_tp(DIM)
+    before = param_shards(fresh_params, local)
+    with expect_error(dcp.IncompleteCheckpointError, r"planning the load failed on rank\(s\) \[1\] of 2"):
+        dcp.load(path, model=fresh)
+    after = param_shards(fresh_params, local)
+    assert after.keys() == before.keys() and before
+    assert all(np.array_equal(after[k], before[k]) for k in before), "no rank placed anything"
+    ttnn.distributed_context_barrier()
