@@ -52,8 +52,8 @@ Set ``DEEPSEEK_V4_MEMORY_REPORTS=1`` to write each program's L1 / DRAM block map
 (``ttnn.device.EnableMemoryReports``), for tracking down circular-buffer / L1 clashes.
 
 ``DEEPSEEK_V4_TEMPERATURE`` (default 0, greedy) samples each token at that temperature, on the host from the
-step's logits, or with ``DEEPSEEK_V4_DEVICE_SAMPLING=1`` on the output stage, which then sends only the token
-(:class:`~models.experimental.deepseek_v41_flash.tt.lm_head.DeepSeekV41DeviceSampler`).
+step's logits with ``DEEPSEEK_V4_DEVICE_SAMPLING=0``, or by default on the output stage, which then sends only the
+token (:class:`~models.experimental.deepseek_v41_flash.tt.lm_head.DeepSeekV41DeviceSampler`).
 ``DEEPSEEK_V4_SEED`` (default 1234) seeds either sampler.
 
 ``DEEPSEEK_V4_BALANCE_DRAM_BANKS`` (default 1) builds the routed experts with K-split gate_up shards spread over
@@ -128,7 +128,7 @@ if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "4096")) < 10:
 _WEIGHT_DTYPE = ttnn.bfloat4_b
 # Accepted by prepare_static_decode for the V4 call shape. The index pool uses CSA_INDEX_BLOCK_SIZE.
 _PAGE_BLOCK_SIZE = 32
-_DEVICE_SAMPLING = os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "0") not in ("0", "", "false", "False")
+_DEVICE_SAMPLING = os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "1") not in ("0", "", "false", "False")
 _TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_TEMPERATURE", "0"))
 _SEED = int(os.environ.get("DEEPSEEK_V4_SEED", "1234"))
 _BALANCE_DRAM_BANKS = os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "1") not in ("0", "", "false", "False")
