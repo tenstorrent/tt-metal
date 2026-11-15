@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_unpack_A.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -101,6 +102,24 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
     }
 }
 
+/**
+ * @brief Initialize the unpacker for the rmsnorm bcast-scalar dest-reuse op: num_tiles tiles of SrcA from one
+ * _llk_unpack_A_ call, SrcB fed a dummy dvalid for the MOVD2B on the math thread.
+ *
+ * Owns unpacker A's X span: every real UNPACR of the MOP targets SrcA, so this init programs x_end on
+ * unpacker A (where DEST_TO_SRCB also routes the operand address) and does not inherit it; Tile_x_dim, the
+ * Y stride and the XY counters are inherited and must still be canonical.
+ *
+ * @tparam num_tiles: Tiles the MOP walks per _llk_unpack_A_ call.
+ * @tparam BType/acc_to_dest/binary_reuse_dest: Must be SCALAR / true / DEST_TO_SRCB (static_assert).
+ * @param transpose_of_faces, within_face_16x16_transpose: Fold a 32x32 transpose into the unpack (num_tiles == 1,
+ *        num_faces == 4 only).
+ * @param face_r_dim: Rows per face; sets the X span.
+ * @param num_faces: Faces per tile (1, 2 or 4).
+ * @note Pairs with @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_ on the math thread. The matching execute
+ *       is the generic @ref _llk_unpack_A_ with the same <SCALAR, true, DEST_TO_SRCB> arguments; other arguments
+ *       route the L1 address to unpacker B, which the static_assert here cannot see.
+ */
 template <
     std::uint32_t num_tiles,
     BroadcastType BType                          = BroadcastType::NONE,
@@ -125,8 +144,16 @@ inline void _llk_unpack_A_rmsnorm_init_(
     // static_cast<uint>(DataFormat::UInt16));
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    config_unpacker_x_end<UNP_SEL>(face_r_dim);
+    // x-start/x-end is per-unpacker state, so program it on the unpacker the MOP issues real (non-ZEROSRC)
+    // UNPACRs against. The only configuration this init accepts (SCALAR + acc_to_dest + DEST_TO_SRCB, see
+    // the static_assert in _llk_unpack_A_rmsnorm_mop_config_) reads L1 on SrcA alone: SrcB is fed a ZEROSRC
+    // UNPACR_NOP for the MOVD2B on the math thread and never reads L1, so its X counter is unused. That is
+    // also where _llk_unpack_A_ routes the L1 base address for DEST_TO_SRCB whatever the broadcast type
+    // (_llk_unpack_A_address_on_unpacker_A_), so the X span and the address must land on the same unpacker.
+    static_assert(
+        _llk_unpack_A_address_on_unpacker_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(),
+        "rmsnorm unpack: the X span is programmed on unpacker A, so the operand address must be routed there too");
+    config_unpacker_x_end<p_setadc::UNP_A>(face_r_dim);
 
     _llk_unpack_A_rmsnorm_mop_config_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);

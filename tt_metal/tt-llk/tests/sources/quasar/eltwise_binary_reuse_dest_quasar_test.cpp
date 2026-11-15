@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
         PROFILER_SYNC();
     }
@@ -152,7 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
@@ -172,7 +172,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_eltwise_unary_datacopy_(i);
                 }
 
-                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(ckernel::DEFAULT_TENSOR_SHAPE);
+                const DataFormat math_format     = static_cast<DataFormat>(formats.math);
+                const DataFormat dest_src_format = ckernel::math::dest_src_format<is_fp32_dest_acc_en>(math_format);
+                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, REUSE_DEST_TYPE>(
+                    REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? dest_src_format : math_format,
+                    REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB ? dest_src_format : math_format,
+                    ckernel::DEFAULT_TENSOR_SHAPE);
                 for (int block = 0; block < num_blocks; block++)
                 {
                     for (int n = 0; n < num_tiles_accum; n++)
@@ -219,9 +224,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
+        // PACK_ISOLATE packs without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -255,7 +260,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         int res_tile_idx = (block * output_tiles_in_block) + tile;
                         _llk_pack_(res_tile_idx, res_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
                     {
                         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }

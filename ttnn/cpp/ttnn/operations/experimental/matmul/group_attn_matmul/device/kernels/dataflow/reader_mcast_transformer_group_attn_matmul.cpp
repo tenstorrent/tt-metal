@@ -5,82 +5,75 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-
-    uint32_t has_work_for_mcast_kv_heads = get_arg_val<uint32_t>(i++);
+    uint32_t has_work_for_mcast_kv_heads = get_arg(args::has_work_for_mcast_kv_heads);
     if (has_work_for_mcast_kv_heads == 0) {
         return;
     }
-    uint32_t has_work_for_q_heads = get_arg_val<uint32_t>(i++);
+    uint32_t has_work_for_q_heads = get_arg(args::has_work_for_q_heads);
     const bool has_work_for_q_heads_bool = has_work_for_q_heads == 1;
 
-    uint32_t src1_addr = get_arg_val<uint32_t>(i++);
-    uint32_t Mt = get_arg_val<uint32_t>(i++);
-    uint32_t Nt = get_arg_val<uint32_t>(i++);
-    uint32_t num_kv_heads = get_arg_val<uint32_t>(i++);  // in1[1] (ie. in1 C)
-    uint32_t in1_CKtNt = get_arg_val<uint32_t>(i++);
-    uint32_t in1_CKtNt_mul_32 = get_arg_val<uint32_t>(i++);
-    uint32_t blocks = get_arg_val<uint32_t>(i++);
-    uint32_t in1_start_id = get_arg_val<uint32_t>(i++);
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t num_kv_heads = get_arg(args::num_kv_heads);  // in1[1] (ie. in1 C)
+    uint32_t in1_CKtNt = get_arg(args::in1_CKtNt);
+    uint32_t in1_CKtNt_mul_32 = get_arg(args::in1_CKtNt_mul_32);
+    uint32_t blocks = get_arg(args::blocks);
+    uint32_t in1_start_id = get_arg(args::in1_start_id);
 
     // matmul params
-    uint32_t in0_block_w = get_arg_val<uint32_t>(i++);
-    uint32_t out_block_w = get_arg_val<uint32_t>(i++);
-    uint32_t in1_num_subblocks = get_arg_val<uint32_t>(i++);
-    uint32_t in1_num_blocks = get_arg_val<uint32_t>(i++);
-    uint32_t in1_block_num_tiles = get_arg_val<uint32_t>(i++);
+    uint32_t in0_block_w = get_arg(args::in0_block_w);
+    uint32_t out_block_w = get_arg(args::out_block_w);
+    uint32_t in1_num_subblocks = get_arg(args::in1_num_subblocks);
+    uint32_t in1_num_blocks = get_arg(args::in1_num_blocks);
+    uint32_t in1_block_num_tiles = get_arg(args::in1_block_num_tiles);
 
     // constants
-    uint32_t Nt_bytes = get_arg_val<uint32_t>(i++);
-    uint32_t in1_block_w_tile_bytes = get_arg_val<uint32_t>(i++);
-    uint32_t out_last_subblock_w = get_arg_val<uint32_t>(i++);
-    uint32_t in1_last_block_w_tile_read_bytes = get_arg_val<uint32_t>(i++);
-    uint32_t in1_last_block_addr_skip = get_arg_val<uint32_t>(i++);
+    uint32_t Nt_bytes = get_arg(args::Nt_bytes);
+    uint32_t in1_block_w_tile_bytes = get_arg(args::in1_block_w_tile_bytes);
+    uint32_t out_last_subblock_w = get_arg(args::out_last_subblock_w);
+    uint32_t in1_last_block_w_tile_read_bytes = get_arg(args::in1_last_block_w_tile_read_bytes);
+    uint32_t in1_last_block_addr_skip = get_arg(args::in1_last_block_addr_skip);
 
-    uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_num_dests = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_num_cores = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_grid_size = get_arg_val<uint32_t>(i++);
-    Semaphore<> sender_sem(get_arg_val<uint32_t>(i++));
-    Semaphore<> receiver_sem(get_arg_val<uint32_t>(i++));
+    uint32_t in1_mcast_dest_noc_start_x = get_arg(args::in1_mcast_dest_noc_start_x);
+    uint32_t in1_mcast_dest_noc_start_y = get_arg(args::in1_mcast_dest_noc_start_y);
+    uint32_t in1_mcast_dest_noc_end_x = get_arg(args::in1_mcast_dest_noc_end_x);
+    uint32_t in1_mcast_dest_noc_end_y = get_arg(args::in1_mcast_dest_noc_end_y);
+    uint32_t in1_mcast_num_dests = get_arg(args::in1_mcast_num_dests);
+    uint32_t in1_mcast_num_cores = get_arg(args::in1_mcast_num_cores);
+    uint32_t in1_mcast_grid_size = get_arg(args::in1_mcast_grid_size);
+    Semaphore<> sender_sem(sem::in1_mcast_sender);
+    Semaphore<> receiver_sem(sem::in1_mcast_receiver);
 
-    uint32_t in1_mcast_sender_size_bytes = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_sender_id = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_sender_num_x = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_sender_num_y = get_arg_val<uint32_t>(i++);
-    tt_l1_ptr uint32_t* in1_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
-    i += in1_mcast_sender_num_x;
-    tt_l1_ptr uint32_t* in1_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
-    i += in1_mcast_sender_num_y;
+    uint32_t in1_mcast_sender_size_bytes = get_arg(args::in1_mcast_sender_size_bytes);
+    uint32_t in1_mcast_sender_id = get_arg(args::in1_mcast_sender_id);
+    uint32_t in1_mcast_sender_num_x = get_arg(args::in1_mcast_sender_num_x);
+    uint32_t in1_mcast_sender_num_y = get_arg(args::in1_mcast_sender_num_y);
+    // The sender NOC coordinate tables follow as varargs: the num_x x entries first, then the num_y y entries.
 
-    constexpr bool transpose_hw_bool = get_compile_time_arg_val(0) == 1;
-    constexpr bool row_major = (bool)get_compile_time_arg_val(1);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(2);
-
-    constexpr uint32_t cb_id_in1 = 1;  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
-    constexpr uint32_t cb_id_in2 = 2;  // all interleaved or sharded KV heads for one user batch
+    constexpr bool transpose_hw_bool = get_arg(args::transpose_hw) == 1;
+    constexpr bool row_major = (bool)get_arg(args::row_major);
+    constexpr uint32_t out_subblock_w = get_arg(args::out_subblock_w);
 
     Noc noc;
-    CircularBuffer cb_in1_obj(cb_id_in1);
-    CircularBuffer cb_in2_obj(cb_id_in2);
+    DataflowBuffer dfb_in1(dfb::in1);  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
+#ifdef IN1_SHARDED
+    DataflowBuffer dfb_in2(dfb::in2);  // all interleaved or sharded KV heads for one user batch
+#endif
 
     constexpr uint32_t num_rows_in_one_tile = 32;
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
+    const uint32_t in1_tile_bytes = dfb_in1.get_tile_size();
     constexpr uint32_t in0_num_blocks_w = 1;  // TODO: Must be 1; generalize to support inner dim blocking
 
 #ifndef IN1_SHARDED
-    constexpr auto in1_args = TensorAccessorArgs<3>();
-    const auto s1 = TensorAccessor(in1_args, src1_addr);
+    const auto s1 = TensorAccessor(tensor::src1);
 #endif
 
     // Mcast setup
@@ -93,8 +86,8 @@ void kernel_main() {
     if constexpr (row_major) {
         uint32_t x = 0, y = 0;
         for (uint32_t i = 0; i < num_rows_in_one_tile; ++i) {
-            sender_sem_noc_x_vec[i] = in1_mcast_sender_noc_x[x];
-            sender_sem_noc_y_vec[i] = in1_mcast_sender_noc_y[y];
+            sender_sem_noc_x_vec[i] = get_vararg(x);
+            sender_sem_noc_y_vec[i] = get_vararg(in1_mcast_sender_num_x + y);
             ++x;
             if (x == in1_mcast_sender_num_x) {
                 x = 0;
@@ -104,8 +97,8 @@ void kernel_main() {
     } else {
         uint32_t x = 0, y = 0;
         for (uint32_t i = 0; i < num_rows_in_one_tile; ++i) {
-            sender_sem_noc_x_vec[i] = in1_mcast_sender_noc_x[x];
-            sender_sem_noc_y_vec[i] = in1_mcast_sender_noc_y[y];
+            sender_sem_noc_x_vec[i] = get_vararg(x);
+            sender_sem_noc_y_vec[i] = get_vararg(in1_mcast_sender_num_x + y);
             ++y;
             if (y == in1_mcast_sender_num_y) {
                 y = 0;
@@ -119,19 +112,20 @@ void kernel_main() {
     UnicastEndpoint local_src;
 
     const bool in1_sender_in_receiver_grid = in1_mcast_sender_id < in1_mcast_grid_size;
-    bool mcast_in1_to_local_cb = false;
-    uint32_t in1_sharded_cb_addr = cb_in2_obj.get_read_ptr();
+    bool mcast_in1_to_local_dfb = false;
 #ifdef IN1_SHARDED
     // Only used for sharded
+    uint32_t in1_sharded_dfb_addr = dfb_in2.get_read_ptr();
     // Don't need to track batch because user batch must be 32 (ie. Mt must be 1)
-    uint32_t in1_sharded_l1_addr_Nt = in1_sharded_cb_addr;
+    uint32_t in1_sharded_l1_addr_Nt = in1_sharded_dfb_addr;
     uint32_t in1_block_w_tile_read_bytes = in1_block_w_tile_bytes;
     if (in1_num_blocks == 1) {
-        mcast_in1_to_local_cb =
+        mcast_in1_to_local_dfb =
             true;  // For sharded in1, if no blocking along Nt, directly mcast instead of doing local copies
     }
 #else
     // Only used for interleaved
+    uint32_t in1_sharded_dfb_addr = 0;  // no resident in1 shard; mcast_in1_to_local_dfb stays false, so never read
     uint32_t in1_batch;
     uint32_t in1_tensor_id_along_Nt;
     uint32_t in1_tensor_id;
@@ -165,8 +159,8 @@ void kernel_main() {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
                     for (uint32_t in0_block = 0; in0_block < in0_num_blocks_w;
                          in0_block++) {  // TODO: Must be 1; generalize to support inner dim blocking
-                        cb_in1_obj.reserve_back(in1_block_num_tiles);
-                        uint32_t l1_write_addr_in1 = cb_in1_obj.get_write_ptr();
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+                        uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr();
 
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks;
                              in1_subblock++) {  // TODO: Must be 1; for generic padding, need full + partial subblocks
@@ -174,21 +168,21 @@ void kernel_main() {
                             if (tile_row_id == in1_mcast_sender_id) {
 // MCAST SENDER: send all kv_heads in one user batch
 #ifdef IN1_SHARDED
-                                if (!mcast_in1_to_local_cb) {
+                                if (!mcast_in1_to_local_dfb) {
                                     // TODO: Try to optimize away the local copy and self-mcast instead for sharded;
                                     // some things to try:
                                     // - block sharding so each core gets correct block along out width
                                     // - overlap copy with mcasting to hide away the local copy time (maybe offload some
                                     // work to writer)
 
-                                    // Copy to cb_id_in1 to mcast
+                                    // Copy to in1 to mcast
                                     uint32_t in1_sharded_l1_addr = in1_sharded_l1_addr_Nt;
                                     uint32_t write_offset = 0;
                                     for (uint32_t kv_heads_id = 0; kv_heads_id < num_kv_heads; kv_heads_id++) {
                                         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                             noc.async_read(
                                                 local_src,
-                                                cb_in1_obj,
+                                                dfb_in1,
                                                 in1_block_w_tile_read_bytes,
                                                 {.noc_x = local_noc_x,
                                                  .noc_y = local_noc_y,
@@ -213,7 +207,7 @@ void kernel_main() {
                                         for (uint32_t w = 0; w < out_subblock_w_; w++) {
                                             noc.async_read(
                                                 s1,
-                                                cb_in1_obj,
+                                                dfb_in1,
                                                 in1_tile_bytes,
                                                 {.page_id = in1_tensor_current_id},
                                                 {.offset_bytes = write_offset});
@@ -234,15 +228,15 @@ void kernel_main() {
                                 sender_sem.wait(in1_mcast_num_dests);
                                 sender_sem.set(0);
 
-                                // Now we have the block in the CB address, we can mcast to dests!
-                                if (mcast_in1_to_local_cb) {  // directly mcast data in in1 sharded cb
-                                    CoreLocalMem<uint32_t> mcast_src(in1_sharded_cb_addr);
+                                // Now we have the block in the DFB address, we can mcast to dests!
+                                if (mcast_in1_to_local_dfb) {  // directly mcast data in in1 sharded dfb
+                                    CoreLocalMem<uint32_t> mcast_src(in1_sharded_dfb_addr);
                                     if (in1_sender_in_receiver_grid) {
                                         // if sender is in receiver grid, num_dests will include source, since we are
-                                        // copying to a different local CB as well
+                                        // copying to a different local DFB as well
                                         noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                                             mcast_src,
-                                            cb_in1_obj,
+                                            dfb_in1,
                                             in1_mcast_sender_size_bytes,
                                             in1_mcast_num_cores + 1,
                                             {},
@@ -253,10 +247,10 @@ void kernel_main() {
                                              .offset_bytes = 0});
                                     } else {
                                         // if sender is not in receiver grid, do a regular multicast but from
-                                        // in1_sharded_cb_addr
+                                        // in1_sharded_dfb_addr
                                         noc.async_write_multicast(
                                             mcast_src,
-                                            cb_in1_obj,
+                                            dfb_in1,
                                             in1_mcast_sender_size_bytes,
                                             in1_mcast_num_cores,
                                             {},
@@ -271,7 +265,7 @@ void kernel_main() {
                                     CoreLocalMem<uint32_t> mcast_src(l1_write_addr_in1);
                                     noc.async_write_multicast(
                                         mcast_src,
-                                        cb_in1_obj,
+                                        dfb_in1,
                                         in1_mcast_sender_size_bytes,
                                         in1_mcast_num_cores,
                                         {},
@@ -306,7 +300,7 @@ void kernel_main() {
                             } else if (in1_sender_in_receiver_grid) {
                                 // MCAST RECEIVER: receive all kv_heads in one user batch
                                 // All cores in mcast grid needs to participate in receiving otherwise data corruption
-                                // since we mcast from and to the same CB
+                                // since we mcast from and to the same DFB
 
                                 // Set in1 semaphore value to INVALID
                                 receiver_sem.set(INVALID);
@@ -320,12 +314,12 @@ void kernel_main() {
                                 receiver_sem.wait(VALID);
                             }
                             if (has_work_for_q_heads_bool) {
-                                cb_in1_obj.push_back(in1_block_num_tiles);
+                                dfb_in1.push_back(in1_block_num_tiles);
                             } else {
                                 // Mcast is in lockstep; this makes write ptr addresses are synced properly for cores
                                 // that only send and have no compute / writer active
-                                cb_in1_obj.push_back(in1_block_num_tiles);
-                                cb_in1_obj.pop_front(in1_block_num_tiles);
+                                dfb_in1.push_back(in1_block_num_tiles);
+                                dfb_in1.pop_front(in1_block_num_tiles);
                             }
 
 #ifndef IN1_SHARDED

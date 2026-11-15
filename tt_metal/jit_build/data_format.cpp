@@ -6,12 +6,8 @@
 
 #include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
 #include <base_types.hpp>     // for tt::tt_metal::UnpackToDestMode
-#include <circular_buffer_constants.h>
-#include <functional>
-#include <iostream>       // for basic_ostream
 #include <set>            // for set
 #include <unordered_map>  // for unordered_map
-#include <utility>
 
 namespace tt {
 
@@ -71,7 +67,7 @@ DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> da
         // Special case where Float32 can pair with any exponent precision, skip checking
         if ((format == DataFormat::Float32) || (format == DataFormat::RawUInt32) || (format == DataFormat::UInt32) ||
             (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8) || (format == DataFormat::UInt16) ||
-            (format == DataFormat::UInt8) || (format == DataFormat::Int32)) {
+            (format == DataFormat::Int16) || (format == DataFormat::UInt8) || (format == DataFormat::Int32)) {
             continue;
         }
 

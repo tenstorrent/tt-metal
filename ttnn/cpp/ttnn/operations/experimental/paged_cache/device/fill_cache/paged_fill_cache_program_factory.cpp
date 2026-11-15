@@ -13,13 +13,12 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::experimental::prim {
 
@@ -38,10 +37,10 @@ const DFBSpecName FC_PAGE_TABLE{"page_table"};
 const DFBSpecName FC_BATCH_IDX{"batch_idx"};
 const DFBSpecName FC_VALID_SEQ_LEN{"valid_seq_len"};
 
-// Quasar (Gen2) rejects self-loop DFBs on data-movement kernels. The writer's three metadata buffers
-// (page_table/batch_idx/valid_seq_len) are self-loops — it NoC-reads a stick and reads it straight
-// back, never pushing — so on Quasar they become node-local scratchpads instead. The accessor names
-// match the DFB ones, so the writer kernel selects dfb::… or scratch::… under #ifdef ARCH_QUASAR.
+// Quasar (Gen2) rejects self-loop DFBs on data-movement kernels, so the writer's three metadata
+// buffers (page_table/batch_idx/valid_seq_len) become node-local scratchpads there. The accessor
+// names match the DFB ones, so the writer kernel selects dfb::… or scratch::… under #ifdef
+// ARCH_QUASAR.
 const ScratchpadSpecName FC_PAGE_TABLE_SCRATCH{"page_table"};
 const ScratchpadSpecName FC_BATCH_IDX_SCRATCH{"batch_idx"};
 const ScratchpadSpecName FC_VALID_SEQ_LEN_SCRATCH{"valid_seq_len"};
@@ -305,11 +304,9 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
 
     // ---------------- Writer ----------------
 
-    // The three metadata buffers below are touched by the writer alone: it reserves an entry, takes
-    // the write pointer, NoC-reads the metadata into it and reads it straight back through an SRAM
-    // pointer, never pushing. With no second kernel to take the opposite endpoint, each is bound as
-    // a self-loop pair: one PRODUCER and one CONSUMER on the same kernel, which is the one form of
-    // repeated binding the spec validator sanctions.
+    // The three metadata buffers below are touched by the writer alone. With no second kernel to
+    // take the opposite endpoint, each is bound as a self-loop pair: one PRODUCER and one CONSUMER
+    // on the same kernel, which is the one form of repeated binding the spec validator sanctions.
     Group<DFBBinding> writer_dfb_bindings = {
         DFBBinding{
             .dfb_spec_name = FC_IN_TILES,

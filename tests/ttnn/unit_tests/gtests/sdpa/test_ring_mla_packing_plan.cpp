@@ -160,6 +160,66 @@ TEST(RingMLAPackingPlan, PassesCoverEverySourceTileOnceAndOnlyAfterItArrives) {
     }
 }
 
+// The kernels take one schedule from make_packed_kv_schedule: the classic ring's unless the host grouped
+// sources, in which case it is the packed one, arrivals consumed and all.
+TEST(RingMLAPackingPlan, KernelScheduleIsClassicUnlessSourcesAreGrouped) {
+    constexpr uint32_t ring_size = 8, region_tiles = 8, chunk_tiles = 4, source_tiles = 2 * region_tiles;
+    uint32_t next = 0;
+    const auto arrival = [&] { return (next++ * 3) % ring_size; };
+    const PackedKVSchedule classic = make_packed_kv_schedule<1>(
+        ring_size,
+        source_tiles,
+        source_tiles * ring_size,
+        all_sources_mask(ring_size),
+        region_tiles,
+        chunk_tiles,
+        false,
+        arrival);
+    EXPECT_FALSE(classic.packed());
+    EXPECT_EQ(classic.source_group_size, 1u);
+    EXPECT_EQ(classic.ring_iterations, ring_size);
+    EXPECT_EQ(classic.base.source_tiles, region_tiles);
+    EXPECT_EQ(classic.base.source_count, 1u);
+    EXPECT_EQ(classic.base.chunk_tiles, chunk_tiles);
+    EXPECT_EQ(classic.base.region_tiles, region_tiles);
+    EXPECT_FALSE(classic.pass_plan(3).defers_newest());
+    EXPECT_EQ(classic.rows(3), 0u);
+    EXPECT_EQ(next, 0u) << "the classic ring previews no arrivals";
+    EXPECT_EQ(
+        make_packed_kv_schedule<1>(ring_size, source_tiles, 1, 0, region_tiles, chunk_tiles, true, arrival)
+            .ring_iterations,
+        1u);
+
+    const PackedKVSchedule packed = make_packed_kv_schedule<4>(
+        ring_size,
+        source_tiles,
+        source_tiles * ring_size,
+        all_sources_mask(ring_size),
+        region_tiles,
+        chunk_tiles,
+        false,
+        arrival);
+    EXPECT_EQ(next, ring_size);
+    next = 0;
+    const PackedKVSchedule direct = packed_kv_schedule(
+        4,
+        ring_size,
+        source_tiles,
+        source_tiles * ring_size,
+        all_sources_mask(ring_size),
+        region_tiles,
+        chunk_tiles,
+        false,
+        arrival);
+    EXPECT_TRUE(packed.packed());
+    EXPECT_EQ(packed.source_group_size, direct.source_group_size);
+    EXPECT_EQ(packed.ring_iterations, direct.ring_iterations);
+    EXPECT_EQ(packed.base.source_tiles, direct.base.source_tiles);
+    for (uint32_t pass = 0; pass < packed.ring_iterations; ++pass) {
+        EXPECT_EQ(packed.rows(pass), direct.rows(pass)) << "pass " << pass;
+    }
+}
+
 TEST(RingMLAPackingPlan, ReadinessWaitsEachSourceOnceInOrder) {
     const PackedKVGroupPlan plan = packed_kv_pass_plan({15, 4, 4, 5}, 0b1);
     PackedKVSourceReadiness readiness;

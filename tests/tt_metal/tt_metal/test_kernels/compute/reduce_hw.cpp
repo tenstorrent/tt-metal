@@ -37,11 +37,7 @@ void kernel_main() {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 dfb_in.wait_front(onetile);
 #if (MATH_ONLY == 1)
-#ifdef ARCH_QUASAR
-                UNPACK((llk_unpack_AB_reduce(dfb::in_data, dfb::in_scaler, 0, 0)));
-#else
                 UNPACK((llk_unpack_AB_reduce<REDUCE_OP, REDUCE_DIM>(dfb::in_data, dfb::in_scaler, 0, 0)));
-#endif
                 // REDUCE_OP and REDUCE_DIM are expected to come from add_define
                 reduce_tile_math<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
 #elif (MATH_ONLY == 0)
@@ -57,5 +53,7 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_release();
     }
+    // Release the scaler, so its producer's DataflowBuffer can drain when it goes out of scope (Quasar).
+    dfb_in_scaler.pop_front(onetile);
     reduce_uninit();
 }

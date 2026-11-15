@@ -9,20 +9,97 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 
 KDA_CHUNK_SIZE = ttnn.TILE_SIZE
 KDA_QKV_DTYPE = ttnn.bfloat16
 KDA_GATE_DTYPE = ttnn.bfloat16
-KDA_BETA_DTYPE = ttnn.float32
 KDA_RECURRENT_STATE_DTYPE = ttnn.float32
-KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
-KDA_PREPARATION_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
+# The L1 budgets below are static: they are sized on Galaxy SP8xTP4 against what is live next to these tensors
+# there (the local summary and prefix buffers, the scans' circular buffers and the CCL semaphores), not measured at
+# run time. They assume the device is opened with an L1_SMALL region (as the model's prefill tests do), so the CCL
+# semaphores the first call allocates do not land between the chunk terms and fragment L1.
+#
+# The chunk terms stay in interleaved L1 for both scans when their share of each worker core fits this budget;
+# larger geometries keep them in DRAM. Kimi-K3 on Galaxy SP8xTP4 (24 heads, 640 rows per device) needs 256 KiB per
+# core; the rest of L1 holds the summary, prefix and scan buffers that run while the chunk terms are alive.
+# Single-device and longer-sequence geometries exceed the budget and would clash with those buffers.
+KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
+# With the entry correction, the summary's emitted output terms also live in L1 next to the chunk terms, which then
+# fit Kimi-K3's per-chip workload on 11x10 and 12x10 grids.
+KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE = 280 * 1024
+# The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
+# each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
+KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
+# The convolution's Q, K and V stay in interleaved L1 until chunk preparation reads them when each core's share fits
+# this budget (96 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM. LoudBox SP2xTP4 holds four
+# times the rows per device (384 KiB per core), so it keeps them in DRAM, as before the fusion: its perf gate measures
+# the DRAM placement, and only Galaxy's measures the L1 one.
+KDA_QKV_L1_BYTES_PER_CORE = 112 * 1024
+# The QKV convolution's fabric history exchange (qkv_causal_conv1d_silu_layout.hpp): a persistent buffer of
+# predecessor, carry, outgoing and end rows, three rows each, and its entry, predecessor and carry semaphores.
+KDA_HISTORY_EXCHANGE_ROWS = 12
+KDA_HISTORY_EXCHANGE_SEMAPHORES = 3
+# The gated norm's output stays in interleaved L1 until the output projection reads it when each core's share fits
+# this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
+KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024
+# The output projection's partial sums stay in interleaved L1 until the TP reduce-scatter reads them when each core's
+# share fits this budget (75 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
+KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
+# The bounded gate's FP32 logits stay in interleaved L1 between the decay projection and the offset add when each core's
+# share fits this budget (64 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
+KDA_DECAY_LOGITS_L1_BYTES_PER_CORE = 64 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
-KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
-KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
+
+
+def validate_convolution_page_channels(page_channels: int | None, config: KDAConfig) -> None:
+    """Reject a convolution tail page that is not a positive multiple of a tile dividing both head dims.
+
+    The tail is ``qkv_causal_conv1d_silu``'s three-row history: token-paged ``[1, K-1, W]`` (``page_channels`` None),
+    or channel-paged ``[1, W / P, (K-1) * P]`` with ``P`` channels per page. Dividing ``head_k_dim`` and ``head_v_dim``
+    keeps every page inside one head of Q, K or V.
+    """
+    if page_channels is None:
+        return
+    if (
+        page_channels <= 0
+        or page_channels % ttnn.TILE_SIZE
+        or config.head_k_dim % page_channels
+        or config.head_v_dim % page_channels
+    ):
+        raise ValueError(
+            f"convolution_page_channels must be a positive multiple of {ttnn.TILE_SIZE} dividing head_k_dim "
+            f"{config.head_k_dim} and head_v_dim {config.head_v_dim}, got {page_channels}"
+        )
+
+
+def convolution_tail_shape(history_rows: int, width: int, page_channels: int | None) -> tuple[int, int, int]:
+    """Device shape of a ``[K-1, W]`` convolution tail, token-paged when ``page_channels`` is None."""
+    if page_channels is None:
+        return (1, history_rows, width)
+    return (1, width // page_channels, history_rows * page_channels)
+
+
+def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConfig:
+    """Interleaved L1 when ``nbytes`` spread over the worker grid fits ``bytes_per_core`` per core, else DRAM."""
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= bytes_per_core * grid.x * grid.y else ttnn.DRAM_MEMORY_CONFIG
+
+
+def preparation_bytes(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> int:
+    """Bytes of chunk preparation's seven outputs, in the order and formats KDA_PREP_OUTPUT_BF16_MASK selects."""
+    key_tiles, value_tiles = key_dim // ttnn.TILE_SIZE, value_dim // ttnn.TILE_SIZE
+    # v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv tiles per chunk.
+    tiles = (value_tiles, key_tiles, key_tiles, 1, key_tiles, key_tiles, 1)
+    tile_bytes = sum(
+        count * ttnn.TILE_SIZE * ttnn.TILE_SIZE * (2 if KDA_PREP_OUTPUT_BF16_MASK & (1 << index) else 4)
+        for index, count in enumerate(tiles)
+    )
+    return batch_heads * num_chunks * tile_bytes
 
 
 @dataclass(frozen=True)
@@ -35,6 +112,12 @@ class KDARecurrenceProgramConfig:
     summary_group_chunks: int = 20
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayAffinePrefix):
+    # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
+    # each chunk's output terms, and an EntryCorrection program forms the chunk outputs and the final state from the
+    # entry states, all chunks in parallel. Cores the entry correction may use: its products count toward the Blackhole
+    # di/dt bound.
+    entry_correction_max_cores: int = 110
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):
@@ -52,10 +135,15 @@ class KDAProgramConfig:
     qkv_channel_chunk_size: int = 768
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
+    input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+    # Weight dtype of the input (q, k, v, f_a, f_b, g, b) and output projections.
+    projection_dtype: ttnn.DataType = ttnn.bfloat16
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
+    # Channels per page of the convolution tail (``KdaState.convolution``); None keeps it token-paged.
+    convolution_page_channels: int | None = None
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -72,26 +160,42 @@ _TUNED_PROJECTION_ROWS = 640
 
 
 def tuned_projection_matmul_configs(
-    grid: ttnn.CoreCoord, rows: int, output_k: int, output_n: int
-) -> tuple[ttnn.MinimalMatmulConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None]:
+    grid: ttnn.CoreCoord,
+    rows: int,
+    input_n: int,
+    output_k: int,
+    output_n: int,
+) -> tuple[
+    ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None
+]:
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
     Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
-    (bf16, FP32 destination accumulation); subblocks stay within the 4-tile FP32 destination limit.
+    (bf16, FP32 destination accumulation) at HiFi2; not re-tuned at other fidelities. Subblocks stay within
+    the 4-tile FP32 destination limit.
     Returns (None, None) when the blocking does not fit, keeping the auto-selected ttnn.linear configs.
     """
     row_tiles = rows // ttnn.TILE_SIZE
     per_core_m = math.ceil(row_tiles / grid.y)
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
-    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8:
+    input_per_core_n = math.ceil(math.ceil(input_n / ttnn.TILE_SIZE) / grid.x)
+    if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4 or input_per_core_n % 3:
         return None, None
-    input_projection = ttnn.MinimalMatmulConfig(
-        M_block_size=2,
-        K_block_size=8,
-        N_block_size=3,
-        subblock_h=1,
-        subblock_w=3,
+    # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and
+    # streams K in 4-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 56 K blocks), the widest that fits in
+    # L1 next to the L1 output with bf16 weights. At HiFi2 the bf16 weight stream from DRAM bounds it.
+    input_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        out_block_h=per_core_m,
+        out_block_w=input_per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=input_per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
     )
     output_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -109,6 +213,11 @@ def tuned_projection_matmul_configs(
     return input_projection, output_projection
 
 
+# tt-blaze decode keeps the K3 input projections in bfloat4_b after layer 0, which costs ~0.025
+# layer-output PCC; bfloat8_b matches decode's layer 0 and output projection.
+KIMI_K3_PROJECTION_DTYPE = ttnn.bfloat8_b
+
+
 def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
     # Fixed production/proxy geometries; native worker capacity is validated by
@@ -121,12 +230,58 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
         recurrence=KDARecurrenceProgramConfig(
-            local_scan_strategy="grouped", summary_group_chunks=group_chunks[active_seq_len_local]
+            local_scan_strategy="grouped",
+            summary_group_chunks=group_chunks[active_seq_len_local],
+            # HiFi3, not HiFi2: HiFi2 keeps only SrcB's 6 explicit mantissa bits, which biases the FP32 state products
+            # low over long sequences. With SP these are the relay's hop (affine prefix) and the entry correction
+            # (scan).
+            scan_math_fidelity=ttnn.MathFidelity.HiFi3,
+            affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
-        qkv_channel_chunk_size=512,
+        qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
-        output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # HiFi3 for the same SrcB truncation.
+        output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
+        projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # The state migration contract's segment, so a slab copy of the convolution tail is a page copy.
+        convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
+    )
+
+
+_DECAY_OUT_BLOCK_TILES = 32
+
+
+def decay_projection_program_config(
+    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
+
+    Each core's output is computed in blocks of at most _DECAY_OUT_BLOCK_TILES tiles, which bounds the output and
+    FP32 intermediate circular buffers on geometries with many rows or heads per core (one Kimi-K3 Galaxy SP8xTP4
+    core holds a single 2 x 8 block).
+    """
+    tile = ttnn.TILE_SIZE
+    per_core_M = math.ceil(rows // tile / grid.y)
+    per_core_N = math.ceil(width // tile / grid.x)
+    out_block_w = max(w for w in range(1, min(per_core_N, _DECAY_OUT_BLOCK_TILES) + 1) if per_core_N % w == 0)
+    out_block_h = max(
+        h for h in range(1, per_core_M + 1) if per_core_M % h == 0 and h * out_block_w <= _DECAY_OUT_BLOCK_TILES
+    )
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=key_dim // tile,
+        out_subblock_h=1,
+        # FP32 accumulation holds four tiles in DST.
+        out_subblock_w=max(w for w in range(1, 5) if out_block_w % w == 0),
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
     )

@@ -526,7 +526,7 @@ class QwenImageDiT:
             dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(h)
-        h1a = ttnn.gelu(h1, fast_and_approximate_mode=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h1a = ttnn.gelu(h1, variant=ttnn.GeluVariant.Tanh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(h1)
         out = ttnn.linear(
             h1a,

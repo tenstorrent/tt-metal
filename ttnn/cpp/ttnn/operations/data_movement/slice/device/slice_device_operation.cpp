@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
@@ -15,6 +16,7 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
@@ -90,6 +92,20 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     return start_offset;
 }
 
+tt::DataFormat get_slice_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch) {
+    const tt::DataFormat format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    // Quasar rejects UInt16 and UInt32 as DFB formats.
+    if (arch == tt::ARCH::QUASAR) {
+        if (format == tt::DataFormat::UInt16) {
+            return tt::DataFormat::RawUInt16;
+        }
+        if (format == tt::DataFormat::UInt32) {
+            return tt::DataFormat::RawUInt32;
+        }
+    }
+    return format;
+}
+
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
@@ -99,7 +115,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     using namespace tt::constants;
     const bool has_step = std::any_of(args.step.cbegin(), args.step.cend(), [](uint32_t s) { return s != 1; });
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
-    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.input.is_allocated(), "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(
         tensor_args.input.layout() == Layout::TILE || tensor_args.input.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",
@@ -179,7 +195,74 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             spec_required.tensor_layout(),
             out_tensor.tensor_spec().tensor_layout());
     }
-    auto output_tensor_shape = compute_output_specs(args, tensor_args).logical_shape();
+    const auto output_spec = compute_output_specs(args, tensor_args);
+    const auto& output_nd_shard_spec = output_spec.memory_config().nd_shard_spec();
+    if (output_nd_shard_spec.has_value() &&
+        output_nd_shard_spec->shard_distribution_strategy == tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D &&
+        output_spec.logical_shape().volume() != 0) {
+        // The allocator only enforces this in compute_page_mapping, which the slice kernels never call, so an
+        // invalid output spec would otherwise reach the device and hang it.
+        const auto distribution = output_spec.compute_buffer_sharding_args().buffer_distribution_spec();
+        TT_FATAL(
+            distribution.has_value() && distribution->num_shards() % distribution->num_cores() == 0,
+            "Slice output ND shard spec {} is CONTIGUOUS_1D but splits the output shape {} into {} shard(s), which is "
+            "not a multiple of its {} core(s). Pass a memory_config that fits the sliced shape, or omit memory_config "
+            "to derive one from the input.",
+            *output_nd_shard_spec,
+            output_spec.logical_shape(),
+            distribution.has_value() ? distribution->num_shards() : 0,
+            distribution.has_value() ? distribution->num_cores() : 0);
+    }
+    // noc_async_{read,write}_sharded walks a rank-1 ND spec one aligned page at a time, so a shard whose payload is
+    // not alignment-sized would have its padding read as data (or real data skipped) once a transfer goes past the
+    // shard's payload. Reject sub-aligned rank-1 shards unless every transfer provably stays inside the payload:
+    //  - rank-1, unstrided tensor: the helper sees one row addressed by byte offset, and reader and writer both end
+    //    at end_bytes, so the transfer is exact iff end_bytes <= shard_bytes (the first page's payload; the bytes
+    //    up to the aligned page are padding).
+    //  - higher rank with a shard exactly one row wide: the page is the whole row and every per-row transfer ends
+    //    inside it, so the early return never leaves its page.
+    // Strided rank-1 slices and shards narrower than the row stay rejected.
+    if (tensor_args.input.layout() == Layout::ROW_MAJOR && output_spec.logical_shape().volume() != 0) {
+        const bool rank1_unstrided = tensor_args.input.padded_shape().rank() == 1 && !has_step;
+        const uint32_t element_size = tensor_args.input.element_size();
+        const auto check_rank1_nd_shard_aligned = [&](const tt::tt_metal::MemoryConfig& mc,
+                                                      const ttnn::Shape& padded_shape,
+                                                      const char* which,
+                                                      const uint32_t end_elements) {
+            const auto& nd = mc.nd_shard_spec();
+            if (!nd.has_value() || nd->shard_shape.rank() != 1) {
+                return;
+            }
+            const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM ? ::hal::get_dram_alignment()
+                                                                                          : ::hal::get_l1_alignment();
+            const uint32_t shard_bytes = nd->shard_shape[0] * element_size;
+            if (shard_bytes % alignment == 0) {
+                return;
+            }
+            if (padded_shape.rank() > 1 && nd->shard_shape[0] == padded_shape[-1]) {
+                return;
+            }
+            if (rank1_unstrided && end_elements * element_size <= shard_bytes) {
+                return;
+            }
+            TT_FATAL(
+                false,
+                "Slice {} is ND-sharded with rank-1 shard shape {} ({} bytes), which is not a multiple of the {}-byte "
+                "buffer alignment, and the slice reaches past the shard's payload. Use a shard size whose byte size "
+                "is aligned.",
+                which,
+                nd->shard_shape,
+                shard_bytes,
+                alignment);
+        };
+        // The input is read up to its slice end; the output is written from offset 0 up to its length.
+        const uint32_t input_end = rank1_unstrided ? args.slice_end[0] : 0;
+        const uint32_t output_end = rank1_unstrided ? args.slice_end[0] - args.slice_start[0] : 0;
+        check_rank1_nd_shard_aligned(
+            tensor_args.input.memory_config(), tensor_args.input.padded_shape(), "input", input_end);
+        check_rank1_nd_shard_aligned(output_spec.memory_config(), output_spec.padded_shape(), "output", output_end);
+    }
+    const auto& output_tensor_shape = output_spec.logical_shape();
     if (has_step) {  // if all ones modify before passing in to function
         TT_FATAL(
             tensor_args.input.layout() == Layout::ROW_MAJOR, "Strided slice is only supported for row major layout");
@@ -233,6 +316,7 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
 
         uint32_t slice_dimension = args.slice_dim.value();
         uint32_t num_parts = args.num_devices.value();
+        TT_FATAL(num_parts > 0, "num_devices must be greater than 0");
 
         for (uint32_t i = 0; i < out_shape.size(); i++) {
             out_shape[i] = input_tensor.logical_shape()[i];
@@ -268,7 +352,34 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
     // Synthesize shard spec for sharded-no-spec output: scale from input spec when layouts match,
     // else fall back to generate_transpose_shard_spec for a fresh full-grid spec.
     auto output_mem_config = args.output_mem_config;
-    if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value()) {
+    // Only an output config that was defaulted from the input may be rescaled; an explicitly supplied
+    // config is honored verbatim even if it happens to equal the input's.
+    if (args.output_mem_config_inherited &&
+        output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED &&
+        !output_mem_config.shard_spec().has_value() && output_mem_config.nd_shard_spec().has_value() &&
+        input_tensor.padded_shape().rank() == output_tensor_shape.rank()) {
+        // True ND sharding (e.g. CONTIGUOUS_1D): rescale the shard shape to the sliced output instead
+        // of falling through to generate_transpose_shard_spec, which knows nothing of ND distribution.
+        // (Issue #46954)
+        const auto& nd_shard_spec_val = output_mem_config.nd_shard_spec().value();
+        const auto& input_padded_shape = input_tensor.padded_shape();
+        if (nd_shard_spec_val.shard_shape.rank() <= output_tensor_shape.rank()) {
+            auto new_nd_spec = ttnn::operations::data_movement::common::rescale_nd_shard_spec_for_output(
+                nd_shard_spec_val,
+                input_padded_shape,
+                output_tensor_shape,
+                input_tensor.dtype(),
+                PageConfig(input_tensor.layout(), input_tensor.tensor_spec().tile()),
+                output_mem_config.buffer_type());
+            output_mem_config = MemoryConfig(output_mem_config.buffer_type(), new_nd_spec);
+            tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(
+                output_mem_config,
+                tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(
+                    args.output_mem_config));
+        }
+    }
+    if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value() &&
+        !output_mem_config.nd_shard_spec().has_value()) {
         std::optional<tt::tt_metal::ShardSpec> derived;
         if (input_tensor.is_sharded() && input_tensor.memory_config().shard_spec().has_value() &&
             input_tensor.memory_config().memory_layout() == output_mem_config.memory_layout() &&
@@ -360,6 +471,7 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
         operation_attributes.slice_dim,
         operation_attributes.num_devices,
         operation_attributes.output_mem_config,
+        operation_attributes.output_mem_config_inherited,
         operation_attributes.sub_core_grids,
         factory.index(),
         tensor_args.start_tensor.has_value(),
@@ -428,6 +540,15 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
             po.memory_config());
     }
 
+    // The RM factory sizes its input DFB from the L1 free at program creation. Key on that plan, or a
+    // program built while L1 was emptier replays its larger DFB over buffers allocated since.
+    if (std::holds_alternative<SliceRmProgramFactory>(factory)) {
+        const auto& destination =
+            tensor_args.preallocated_output.has_value() ? tensor_args.preallocated_output->tensor_spec() : output_spec;
+        hash = ttsl::hash::hash_objects(
+            hash, SliceRmProgramFactory::dfb_entry_size(operation_attributes, tensor_args, destination));
+    }
+
     return hash;
 }
 
@@ -454,11 +575,20 @@ SliceDeviceOperation::tensor_return_value_t slice(
     const std::optional<uint32_t>& slice_dim,
     const std::optional<uint32_t>& num_devices,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& preallocated_output) {
+    const std::optional<Tensor>& preallocated_output,
+    bool output_mem_config_inherited) {
     using OperationType = ttnn::prim::SliceDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            slice_start, slice_end, step, output_mem_config, use_tensor_args, slice_dim, num_devices, sub_core_grids},
+            slice_start,
+            slice_end,
+            step,
+            output_mem_config,
+            use_tensor_args,
+            slice_dim,
+            num_devices,
+            sub_core_grids,
+            output_mem_config_inherited},
         OperationType::tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output});
 }
 }  // namespace ttnn::prim

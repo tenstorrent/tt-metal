@@ -78,7 +78,7 @@ variable "UV_IMAGE" {
   # The Dockerfile defaults are only used for standalone `docker build` without
   # Bake; Bake always passes this variable, so it takes precedence.
   # See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
-  default = "ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b"
+  default = "ghcr.io/astral-sh/uv@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b"
 }
 
 variable "TT_LLM_ENGINE_IMAGE" {

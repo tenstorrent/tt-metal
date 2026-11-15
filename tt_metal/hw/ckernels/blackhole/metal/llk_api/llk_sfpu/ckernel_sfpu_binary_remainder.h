@@ -9,7 +9,7 @@
 #include "ckernel_sfpu_div_int32_floor.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_rounding_ops.h"
+#include "ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
 

@@ -10,7 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from loguru import logger
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM import DEVICE_PARAMS_L1_SMALL_SIZE
 
 

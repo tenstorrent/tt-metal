@@ -3,12 +3,10 @@
 
 import pytest
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
-from helpers.param_config import parametrize
+from helpers.param_config import parametrize, quasar_dest_sync_modes
 from quasar.test_pack_l1_acc_quasar import (
     ALL_PACK_L1_ACC_COMBINATIONS,
     INPUT_DIMENSIONS,
-    pack_l1_acc_dest_sync_modes,
-    pack_l1_acc_implied_math_formats,
 )
 from quasar.test_pack_l1_acc_quasar import test_pack_l1_acc_quasar as run_pack_l1_acc
 
@@ -17,10 +15,7 @@ from quasar.test_pack_l1_acc_quasar import test_pack_l1_acc_quasar as run_pack_l
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc=ALL_PACK_L1_ACC_COMBINATIONS,
-    implied_math_format=lambda formats_dest_acc: pack_l1_acc_implied_math_formats(
-        formats_dest_acc, is_perf=True
-    ),
-    dest_sync_mode=lambda: pack_l1_acc_dest_sync_modes(is_perf=True),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
     input_dimensions=INPUT_DIMENSIONS,
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -29,7 +24,6 @@ from quasar.test_pack_l1_acc_quasar import test_pack_l1_acc_quasar as run_pack_l
 def test_perf_pack_l1_acc_quasar(
     perf_report,
     formats_dest_acc,
-    implied_math_format,
     dest_sync_mode,
     input_dimensions,
     run_types,
@@ -38,7 +32,6 @@ def test_perf_pack_l1_acc_quasar(
 ):
     run_pack_l1_acc(
         formats_dest_acc,
-        implied_math_format,
         dest_sync_mode,
         input_dimensions,
         run_types=run_types,

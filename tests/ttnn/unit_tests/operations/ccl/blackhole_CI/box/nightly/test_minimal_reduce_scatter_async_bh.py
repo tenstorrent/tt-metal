@@ -8,7 +8,7 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_n_dev,
     skip_for_n_or_less_dev,

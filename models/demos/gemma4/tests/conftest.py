@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
+
 import pytest
 
 from .test_factory import skip_if_config_only_checkpoint
@@ -39,6 +41,18 @@ def pytest_runtest_setup(item):
     """Skip PR integration tests when CI uses config-only HF_MODEL (no weights/tokenizer)."""
     if _MARKERS_REQUIRING_REAL_CHECKPOINT.intersection(m.name for m in item.iter_markers()):
         skip_if_config_only_checkpoint()
+
+
+_DEVICE_FIXTURES = ("device", "mesh_device", "bh_2d_mesh_device")
+
+
+@pytest.fixture(autouse=True)
+def ensure_gc(request):
+    """models/conftest.py collects garbage before every test (autouse ``ensure_gc``) to release a device test's
+    buffers; over this package's heap that costs 0.16-0.45 s per test, so this closest definition keeps the collect
+    for tests that hold a device and skips it for host tests."""
+    if any(name in request.fixturenames for name in _DEVICE_FIXTURES):
+        gc.collect()
 
 
 @pytest.fixture(autouse=True)

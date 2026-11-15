@@ -9,6 +9,7 @@
 #include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "llrt/hal.hpp"
 #include "hal_types.hpp"
@@ -16,7 +17,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace_buffer.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "dispatch/worker_config_buffer.hpp"
@@ -84,8 +85,8 @@ void issue_trace_commands(
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    CoreCoord dispatch_core) {
-    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state) {
+    MetalContext& metal_ctx = sysmem_manager.metal_context();
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, dispatch_md.cmd_sequence_sizeB);
@@ -106,16 +107,13 @@ void issue_trace_commands(
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
-            metal_ctx.hal().make_go_msg_u32(
-                dev_msgs::RUN_MSG_REPLAY_TRACE,
-                dispatch_core.x,
-                dispatch_core.y,
-                metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index) +
-                    metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id)),
+            sysmem_manager.env_impl().get_hal().make_go_msg_u32(
+                dev_msgs::RUN_MSG_REPLAY_TRACE, metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index)),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+            worker_launch_message_buffer_state[index].get_mcast_wptr(),
             dispatcher_for_go_signal);
     }
 
@@ -135,15 +133,13 @@ void issue_trace_commands(
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
-                cq_id,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
-            expected_num_workers,
-            cq_id);
+            expected_num_workers);
     }
 
     uint32_t page_size_log2 = __builtin_ctz(dispatch_md.trace_buffer_page_size);

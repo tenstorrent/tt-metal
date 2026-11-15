@@ -99,12 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Restore the SrcA operand baseline this op mutated. NOTE: intentionally NO
     // `_llk_unpack_reconfig_data_format_srca_impl_` here, so this uninit is the
     // sole reset of the unpacker state before the next op.
-#ifdef ARCH_WORMHOLE
-    // Wormhole threads face_r_dim so the restore matches a tiny-tile operand baseline.
     _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces, face_r_dim);
-#else
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces);
-#endif
 
     // ---- Run 1: plain datacopy of the tilized tile (same format, no reconfig) ----
     run = 1;
@@ -132,6 +127,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool is_int_fpu_en        = false;
     const std::uint32_t res_dst_idx = 0;
 
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, num_faces);
+
     // ---- Run 0: datacopy with tilize ----
     int run                      = 0;
     static constexpr bool TILIZE = true;
@@ -140,13 +137,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats_array[run].math);
+        llk_test_pack_mode_v<false, TILIZE>>(tensor_shape, formats_array[run].math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats_array[run].math, formats_array[run].math);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        res_dst_idx, formats_array[run].math, formats_array[run].math, num_faces);
+        res_dst_idx, formats_array[run].math, formats_array[run].math, tensor_shape);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     // ---- Run 1: plain datacopy (no tilize) ----
@@ -157,11 +154,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, NO_TILIZE>>(num_faces, formats_array[run].math);
+        llk_test_pack_mode_v<false, NO_TILIZE>>(tensor_shape, formats_array[run].math);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        res_dst_idx, formats_array[run].math, formats_array[run].math, num_faces);
+        res_dst_idx, formats_array[run].math, formats_array[run].math, tensor_shape);
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

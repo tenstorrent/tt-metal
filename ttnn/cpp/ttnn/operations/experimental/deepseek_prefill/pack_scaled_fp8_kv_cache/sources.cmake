@@ -1,6 +1,6 @@
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PACK_SCALED_FP8_KV_CACHE_API_HEADERS
     pack_scaled_fp8_kv_cache.hpp
-    packed_kv_layout.hpp
+    shared_with_host/packed_kv_layout.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PACK_SCALED_FP8_KV_CACHE_SRCS

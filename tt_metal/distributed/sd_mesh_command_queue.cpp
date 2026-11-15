@@ -9,6 +9,7 @@
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -17,8 +18,6 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "emule_deferred_mesh_dispatch.hpp"
@@ -67,7 +66,7 @@ void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::Tar
     }
     tt::tt_metal::emule::flush_deferred_mesh_dispatch();
     std::vector<int> device_ids;
-    device_ids.reserve(mesh_device->get_devices().size());
+    device_ids.reserve(mesh_device->impl().get_devices().size());
     for (auto device_id : mesh_device->get_device_ids()) {
         device_ids.push_back(static_cast<int>(device_id));
     }
@@ -94,9 +93,26 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     active_distributed_context_(std::move(distributed_context)) {
     // Init thread pool with all local devices for parallel dispatch.
     // One thread per device enables NUMA-aware CPU binding.
-    auto local_devices = mesh_device_->get_devices();
+    auto local_devices = mesh_device_->impl().get_devices();
     if (local_devices.size() > 1) {
         launch_thread_pool_ = create_device_bound_thread_pool(mesh_device_->impl().get_context_id(), local_devices);
+    }
+}
+
+SDMeshCommandQueue::~SDMeshCommandQueue() {
+    // Drain workloads enqueued non-blocking before the queue goes away, matching FDMeshCommandQueue's
+    // destructor. Otherwise a program still running at device close is killed mid-flight by the core
+    // reset on the next open, and the Tensix state it leaves behind can hang or corrupt the next
+    // program on the same cores.
+    if (this->get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+        wait_for_cores_idle();
+    } catch (const std::exception& e) {
+        // Destructors must not throw; leave the cores as they are and report it.
+        log_warning(tt::LogMetal, "SDMeshCommandQueue destructor: failed waiting for in-flight programs: {}", e.what());
     }
 }
 
@@ -135,6 +151,11 @@ bool SDMeshCommandQueue::write_shard_to_device(
     }
 
     auto payload = ttsl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    // Timed per shard, after wait_for_cores_idle(), so the time is the transfer alone.
+    ScopedHostTransfer transfer_stats(
+        host_transfer_stats_,
+        HostTransferCategory::BufferWriteSlowDispatch,
+        host_transfer_stats_->enabled() ? host_bytes_written(*shard_view, region_value.size, logical_core_filter) : 0);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
@@ -169,6 +190,8 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
+    ScopedHostTransfer transfer_stats(
+        host_transfer_stats_, HostTransferCategory::BufferReadSlowDispatch, shard_view->size());
     tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
@@ -182,7 +205,7 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
-    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+    auto& context = mesh_device_->impl().metal_context();
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
@@ -194,7 +217,7 @@ void SDMeshCommandQueue::wait_for_cores_idle() {
 }
 
 void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking) {
-    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+    auto& context = mesh_device_->impl().metal_context();
     const auto& program_cores = program.impl().logical_cores();
 
     // Collect local devices for this program, handling async idle checks
@@ -280,7 +303,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
                     // Device had active cores before this program was launched
                     // Merge the active cores from the previous program with the active cores from the current
                     // program
-                    const auto& hal = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
+                    const auto& hal = mesh_device_->impl().metal_env().get_hal();
                     auto program_cores = program.impl().logical_cores();
                     for (uint32_t core_type_index = 0; core_type_index < hal.get_programmable_core_type_count();
                          core_type_index++) {
@@ -422,7 +445,7 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
         return;
     }
     // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
-    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // the MeshDevice api lock across this write and the sequence it is part of, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
 
@@ -438,9 +461,8 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
         IDevice* device = mesh_device_->impl().get_device(target.device_coord);
         // target.address is the full device destination (caller pre-applies the
         // DRAM L1 NOC offset). write_core is synchronous, so `blocking` is moot.
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .write_core(&value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
+        mesh_device_->impl().metal_env().get_cluster().write_core(
+            &value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
     }
 }
 
@@ -451,11 +473,10 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
     auto lock = lock_api_function_();
     drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
+    auto& cluster = mesh_device_->impl().metal_env().get_cluster();
     for (auto device_id : mesh_device_->get_device_ids()) {
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .dram_barrier(device_id);
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().l1_barrier(device_id);
+        cluster.dram_barrier(device_id);
+        cluster.l1_barrier(device_id);
     }
 
     // Barrier across all active hosts of the mesh

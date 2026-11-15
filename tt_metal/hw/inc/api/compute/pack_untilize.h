@@ -61,12 +61,17 @@ ALWI void pack_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
             icb)));  // init must be after configure
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
 #else
-    UNPACK((llk_unpack_A_init<
-            BroadcastType::NONE,
-            false /*acc_to_dest*/,
-            EltwiseBinaryReuseDestType::NONE,
-            false /*unpack_to_dest*/>(false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
+    // UnpackToDestEn is kernel-wide on Quasar (set once any DFB unpacks to DEST) and llk_unpack_A routes on it alone,
+    // so icb goes straight into DEST whatever its format. 32-bit inputs require it: a 32-bit unpack into SrcA is
+    // illegal on Quasar (tt-metal #62275). Math then only forwards each section.
+    UNPACK((
+        llk_unpack_A_init<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          is_fp32_dest_acc_en,
+          BroadcastType::NONE,
+          UnpackToDestEn>(icb)));
 #endif
     pack_untilize_dest_init_impl<
         block_ct_dim,
@@ -249,6 +254,9 @@ template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool i
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
+        // Unpack half of the DEST section handshake: a no-op on WH/BH, and on Quasar unless UnpackToDestEn. One tile
+        // row is one section.
+        UNPACK((llk_unpack_wait_for_dest_available()));
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
 #ifndef ARCH_QUASAR
@@ -265,10 +273,15 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
                     BroadcastType::NONE,
                     false /*acc_to_dest*/,
                     EltwiseBinaryReuseDestType::NONE,
-                    false /*unpack_to_dest*/>(icb, c)));
-            MATH((llk_math_eltwise_unary_datacopy(c, icb)));
+                    UnpackToDestEn>(icb, c, c /*dst_tile_index*/)));
+            MATH((llk_math_eltwise_unary_datacopy<
+                  DataCopyType::A2D,
+                  is_fp32_dest_acc_en,
+                  BroadcastType::NONE,
+                  UnpackToDestEn>(c, icb)));
 #endif
         }
+        UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));

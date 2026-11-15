@@ -20,13 +20,13 @@ The number and size of DRAM and SRAM banks are architecture specific and derived
 
 There is one DRAM bank per DRAM channel. For example, on Wormhole there are 12 ~1GB DRAM banks while Blackhole devices have 8 ~4GB DRAM banks. Some portion of each DRAM bank is reserved for a barrier.
 
-There is one SRAM bank per Tensix compute core and `N` SRAM banks per storage only core, where `N = SRAM size per core / storage core bank size`. The number of storage cores and the storage core bank size is specified in the core descriptor yaml for the particular arch. Example of SRAM banks in compute core and storage only cores is shown in *Figure 1*.
+There is one SRAM bank per Tensix compute core, as shown in *Figure 1*.
 
-<img src="images/compute-vs-storage-only-sram-banks.png" style="width:200px;"/>
+<img src="images/sram-banks-per-core.png" style="width:170px;"/>
 
-*Figure 1: SRAM banks in compute core and storage only core*
+*Figure 1: SRAM bank in a compute core*
 
-The SRAM bank size is the storage core bank size if specified otherwise it is `total SRAM size - reserved size`. Reserved region in SRAM is used to hold FW, Kernels, and related runtime metadata.
+The SRAM bank size is `total SRAM size - reserved size`. Reserved region in SRAM is used to hold FW, Kernels, and related runtime metadata.
 
 ## 3. Lockstep Allocation
 

@@ -10,7 +10,6 @@
 #include "cmath_common.h"
 
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_log.h"
 #include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
@@ -23,6 +22,11 @@ inline void calculate_lgamma_stirling() {
     constexpr float r0 = 0.0833333333f;   // 1/12
     constexpr float r1 = -0.0027777777f;  // -1/360
 
+    // ln2 is bound here and held in an LREG across the loop; as a literal inside the loop it would
+    // be re-materialised on every row. Wormhole's reciprocal leaves room for only this one (Blackhole
+    // also holds D); a second fails to allocate.
+    const sfpi::vFloat log_ln2 = LogPolyNoInit::LN2;
+
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat z = in;
@@ -32,7 +36,7 @@ inline void calculate_lgamma_stirling() {
         v_endif;
 
         // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
-        sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
+        sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z, log_ln2, LogPolyNoInit::D) - z + LOG_SQRT_2PI);
 
         // 3. Bernoulli correction: (1/z)(r0 + r1/z^2).
         sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
@@ -145,15 +149,27 @@ inline void calculate_lgamma_adjusted(
         sfpi::vFloat result = res_stirling;
 
         // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_stirling.
-        v_if(in < 0.5f) { result = reflection_adj - res_stirling; }
+        v_if(in < 0.5f) {
+            result = reflection_adj - res_stirling;
+            // At a pole (x a non-positive integer) log|sin| is -inf, so reflection_adj is +inf and
+            // lgamma is +inf whatever res_stirling holds. For x <= about -4e36 (every float that
+            // large is an integer) res_stirling itself overflows to +inf, and inf - inf is NaN:
+            // let the pole win.
+            v_if(sfpi::is_inf(reflection_adj)) { result = reflection_adj; }
+            v_endif;
+        }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-        } else {
-            v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
-            v_endif;
         }
+
+        // Stirling's (z - 0.5) * log(z) - z is inf - inf for an infinite z. in = +inf never enters
+        // the reflection arm, so only this override repairs it; in = -inf is a pole (floor(-inf) is
+        // -inf) that the arm above already returns +inf for. The override runs in both Dest modes:
+        // +inf is exact in bf16 and fp32 alike, and lgamma(+-inf) = +inf.
+        v_if(sfpi::is_inf(in)) { result = std::numeric_limits<float>::infinity(); }
+        v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;

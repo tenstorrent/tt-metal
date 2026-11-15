@@ -9,8 +9,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_polyval.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 

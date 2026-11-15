@@ -13,8 +13,14 @@ import glob
 import json
 import os
 import re
+import runpy
+from pathlib import Path
 
 import pandas as pd
+
+canonical_test_name = runpy.run_path(
+    str(Path(__file__).with_name("test_name_aliases.py"))
+)["canonical_test_name"]
 
 # 5 runs of one commit on Blackhole moved at most 1.9% and 25 cycles (#53752).
 DEFAULT_THRESHOLD = 0.02
@@ -45,6 +51,10 @@ def _is_metric(col):
 
 
 MODULE_COL = "test_module"
+
+
+def _canonical_module(module):
+    return canonical_test_name(module)
 
 
 def _is_ignored(col):
@@ -129,12 +139,13 @@ def _module_of(path):
 
 
 def _read_frames(paths):
-    """Each side's frames, stamped with their test module unless they carry one."""
+    """Read frames and canonicalize legacy module names before point matching."""
     frames = []
     for path in paths:
         frame = pd.read_csv(path)
         if MODULE_COL not in frame.columns:
             frame[MODULE_COL] = _module_of(path)
+        frame[MODULE_COL] = frame[MODULE_COL].map(_canonical_module)
         frames.append(frame)
     return frames
 
@@ -226,12 +237,6 @@ def _side_line(role, sha, label, iters):
     return f"- {named}: `{sha}`{tail}"
 
 
-def _varying_keys(rows):
-    """Config keys that differ across the rows shown; those tell them apart."""
-    keys = {k for r in rows for k, _ in r["config"] if k != MODULE_COL}
-    return {k for k in keys if len({dict(r["config"]).get(k) for r in rows}) > 1}
-
-
 def _findings(rows):
     """Points that differ only in marker or run type are one finding."""
     groups = {}
@@ -240,30 +245,73 @@ def _findings(rows):
     return sorted(groups.values(), key=lambda g: -max(abs(p["delta"]) for p in g))
 
 
-def _delta_table(rows, *, caption):
-    """One line per finding, then each finding's configuration in full."""
-    groups = _findings(rows)
-    varying = _varying_keys([g[0] for g in groups])
+def _short(value):
+    """`DestAccumulation.Yes` -> `Yes`, `64.0` -> `64`: the key already names the type."""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value)
+    head, _, tail = text.partition(".")
+    return tail if tail and head[:1].isupper() and head.isidentifier() else text
+
+
+_FORMAT_GROUPS = (
+    ("formats.input", ("formats.input_A", "formats.input_B")),
+    (
+        "formats.register",
+        (
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+        ),
+    ),
+)
+
+
+def _fixed_params(records):
+    """Per test, the parameters that hold one value across its whole sweep."""
+    seen = {}
+    for r in records:
+        values = seen.setdefault(r.get(MODULE_COL, ""), {})
+        for k, v in r["config"]:
+            values.setdefault(k, set()).add(v)
+    return {
+        module: {k for k, v in values.items() if len(v) == 1}
+        for module, values in seen.items()
+    }
+
+
+def _params(config, hidden=()):
+    shown = {k: v for k, v in config if k != MODULE_COL and k not in hidden}
+    for name, keys in _FORMAT_GROUPS:
+        values = {shown[k] for k in keys if k in shown}
+        if len(values) == 1 and all(k in shown for k in keys):
+            for k in keys:
+                del shown[k]
+            shown[name] = values.pop()
+    return ", ".join(f"`{k}={_short(shown[k])}`" for k in sorted(shown))
+
+
+def _delta_table(rows, *, caption, fixed=None):
+    """One line per finding, with the parameters that vary within its test."""
+    fixed = fixed or {}
     lines = [
         f"## {caption}",
         "",
-        "| # | test | points | markers | run types | current | baseline | Δ | Δ cycles |",
-        "|--:|---|--:|---|---|--:|--:|--:|--:|",
+        "| # | test | configuration | points | markers | run types | current | baseline | Δ | Δ cycles |",
+        "|--:|---|---|--:|---|---|--:|--:|--:|--:|",
     ]
-    for n, g in enumerate(groups, 1):
+    for n, g in enumerate(_findings(rows), 1):
         w = max(g, key=lambda p: abs(p["delta"]))
+        module = w.get(MODULE_COL) or "?"
         markers = ", ".join(sorted({p["marker"] for p in g}))
         run_types = ", ".join(sorted({p["run_type"] for p in g}))
+        config = _params(g[0]["config"], fixed.get(module, ()))
         lines.append(
-            f"| {n} | {w.get(MODULE_COL) or '?'} | {len(g)} | {markers} | {run_types} | "
+            f"| {n} | {module} | {config or '—'} | {len(g)} | {markers} | {run_types} | "
             f"{w['current']:.1f} | {w['baseline']:.1f} | {w['delta'] * 100:+.1f}% | "
             f"{w.get('abs_delta', 0.0):+.0f} |"
         )
-    lines += ["", "### Configuration of each row above", ""]
-    for n, g in enumerate(groups, 1):
-        config = {k: v for k, v in g[0]["config"] if k != MODULE_COL}
-        ordered = sorted(config, key=lambda k: (k not in varying, k))
-        lines.append(f"{n}. " + ", ".join(f"`{k}={config[k]}`" for k in ordered))
     return lines
 
 
@@ -280,16 +328,18 @@ def render_report(
     baseline_label=None,
     current_label=None,
     module_thresholds=None,
+    arch=None,
 ):
     """Markdown: the verdict, the worst findings each way, and the new points."""
     regs = sorted(result["regressions"], key=lambda r: -r["delta"])
     imps = sorted(result.get("improvements", []), key=lambda r: r["delta"])
     reg_groups, imp_groups = _findings(regs), _findings(imps)
     verdict = "❌ REGRESSIONS FOUND" if regs else "✅ no regressions"
+    name = arch.capitalize() if arch else None
     lines = [
-        f"# Perf compare — {test}",
+        f"# Perf compare — {test}" + (f" — {name}" if name else ""),
         "",
-        f"**{verdict}**",
+        f"**{name + ': ' if name else ''}{verdict}**",
         "",
         f"Rule: a point is a regression when it is **more than {threshold * 100:.0f}% "
         f"slower AND more than {min_cycles:.0f} cycles slower**. Both must hold. "
@@ -319,6 +369,12 @@ def render_report(
             "(INIT, UNINIT) are a few hundred cycles, where a handful of cycles of "
             "jitter looks like a large percentage."
         )
+    if reg_groups or imp_groups:
+        lines.append(
+            "- The configuration column leaves out the parameters that never change "
+            "within a test; `.points.csv` has every parameter."
+        )
+    fixed = _fixed_params(result["records"])
     lines.append("")
     for groups, what, where, companion in (
         (reg_groups, "regression", "slower", ".regressions.csv"),
@@ -327,13 +383,23 @@ def render_report(
         if not groups:
             continue
         shown = groups[:_TOP_N]
-        lines += _delta_table(
+        count = (
+            f"Top {_TOP_N} of {len(groups)}"
+            if len(groups) > _TOP_N
+            else f"All {len(groups)}"
+        )
+        table = _delta_table(
             [p for g in shown for p in g],
-            caption=f"Top {len(shown)} {what} findings ({where} on current)",
+            caption=f"{count} {what} findings ({where} on current)",
+            fixed=fixed,
         )
         if len(groups) > _TOP_N:
-            lines += ["", f"_… and {len(groups) - _TOP_N} more — see `{companion}`._"]
-        lines.append("")
+            table += ["", f"_… and {len(groups) - _TOP_N} more — see `{companion}`._"]
+        summary = table[0].removeprefix("## ")
+        # Regressions are what a reader comes for, so their table starts open.
+        details = "<details open>" if what == "regression" else "<details>"
+        lines += [details, f"<summary>{summary}</summary>", ""]
+        lines += table[2:] + ["", "</details>", ""]
     if result["new_points"]:
         lines.append(
             f"## New points ({len(result['new_points'])}) — no baseline, not counted as regressions"
@@ -411,6 +477,7 @@ def main(argv=None):
     )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
+    ap.add_argument("--arch", help="named in the title and the verdict")
     ap.add_argument("--baseline-sha", default="?")
     ap.add_argument("--current-sha", default="?")
     ap.add_argument(
@@ -461,6 +528,7 @@ def main(argv=None):
         baseline_label=a.baseline_label,
         current_label=a.current_label,
         module_thresholds=_module_thresholds(a.module_threshold),
+        arch=a.arch,
     )
     with open(a.report, "w") as f:
         f.write(report + "\n")

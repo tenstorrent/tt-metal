@@ -11,7 +11,7 @@ test_matmul_batch_mismatch:     A batch>1, B batch=1 (prior regression)
 import pytest
 import torch
 import ttnn
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 @pytest.mark.parametrize(

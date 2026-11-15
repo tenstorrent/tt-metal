@@ -74,11 +74,12 @@ jobs:
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
+          if [ -z "${{ vars.GARAGE_S3_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
             echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
+            echo "Needs vars.GARAGE_S3_ACCESS_KEY_ID and secrets.GARAGE_S3_SECRET_KEY."
             exit 1
           fi
-          echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=${{ vars.GARAGE_S3_ACCESS_KEY_ID }}" >> $GITHUB_ENV
           echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=garage" >> $GITHUB_ENV
           CCACHE_REMOTE_STORAGE="s3://${CCACHE_S3_BUCKET}|region=garage|prefix=${CCACHE_S3_PREFIX}|endpoint_url=http://garage.garage.svc.cluster.local:3900"
@@ -136,14 +137,14 @@ jobs:
           uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@e33c063ca6e52b48bcefbc45d46d8c150ffa81ca" boto3  # 1.2.0
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
-          CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
+          CT_VERSION="23"
           {
             echo "CTCACHE_S3_BUCKET=ctcache"
             echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"
             echo "CTCACHE_KEEP_COMMENTS=1"
             # Note: CTCACHE_SAVE_OUTPUT is intentionally NOT set — S3 store_in_cache_with_data
             # is a TODO no-op in ctcache 1.2.0, so saving output would silently write nothing.
-            echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}"
+            echo "AWS_ACCESS_KEY_ID=${{ vars.GARAGE_S3_ACCESS_KEY_ID }}"
             echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}"
             echo "AWS_ENDPOINT_URL=http://garage.garage.svc.cluster.local:3900"
             echo "AWS_DEFAULT_REGION=garage"
@@ -164,7 +165,7 @@ jobs:
             http://garage.garage.svc.cluster.local:3900/ || echo "Garage root: curl failed (unreachable)"
 
           # Verify connectivity — warn but don't fail if Garage is unreachable
-          AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
+          AWS_ACCESS_KEY_ID="${{ vars.GARAGE_S3_ACCESS_KEY_ID }}" \
           AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
           AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
           AWS_DEFAULT_REGION="garage" \
@@ -245,7 +246,7 @@ jobs:
           mkdir -p /tmp/ccache
 
       - name: Check out repo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive

@@ -11,7 +11,7 @@
 
 #include "impl/metal2_host_api/helpers.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -43,6 +43,11 @@ void CollectNameLookups(const ProgramSpec& spec, CollectedSpecData& collected) {
         auto [it, inserted] =
             collected.tensor_parameter_by_name.try_emplace(tensor_parameter.unique_id, &tensor_parameter);
         TT_FATAL(inserted, "Duplicate TensorParameter name '{}'", tensor_parameter.unique_id);
+    }
+
+    for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
+        auto [it, inserted] = collected.sram_arena_parameter_by_name.try_emplace(parameter.unique_id, &parameter);
+        TT_FATAL(inserted, "Duplicate SRAMArenaParameter name '{}'", parameter.unique_id);
     }
 
     for (const auto& pipe_parameter : spec.advanced_options.prefetcher_pipe_parameters) {
@@ -117,7 +122,7 @@ void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected)
     // against the pipe are in ValidateProgramSpec.) Only local DFBs can relay: the ring lives in
     // receiver-node L1.
     for (const auto& dfb : spec.dataflow_buffers) {
-        std::unordered_set<PrefetcherPipeParamName> relayed;
+        std::unordered_set<experimental::PrefetcherPipeParamName> relayed;
         for (const auto& pipe_name : dfb.advanced_options.prefetcher_pipe_relays) {
             TT_FATAL(
                 collected.prefetcher_pipe_by_name.contains(pipe_name),
@@ -239,9 +244,9 @@ void CollectSemaphoreBinders(const ProgramSpec& spec, CollectedSpecData& collect
     for (auto& [sem_name, sem_info] : census) {
         for (const auto& rec : sem_info.binders) {
             const NodeRangeSet& binder_nodes = collected.kernel_node_set.at(rec.kernel->unique_id);
-            // Not a hart count for Gen1 compute: num_threads is forced to 1 there, but one compute
-            // kernel is three TRISC binaries with two semaphore writers (UNPACK and PACK). Gen1
-            // compute binders are routed to COMPUTE_ATOMIC without consulting this count.
+            // Not a hart count for compute: one compute kernel is several TRISC binaries with two
+            // semaphore writers (UNPACK and PACK). Compute binders are routed to COMPUTE_ATOMIC
+            // without consulting this count.
             sem_info.binder_instance_count += binder_nodes.num_cores() * rec.kernel->num_threads;
             sem_info.binder_node_set = sem_info.binder_node_set.merge(binder_nodes);
         }
@@ -262,4 +267,4 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     return collected;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -7,7 +7,6 @@
 #include <sstream>
 #include <ostream>
 #include <filesystem>
-#include <algorithm>
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
@@ -25,12 +24,10 @@
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <map>
 
 #include <google/protobuf/text_format.h>
 
@@ -810,7 +807,7 @@ std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_l
 
     auto load_if_regular_file = [](const std::filesystem::path& path) -> std::optional<PhysicalGroupingDescriptor> {
         if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
-            log_info(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
+            log_debug(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
             return PhysicalGroupingDescriptor(path);
         }
         return std::nullopt;
@@ -892,7 +889,7 @@ std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_l
 
     // 3. Default fallback (also searched in both grouping dirs).
     if (auto loaded = load_from_grouping_dirs("default_physical_grouping_descriptor.textproto")) {
-        log_info(tt::LogFabric, "No specific Physical Grouping Descriptor found; using default.");
+        log_debug(tt::LogFabric, "No specific Physical Grouping Descriptor found; using default.");
         return loaded;
     }
 

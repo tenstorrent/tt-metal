@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -40,6 +41,9 @@ struct operation_attributes_t {
     std::optional<uint32_t> valid_length;
     // Constant added to valid_length_tensor[0] on-device. Included in the program hash.
     uint32_t valid_length_offset{0};
+    // NoC the reader streams the input rows from DRAM on; the writer takes the other one. Resolved in invoke
+    // (caller's choice, else the arch's preferred DRAM-read NoC) and included in the program hash.
+    tt::tt_metal::NOC dram_read_noc{tt::tt_metal::NOC::NOC_0};
 };
 
 struct tensor_args_t {

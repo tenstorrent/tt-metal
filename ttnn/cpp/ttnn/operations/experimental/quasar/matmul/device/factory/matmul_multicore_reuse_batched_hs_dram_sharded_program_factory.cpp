@@ -161,9 +161,8 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     // Tile sizes
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
@@ -275,7 +274,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
     // CB 4 & 5: output and intermediate - on worker cores
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
-    if (interm0_data_format != output_data_format) {
+    const bool share_out_interm_buffer =
+        interm0_data_format == output_data_format && (!packer_l1_acc_en || out_shard_tiles == out_block_tiles);
+    if (!share_out_interm_buffer) {
         // Separate CBs for output and intermediate
         {
             CBDescriptor cb_desc;
@@ -408,6 +409,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         in1_writer_compile_args.push_back(in3_block_tiles);
         tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_writer_compile_args);
     }
+    // in1 TensorAccessorArgs for the BankView reads, appended last: CTA 10 without bias, after the bias args
+    // with bias.
+    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_writer_compile_args);
 
     uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;

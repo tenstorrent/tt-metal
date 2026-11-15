@@ -11,9 +11,11 @@
 #include <cstring>
 #include <type_traits>
 
+#include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "internal/local_mem/address_access.h"
 #if !defined(ARCH_QUASAR)
 // ckernel::load_blocking (store-drain in copy_via_memmove) — WH/BH only. On Quasar this header is
 // unusable from a data-movement (DM) build: ckernel.h -> ckernel_addrmod.h -> ckernel_trisc_id.h #errors
@@ -54,6 +56,14 @@ FORCE_INLINE void enhanced_noc_async_read(
     return enhanced_noc_async_read<max_transfer_size, only_reads>(noc, src_noc_addr, dst_l1_addr, bytes);
 }
 
+// Handle overload: the local destination is a CoreLocalMem (e.g. `scratchpad.local_mem() + offset`).
+template <uint32_t max_transfer_size, bool only_reads, typename T, typename AddressType>
+FORCE_INLINE void enhanced_noc_async_read(
+    Noc noc, const uint64_t src_noc_addr, const CoreLocalMem<T, AddressType>& dst, const uint32_t bytes) {
+    enhanced_noc_async_read<max_transfer_size, only_reads>(
+        noc, src_noc_addr, static_cast<uint32_t>(local_mem::detail::AddressAccess::address(dst)), bytes);
+}
+
 template <uint32_t max_transfer_size, bool only_writes>
 FORCE_INLINE void enhanced_noc_async_write(
     Noc noc, const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
@@ -74,6 +84,14 @@ FORCE_INLINE void enhanced_noc_async_write(
     const uint32_t src_l1_addr, const uint64_t dst_noc_addr, const uint32_t bytes) {
     Noc noc;
     return enhanced_noc_async_write<max_transfer_size, only_writes>(noc, src_l1_addr, dst_noc_addr, bytes);
+}
+
+// Handle overload: the local source is a CoreLocalMem (e.g. `scratchpad.local_mem() + offset`).
+template <uint32_t max_transfer_size, bool only_writes, typename T, typename AddressType>
+FORCE_INLINE void enhanced_noc_async_write(
+    Noc noc, const CoreLocalMem<T, AddressType>& src, const uint64_t dst_noc_addr, const uint32_t bytes) {
+    enhanced_noc_async_write<max_transfer_size, only_writes>(
+        noc, static_cast<uint32_t>(local_mem::detail::AddressAccess::address(src)), dst_noc_addr, bytes);
 }
 
 // Self-NOC src/dst args for a local L1 address on the executing core, expressed in the
@@ -184,6 +202,18 @@ FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t sr
     // publish -- but copy_async=true callers skip the drain, so the flush alone left stale TL1.)
 }
 
+// Handle overload: forwards the handles' raw L1 addresses unchanged to the raw-address form above, so the Quasar
+// uncached-alias normalisation/arithmetic and the WH/BH drain are exactly the same. A handle built from a DFB pointer
+// (CoreLocalMem(dfb.get_write_ptr())) carries the uncached alias as is, just like the raw address did.
+template <bool copy_async, typename TDst, typename ADst, typename TSrc, typename ASrc>
+FORCE_INLINE void copy_via_memmove(
+    const CoreLocalMem<TDst, ADst>& dst, const CoreLocalMem<TSrc, ASrc>& src, const uint32_t bytes) {
+    copy_via_memmove<copy_async>(
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(dst)),
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(src)),
+        bytes);
+}
+
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
 FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     constexpr uint32_t page_size = max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size;
@@ -259,6 +289,26 @@ FORCE_INLINE void tt_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_a
         noc, dst_l1_addr, src_l1_addr, bytes);
 }
 
+// Handle overload: forwards the handles' raw L1 addresses to the raw-address form above (same overlap/alignment
+// checks and the same NoC-vs-memmove choice).
+template <
+    bool guaranteed_16B_aligned,
+    bool copy_async,
+    bool use_read_datamover,
+    uint32_t max_transfer_size,
+    typename TDst,
+    typename ADst,
+    typename TSrc,
+    typename ASrc>
+FORCE_INLINE void tt_memmove(
+    Noc noc, const CoreLocalMem<TDst, ADst>& dst, const CoreLocalMem<TSrc, ASrc>& src, const uint32_t bytes) {
+    tt_memmove<guaranteed_16B_aligned, copy_async, use_read_datamover, max_transfer_size>(
+        noc,
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(dst)),
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(src)),
+        bytes);
+}
+
 template <typename T = uint32_t>
 FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, T val) {
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr T*>(begin_addr);
@@ -327,6 +377,12 @@ FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask)
     return (address & mask) + AlignReq;
 }
 
+// Handle overload: aligns the L1 address the handle points at; returns the aligned raw L1 address.
+template <uint32_t AlignReq, typename T, typename AddressType>
+FORCE_INLINE uint32_t align_address(const CoreLocalMem<T, AddressType>& mem, const uint64_t mask) {
+    return align_address<AlignReq>(static_cast<uint32_t>(local_mem::detail::AddressAccess::address(mem)), mask);
+}
+
 // Wait for a specified number of cycles
 // This is a blocking wait, so it should only be used for debugging purposes
 // It is not recommended to use this in production code
@@ -362,7 +418,7 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
 // Split a logical-row transfer across shards when a BLOCK/WIDTH-sharded buffer's row
 // spans multiple cores. Falls through to a single noc_async_{read,write} for interleaved
 // buffers, HEIGHT-sharded RM (whole row stays on one core), and shards whose width covers
-// the full row.
+// the full row; on a rank-1 spec that transfer continues into the following pages.
 //
 // pages_per_row = ceil(tensor_W_pages / shard_W_pages); HEIGHT-sh collapses to 1 for any W·E.
 // Split-branch stride is exact iff shard_W_pages == 1 (RM B/W-sh: one shard-row = one page).
@@ -377,18 +433,23 @@ FORCE_INLINE void noc_async_write_sharded(
         const uint32_t r = dspec.rank();
         const uint32_t shard_W = (r >= 1) ? dspec.shard_shape()[r - 1] : 1u;
         const uint32_t pages_per_row = (r > 1 && shard_W > 0) ? div_up(dspec.tensor_shape()[r - 1], shard_W) : 1u;
-        if (pages_per_row <= 1) {
+        const uint32_t page_size = tensor.get_aligned_page_size();
+        // A rank-1 spec keeps its pages in order, so a transfer that runs past its page continues into the next ones.
+        if (pages_per_row <= 1 && (r > 1 || offset + size <= page_size)) {
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = dest_id, .offset_bytes = offset});
             return;
         }
-        const uint32_t page_size = tensor.get_aligned_page_size();
         uint32_t sharded_dest_id = dest_id * pages_per_row + offset / page_size;
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
         uint32_t remaining = size;
         for (uint32_t i = 0; i < num_pages; i++) {
+            // Stop at the last page of the tensor.
+            if (sharded_dest_id >= dspec.tensor_volume()) {
+                break;
+            }
             uint32_t write_size = std::min(remaining, page_size - sharded_offset);
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr),
@@ -401,6 +462,9 @@ FORCE_INLINE void noc_async_write_sharded(
             l1_addr += write_size;
             remaining -= write_size;
         }
+        // The loop also stops at the last page of the tensor; a request for more bytes than remain would leave the
+        // destination part-written, so surface that rather than silently returning stale data.
+        ASSERT(remaining == 0);
     }
 }
 
@@ -416,6 +480,19 @@ FORCE_INLINE void noc_async_write_sharded(
     return noc_async_write_sharded(noc, l1_addr, tensor, dest_id, offset, size);
 }
 
+// Handle overload: the local source is a CoreLocalMem (e.g. `scratchpad.local_mem()`).
+template <typename AddrGenType, typename T, typename AddressType>
+FORCE_INLINE void noc_async_write_sharded(
+    Noc noc,
+    const CoreLocalMem<T, AddressType>& l1_src,
+    AddrGenType tensor,
+    uint32_t dest_id,
+    uint32_t offset,
+    uint32_t size) {
+    noc_async_write_sharded(
+        noc, static_cast<uint32_t>(local_mem::detail::AddressAccess::address(l1_src)), tensor, dest_id, offset, size);
+}
+
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_read_sharded(
     Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t src_id, uint32_t offset, uint32_t size) {
@@ -426,18 +503,23 @@ FORCE_INLINE void noc_async_read_sharded(
         const uint32_t r = dspec.rank();
         const uint32_t shard_W = (r >= 1) ? dspec.shard_shape()[r - 1] : 1u;
         const uint32_t pages_per_row = (r > 1 && shard_W > 0) ? div_up(dspec.tensor_shape()[r - 1], shard_W) : 1u;
-        if (pages_per_row <= 1) {
+        const uint32_t page_size = tensor.get_aligned_page_size();
+        // A rank-1 spec keeps its pages in order, so a transfer that runs past its page continues into the next ones.
+        if (pages_per_row <= 1 && (r > 1 || offset + size <= page_size)) {
             noc.async_read(
                 tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = src_id, .offset_bytes = offset}, {});
             return;
         }
-        const uint32_t page_size = tensor.get_aligned_page_size();
         uint32_t sharded_src_id = src_id * pages_per_row + offset / page_size;
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
         // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
         uint32_t remaining = size;
         for (uint32_t i = 0; i < num_pages; i++) {
+            // Stop at the last page of the tensor.
+            if (sharded_src_id >= dspec.tensor_volume()) {
+                break;
+            }
             uint32_t read_size = std::min(remaining, page_size - sharded_offset);
             noc.async_read(
                 tensor,
@@ -450,6 +532,9 @@ FORCE_INLINE void noc_async_read_sharded(
             l1_addr += read_size;
             remaining -= read_size;
         }
+        // The loop also stops at the last page of the tensor; a request for more bytes than remain would leave the
+        // destination part-filled, so surface that rather than silently returning stale data.
+        ASSERT(remaining == 0);
     }
 }
 
@@ -463,6 +548,19 @@ FORCE_INLINE void noc_async_read_sharded(
     const uint32_t size) {
     Noc noc;
     return noc_async_read_sharded(noc, l1_addr, tensor, src_id, offset, size);
+}
+
+// Handle overload: the local destination is a CoreLocalMem (e.g. `scratchpad.local_mem()`).
+template <typename AddrGenType, typename T, typename AddressType>
+FORCE_INLINE void noc_async_read_sharded(
+    Noc noc,
+    const CoreLocalMem<T, AddressType>& l1_dst,
+    AddrGenType tensor,
+    uint32_t src_id,
+    uint32_t offset,
+    uint32_t size) {
+    noc_async_read_sharded(
+        noc, static_cast<uint32_t>(local_mem::detail::AddressAccess::address(l1_dst)), tensor, src_id, offset, size);
 }
 
 }  // namespace tt::data_movement::common

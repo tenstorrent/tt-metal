@@ -40,7 +40,7 @@ void kernel_main() {
     DataflowBuffer dfb_out_obj(dfb::out);
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     constexpr bool is_w_single_tile = Wt == 1;
-    DataflowBuffer& dfb_reduction_input_obj = do_mask_w ? dfb_masked_input_obj : dfb_input_obj;
+    auto& dfb_reduction_input_obj = do_mask_w ? dfb_masked_input_obj : dfb_input_obj;
 
     compute_kernel_hw_startup(dfb_input_id, dfb_input_id, dfb::out);
 
@@ -84,16 +84,15 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(onetile),
                     ckl::CopyTile<ckl::input(
-                        dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                        dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{
+                        dfb_input_obj},
                     ckl::CopyTile<
                         ckl::input(dfb::mask_w, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
-                        ckl::Dst::D1>{},
+                        ckl::Dst::D1>{dfb_mask_w_obj},
                     ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
                     ckl::PackTile<ckl::output(
-                        dfb::masked_input,
-                        ckl::ReservePolicy::PerTile,
-                        ckl::PushPolicy::PerTile,
-                        kDataFormatReconfig)>{});
+                        dfb::masked_input, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{
+                        dfb_masked_input_obj});
                 dfb_input_id = dfb::masked_input;
             }
 

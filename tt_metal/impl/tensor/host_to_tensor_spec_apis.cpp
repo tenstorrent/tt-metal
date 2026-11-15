@@ -17,6 +17,7 @@
 #include <tt-metalium/host_buffer.hpp>
 
 #include <tt_stl/span.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 #include "tensor_impl.hpp"
 
@@ -34,7 +35,10 @@ bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
                          experimental::per_core_allocation::is_per_core_allocation(b.memory_config());
 }
 
-bool is_bfp_dtype(DataType dtype) { return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B; }
+// Block formats (BFP and MX) are packed tiles and must pivot through FLOAT32 on the host.
+bool is_bfp_dtype(DataType dtype) {
+    return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || is_mx(dtype);
+}
 
 bool is_integral_dtype(DataType dtype) {
     return dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::UINT32 ||
@@ -130,7 +134,7 @@ HostTensor host_tensor_to_tensor_spec_with_pad_value(
     const TensorSpec& decode_spec = source_for_decode.tensor_spec();
     const TensorSpec working_spec(
         dest_spec.logical_shape(),
-        TensorLayout(
+        experimental::tensor_layout_with_custom_alignment(
             working_encode_dtype,
             dest_spec.page_config(),
             dest_spec.memory_config(),

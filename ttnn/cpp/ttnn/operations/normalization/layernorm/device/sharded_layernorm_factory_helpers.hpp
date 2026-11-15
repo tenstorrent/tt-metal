@@ -12,8 +12,8 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -23,7 +23,7 @@ namespace ttnn::prim::sharded_layernorm_helpers {
 
 using namespace tt::tt_metal;
 
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 // Forward declarations
 struct GridParams;
@@ -68,6 +68,7 @@ extern const m2::DFBSpecName EX;             // combined E[x]
 extern const m2::DFBSpecName EX_EXTERNAL;    // partial E[x] gathered from the other cores
 extern const m2::DFBSpecName EX_PARTIAL2;    // this core's partial Var[x] (or E[x^2])
 extern const m2::DFBSpecName EX2;            // combined Var[x] (or E[x^2])
+extern const m2::DFBSpecName EX2_LOCAL;      // combined Var[x] (or E[x^2]) kept on the core that applies it
 extern const m2::DFBSpecName EX_EXTERNAL2;   // partial Var[x] gathered from the other cores
 extern const m2::DFBSpecName MASK_SCRATCH;   // column-masked copy of the input, for the E[x] reduce
 extern const m2::DFBSpecName EX_GLOBAL;      // final statistics, multicast to every core
@@ -271,6 +272,9 @@ struct SpecConfig {
     // Exposes the Welford intake under a second buffer index configured for UnpackToDest, so
     // transpose_tile does not truncate Float32 input to TF32 on the SrcA path.
     bool welford_fp32_alias = false;
+    // The cross-core reduce runs in two stages. Only then does the non-distributed Var[x] reduce have a
+    // first-stage result for the reader to gather, so only then does it need the ex2 buffer.
+    bool use_two_stage_reduce = false;
 
     // Buffer sizes
     DFBSizeParams::Sizes sizes;

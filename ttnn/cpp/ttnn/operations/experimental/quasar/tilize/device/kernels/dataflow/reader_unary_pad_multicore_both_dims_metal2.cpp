@@ -22,6 +22,7 @@
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 using tt::data_movement::common::tt_memmove;
 
@@ -120,7 +121,9 @@ void kernel_main() {
             // l1_write_addr itself, so the addressing is unchanged -- get_ptr() only exposes the start
             // of the run.
             const auto in0_lock = cb_in0.scoped_write_lock(single_block_size * has_rows);
-            uint32_t l1_write_addr = static_cast<uint32_t>(in0_lock.get_ptr().get_address());
+            // Raw address: the walk does alignment math on it and feeds tt_memmove / the raw-address fill helper.
+            uint32_t l1_write_addr =
+                static_cast<uint32_t>(local_mem::detail::AddressAccess::address(in0_lock.get_ptr()));
 
             for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
                 uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);

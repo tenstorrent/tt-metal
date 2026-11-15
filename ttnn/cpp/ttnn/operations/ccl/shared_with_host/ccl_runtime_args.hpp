@@ -15,7 +15,8 @@ struct AllGatherCommonArgs {
     static constexpr uint32_t barrier = 2;
     static constexpr uint32_t semaphore_0 = 3;
     static constexpr uint32_t semaphore_1 = 4;
-    static constexpr uint32_t count = 5;
+    static constexpr uint32_t input_Ht = 5;
+    static constexpr uint32_t count = 6;
 };
 
 struct LlamaGatherReaderCommonArgs {
@@ -49,7 +50,9 @@ struct ReduceScatterCommonArgs {
     static constexpr uint32_t semaphore_0 = 5;
     static constexpr uint32_t semaphore_1 = 6;
     static constexpr uint32_t ack = 7;
-    static constexpr uint32_t count = 8;
+    static constexpr uint32_t input_Ht = 8;
+    static constexpr uint32_t intermediate_half_pages = 9;
+    static constexpr uint32_t count = 10;
 };
 
 }  // namespace ttnn::ccl

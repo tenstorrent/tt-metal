@@ -41,8 +41,11 @@ inline bool has_nontile_w(const ttnn::Tensor& input) {
     return s.rank() >= 1 && s[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
-// Route RM sharded input through composite when native isn't safe: nontile-aligned B/W,
-// B/W with non-zero width-begin, or nontile-aligned HEIGHT outside the sharded fast path.
+using ttnn::operations::data_movement::has_subaligned_shard_row;
+
+// Route RM sharded input through composite when native isn't safe: nontile-aligned B/W, B/W with a
+// sub-aligned shard row or non-zero width-begin, or nontile-aligned HEIGHT outside the sharded fast
+// path.
 inline bool needs_rm_composite_input(
     const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mc, bool no_step, bool width_begin_nonzero) {
     if (input.layout() != Layout::ROW_MAJOR || !input.is_sharded()) {
@@ -50,7 +53,8 @@ inline bool needs_rm_composite_input(
     }
     if (is_rm_bw_sharded(input.memory_config())) {
         // Only W misalignment breaks the per-shard page split; irregular H is fine.
-        return has_nontile_w(input) || width_begin_nonzero;
+        return has_nontile_w(input) || width_begin_nonzero ||
+               has_subaligned_shard_row(input.memory_config(), input.element_size());
     }
     // Require a spec: no-spec HEIGHT output triggers needs_sharded_output_reshard → composite anyway.
     const bool stays_on_sharded_fast_path =
@@ -59,12 +63,14 @@ inline bool needs_rm_composite_input(
     return has_nontile_hw(input) && !stays_on_sharded_fast_path;
 }
 
-// Compose RM B/W-sharded output only on nontile-aligned W (irregular H is fine natively).
+// Compose RM B/W-sharded output on nontile-aligned W or a sub-aligned shard row (irregular H is
+// fine natively). Callers must pass the post-rescale config, since the implicit-inheritance rescale
+// can turn an aligned inherited shard row into a sub-aligned one.
 inline bool needs_rm_composite_output(const ttnn::Tensor& input, const tt::tt_metal::MemoryConfig& output_mc) {
     if (input.layout() != Layout::ROW_MAJOR || !is_rm_bw_sharded(output_mc)) {
         return false;
     }
-    return has_nontile_w(input);
+    return has_nontile_w(input) || has_subaligned_shard_row(output_mc, input.element_size());
 }
 
 // Sharded-no-spec output that can't seed from the input (not sharded, or layout differs);
@@ -147,11 +153,12 @@ ttnn::Tensor slice(
     };
 
     // True when the next to_memory_config can land directly in the preallocated buffer: layouts
-    // must match (prim::copy validates equality) and source must not alias the preallocated.
+    // must match (prim::copy validates equality) and source must not alias the preallocated. A dtype
+    // mismatch is left to finalize_into_preallocated to reject.
     auto can_land_in_preallocated = [&](const ttnn::Tensor& source) {
         return optional_output_tensor.has_value() && source.storage_type() == StorageType::DEVICE &&
                source.layout() == optional_output_tensor->layout() &&
-               source.buffer() != optional_output_tensor->buffer();
+               source.dtype() == optional_output_tensor->dtype() && source.buffer() != optional_output_tensor->buffer();
     };
     // Safety net for paths that bypass the device op (composite / no-op / rm_only layout fixup):
     // short-circuits by buffer identity, falls back to ttnn::copy when result != preallocated.
@@ -163,6 +170,14 @@ ttnn::Tensor slice(
         if (result.buffer() == dst.buffer()) {
             return result;
         }
+        // ttnn::copy converts silently, so only accept the result's dtype, or the input's: the rm_only
+        // path promotes BFLOAT8_B to BFLOAT16 (untilize), and copying back only undoes that promotion.
+        TT_FATAL(
+            dst.dtype() == result.dtype() || dst.dtype() == input_tensor.dtype(),
+            "The preallocated output tensor needs dtype {} or {}, however it is {}",
+            result.dtype(),
+            input_tensor.dtype(),
+            dst.dtype());
         return ttnn::copy(result, dst);
     };
 
@@ -181,29 +196,6 @@ ttnn::Tensor slice(
     // No-op check
     if (no_step && starts_zero && ends_max) {
         return finalize_into_preallocated(ret_adjustment(input_tensor));
-    }
-
-    // Composite hop: unshard to L1 interleaved if needed, slice, then convert to the requested mc.
-    const bool width_begin_nonzero = !begins.empty() && begins.back() != 0;
-    const bool rm_in_bad =
-        detail::needs_rm_composite_input(input_tensor, output_memory_config, no_step, width_begin_nonzero);
-    const bool rm_out_bad = detail::needs_rm_composite_output(input_tensor, output_memory_config);
-    const bool out_no_spec = detail::needs_sharded_output_reshard(input_tensor, output_memory_config);
-    if (rm_in_bad || rm_out_bad || out_no_spec) {
-        const auto interleaved_l1 =
-            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
-        Tensor x = rm_in_bad ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt) : input_tensor;
-        // Intermediate lives in L1 interleaved; to_memory_config lands the result in the caller's
-        // buffer. sub_core_grids is threaded through to bound the recursive slice's work split.
-        auto sliced = slice<T>(x, begins, ends, step, interleaved_l1, std::nullopt, pad_value, sub_core_grids);
-        // slice preserves layout and to_memory_config doesn't change it — no trailing to_layout needed.
-        // sliced is L1-interleaved so resolve_mc falls through to generate_transpose_shard_spec.
-        const auto final_mc = resolve_mc(sliced);
-        if (sliced.memory_config() == final_mc) {
-            return finalize_into_preallocated(sliced);
-        }
-        const auto target = can_land_in_preallocated(sliced) ? optional_output_tensor : std::nullopt;
-        return finalize_into_preallocated(ttnn::to_memory_config(sliced, final_mc, std::nullopt, target));
     }
 
     // Create modified vectors with wrapped indices and adjust them to match the tensor's rank
@@ -238,13 +230,14 @@ ttnn::Tensor slice(
     bool one_dimensional = input_rank == 1;
     bool handled_tile_alignment = one_dimensional ? true : check_handled_tile_alignment();
 
-    Tensor input = input_tensor;
     // Use the RM path when input isn't TILE, or TILE input has strided/1D/non-tile-aligned begins
     // (ends are padded downstream, so only begin alignment matters).
     rm_only = (input_tensor.layout() != Layout::TILE) || (!no_step || one_dimensional || !handled_tile_alignment);
 
     // Implicit inheritance from a sharded input: rescale the shard spec to the sliced shape so the
     // output doesn't reuse the input's (oversized) spec. Covers HEIGHT/WIDTH/BLOCK. (Issue #38016)
+    // Runs before the composite decision below so both that decision and the composite path's own
+    // resolve_mc see the final spec — rescaling can turn an aligned shard row into a sub-aligned one.
     if (!memory_config_arg.has_value() && !optional_output_tensor.has_value() && input_tensor.is_sharded() &&
         input_rank >= 2) {
         const auto& mem_layout = output_memory_config.memory_layout();
@@ -316,6 +309,32 @@ ttnn::Tensor slice(
         }
     }
 
+    // Composite hop: unshard to L1 interleaved if needed, slice, then convert to the requested mc.
+    // Must stay below the rescale: needs_rm_composite_output and resolve_mc need the rescaled spec,
+    // which can be sub-aligned even when the inherited one isn't.
+    const bool width_begin_nonzero = !begins.empty() && begins.back() != 0;
+    const bool rm_in_bad =
+        detail::needs_rm_composite_input(input_tensor, output_memory_config, no_step, width_begin_nonzero);
+    const bool rm_out_bad = detail::needs_rm_composite_output(input_tensor, output_memory_config);
+    const bool out_no_spec = detail::needs_sharded_output_reshard(input_tensor, output_memory_config);
+    if (rm_in_bad || rm_out_bad || out_no_spec) {
+        const auto interleaved_l1 =
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+        Tensor x = rm_in_bad ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt) : input_tensor;
+        // Intermediate lives in L1 interleaved; to_memory_config lands the result in the caller's
+        // buffer. sub_core_grids is threaded through to bound the recursive slice's work split.
+        auto sliced = slice<T>(x, begins, ends, step, interleaved_l1, std::nullopt, pad_value, sub_core_grids);
+        // slice preserves layout and to_memory_config doesn't change it — no trailing to_layout needed.
+        // sliced is L1-interleaved so resolve_mc falls through to generate_transpose_shard_spec.
+        const auto final_mc = resolve_mc(sliced);
+        if (sliced.memory_config() == final_mc) {
+            return finalize_into_preallocated(sliced);
+        }
+        const auto target = can_land_in_preallocated(sliced) ? optional_output_tensor : std::nullopt;
+        return finalize_into_preallocated(ttnn::to_memory_config(sliced, final_mc, std::nullopt, target));
+    }
+
+    Tensor input = input_tensor;
     if (rm_only) {
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
@@ -365,6 +384,12 @@ ttnn::Tensor slice(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
+    // prim::qsr::slice writes into the caller's buffer verbatim, so it can only be the destination when
+    // the buffer's page geometry matches the output the op computes for `input`. rm_only downgrades a
+    // TILE input to ROW_MAJOR, which leaves the caller's TILE tensor tile-paged while the RM factories
+    // page it by row; hand it over only when the layouts agree and let ret_adjustment retilize into it
+    // via finalize_into_preallocated's copy otherwise.
+    const auto prim_output = can_land_in_preallocated(input) ? optional_output_tensor : std::nullopt;
     auto res = ttnn::prim::qsr::slice(
         input,
         ttnn::Shape(modified_begins),
@@ -377,7 +402,7 @@ ttnn::Tensor slice(
         std::nullopt,
         std::nullopt,
         sub_core_grids,
-        optional_output_tensor);
+        prim_output);
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {

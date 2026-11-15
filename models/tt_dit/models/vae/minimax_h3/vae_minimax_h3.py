@@ -405,6 +405,9 @@ class MiniMaxH3Vae:
         self.last_decode_profile: dict[str, float] = {}
 
         self.decoder = self._make_decoder()
+        # The stitcher / blender cache blend weights per tile geometry on device, outside any
+        # Module; evicting the decoder must take them along or they outlive it for the process.
+        self.decoder.register_eviction_hook(self._release_decode_caches)
         self.image_encoder = self._make_encoder(num_frames=1, temporal_taps=1)
         self.video_encoder = (
             self._make_encoder(num_frames=config.clip_length, temporal_taps=3) if task == "ref2va" else None
@@ -479,6 +482,17 @@ class MiniMaxH3Vae:
             which = "decoder" if module is self.decoder else "encoder"
             raise RuntimeError(f"call load_state() before {which} use")
         return state
+
+    def _release_decode_caches(self) -> None:
+        """Drop the stitcher's ramps and the blender's geometry weights; both rebuild on the next decode."""
+        from ....layers.module import release_device_cache
+
+        if self._stitcher is not None:
+            release_device_cache(self._stitcher._ramps)
+            self._stitcher = None
+        if self._blender is not None:
+            release_device_cache(self._blender._weights)
+            self._blender = None
 
     def _ensure_loaded(self, module, subfolder: str) -> None:
         if module.is_loaded():

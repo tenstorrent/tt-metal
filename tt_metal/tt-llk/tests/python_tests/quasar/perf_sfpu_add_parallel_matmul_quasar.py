@@ -19,7 +19,7 @@ from quasar.test_sfpu_add_parallel_matmul_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync_implied_math=generate_parallel_matmul_add_combinations(
+    format_dest_acc_sync=generate_parallel_matmul_add_combinations(
         SFPU_ADD_FORMATS, is_perf=True
     ),
     run_types=PERF_RUN_TYPES_QUASAR_4_TRISC,
@@ -28,13 +28,13 @@ from quasar.test_sfpu_add_parallel_matmul_quasar import (
 )
 def test_perf_sfpu_add_parallel_matmul_quasar(
     perf_report,
-    format_dest_acc_sync_implied_math,
+    format_dest_acc_sync,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_sfpu_add_parallel_matmul(
-        [format_dest_acc_sync_implied_math],
+        [format_dest_acc_sync],
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

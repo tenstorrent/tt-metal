@@ -21,45 +21,13 @@ namespace tt::tt_fabric::linear::experimental {
 static FORCE_INLINE void fabric_set_unicast_route(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t i) {
-#if defined(FABRIC_2D)
-    const auto& slot = connection_manager.get(i);
-    fabric_set_unicast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id);
-#else
-    // 1D unicast, nop
-#endif
-}
+    uint8_t i);
 
 static FORCE_INLINE void fabric_set_mcast_route(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t* range,
-    uint8_t i) {
-#if defined(FABRIC_2D)
-    // 2D multicast
-    const auto& slot = connection_manager.get(i);
-    if (range[i] != 0) {
-        auto hop = range[i];
-        switch (static_cast<eth_chan_directions>(slot.tag)) {
-            case eth_chan_directions::EAST: {
-                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, hop, 0, 0, 0);
-            } break;
-            case eth_chan_directions::WEST: {
-                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, hop, 0, 0);
-            } break;
-            case eth_chan_directions::NORTH: {
-                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, hop, 0);
-            } break;
-            case eth_chan_directions::SOUTH: {
-                fabric_set_mcast_route(packet_header, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, 0, hop);
-            } break;
-            default: ASSERT(false); break;
-        }
-    }
-#else
-    // 1D multicast, nop
-#endif
-}
+    uint8_t i);
 
 // clang-format off
 /**
@@ -84,15 +52,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint8_t num_hops) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t num_hops);
 
 // clang-format off
 /**
@@ -116,14 +76,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_unicast_write(
-            &slot.sender, packet_header, src_addr, size, noc_unicast_command_header, num_hops[i]);
-    });
-}
+    uint8_t* num_hops);
 
 // clang-format off
 /**
@@ -149,14 +102,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -179,13 +125,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_unicast_write_with_state<UpdateMask>(
-            &slot.sender, packet_header, src_addr, noc_unicast_command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -206,11 +146,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t num_hops,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-    populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -233,13 +169,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     uint8_t route_id,
     uint8_t* num_hops,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_unicast_write_set_state<UpdateMask>(
-            packet_header, num_hops[i], command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -260,14 +190,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
-    uint8_t num_hops) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->to_noc_unicast_atomic_inc(noc_unicast_atomic_inc_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t num_hops);
 
 // clang-format off
 /**
@@ -287,14 +210,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
-    uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_unicast_atomic_inc(
-            &slot.sender, packet_header, noc_unicast_atomic_inc_command_header, num_hops[i]);
-    });
-}
+    uint8_t* num_hops);
 
 // clang-format off
 /**
@@ -316,12 +232,7 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, noc_unicast_atomic_inc_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr);
 
 // clang-format off
 /**
@@ -342,13 +253,7 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_unicast_atomic_inc_with_state<UpdateMask>(
-            &slot.sender, packet_header, noc_unicast_atomic_inc_command_header);
-    });
-}
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr);
 
 // clang-format off
 /**
@@ -367,12 +272,7 @@ template <
     UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
     typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header, uint8_t num_hops, CommandHeaderT command_header) {
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_ATOMIC_INC;
-    packet_header->payload_size_bytes = 0;
-    populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, command_header);
-}
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t num_hops, CommandHeaderT command_header);
 
 // clang-format off
 /**
@@ -395,12 +295,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint8_t* num_hops,
-    CommandHeaderT command_header) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_unicast_atomic_inc_set_state<UpdateMask>(packet_header, num_hops[i], command_header);
-    });
-}
+    CommandHeaderT command_header);
 
 // clang-format off
 /**
@@ -425,15 +320,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
-    uint8_t num_hops) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->to_noc_unicast_scatter_write(noc_unicast_scatter_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t num_hops);
 
 // clang-format off
 /**
@@ -457,14 +344,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
-    uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_scatter_write(
-            &slot.sender, packet_header, src_addr, size, noc_unicast_scatter_command_header, num_hops[i]);
-    });
-}
+    uint8_t* num_hops);
 
 // clang-format off
 /**
@@ -489,16 +369,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint8_t num_hops) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
-        noc_unicast_scatter_atomic_inc_fused_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t num_hops);
 
 // clang-format off
 /**
@@ -522,19 +393,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
-    uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_fused_scatter_write_atomic_inc(
-            &slot.sender,
-            packet_header,
-            src_addr,
-            size,
-            noc_unicast_scatter_atomic_inc_fused_command_header,
-            num_hops[i]);
-    });
-}
+    uint8_t* num_hops);
 
 // clang-format off
 /**
@@ -560,15 +419,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
-        packet_header, packet_size_bytes, noc_unicast_scatter_atomic_inc_fused_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -593,17 +444,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<UpdateMask>(
-            &slot.sender,
-            packet_header,
-            src_addr,
-            noc_unicast_scatter_atomic_inc_fused_command_header,
-            packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -624,16 +465,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t num_hops,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    static_assert(
-        has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Flush),
-        "When setting state, the Flush field must be updated to set the chunk encoding for the semaphore increment "
-        "chunk");
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-    populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
-        packet_header, packet_size_bytes, command_header);
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -656,13 +488,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state(
     uint8_t route_id,
     uint8_t* num_hops,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<UpdateMask>(
-            packet_header, num_hops[i], command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -688,15 +514,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_scatter_write_fields<UpdateMask>(
-        packet_header, packet_size_bytes, noc_unicast_scatter_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -721,13 +539,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_scatter_write_with_state<UpdateMask>(
-            &slot.sender, packet_header, src_addr, noc_unicast_scatter_command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -748,11 +560,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t num_hops,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-    populate_unicast_scatter_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -775,13 +583,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     uint8_t route_id,
     uint8_t* num_hops,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_scatter_write_set_state<UpdateMask>(
-            packet_header, num_hops[i], command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -802,14 +604,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
-    uint8_t num_hops) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->to_noc_unicast_inline_write(noc_unicast_inline_write_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t num_hops);
 
 // clang-format off
 /**
@@ -829,14 +624,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
-    uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_unicast_inline_write(
-            &slot.sender, packet_header, noc_unicast_inline_write_command_header, num_hops[i]);
-    });
-}
+    uint8_t* num_hops);
 
 // clang-format off
 /**
@@ -858,12 +646,7 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_inline_fields<UpdateMask>(packet_header, noc_unicast_inline_write_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr);
 
 // clang-format off
 /**
@@ -884,13 +667,7 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_unicast_inline_write_with_state<UpdateMask>(
-            &slot.sender, packet_header, noc_unicast_inline_write_command_header);
-    });
-}
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr);
 
 // clang-format off
 /**
@@ -907,12 +684,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
 // clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header, uint8_t num_hops, CommandHeaderT command_header) {
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_INLINE_WRITE;
-    packet_header->payload_size_bytes = 0;
-    populate_unicast_inline_fields<UpdateMask>(packet_header, command_header);
-}
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t num_hops, CommandHeaderT command_header);
 
 // clang-format off
 /**
@@ -933,12 +705,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint8_t* num_hops,
-    CommandHeaderT command_header) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_unicast_inline_write_set_state<UpdateMask>(packet_header, num_hops[i], command_header);
-    });
-}
+    CommandHeaderT command_header);
 
 // clang-format off
 /**
@@ -963,15 +730,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
-    uint8_t num_hops) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t num_hops);
 
 // clang-format off
 /**
@@ -995,14 +754,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
-    uint8_t* num_hops) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_fused_unicast_with_atomic_inc(
-            &slot.sender, packet_header, src_addr, size, noc_fused_unicast_atomic_inc_command_header, num_hops[i]);
-    });
-}
+    uint8_t* num_hops);
 
 // clang-format off
 /**
@@ -1028,15 +780,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_fused_atomic_inc_fields<UpdateMask>(
-        packet_header, packet_size_bytes, noc_fused_unicast_atomic_inc_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1061,13 +805,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
-            &slot.sender, packet_header, src_addr, noc_fused_unicast_atomic_inc_command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1088,11 +826,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t num_hops,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    packet_header->to_chip_unicast(num_hops);
-    packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
-    populate_unicast_fused_atomic_inc_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1115,13 +849,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t route_id,
     uint8_t* num_hops,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
-            packet_header, num_hops[i], command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1148,15 +876,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t start_distance,
-    uint8_t range) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t range);
 
 // clang-format off
 /**
@@ -1182,14 +902,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t* start_distance,
-    uint8_t* range) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_unicast_write(
-            &slot.sender, packet_header, src_addr, size, noc_unicast_command_header, start_distance[i], range[i]);
-    });
-}
+    uint8_t* range);
 
 // clang-format off
 /**
@@ -1215,14 +928,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1245,13 +951,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_multicast_noc_unicast_write_with_state<UpdateMask>(
-            &slot.sender, packet_header, src_addr, noc_unicast_command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1274,11 +974,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     uint8_t start_distance,
     uint8_t range,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-    populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1303,13 +999,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     uint8_t* start_distance,
     uint8_t* range,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
-            packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1332,14 +1022,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t start_distance,
-    uint8_t range) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->to_noc_unicast_atomic_inc(noc_unicast_atomic_inc_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t range);
 
 // clang-format off
 /**
@@ -1361,14 +1044,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     uint8_t route_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t* start_distance,
-    uint8_t* range) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_unicast_atomic_inc(
-            &slot.sender, packet_header, noc_unicast_atomic_inc_command_header, start_distance[i], range[i]);
-    });
-}
+    uint8_t* range);
 
 // clang-format off
 /**
@@ -1390,12 +1066,7 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, noc_unicast_atomic_inc_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr);
 
 // clang-format off
 /**
@@ -1416,13 +1087,7 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UpdateMask>(
-            &slot.sender, packet_header, noc_unicast_atomic_inc_command_header);
-    });
-}
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr);
 
 // clang-format off
 /**
@@ -1445,12 +1110,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t start_distance,
     uint8_t range,
-    CommandHeaderT command_header = nullptr) {
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_ATOMIC_INC;
-    packet_header->payload_size_bytes = 0;
-    populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, command_header);
-}
+    CommandHeaderT command_header = nullptr);
 
 // clang-format off
 /**
@@ -1475,13 +1135,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     uint8_t route_id,
     uint8_t* start_distance,
     uint8_t* range,
-    CommandHeaderT command_header = nullptr) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_unicast_atomic_inc_set_state<UpdateMask>(
-            packet_header, start_distance[i], range[i], command_header);
-    });
-}
+    CommandHeaderT command_header = nullptr);
 
 // clang-format off
 /**
@@ -1508,15 +1162,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
     uint8_t start_distance,
-    uint8_t range) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->to_noc_unicast_scatter_write(noc_unicast_scatter_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t range);
 
 // clang-format off
 /**
@@ -1542,20 +1188,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
     uint8_t* start_distance,
-    uint8_t* range) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_scatter_write(
-            &slot.sender,
-            packet_header,
-            src_addr,
-            size,
-            noc_unicast_scatter_command_header,
-            start_distance[i],
-            range[i]);
-    });
-}
+    uint8_t* range);
 
 // clang-format off
 /**
@@ -1581,15 +1214,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_scatter_write_fields<UpdateMask>(
-        packet_header, packet_size_bytes, noc_unicast_scatter_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1614,13 +1239,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_multicast_noc_scatter_write_with_state<UpdateMask>(
-            &slot.sender, packet_header, src_addr, noc_unicast_scatter_command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1643,11 +1262,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint8_t start_distance,
     uint8_t range,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-    populate_unicast_scatter_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1672,13 +1287,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     uint8_t* start_distance,
     uint8_t* range,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_scatter_write_set_state<UpdateMask>(
-            packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -1701,14 +1310,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t start_distance,
-    uint8_t range) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->to_noc_unicast_inline_write(noc_unicast_inline_write_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t range);
 
 // clang-format off
 /**
@@ -1730,14 +1332,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     uint8_t route_id,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t* start_distance,
-    uint8_t* range) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_unicast_inline_write(
-            &slot.sender, packet_header, noc_unicast_inline_write_command_header, start_distance[i], range[i]);
-    });
-}
+    uint8_t* range);
 
 // clang-format off
 /**
@@ -1759,12 +1354,7 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_inline_fields<UpdateMask>(packet_header, noc_unicast_inline_write_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr);
 
 // clang-format off
 /**
@@ -1785,13 +1375,7 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_multicast_noc_unicast_inline_write_with_state<UpdateMask>(
-            &slot.sender, packet_header, noc_unicast_inline_write_command_header);
-    });
-}
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr);
 
 // clang-format off
 /**
@@ -1809,12 +1393,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
 // clang-format on
 template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header, uint8_t start_distance, uint8_t range, CommandHeaderT command_header) {
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_INLINE_WRITE;
-    packet_header->payload_size_bytes = 0;
-    populate_unicast_inline_fields<UpdateMask>(packet_header, command_header);
-}
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t start_distance, uint8_t range, CommandHeaderT command_header);
 
 // clang-format off
 /**
@@ -1837,13 +1416,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     uint8_t route_id,
     uint8_t* start_distance,
     uint8_t* range,
-    CommandHeaderT command_header) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_unicast_inline_write_set_state<UpdateMask>(
-            packet_header, start_distance[i], range[i], command_header);
-    });
-}
+    CommandHeaderT command_header);
 
 // clang-format off
 /**
@@ -1870,15 +1443,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
     uint8_t start_distance,
-    uint8_t range) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t range);
 
 // clang-format off
 /**
@@ -1904,20 +1469,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
     uint8_t* start_distance,
-    uint8_t* range) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_fused_unicast_with_atomic_inc(
-            &slot.sender,
-            packet_header,
-            src_addr,
-            size,
-            noc_fused_unicast_atomic_inc_command_header,
-            start_distance[i],
-            range[i]);
-    });
-}
+    uint8_t* range);
 
 // clang-format off
 /**
@@ -1944,16 +1496,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
     uint8_t start_distance,
-    uint8_t range) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
-        noc_unicast_scatter_atomic_inc_fused_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint8_t range);
 
 // clang-format off
 /**
@@ -1979,20 +1522,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
     uint8_t* start_distance,
-    uint8_t* range) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_fused_scatter_write_atomic_inc(
-            &slot.sender,
-            packet_header,
-            src_addr,
-            size,
-            noc_unicast_scatter_atomic_inc_fused_command_header,
-            start_distance[i],
-            range[i]);
-    });
-}
+    uint8_t* range);
 
 // clang-format off
 /**
@@ -2018,15 +1548,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
-        packet_header, packet_size_bytes, noc_unicast_scatter_atomic_inc_fused_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -2051,17 +1573,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_unicast_scatter_atomic_inc_fused_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_multicast_noc_fused_scatter_write_atomic_inc_with_state<UpdateMask>(
-            &slot.sender,
-            packet_header,
-            src_addr,
-            noc_unicast_scatter_atomic_inc_fused_command_header,
-            packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -2084,16 +1596,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
     uint8_t start_distance,
     uint8_t range,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    static_assert(
-        has_flag(UpdateMask, UnicastFusedScatterWriteAtomicIncUpdateMask::Flush),
-        "When setting state, the Flush field must be updated to set the chunk encoding for the semaphore increment "
-        "chunk");
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-    populate_unicast_fused_scatter_write_atomic_inc_fields<UpdateMask>(
-        packet_header, packet_size_bytes, command_header);
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -2118,13 +1621,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state(
     uint8_t* start_distance,
     uint8_t* range,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_fused_scatter_write_atomic_inc_set_state<UpdateMask>(
-            packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -2150,15 +1647,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-    populate_unicast_fused_atomic_inc_fields<UpdateMask>(
-        packet_header, packet_size_bytes, noc_fused_unicast_atomic_inc_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -2183,13 +1672,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     uint8_t route_id,
     uint32_t src_addr,
     CommandHeaderT noc_fused_unicast_atomic_inc_command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
-            &slot.sender, packet_header, src_addr, noc_fused_unicast_atomic_inc_command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -2212,11 +1695,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t start_distance,
     uint8_t range,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
-    packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
-    populate_unicast_fused_atomic_inc_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -2241,13 +1720,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t* start_distance,
     uint8_t* range,
     CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
-            packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
-    });
-}
+    uint16_t packet_size_bytes = 0);
 
 // clang-format off
 /**
@@ -2272,16 +1745,7 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint16_t hops) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_sparse_multicast(
-        tt::tt_fabric::SparseMulticastRoutingCommandHeader<PACKET_HEADER_TYPE>{hops});
-    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t hops);
 
 // clang-format off
 /**
@@ -2305,13 +1769,7 @@ FORCE_INLINE void fabric_sparse_multicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint16_t* hops) {
-    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        auto& slot = connection_manager.get(i);
-        fabric_sparse_multicast_noc_unicast_write(
-            &slot.sender, packet_header, src_addr, size, noc_unicast_command_header, hops[i]);
-    });
-}
+    uint16_t* hops);
 
 // clang-format off
 /**
@@ -2340,15 +1798,9 @@ FORCE_INLINE void fabric_sparse_multicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocSparseMulticastWriteCommandHeader sparse_mcast_command_header,
-    uint16_t hops) {
-    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
-
-    packet_header->to_chip_sparse_multicast(
-        tt::tt_fabric::SparseMulticastRoutingCommandHeader<PACKET_HEADER_TYPE>{hops});
-    packet_header->to_noc_sparse_mcast_write(sparse_mcast_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
+    uint16_t hops);
 
 }  // namespace tt::tt_fabric::linear::experimental
+
+// API IMPL files for new architectures will be included here as they are added
+#include "tt_metal/fabric/hw/inc/linear/tt-1xx/api_impl.h"

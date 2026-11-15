@@ -32,6 +32,10 @@ ALWI void i0_tile(uint32_t idst) {
 
 /**
  * Please refer to documentation for any_init.
+ *
+ * i0_tile reads its reciprocal-square-root constants from the programmable constant registers,
+ * loaded here; other SFPU inits may overwrite them, so call i0_tile_init again before i0_tile
+ * after them.
  */
 ALWI void i0_tile_init() { MATH(SFPU_UNARY_INIT(i0)); }
 }  // namespace ckernel

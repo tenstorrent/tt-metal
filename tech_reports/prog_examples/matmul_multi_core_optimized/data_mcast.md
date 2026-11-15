@@ -167,7 +167,7 @@ auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
 ```
 
 If you are interested in further details on how these work, we implore you to check out the exact dataflow kernels located in the
-[tt_metal/programming_examples/matmul_common/kernels/dataflow](../../../tt_metal/programming_examples/matmul_common/kernels/dataflow) file.
+[tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow](../../../tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow) file.
 You can see there are many arguments with which to experiment with, such as mcast destination nocs. You can imagine defining your own mcast scheme.
 
     in0_mcast_dest_noc_start_x
@@ -197,7 +197,7 @@ For kernels without bias fusion or when the [PACKER_L1_ACC] is not defined, we d
 b.  **Bias Broadcasting Mechanism**
 
     ``` cpp
-    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+    add_bcast_rows_init(mm_partials_cb_id, bias_cb_id);
     for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
         uint32_t bcast_tile_idx = in1_index_subblock_offset;
         for (uint32_t k = 0; k < out_subblock_w; k++, i++) {

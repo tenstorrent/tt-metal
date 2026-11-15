@@ -13,6 +13,8 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 
 using namespace ckernel;
 
@@ -33,15 +35,22 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
- * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
+ * @param tensor_shape: Tile geometry. Only the total face count is used (must be 1, 2, or 4). On 32-bit unpack to dest it
+ *        sets how many faces get their Dest zero flags re-cleared (budabackend#2730), so it must cover at least the
+ *        faces unpacked to Dest. @ref ckernel::DEFAULT_TENSOR_SHAPE (4 faces) is always valid.
  * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this
  *       function, and @ref _llk_math_eltwise_unary_datacopy_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).
  */
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(
-    const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
+    const std::uint32_t dst_index,
+    const std::uint32_t src_format,
+    const std::uint32_t dst_format,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_", tensor_shape);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
@@ -90,6 +99,10 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
             // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+
+            // UNPACK_TO_DEST covers only unpacker 0 and MOVD2B doesn't wait for SrcB valid, so wait for
+            // _llk_unpack_A_'s SrcB handoff (unpacker 1) before the broadcasts below write the bank.
+            math::srcb_bank_wait();
         }
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
@@ -105,8 +118,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             //   4. Fp32_enabled=0 (BH HW bug: MOVB2D DEST_32B_LOW ignores writes when Fp32 is on)
             //      SrcA=Float32 + MOVB2D(DEST_32B_LOW, MOV_8_ROW_BRCST): broadcast lo16 from B to dest
             //   5. Fp32_enabled=1: restore FP32 dest mode
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
             const std::uint32_t tile_base = dst_index * 64;
-            TTI_SETDVALID(0b10);
 
             // Source row 0 -> faces 0 (rows 0-15) and 2 (rows 32-47)
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);   // hi16 to B
@@ -164,8 +177,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // every datum in every row of all 4 faces. Same hi16/lo16 split as ROW broadcast,
             // but uses MOV_8_ROW_BRCST_D0_BRCST which broadcasts both across rows AND across
             // all 16 datums within each row.
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
             const std::uint32_t tile_base = dst_index * 64;
-            TTI_SETDVALID(0b10);
 
             // Extract source scalar from dest row 0 into B register
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);   // hi16 to B
@@ -209,8 +222,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // each pair, all 16 source rows are extracted in groups of 4, then broadcast
             // via MOV_4_ROWS_D0_BRCST to both the left face (rows 0-15) and the right
             // face (rows 16-31). Same hi16/lo16 split as ROW/SCALAR broadcasts.
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
             const std::uint32_t tile_base = dst_index * 64;
-            TTI_SETDVALID(0b10);
 
 #pragma GCC unroll 2
             for (int offset = 0; offset < 2; ++offset)
@@ -425,12 +438,16 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
  * @tparam is_int_fpu_en: Enable integer FPU datapath (forces the ELWADD move path like FP32 dest).
  * @param rows_per_inst: Rows moved per instruction (selects single-row vs. multi-row addr mode and loop count).
  * @param total_rows: Total rows to move across the inner loop.
- * @param num_faces: Number of faces in the tile.
+ * @param tensor_shape: Tile geometry; only the total face count is used today.
  * @param dst_format: Destination data format (DataFormat enum underlying value); selects UInt16 special-casing.
  */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
-inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32_t total_rows, const std::uint32_t num_faces, const std::uint32_t dst_format)
+inline void eltwise_unary_configure_mop(
+    std::uint32_t rows_per_inst, std::uint32_t total_rows, const ckernel::TensorShape tensor_shape, const std::uint32_t dst_format)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("eltwise_unary_configure_mop", tensor_shape);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+
     if constexpr (type == DataCopyType::A2D)
     {
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
@@ -536,8 +553,9 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam is_int_fpu_en: Enable integer FPU datapath.
  * @tparam pack_mode: Packing layout, values = <Default/Tilize>
- * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
+ * @param tensor_shape: Tile geometry (face_r_dim, face grid). Total face count must be 1, 2, or 4.
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
+ * @note COL broadcast supports only a full 32x32 tile (16-row faces, 2x2 face grid).
  * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ (copy/transpose), @ref _llk_unpack_tilize_init_ (tilize) or @ref _llk_unpack_untilize_init_
  * (untilize) which feed the tile.
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
@@ -548,13 +566,25 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en             = false,
     PackMode pack_mode             = PackMode::Default>
-inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
+inline void _llk_math_eltwise_unary_datacopy_init_(
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_format = 255)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
     constexpr bool tilize = (pack_mode == PackMode::Tilize);
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_eltwise_unary_datacopy_init_", tensor_shape);
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    if constexpr (src_b_bcast_type == BroadcastType::COL)
+    {
+        // The COL MOP covers two faces and the execute runs it twice, so it needs a full 32x32 tile
+        // (4 faces of 16 rows). A 1x32 tile was seen to hang on Wormhole.
+        LLK_ASSERT(
+            tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
+                tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
+            "Column broadcast datacopy supports only 32x32 tiles");
+    }
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
@@ -562,11 +592,11 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
         // Tilize: math MOP iterates over all faces of the tile (num_faces * 16 rows).
         // Non-tilize: single 16-row face pair (MOV_8_ROWS runs twice under the hood).
         eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
-            p_mova2d::MOV_8_ROWS, tilize ? (num_faces * 16) : 16, num_faces, dst_format);
+            p_mova2d::MOV_8_ROWS, tilize ? (num_faces * 16) : 16, tensor_shape, dst_format);
     }
     else if constexpr (type == DataCopyType::B2D)
     {
-        eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, num_faces, dst_format);
+        eltwise_unary_configure_mop<type, false, src_b_bcast_type>(p_movb2d::MOV_4_ROWS, 16, tensor_shape, dst_format);
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);

@@ -92,8 +92,25 @@ def test_missing_slabs_or_mismatched_slabs_are_refused(expect_error):
     caches.kda_states.layer_ids = caches.kda_states.layer_ids[:-1]
     with expect_error(RuntimeError, "cover layers"):
         _runtime(24, 24).kv_migration_stages(caches)
-    with expect_error(RuntimeError, "DFlash"):
-        _runtime(0, 24, dflash=True).kv_migration_stages(_caches(0, 24))
+
+
+def test_dspark_drafter_rows_match_its_layer_completions():
+    """The drafter's K and V follow the three stages, on the rows its layer completions are numbered by."""
+    from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
+
+    tail = _runtime(72, 21, dflash=True)
+    tail._dflash_k_cache, tail._dflash_v_cache = _tensor(0x4000, ()), _tensor(0x5000, ())
+    tail.drafter = SimpleNamespace(config=SimpleNamespace(num_hidden_layers=5))
+    *_, k, v = tail.kv_migration_stages(_caches(72, 21))
+    assert [(s.base_addr, s.first_layer, s.count) for s in (k, v)] == [(0x4000, 93, 5), (0x5000, 93, 5)]
+    layout = layer_completion_layout(SPLITS, 3, extra_layers=5)
+    records = range(layout.rank_first_record, layout.rank_first_record + layout.rank_record_count)
+    assert list(records[-5:]) == list(range(k.first_layer, k.first_layer + k.count))
+
+    upstream = _runtime(0, 24, dflash=True)
+    upstream._dflash_k_cache = None
+    stages = upstream.kv_migration_stages(_caches(0, 24))
+    assert [(s.base_addr, s.count) for s in stages[3:]] == [(0, 0), (0, 0)]
 
 
 def test_table_layer_rows_follow_the_gathered_stages():
@@ -116,21 +133,21 @@ def test_adapter_hooks_name_the_three_configs():
 
 
 def test_layer_position_range_follows_the_contract():
-    """Contract section 5: MLA layers over the request, KDA layers over the version window decode reads next."""
+    """MLA layers over the request; KDA layers over their one Snapshot window, whatever the prompt length."""
     adapter = KimiK3Adapter()
     assert adapter.layer_position_range(3, 100) == (0, 100)
-    assert adapter.layer_position_range(0, 100) == (110_592, 147_456)  # the contract's own example, v = 3
-    assert adapter.layer_position_range(0, 56_320) == (7 * 36_864, 8 * 36_864)
+    assert adapter.layer_position_range(0, 100) == (0, 36_864)
+    assert adapter.layer_position_range(0, 56_320) == (0, 36_864)
     assert adapter.layer_position_range(0, 1) == (0, 36_864)
     assert adapter.layer_position_range(92, 56_320) == (0, 56_320)
 
 
-def test_driver_groups_consecutive_same_axis_layers_into_runs():
+def test_driver_groups_consecutive_equal_range_layers_into_runs():
     from models.demos.common.prefill.runners.migration_driver import _layer_runs
 
     real_len = 56_320
     runs = _layer_runs(range(KimiK3Config.NUM_LAYERS), real_len, KimiK3Adapter().layer_position_range)
-    window = (7 * 36_864, 8 * 36_864)
+    window = (0, 36_864)
     assert runs[:4] == [(0, 3, *window), (3, 4, 0, real_len), (4, 7, *window), (7, 8, 0, real_len)]
     assert runs[-1] == (91, 93, 0, real_len)  # layers 91 and 92 are both MLA: one call
     assert len(runs) == 46
@@ -140,6 +157,10 @@ def test_driver_groups_consecutive_same_axis_layers_into_runs():
         kinds = {layer in mla for layer in range(start, end)}
         assert len(kinds) == 1
         assert (pos_start, pos_end) == ((0, real_len) if kinds.pop() else window)
+    # At real_len == W the KDA window equals the MLA token range, so every layer shares one call.
+    assert _layer_runs(range(KimiK3Config.NUM_LAYERS), 36_864, KimiK3Adapter().layer_position_range) == [
+        (0, KimiK3Config.NUM_LAYERS, 0, 36_864)
+    ]
     # A subset keeps its own layers only and never merges across a gap.
     assert _layer_runs([22, 23, 27], real_len, KimiK3Adapter().layer_position_range) == [
         (22, 23, *window),
