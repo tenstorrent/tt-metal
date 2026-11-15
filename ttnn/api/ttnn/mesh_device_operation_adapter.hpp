@@ -797,11 +797,11 @@ public:
                 }
                 std::vector<tt::tt_metal::WorkloadDescriptor::PerCoordProgram> kept;
                 kept.reserve(programs.size() - index_of.size() + 1);
-                for (size_t i = 0; i < programs.size(); ++i) {
+                for (auto& program : programs) {
                     const bool in_range =
-                        programs[i].range.shape().mesh_size() == 1 && range.contains(programs[i].range.start_coord());
+                        program.range.shape().mesh_size() == 1 && range.contains(program.range.start_coord());
                     if (!in_range) {
-                        kept.push_back(std::move(programs[i]));
+                        kept.push_back(std::move(program));
                     }
                 }
                 kept.push_back(tt::tt_metal::WorkloadDescriptor::PerCoordProgram{
