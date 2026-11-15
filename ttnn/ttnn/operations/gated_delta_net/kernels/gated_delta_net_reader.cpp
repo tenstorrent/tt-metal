@@ -4,7 +4,8 @@
 // gated_delta_net reader (NCRISC).
 //
 // Per unit (pair (b, h), piece) of this core's contiguous range; a piece owns Vb = Vt / PIECES of the
-// pair's v / state columns (R-VSPLIT; R-STEP is PIECES = 1) and every q/k column of its key head:
+// pair's v / state columns (R-VSPLIT; R-STEP is PIECES = 1) and every q/k column of its key head; under R-BCAST
+// the key head's q injector reads only its q columns, the k injector only its k columns, a receiver none:
 //   load_pair_block: conv_weight tiles (raw for the FPU conv, else row j -> row 0 of tap tile j), A_log / dt_bias
 //                    gate-column tiles, norm_weight tiles.
 //   per tile row of the pair: b/a gate tiles, the conv window (4 tap tiles per column tile, rows
@@ -14,6 +15,7 @@
 // Token rows are moved as face-row segments (64 B fp32, 32 B bf16; bf16 reads go through RowReader
 // staging) unless the pair owns the whole tile row.
 
+#include "api/debug/kernel_profiler.hpp"  // TMP-ZONES
 #include <stdint.h>
 
 #include "api/alignment.h"
@@ -207,7 +209,6 @@ void kernel_main() {
     constexpr uint32_t n_state = Kt * Vb;
     constexpr uint32_t z_width_tiles = Hv * Vt;
     constexpr uint32_t pair_cols = 2 * Kt + Vb;
-    constexpr uint32_t conv_w_pages = CONV_W_RAW ? pair_cols : GDN_CONV_TAPS * pair_cols;
 
     constexpr auto mixed_args = TensorAccessorArgs<15>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
@@ -236,6 +237,15 @@ void kernel_main() {
     const uint32_t first_unit = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
     const uint32_t T = get_arg_val<uint32_t>(arg++);
+    const uint32_t qk_role = get_arg_val<uint32_t>(arg++);
+    const uint32_t zero_slots = get_arg_val<uint32_t>(arg++);  // cb_window slots the writer zeroes
+    // The unit's columns: q/k columns [qk_lo, qk_lo + qk_cols) of the pair's 2Kt, then its Vb v columns.
+    const uint32_t qk_lo = qk_role == GDN_QK_K_INJECTOR ? Kt : 0;
+    const uint32_t qk_cols = qk_role == GDN_QK_OWN ? 2 * Kt : (qk_role == GDN_QK_RECEIVER ? 0 : Kt);
+    const uint32_t unit_cols = qk_cols + Vb;
+    const uint32_t conv_w_pages = CONV_W_RAW ? unit_cols : GDN_CONV_TAPS * unit_cols;
+    // R-VSPLIT hands the whole unit over at once; R-STEP has no receivers, so its group divides pair_cols.
+    const uint32_t group_cols = WINDOW_GROUP_COLS == pair_cols ? unit_cols : WINDOW_GROUP_COLS;
 
     Noc noc;
     CircularBuffer window_buf(cb_window);
@@ -250,7 +260,7 @@ void kernel_main() {
         dirty_hi[slot] = 0;
     }
     uint32_t window_slot = 0;
-    uint32_t zero_tokens = WINDOW_SLOTS;  // the writer zeroes slot k and then sends token k
+    uint32_t zero_tokens = zero_slots;  // the writer zeroes slot k and then sends token k
     const uint32_t hist_stage = get_write_ptr(cb_hist_stage);
     RowReader rows(STAGE_SLOTS == 0 ? 0 : get_write_ptr(cb_row_stage));
 
@@ -290,19 +300,24 @@ void kernel_main() {
             return 2 * Hk * Kt + head * Vt + v_first + (idx - 2 * Kt);
         };
 
+        // Pair column (channel-group order) of the unit's local column `local`.
+        auto unit_col = [&](uint32_t local) -> uint32_t {
+            return local < qk_cols ? qk_lo + local : 2 * Kt + (local - qk_cols);
+        };
+
         // ---- load_pair_block ----
         cb_reserve_back(cb_conv_w, conv_w_pages);
         cb_reserve_back(cb_gate_w, 2);
         cb_reserve_back(cb_norm_w, Vb);
         const uint32_t conv_w_base = get_write_ptr(cb_conv_w);
-        for (uint32_t idx = 0; idx < pair_cols; ++idx) {
-            const uint32_t ct = pair_col(idx);
+        for (uint32_t local = 0; local < unit_cols; ++local) {
+            const uint32_t ct = pair_col(unit_col(local));
             if constexpr (CONV_W_RAW) {
                 // Tap j stays at row j; compute broadcasts it by row index.
-                read_row_span(conv_w, ct, 0, GDN_CONV_TAPS, conv_w_base + idx * TILE_BYTES);
+                read_row_span(conv_w, ct, 0, GDN_CONV_TAPS, conv_w_base + local * TILE_BYTES);
             } else {
                 for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
-                    rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * idx + tap) * TILE_BYTES, 0);
+                    rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * local + tap) * TILE_BYTES, 0);
                 }
             }
         }
@@ -338,12 +353,12 @@ void kernel_main() {
             // Per group: one zero fill, one flush of every DRAM row read (current rows + history rows),
             // then one flush of the L1 row shifts that source the current-row tiles. A uniform group
             // size keeps every reservation contiguous in cb_window (its size is a multiple of a group).
-            constexpr uint32_t group_cols = WINDOW_GROUP_COLS;
-            constexpr uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
-            for (uint32_t group_first = 0; group_first < pair_cols; group_first += group_cols) {
+            const uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
+            for (uint32_t group_first = 0; group_first < unit_cols; group_first += group_cols) {
                 cb_reserve_back(cb_window, group_tiles);
                 const uint32_t win = get_write_ptr(cb_window);
                 if (zero_tokens != 0) {
+                    DeviceZoneScopedN("R-ZEROWAIT");
                     // The writer zeroes the buffer slot by slot at kernel start, off this RISC's critical path.
                     cb_wait_front(cb_window_zeroed, 1);
                     cb_pop_front(cb_window_zeroed, 1);
@@ -372,7 +387,7 @@ void kernel_main() {
                 const uint32_t prev_row0 = lo - GDN_HISTORY;
                 const bool prev_staged = !hist_needed && prev_row0 / TILE_ROWS == (lo - 1) / TILE_ROWS;
                 for (uint32_t col = 0; col < group_cols; ++col) {
-                    const uint32_t ct = pair_col(group_first + col);
+                    const uint32_t ct = pair_col(unit_col(group_first + col));
                     const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
                     read_tile_rows(
                         rows, mixed, tr * Ct + ct, base_row, lo, hi, col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
@@ -410,7 +425,10 @@ void kernel_main() {
                         }
                     }
                 }
-                rows.finish();
+                {
+                    DeviceZoneScopedN("R-FLUSH");
+                    rows.finish();
+                }
                 if (hist_staged || prev_staged) {
                     for (uint32_t col = 0; col < group_cols; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
@@ -443,6 +461,7 @@ void kernel_main() {
                     cb_push_back(cb_gate_in, 2);
                     gates_pending = false;
                 }
+                DeviceZoneScopedN("R-COPIES");
                 if (hi - lo > 1 || hist_staged || prev_staged) {
                     for (uint32_t col = 0; col < group_cols && hi - lo > 1; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
@@ -465,6 +484,7 @@ void kernel_main() {
             }
             // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs ----
             if (tr == first_tr) {
+                DeviceZoneScopedN("R-STATE");
                 cb_reserve_back(cb_state_in, n_state);
                 cb_reserve_back(cb_state_in_mm, n_state);
                 const uint32_t state_base = get_write_ptr(cb_state_in);

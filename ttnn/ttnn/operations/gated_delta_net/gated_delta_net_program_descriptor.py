@@ -41,6 +41,9 @@ CHUNK_MIN_TOKENS = 2
 # Full-sync DEST (8 fp32 tiles per window, state update batches of 7). Measured slower on
 # perf_decode_b1 (54.5 vs 53.2 us: it loses math/pack overlap), so off; the kernels adapt to either.
 DST_FULL_SYNC = False
+# R-BCAST (decode R-VSPLIT): of each key head's r * pieces cores, the first preps q (conv + L2 norm) and the
+# second k, once each, and multicast qn / kn to the others, which read and prep only their v columns.
+SHARE_QK_PREP = True
 
 # ---- Buffer-depth knobs ----
 WINDOW_DEPTH = 2  # window groups of tap tiles in flight
@@ -100,9 +103,15 @@ CB_CHUNK_VEC = 36
 CB_CHUNK_MAT = 37
 CB_UW = 38
 CB_TRI_MASK = 39
+CB_QK_STAGE = 40
+CB_KQ_ROWS_F32 = 41
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
+QK_MCAST_FIRST_SEM_ID = 1  # R-BCAST channel semaphores follow
+# Per-core q/k prep role (R-BCAST): own = preps its own q and k (no sharing); q / k injector = preps qn / kn and
+# multicasts it, receives the other; receiver = receives both.
+QK_OWN, QK_Q_INJECTOR, QK_K_INJECTOR, QK_RECEIVER = 0, 1, 2, 3
 
 # Rows staged per flush when a token face row is narrower than the DRAM read alignment (bf16 on
 # Blackhole): each half-row is read as one aligned chunk into staging, then copied L1-to-L1.
@@ -131,13 +140,17 @@ def _kernel_defines():
         "CHUNK_COEF_PAGES",
         "CHUNK_VEC_PAGES",
         "CHUNK_MAT_PAGES",
+        "QK_OWN",
+        "QK_Q_INJECTOR",
+        "QK_K_INJECTOR",
+        "QK_RECEIVER",
     ]
     return [(f"GDN_{n}", str(globals()[n])) for n in names]
 
 
 # Pages per CB; each entry is (index list sharing one allocation, pages). Vt here is the piece's column
 # block (v_block_tiles); pieces > 1 adds the partial-sum combine buffers, chunked the R-CHUNK buffers.
-def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False):
+def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0):
     n_state = Kt * Vt
     trb = TOKEN_TILE_ROWS_PER_BLOCK
     return [
@@ -155,7 +168,8 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False):
         ((CB_RINV,), 2 * trb),
         ((CB_SQ_O,), Vt * trb),
         ((CB_RINV_O,), trb),
-        ((CB_KQ_ROWS,), 2 * Kt * trb),
+        # R-BCAST lands kn / qn in place; the U2D view feeds the fp32 qn . kn.
+        ((CB_KQ_ROWS, CB_KQ_ROWS_F32), 2 * Kt * trb),
         ((CB_KNT,), Kt * trb),
         ((CB_D,), trb),
         ((CB_GATE_IN,), 2 * ROW_DEPTH),
@@ -182,7 +196,15 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False):
         ((CB_CHUNK_MAT,), CHUNK_MAT_PAGES if chunked else 0),
         ((CB_UW,), Vt if chunked else 0),
         ((CB_TRI_MASK,), 1 if chunked else 0),
+        # R-BCAST injector: its qn or kn (compute -> writer, multicast source).
+        ((CB_QK_STAGE,), Kt if _share_qk(pieces, tokens) else 0),
     ]
+
+
+def _share_qk(pieces, tokens):
+    """R-BCAST predicate: one unit per core (R-VSPLIT) and one tile row per unit (decode), so each core takes
+    one q/k block, into CB slots that are still at their base address on every core."""
+    return SHARE_QK_PREP and pieces > 1 and tokens == 1
 
 
 # Indices read by copy_tile / SFPU at full fp32 (UnpackToDestFp32) when Float32; the rest feed srcA/srcB
@@ -198,6 +220,7 @@ U2D_CBS = (
     CB_SQ,
     CB_RINV,
     CB_D,
+    CB_KQ_ROWS_F32,
     CB_GATE_IN,
     CB_GATE_W,
     CB_TOK_COEF,
@@ -237,13 +260,13 @@ def _row_stage_bytes(token_tile_bytes):
     return 0 if seg_bytes % align == 0 else (ROW_STAGE_SLOTS + 1) * align
 
 
-def l1_footprint_bytes(Kt, Vt, dtype, pieces=1, chunked=True):
+def l1_footprint_bytes(Kt, Vt, dtype, pieces=1, chunked=True, tokens=0):
     """Per-core footprint of one unit (Vt = the unit's column block). validate() checks R-STEP (the
     whole Vt); the descriptor re-checks the regime it selects."""
     token_bytes = _tile_bytes(dtype)
     cb_bytes = sum(
         pages * (token_bytes if indices[0] in TOKEN_CBS else FP32_TILE_BYTES)
-        for indices, pages in _cb_plan(Kt, Vt, _conv_on_fpu(dtype), pieces, chunked)
+        for indices, pages in _cb_plan(Kt, Vt, _conv_on_fpu(dtype), pieces, chunked, tokens)
     )
     return cb_bytes + BF16_TILE_BYTES + SIGNAL_PAGE_BYTES + _row_stage_bytes(token_bytes)
 
@@ -311,19 +334,58 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             next_block += per_core
     assert pieces == 1 or all(count == 1 for _, _, count in assignment)
     chunked = _chunked(tokens, device)
-    assert l1_footprint_bytes(Kt, v_block_tiles, mixed_qkv.dtype, pieces, chunked) <= L1_BUDGET
+    assert l1_footprint_bytes(Kt, v_block_tiles, mixed_qkv.dtype, pieces, chunked, tokens) <= L1_BUDGET
     # NoC coordinates of the core running each unit (R-VSPLIT peers).
     unit_noc = {}
     for core, first_unit, _ in assignment:
         noc_core = device.worker_core_from_logical_core(core)
         unit_noc[first_unit] = (noc_core.x, noc_core.y)
 
+    # R-BCAST: units of one (sequence, key head) are r * pieces consecutive units, so on one unit per core they
+    # are consecutive cores in row-major order: one multicast group each, with the q injector its first core
+    # and the k injector its second (two channels, one sender each).
+    qk_group = (value_heads // key_heads) * pieces
+    qk_channels = []
+    if _share_qk(pieces, tokens):
+        order = [(core.y, core.x) for core, _, _ in assignment]
+        assert order == sorted(order), "units must be assigned in row-major core order"
+        # No handshake: each receiver's landing CB is untouched before the single hand-off. The injectors' writers
+        # send on the writer's NoC (WriterConfigDescriptor: NOC 1, the preferred DRAM-write NoC).
+        config = ttnn.McastConfig(noc=ttnn.NOC.RISCV_1_default, handshake=False, data_ready=ttnn.McastDataReady.Counter)
+        qk_channels = [
+            ttnn.Mcast(
+                device,
+                config,
+                all_cores,
+                qk_group,
+                ttnn.McastFixedSenderConfig(sender_index=sender),
+                ttnn.McastCoreOrder.RowMajor,
+            )
+            for sender in (0, 1)
+        ]
+
+    def qk_role(unit):
+        if not qk_channels:
+            return QK_OWN
+        return {0: QK_Q_INJECTOR, 1: QK_K_INJECTOR}.get(unit % qk_group, QK_RECEIVER)
+
+    def window_zeroing(first_unit, count):
+        """(slots, bytes per slot) of cb_window the writer zeroes: only the window groups this core will use."""
+        groups, group_cols = 0, 0
+        for unit in range(first_unit, first_unit + count):
+            seq_lo = (unit // pieces // value_heads) * tokens
+            tile_rows = (seq_lo + tokens - 1) // TILE - seq_lo // TILE + 1
+            unit_cols = v_block_tiles + {QK_OWN: 2 * Kt, QK_RECEIVER: 0}.get(qk_role(unit), Kt)
+            group_cols = unit_cols if pieces > 1 else _window_group_cols(Kt, v_block_tiles, pieces)
+            groups += tile_rows * (unit_cols // group_cols)
+        return min(WINDOW_DEPTH, groups), CONV_TAPS * group_cols * token_tile_bytes
+
     # ---- circular buffers ----
     token_dtype = mixed_qkv.dtype
     token_tile_bytes = _tile_bytes(token_dtype)
     cbs = []
     conv_on_fpu = _conv_on_fpu(token_dtype)
-    for indices, pages in _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces, chunked):
+    for indices, pages in _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces, chunked, tokens):
         if pages == 0:
             continue
         is_token = indices[0] in TOKEN_CBS
@@ -398,8 +460,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     reader_addrs = [t.buffer_address() for t in reader_tensors]
 
     # ---- writer ----
-    window_bytes = CONV_TAPS * _window_group_cols(Kt, v_block_tiles, pieces) * WINDOW_DEPTH * token_tile_bytes
-    writer_ct = [Kt, Vt, value_heads, *geometry_ct, window_bytes, pieces, OSUM_SEM_ID, WINDOW_DEPTH, int(chunked)]
+    writer_ct = [Kt, Vt, value_heads, *geometry_ct, pieces, OSUM_SEM_ID, int(chunked)]
     for t in (output, recurrent_state_out):
         writer_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     writer_addrs = [output.buffer_address(), recurrent_state_out.buffer_address()]
@@ -416,16 +477,21 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         pieces,
         _window_group_cols(Kt, v_block_tiles, pieces),
         int(chunked),
+        int(bool(qk_channels)),
     ]
 
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for core, first_unit, count in assignment:
-        reader_rt[core.x][core.y] = reader_addrs + [first_unit, count, tokens]
+        role = qk_role(first_unit)  # R-BCAST runs one unit per core
+        zero_slots, zero_slot_bytes = window_zeroing(first_unit, count)
+        reader_rt[core.x][core.y] = reader_addrs + [first_unit, count, tokens, role, zero_slots]
         # R-VSPLIT: NoC coordinates of the pair's piece cores, in piece order.
         group_first = first_unit - first_unit % pieces
         peers = [c for s in range(pieces) for c in unit_noc[group_first + s]] if pieces > 1 else []
-        writer_rt[core.x][core.y] = writer_addrs + [first_unit, count, tokens] + peers
-        compute_rt[core.x][core.y] = [first_unit, count, tokens, _float_bits(value_dim * epsilon)]
+        writer_rt[core.x][core.y] = (
+            writer_addrs + [first_unit, count, tokens, role, zero_slots, zero_slot_bytes] + peers
+        )
+        compute_rt[core.x][core.y] = [first_unit, count, tokens, _float_bits(value_dim * epsilon), role]
 
     modes = list(getattr(compute_kernel_config, "unpack_to_dest_mode", []) or [])
     if len(modes) < NUM_CB_SLOTS:
@@ -467,4 +533,14 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     semaphores = []
     if pieces > 1:
         semaphores.append(ttnn.SemaphoreDescriptor(id=OSUM_SEM_ID, core_ranges=all_cores, initial_value=0))
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores, cbs=cbs)
+    # The writer carries the q and k multicast channels (absent outside R-BCAST, so one kernel source).
+    next_sem = QK_MCAST_FIRST_SEM_ID
+    for prefix, channel in zip(("qkq", "qkk"), qk_channels or (None, None)):
+        if channel is None:
+            ttnn.attach_absent_mcast(kernels[1], prefix)
+        else:
+            channel.attach(descriptor, prefix, [kernels[1]], next_sem)
+            next_sem = channel.next_semaphore_id()
+    descriptor.kernels = kernels
+    return descriptor

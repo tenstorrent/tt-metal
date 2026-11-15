@@ -8,13 +8,17 @@
 // PIECES > 1 (R-VSPLIT) all-gathers the partial sum o^2 of every piece of the pair; then drains the
 // piece's output tiles (whole tiles when the pair owns the tile row, else face-row segments of its rows
 // only). After the pair's last token: drains the piece's slice of recurrent_state_out.
+// R-BCAST (decode R-VSPLIT): the key head's q and k injectors multicast qn and kn (one channel each) into
+// cb_kq_rows on every core of the key head, where the writer hands the landed rows to compute.
 
+#include "api/debug/kernel_profiler.hpp"  // TMP-ZONES
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 namespace {
 
@@ -27,17 +31,18 @@ constexpr uint32_t cb_window = GDN_CB_WINDOW;
 constexpr uint32_t cb_window_zeroed = GDN_CB_WINDOW_ZEROED;
 constexpr uint32_t cb_osum_part = GDN_CB_OSUM_PART;
 constexpr uint32_t cb_osum_gather = GDN_CB_OSUM_GATHER;
+constexpr uint32_t cb_kq_rows = GDN_CB_KQ_ROWS;
+constexpr uint32_t cb_kq_rows_f32 = GDN_CB_KQ_ROWS_F32;
+constexpr uint32_t cb_qk_stage = GDN_CB_QK_STAGE;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t OUT_TILE_BYTES = get_compile_time_arg_val(3);    // output tile (dtype-derived on host)
 constexpr uint32_t STATE_TILE_BYTES = get_compile_time_arg_val(4);  // fp32 state tile
 constexpr uint32_t FACE_BYTES = OUT_TILE_BYTES / 4;
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;
-constexpr uint32_t WINDOW_BYTES = get_compile_time_arg_val(5);  // whole cb_window
-constexpr uint32_t PIECES = get_compile_time_arg_val(6);        // column pieces per pair
-constexpr uint32_t OSUM_SEM_ID = get_compile_time_arg_val(7);   // peer partial sums landed (cumulative)
-constexpr uint32_t WINDOW_SLOTS = get_compile_time_arg_val(8);  // window groups held by cb_window
-constexpr bool CHUNKED = get_compile_time_arg_val(9) != 0;      // R-CHUNK: chunk coefficients per tile row
+constexpr uint32_t PIECES = get_compile_time_arg_val(5);       // column pieces per pair
+constexpr uint32_t OSUM_SEM_ID = get_compile_time_arg_val(6);  // peer partial sums landed (cumulative)
+constexpr bool CHUNKED = get_compile_time_arg_val(7) != 0;     // R-CHUNK: chunk coefficients per tile row
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
@@ -46,6 +51,44 @@ FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES 
 // Word index of element (r, c) of an fp32 tile (four 16x16 faces).
 FORCE_INLINE uint32_t elem_index(uint32_t r, uint32_t c) {
     return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15);
+}
+
+// Lands kn (cb_kq_rows tiles [0, Kt)) and qn ([Kt, 2Kt)) of one tile row. An injector multicasts its staged
+// part (qn from the q injector, kn from the k injector) and copies it into its own rows; every core receives the
+// parts it did not prep. Every core has the same CB layout and R-BCAST hands off one block per core, so a
+// receiver's write pointer is the address the injector targets.
+template <typename QChannel, typename KChannel>
+void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t qk_role, uint32_t Kt) {
+    Noc noc;
+    const uint32_t part_bytes = Kt * STATE_TILE_BYTES;
+    cb_reserve_back(cb_kq_rows, 2 * Kt);
+    cb_reserve_back(cb_kq_rows_f32, 2 * Kt);
+    const uint32_t kn_dst = get_write_ptr(cb_kq_rows);
+    const uint32_t qn_dst = kn_dst + part_bytes;
+    if (qk_role == GDN_QK_Q_INJECTOR || qk_role == GDN_QK_K_INJECTOR) {
+        const bool is_q = qk_role == GDN_QK_Q_INJECTOR;
+        const uint32_t dst = is_q ? qn_dst : kn_dst;
+        cb_wait_front(cb_qk_stage, Kt);
+        const uint32_t stage = get_read_ptr(cb_qk_stage);
+        if (is_q) {
+            q_channel.optional_sender(noc)->send(stage, dst, part_bytes);
+        } else {
+            k_channel.optional_sender(noc)->send(stage, dst, part_bytes);
+        }
+        noc_async_read(get_noc_addr(stage), dst, part_bytes);
+        noc_async_read_barrier();
+        cb_pop_front(cb_qk_stage, Kt);
+        if (is_q) {
+            k_channel.optional_receiver(noc)->receive();
+        } else {
+            q_channel.optional_receiver(noc)->receive();
+        }
+    } else {
+        q_channel.optional_receiver(noc)->receive();
+        k_channel.optional_receiver(noc)->receive();
+    }
+    cb_push_back(cb_kq_rows, 2 * Kt);
+    cb_push_back(cb_kq_rows_f32, 2 * Kt);
 }
 
 }  // namespace
@@ -58,7 +101,11 @@ void kernel_main() {
     constexpr uint32_t n_state = Kt * Vb;
     constexpr uint32_t out_width_tiles = Hv * Vt;
 
-    constexpr auto out_args = TensorAccessorArgs<10>();
+    constexpr auto out_args = TensorAccessorArgs<8>();
+    constexpr auto q_channel = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("qkq_ct_offset"), get_named_compile_time_arg_val("qkq_rt_offset")>();
+    constexpr auto k_channel = dataflow_kernel_lib::
+        McastArgs<get_named_compile_time_arg_val("qkk_ct_offset"), get_named_compile_time_arg_val("qkk_rt_offset")>();
     constexpr auto state_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     uint32_t arg = 0;
@@ -67,6 +114,9 @@ void kernel_main() {
     const uint32_t first_unit = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
     const uint32_t T = get_arg_val<uint32_t>(arg++);
+    const uint32_t qk_role = get_arg_val<uint32_t>(arg++);
+    const uint32_t zero_slots = get_arg_val<uint32_t>(arg++);       // cb_window slots this core's reader uses
+    const uint32_t zero_slot_bytes = get_arg_val<uint32_t>(arg++);  // one window group
     // R-VSPLIT: NoC (x, y) of the pair's piece cores in piece order (this core included). The host runs
     // one unit per core then, so every piece of a pair walks the same tile rows in lockstep.
     uint32_t peer_x[PIECES];
@@ -77,15 +127,15 @@ void kernel_main() {
     }
     uint32_t rows_combined = 0;
 
-    // Zero the reader's conv window buffer once (it keeps rows outside the token rows zero from then
+    // Zero the window groups the reader will use once (it keeps rows outside the token rows zero from then
     // on), one slot at a time with a token per slot so the reader starts on slot 0 without waiting for
     // the rest; this RISC is idle until the first gates arrive.
     {
         Noc noc;
         CircularBuffer window_buf(cb_window);
-        constexpr uint32_t slot_bytes = WINDOW_BYTES / WINDOW_SLOTS;
-        for (uint32_t slot = 0; slot < WINDOW_SLOTS; ++slot) {
-            noc.async_write_zeros(window_buf, slot_bytes, {.offset_bytes = slot * slot_bytes});
+        for (uint32_t slot = 0; slot < zero_slots; ++slot) {
+            DeviceZoneScopedN("W-ZERO");
+            noc.async_write_zeros(window_buf, zero_slot_bytes, {.offset_bytes = slot * zero_slot_bytes});
             noc.write_zeros_l1_barrier();
             cb_reserve_back(cb_window_zeroed, 1);
             cb_push_back(cb_window_zeroed, 1);
@@ -143,6 +193,11 @@ void kernel_main() {
                 cb_push_back(cb_tok_coef, GDN_TOK_COEF_PAGES);
             }
             cb_pop_front(cb_gates, 2);
+
+            if (!CHUNKED && qk_role != GDN_QK_OWN) {
+                DeviceZoneScopedN("W-QK");
+                land_qk_rows(q_channel, k_channel, qk_role, Kt);
+            }
 
             // ---- partial sum o^2 all-gather (R-VSPLIT) ----
             // Each piece writes its partial into slot `piece` of the gather buffer on every piece core
