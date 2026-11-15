@@ -8,6 +8,8 @@ Contract: ``forward`` takes S rows of ONE user per mesh row in the pool decode l
 """
 
 
+import os
+
 import torch
 
 import ttnn
@@ -27,7 +29,25 @@ class Hy4MTP:
         f32 = lambda k: upload(self.md, sd[k + ".weight"].float().reshape(1, 1, 1, HID), ttnn.float32)
         self.w_e, self.w_h, self.w_fin = f32("enorm"), f32("hnorm"), f32("final_layernorm")
         self.ckc = compute_cfg(self.md, "hifi4", True)
+        # HY4_MTP_NORM=fast (verify-round track, DRAFT-ONLY numerics: the MTP output only proposes drafts, the verify rows decide): the 7-op fp32 rms_exact composite (~100 us per call, 5 calls per MTP pass)
+        # replaced by typecast + ttnn.rms_norm on bf16 (bf16 sum of squares: ~3-4 % scale error, acceptance is measured by the spec_eq histogram)
+        self.fast_norm = os.environ.get("HY4_MTP_NORM", "exact") == "fast"
+        if self.fast_norm:
+            wb = lambda t: upload(
+                self.md,
+                ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float().reshape(1, 1, HID // 32, 32),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self._wb = {id(t): wb(t) for t in (self.w_e, self.w_h, self.w_fin, ly.w_in32, ly.w_post32)}
+            self.ckc_norm = compute_cfg(self.md, "hifi4", False)
         self.shared = ly.shared_dec if getattr(ly, "shared_dec", None) is not None else with_decode_cfg(ly.shared)
+
+    def _norm(self, x32, w32):
+        if not self.fast_norm:
+            return rms_exact(x32, w32, self.eps)
+        xb = ttnn.typecast(x32, ttnn.bfloat16)
+        return ttnn.rms_norm(xb, weight=self._wb[id(w32)], epsilon=self.eps, compute_kernel_config=self.ckc_norm)
 
     def embed(self, tok):
         """tok uint32 [1, S] ROW_MAJOR replicated -> bf16 [1,1,S,D] replicated (shared embedding table, vocab column-sharded on the hidden dim)."""
@@ -42,8 +62,8 @@ class Hy4MTP:
         ch = self.ch
         e32 = ttnn.typecast(e, ttnn.float32)
         h32 = ttnn.typecast(h, ttnn.float32)
-        en = rms_exact(e32, self.w_e, self.eps)
-        hn = rms_exact(h32, self.w_h, self.eps)
+        en = self._norm(e32, self.w_e)
+        hn = self._norm(h32, self.w_h)
         for t in (e32, h32):
             ttnn.deallocate(t)
         cat = ttnn.concat([en, hn], dim=3)
@@ -97,21 +117,21 @@ class Hy4MTP:
         x = self.pre(e, h)
         ttnn.deallocate(e)
         tp("x0", x)
-        h1 = rms_exact(x, ly.w_in32, self.eps)
+        h1 = self._norm(x, ly.w_in32)
         a = ly.attn.decode_step_pool(h1, self.opt, tabs, dense8)
         ttnn.deallocate(h1)
         tp("a", a)
         x = ttnn.add(x, ttnn.typecast(a, ttnn.float32))
         ttnn.deallocate(a)
         tp("x1", x)
-        h2 = rms_exact(x, ly.w_post32, self.eps)
+        h2 = self._norm(x, ly.w_post32)
         y = self.mlp(h2, taps)
         ttnn.deallocate(h2)
         tp("y", y)
         x = ttnn.add(x, ttnn.typecast(y, ttnn.float32))
         ttnn.deallocate(y)
         tp("x2", x)
-        out = rms_exact(x, self.w_fin, self.eps)
+        out = self._norm(x, self.w_fin)
         ttnn.deallocate(x)
         return out
 
