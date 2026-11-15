@@ -65,7 +65,8 @@ tt::tt_metal::Tile rm_face_tile() { return tt::tt_metal::Tile({1, TILE_WIDTH}, f
 
 std::shared_ptr<Tensor> make_scratch_tensor(const Tensor& input, uint32_t ring_size) {
     const auto& shard = input.shard_spec().value();
-    auto logical = input.logical_shape();
+    // ROW_MAJOR bytes of the same size as the shards (a TILE input's shards are summed as raw 32-wide runs).
+    auto logical = input.padded_shape();
     logical[-2] *= ring_size;
     const ShardSpec scratch_shard{shard.grid, {shard.shape[0] * ring_size, shard.shape[1]}, shard.orientation};
     // The scratch lives as long as the cached program. In L1_SMALL when it fits there, so like the semaphore it
@@ -144,6 +145,11 @@ std::optional<CoalescedPlan> plan_coalesced(
     // With max_packet_bytes: any scratch that still leaves the cap's worth of L1_SMALL free.
     const uint64_t l1_small_wide_cap = l1_small_free > kL1SmallScratchCap ? l1_small_free - kL1SmallScratchCap : 0;
 
+    // A TILE input (a several-row block) is too large for L1_SMALL at production sizes; rather than the slow
+    // uncoalesced path it takes the largest packets that fit, with the ping-pong scratch in L1.
+    const bool l1_scratch_fallback = input.layout() == Layout::TILE;
+    std::optional<CoalescedPlan> fallback;
+    std::optional<CoalescedPlan> capped_fallback;
     for (uint32_t r_link = 1; r_link <= max_r_link; ++r_link) {
         if (pages_per_link % r_link != 0) {
             continue;
@@ -153,8 +159,15 @@ std::optional<CoalescedPlan> plan_coalesced(
         if (group_bytes > max_payload_bytes) {
             continue;
         }
+        // The fallback takes the largest packets within max_packet_bytes, else the largest the fabric carries.
+        if (l1_scratch_fallback && !fallback.has_value()) {
+            fallback = CoalescedPlan{.reducers_per_link = r_link, .group_pages = group_pages};
+        }
         if (max_packet_bytes.has_value() && group_bytes > *max_packet_bytes) {
             continue;
+        }
+        if (l1_scratch_fallback && !capped_fallback.has_value()) {
+            capped_fallback = CoalescedPlan{.reducers_per_link = r_link, .group_pages = group_pages};
         }
         if (l1_small_enabled) {
             const uint64_t scratch_bytes = tt::align(2ull * ring_size * group_bytes, l1_small_align);
@@ -166,7 +179,7 @@ std::optional<CoalescedPlan> plan_coalesced(
         }
         return CoalescedPlan{.reducers_per_link = r_link, .group_pages = group_pages};
     }
-    return std::nullopt;
+    return capped_fallback.has_value() ? capped_fallback : fallback;
 }
 
 std::shared_ptr<Tensor> make_coalesced_scratch_tensor(
@@ -218,12 +231,7 @@ WidthShardedAllReduceMeshWorkloadFactory::create_mesh_workload(
             operation_attributes.ring_size,
             available_cores,
             operation_attributes.max_packet_bytes)) {
-        auto scratch = make_coalesced_scratch_tensor(
-            tensor_return_value,
-            operation_attributes.ring_size,
-            operation_attributes.num_links,
-            plan->reducers_per_link,
-            plan->group_pages);
+        // Semaphores first: a scratch that fills L1_SMALL (a several-row block's) would otherwise leave them none.
         auto sem_even =
             ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
         auto sem_odd =
@@ -232,6 +240,12 @@ WidthShardedAllReduceMeshWorkloadFactory::create_mesh_workload(
             ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
         auto sem_iter_1 =
             ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+        auto scratch = make_coalesced_scratch_tensor(
+            tensor_return_value,
+            operation_attributes.ring_size,
+            operation_attributes.num_links,
+            plan->reducers_per_link,
+            plan->group_pages);
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
 
         tt::tt_metal::distributed::MeshWorkload workload;
@@ -255,9 +269,17 @@ WidthShardedAllReduceMeshWorkloadFactory::create_mesh_workload(
         return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
     }
 
-    auto scratch = make_scratch_tensor(tensor_args.input, operation_attributes.ring_size);
+    TT_FATAL(
+        tensor_args.input.layout() != Layout::TILE,
+        "width_sharded_all_reduce: a TILE (row-block) input needs the coalesced path: {} pages over {} links must "
+        "split into at most {} reducer cores per link with packets of at most the fabric's max payload",
+        tensor_args.input.buffer()->num_pages(),
+        operation_attributes.num_links,
+        tensor_return_value.memory_config().shard_spec()->grid.num_cores() / operation_attributes.num_links);
+    // The semaphore first: a scratch that fills L1_SMALL (a several-row block's) would otherwise leave it no room.
     auto out_ready_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    auto scratch = make_scratch_tensor(tensor_args.input, operation_attributes.ring_size);
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
 
     tt::tt_metal::distributed::MeshWorkload workload;

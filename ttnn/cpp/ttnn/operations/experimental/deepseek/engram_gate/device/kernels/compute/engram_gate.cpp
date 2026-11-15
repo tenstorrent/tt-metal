@@ -32,6 +32,24 @@
 // Every tile CB is fp32; only the row-major inputs and the output are bf16.
 namespace {
 
+// bf16 32x32 tiles -> the fp32 tiles of cb_tiles (a block's inputs arrive tiled).
+void convert_block_tiles(uint32_t cb_in, uint32_t Wt, uint32_t block, uint32_t cb_tiles) {
+    reconfig_data_format_srca(cb_in);
+    pack_reconfig_data_format(cb_tiles);
+    copy_init(cb_in);
+    cb_reserve_back(cb_tiles, Wt);
+    for (uint32_t wt = 0; wt < Wt; ++wt) {
+        tile_regs_acquire();
+        copy_tile(cb_in, block * Wt + wt, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_tiles);
+        tile_regs_release();
+    }
+    cb_push_back(cb_tiles, Wt);
+    reconfig_data_format_srca(cb_tiles);
+}
+
 void tilize_block_rows(uint32_t cb_rm, uint32_t Wt, uint32_t block, uint32_t cb_tiles) {
     reconfig_data_format_srca(cb_rm);
     tilize_init(cb_rm, Wt, cb_tiles);
@@ -40,6 +58,15 @@ void tilize_block_rows(uint32_t cb_rm, uint32_t Wt, uint32_t block, uint32_t cb_
     cb_push_back(cb_tiles, Wt);
     tilize_uninit(cb_rm, cb_tiles);
     reconfig_data_format_srca(cb_tiles);
+}
+
+template <uint32_t block_h>
+void to_tiles(uint32_t cb_rm, uint32_t Wt, uint32_t block, uint32_t cb_tiles) {
+    if constexpr (block_h > 0) {
+        convert_block_tiles(cb_rm, Wt, block, cb_tiles);
+    } else {
+        tilize_block_rows(cb_rm, Wt, block, cb_tiles);
+    }
 }
 
 // cb_prod (Wt tiles) -> row sums in column 0 -> transposed into row 0 of one cb_partial tile.
@@ -110,6 +137,9 @@ void kernel_main() {
     constexpr uint32_t inv_d = get_compile_time_arg_val(18);
     constexpr uint32_t eps = get_compile_time_arg_val(19);
     constexpr uint32_t gate_clamp = get_compile_time_arg_val(20);
+    // > 0: the x / k / v CBs already hold bf16 32x32 tiles (a several-row block, see the reader), and the
+    // output is packed as tiles instead of untilized.
+    constexpr uint32_t block_h = get_compile_time_arg_val(21);
     constexpr uint32_t rm_pages = Rt * Wt;
 
     compute_kernel_hw_startup(cb_xt, cb_xt, cb_prod);
@@ -123,8 +153,8 @@ void kernel_main() {
 
     // Phase 1: per-core partial sums.
     for (uint32_t rt = 0; rt < Rt; ++rt) {
-        tilize_block_rows(cb_x_rm, Wt, rt, cb_xt);
-        tilize_block_rows(cb_k_rm, Wt, rt, cb_kt);
+        to_tiles<block_h>(cb_x_rm, Wt, rt, cb_xt);
+        to_tiles<block_h>(cb_k_rm, Wt, rt, cb_kt);
         cb_wait_front(cb_xt, Wt);
         cb_wait_front(cb_kt, Wt);
 
@@ -224,28 +254,46 @@ void kernel_main() {
         cb_pop_front(cb_gate_row, 1);
         cb_push_back(cb_gate_col, 1);
 
-        tilize_block_rows(cb_x_rm, Wt, rt, cb_xt);
-        tilize_block_rows(cb_v_rm, Wt, rt, cb_vt);
+        to_tiles<block_h>(cb_x_rm, Wt, rt, cb_xt);
+        to_tiles<block_h>(cb_v_rm, Wt, rt, cb_vt);
         cb_wait_front(cb_xt, Wt);
         cb_wait_front(cb_vt, Wt);
         cb_wait_front(cb_gate_col, 1);
 
-        pack_untilize_dest_init<1, Wt>(cb_out_rm);
-        cb_reserve_back(cb_out_rm, Wt);
-        for (uint32_t wt = 0; wt < Wt; ++wt) {
-            mul_bcast_cols_init(cb_vt, cb_gate_col);
-            tile_regs_acquire();
-            mul_tiles_bcast_cols(cb_vt, cb_gate_col, wt, 0, 0);
-            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xt);
-            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xt, wt, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_untilize_dest<1, Wt>(cb_out_rm, 1, wt);
-            tile_regs_release();
+        if constexpr (block_h > 0) {
+            pack_reconfig_data_format(cb_out_rm);
+            cb_reserve_back(cb_out_rm, Wt);
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                mul_bcast_cols_init(cb_vt, cb_gate_col);
+                tile_regs_acquire();
+                mul_tiles_bcast_cols(cb_vt, cb_gate_col, wt, 0, 0);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xt);
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xt, wt, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, cb_out_rm, wt);
+                tile_regs_release();
+            }
+            cb_push_back(cb_out_rm, Wt);
+            pack_reconfig_data_format(cb_xt);
+        } else {
+            pack_untilize_dest_init<1, Wt>(cb_out_rm);
+            cb_reserve_back(cb_out_rm, Wt);
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                mul_bcast_cols_init(cb_vt, cb_gate_col);
+                tile_regs_acquire();
+                mul_tiles_bcast_cols(cb_vt, cb_gate_col, wt, 0, 0);
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xt);
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_xt, wt, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_untilize_dest<1, Wt>(cb_out_rm, 1, wt);
+                tile_regs_release();
+            }
+            cb_push_back(cb_out_rm, Wt);
+            pack_untilize_uninit(cb_out_rm);
+            pack_reconfig_data_format(cb_xt);
         }
-        cb_push_back(cb_out_rm, Wt);
-        pack_untilize_uninit(cb_out_rm);
-        pack_reconfig_data_format(cb_xt);
 
         cb_pop_front(cb_xt, Wt);
         cb_pop_front(cb_vt, Wt);

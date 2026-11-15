@@ -17,7 +17,24 @@ void WidthShardedAllReduceDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor = tensor_args.input;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "width_sharded_all_reduce: input must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "width_sharded_all_reduce: input must be allocated");
-    TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "width_sharded_all_reduce: input must be ROW_MAJOR");
+    // The sum is elementwise over 32-element runs of each shard, so any layout whose shard is a dense run of
+    // 32-wide rows or tiles works: ROW_MAJOR, or TILE with 32-wide tiles (e.g. a (4, 32) block of rows), whose
+    // shard bytes are summed as is. bf16 / fp32 only: block-float tiles share exponents.
+    TT_FATAL(
+        input_tensor.layout() == Layout::ROW_MAJOR ||
+            (input_tensor.layout() == Layout::TILE &&
+             input_tensor.tensor_spec().tile().get_tile_shape()[1] == tt::constants::TILE_WIDTH &&
+             (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32)),
+        "width_sharded_all_reduce: input must be ROW_MAJOR, or bf16 / fp32 TILE with {}-wide tiles",
+        tt::constants::TILE_WIDTH);
+    if (input_tensor.layout() == Layout::TILE) {
+        const auto& tile_shard = input_tensor.shard_spec().value();
+        TT_FATAL(
+            tile_shard.shape[0] % input_tensor.tensor_spec().tile().get_tile_shape()[0] == 0,
+            "width_sharded_all_reduce: TILE shard height {} must be a multiple of the tile height {}",
+            tile_shard.shape[0],
+            input_tensor.tensor_spec().tile().get_tile_shape()[0]);
+    }
     TT_FATAL(
         input_tensor.is_sharded() &&
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&

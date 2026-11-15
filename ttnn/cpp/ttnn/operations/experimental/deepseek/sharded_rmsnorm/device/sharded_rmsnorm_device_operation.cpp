@@ -11,13 +11,114 @@
 
 namespace ttnn::operations::experimental::deepseek::sharded_rmsnorm {
 
+uint32_t row_block_height(const Tensor& input) {
+    if (input.layout() != Layout::TILE) {
+        return 0;
+    }
+    const uint32_t h = input.tensor_spec().tile().get_height();
+    return h < tt::constants::TILE_HEIGHT ? h : 0;
+}
+
 namespace {
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
+// Several-row block mode: rows x D in (h x 32) tiles, h in {1, 2, 4, 8}.
+void validate_row_block(const ShardedRmsNormParams& attributes, const ShardedRmsNormInputs& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const auto& weight = tensor_args.weight;
+    const uint32_t h = row_block_height(input);
+    TT_FATAL(
+        h == 1 || h == 2 || h == 4 || h == 8, "sharded_rmsnorm: row-block tile height must be 1, 2, 4 or 8, got {}", h);
+    TT_FATAL(
+        input.tensor_spec().tile().get_width() == TILE_WIDTH,
+        "sharded_rmsnorm: row-block tiles must be {} wide",
+        TILE_WIDTH);
+    const auto& in_shape = input.logical_shape();
+    TT_FATAL(
+        in_shape.rank() == 4 && in_shape[0] == 1 && in_shape[1] == 1 && in_shape[2] >= 1 && in_shape[2] <= h,
+        "sharded_rmsnorm: row-block input must have logical shape [1, 1, rows <= {}, D], got {}",
+        h,
+        in_shape);
+    const uint32_t d = static_cast<uint32_t>(in_shape[3]);
+    TT_FATAL(
+        input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+            input.memory_config().buffer_type() == BufferType::L1 && input.shard_spec().has_value(),
+        "sharded_rmsnorm: input_tensor must be L1 WIDTH_SHARDED, got {}",
+        input.memory_config());
+    const auto& in_shard = input.shard_spec().value();
+    TT_FATAL(
+        in_shard.orientation == ShardOrientation::ROW_MAJOR,
+        "sharded_rmsnorm: input_tensor shard orientation must be ROW_MAJOR");
+    TT_FATAL(
+        in_shard.shape[0] == h, "sharded_rmsnorm: row-block shard height must be {}, got {}", h, in_shard.shape[0]);
+    const uint32_t shard_w = in_shard.shape[1];
+    TT_FATAL(
+        shard_w > 0 && shard_w % TILE_WIDTH == 0 && shard_w * in_shard.grid.num_cores() == d,
+        "sharded_rmsnorm: {} cores x shard width {} must equal D={} (shard width a multiple of {})",
+        in_shard.grid.num_cores(),
+        shard_w,
+        d,
+        TILE_WIDTH);
+
+    TT_FATAL(
+        weight.storage_type() == StorageType::DEVICE && weight.buffer() != nullptr,
+        "sharded_rmsnorm: weight must be on device");
+    TT_FATAL(weight.device() == input.device(), "sharded_rmsnorm: weight must reside on the same device as input");
+    TT_FATAL(
+        weight.dtype() == DataType::BFLOAT16 && weight.layout() == Layout::TILE,
+        "sharded_rmsnorm: weight must be BFLOAT16 TILE");
+    TT_FATAL(
+        weight.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "sharded_rmsnorm: weight must be INTERLEAVED, got {}",
+        weight.memory_config().memory_layout());
+    const auto& wtile = weight.tensor_spec().tile();
+    const bool replicated = wtile.get_height() == h && wtile.get_width() == TILE_WIDTH;
+    TT_FATAL(
+        replicated || (wtile.get_height() == TILE_HEIGHT && wtile.get_width() == TILE_WIDTH),
+        "sharded_rmsnorm: row-block weight must use 32x32 tiles ([1, 1, 1, D]) or the input's {}x{} tiles "
+        "([1, 1, {}, D], gamma in every row)",
+        h,
+        TILE_WIDTH,
+        h);
+    TT_FATAL(
+        weight.logical_shape() == ttnn::Shape({1, 1, replicated ? h : 1u, d}),
+        "sharded_rmsnorm: row-block weight logical shape must be [1, 1, {}, {}], got {}",
+        replicated ? h : 1u,
+        d,
+        weight.logical_shape());
+
+    TT_FATAL(
+        attributes.output_layout == Layout::TILE,
+        "sharded_rmsnorm: row-block output is TILE in the input's {}x{} tiles",
+        h,
+        TILE_WIDTH);
+    const auto& out_mem = attributes.output_mem_config;
+    if (out_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+        TT_FATAL(
+            out_mem.buffer_type() == BufferType::DRAM || out_mem.buffer_type() == BufferType::L1,
+            "sharded_rmsnorm: interleaved output must be DRAM or L1");
+    } else {
+        TT_FATAL(
+            out_mem.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED && out_mem.buffer_type() == BufferType::L1 &&
+                out_mem.shard_spec().has_value() && out_mem.shard_spec()->grid == in_shard.grid &&
+                out_mem.shard_spec()->orientation == ShardOrientation::ROW_MAJOR &&
+                out_mem.shard_spec()->shape == in_shard.shape,
+            "sharded_rmsnorm: row-block output must be INTERLEAVED, or WIDTH_SHARDED in L1 like the input, got {}",
+            out_mem);
+    }
+}
+
 void validate_sharded_rmsnorm_tensors(const ShardedRmsNormParams& attributes, const ShardedRmsNormInputs& tensor_args) {
     const auto& input = tensor_args.input_tensor;
+    if (input.storage_type() == StorageType::DEVICE && row_block_height(input) > 0) {
+        TT_FATAL(input.buffer() != nullptr, "sharded_rmsnorm: input_tensor must be allocated on device");
+        TT_FATAL(input.device()->arch() == tt::ARCH::BLACKHOLE, "sharded_rmsnorm: Blackhole architecture required");
+        TT_FATAL(input.dtype() == DataType::BFLOAT16, "sharded_rmsnorm: input_tensor must be BFLOAT16");
+        validate_row_block(attributes, tensor_args);
+        return;
+    }
     const auto& weight = tensor_args.weight;
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "sharded_rmsnorm: input_tensor must be on device");
@@ -155,9 +256,11 @@ void ShardedRmsNormDeviceOperation::validate_on_program_cache_hit(
 ShardedRmsNormDeviceOperation::spec_return_value_t ShardedRmsNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
-    const auto page_config = operation_attributes.output_layout == Layout::ROW_MAJOR
-                                 ? PageConfig(Layout::ROW_MAJOR)
-                                 : PageConfig(Layout::TILE, Tile({TILE_HEIGHT, TILE_WIDTH}));
+    const auto page_config =
+        operation_attributes.output_layout == Layout::ROW_MAJOR
+            ? PageConfig(Layout::ROW_MAJOR)
+            : (row_block_height(input) > 0 ? PageConfig(Layout::TILE, input.tensor_spec().tile())
+                                           : PageConfig(Layout::TILE, Tile({TILE_HEIGHT, TILE_WIDTH})));
     return TensorSpec(
         input.logical_shape(), TensorLayout(input.dtype(), page_config, operation_attributes.output_mem_config));
 }
@@ -186,7 +289,10 @@ Tensor sharded_rmsnorm(
         resolved_mem_config = memory_config.value();
     } else if (input_tensor.shard_spec().has_value()) {
         const auto& in_shard = input_tensor.shard_spec().value();
-        const uint32_t out_h = resolved_layout == Layout::TILE ? tt::constants::TILE_HEIGHT : 1u;
+        const uint32_t block_h =
+            ttnn::operations::experimental::deepseek::sharded_rmsnorm::row_block_height(input_tensor);
+        const uint32_t out_h =
+            block_h > 0 ? block_h : (resolved_layout == Layout::TILE ? tt::constants::TILE_HEIGHT : 1u);
         const tt::tt_metal::ShardSpec out_shard(
             in_shard.grid, {out_h, in_shard.shape[1]}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
         resolved_mem_config =

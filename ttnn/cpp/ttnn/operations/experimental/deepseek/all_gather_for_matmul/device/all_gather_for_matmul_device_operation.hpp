@@ -27,6 +27,9 @@ struct AllGatherForMatmulDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
+// TILE input whose tiles are h x 32 rows (h < 32, e.g. a (4, 32) block): gathered as raw tiles, no untilize.
+bool all_gather_for_matmul_row_tiles(const Tensor& input_tensor);
+
 Tensor all_gather_for_matmul(
     const Tensor& input_tensor,
     const tt::tt_metal::CoreRangeSet& output_core_range_set,

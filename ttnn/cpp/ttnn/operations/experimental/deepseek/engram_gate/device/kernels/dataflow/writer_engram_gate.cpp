@@ -46,6 +46,10 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(7);
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(8);
     constexpr uint32_t out_row_bytes = get_compile_time_arg_val(9);
+    // > 0: the output is (block_h x 32) tiles, cb_out_rm holds 32x32 tiles with stream s's rows at
+    // [s * block_h, (s + 1) * block_h) (see the reader).
+    constexpr uint32_t block_h = get_compile_time_arg_val(10);
+    constexpr uint32_t hc = get_compile_time_arg_val(11);
     constexpr uint32_t num_partials = 3 * Rt;
 
     const uint32_t c = get_arg_val<uint32_t>(0);
@@ -102,6 +106,33 @@ void kernel_main() {
     noc_semaphore_wait(semaphore, num_cores);
     noc_semaphore_set(semaphore, 0);
     cb_push_back(cb_gather, num_partials);
+
+    if constexpr (block_h > 0) {
+        constexpr uint32_t elem_bytes = 2;
+        constexpr uint32_t face_rows_bytes = block_h * 16 * elem_bytes;
+        constexpr uint32_t small_tile_bytes = 2 * face_rows_bytes;
+        constexpr uint32_t big_tile_bytes = 32 * 32 * elem_bytes;
+        constexpr uint32_t big_face_bytes = 16 * 16 * elem_bytes;
+        constexpr uint32_t big_face_row_bytes = 16 * elem_bytes;
+        constexpr uint32_t streams_tiles = out_row_bytes / (32 * elem_bytes);
+        const uint32_t home_tile = home_offset / (32 * elem_bytes);
+        cb_wait_front(cb_out_rm, Wt);
+        const uint32_t src = get_read_ptr(cb_out_rm);
+        for (uint32_t t = 0; t < Wt; ++t) {
+            for (uint32_t s = 0; s < hc; ++s) {
+                const uint32_t r0 = s * block_h;
+                const uint32_t from =
+                    src + t * big_tile_bytes + (r0 < 16 ? 0 : 2 * big_face_bytes) + (r0 % 16) * big_face_row_bytes;
+                const uint64_t to =
+                    get_noc_addr(home_x, home_y, out_addr + (s * streams_tiles + home_tile + t) * small_tile_bytes);
+                noc_async_write(from, to, face_rows_bytes);
+                noc_async_write(from + big_face_bytes, to + face_rows_bytes, face_rows_bytes);
+            }
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_out_rm, Wt);
+        return;
+    }
 
     // Valid rows only, into this slice's columns of its home output shard.
     for (uint32_t rt = 0; rt < Rt; ++rt) {

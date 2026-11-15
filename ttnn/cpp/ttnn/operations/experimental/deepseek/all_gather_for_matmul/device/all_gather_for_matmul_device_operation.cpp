@@ -13,10 +13,33 @@ using namespace tt::constants;
 
 namespace ttnn::prim {
 
+bool all_gather_for_matmul_row_tiles(const Tensor& input_tensor) {
+    return input_tensor.layout() == Layout::TILE && input_tensor.tensor_spec().tile().get_tile_shape()[0] < TILE_HEIGHT;
+}
+
 namespace {
 
 tt::tt_metal::TensorSpec make_output_spec(
     const Tensor& input_tensor, const tt::tt_metal::CoreRangeSet& output_core_range_set) {
+    if (all_gather_for_matmul_row_tiles(input_tensor)) {
+        // Row tiles (h x 32, h < 32) pass through untouched: the replica is the input's own tiles, so its
+        // shard is [padded rows, K] in the input's tile and dtype (padding rows are replicated too).
+        const auto& padded_shape = input_tensor.padded_shape();
+        const uint32_t width = padded_shape[-1];
+        const uint32_t rows = padded_shape.volume() / width;
+        auto output_shape = input_tensor.logical_shape();
+        for (int dim = 0; dim < static_cast<int>(output_shape.rank()) - 2; ++dim) {
+            output_shape[dim] = 1;
+        }
+        output_shape[-2] = rows * output_core_range_set.num_cores();
+        const ShardSpec shard{output_core_range_set, {rows, width}, ShardOrientation::ROW_MAJOR};
+        return tt::tt_metal::TensorSpec(
+            output_shape,
+            TensorLayout(
+                input_tensor.dtype(),
+                PageConfig(Layout::TILE, input_tensor.tensor_spec().tile()),
+                MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard}));
+    }
     const auto& logical_shape = input_tensor.logical_shape();
     const uint32_t logical_width = logical_shape[-1];
     // M covers every logical row, including rows spread over leading dims.
@@ -137,7 +160,26 @@ void AllGatherForMatmulDeviceOperation::validate_on_program_cache_miss(
                 input_shard.shape[1] * input_tensor.element_size());
         }
     }
-    if (input_tensor.layout() == Layout::TILE) {
+    if (all_gather_for_matmul_row_tiles(input_tensor)) {
+        const auto tile = input_tensor.tensor_spec().tile().get_tile_shape();
+        TT_FATAL(tile[1] == TILE_WIDTH, "Row-tile input must use {}-wide tiles, got {}", TILE_WIDTH, tile[1]);
+        TT_FATAL(
+            input_shard.shape[0] % tile[0] == 0 && input_shard.shape[1] % TILE_WIDTH == 0,
+            "Row-tile input shard shape {} must be tile-aligned to {}x{}",
+            input_shard.shape,
+            tile[0],
+            tile[1]);
+        if (width_sharded) {
+            TT_FATAL(
+                flattened_height == tile[0],
+                "WIDTH_SHARDED row-tile input must be one tile row (padded height {} == tile height {}), so each "
+                "core's shard is one contiguous run of the replica",
+                flattened_height,
+                tile[0]);
+        } else {
+            TT_FATAL(input_shard.grid.num_cores() == 1, "HEIGHT_SHARDED row-tile input must live on a single core");
+        }
+    } else if (input_tensor.layout() == Layout::TILE) {
         TT_FATAL(
             input_shard.shape[0] % TILE_HEIGHT == 0 && input_shard.shape[1] % TILE_WIDTH == 0,
             "TILE input shard shape {} must be tile-aligned",
@@ -148,7 +190,7 @@ void AllGatherForMatmulDeviceOperation::validate_on_program_cache_miss(
         const auto expected_spec = make_output_spec(input_tensor, args.output_core_range_set);
         TT_FATAL(
             tensor_args.preallocated_output->tensor_spec() == expected_spec,
-            "Preallocated output tensor spec must match the inferred ROW_MAJOR HEIGHT_SHARDED output spec");
+            "Preallocated output tensor spec must match the inferred HEIGHT_SHARDED output spec");
     }
 }
 

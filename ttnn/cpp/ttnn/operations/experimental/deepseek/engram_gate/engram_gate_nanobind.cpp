@@ -35,6 +35,11 @@ void bind_engram_gate(::nanobind::module_& mod) {
                 ``streams`` grid; row ``i`` is ``q_weight * k_weight / sqrt(D)`` of copy ``i % hc``.
             eps (float): RMS epsilon.
 
+        A DSpark block of up to ``h`` rows (``h`` in 1/2/4/8): ``streams`` ``[1, 1, hc * h, D]`` bf16 TILE in
+        ``(h, 32)`` tiles, row ``s * h + j`` = stream ``s`` of block row ``j`` (shard ``[hc * h, D / cores]``),
+        ``kv`` ``[1, 1, rows <= h, (hc+1)*D]`` in the same tiles (shard ``[h, *]``), and ``gate_weight`` with
+        row ``i`` holding copy ``(i // h) % hc``. The output takes ``streams``' spec.
+
         Keyword Args:
             memory_config (Optional[ttnn.MemoryConfig]): output memory config; must equal the
                 ``streams`` memory config (the default).

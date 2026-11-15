@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mix_streams_program_factory.hpp"
+#include "mix_streams_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -36,6 +37,110 @@ constexpr char kComputeKernelPath[] =
 constexpr char kWriterKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/mix_streams/device/kernels/dataflow/writer_mix_streams.cpp";
 
+constexpr char kBlockReaderKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/mix_streams/device/kernels/dataflow/reader_mix_streams_rows.cpp";
+constexpr char kBlockWriterKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/mix_streams/device/kernels/dataflow/writer_mix_streams_rows.cpp";
+
+// A several-row block (see validate_block). The streams' hc (h x 32) tiles of column tile c stack into one 32x32
+// tile, row s * h + j = stream s of row j; the reader folds every row's comb^T and post into one 32x32 tile each
+// (M[i*h + j, s*h + j] = comb_j[s, i], P[i*h + j, j] = post_j[i]) and the sublayer row block into rows 0..h-1 of
+// a tile, so the same two single-tile matmuls per column tile mix the whole block.
+MixStreamsProgramFactory::cached_program_t create_block(
+    const MixStreamsParams& operation_attributes, const MixStreamsInputs& tensor_args, MixStreamsTensorReturn& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    const auto& post = tensor_args.post;
+    const auto& comb = tensor_args.comb;
+    const auto& sublayer_out = tensor_args.sublayer_out;
+    const auto& streams = tensor_args.streams;
+
+    Program program = CreateProgram();
+    const DataFormat df = datatype_to_dataformat_converter(streams.dtype());
+    const uint32_t tile_bytes = tile_size(df);
+    const uint32_t hc = operation_attributes.num_streams;
+    const uint32_t h = block_height(streams);
+    const uint32_t n_rows = post.logical_shape()[1];
+    const uint32_t n_tiles = streams.logical_shape()[-1] / constants::TILE_WIDTH;
+
+    IDevice* device = streams.device();
+    const CoreCoord grid_size = device->compute_with_storage_grid_size();
+    const uint32_t max_cores =
+        std::min<uint32_t>(n_tiles, std::min<uint32_t>(kMaxCores, static_cast<uint32_t>(grid_size.x * grid_size.y)));
+    const CoreRangeSet work_grid = num_cores_to_corerangeset(max_cores, grid_size, /*row_wise=*/true);
+    const auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_1, tiles_per_core_2] =
+        split_work_to_cores(work_grid, n_tiles, /*row_wise=*/true);
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+
+    constexpr uint32_t tile_buffering = 2;
+    auto make_cb = [&](uint32_t index, uint32_t num_pages) {
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(num_pages * tile_bytes, {{index, df}}).set_page_size(index, tile_bytes));
+    };
+    make_cb(kCbCombSrc, 1);
+    make_cb(kCbComb, 1);
+    make_cb(kCbPost, 1);
+    make_cb(kCbStreams, tile_buffering);
+    make_cb(kCbSub, tile_buffering);
+    make_cb(kCbOut, tile_buffering);
+
+    std::vector<uint32_t> reader_ct_args = {
+        kCbCombSrc, kCbComb, kCbPost, kCbStreams, kCbSub, hc, h, n_rows, n_tiles, tile_buffering};
+    TensorAccessorArgs(post.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(comb.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(sublayer_out.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(streams.buffer()).append_to(reader_ct_args);
+
+    std::vector<uint32_t> writer_ct_args = {kCbOut, hc, h, n_tiles};
+    TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
+
+    const std::vector<uint32_t> compute_ct_args = {kCbComb, kCbPost, kCbStreams, kCbSub, kCbOut, n_tiles};
+
+    const KernelHandle reader_kernel_id =
+        CreateKernel(program, kBlockReaderKernelPath, all_cores, ReaderDataMovementConfig(reader_ct_args));
+    const KernelHandle writer_kernel_id =
+        CreateKernel(program, kBlockWriterKernelPath, all_cores, WriterDataMovementConfig(writer_ct_args));
+    const KernelHandle compute_kernel_id = CreateKernel(
+        program,
+        kComputeKernelPath,
+        all_cores,
+        ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_ct_args});
+
+    std::vector<CoreCoord> cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
+    uint32_t start_tile = 0;
+    for (const auto& core : cores) {
+        const uint32_t tiles_this_core = core_group_1.contains(core)   ? tiles_per_core_1
+                                         : core_group_2.contains(core) ? tiles_per_core_2
+                                                                       : 0;
+        SetRuntimeArgs(
+            program,
+            reader_kernel_id,
+            core,
+            {post.buffer()->address(),
+             comb.buffer()->address(),
+             sublayer_out.buffer()->address(),
+             streams.buffer()->address(),
+             start_tile,
+             tiles_this_core});
+        SetRuntimeArgs(program, compute_kernel_id, core, {tiles_this_core, start_tile});
+        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), start_tile, tiles_this_core});
+        start_tile += tiles_this_core;
+    }
+    return MixStreamsProgramFactory::cached_program_t{
+        std::move(program),
+        {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = std::move(cores)}};
+}
+
 }  // namespace
 
 MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
@@ -44,6 +149,9 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
     MixStreamsTensorReturn& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    if (block_height(tensor_args.streams) > 0) {
+        return create_block(operation_attributes, tensor_args, tensor_return_value);
+    }
 
     const auto& post = tensor_args.post;
     const auto& comb = tensor_args.comb;
