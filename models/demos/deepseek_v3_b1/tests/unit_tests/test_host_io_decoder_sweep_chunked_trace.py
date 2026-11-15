@@ -280,7 +280,7 @@ def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(model_id: str, pro
         pytest.skip("HostIoDecoderStage sweep requires 8 devices per rank (4x2 mesh)")
 
     hf_model_path = os.environ.get("HF_MODEL", str(run_host_io_decoder_sweep.DEFAULT_HF_MODEL_PATH))
-    cache_path = os.environ.get("TT_MDDEL_CACHE", str(run_host_io_decoder_sweep.DEFAULT_CACHE_PATH))
+    cache_path = os.environ.get("TT_MODEL_CACHE", str(run_host_io_decoder_sweep.DEFAULT_CACHE_PATH))
     exit_code = run_host_io_decoder_sweep.main(
         [
             "--decoder-layer-indices",
@@ -325,7 +325,7 @@ def test_run_host_io_decoder_sweep_chunked_trace_multi_slot_stress(model_id: str
         pytest.skip("HostIoDecoderStage sweep requires 8 devices per rank (4x2 mesh)")
 
     hf_model_path = os.environ.get("HF_MODEL", str(run_host_io_decoder_sweep.DEFAULT_HF_MODEL_PATH))
-    cache_path = os.environ.get("TT_MDDEL_CACHE", str(run_host_io_decoder_sweep.DEFAULT_CACHE_PATH))
+    cache_path = os.environ.get("TT_MODEL_CACHE", str(run_host_io_decoder_sweep.DEFAULT_CACHE_PATH))
     exit_code = run_host_io_decoder_sweep.main(
         [
             "--decoder-layer-indices",
