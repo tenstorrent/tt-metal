@@ -64,6 +64,7 @@ class RCfg:
     spread: bool = True  # owners per slice, spread round the cycles (owner_table); False: chip e % N owns expert e
     diag: bool = False  # progress counters in spare CBs for a hang post-mortem (WS_DIAG)
     defer: bool = False  # forwarder sends do not wait for the payload to leave L1 until the next send (WS_DEFER)
+    swap_noc: bool = False  # forwarder BRISC (landing, DRAM reads) on NOC1, NCRISC (fabric sends) on NOC0
 
 
 def snake(shape):
@@ -347,10 +348,13 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
     tl_all = [tword(c) for c in range(NC)]
     xy = lambda core: noc(mesh, *core)[0] | noc(mesh, *core)[1] << 8
     mesh_id = int(node(mesh, (0, 0)).mesh_id)
-    dm = lambda risc: ttnn.DataMovementConfigDescriptor(
+    dm = lambda risc, noc=None: ttnn.DataMovementConfigDescriptor(
         processor=ttnn.DataMovementProcessor.RISCV_0 if risc == 0 else ttnn.DataMovementProcessor.RISCV_1,
-        noc=ttnn.NOC.RISCV_0_default if risc == 0 else ttnn.NOC.RISCV_1_default,
+        noc=(ttnn.NOC.NOC_0 if noc == 0 else ttnn.NOC.NOC_1) if noc is not None else
+        (ttnn.NOC.RISCV_0_default if risc == 0 else ttnn.NOC.RISCV_1_default),
     )
+    # forwarder NoCs: landing (BRISC) and fabric sends (NCRISC); swap_noc moves the landing writes to NOC1
+    land_noc, send_noc = (1, 0) if rc.swap_noc else (0, 1)
     tab_t, TL, meta = tabs["tab_t"], tabs["TL"], tabs["meta"]
     sdefs = [("SST_ADDR", str(sst.buffer_address()))] + ([("WS_DIAG", "1")] if rc.diag else [])
     odefs = [("WS_OWN_SLICES", "1")] if rc.own_slices else []
@@ -425,7 +429,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
                     + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args()),
                     runtime_args=frd,
                     defines=[("RD_DEPTH", str(rc.RD)), ("SCB_CHUNKS", str(rc.SCB))] + sdefs + odefs,
-                    config=dm(0),
+                    config=dm(0, land_noc),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=kpath("wr_fwd.cpp"),
@@ -433,7 +437,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
                     compile_time_args=ct_ring + [rc.CRB],
                     runtime_args=fsd,
                     defines=FAB_DEFS + sdefs + [("SCB_CHUNKS", str(rc.SCB))] + fdefs,
-                    config=dm(1),
+                    config=dm(1, send_noc),
                 ),
             ]
             kf = len(kernels) - 1

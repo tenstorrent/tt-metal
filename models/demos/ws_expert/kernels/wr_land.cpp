@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// ws_expert store-and-forward forwarder, BRISC (NOC0). Loads this ring's order table (wr_seq.hpp) into CB 2 for both
-// RISCs, then runs two independent cursors over it in one non-blocking loop:
+// ws_expert store-and-forward forwarder, BRISC (NOC0; NOC1 with RCfg.swap_noc). Loads this ring's order table
+// (wr_seq.hpp) into CB 2 for both RISCs, then runs two independent cursors over it in one non-blocking loop:
 //   INJ:       reads each packet's chunk from this chip's DRAM into CB 0 (RD_DEPTH chunks in flight, one transaction
 //              id each; slices stored chunk-contiguous, ws_fab.slice_layout) for the NCRISC to send;
 //   FWD/TERM:  once the packet is in staging slot k % S (arrival count > k), writes it into its group core's ring slot

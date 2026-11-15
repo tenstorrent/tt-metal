@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// ws_expert store-and-forward forwarder, NCRISC (NOC1): owns the fabric connection to the next chip of this directed
-// ring and walks the ring's order table (wr_seq.hpp, loaded into CB 2 by the BRISC) in order:
+// ws_expert store-and-forward forwarder, NCRISC (NOC1; NOC0 with RCfg.swap_noc): owns the fabric connection to the
+// next chip of this directed ring and walks the ring's order table (wr_seq.hpp, loaded into CB 2 by the BRISC) in
+// order:
 //   INJ:  sends the chunk the BRISC read into CB 0;
 //   FWD:  once staging slot k % S has arrived, sends it on;
 //   TERM: nothing to send (the BRISC lands it).
