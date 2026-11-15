@@ -36,6 +36,16 @@ _SPEC_STEP_CORES = 110
 _VISION_BUCKET = 2048
 # Patches the vision warmup covers when vLLM's --mm-processor-kwargs sets no max_pixels: about a 2 MP image.
 _VISION_WARMUP_PATCHES = 8191
+# Fabric packet payload of the MTP class's mesh. Fewer, larger packets cut the per-packet cost of the decode and verify
+# all-reduces: TP=8 decode is faster at 8192 B than at the fabric default (4352 B) and at the Blackhole maximum
+# (15232 B). Blackhole only: 8192 B is above the Wormhole maximum (7616 B).
+_FABRIC_PACKET_PAYLOAD_BYTES = 8192
+
+
+def _fabric_router_config():
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = _FABRIC_PACKET_PAYLOAD_BYTES
+    return router
 
 
 class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
@@ -605,6 +615,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # The verify sampler applies no penalties and no grammar mask: such a step is sampled on the host.
         "supports_device_penalties": False,
         "supports_device_grammar": False,
+        # vllm-tt-plugin adds these to its ttnn.set_fabric_config arguments before it opens the mesh. No "config" key:
+        # the fabric type stays the plugin's hardware default or the launch's override_tt_config fabric_config.
+        "fabric_config": {"router_config": _fabric_router_config()},
     }
 
     @classmethod
