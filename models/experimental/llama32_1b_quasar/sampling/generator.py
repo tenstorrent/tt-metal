@@ -543,6 +543,25 @@ def format_sampling_params(sampling_params, max_batch_size):
     return replace(sampling_params, **kwargs)
 
 
+def per_slot_sampling_params(sampling_params, slot_len: int = 32):
+    """
+    Create a new SamplingParams where every field that is a list is kept as is,
+    and every non-list, non-None field is repeated ``slot_len`` times (None stays None).
+
+    Does not mutate the input.
+    """
+    kwargs = {}
+    for f in fields(sampling_params):
+        val = getattr(sampling_params, f.name)
+        if isinstance(val, list):
+            kwargs[f.name] = list(val)
+        elif val is None:
+            kwargs[f.name] = None
+        else:
+            kwargs[f.name] = [val] * slot_len
+    return replace(sampling_params, **kwargs)
+
+
 def broadcast_sampling_params(
     formatted_sampling_params,
     idx: int,

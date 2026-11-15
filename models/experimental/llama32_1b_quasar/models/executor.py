@@ -1268,9 +1268,9 @@ class EagerLLMExecutor:
             # TTTv1 SamplingGenerator pushes per-request k/p/temp into persistent device buffers
             # via apply_decode_state + seed_manager. The TTTv2 Sampling1D module holds no mutable
             # state (k/p/temp are per-call args; greedy/argmax needs none), so skip when absent.
-            from models.experimental.llama32_1b_quasar.sampling import broadcast_sampling_params, format_sampling_params
+            from models.experimental.llama32_1b_quasar.sampling import format_sampling_params, per_slot_sampling_params
 
-            per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
+            per_request_params = format_sampling_params(per_slot_sampling_params(sampling_params, B), B)
             self.model.sampling.apply_decode_state(
                 [per_request_params],
                 reset_batch=False,
@@ -2175,9 +2175,9 @@ class TracedLLMExecutor:
         ):
             # TTTv1-only: push per-request k/p/temp into persistent device buffers before replay.
             # TTTv2 Sampling1D has no such state (greedy/argmax needs none) — skip when absent.
-            from models.experimental.llama32_1b_quasar.sampling import broadcast_sampling_params, format_sampling_params
+            from models.experimental.llama32_1b_quasar.sampling import format_sampling_params, per_slot_sampling_params
 
-            per_request_params = format_sampling_params(broadcast_sampling_params(sampling_params, 0, slot_len=B), B)
+            per_request_params = format_sampling_params(per_slot_sampling_params(sampling_params, B), B)
             self.model.sampling.apply_decode_state(
                 [per_request_params],
                 reset_batch=False,
