@@ -48,6 +48,7 @@ from ttml.distributed_checkpointing._state_dict import label_of, local_coords
 from ttml.distributed_checkpointing._topology import Label, chunk_boxes, global_shape
 from ttml.distributed_checkpointing._train_state import capture_process_rng, restore_process_rng
 from ttml.modules import LoraConfig, LoraModel, Parameter
+from ttml.sharding import Sharding
 
 from dcp_oracle import Loader, advance_generators
 
@@ -218,6 +219,12 @@ def train(
         mark(f"step {step}: optimizer stepped")
 
 
+def gather(tensor) -> np.ndarray:
+    """A tensor's global device-layout array as float32, through ttml's composer, which reads one copy of every
+    replicated box."""
+    return np.asarray(Sharding.from_tensor(tensor).gather(tensor)).astype(np.float32)
+
+
 def world_group() -> tuple[int, int]:
     """``(rank, size)`` of the ranks this process runs with: ``(0, 1)`` outside tt-run."""
     if ttnn.distributed_context_is_initialized() and int(ttnn.distributed_context_get_size()) > 1:
@@ -334,19 +341,24 @@ def local_reference(model, params, optimizer, scheduler, loader, config, seed: i
         )
     )
     tag = f"w{rank:03d}"
-    for name, tensor in params.items():
-        cname = canonical_name(name, config)
-        out[f"label:param:{cname}"] = np.asarray(label_json(tensor))
+    one_process = world_group()[1] == 1
+
+    def dump(kind: str, cname: str, tensor) -> None:
+        out[f"label:{kind}:{cname}"] = np.asarray(label_json(tensor))
         for coord, arr in local_shards(tensor).items():
-            out[f"shard:param:{cname}:{tag}:{coord_key(coord)}"] = arr
+            out[f"shard:{kind}:{cname}:{tag}:{coord_key(coord)}"] = arr
+        if one_process:
+            # The composer's global array, built without DCP's topology helpers: the check that assemble() places
+            # the shards where the label says, since a bug shared with the checkpoint would pass the comparison.
+            out[f"composer:{kind}:{cname}"] = gather(tensor)
+
+    for name, tensor in params.items():
+        dump("param", canonical_name(name, config), tensor)
 
     def walk(node, path):
         if isinstance(node, ttml.NamedParameters):
             for name, tensor in node.items():
-                cname = "/".join(path) + ":" + canonical_name(name, config)
-                out[f"label:state:{cname}"] = np.asarray(label_json(tensor))
-                for coord, arr in local_shards(tensor).items():
-                    out[f"shard:state:{cname}:{tag}:{coord_key(coord)}"] = arr
+                dump("state", "/".join(path) + ":" + canonical_name(name, config), tensor)
         elif isinstance(node, dict):
             for key, child in node.items():
                 walk(child, path + (str(key),))
@@ -458,6 +470,9 @@ def _canonical_part(parts: dict[str, np.ndarray], config: LlamaConfig) -> tuple[
             differ.append(name)
         one_copy = {coord: arrays[0] for coord, arrays in by_coord.items()}
         array = assemble(label, one_copy)
+        composer = parts.get("composer:" + name)
+        if composer is not None and name not in differ and not np.array_equal(array, composer):
+            raise AssertionError(f"{name}: the shards placed by their label differ from the composer's gather")
         out[name] = canonicalize(leaf, array, config, meta["tp"])
         if (leaf.endswith("fc/weight") or leaf.endswith("tok_emb/weight")) and array.shape[2] > config.vocab_size:
             out["pad:" + name] = array[:, :, config.vocab_size :, :]  # the padding rows, compared apart
