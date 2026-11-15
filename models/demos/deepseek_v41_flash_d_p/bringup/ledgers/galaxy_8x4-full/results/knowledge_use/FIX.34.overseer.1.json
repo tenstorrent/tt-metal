@@ -1,0 +1,81 @@
+{
+ "used": [
+  {
+   "id": "DS41-245",
+   "how": "test sets DS41_ENGRAM_TABLE to its shipped default (resident) when unset: under pytest unset reads F222's test value mmap, a different wall",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-228",
+   "how": "documented that the position points use random ids (PositionGolden): not a routing-dependent measurement",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-243",
+   "how": "model through the one load path (batch.device_model -> adapter.load_model), BATCH_SHARED, decode via use_decoder_skip when the batch model was loaded with another value",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-252",
+   "how": "every timed run is preceded by the real previous chunk (p - 5120), never a re-run of the same chunk, so the carry is a real previous chunk's",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-206",
+   "how": "fresh state at start > 0 under decode: the window policy truncates the first chunk's window, so the untimed previous chunk runs without refusal",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the 8x4 spec's target.seq (56320) bounds a loaded model's position tables; a long-position test must raise it in memory (now DS41-279)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.34",
+   "answer": "done",
+   "evidence": "tests/test_skip_positions.py; gate FIX.34 --check PASS (both units); all 6 points fit and ran, metrics per point in results/FIX.34.json; table in BREADCRUMBS.md FIX.34"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or fork changed; nothing padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; test only"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suites run; only the new test and the gate's determinism unit"
+  }
+ ],
+ "cited_only": [
+  "DS41-279"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.34",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-15T09:41:52",
+  "head": "707b67dadc6",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.34.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.34.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py"
+  ]
+ }
+}
