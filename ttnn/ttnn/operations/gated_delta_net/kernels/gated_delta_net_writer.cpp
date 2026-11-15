@@ -47,6 +47,7 @@ constexpr uint32_t cb_in_vec = GDN_CB_IN_VEC;
 constexpr uint32_t cb_in_v = GDN_CB_IN_V;
 constexpr uint32_t cb_o_acc = GDN_CB_O_ACC;
 constexpr uint32_t cb_o_in = GDN_CB_O_IN;
+constexpr uint32_t cb_tri_mask = GDN_CB_TRI_MASK;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t OUT_TILE_BYTES = get_compile_time_arg_val(3);    // output tile (dtype-derived on host)
@@ -59,7 +60,7 @@ constexpr bool CHUNKED = get_compile_time_arg_val(7) != 0;     // R-CHUNK: chunk
 constexpr uint32_t ROLE = get_compile_time_arg_val(8);         // GDN_ROLE_*
 constexpr uint32_t INBOX_SLOTS = get_compile_time_arg_val(9) > 0 ? get_compile_time_arg_val(9)
                                                                  : 1;  // R-PREP inbox slots (1 outside R-PREP)
-constexpr uint32_t RATIO = get_compile_time_arg_val(10);               // value heads per key head
+constexpr uint32_t RATIO = get_compile_time_arg_val(10);               // R-PREP: value heads per prep group
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: multicasts its key head's qn or kn, nothing else
@@ -374,6 +375,26 @@ void kernel_main() {
             cb_reserve_back(cb_window_zeroed, 1);
             cb_push_back(cb_window_zeroed, 1);
         }
+    }
+
+    if constexpr (CHUNKED && !STATE) {
+        // Lower-triangular 0/1 mask (column <= row) of the chunk decay matrix, then the identity, once per kernel:
+        // zeroed over the NoC, then only the ones are stored. Built here, after the window zeroing: the reader's first
+        // DRAM reads are on the critical path, this RISC is idle until the first gates.
+        Noc noc;
+        CircularBuffer mask_buf(cb_tri_mask);
+        cb_reserve_back(cb_tri_mask, 2);
+        noc.async_write_zeros(mask_buf, 2 * STATE_TILE_BYTES, {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
+        volatile tt_l1_ptr uint32_t* mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tri_mask));
+        for (uint32_t r = 0; r < TILE_ROWS; ++r) {
+            const uint32_t row = (r >> 4) * 2 * 256 + (r & 15) * 16;
+            for (uint32_t c = 0; c <= r; ++c) {
+                mask[row + (c >> 4) * 256 + (c & 15)] = ONE_BITS;
+            }
+            mask[TILE_WORDS + row + (r >> 4) * 256 + (r & 15)] = ONE_BITS;  // identity (R-PREP inverse)
+        }
+        cb_push_back(cb_tri_mask, 2);
     }
 
     if constexpr (PREP) {

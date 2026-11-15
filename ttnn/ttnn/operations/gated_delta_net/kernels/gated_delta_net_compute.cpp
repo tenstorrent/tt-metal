@@ -125,6 +125,7 @@ constexpr uint32_t cb_in_vec = GDN_CB_IN_VEC;
 constexpr uint32_t cb_in_v = GDN_CB_IN_V;
 constexpr uint32_t cb_v_prep = GDN_CB_V_PREP;
 constexpr uint32_t cb_o_in = GDN_CB_O_IN;
+constexpr uint32_t cb_zw = GDN_CB_ZW;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t COEF_ALPHA_SEL = 0;  // alpha_p at row p, 0 elsewhere
@@ -163,8 +164,8 @@ constexpr bool CHUNKED = get_compile_time_arg_val(9) != 0;           // R-CHUNK:
 constexpr bool QK_SHARED = get_compile_time_arg_val(10) != 0;        // R-BCAST: q/k prepped once per key head
 static_assert(!(QK_SHARED && CHUNKED), "R-BCAST is a decode regime");
 constexpr uint32_t ROLE = get_compile_time_arg_val(11);   // GDN_ROLE_*
-constexpr uint32_t RATIO = get_compile_time_arg_val(12);  // value heads per key head
-constexpr bool PREP = ROLE == GDN_ROLE_PREP;              // Vb is then the key head's r * Vt v columns
+constexpr uint32_t RATIO = get_compile_time_arg_val(12);  // R-PREP: value heads per prep group
+constexpr bool PREP = ROLE == GDN_ROLE_PREP;              // Vb is then the group's RATIO * Vt v columns
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: conv + L2 norm of one key head's q or k, every sequence
 // R-QKCORE pair cores whose units share one key head: kn^T and d are computed once and held for every unit (host knob
@@ -1493,8 +1494,33 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
         cb_pop_front(cb_osum_gather, PIECES);
     }
     cb_wait_front(cb_rinv_o, HEADS);
-    cb_wait_front(cb_z, Vb);
     cb_reserve_back(cb_out_rows, Vb);
+    if constexpr (PREP) {
+        // The gate factor norm_weight (*)row silu(z) was made before o landed (zw_block).
+        cb_wait_front(cb_zw, Vb);
+        for (uint32_t vt = 0; vt < Vb; ++vt) {
+            tile_regs_acquire();
+            begin_loads(o_cb);
+            load(o_cb, vt, 0);
+            load(cb_zw, vt, 2);
+            begin_loads(cb_rinv_o);
+            load(cb_rinv_o, vt / W, 1);
+            sfpu_bcast_col_init();
+            sfpu_mul_bcast_col(0, 1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 2, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_first(0, cb_out_rows, vt);
+            tile_regs_release();
+        }
+        cb_push_back(cb_out_rows, Vb);
+        cb_pop_front(o_cb, Vb);
+        cb_pop_front(cb_zw, Vb);
+        cb_pop_front(cb_rinv_o, HEADS);
+        return;
+    }
+    cb_wait_front(cb_z, Vb);
     for (uint32_t vt = 0; vt < Vb; ++vt) {
         tile_regs_acquire();
         begin_loads(o_cb);
@@ -1525,6 +1551,30 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope,
 
 }  // namespace
 
+// R-PREP prep core: zw = norm_weight (*)row silu(z) of a tile row's Vb columns -> cb_zw (fp32), while the state cores
+// still run the row, so the RMS norm after o lands is two products per tile.
+ALWI void zw_block() {
+    constexpr uint32_t W = PREP ? Vb / RATIO : 1;  // columns of one head (norm_weight holds W tiles)
+    cb_wait_front(cb_z, Vb);
+    cb_reserve_back(cb_zw, Vb);
+    for (uint32_t vt = 0; vt < Vb; ++vt) {
+        tile_regs_acquire();
+        begin_loads(cb_z);
+        load(cb_z, vt, 0);
+        load(cb_norm_w, vt % W, 1);
+        silu_tile_init();
+        silu_tile(0);
+        sfpu_bcast_row_init();
+        sfpu_mul_bcast_row(0, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(0, cb_zw, vt);
+        tile_regs_release();
+    }
+    cb_push_back(cb_zw, Vb);
+    cb_pop_front(cb_z, Vb);
+}
+
 // R-PREP prep core: tile rows offset, offset + stride, ... of its (sequence, key head). The RMS norm of a row runs
 // after the next row's prep, by when the state cores have usually returned the row's o.
 ALWI void prep_main(
@@ -1536,7 +1586,6 @@ ALWI void prep_main(
     const uint32_t first_tr = seq_lo / TILE_ROWS;
     const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
     const RowScope full{RowScope::FULL_TILE};
-    cb_wait_front(cb_tri_mask, 2);
     cb_wait_front(cb_conv_w, conv_w_pages);
     cb_wait_front(cb_gate_w, 2);
     cb_wait_front(cb_norm_w, Vb / RATIO);
@@ -1555,6 +1604,7 @@ ALWI void prep_main(
             }
             l2norm_block(bufs, full);
             gram_block(bufs);
+            cb_wait_front(cb_tri_mask, 2);  // writer-built once (mask, identity), held for the kernel
             cb_wait_front(cb_v_prep, Vb);
 #pragma GCC unroll 1
             for (uint32_t head = 0; head < RATIO; ++head) {
@@ -1562,6 +1612,7 @@ ALWI void prep_main(
                 head_block(head);
             }
             cb_pop_front(cb_v_prep, Vb);
+            zw_block();
             cb_pop_front(cb_gram, 2);
             cb_pop_front(cb_kq_rows, 2 * Kt);
             cb_pop_front(cb_knT, Kt);

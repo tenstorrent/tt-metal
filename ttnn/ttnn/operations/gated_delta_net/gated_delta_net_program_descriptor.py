@@ -66,14 +66,33 @@ PREP_OFFLOAD = True
 # Prep cores per group, at most: the state cores' producer tables hold this many (more than about twice a prep tile
 # row's time over a state step buys nothing).
 MAX_PREP_CORES_PER_GROUP = 32
-PREP_SEND_NOC_1 = True  # prep writer on NOC 1, reader on NOC 0 (see the kernel descriptors)
+# R-PREP: head blocks multicast to a head's pieces (one write per run of consecutive cores); False: one unicast each.
+# Unicast and multicast measure the same on long calls (model_prefill_4096 920 us); unicast is steadier on short ones.
+PREP_MCAST = False
+# R-PREP: each group's state cores placed among its own prep cores (else the state cores fill the first grid rows and
+# the prep cores take the idle cores nearest them). model_prefill_4096 1.08-1.15 ms -> 922 us, T=1024 390 -> 307 us.
+PREP_CLUSTER = True
+# R-PREP prep writer NoC (the reader takes the other): 1, 0, or "auto" (per core, the shorter paths to its state cores).
+PREP_SEND_NOC = "auto"
+NOC_GRID = (17, 12)  # Blackhole NoC torus (x, y), in NOC 0 coordinates (R-PREP is Blackhole-only)
 # Pieces per pair under R-PREP, at most. Fewer pieces leave more prep cores and halve the fan-out of a prepped row;
 # model_prefill_4096: 4 pieces 1.34 ms (prep-bound, sends late), 2 pieces 1.18 ms (same run).
 PREP_MAX_PIECES = 2
-# R-PREP fills its pipeline once (about one prep core's tile row, ~120 us at the model geometry) and then runs a tile
-# row per state step; below this many tile rows per sequence the local chunk step is faster (prefill T=96, 3 tile
-# rows: 168 us local, 177 us R-PREP).
-PREP_MIN_TILE_ROWS = 4
+# R-PREP fills its pipeline once (one prep core's tile row) and then runs a tile row per state step; below this many tile
+# rows per sequence the local chunk step is faster (model geometry, one value head per prep group: T=32 67 us local,
+# 73 us R-PREP; T=64 118 vs 80 us).
+PREP_MIN_TILE_ROWS = 2
+# R-PREP: value heads per prep group (a divisor of the key head's r value heads). A group's prep cores take its tile
+# rows round robin and prep its heads only, each redoing the key head's q / k prep: fewer heads spread one tile row's
+# prep over more cores (short calls, whose time is the pipeline fill), all r share the q / k prep (long calls, where
+# prep throughput binds). None: auto (_prep_heads).
+PREP_HEADS = None
+# _prep_heads cost model, device us at the model geometry (Kt = Vt = 4, bf16): a prep core's tile row is the q / k part
+# plus one part per value head, the state step one tile row. Fits T = 128..4096: h = 1 wins to 16 tile rows per
+# sequence (T=512 199 vs 214 us), h = 3 from 32 (T=1024 335 vs 302 us).
+PREP_QK_ROW_US = 27.0
+PREP_HEAD_ROW_US = 30.0
+STATE_STEP_US = 5.3
 
 # ---- Buffer-depth knobs ----
 WINDOW_DEPTH = 2  # window groups of tap tiles in flight
@@ -179,6 +198,7 @@ CB_IN_MAT = 46
 CB_IN_VEC = 47
 CB_IN_V = 48
 CB_V_PREP = 49
+CB_ZW = 50  # R-PREP prep core: norm_weight (*)row silu(z) of its rows, ahead of the o that the RMS norm scales
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
@@ -308,6 +328,7 @@ def _cb_plan(Kt, Vt, conv_on_fpu=False, pieces=1, chunked=False, tokens=0, unit_
         ((CB_IN_VEC,), 0),
         ((CB_IN_V,), 0),
         ((CB_V_PREP,), 0),
+        ((CB_ZW,), 0),
     ]
 
 
@@ -336,6 +357,7 @@ PREP_ONLY_CBS = (
     CB_HIST_STAGE,
     CB_GRAM,
     CB_TRI_MASK,
+    CB_ZW,
 )
 STATE_ONLY_CBS = (
     CB_STATE_IN,
@@ -365,13 +387,13 @@ def _inbox_pages(Kt, Vb):
 REMOTE_CBS = (CB_IN_KQ, CB_IN_KNT, CB_IN_MAT, CB_IN_VEC, CB_IN_V, CB_O_IN)
 
 
-def _prep_cb_plan(Kt, Vt, ratio, conv_on_fpu, pieces, inbox):
+def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox):
     """R-PREP plans as (shared, state, prep) lists of (indices, pages): the remotely written buffers (on every core,
     sized for the role that receives them; the inbox buffers are exactly `inbox` slots, so tile row i lands in slot
     i % inbox), then each role's own buffers."""
     Vb = Vt // pieces
     state = {idx[0]: pages for idx, pages in _cb_plan(Kt, Vb, conv_on_fpu, pieces, True)}
-    prep = {idx[0]: pages for idx, pages in _cb_plan(Kt, ratio * Vt, conv_on_fpu, 1, True)}
+    prep = {idx[0]: pages for idx, pages in _cb_plan(Kt, heads * Vt, conv_on_fpu, 1, True)}
     for idx in PREP_ONLY_CBS:
         state[idx] = 0
     for idx in STATE_ONLY_CBS:
@@ -381,11 +403,12 @@ def _prep_cb_plan(Kt, Vt, ratio, conv_on_fpu, pieces, inbox):
     state[CB_O_ACC] = O_ACC_DEPTH * Vb
     prep[CB_CHUNK_VEC] = CHUNK_VEC_PAGES + 1  # the chunk vectors, then exp(c_last - c)^T
     prep[CB_CHUNK_MAT] = 1  # L, the operand of the inverse
-    prep[CB_V_PREP] = ratio * Vt
-    prep[CB_PREP_SEND] = (PREP_SEND_HEADS or ratio) * _head_block_pages(Kt, Vt)
-    prep[CB_O_IN] = O_IN_DEPTH * ratio * Vt
+    prep[CB_V_PREP] = heads * Vt
+    prep[CB_PREP_SEND] = (PREP_SEND_HEADS or heads) * _head_block_pages(Kt, Vt)
+    prep[CB_O_IN] = O_IN_DEPTH * heads * Vt
     prep[CB_NORM_W] = Vt
-    prep[CB_RINV_O] = ratio * TOKEN_TILE_ROWS_PER_BLOCK
+    prep[CB_RINV_O] = heads * TOKEN_TILE_ROWS_PER_BLOCK
+    prep[CB_ZW] = 2 * heads * Vt  # row k's, made before row k - 1's RMS norm, which takes row k - 1's
     for idx, pages in _inbox_pages(Kt, Vb).items():
         state[idx] = inbox * pages
     state[CB_V] = 0  # the state core reads v from its inbox
@@ -436,6 +459,7 @@ U2D_CBS = (
     CB_O_IN,
     CB_IN_V,
     CB_V_PREP,
+    CB_ZW,
 )
 
 
@@ -504,10 +528,32 @@ def _seq_tile_rows(seq, tokens):
     return (seq * tokens + tokens - 1) // TILE - (seq * tokens) // TILE + 1
 
 
+def _prep_heads(batch, value_heads, key_heads, tokens, spare_cores):
+    """Value heads per R-PREP group (PREP_HEADS, or auto)."""
+    ratio = value_heads // key_heads
+    if PREP_HEADS is not None:
+        assert ratio % PREP_HEADS == 0, "PREP_HEADS must divide the value heads per key head"
+        return PREP_HEADS
+    rows = max(_seq_tile_rows(seq, tokens) for seq in range(batch))
+
+    def estimate(heads):
+        # Pipeline fill (one prep row), then per tile row the state step, or the group's prep rate when its cores
+        # take several rows each.
+        per_group = min(spare_cores // (batch * key_heads * (ratio // heads)), MAX_PREP_CORES_PER_GROUP)
+        if per_group < 1:
+            return float("inf")
+        prep_row = PREP_QK_ROW_US + heads * PREP_HEAD_ROW_US
+        rate = STATE_STEP_US if per_group >= rows else max(STATE_STEP_US, prep_row / per_group)
+        return prep_row + rows * rate
+
+    return min((h for h in range(1, ratio + 1) if ratio % h == 0), key=lambda h: (estimate(h), -h))
+
+
 def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, dtype, spare_cores):
-    """R-PREP plan, or None to keep prep and state on the same core: (prep cores per group cap, inbox depth).
-    Needs one unit per core (R-VSPLIT), at least one idle core per (sequence, key head) group, the key head's
-    value heads in one gate tile column (one gate tile per prepped tile row) and the merged plan inside L1."""
+    """R-PREP plan, or None to keep prep and state on the same core: (prep cores per group cap, inbox depth, value
+    heads per group). A group is (sequence, key head, subset of `heads` of its value heads). Needs one unit per core
+    (R-VSPLIT), at least one idle core per group, the key head's value heads in one gate tile column (one gate tile
+    per prepped tile row) and the merged plan inside L1."""
     ratio = value_heads // key_heads
     if not (PREP_OFFLOAD and chunked and pieces > 1):
         return None
@@ -515,7 +561,8 @@ def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked,
         return None
     if min(_seq_tile_rows(seq, tokens) for seq in range(batch)) < PREP_MIN_TILE_ROWS:
         return None
-    per_group = min(spare_cores // (batch * key_heads), MAX_PREP_CORES_PER_GROUP)
+    heads = _prep_heads(batch, value_heads, key_heads, tokens, spare_cores)
+    per_group = min(spare_cores // (batch * key_heads * (ratio // heads)), MAX_PREP_CORES_PER_GROUP)
     if per_group < 1:
         return None
     # A prep core's next tile row is granted only after its current one has landed when its stride is at least
@@ -523,8 +570,8 @@ def _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked,
     inbox = min([INBOX_DEPTH, per_group] + [_seq_tile_rows(seq, tokens) for seq in range(batch)])
     # The deepest inbox that fits L1 (a shallower one only costs slack between a grant and its landing).
     while inbox >= 1:
-        if _prep_plan_bytes(_prep_cb_plan(Kt, Vt, ratio, _conv_on_fpu(dtype), pieces, inbox), dtype) <= L1_BUDGET:
-            return per_group, inbox
+        if _prep_plan_bytes(_prep_cb_plan(Kt, Vt, heads, _conv_on_fpu(dtype), pieces, inbox), dtype) <= L1_BUDGET:
+            return per_group, inbox, heads
         inbox -= 1
     return None
 
@@ -603,7 +650,7 @@ def _mcast_rects(device, cores):
     runs = []
     for core in cores:
         virt = device.worker_core_from_logical_core(core)
-        if runs and runs[-1][-1].y == virt.y and runs[-1][-1].x + 1 == virt.x:
+        if PREP_MCAST and runs and runs[-1][-1].y == virt.y and runs[-1][-1].x + 1 == virt.x:
             runs[-1].append(virt)
         else:
             runs.append([virt])
@@ -701,6 +748,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     state_set = {(c.x, c.y) for c in state_cores}
     spare = [c for c in grid_cores if (c.x, c.y) not in state_set]
     prep = _prep_layout(batch, value_heads, key_heads, tokens, Kt, Vt, pieces, chunked, token_dtype, len(spare))
+    heads = ratio  # R-PREP: value heads per prep group
     if prep is None:
         inbox = 0
         # The deepest per-unit input depth that fits L1 (1 when every core runs one unit).
@@ -735,9 +783,29 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             cb_plan = local_plan(unit_depth)
         assert _plan_bytes(cb_plan, token_dtype) <= L1_BUDGET
     else:
-        per_group, inbox = prep
-        prep_plans = _prep_cb_plan(Kt, Vt, ratio, conv_on_fpu, pieces, inbox)
+        per_group, inbox, heads = prep
+        prep_plans = _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox)
         assert _prep_plan_bytes(prep_plans, token_dtype) <= L1_BUDGET
+        # Group first units: heads value heads (each `pieces` units) from value head h0.
+        groups = [(seq * value_heads + h0) * pieces for seq in range(batch) for h0 in range(0, value_heads, heads)]
+        strides = [min(per_group, _seq_tile_rows(first // pieces // value_heads, tokens)) for first in groups]
+        cluster_picks = None
+        if PREP_CLUSTER:
+            # Each group's state and prep cores as one blob around the first free core (row-major), its state cores at
+            # the blob's center: a head block crosses a few links instead of every group's converging on the top rows.
+            free = list(grid_cores)
+            assignment, cluster_picks = [], []
+            for first, stride in zip(groups, strides):
+                seed = free[0]
+                blob = sorted(free, key=lambda c: (abs(c.x - seed.x) + abs(c.y - seed.y), c.y, c.x))
+                blob = blob[: heads * pieces + stride]
+                cx, cy = sum(c.x for c in blob) / len(blob), sum(c.y for c in blob) / len(blob)
+                blob.sort(key=lambda c: (abs(c.x - cx) + abs(c.y - cy), c.y, c.x))
+                assignment += [(core, first + u, 1, 1) for u, core in enumerate(blob[: heads * pieces])]
+                cluster_picks.append(blob[heads * pieces :])
+                taken = {(c.x, c.y) for c in blob}
+                free = [c for c in free if (c.x, c.y) not in taken]
+            state_cores = [core for core, _, _, _ in assignment]
     # NoC coordinates of the core running each unit (R-VSPLIT peers).
     unit_noc = {}
     unit_cores = []  # logical core of each unit when one unit per core (R-VSPLIT)
@@ -809,28 +877,26 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             groups += tile_rows * (unit_cols // group_cols)
         return window_zeroing(group_cols, group_cols, groups)
 
-    # ---- R-PREP: prep cores per (sequence, key head) group, round robin over the group's tile rows ----
+    # ---- R-PREP: prep cores per (sequence, key head, head subset) group, round robin over the group's tile rows ----
     prep_units = []  # (core, group first unit, stride position, stride)
     group_producers = {}  # group first unit -> NoC coordinates of its prep cores in stride order
     if prep is not None:
-        groups = [(seq, hk) for seq in range(batch) for hk in range(key_heads)]
-        strides = [min(per_group, _seq_tile_rows(seq, tokens)) for seq, _ in groups]
-        # The groups take idle cores in turn, each the one nearest its own state cores (short multicast paths).
-        centers = []
-        for seq, hk in groups:
-            first = (seq * value_heads + hk * ratio) * pieces
-            members = unit_cores[first : first + ratio * pieces]
-            centers.append((sum(c.x for c in members) / len(members), sum(c.y for c in members) / len(members)))
-        free = list(spare)
-        picks = [[] for _ in groups]
-        for q in range(max(strides)):
-            for g, (cx, cy) in enumerate(centers):
-                if q < strides[g]:
-                    core = min(free, key=lambda c: abs(c.x - cx) + abs(c.y - cy))
-                    free.remove(core)
-                    picks[g].append(core)
-        for g, (seq, hk) in enumerate(groups):
-            group_first = (seq * value_heads + hk * ratio) * pieces
+        picks = cluster_picks
+        if picks is None:
+            # The groups take idle cores in turn, each the one nearest its own state cores (short multicast paths).
+            centers = []
+            for first in groups:
+                members = unit_cores[first : first + heads * pieces]
+                centers.append((sum(c.x for c in members) / len(members), sum(c.y for c in members) / len(members)))
+            free = list(spare)
+            picks = [[] for _ in groups]
+            for q in range(max(strides)):
+                for g, (cx, cy) in enumerate(centers):
+                    if q < strides[g]:
+                        core = min(free, key=lambda c: abs(c.x - cx) + abs(c.y - cy))
+                        free.remove(core)
+                        picks[g].append(core)
+        for g, group_first in enumerate(groups):
             for q, core in enumerate(picks[g]):
                 prep_units.append((core, group_first, q, strides[g]))
                 noc_core = device.worker_core_from_logical_core(core)
@@ -923,7 +989,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     writer_addrs = [output.buffer_address(), recurrent_state_out.buffer_address()]
 
     def role_ct(role):
-        unit_v = ratio * Vt if role == ROLE_PREP else v_block_tiles
+        unit_v = heads * Vt if role == ROLE_PREP else v_block_tiles
         role_pieces = 1 if role == ROLE_PREP else pieces
         group_cols = _window_group_cols(Kt, unit_v, role_pieces)
         if qk_cores:
@@ -933,8 +999,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         s0_tiles = Kt * v_block_tiles
         reader_ct += [pieces, int(chunked), role, inbox, min(S0_READ_TILES or s0_tiles, s0_tiles), int(bool(qk_cores))]
         reader_ct += [int(tokens == 1)]  # decode: window rows issued ahead of the other inputs
+        reader_ct += [heads]  # R-PREP: value heads per prep group
         reader_ct += reader_accessor_ct
-        writer_ct = [Kt, Vt, value_heads, *geometry_ct, pieces, OSUM_SEM_ID, int(chunked), role, inbox, ratio]
+        writer_ct = [Kt, Vt, value_heads, *geometry_ct, pieces, OSUM_SEM_ID, int(chunked), role, inbox, heads]
         writer_ct += writer_accessor_ct
         compute_ct = [
             Kt,
@@ -949,7 +1016,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             int(chunked),
             int(bool(qk_channels) and role != ROLE_QK),
             role,
-            ratio,
+            heads,
         ]
         return reader_ct, writer_ct, compute_ct
 
@@ -977,7 +1044,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         rows = [0, 1, stride]  # tile rows: every one of the unit's sequence; then the unit stride
         producers = []
         if prep is not None:
-            group_first = first_unit - first_unit % (ratio * pieces)
+            group_first = first_unit - first_unit % (heads * pieces)
             producers = [len(group_producers[group_first]) // 2] + group_producers[group_first]
         rts[0][core.x, core.y] = (
             reader_addrs + [first_unit, count, tokens, role, zero_slots] + rows + producers + cs_args(core)
@@ -990,17 +1057,18 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         )
         rts[2][core.x, core.y] = [first_unit, count, tokens, v_eps_bits, role] + rows
     roles[state_role] = (state_cores, *rts)
+    prep_send_noc0 = {}  # R-PREP prep core (x, y) -> its writer sends on NOC 0
     if prep_units:
         rts = ({}, {}, {})  # (x, y) -> args, per kernel
         for core, group_first, q, stride in prep_units:
             seq = group_first // pieces // value_heads
             my_rows = len(range(q, _seq_tile_rows(seq, tokens), stride))
-            group_cols = _window_group_cols(Kt, ratio * Vt, 1)
-            zero_slots, zero_slot_bytes = window_zeroing(2 * Kt + ratio * Vt, group_cols, my_rows)
+            group_cols = _window_group_cols(Kt, heads * Vt, 1)
+            zero_slots, zero_slot_bytes = window_zeroing(2 * Kt + heads * Vt, group_cols, my_rows)
             rows = [q, stride, 1]
-            consumers = [c for u in range(ratio * pieces) for c in unit_noc[group_first + u]]
+            consumers = [c for u in range(heads * pieces) for c in unit_noc[group_first + u]]
             # A head block goes to the head's pieces: one multicast per row run.
-            for j in range(ratio):
+            for j in range(heads):
                 first = group_first + j * pieces
                 consumers += _mcast_rects(device, unit_cores[first : first + pieces])
             rts[0][core.x, core.y] = reader_addrs + [group_first, 1, tokens, QK_OWN, zero_slots] + rows + cs_args(core)
@@ -1008,6 +1076,13 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 writer_addrs + [group_first, 1, tokens, QK_OWN, zero_slots, zero_slot_bytes] + rows + consumers
             )
             rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, QK_OWN] + rows
+            src = device.worker_core_from_logical_core(core)
+            dsts = [unit_noc[group_first + u] for u in range(heads * pieces)]
+            hops = [
+                sum((dx - src.x) % NOC_GRID[0] + (dy - src.y) % NOC_GRID[1] for dx, dy in dsts),
+                sum((src.x - dx) % NOC_GRID[0] + (src.y - dy) % NOC_GRID[1] for dx, dy in dsts),
+            ]
+            prep_send_noc0[core.x, core.y] = hops[0] < hops[1]
         roles[ROLE_PREP] = (prep_cores, *rts)
     if qk_cores:
         # A q / k core's "unit" is its key head; its count the sequences (token rows 0..B-1 of the decode tile row).
@@ -1060,6 +1135,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             # cores in the top SWAP_NOC_ROWS rows read on NOC 1 and write on NOC 0.
             top = [c for c in cores if c.y < SWAP_NOC_ROWS]
             kernel_groups += [(role, top, True), (role, [c for c in cores if c.y >= SWAP_NOC_ROWS], False)]
+        elif role == ROLE_PREP and PREP_SEND_NOC == "auto":
+            # Each prep core writes on the NoC with the shorter paths to its state cores (NOC 0 routes toward higher x
+            # and y, NOC 1 toward lower, both around the torus); the reader takes the other one.
+            on_noc0 = [c for c in cores if prep_send_noc0[c.x, c.y]]
+            kernel_groups += [(role, on_noc0, True), (role, [c for c in cores if not prep_send_noc0[c.x, c.y]], False)]
         else:
             kernel_groups.append((role, cores, False))
     for role, cores, swap_nocs in kernel_groups:
@@ -1077,7 +1157,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             reader_config = ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
             )
-        if role == ROLE_PREP and PREP_SEND_NOC_1:
+        if role == ROLE_PREP and PREP_SEND_NOC != 0 and not swap_nocs:
             # The prep cores sit below the state cores in row-major order: NOC 1 (which routes toward lower y) reaches
             # them directly, NOC 0 only around the torus. The reader takes the other NoC.
             writer_config = ttnn.DataMovementConfigDescriptor(

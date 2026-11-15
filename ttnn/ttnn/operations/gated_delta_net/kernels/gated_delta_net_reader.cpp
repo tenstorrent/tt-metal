@@ -14,9 +14,9 @@
 //   copy_conv_state_block: conv_state_out rows 3b..3b+2 of the pair's columns (bit-exact DM copy).
 // Token rows are moved as face-row segments (64 B fp32, 32 B bf16; bf16 reads go through RowReader
 // staging) unless the pair owns the whole tile row.
-// R-PREP (ROLE): a prep core's unit is a (sequence, key head) with the r value heads' v columns, and it reads the
-// gate, window and z inputs of tile rows offset, offset + stride, ... only (and norm_weight once); a state core reads
-// S0, hands its inbox rows to compute as prep cores land them, and copies conv_state_out.
+// R-PREP (ROLE): a prep core's unit is a (sequence, key head) with PREP_HEADS of its value heads' v columns, and it
+// reads the gate, window and z inputs of tile rows offset, offset + stride, ... only (and norm_weight once); a state
+// core reads S0, hands its inbox rows to compute as prep cores land them, and copies conv_state_out.
 
 #include <stdint.h>
 
@@ -44,7 +44,6 @@ constexpr uint32_t cb_scratch = GDN_CB_SCRATCH;
 constexpr uint32_t cb_row_stage = GDN_CB_ROW_STAGE;
 constexpr uint32_t cb_window_zeroed = GDN_CB_WINDOW_ZEROED;
 constexpr uint32_t cb_hist_stage = GDN_CB_HIST_STAGE;
-constexpr uint32_t cb_tri_mask = GDN_CB_TRI_MASK;
 constexpr uint32_t cb_in_kq = GDN_CB_IN_KQ;
 constexpr uint32_t cb_in_knt = GDN_CB_IN_KNT;
 constexpr uint32_t cb_in_mat = GDN_CB_IN_MAT;
@@ -68,6 +67,7 @@ constexpr uint32_t S0_READ_TILES = get_compile_time_arg_val(17);        // S0 ti
 // R-QKCORE: the q / k cores write conv_state_out (whole tiles), the pair cores none of it.
 constexpr bool CS_BY_QK_CORES = get_compile_time_arg_val(18) != 0;
 constexpr bool DECODE = get_compile_time_arg_val(19) != 0;  // T = 1 (other builds compile no prefetch path)
+constexpr uint32_t PREP_HEADS = get_compile_time_arg_val(20);  // R-PREP: value heads per prep group
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;    // R-PREP prep core: token-row inputs of strided tile rows
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;  // R-PREP state core: inbox, S0, z, norm_weight
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;   // R-QKCORE: q or k columns of one key head, every decode sequence
@@ -238,13 +238,13 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(4);
     constexpr uint32_t Gt = get_compile_time_arg_val(5);
     constexpr uint32_t ratio = Hv / Hk;
-    // v columns of a unit: a piece's, or on a prep core those of the key head's r value heads.
-    constexpr uint32_t Vb = PREP ? ratio * Vt : Vt / PIECES;
+    // v columns of a unit: a piece's, or on a prep core those of its group's PREP_HEADS value heads.
+    constexpr uint32_t Vb = PREP ? PREP_HEADS * Vt : Vt / PIECES;
     constexpr uint32_t n_state = Kt * Vb;
     constexpr uint32_t z_width_tiles = Hv * Vt;
     constexpr uint32_t pair_cols = 2 * Kt + Vb;
 
-    constexpr auto mixed_args = TensorAccessorArgs<20>();
+    constexpr auto mixed_args = TensorAccessorArgs<21>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
@@ -333,25 +333,6 @@ void kernel_main() {
 
     dataflow_kernel_lib::
         prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
-    if constexpr (CHUNKED && !STATE) {
-        // Lower-triangular 0/1 mask (column <= row) of the chunk decay matrix, then the identity, once per kernel:
-        // zeroed over the NoC, then only the ones are stored.
-        CircularBuffer mask_buf(cb_tri_mask);
-        cb_reserve_back(cb_tri_mask, 2);
-        noc.async_write_zeros(mask_buf, 2 * STATE_TILE_BYTES, {.offset_bytes = 0});
-        noc.write_zeros_l1_barrier();
-        volatile tt_l1_ptr uint32_t* mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tri_mask));
-        constexpr uint32_t ONE_BITS = 0x3f800000u;
-        constexpr uint32_t TILE_WORDS = TILE_ROWS * TILE_ROWS;
-        for (uint32_t r = 0; r < TILE_ROWS; ++r) {
-            const uint32_t row = (r >> 4) * 2 * 256 + (r & 15) * 16;
-            for (uint32_t c = 0; c <= r; ++c) {
-                mask[row + (c >> 4) * 256 + (c & 15)] = ONE_BITS;
-            }
-            mask[TILE_WORDS + row + (r >> 4) * 256 + (r & 15)] = ONE_BITS;  // identity (R-PREP inverse)
-        }
-        cb_push_back(cb_tri_mask, 2);
-    }
 
     if constexpr (QK_CORE) {
         // ---- R-QKCORE: the q (or k) columns of key head first_unit for token rows [0, num_units) of the decode tile
@@ -617,6 +598,16 @@ void kernel_main() {
                         if (granted_rows == i) {
                             cb_reserve_back(cb_in_v, Vb);  // row i's slot: freed once compute pops row i - INBOX_SLOTS
                         }
+                        if (tr == first_tr) {
+                            // S0 while the first rows are prepped: compute's first step needs it with row 0.
+                            grant_free_slots();
+                            cb_reserve_back(cb_state_in, n_state);
+                            cb_reserve_back(cb_state_in_mm, n_state);
+                            read_s0(get_write_ptr(cb_state_in), pair, v_first);
+                            noc_async_read_barrier();
+                            cb_push_back(cb_state_in, n_state);
+                            cb_push_back(cb_state_in_mm, n_state);
+                        }
                         do {
                             grant_free_slots();
                         } while (*landed < i / INBOX_SLOTS + 1);
@@ -828,7 +819,7 @@ void kernel_main() {
                     }
                     // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs
                     // ----
-                    if (tr == first_tr && !PREP) {
+                    if (tr == first_tr && !PREP && !STATE) {
                         if (early_s0) {
                             noc_async_read_barrier_with_trid(S0_TRID);
                         } else {
