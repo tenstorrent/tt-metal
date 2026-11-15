@@ -208,7 +208,7 @@ def test_save_plan_spreads_owners_over_every_file_and_fixes_offsets():
         assert sum(it.nbytes for it in fplan.items) == fplan.data_bytes
     entries = plan.entries()
     assert len(entries["model/blocks/3/w"].chunks) == 8
-    assert {c.writer_coord[1] for c in entries["model/blocks/3/w"].chunks} == set(range(8))
+    assert {plan.files[c.file].coord[1] for c in entries["model/blocks/3/w"].chunks} == set(range(8))
 
 
 def test_mismatches_are_refused_before_any_read(expect_error):

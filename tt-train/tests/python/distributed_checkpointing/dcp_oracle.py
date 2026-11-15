@@ -14,12 +14,24 @@ from __future__ import annotations
 import numpy as np
 
 from ttml.distributed_checkpointing._boxes import Box
+from ttml.distributed_checkpointing._errors import TopologyError
 from ttml.distributed_checkpointing._index import FileRecord, Index, data_file_name
 from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
-from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, local_shape as label_local_shape
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 
 R = Placement.replicate
 S = Placement.shard
+
+
+def label_local_shape(label: Label, global_shape) -> tuple[int, ...]:
+    """The per-device shape ``label`` gives a global array of ``global_shape``."""
+    shape = []
+    for d, n in enumerate(global_shape):
+        count = label.shard_count(d)
+        if n % count:
+            raise TopologyError(f"dim {d} of extent {n} does not split evenly into {count} shards")
+        shape.append(n // count)
+    return tuple(shape)
 
 
 def world(placements, dist_shape, mesh_shape=None) -> Label:

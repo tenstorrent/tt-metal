@@ -35,15 +35,12 @@ from ttml.distributed_checkpointing._topology import Label, Placement, dist_coor
 def _index() -> Index:
     label = Label((Placement.replicate(), Placement.shard(2)), (2, 2), tuple(dist_coords((2, 2))))
     chunks = [
-        ChunkRecord(
-            Box((0, 0, 0, 0), (1, 1, 96, 16)), file=0, data_offset=0, nbytes=3072, writer_coord=(0, 0), crc32=0x3F0A9C11
-        ),
+        ChunkRecord(Box((0, 0, 0, 0), (1, 1, 96, 16)), file=0, data_offset=0, nbytes=3072, crc32=0x3F0A9C11),
         ChunkRecord(
             Box((0, 0, 96, 0), (1, 1, 96, 16)),
             file=3,
             data_offset=4096,
             nbytes=3072,
-            writer_coord=(1, 1),
             crc32=0x77C2E0D9,
         ),
     ]
@@ -85,8 +82,8 @@ def _index() -> Index:
             label,
             ("model/Llama/blocks/0/attention/qkv_linear/weight",),
             [
-                ChunkRecord(Box((0, 0, 0, 0), (1, 1, 32, 16)), 0, 3072, 2048, (0, 0)),
-                ChunkRecord(Box((0, 0, 32, 0), (1, 1, 32, 16)), 1, 0, 2048, (0, 1)),
+                ChunkRecord(Box((0, 0, 0, 0), (1, 1, 32, 16)), 0, 3072, 2048),
+                ChunkRecord(Box((0, 0, 32, 0), (1, 1, 32, 16)), 1, 0, 2048),
             ],
         ),
     }

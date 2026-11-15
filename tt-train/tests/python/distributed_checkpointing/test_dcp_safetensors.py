@@ -19,8 +19,12 @@ from ttml.distributed_checkpointing._safetensors import (
     pread_all,
     pwrite_all,
     read_header,
-    read_metadata,
 )
+
+
+def _decoded_metadata(header: dict) -> dict:
+    """``__metadata__`` as a reader that decodes JSON objects and arrays sees it."""
+    return {k: json.loads(v) if v[:1] in ("{", "[") else v for k, v in header.get("__metadata__", {}).items()}
 
 
 def test_header_fixes_offsets_and_aligns_the_data_section(expect_error):
@@ -62,7 +66,7 @@ def test_file_written_at_fixed_offsets_opens_with_the_safetensors_package(tmp_pa
 
     parsed, start = read_header(path)
     assert start == data_start and parsed["model/a"]["dtype"] == "BF16" and parsed["model/a"]["shape"] == [1, 1, 32, 64]
-    assert read_metadata(parsed) == {"ttml.format": "ttml-dcp/1"}
+    assert parsed["__metadata__"] == {"ttml.format": "ttml-dcp/1"}
 
     with safe_open(path, framework="pt") as f:
         assert set(f.keys()) == {"model/a", "model/b"}
@@ -76,9 +80,8 @@ def test_metadata_reads_back_exactly_what_was_written(expect_error):
     header, _, _ = build_header([("x", "BF16", (1, 1, 1, 2), 4)], metadata)
     parsed = json.loads(header[8:])
     assert parsed["__metadata__"]["a"] == "1" and parsed["__metadata__"]["format"] == "ttml-dcp/1", "stored as is"
-    assert read_metadata(parsed) == metadata
+    assert _decoded_metadata(parsed) == metadata
     with expect_error(ValueError, "reads back as JSON"):
         build_header([], {"a": "[not a list]"})
     with expect_error(ValueError, "must be a str, dict or list"):
         build_header([], {"steps": 3})
-    assert read_metadata({"__metadata__": {"foreign": "{not json"}}) == {"foreign": "{not json"}

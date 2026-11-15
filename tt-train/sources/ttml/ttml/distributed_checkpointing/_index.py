@@ -46,7 +46,6 @@ class ChunkRecord:
     file: int  # index into Index.files
     data_offset: int  # within the file's data section
     nbytes: int
-    writer_coord: tuple[int, ...]
     crc32: int | None = None
 
 
@@ -169,7 +168,6 @@ def _entry_to_json(entry: Entry) -> dict:
         "file": [c.file for c in chunks],
         "data_offset": [c.data_offset for c in chunks],
         "nbytes": _broadcast([c.nbytes for c in chunks]),
-        "writer_coord": [list(c.writer_coord) for c in chunks],
     }
     if any(c.crc32 is not None for c in chunks):
         table["crc32"] = [None if c.crc32 is None else f"{c.crc32:08x}" for c in chunks]
@@ -199,9 +197,8 @@ def _entry_from_json(key: str, value: dict) -> Entry:
     files = table["file"]
     data_offsets = table["data_offset"]
     nbytes = _expand(table["nbytes"], n)
-    coords = table["writer_coord"]
     crcs = table.get("crc32")
-    if not (len(offsets) == len(sizes) == len(files) == len(data_offsets) == len(nbytes) == len(coords) == n) or (
+    if not (len(offsets) == len(sizes) == len(files) == len(data_offsets) == len(nbytes) == n) or (
         crcs is not None and len(crcs) != n
     ):
         raise CheckpointError(f"index entry {key!r}: chunk table columns disagree with n={n}")
@@ -215,7 +212,6 @@ def _entry_from_json(key: str, value: dict) -> Entry:
             file=int(files[i]),
             data_offset=int(data_offsets[i]),
             nbytes=int(nbytes[i]),
-            writer_coord=tuple(coords[i]),
             crc32=crc_values[i],
         )
         for i in range(n)
