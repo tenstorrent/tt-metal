@@ -376,8 +376,10 @@ class PersistentMoE:
     ``rows`` (1, 2 or 4) makes every request a block of that many token rows -- DSpark's verify block -- each
     routed on its own, through one pass of the op: the union of the rows' top-k is fetched once and applied to every
     row (with each row's own routing weight, zero where it did not pick the expert). A block travels as its
-    ``(rows x 32)`` tiles (:func:`tile_rows`), in request rows and in outputs alike, ``[1, 1, 1, rows * D]``. The HC
-    post step is not fused for blocks.
+    ``(rows x 32)`` tiles (:func:`tile_rows`), in request rows and in outputs alike, ``[1, 1, 1, rows * D]``. With
+    the HC post step fused, a block's streams are ``(rows x 32)``-tiled ``[1, 1, hc * rows, D]`` (row ``h * rows +
+    j`` is stream h's block row j; see :meth:`streams_memory_config` and :meth:`block_streams`) and its post and comb
+    carry a tile per row, ``[1, rows, hc, 1]`` and ``[1, rows, hc, hc]``.
     """
 
     def __init__(
@@ -406,9 +408,7 @@ class PersistentMoE:
         if rows not in (1, 2, 4):
             raise ValueError(f"a request block takes 1, 2 or 4 rows, got {rows}")
         self.rows = rows
-        self.fuse_hc = (FUSE_HC and rows == 1) if fuse_hc is None else fuse_hc
-        if self.fuse_hc and rows > 1:
-            raise ValueError("the HC post step is fused for one-row requests only")
+        self.fuse_hc = FUSE_HC if fuse_hc is None else fuse_hc
         self.parts = _HC_COLLAPSE_CORES if self.fuse_hc else 2
         first = moes[self.layer_ids[0]]
         self.hidden = first.hidden
@@ -580,10 +580,26 @@ class PersistentMoE:
         )
 
     def streams_memory_config(self, request_mesh, num_streams: int = 4) -> ttnn.MemoryConfig:
-        """The residual streams' ``[hc, D]`` ROW_MAJOR width-sharded L1 config, whose shards the partials buffer's
-        line up with when the HC post step is fused (see :meth:`request`'s ``streams``)."""
+        """The residual streams' width-sharded L1 config, whose shards the partials buffer's line up with when the HC
+        post step is fused (see :meth:`request`'s ``streams``): ``[hc, D]`` ROW_MAJOR for one row; for a block,
+        ``[hc * rows, D]`` in ``(rows x 32)`` tiles, so a shard holds each stream's columns of the block in turn."""
         return width_sharded_l1_config(
-            num_streams, self.hidden, request_mesh, num_cores=_HC_COLLAPSE_CORES, tile_height=1
+            num_streams * self.rows, self.hidden, request_mesh, num_cores=_HC_COLLAPSE_CORES, tile_height=self.rows
+        )
+
+    def block_streams(self, request_mesh, streams: torch.Tensor):
+        """Host ``streams`` -- ``[hc, D]`` for one row, ``[hc, rows, D]`` for a block -- on every chip of
+        ``request_mesh``, as :meth:`request`'s ``streams`` takes them."""
+        hc = streams.shape[0]
+        rows_kwargs = {} if self.rows == 1 else {"tile": ttnn.Tile((self.rows, 32))}
+        return ttnn.from_torch(
+            streams.reshape(1, 1, hc * self.rows, self.hidden),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT if self.rows == 1 else ttnn.TILE_LAYOUT,
+            device=request_mesh,
+            memory_config=self.streams_memory_config(request_mesh, hc),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(request_mesh),
+            **rows_kwargs,
         )
 
     def partials_buffer(self, request_mesh, num_chips: int):
@@ -649,7 +665,9 @@ class PersistentMoE:
 
         With ``streams`` ``[1, 1, hc, D]`` (in :meth:`streams_memory_config`), ``post`` ``[1, 1, hc, 1]`` and
         ``comb`` ``[1, 1, hc, hc]`` (bf16 TILE) the output is instead the hyper-connection's new streams,
-        ``post[h] * row + sum_g comb[g, h] * streams[g]`` (``mix_streams``), in ``streams``' spec."""
+        ``post[h] * row + sum_g comb[g, h] * streams[g]`` (``mix_streams``), in ``streams``' spec. For a block of
+        ``rows`` rows: ``streams`` ``[1, 1, hc * rows, D]`` in ``(rows x 32)`` tiles (row ``h * rows + j``),
+        ``post`` ``[1, rows, hc, 1]``, ``comb`` ``[1, rows, hc, hc]``, each row j mixed with its own post and comb."""
         return self._send(requester, self.row_of_layer(layer), tensor, streams=streams, post=post, comb=comb)
 
     def _send(self, requester: int, row: int, tensor=None, streams=None, post=None, comb=None):

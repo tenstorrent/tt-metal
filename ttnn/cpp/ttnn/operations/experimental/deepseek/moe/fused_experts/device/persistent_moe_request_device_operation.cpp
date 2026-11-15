@@ -106,8 +106,48 @@ constexpr uint32_t kHcTileBytes = 32 * 32 * 2;
 constexpr uint32_t kHcScalarPage = 32;
 // Stream counts the HC post kernel reads post and comb for: their (h, g) elements must lie in face 0's first 4 rows.
 constexpr uint32_t kMaxHcStreams = 4;
+// A several-row block's HC post step: its per-row post and comb values are column 0 of 32x32 tiles (faces 0 and 2)
+// kHcColumnPage apart, an odd multiple of 16 B past 1 KB, so one tile's face 2 column and the next one's face 0 column
+// interleave (see dataflow/moe_partials_hcpost.cpp).
+constexpr uint32_t kHcColumnPage = 1024 + 16;
+// The tile rows (block rows) a request carries, and so the HC post step's streams' tile height.
+constexpr uint32_t kMaxBlockRows = 4;
+
+// The HC post step's views of a several-row part (see compute/moe_partials_hcpost.cpp): 32x32 views page_bytes apart,
+// part_pages pages per part.
+struct BlockViews {
+    uint32_t views;
+    uint32_t page_bytes;
+    uint32_t part_pages;
+    uint32_t tile_pages;
+};
+
+BlockViews block_views(uint32_t part_bytes) {
+    uint32_t page = kHcTileBytes;
+    while (part_bytes % page != 0) {
+        page /= 2;
+    }
+    return BlockViews{
+        .views = (part_bytes + kHcTileBytes - 1) / kHcTileBytes,
+        .page_bytes = page,
+        .part_pages = part_bytes / page,
+        .tile_pages = kHcTileBytes / page};
+}
 
 bool hc_post(const PersistentMoeRequestInputs& tensors) { return tensors.streams.has_value(); }
+
+// The block rows of an HC post request: the input row's elements over the streams' width.
+uint32_t hc_rows(const PersistentMoeRequestInputs& tensors) {
+    const auto width = static_cast<uint32_t>(tensors.streams->logical_shape()[-1]);
+    const uint32_t row_elems = tensors.input.buffer()->page_size() / 2u;
+    return width > 0 && row_elems % width == 0 ? row_elems / width : 0u;
+}
+
+// The HC post request's stream count.
+uint32_t hc_streams(const PersistentMoeRequestInputs& tensors) {
+    const uint32_t rows = hc_rows(tensors);
+    return rows == 0 ? 0u : static_cast<uint32_t>(tensors.streams->logical_shape()[2]) / rows;
+}
 
 PartialsLayout partials_layout(const PersistentMoeRequestParams& attributes, uint32_t row_bytes) {
     const auto& partials = attributes.partials;
@@ -146,19 +186,36 @@ void validate_hc_post(const PersistentMoeRequestParams& attributes, const Persis
     auto* mesh = tensors.input.device();
     const uint32_t row_elems = tensors.input.buffer()->page_size() / 2u;
     const auto& shape = streams.logical_shape();
+    const uint32_t rows = hc_rows(tensors);
+    TT_FATAL(
+        rows >= 1 && rows <= kMaxBlockRows && (rows & (rows - 1)) == 0,
+        "persistent_moe_request: the {}-element input row is not 1, 2 or 4 rows of the streams' width {}",
+        row_elems,
+        shape[-1]);
+    const uint32_t width = row_elems / rows;
+    const uint32_t hc = hc_streams(tensors);
+    // One row: [1, 1, hc, D] ROW_MAJOR. A block of rows: [1, 1, hc * rows, D] in (rows x 32) tiles, row h * rows + j
+    // stream h's block row j, so each shard holds a stream's part after another, in the partials' byte order.
+    const bool layout_ok = rows == 1 ? streams.layout() == Layout::ROW_MAJOR
+                                     : streams.layout() == Layout::TILE &&
+                                           streams.tensor_spec().tile().get_height() == rows &&
+                                           streams.tensor_spec().tile().get_width() == 32;
     TT_FATAL(
         streams.storage_type() == StorageType::DEVICE && streams.device() == mesh &&
-            streams.dtype() == DataType::BFLOAT16 && streams.layout() == Layout::ROW_MAJOR && shape.rank() == 4 &&
-            shape[0] == 1 && shape[1] == 1 && shape[2] >= 1 && static_cast<uint32_t>(shape[2]) <= kMaxHcStreams &&
-            static_cast<uint32_t>(shape[3]) == row_elems,
-        "persistent_moe_request: streams must be [1, 1, hc <= {}, {}] bfloat16 ROW_MAJOR on the input's mesh, got {} "
-        "{} {}",
+            streams.dtype() == DataType::BFLOAT16 && layout_ok && shape.rank() == 4 && shape[0] == 1 && shape[1] == 1 &&
+            hc >= 1 && hc <= kMaxHcStreams && hc * rows == static_cast<uint32_t>(shape[2]) &&
+            static_cast<uint32_t>(shape[3]) == width,
+        "persistent_moe_request: streams must be [1, 1, hc <= {}, {}] bfloat16 ROW_MAJOR (one row) or [1, 1, hc * {}, "
+        "{}] bfloat16 TILE with ({}, 32) tiles (a block of {} rows) on the input's mesh, got {} {} {}",
         kMaxHcStreams,
-        row_elems,
+        width,
+        rows,
+        width,
+        rows,
+        rows,
         shape,
         streams.layout(),
         streams.dtype());
-    const uint32_t hc = shape[2];
     TT_FATAL(
         streams.memory_config().buffer_type() == BufferType::L1 &&
             streams.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -169,7 +226,7 @@ void validate_hc_post(const PersistentMoeRequestParams& attributes, const Persis
     const auto partials_cores =
         corerange_to_cores(attributes.partials.shard_spec().value().grid, std::nullopt, /*row_wise=*/true);
     TT_FATAL(
-        stream_cores == partials_cores && shard.shape[0] == hc && shard.shape[1] * stream_cores.size() == row_elems,
+        stream_cores == partials_cores && shard.shape[0] == hc * rows && shard.shape[1] * stream_cores.size() == width,
         "persistent_moe_request: the streams' [{}, {}] shards must sit on the partials' {} cores, in the same order",
         shard.shape[0],
         shard.shape[1],
@@ -184,9 +241,11 @@ void validate_hc_post(const PersistentMoeRequestParams& attributes, const Persis
             "mesh");
     }
     TT_FATAL(
-        post.logical_shape() == ttnn::Shape({1, 1, hc, 1}) && comb.logical_shape() == ttnn::Shape({1, 1, hc, hc}),
-        "persistent_moe_request: post must be [1, 1, {}, 1] and comb [1, 1, {}, {}], got {} and {}",
+        post.logical_shape() == ttnn::Shape({1, rows, hc, 1}) && comb.logical_shape() == ttnn::Shape({1, rows, hc, hc}),
+        "persistent_moe_request: post must be [1, {}, {}, 1] and comb [1, {}, {}, {}] (a tile per row), got {} and {}",
+        rows,
         hc,
+        rows,
         hc,
         hc,
         post.logical_shape(),
@@ -407,7 +466,15 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
             .buffer = buffer,
         });
     };
-    if (hc_post(tensors)) {
+    const uint32_t rows = hc_post(tensors) ? hc_rows(tensors) : 1u;
+    const BlockViews views = block_views(layout.part_bytes);
+    if (hc_post(tensors) && rows > 1) {
+        TT_FATAL(
+            views.page_bytes % 32 == 0 && views.views <= 8,
+            "persistent_moe_request: a {} B part does not split into the HC post step's 32x32 views",
+            layout.part_bytes);
+        add_view_cb(cb_in, layout.num_slots * views.part_pages, views.page_bytes, attributes.partials.buffer());
+    } else if (hc_post(tensors)) {
         TT_FATAL(
             layout.part_bytes <= kHcTileBytes && layout.part_bytes % 32 == 0,
             "persistent_moe_request: a {} B part does not fit the HC post step's one-tile view",
@@ -428,7 +495,7 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
     const uint32_t skip = stop ? 1u : 0u;
     if (hc_post(tensors)) {
         // The new streams on each stream-collapse core (see dataflow/moe_partials_hcpost.cpp).
-        const auto hc = static_cast<uint32_t>(tensors.streams->logical_shape()[2]);
+        const uint32_t hc = hc_streams(tensors);
         constexpr uint32_t cb_s = tt::CBIndex::c_3;
         constexpr uint32_t cb_post = tt::CBIndex::c_4;
         constexpr uint32_t cb_comb = tt::CBIndex::c_5;
@@ -436,17 +503,31 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
         constexpr uint32_t cb_x = tt::CBIndex::c_7;
         constexpr uint32_t cb_tmp = tt::CBIndex::c_8;
         constexpr uint32_t cb_prod = tt::CBIndex::c_9;
-        // Tiles read or packed through a part_bytes view run past the last page: one spare tile of slack.
-        const uint32_t slack_pages = (kHcTileBytes + layout.part_bytes - 1) / layout.part_bytes;
-        add_view_cb(cb_out, hc + slack_pages, layout.part_bytes);
-        add_view_cb(cb_s, hc + slack_pages, layout.part_bytes);
-        const uint32_t scalar_slack = kHcTileBytes / kHcScalarPage;
-        add_view_cb(cb_post, hc + scalar_slack, kHcScalarPage);
-        add_view_cb(cb_comb, hc * hc + scalar_slack, kHcScalarPage);
-        add_view_cb(cb_mix, hc, kHcTileBytes);
-        add_view_cb(cb_x, 1, kHcTileBytes);
-        add_view_cb(cb_prod, hc, kHcTileBytes);
-        add_cb(cb_tmp, 1, tt::DataFormat::Float16_b);  // post's and comb's face-0 heads, 128 B each
+        uint32_t scalar_page = kHcScalarPage;
+        if (rows > 1) {
+            // Views read or packed past a part's end: one spare view of slack. A coefficient tile's face 2 runs
+            // one page and a half past its start.
+            add_view_cb(cb_out, hc * views.part_pages + views.tile_pages, views.page_bytes);
+            add_view_cb(cb_s, hc * views.part_pages + views.tile_pages, views.page_bytes);
+            scalar_page = kHcColumnPage;
+            add_view_cb(cb_post, hc + 1, kHcColumnPage);
+            add_view_cb(cb_comb, hc * hc + 1, kHcColumnPage);
+            add_view_cb(cb_mix, hc * views.views, kHcTileBytes);
+            add_view_cb(cb_x, views.views, kHcTileBytes);
+            add_cb(cb_tmp, rows, tt::DataFormat::Float16_b);  // each row's post and comb face-0 heads, 128 B each
+        } else {
+            // Tiles read or packed through a part_bytes view run past the last page: one spare tile of slack.
+            const uint32_t slack_pages = (kHcTileBytes + layout.part_bytes - 1) / layout.part_bytes;
+            add_view_cb(cb_out, hc + slack_pages, layout.part_bytes);
+            add_view_cb(cb_s, hc + slack_pages, layout.part_bytes);
+            const uint32_t scalar_slack = kHcTileBytes / kHcScalarPage;
+            add_view_cb(cb_post, hc + scalar_slack, kHcScalarPage);
+            add_view_cb(cb_comb, hc * hc + scalar_slack, kHcScalarPage);
+            add_view_cb(cb_mix, hc, kHcTileBytes);
+            add_view_cb(cb_x, 1, kHcTileBytes);
+            add_view_cb(cb_prod, hc, kHcTileBytes);
+            add_cb(cb_tmp, 1, tt::DataFormat::Float16_b);  // post's and comb's face-0 heads, 128 B each
+        }
 
         std::vector<uint32_t> reader_ct_args = {
             layout.num_slots,
@@ -459,8 +540,10 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
             cb_comb,
             cb_out,
             cb_tmp,
-            kHcScalarPage,
-            kHcScalarPage};
+            scalar_page,
+            scalar_page,
+            rows,
+            views.part_pages};
         TensorAccessorArgs(*tensors.post->buffer()).append_to(reader_ct_args);
         TensorAccessorArgs(*tensors.comb->buffer()).append_to(reader_ct_args);
         sum_reader.kernel_source =
@@ -471,7 +554,20 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
             "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/fused_experts/device/kernels/compute/"
             "moe_partials_hcpost.cpp";
         sum_compute.compile_time_args = {
-            layout.num_slots, hc, cb_in, cb_s, cb_post, cb_comb, cb_mix, cb_x, cb_out, cb_prod};
+            layout.num_slots,
+            hc,
+            cb_in,
+            cb_s,
+            cb_post,
+            cb_comb,
+            cb_mix,
+            cb_x,
+            cb_out,
+            cb_prod,
+            rows,
+            rows > 1 ? views.views : 1u,
+            rows > 1 ? views.part_pages : 1u,
+            rows > 1 ? views.tile_pages : 1u};
         sum_compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false};
         for (const auto& c : layout.sum_cores) {
             sum_reader.emplace_runtime_args(
