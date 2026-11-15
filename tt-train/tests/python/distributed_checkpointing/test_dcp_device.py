@@ -139,7 +139,8 @@ def test_a_step_after_the_load_matches_the_uninterrupted_run(tp_mesh, tmp_path):
     assert _state(opt2)[1] == expected_scalars
 
     model3, params3, opt3 = fresh_tp(DIM)
-    dcp.load(path, model=model3, strict=False)  # the parameters alone: the optimizer starts from nothing
+    # The parameters alone, strictly: a load without an optimizer does not count the optimizer entries as unexpected.
+    assert dcp.load(path, model=model3).unexpected == []
     train_step(model3, opt3, DIM, input_scale=0.5)
     _assert_some_differ(_model_shards(params3), expected)
     _assert_some_differ(_state(opt3)[0], expected_state)
@@ -175,13 +176,13 @@ def test_buffers_are_saved_and_loaded(tp_mesh, tmp_path):
     _assert_same_shards(_model_shards(fresh.parameters()), _model_shards(model.parameters()))
 
 
-def test_strict_load_names_the_mismatch(tp_mesh, tmp_path):
+def test_strict_load_names_the_mismatch(tp_mesh, tmp_path, expect_error):
     model, params, opt = fresh_tp(DIM)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model, optimizer=opt)
 
     other = _TPBlockPlus(DIM)
-    with pytest.raises(dcp.MissingKeyError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.MissingKeyError, r"live tensor\(s\) have no entry in the checkpoint: \['model/_TPBlockPlus/"):
         dcp.load(path, model=other)
     lenient = dcp.load(path, model=other, strict=False)
     assert lenient.missing and lenient.unexpected
@@ -193,20 +194,20 @@ def test_strict_load_names_the_mismatch(tp_mesh, tmp_path):
     model_only = str(tmp_path / "step_0000002")
     dcp.save(model_only, model=model)
     model2, params2, opt2 = fresh_tp(DIM)
-    with pytest.raises(dcp.MissingKeyError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.MissingKeyError, r"live tensor\(s\) have no entry in the checkpoint: \['optimizer/"):
         dcp.load(model_only, model=model2, optimizer=opt2)
     partial = dcp.load(model_only, model=model2, optimizer=opt2, strict=False)
     assert partial.missing and all(k.startswith("optimizer/") for k in partial.missing)
     assert not partial.unexpected
 
 
-def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_path):
+def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_path, expect_error):
     model, params, opt = fresh_tp(DIM)
-    with pytest.raises(dcp.IncompleteCheckpointError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.IncompleteCheckpointError, "nowhere is not a complete checkpoint"):
         dcp.load(str(tmp_path / "nowhere"), model=model)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model)
-    with pytest.raises(dcp.CheckpointError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.CheckpointError, "step_0000001 already exists; pass overwrite=True to replace it"):
         dcp.save(path, model=model)
     dcp.save(path, model=model, overwrite=True)
     assert dcp.is_complete(path)
@@ -407,7 +408,7 @@ def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_s
     assert flagged == ["model/llama/llama_block_0/attention/kv_linear/weight"], flagged
 
 
-def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
+def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_error):
     model = _Stack(DIM)
     ttml.fsdp.fully_shard(model)
     params = model.parameters()
@@ -449,7 +450,7 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
     )
     model3(x)  # leaves the module UNSHARDED
     assert model3._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
-    with pytest.raises(dcp.FSDPStateError):  # allow-pytest.raises: the fixture matches on device error text
+    with expect_error(dcp.FSDPStateError, "is not in its sharded state; pass reshard_fsdp=True"):
         dcp.save(str(tmp_path / "gathered"), model=model3, optimizer=opt3, reshard_fsdp=False)
     dcp.save(str(tmp_path / "resharded"), model=model3, optimizer=opt3)
     assert model3._fsdp_state.sharded_state == _ShardedState.SHARDED
