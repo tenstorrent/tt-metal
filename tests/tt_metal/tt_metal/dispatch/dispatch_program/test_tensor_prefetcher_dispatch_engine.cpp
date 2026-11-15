@@ -200,6 +200,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineWaitsOnS
     EXPECT_EQ(region.wait_for_retired(written + 1), written + 1) << "the kernels never passed the signalled wait";
 
     experimental::WaitForCqOnTensorPrefetcher(mesh_device.mesh_command_queue(), std::nullopt);
+    // The fence is a dispatcher write. Let it run before looking for its effect: a simulator advances fast
+    // dispatch only while the host drives the command queue, not while it polls L1.
+    distributed::Finish(mesh_device.mesh_command_queue());
     EXPECT_EQ(region.wait_for_retired(written + 2), written + 2) << "the kernels never passed the CQ fence";
     EXPECT_NE(region.read(fifo::signal_slot_offset(mesh_device.mesh_command_queue().id())), 0u)
         << "the dispatcher never wrote the CQ's fence slot";
