@@ -22,11 +22,13 @@ import math
 import os
 import re
 import secrets
+import shutil
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from ._boxes import Box
-from ._errors import CheckpointError, IncompleteCheckpoint, VersionError
+from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
 from ._layouts import Transform, transform_from_json
 from ._topology import Label
 
@@ -47,7 +49,6 @@ class ChunkRecord:
     file: int  # index into Index.files
     data_offset: int  # within the file's data section
     nbytes: int
-    writer_coord: tuple[int, ...]
     crc32: int | None = None
 
 
@@ -170,7 +171,6 @@ def _entry_to_json(entry: Entry) -> dict:
         "file": [c.file for c in chunks],
         "data_offset": [c.data_offset for c in chunks],
         "nbytes": _broadcast([c.nbytes for c in chunks]),
-        "writer_coord": [list(c.writer_coord) for c in chunks],
     }
     if any(c.crc32 is not None for c in chunks):
         table["crc32"] = [None if c.crc32 is None else f"{c.crc32:08x}" for c in chunks]
@@ -200,9 +200,8 @@ def _entry_from_json(key: str, value: dict) -> Entry:
     files = table["file"]
     data_offsets = table["data_offset"]
     nbytes = _expand(table["nbytes"], n)
-    coords = table["writer_coord"]
     crcs = table.get("crc32")
-    if not (len(offsets) == len(sizes) == len(files) == len(data_offsets) == len(nbytes) == len(coords) == n) or (
+    if not (len(offsets) == len(sizes) == len(files) == len(data_offsets) == len(nbytes) == n) or (
         crcs is not None and len(crcs) != n
     ):
         raise CheckpointError(f"index entry {key!r}: chunk table columns disagree with n={n}")
@@ -216,7 +215,6 @@ def _entry_from_json(key: str, value: dict) -> Entry:
             file=int(files[i]),
             data_offset=int(data_offsets[i]),
             nbytes=int(nbytes[i]),
-            writer_coord=tuple(coords[i]),
             crc32=crc_values[i],
         )
         for i in range(n)
@@ -260,7 +258,10 @@ _DIR_NAME = re.compile(r"^(?:(?P<prefix>.+)_)?step_(?P<step>\d+)$")
 
 
 def step_dir_name(step: int, prefix: str = "") -> str:
-    """``step_0001000``, or ``<prefix>_step_0001000``."""
+    """``step_0001000``, or ``<prefix>_step_0001000``. ``step`` must not be negative: ``parse_dir_name`` and
+    ``find_latest`` would not recognize the name."""
+    if int(step) < 0:
+        raise ValueError(f"step_dir_name: step must not be negative, got {step}")
     name = f"step_{int(step):07d}"
     return f"{prefix}_{name}" if prefix else name
 
@@ -277,7 +278,7 @@ def is_complete(path: str) -> bool:
     """A final directory name (no staging or replaced suffix) that holds an ``index.json``.
 
     Only the file's presence is checked, so the call stays cheap for ``find_latest``; ``read_index`` raises
-    ``IncompleteCheckpoint`` for an index that does not parse."""
+    ``IncompleteCheckpointError`` for an index that does not parse."""
     name = os.path.basename(path.rstrip("/"))
     if PARTIAL_MARK in name or REPLACED_MARK in name:
         return False
@@ -332,8 +333,9 @@ def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> N
     """Rename the staging directory to its final name after fsyncing it, then fsync the parent.
 
     With ``overwrite`` an existing final directory is first moved aside to ``<final>.replaced-<nonce>`` and deleted
-    once the new one is in place. If moving the new one in fails, the old one is moved back before the error is
-    raised, so a failed overwrite leaves the previous checkpoint where it was."""
+    once the new one is in place; if it cannot be deleted (busy files on NFS), a warning names it. If moving the new
+    one in fails, the old one is moved back before the error is raised, so a failed overwrite leaves the previous
+    checkpoint where it was."""
     final_dir = final_dir.rstrip("/")
     if os.path.exists(final_dir) and not overwrite:
         raise CheckpointError(f"{final_dir} already exists; pass overwrite=True to replace it")
@@ -356,9 +358,14 @@ def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> N
         raise
     _fsync_dir(os.path.dirname(final_dir) or ".")
     if replaced is not None:
-        import shutil
-
-        shutil.rmtree(replaced, ignore_errors=True)
+        left: list[str] = []
+        shutil.rmtree(replaced, onerror=lambda function, path, excinfo: left.append(path))
+        if left:
+            warnings.warn(
+                f"{final_dir} replaced the previous checkpoint, but {len(left)} entr(ies) of it could not be removed "
+                f"from {replaced} (first: {left[0]}); delete that directory by hand",
+                stacklevel=2,
+            )
 
 
 def _fsync_dir(path: str) -> None:
@@ -419,15 +426,27 @@ def write_index(directory: str, index: Index) -> None:
     _atomic_write_json(os.path.join(directory, INDEX_NAME), index.to_json())
 
 
+def _refuse_staging(directory: str) -> None:
+    if PARTIAL_MARK in os.path.basename(os.path.normpath(directory)):
+        raise IncompleteCheckpointError(
+            f"{directory} is a staging directory; it becomes a checkpoint only when its save is finalized"
+        )
+
+
 def read_index(directory: str) -> Index:
+    """The checkpoint's index as an ``Index``, the format's in-memory form, for inspecting a checkpoint without
+    touching a device. A staging directory or one without a readable index is an ``IncompleteCheckpointError``."""
+    _refuse_staging(directory)
     path = os.path.join(directory, INDEX_NAME)
     if not os.path.isfile(path):
-        raise IncompleteCheckpoint(f"{directory} has no {INDEX_NAME}; it is not a complete checkpoint")
+        raise IncompleteCheckpointError(f"{directory} has no {INDEX_NAME}; it is not a complete checkpoint")
     try:
         with open(path, "r", encoding="utf-8") as f:
             return Index.from_json(json.load(f))
+    except CheckpointError as err:
+        raise type(err)(f"{path}: {err}") from err
     except (ValueError, KeyError, TypeError, IndexError, AttributeError) as err:
-        raise IncompleteCheckpoint(
+        raise IncompleteCheckpointError(
             f"{path} is not a readable index ({type(err).__name__}: {err}); the checkpoint is corrupt or truncated"
         ) from err
 
@@ -436,22 +455,23 @@ def write_header(directory: str, header: dict) -> None:
     _atomic_write_json(os.path.join(directory, HEADER_NAME), header)
 
 
-def read_header(directory: str) -> dict:
+def read_header_json(directory: str) -> dict:
+    _refuse_staging(directory)
     path = os.path.join(directory, HEADER_NAME)
     if not os.path.isfile(path):
-        raise IncompleteCheckpoint(f"{directory} has no {HEADER_NAME}")
+        raise IncompleteCheckpointError(f"{directory} has no {HEADER_NAME}")
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except ValueError as err:
-        raise IncompleteCheckpoint(
+        raise IncompleteCheckpointError(
             f"{path} is not readable JSON ({err}); the checkpoint is corrupt or truncated"
         ) from err
 
 
 def read_user_header(directory: str) -> dict:
     """The custom user-defined header dict passed to ``save``, without touching any device."""
-    return read_header(directory).get("user", {})
+    return read_header_json(directory).get("user", {})
 
 
 def data_file_name(world_rank: int, mesh_id: int, coord: Sequence[int]) -> str:
