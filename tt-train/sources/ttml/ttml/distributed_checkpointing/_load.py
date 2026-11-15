@@ -22,12 +22,10 @@ from math import prod
 import numpy as np
 import ttnn
 
-from ._errors import CheckpointError, IncompleteCheckpoint
-from ._index import Index, is_complete, read_index
-from ._index import read_header as _read_header_json
+from ._errors import CheckpointError, IncompleteCheckpointError
+from ._index import Index, is_complete, read_header_json, read_index
 from ._planner import KeyPlan, LoadPlan, ReadItem, create_load_plan
-from ._safetensors import pread_all
-from ._safetensors import read_header as read_safetensors_header
+from ._safetensors import pread_all, read_file_header
 from ._state_dict import (
     NATIVE,
     NUMPY_CARRIERS,
@@ -173,9 +171,11 @@ def load(
     t0 = time.perf_counter()
     ckpt_dir = os.path.abspath(ckpt_dir)
     if not is_complete(ckpt_dir):
-        raise IncompleteCheckpoint(f"{ckpt_dir} is not a complete checkpoint (staging directory or missing index.json)")
+        raise IncompleteCheckpointError(
+            f"{ckpt_dir} is not a complete checkpoint (staging directory or missing index.json)"
+        )
     index: Index = read_index(ckpt_dir)
-    header = _read_header_json(ckpt_dir)
+    header = read_header_json(ckpt_dir)
 
     fsdp_states = fsdp_gate(model, reshard_fsdp)
     # A sharded FSDP module's cached shards are its current values: drop them now, so every value the load replaces is
@@ -208,11 +208,11 @@ def load(
             fds[file_index] = os.open(path, os.O_RDONLY)
             size = os.fstat(fds[file_index]).st_size
             if size != record.nbytes:
-                raise IncompleteCheckpoint(
+                raise IncompleteCheckpointError(
                     f"data file {path} is {size} bytes but the index records {record.nbytes}; the checkpoint is "
                     "truncated or corrupt"
                 )
-            _, data_start[file_index] = read_safetensors_header(path)
+            _, data_start[file_index] = read_file_header(path)
         workers = 32 if threads is None else threads
         read_s = place_s = 0.0
         reads = 0

@@ -172,7 +172,7 @@ def test_strict_load_names_the_mismatch(tp_mesh, tmp_path):
 
 def test_incomplete_directory_and_existing_directory_are_refused(tp_mesh, tmp_path):
     model, params, opt = fresh_tp(DIM)
-    with pytest.raises(dcp.IncompleteCheckpoint):  # allow-pytest.raises: the fixture matches on device error text
+    with pytest.raises(dcp.IncompleteCheckpointError):  # allow-pytest.raises: the fixture matches on device error text
         dcp.load(str(tmp_path / "nowhere"), model=model)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model)
@@ -252,7 +252,7 @@ def test_a_truncated_data_file_is_refused_before_anything_is_placed(tp_mesh, tmp
 
     model2, params2, opt2 = fresh_tp(DIM)
     before = _model_shards(params2)
-    with expect_error(dcp.IncompleteCheckpoint, "truncated or corrupt"):
+    with expect_error(dcp.IncompleteCheckpointError, "truncated or corrupt"):
         dcp.load(path, model=model2, optimizer=opt2)
     _assert_same_shards(_model_shards(params2), before)
 
