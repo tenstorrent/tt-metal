@@ -163,11 +163,12 @@ def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
 
 
 def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
-    staging, _ = begin_staging(str(tmp_path / "step_0000001"))
-    write_header(staging, {"format": "ttml-dcp", "version": 1, "user": {"step": 1, "run": "a"}, "train_state": {}})
-    assert read_user_header(staging) == {"step": 1, "run": "a"}
-    write_header(staging, {"format": "ttml-dcp", "version": 1})
-    assert read_user_header(staging) == {}, "a header without a user dict reads as empty"
+    ckpt = str(tmp_path / "step_0000001")
+    os.makedirs(ckpt)
+    write_header(ckpt, {"format": "ttml-dcp", "version": 1, "user": {"step": 1, "run": "a"}, "train_state": {}})
+    assert read_user_header(ckpt) == {"step": 1, "run": "a"}
+    write_header(ckpt, {"format": "ttml-dcp", "version": 1})
+    assert read_user_header(ckpt) == {}, "a header without a user dict reads as empty"
 
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
@@ -177,6 +178,10 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     write_header(staging, {"step": 10})
     write_index(staging, _index())
     assert not is_complete(staging) and find_latest(str(tmp_path)) is None
+    with expect_error(IncompleteCheckpointError, "is a staging directory"):
+        read_index(staging)
+    with expect_error(IncompleteCheckpointError, "is a staging directory"):
+        read_user_header(staging)
 
     finalize_staging(staging, final)
 

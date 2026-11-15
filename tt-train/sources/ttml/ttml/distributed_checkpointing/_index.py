@@ -380,7 +380,17 @@ def write_index(directory: str, index: Index) -> None:
     _atomic_write_json(os.path.join(directory, INDEX_NAME), index.to_json())
 
 
+def _refuse_staging(directory: str) -> None:
+    if PARTIAL_MARK in os.path.basename(os.path.normpath(directory)):
+        raise IncompleteCheckpointError(
+            f"{directory} is a staging directory; it becomes a checkpoint only when its save is finalized"
+        )
+
+
 def read_index(directory: str) -> Index:
+    """The checkpoint's index as an ``Index``, the format's in-memory form, for inspecting a checkpoint without
+    touching a device. A staging directory or one without a readable index is an ``IncompleteCheckpointError``."""
+    _refuse_staging(directory)
     path = os.path.join(directory, INDEX_NAME)
     if not os.path.isfile(path):
         raise IncompleteCheckpointError(f"{directory} has no {INDEX_NAME}; it is not a complete checkpoint")
@@ -398,6 +408,7 @@ def write_header(directory: str, header: dict) -> None:
 
 
 def read_header_json(directory: str) -> dict:
+    _refuse_staging(directory)
     path = os.path.join(directory, HEADER_NAME)
     if not os.path.isfile(path):
         raise IncompleteCheckpointError(f"{directory} has no {HEADER_NAME}")
