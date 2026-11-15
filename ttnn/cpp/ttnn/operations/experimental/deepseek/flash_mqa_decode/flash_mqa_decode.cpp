@@ -23,7 +23,11 @@ Tensor flash_mqa_decode(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<Tensor>& cos,
-    const std::optional<Tensor>& sin) {
+    const std::optional<Tensor>& sin,
+    const std::optional<Tensor>& new_kv,
+    uint32_t num_rows,
+    bool dense_selected,
+    uint32_t row_groups) {
     return ttnn::prim::flash_mqa_decode(
         q,
         kv,
@@ -39,7 +43,11 @@ Tensor flash_mqa_decode(
         memory_config,
         compute_kernel_config,
         cos,
-        sin);
+        sin,
+        new_kv,
+        num_rows,
+        dense_selected,
+        row_groups);
 }
 
 }  // namespace ttnn::experimental::deepseek

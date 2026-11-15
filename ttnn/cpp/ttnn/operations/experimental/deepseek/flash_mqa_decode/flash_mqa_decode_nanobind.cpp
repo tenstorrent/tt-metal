@@ -54,8 +54,28 @@ void bind_flash_mqa_decode(::nanobind::module_& mod) {
             sin (Optional[ttnn.Tensor]): bfloat16 32x32 TILE ``[1, 1, >=1, rope_dim]`` RoPE sines
                 (pass ``-sin`` for inverse RoPE).
 
+            new_kv (Optional[ttnn.Tensor]): block mode only: TILE ``[1, 1, 32, head_dim]`` with kv's dtype, rows
+                ``0 .. num_rows - 1`` = the block's new kv rows (not yet in the ring); the other rows must be finite.
+            num_rows (int): query rows per head, 1 (one token) or a DSpark verify block of 2, 4 or 8 rows at
+                positions ``p .. p + num_rows - 1``, causal inside the block. Block mode: ``q`` is
+                ``[1, 1, heads * num_rows, head_dim]`` row-major with row ``h * num_rows + j``; ``lengths`` is int32
+                ``[1, 1, 1, 4 + num_rows]`` = ``[p, ring_first_row, selected_first_row, 0, n_0, ..., n_{R-1}]``;
+                row ``j`` attends the ring slots (``position % ring_capacity``) of positions
+                ``max(0, p + j - ring_capacity + 1) .. p - 1``, ``new_kv`` rows ``0 .. j`` and ``n_j`` selected rows;
+                ``cos`` / ``sin`` are required, TILE ``[1, 1, num_rows, rope_dim]`` (tile ``(num_rows, 32)`` or
+                32x32), row ``j`` for block row ``j``. Returns TILE ``(num_rows, 32)``
+                ``[1, 1, num_rows, heads * head_dim]``.
+            dense_selected (bool): block mode: row ``j``'s selected rows are the first ``n_j`` rows of
+                ``selected_kv`` from ``selected_row_offset + selected_first_row`` (a shared ``dense_kv``) instead of
+                its own block starting ``j * selected_capacity`` rows later (per-row selections;
+                ``selected_capacity`` = ``selected_rows``, or the rows past the offset / ``num_rows`` when 0).
+
+            row_groups (int): block mode: the rows run on ``row_groups`` groups of ``num_s_blocks`` x head-group
+                cores, group ``rg`` attending rows ``rg, rg + row_groups, ...`` (a chunk shared by rows is read once
+                per group); 0 picks the most that divides ``num_rows`` and fits the grid's height.
+
         Returns:
-            ttnn.Tensor: ``[1, 1, heads, head_dim]`` bfloat16 row-major.
+            ttnn.Tensor: ``[1, 1, heads, head_dim]`` bfloat16 row-major (block mode: see ``num_rows``).
         )doc",
         &ttnn::experimental::deepseek::flash_mqa_decode,
         nb::arg("q"),
@@ -73,7 +93,11 @@ void bind_flash_mqa_decode(::nanobind::module_& mod) {
         nb::arg("memory_config") = std::nullopt,
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cos") = std::nullopt,
-        nb::arg("sin") = std::nullopt);
+        nb::arg("sin") = std::nullopt,
+        nb::arg("new_kv") = std::nullopt,
+        nb::arg("num_rows") = 1,
+        nb::arg("dense_selected") = false,
+        nb::arg("row_groups") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

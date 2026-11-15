@@ -46,7 +46,27 @@ namespace ttnn::experimental::deepseek {
 //   sin:                 optional TILE bfloat16 ``[1, 1, >=1, rope_dim]`` RoPE sines (pass ``-sin``
 //                        for inverse RoPE).
 //
+//   new_kv, num_rows, dense_selected, row_groups: a block of ``num_rows`` (2, 4 or 8) query rows, see below.
+//
 // Returns: ``[1, 1, heads, head_dim]`` bfloat16 row-major.
+//
+// Block mode (``num_rows`` R > 1, a DSpark verify block at positions p .. p + R - 1, causal inside the block):
+//   q:       ``[1, 1, heads * R, head_dim]`` bfloat16 row-major, row ``h * R + j`` (head-major).
+//   kv:      the ring, holding positions <= p - 1 at row ``ring_first_row + position % ring_capacity``.
+//   new_kv:  TILE ``[1, 1, 32, head_dim]`` with kv's dtype: rows 0 .. R - 1 are the block's new kv rows (the
+//            other rows must be finite; they are masked).
+//   lengths: row-major int32 ``[1, 1, 1, 4 + R]``: ``[p, ring_first_row, selected_first_row, 0, n_0 .. n_{R-1}]``.
+//            Row j attends the ring slots of positions ``max(0, p + j - (ring_capacity - 1)) .. p - 1``, new kv rows
+//            ``0 .. j``, and ``n_j`` selected rows: ``selected_kv`` rows from
+//            ``selected_row_offset + selected_first_row + j * selected_capacity`` (``dense_selected`` false) or from
+//            ``selected_row_offset + selected_first_row`` (``dense_selected`` true). ``selected_capacity`` is
+//            ``selected_rows`` (or, when 0, the rows past the offset / R per-row, all of them dense).
+//   cos/sin: TILE ``[1, 1, R, rope_dim]`` (tile ``(R, 32)`` or 32x32), row j for block row j. Required.
+//   row_groups: the rows run on row_groups groups of num_s_blocks x head-group cores (group rg attends rows rg,
+//            rg + row_groups, ...; a chunk shared by rows is read once per group); 0 picks the most that divides R
+//            and fits the grid's height.
+//   Returns TILE ``(R, 32)`` ``[1, 1, R, heads * head_dim]`` bfloat16; default memory: one L1 shard on q's first
+//   core when q is sharded, else q's memory config.
 Tensor flash_mqa_decode(
     const Tensor& q,
     const Tensor& kv,
@@ -62,6 +82,10 @@ Tensor flash_mqa_decode(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<Tensor>& cos = std::nullopt,
-    const std::optional<Tensor>& sin = std::nullopt);
+    const std::optional<Tensor>& sin = std::nullopt,
+    const std::optional<Tensor>& new_kv = std::nullopt,
+    uint32_t num_rows = 1,
+    bool dense_selected = false,
+    uint32_t row_groups = 0);
 
 }  // namespace ttnn::experimental::deepseek

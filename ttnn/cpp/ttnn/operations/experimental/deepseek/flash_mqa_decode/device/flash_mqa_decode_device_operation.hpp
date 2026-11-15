@@ -31,6 +31,13 @@ struct FlashMqaDecodeDeviceOperation {
         uint32_t ring_rows = 0;
         // Most selected rows attended; 0 for all of selected_kv's rows past selected_row_offset.
         uint32_t selected_rows = 0;
+        // Query rows per head (a DSpark verify block); 1 is the one-token path.
+        uint32_t num_rows = 1;
+        // num_rows > 1: true when every row attends a prefix of one shared selected_kv (per-row counts), false
+        // when row j attends its own block of selected_kv rows.
+        bool dense_selected = false;
+        // num_rows > 1: groups of cores the rows are split over (group rg attends rows rg, rg + row_groups, ...).
+        uint32_t row_groups = 1;
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -43,6 +50,8 @@ struct FlashMqaDecodeDeviceOperation {
         std::optional<Tensor> attention_sink;
         std::optional<Tensor> cos;
         std::optional<Tensor> sin;
+        // num_rows > 1: the block's new kv rows (TILE [1, 1, 32, head_dim], row j = block row j).
+        std::optional<Tensor> new_kv;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -50,6 +59,10 @@ struct FlashMqaDecodeDeviceOperation {
 
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+        static tt::tt_metal::ProgramDescriptor create_rows_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -82,6 +95,10 @@ ttnn::Tensor flash_mqa_decode(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& cos,
-    const std::optional<ttnn::Tensor>& sin);
+    const std::optional<ttnn::Tensor>& sin,
+    const std::optional<ttnn::Tensor>& new_kv = std::nullopt,
+    uint32_t num_rows = 1,
+    bool dense_selected = false,
+    uint32_t row_groups = 0);
 
 }  // namespace ttnn::prim
