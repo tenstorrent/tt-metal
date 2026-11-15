@@ -6,6 +6,9 @@
 
 import json
 import os
+import shutil
+
+import pytest
 
 
 from ttml.distributed_checkpointing._boxes import Box
@@ -155,7 +158,7 @@ def test_a_bad_index_names_its_file(tmp_path, expect_error):
         read_index(written(placement(["shard"])))
 
 
-def test_naming():
+def test_naming(expect_error):
     assert step_dir_name(1000) == "step_0001000"
     assert step_dir_name(7, prefix="llama8b") == "llama8b_step_0000007"
     assert parse_dir_name("step_0001000") == ("", 1000)
@@ -163,6 +166,8 @@ def test_naming():
     assert parse_dir_name("/runs/x/final") is None
     assert data_file_name(0, 0, (1, 2)) == "data/w000_m0_d1-2.safetensors"
     assert data_file_name(3, 1, (0,)) == "data/w003_m1_d0.safetensors"
+    with expect_error(ValueError, "step must not be negative"):
+        step_dir_name(-1)  # "step_-000001" would never parse back, so find_latest would not find it
 
 
 def test_find_latest_orders_by_parsed_step_and_skips_partials(tmp_path):
@@ -299,3 +304,20 @@ def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypa
     assert is_complete(final) and read_index(final).checkpoint_id == previous
     assert not [n for n in os.listdir(tmp_path) if ".replaced-" in n], "nothing left aside"
     assert os.path.isdir(staging2), "the new checkpoint is untouched for the caller to retry or delete"
+
+
+def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_path, monkeypatch):
+    final = str(tmp_path / "step_0000010")
+    staging, _ = begin_staging(final)
+    write_index(staging, _index())
+    finalize_staging(staging, final)
+    staging2, _ = begin_staging(final)
+    write_index(staging2, _index())
+
+    def busy_rmtree(path, onerror):  # an NFS server keeping an open file as .nfsXXXX
+        onerror(os.unlink, os.path.join(path, ".nfs0001"), (OSError, OSError("Device or resource busy"), None))
+
+    monkeypatch.setattr(shutil, "rmtree", busy_rmtree)
+    with pytest.warns(UserWarning, match="could not be removed"):
+        finalize_staging(staging2, final, overwrite=True)
+    assert is_complete(final), "the new checkpoint is in place"

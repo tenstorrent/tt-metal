@@ -21,6 +21,8 @@ import json
 import os
 import re
 import secrets
+import shutil
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -255,7 +257,10 @@ _DIR_NAME = re.compile(r"^(?:(?P<prefix>.+)_)?step_(?P<step>\d+)$")
 
 
 def step_dir_name(step: int, prefix: str = "") -> str:
-    """``step_0001000``, or ``<prefix>_step_0001000``."""
+    """``step_0001000``, or ``<prefix>_step_0001000``. ``step`` must not be negative: ``parse_dir_name`` and
+    ``find_latest`` would not recognize the name."""
+    if int(step) < 0:
+        raise ValueError(f"step_dir_name: step must not be negative, got {step}")
     name = f"step_{int(step):07d}"
     return f"{prefix}_{name}" if prefix else name
 
@@ -327,8 +332,9 @@ def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> N
     """Rename the staging directory to its final name after fsyncing it, then fsync the parent.
 
     With ``overwrite`` an existing final directory is first moved aside to ``<final>.replaced-<nonce>`` and deleted
-    once the new one is in place. If moving the new one in fails, the old one is moved back before the error is
-    raised, so a failed overwrite leaves the previous checkpoint where it was."""
+    once the new one is in place; if it cannot be deleted (busy files on NFS), a warning names it. If moving the new
+    one in fails, the old one is moved back before the error is raised, so a failed overwrite leaves the previous
+    checkpoint where it was."""
     final_dir = final_dir.rstrip("/")
     if os.path.exists(final_dir) and not overwrite:
         raise CheckpointError(f"{final_dir} already exists; pass overwrite=True to replace it")
@@ -351,9 +357,14 @@ def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> N
         raise
     _fsync_dir(os.path.dirname(final_dir) or ".")
     if replaced is not None:
-        import shutil
-
-        shutil.rmtree(replaced, ignore_errors=True)
+        left: list[str] = []
+        shutil.rmtree(replaced, onerror=lambda function, path, excinfo: left.append(path))
+        if left:
+            warnings.warn(
+                f"{final_dir} replaced the previous checkpoint, but {len(left)} entr(ies) of it could not be removed "
+                f"from {replaced} (first: {left[0]}); delete that directory by hand",
+                stacklevel=2,
+            )
 
 
 def _fsync_dir(path: str) -> None:

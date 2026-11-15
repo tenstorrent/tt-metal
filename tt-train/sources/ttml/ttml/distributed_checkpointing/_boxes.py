@@ -65,6 +65,11 @@ class Box:
     def contains(self, other: "Box") -> bool:
         return all(lo <= o and o + s <= hi for lo, hi, o, s in zip(self.offsets, self.ends, other.offsets, other.sizes))
 
+    def corresponding(self, inner: "Box", parent: "Box") -> "Box":
+        """The sub-box of this box at the place ``inner`` takes inside ``parent``, where ``parent`` is this box in
+        another coordinate system (same sizes, translated)."""
+        return Box(tuple(o + (i - p) for o, i, p in zip(self.offsets, inner.offsets, parent.offsets)), inner.sizes)
+
     def relative_to(self, origin: "Box") -> "Box":
         """This box in coordinates local to ``origin`` (which must contain it)."""
         if not origin.contains(self):
