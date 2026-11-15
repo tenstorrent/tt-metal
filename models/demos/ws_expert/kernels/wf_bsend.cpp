@@ -11,7 +11,8 @@
 // packet is fused with an atomic inc of the core's warr word for the slot. Two cores a branch (links 0 and 1, targets
 // c % 2 == link); the link-0 core also forwards the relay's credit entries (WF_CREDQ) between its packets.
 // RT: 0 my mesh id, 1 my chip id, 2 e hops, 3 w hops, 4 n hops, 5 s hops, 6 covered chips (bit mask), 7 ntargets,
-//     8.. targets (c | x << 8 | y << 16), then (not WF_LOCAL) the fabric connection args
+//     8.. targets (c | x << 8 | y << 16), then (not WF_LOCAL) the fabric connection args; WS_ITEMS (WF_LOCAL, targets
+//     = all NC cores in order): the number of owned slices and the slices (c | e << 8), in landing order
 // CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 CHT, 5 G, 6 GC, 7 wgu_ring, 8 wd_ring, 9 warr, 10 icred, 11 NC, 12 NCHIP, 13 own
 #include "api/dataflow/dataflow_api.h"
 #ifndef WF_LOCAL
@@ -87,81 +88,93 @@ void kernel_main() {
     uint32_t t_cb = 0, t_send = 0, t_cred = 0;
     const uint32_t tstart = wall();
 
-    for (uint32_t e = own; e < NEXP; e += NCHIP) {
+    // one slice: expert e's for target a's core
+    auto send_slice = [&](uint32_t e, uint32_t a) {
         const uint32_t g = e % G, n = e / G;
+        const uint32_t c = a & 0xFF, tx = (a >> 8) & 0xFF, ty = (a >> 16) & 0xFF;
+        if (n >= 2) {  // every covered chip freed expert n - 2's slot of core c
+            const uint32_t a0 = wall();
+            for (uint32_t k = 0; k < NCHIP; ++k) {
+                if (!((covered >> k) & 1)) {
+                    continue;
+                }
+                volatile tt_l1_ptr uint32_t* cr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icred + (k * NC + c) * 16);
+                do {
+                    drain();
+                    invalidate_l1_cache();
+                } while (*cr < n - 1);
+            }
+            t_cred += wall() - a0;
+        }
+        for (uint32_t u0 = 0; u0 < WTOT; u0 += CHT) {
+            const uint32_t dst =
+                u0 < WGU ? wgu_ring + ((n & 1) * WGU + u0) * tb : wd_ring + ((n & 1) * WDN + u0 - WGU) * tb;
+            const uint32_t a1 = wall();
+            while (!cb_pages_available_at_front(0, CHT)) {
+                drain();
+            }
+            cb_wait_front(0, CHT);
+            const uint32_t a2 = wall();
+            t_cb += a2 - a1;
+            const bool last = u0 + CHT >= WTOT;
+#ifdef WF_LOCAL
+            noc_async_write(get_read_ptr(0), get_noc_addr(tx, ty, dst), CHB);
+            if (last) {
+                noc_async_write_barrier();
+                noc_semaphore_inc(get_noc_addr(tx, ty, warr + (n & 1) * 16), 1);
+            } else {
+                noc_async_writes_flushed();
+            }
+#else
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* h = hdr[hi];
+            hi ^= 1;
+            if (!last) {
+                fabric_multicast_noc_unicast_write(
+                    &conn,
+                    h,
+                    my_chip,
+                    my_mesh,
+                    ranges,
+                    get_read_ptr(0),
+                    CHB,
+                    tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(tx, ty, dst)});
+            } else {
+                fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                    &conn,
+                    h,
+                    my_chip,
+                    my_mesh,
+                    ranges,
+                    get_read_ptr(0),
+                    CHB,
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                        get_noc_addr(tx, ty, dst), get_noc_addr(tx, ty, warr + (n & 1) * 16), 1, true});
+            }
+            noc_async_writes_flushed();  // (payload read out of CB 0 and the header out of L1)
+#endif
+            t_send += wall() - a2;
+            cb_pop_front(0, CHT);
+            drain();
+        }
+    };
+#ifdef WS_ITEMS
+    // the host's list of owned slices (c | e << 8), in landing order (target c is RT 8 + c)
+    const uint32_t ni = get_arg_val<uint32_t>(8 + nt);
+    for (uint32_t i = 0; i < ni; ++i) {
+        const uint32_t it = get_arg_val<uint32_t>(9 + nt + i);
+        send_slice(it >> 8, get_arg_val<uint32_t>(8 + (it & 0xFF)));
+    }
+#else
+    for (uint32_t e = own; e < NEXP; e += NCHIP) {
         for (uint32_t t = 0; t < nt; ++t) {
             const uint32_t a = get_arg_val<uint32_t>(8 + t);
-            const uint32_t c = a & 0xFF, tx = (a >> 8) & 0xFF, ty = (a >> 16) & 0xFF;
-            if (c / GC != g) {
-                continue;
-            }
-            if (n >= 2) {  // every covered chip freed expert n - 2's slot of core c
-                const uint32_t a0 = wall();
-                for (uint32_t k = 0; k < NCHIP; ++k) {
-                    if (!((covered >> k) & 1)) {
-                        continue;
-                    }
-                    volatile tt_l1_ptr uint32_t* cr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icred + (k * NC + c) * 16);
-                    do {
-                        drain();
-                        invalidate_l1_cache();
-                    } while (*cr < n - 1);
-                }
-                t_cred += wall() - a0;
-            }
-            for (uint32_t u0 = 0; u0 < WTOT; u0 += CHT) {
-                const uint32_t dst =
-                    u0 < WGU ? wgu_ring + ((n & 1) * WGU + u0) * tb : wd_ring + ((n & 1) * WDN + u0 - WGU) * tb;
-                const uint32_t a1 = wall();
-                while (!cb_pages_available_at_front(0, CHT)) {
-                    drain();
-                }
-                cb_wait_front(0, CHT);
-                const uint32_t a2 = wall();
-                t_cb += a2 - a1;
-                const bool last = u0 + CHT >= WTOT;
-#ifdef WF_LOCAL
-                noc_async_write(get_read_ptr(0), get_noc_addr(tx, ty, dst), CHB);
-                if (last) {
-                    noc_async_write_barrier();
-                    noc_semaphore_inc(get_noc_addr(tx, ty, warr + (n & 1) * 16), 1);
-                } else {
-                    noc_async_writes_flushed();
-                }
-#else
-                volatile tt_l1_ptr PACKET_HEADER_TYPE* h = hdr[hi];
-                hi ^= 1;
-                if (!last) {
-                    fabric_multicast_noc_unicast_write(
-                        &conn,
-                        h,
-                        my_chip,
-                        my_mesh,
-                        ranges,
-                        get_read_ptr(0),
-                        CHB,
-                        tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(tx, ty, dst)});
-                } else {
-                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                        &conn,
-                        h,
-                        my_chip,
-                        my_mesh,
-                        ranges,
-                        get_read_ptr(0),
-                        CHB,
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            get_noc_addr(tx, ty, dst), get_noc_addr(tx, ty, warr + (n & 1) * 16), 1, true});
-                }
-                noc_async_writes_flushed();  // (payload read out of CB 0 and the header out of L1)
-#endif
-                t_send += wall() - a2;
-                cb_pop_front(0, CHT);
-                drain();
+            if ((a & 0xFF) / GC == e % G) {
+                send_slice(e, a);
             }
         }
     }
+#endif
 #ifdef WF_CREDQ
     while (!qdone) {  // (other chips' credits still pass through this connection)
         drain();

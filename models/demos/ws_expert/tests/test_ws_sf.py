@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Store-and-forward weight landing (ws_sf.py): every chip runs the 4 groups on its own tokens, expert e owned by
-chip e % NCHIP; the weights travel one fabric hop at a time around Hamiltonian cycles. test_sf_schedule checks the
+"""Store-and-forward weight landing (ws_sf.py): every chip runs the 4 groups on its own tokens, each expert's slices
+owned by chips spread round the cycles; the weights travel one fabric hop at a time around Hamiltonian cycles. test_sf_schedule checks the
 ring streams on the host; the device tests make the inputs once and launch WS_WARM (default 20) warm-up + WS_MEAS
 (default 5) measured times (every launch builds the program again: fresh credit / arrival words). The steady-state time
 per expert comes from the group cores' expert-done stamps; PCC (each group's last expert) is checked on the last
@@ -17,28 +17,36 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.ws_expert.bench_util import aiclk_mhz
-from models.demos.ws_expert.tests.test_ws_fab_bench import (
-    FAB,
-    TORUS,
-    chip_pcc,
-    chip_time,
-    make_inputs,
-    make_inputs_owned,
-)
+from models.demos.ws_expert.bench_util import aiclk_mhz, quantize, to_dev
+from models.demos.ws_expert.tests.test_ws_fab_bench import FAB, TORUS, chip_pcc, chip_time, make_inputs
+from models.demos.ws_expert.ws_expert import interleave_gu
+from models.demos.ws_expert.ws_fab import slice_layout
 from models.demos.ws_expert.ws_group import GCfg
-from models.demos.ws_expert.ws_sf import INJ, TERM, RCfg, build_sf, conveyor, flow, make_tables, rings, torus_cycles
+from models.demos.ws_expert.ws_sf import (
+    INJ,
+    TERM,
+    RCfg,
+    build_sf,
+    conveyor,
+    flow,
+    local_items,
+    make_tables,
+    owner_table,
+    rings,
+    torus_cycles,
+)
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
 
 
-def check_schedule(shape, rc: RCfg, cfg: GCfg, seqs):
+def check_schedule(shape, rc: RCfg, cfg: GCfg, seqs, items=None):
     """The ring orders (ws_sf.conveyor): each chip's outgoing stream on a ring is exactly the next chip's incoming one,
-    only owners inject, and every chip receives every slice of every expert it does not own exactly once. Returns the
-    incoming packets per chip and ring (load balance)."""
+    only owners inject, every chip receives every slice it does not own exactly once and its local lander lands the
+    ones it owns. Returns the incoming packets per chip and ring (load balance)."""
     R, Cn = shape
     NCHIP = R * Cn
+    own = owner_table(shape, rc, cfg)
     got = [Counter() for _ in range(NCHIP)]
     load = {}
     for f, (lane, d, cyc, _) in enumerate(rings(shape, rc)):
@@ -49,13 +57,16 @@ def check_schedule(shape, rc: RCfg, cfg: GCfg, seqs):
             inc = [t[1:] for t in seqs[(nx, f)] if t[0] != INJ]
             assert out == inc, f"ring {f}: stream {chip} -> {nx} differs"
             for kind, e, c, u in seqs[(chip, f)]:
-                assert kind != INJ or e % NCHIP == chip
+                assert kind != INJ or own[e][c % cfg.GC] == chip
                 if kind != INJ and u == 0:
                     got[chip][(e, c)] += 1
             load[(chip, f)] = sum(k != INJ for k, *_ in seqs[(chip, f)])
     for me in range(NCHIP):
-        want = {(e, (e % cfg.G) * cfg.GC + j) for e in range(cfg.nexp) if e % NCHIP != me for j in range(cfg.GC)}
+        want = {(e, (e % cfg.G) * cfg.GC + j) for e in range(cfg.nexp) for j in range(cfg.GC) if own[e][j] != me}
         assert set(got[me]) == want and all(v == 1 for v in got[me].values()), f"chip {me} receives a wrong slice set"
+        if items is not None:
+            owned = [(e, (e % cfg.G) * cfg.GC + j) for e in range(cfg.nexp) for j in range(cfg.GC) if own[e][j] == me]
+            assert sorted((it >> 8, it & 0xFF) for it in items[me]) == owned, f"chip {me}: local lander slices"
     return load
 
 
@@ -63,8 +74,8 @@ def check_schedule(shape, rc: RCfg, cfg: GCfg, seqs):
 def test_sf_schedule(shape, nexp):
     cfg = GCfg(nexp=nexp, G=4)
     rc = RCfg() if shape[0] == 2 else RCfg(cycles=torus_cycles(*shape))
-    seqs, steps = conveyor(shape, rc, cfg)
-    load = check_schedule(shape, rc, cfg, seqs)
+    seqs, steps, last = conveyor(shape, rc, cfg)
+    load = check_schedule(shape, rc, cfg, seqs, local_items(shape, rc, cfg, last))
     out_max = max(sum(k != TERM for k, *_ in sq) for sq in seqs.values())
     logger.info(
         f"WSS schedule {shape} {nexp} experts: incoming packets a chip and ring min {min(load.values())} max "
@@ -72,6 +83,65 @@ def test_sf_schedule(shape, nexp):
         f"({100 * out_max / steps:.1f}% busy)"
     )
     assert max(load.values()) - min(load.values()) <= max(load.values()) // 4
+
+
+def make_inputs_spread(mesh, cfg: GCfg, rc: RCfg, Ms, seed=0):
+    """Inputs for a whole-mesh run with owners per slice (ws_sf.owner_table): each chip's slices tensor holds only the
+    slices it owns, slice j of expert e at local index (e // N) GC + j (WS_OWN_SLICES), weights drawn in bf16;
+    references for each group's last expert."""
+    N = mesh.get_num_devices()
+    own = owner_table(tuple(mesh.shape), rc, cfg)
+    torch.manual_seed(seed)
+    x = torch.randn(cfg.T + 1, cfg.H)
+    x[cfg.T] = 0
+    idx = torch.full((cfg.nexp, cfg.RMAX * 32), cfg.T, dtype=torch.int32)
+    for e, M in enumerate(Ms):
+        idx[e, :M] = torch.randperm(cfg.T)[:M].to(torch.int32)
+    counts = torch.tensor(Ms, dtype=torch.int32).reshape(1, -1)
+    wg = torch.randn(cfg.nexp, cfg.H, cfg.I, dtype=torch.bfloat16) / cfg.H**0.5
+    wu = torch.randn(cfg.nexp, cfg.H, cfg.I, dtype=torch.bfloat16) / cfg.H**0.5
+    wd = torch.randn(cfg.nexp, cfg.I, cfg.H, dtype=torch.bfloat16) / cfg.I**0.5
+    K, dw = cfg.nexp // N, 32 * cfg.DCOLS
+    per_chip = []
+    for X in range(N):
+        # chip X's slices as K whole experts: local expert k's slice j is slice j of the expert in [k N, (k + 1) N)
+        # that X owns (gate / up column tile j, down columns [dw j, dw (j + 1)))
+        vg, vu, vd = torch.empty(K, cfg.H, cfg.I), torch.empty(K, cfg.H, cfg.I), torch.empty(K, cfg.I, cfg.H)
+        for k in range(K):
+            for j in range(cfg.GC):
+                (e,) = [e for e in range(k * N, (k + 1) * N) if own[e][j] == X]
+                vg[k][:, 32 * j : 32 * j + 32] = wg[e][:, 32 * j : 32 * j + 32].float()
+                vu[k][:, 32 * j : 32 * j + 32] = wu[e][:, 32 * j : 32 * j + 32].float()
+                vd[k][:, dw * j : dw * j + dw] = wd[e][:, dw * j : dw * j + dw].float()
+        per_chip.append(slice_layout(cfg, rc.CHT, vg, vu, vd))
+        del vg, vu, vd
+    rm = lambda t, dt: ttnn.from_torch(t, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh)
+    dev = dict(
+        x_t=rm(x, ttnn.bfloat16),
+        idx_t=rm(idx, ttnn.uint32),
+        counts_t=rm(counts, ttnn.uint32),
+        ws_t=ttnn.from_torch(
+            torch.cat(per_chip, 0),
+            dtype=cfg.w_dt,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        ),
+        out_t=to_dev(torch.zeros(cfg.G * cfg.RMAX * 32, cfg.H), cfg.out_dt, mesh),
+    )
+    del per_chip
+    refs = []
+    for g in range(cfg.G):
+        e = max(range(g, cfg.nexp, cfg.G))
+        wguq = quantize(interleave_gu(wg[e].float(), wu[e].float()), cfg.w_dt)
+        wdq = quantize(wd[e].float(), cfg.w_dt)
+        X = quantize(x[idx[e].long()].to(torch.bfloat16).float(), cfg.x_dt)
+        wgq = wguq.reshape(cfg.H, -1, 2, 32)[:, :, 0].reshape(cfg.H, cfg.I)
+        wuq = wguq.reshape(cfg.H, -1, 2, 32)[:, :, 1].reshape(cfg.H, cfg.I)
+        h = quantize(torch.nn.functional.silu(X @ wgq) * (X @ wuq), cfg.h_dt)
+        refs.append((e, (h @ wdq)[: Ms[e]]))
+    return dev, refs
 
 
 def fwd_report(rc: RCfg, nf, sst_chip, clk):
@@ -102,7 +172,7 @@ def fwd_report(rc: RCfg, nf, sst_chip, clk):
 def run(mesh, cfg: GCfg, rc: RCfg, Ms, dev, refs, tag, warm=WARM, meas=MEAS):
     chips = list(range(mesh.get_num_devices()))
     tabs = make_tables(mesh, cfg, rc)
-    check_schedule(tuple(mesh.shape), rc, cfg, tabs["seqs"])
+    check_schedule(tuple(mesh.shape), rc, cfg, tabs["seqs"], tabs["items"])
     clk = aiclk_mhz(0)
     nf = len(rings(tuple(mesh.shape), rc))
     rows, fw = [], None
@@ -181,12 +251,11 @@ def test_ws_sf_tray(mesh_device, M):
 @pytest.mark.parametrize("nexp,T,M", [(128, 8192, 586), (128, 8192, 2048)], ids=["e128m586", "e128m2048"])
 def test_ws_sf_glx(mesh_device, nexp, T, M):
     """Stage B: the whole Galaxy (8 x 4, FABRIC_2D_TORUS_XY), two edge-disjoint Hamiltonian cycles x 2 directions x 2
-    links = 8 directed rings, one per incoming link of every chip; each chip holds only its own experts' slices."""
-    nchip = mesh_device.get_num_devices()
+    links = 8 directed rings, one per incoming link of every chip; each chip holds only the slices it owns."""
     cfg = GCfg(nexp=nexp, G=4, T=T)
     rc = rcfg_from_env(cycles=torus_cycles(*tuple(mesh_device.shape)), own_slices=True)
     Ms = [M] * cfg.nexp
-    dev, refs = make_inputs_owned(mesh_device, cfg, rc.CHT, Ms, nchip)
+    dev, refs = make_inputs_spread(mesh_device, cfg, rc, Ms)
     warm = int(os.environ.get("WS_SF_WARM", WARM))
     rows, pcs, fw = run(mesh_device, cfg, rc, Ms, dev, refs, f"glx {nexp} experts M {M}", warm=warm)
     assert min(pcs.values()) > 0.999

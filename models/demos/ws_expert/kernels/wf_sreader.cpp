@@ -8,8 +8,10 @@
 // chip's DRAM into CB 0 (SCB chunks of CHT tiles) for the fabric sender (NCRISC), RD_DEPTH chunks in flight (one
 // transaction id each). The slices are stored chunk-contiguous (ws_fab.slice_layout): chunk q = (e GC + j) NCH + u
 // is one read of CHT tiles from bank q % 8 (576 B page reads were issue-bound at ~10 GB/s a sender).
-// RT: 0 slices addr, 1 own (reads experts e % NOWN == own), 2 ntargets, 3.. targets (c | x << 8 | y << 16)
-// WS_OWN_SLICES: the slices tensor holds only this chip's experts, in expert order (local index e / NOWN)
+// RT: 0 slices addr, 1 own (reads experts e % NOWN == own), 2 ntargets, 3.. targets (c | x << 8 | y << 16), then with
+//     WS_ITEMS: the number of owned slices and the slices (c | e << 8) to read, in order (instead of own's experts)
+// WS_OWN_SLICES: the slices tensor holds only the slices this chip owns: slice j of expert e at local index
+//     (e / NOWN) GC + j
 // CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 PAIRS, 5 HT, 6 CHT, 7 G, 8 GC, then TensorAccessorArgs(slices)
 #include "api/dataflow/dataflow_api.h"
 
@@ -46,6 +48,36 @@ void kernel_main() {
         cb_push_back(0, CHT);
         ++pushed;
     };
+    auto read_slice = [&](uint32_t e, uint32_t j) {
+        for (uint32_t u = 0; u < NCH; ++u) {
+            const uint32_t r0 = wall();
+            cb_reserve_back(0, (issued - pushed + 1) * CHT);
+            const uint32_t i0 = wall();
+            t_res += i0 - r0;
+            uint32_t l1 = base + (issued % SCB) * CHB;
+            noc_async_read_set_trid(1 + issued % D);
+            // chunk q's CHT tiles are pages (q / 8) CHT 8 + q % 8 + 8 k: contiguous in one bank
+#ifdef WS_OWN_SLICES
+            const uint32_t q = ((e / NOWN) * GC + j) * NCH + u;  // only the slices this chip owns (local index e / NOWN)
+#else
+            const uint32_t q = (e * GC + j) * NCH + u;
+#endif
+            noc_async_read(ws.get_noc_addr((q / 8) * CHT * 8 + q % 8), l1, CHB);
+            ++issued;
+            t_issue += wall() - i0;
+            if (issued - pushed >= D) {
+                retire();
+            }
+        }
+    };
+#ifdef WS_ITEMS
+    // the host's list of owned slices (c | e << 8), in the order the sender lands them
+    const uint32_t ni = get_arg_val<uint32_t>(3 + nt);
+    for (uint32_t i = 0; i < ni; ++i) {
+        const uint32_t it = get_arg_val<uint32_t>(4 + nt + i);
+        read_slice(it >> 8, (it & 0xFF) % GC);
+    }
+#else
     const uint32_t own = get_arg_val<uint32_t>(1);  // this chip's experts: e % NOWN == own
     for (uint32_t e = 0; e < NEXP; ++e) {
         if (e % NOWN != own) {
@@ -54,32 +86,12 @@ void kernel_main() {
         const uint32_t g = e % G;
         for (uint32_t t = 0; t < nt; ++t) {
             const uint32_t c = get_arg_val<uint32_t>(3 + t) & 0xFF;
-            if (c / GC != g) {
-                continue;
-            }
-            const uint32_t j = c % GC;
-            for (uint32_t u = 0; u < NCH; ++u) {
-                const uint32_t r0 = wall();
-                cb_reserve_back(0, (issued - pushed + 1) * CHT);
-                const uint32_t i0 = wall();
-                t_res += i0 - r0;
-                uint32_t l1 = base + (issued % SCB) * CHB;
-                noc_async_read_set_trid(1 + issued % D);
-                // chunk q's CHT tiles are pages (q / 8) CHT 8 + q % 8 + 8 k: contiguous in one bank
-#ifdef WS_OWN_SLICES
-                const uint32_t q = ((e / NOWN) * GC + j) * NCH + u;  // slices of this chip's experts only
-#else
-                const uint32_t q = (e * GC + j) * NCH + u;
-#endif
-                noc_async_read(ws.get_noc_addr((q / 8) * CHT * 8 + q % 8), l1, CHB);
-                ++issued;
-                t_issue += wall() - i0;
-                if (issued - pushed >= D) {
-                    retire();
-                }
+            if (c / GC == g) {
+                read_slice(e, c % GC);
             }
         }
     }
+#endif
     while (pushed < issued) {
         retire();
     }

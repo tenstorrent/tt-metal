@@ -15,10 +15,13 @@
 // core does the same for its pair: W_RELAY changes go to the next chip, batched by CRB while packets are flowing.
 // Every wait polls the relay, so credits keep moving while this ring is blocked.
 // Deadlock freedom: the tables are the time order of a synchronous model of all rings (ws_sf.conveyor) in which each
-// packet goes on the moment it arrives and every expert e is injected only after experts <= e - 2G of its group have
-// reached every chip. Each wait here is on an event that comes earlier in that model's time (the previous table entry,
-// the packet's previous hop, the downstream slot freed S packets earlier, and for landing the group slot freed by
-// expert e - 2G, all of whose packets landed earlier), so no cycle of waits can form, whatever the real timing.
+// packet goes on the moment it arrives, and a packet of a group's expert n reaches each chip only after every packet
+// of the group's experts up to n - 1 (the group cores free expert n - 2's slot once expert n - 1's weights are in).
+// Each wait here is on an event earlier in that model's time: the previous table entry, the packet's previous hop,
+// the downstream slot freed S packets earlier (S > the model's hop time), and for landing the group slot of expert
+// n - 2, freed once the chip has every slice of the experts up to n - 1: ring packets that arrived earlier, and the
+// chip's own slices, which its local lander takes in the order of the model time after which their slot can be freed
+// (ws_sf.local_items). So no cycle of waits can form, whatever the real timing.
 // At the end the core keeps relaying until its pair's last count went out and downstream returned all its slots, so
 // no fabric write lands after the program ends.
 // RT: 0 table length, 1 packets in (FWD + TERM), 2 packets out (INJ + FWD), 3 packets in on the pair's ring,

@@ -1,24 +1,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""ws_expert groups with the weights forwarded store-and-forward around Hamiltonian cycles (every chip runs experts;
-expert e is owned by chip e % NCHIP, as in ws_fab.build_all).
+"""ws_expert groups with the weights forwarded store-and-forward around Hamiltonian cycles (every chip runs experts on
+its own tokens and owns part of the weights).
 
 The fabric's own multicast trees send everything over an N/S trunk with E/W teeth and the shortest way round, which
 loads some links about twice their share. Here every packet goes one hop only: a cycle through all chips, in each
 direction, on each of its links, is a directed ring with one forwarder core per chip. A lane is a (cycle, link) pair;
-the group cores of every expert are dealt to the lanes (j % NL), and each slice goes both ways round its lane from the
+the group cores of every expert are dealt to the lanes (j % NL), and each slice goes both ways round its lane from its
 owner and stops half way (reach: the two directions add up to N - 1 hops; on an even ring the half-way chip alternates
-slice by slice).
+slice by slice). The owners are per slice and spread round the lane's cycle (owner_table), so that the few experts a
+group may have in flight are injected from all round every ring.
 
 Order on the rings. A forwarder handles its packets in a fixed order known to both ends, so packets carry no
 metadata. The order comes from a synchronous model of each ring as a conveyor (conveyor()): every hop takes D packet
 times, a chip forwards what arrives unless it ends there, and puts its own next packet into every free slot. Expert-
-major order (all of an expert's packets before the next expert's) serializes the owners around the ring (about 55% of
-the link in a model run); the conveyor keeps every link busy (99% in the same model). Owners inject their experts in
-order, and expert e only once every earlier expert of its group up to e - 2G has reached all chips: the group cores'
-2-slot rings then never hold back a packet that an older expert is waiting behind (see wr_fwd.cpp for why this, with
-all forwarders following the model's order, cannot deadlock).
+major order (all of an expert's packets before the next expert's) serializes the owners around the ring; the conveyor
+keeps the links busy. A group core frees expert n - 2's ring slot only once expert n - 1's weights are in (its down
+projection lags into the next expert's rows), so a packet of expert n may reach a chip only after every packet of the
+group's experts up to n - 1 has (the model's window); with all forwarders and the local landers following the model's
+order, every wait is on an earlier model event and the rings cannot deadlock (wr_fwd.cpp).
 
 Per directed ring and chip one forwarder core:
 - BRISC (wr_land.cpp): loads this ring's order (a DRAM table), reads the chip's own slices from DRAM into CB 0 ahead of
@@ -26,9 +27,9 @@ Per directed ring and chip one forwarder core:
   arrival increment after a slice's last packet;
 - NCRISC (wr_fwd.cpp): sends injected and passing packets one hop into the next chip's forwarder (fused write +
   arrival increment), and relays the opposite ring's per-hop staging credits to the next chip.
-A local lander (wf_sreader + wf_bsend WF_LOCAL) writes the chip's own slices into its own group cores, and a relay core
-(wr_relay.cpp) fans the group cores' freed-slot counts out to the chip's landers: no credit travels more than one hop,
-and none goes back to the owners.
+A local lander (wf_sreader + wf_bsend WF_LOCAL) writes the chip's own slices into its own group cores in the order
+local_items() gives, and a relay core (wr_relay.cpp) fans the group cores' freed-slot counts out to the chip's
+landers: no credit travels more than one hop, and none goes back to the owners.
 """
 
 from collections import deque
@@ -59,8 +60,8 @@ class RCfg:
     # forwarder cores, index 2 lane + dir (outside the groups; lanes = cycles x links)
     fwd: tuple = ((9, 0), (10, 0), (9, 1), (10, 1), (9, 2), (10, 2), (9, 3), (10, 3))
     cycles: tuple = None  # Hamiltonian cycles (mesh coordinates in ring order); default: the row snake
-    own_slices: bool = False  # each chip's slices tensor holds only its own experts (WS_OWN_SLICES)
-    owners: tuple = None  # chip of expert class k = e % NCHIP (default: chip k)
+    own_slices: bool = False  # each chip's slices tensor holds only the slices it owns (WS_OWN_SLICES)
+    spread: bool = True  # owners per slice, spread round the cycles (owner_table); False: chip e % N owns expert e
 
 
 def snake(shape):
@@ -136,10 +137,6 @@ def reach(e, s, d, N):
     return kf if d == 0 else N - 1 - kf
 
 
-def owner_of(rc: RCfg, NCHIP, e):
-    return rc.owners[e % NCHIP] if rc.owners else e % NCHIP
-
-
 def rings(mesh_shape, rc: RCfg):
     """Directed rings [(lane, dir, cycle, link)], index 2 lane + dir."""
     R, Cn = mesh_shape
@@ -159,12 +156,35 @@ def flow(cyc, d, Cn):
     return chips if d == 0 else [chips[0]] + chips[1:][::-1]
 
 
+def owner_table(shape, rc: RCfg, cfg: GCfg):
+    """own[e][j]: the chip that holds and injects slice j of expert e. Spread (default): slice s of lane l (j = NL s +
+    l) is owned by the chip at position (e + s N // (GC / NL)) % N of the lane's cycle, so every expert is injected from
+    all round each cycle and a chip owns the slices j of the experts e = const(j) mod N (nexp / N of them per j, local
+    index e // N: WS_OWN_SLICES). Otherwise chip e % N owns all of expert e."""
+    R, Cn = shape
+    NCHIP = R * Cn
+    rl = rings(shape, rc)
+    NL = len(rl) // 2
+    assert cfg.GC % NL == 0
+    if rc.spread:
+        assert cfg.nexp % NCHIP == 0, "every chip owns as many slices of each core"
+    own = [[e % NCHIP] * cfg.GC for e in range(cfg.nexp)]
+    for e in range(cfg.nexp):
+        for j in range(cfg.GC if rc.spread else 0):
+            r, c = rl[2 * (j % NL)][2][(e + (j // NL) * NCHIP // (cfg.GC // NL)) % NCHIP]
+            own[e][j] = r * Cn + c
+    return own
+
+
 def conveyor(shape, rc: RCfg, cfg: GCfg):
     """The rings' packet order from a synchronous conveyor model (module doc). Every hop takes D steps; a packet never
     waits once injected, so its arrival times are known when it is injected. An owner may inject a packet of expert e
-    (the n-th of group g) once all packets of the group's experts n' <= n - 2 are injected and the packet reaches
-    every chip on its path after their last packet there. Returns {(chip, ring): [(kind, e, c, u)]} (each chip's in-
-    and out-stream merged in time order, TERM packets included) and the model's steps."""
+    (the n-th of group g) once all packets of the group's experts n' <= n - 1 are injected and the packet reaches
+    every chip on its path after their last packet there (a group core frees expert n - 2's slot only once expert
+    n - 1's weights are in: its down projection lags into the next expert's rows). Owners keep one queue a group and
+    inject the oldest expert the window allows. Returns {(chip, ring): [(kind, e, c, u)]} (each chip's in- and out-
+    stream merged in time order, TERM packets included), the model's steps and the arrival times
+    last[e][chip] (the expert's last packet at the chip)."""
     R, Cn = shape
     NCHIP = R * Cn
     G, GC, D = cfg.G, cfg.GC, rc.D
@@ -173,10 +193,11 @@ def conveyor(shape, rc: RCfg, cfg: GCfg):
     NL = len(rl) // 2
     order = [flow(cyc, d, Cn) for _, d, cyc, _ in rl]
     N = [len(o) for o in order]
+    own = owner_table(shape, rc, cfg)
     queue, uninj = [], [0] * cfg.nexp
     for f, (lane, d, cyc, _) in enumerate(rl):
         pos = {chip: i for i, chip in enumerate(order[f])}
-        qf = [deque() for _ in range(N[f])]
+        qf = [[deque() for _ in range(G)] for _ in range(N[f])]  # owner queues, one per group
         for e in range(cfg.nexp):
             for s in range(GC // NL):
                 r = reach(e, s, d, N[f])
@@ -184,7 +205,7 @@ def conveyor(shape, rc: RCfg, cfg: GCfg):
                     continue
                 c = (e % G) * GC + NL * s + lane
                 for u in range(NCH):
-                    qf[pos[owner_of(rc, NCHIP, e)]].append((e, c, u, r))
+                    qf[pos[own[e][NL * s + lane]]][e % G].append((e, c, u, r))
                 uninj[e] += NCH
         queue.append(qf)
     last = [dict() for _ in range(cfg.nexp)]  # chip -> last arrival time of the expert's packets
@@ -221,28 +242,51 @@ def conveyor(shape, rc: RCfg, cfg: GCfg):
                     else:
                         sq.append((FWD, e, c, u))
                         out = (e, c, u, r, h + 1)
-                if out is None and qf[p]:
-                    e, c, u, r = qf[p][0]
-                    g, n = e % G, e // G
-                    ok = n < 2 or (
-                        ready[g] >= n - 1
-                        and all(t + D * h > cum[g][n - 1].get(of[(p + h) % Nf], -1) for h in range(1, r + 1))
-                    )
-                    if ok:
-                        qf[p].popleft()
-                        sq.append((INJ, e, c, u))
-                        out = (e, c, u, r, 1)
-                        for h in range(1, r + 1):
-                            q = of[(p + h) % Nf]
-                            last[e][q] = max(last[e].get(q, -1), t + D * h)
-                        uninj[e] -= 1
-                        if uninj[e] == 0:
-                            advance(g)
+                # the oldest expert at the head of an owner queue whose group window allows it
+                pick = None
+                for qg in qf[p] if out is None else ():
+                    if qg and (pick is None or qg[0][0] < pick[0][0]):
+                        e, c, u, r = qg[0]
+                        g, n = e % G, e // G
+                        if n < 1 or (
+                            ready[g] >= n
+                            and all(t + D * h > cum[g][n].get(of[(p + h) % Nf], -1) for h in range(1, r + 1))
+                        ):
+                            pick = qg
+                if pick is not None:
+                    e, c, u, r = pick.popleft()
+                    sq.append((INJ, e, c, u))
+                    out = (e, c, u, r, 1)
+                    for h in range(1, r + 1):
+                        q = of[(p + h) % Nf]
+                        last[e][q] = max(last[e].get(q, -1), t + D * h)
+                    uninj[e] -= 1
+                    if uninj[e] == 0:
+                        advance(e % G)
                 new[base] = out
             pipe[f] = new
         t += 1
         assert t < 100 * sum(len(s) for s in seqs.values()) + 1000, "conveyor model stuck"
-    return seqs, t
+    return seqs, t, last
+
+
+def local_items(shape, rc: RCfg, cfg: GCfg, last):
+    """Per chip, the slices it owns in the order its local lander lands them (entries c | e << 8): by the model time
+    after which the slice's slot can be freed (the last arrival at the chip of its group's experts n' <= n - 1), then
+    n. Every wait of the lander then points to an earlier model event, like the forwarders' (wr_fwd.cpp)."""
+    R, Cn = shape
+    NCHIP = R * Cn
+    G, GC = cfg.G, cfg.GC
+    own = owner_table(shape, rc, cfg)
+    items = [[] for _ in range(NCHIP)]
+    for g in range(G):
+        upto = [-1] * NCHIP  # last arrival at each chip over the group's experts so far
+        for e in range(g, cfg.nexp, G):
+            for j in range(GC):
+                items[own[e][j]].append((upto[own[e][j]], e // G, g, j, e))
+            for q, v in last[e].items():
+                upto[q] = max(upto[q], v)
+    return [[(g * GC + j) | e << 8 for _, _, g, j, e in sorted(it)] for it in items]
 
 
 def ring_tables(shape, rc: RCfg, cfg: GCfg):
@@ -250,7 +294,7 @@ def ring_tables(shape, rc: RCfg, cfg: GCfg):
     packets in, packets out); TL rounded up to 16 entries (64 B)."""
     R, Cn = shape
     NCHIP = R * Cn
-    seqs, _ = conveyor(shape, rc, cfg)
+    seqs, _, last = conveyor(shape, rc, cfg)
     nr = len(rings(shape, rc))
     TL = max(len(s) for s in seqs.values())
     TL = -(-TL // 16) * 16
@@ -260,12 +304,13 @@ def ring_tables(shape, rc: RCfg, cfg: GCfg):
         assert all(e < (1 << 18) and c < 256 and u < 16 for _, e, c, u in sq)
         tab[chip, f, : len(sq)] = torch.tensor([k | u << 2 | c << 6 | e << 14 for k, e, c, u in sq], dtype=torch.int64)
         meta[(chip, f)] = (len(sq), sum(k != INJ for k, *_ in sq), sum(k != TERM for k, *_ in sq))
-    return tab.to(torch.int32), meta, seqs
+    return tab.to(torch.int32), meta, seqs, local_items(shape, rc, cfg, last)
 
 
 def make_tables(mesh, cfg: GCfg, rc: RCfg):
-    """Device copy of the order tables (each chip its own [nring, TL], DRAM, one page a ring) and their metadata."""
-    tab, meta, seqs = ring_tables(tuple(mesh.shape), rc, cfg)
+    """Device copy of the order tables (each chip its own [nring, TL], DRAM, one page a ring), their metadata and the
+    local landers' orders."""
+    tab, meta, seqs, items = ring_tables(tuple(mesh.shape), rc, cfg)
     NCHIP, nr, TL = tab.shape
     tab_t = ttnn.from_torch(
         tab.reshape(NCHIP * nr, TL),
@@ -275,7 +320,7 @@ def make_tables(mesh, cfg: GCfg, rc: RCfg):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
     )
-    return dict(tab_t=tab_t, TL=TL, meta=meta, seqs=seqs)
+    return dict(tab_t=tab_t, TL=TL, meta=meta, seqs=seqs, items=items)
 
 
 def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs):
@@ -327,8 +372,10 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
             )
             lx, ly = rc.local
             lrd, lsd, frd, fsd = (ttnn.RuntimeArgs() for _ in range(4))
-            lrd[lx][ly] = [ws_t.buffer_address(), me, NC] + tl_all
-            lsd[lx][ly] = [mesh_id, me, 0, 0, 0, 0, 1 << me, NC] + tl_all
+            items = tabs["items"][me]
+            assert len(items) <= 200, "the local lander's slice list fits its runtime args"
+            lrd[lx][ly] = [ws_t.buffer_address(), me, NC] + tl_all + [len(items)] + items
+            lsd[lx][ly] = [mesh_id, me, 0, 0, 0, 0, 1 << me, NC] + tl_all + [len(items)] + items
             nxt = {}
             for lane, d, cyc, l in rl:
                 f = 2 * lane + d
@@ -352,6 +399,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
                     + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args()),
                     runtime_args=lrd,
                     defines=[("RD_DEPTH", str(rc.RD)), ("SCB_CHUNKS", str(rc.SCB)), ("NOWN", str(NCHIP))]
+                    + [("WS_ITEMS", "1")]
                     + sdefs
                     + odefs,
                     config=dm(0),
@@ -361,7 +409,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
                     core_ranges=crs([rc.local]),
                     compile_time_args=ct_send + ct_send_icred(me),
                     runtime_args=lsd,
-                    defines=[("WF_LOCAL", "1")] + sdefs,
+                    defines=[("WF_LOCAL", "1"), ("WS_ITEMS", "1")] + sdefs,
                     config=dm(1),
                 ),
                 ttnn.KernelDescriptor(
