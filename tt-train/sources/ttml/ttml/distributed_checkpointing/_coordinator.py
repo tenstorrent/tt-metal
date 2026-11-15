@@ -11,7 +11,7 @@ Save and load each run as a fixed sequence of phases. A phase is one named step 
 the same point (collecting its live tensors, writing its shards or, on rank 0 alone, merging the ranks' plan parts),
 followed by a status exchange: an allgather of one int per rank, 0 for success or the error class of a failure. Every
 rank so learns whether any rank's step failed, and either all of them go on to the next phase or all of them raise, with
-that class (``IncompleteCheckpoint``, ``MissingKeyError``, ...) and a message naming the phase and the ranks that
+that class (``IncompleteCheckpointError``, ``MissingKeyError``, ...) and a message naming the phase and the ranks that
 failed. Between phases the ranks only move bytes, rank 0 gathering the ranks' parts or broadcasting its own; those
 transfers do no local work that could fail on one rank alone. A single process is the group of one, a ``Group`` on a
 ``LoopbackTransport``: its phases just run, letting their errors propagate as raised, and its transfers return their
@@ -55,21 +55,21 @@ from ._errors import (
     CheckpointError,
     CheckpointFatal,
     CoverageError,
-    DtypeMismatch,
+    DtypeMismatchError,
     FSDPStateError,
-    IncompleteCheckpoint,
+    IncompleteCheckpointError,
     LayoutError,
     LazyParameterError,
     MissingKeyError,
-    RoleMismatch,
-    ShapeMismatch,
+    RoleMismatchError,
+    ShapeMismatchError,
     TopologyError,
     UnexpectedKeyError,
     VersionError,
 )
 from ._index import Entry, FileRecord, Index, _entry_from_json, _entry_to_json
 from ._layouts import transform_from_json
-from ._planner import TensorInfo, _replica_layout
+from ._planner import TensorInfo, _checked_groups
 from ._topology import Chunk, Label
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
@@ -83,18 +83,18 @@ MAX_PAYLOAD = (1 << 31) - 1
 # The error classes a phase carries across the ranks: status 0 is success, status k the class at index k - 1.
 ERROR_CLASSES: tuple[type[CheckpointError], ...] = (
     CheckpointError,
-    IncompleteCheckpoint,
+    IncompleteCheckpointError,
     VersionError,
     LayoutError,
-    ShapeMismatch,
-    DtypeMismatch,
+    ShapeMismatchError,
+    DtypeMismatchError,
     MissingKeyError,
     UnexpectedKeyError,
     CoverageError,
     TopologyError,
     FSDPStateError,
     LazyParameterError,
-    RoleMismatch,
+    RoleMismatchError,
 )
 
 
@@ -441,9 +441,7 @@ def _same_description(a: TensorInfo, b: TensorInfo) -> bool:
 
 def _groups_of(info: TensorInfo) -> tuple[dict[tuple[int, ...], tuple[Chunk, ...]], dict[tuple[int, ...], tuple]]:
     """A key's replica groups (cached per label and shape) and, per mesh coordinate, the group it holds."""
-    groups, problem = _replica_layout(info.label, tuple(info.local_shape))
-    if problem:
-        raise CheckpointError(f"{info.key}: {problem}")
+    groups = _checked_groups(info)  # a TopologyError or CoverageError naming the key
     by_coord = {chunk.mesh_coord: group for group, chunks in groups.items() for chunk in chunks}
     return groups, by_coord
 
@@ -573,7 +571,6 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
                     file=c.file + base,
                     data_offset=c.data_offset,
                     nbytes=c.nbytes,
-                    writer_coord=c.writer_coord,
                     crc32=c.crc32,
                 )
                 for c in entry.chunks

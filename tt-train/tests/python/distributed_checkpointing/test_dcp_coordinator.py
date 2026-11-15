@@ -25,7 +25,7 @@ from ttml.distributed_checkpointing._coordinator import (
     merge_plan_parts,
     merge_results,
 )
-from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatal, IncompleteCheckpoint
+from ttml.distributed_checkpointing._errors import CheckpointError, CheckpointFatal, IncompleteCheckpointError
 from ttml.distributed_checkpointing._index import ChunkRecord, Entry, FileRecord, data_file_name
 from ttml.distributed_checkpointing._layouts import Identity
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
@@ -152,7 +152,7 @@ def _entry(key, chunks, global_shape=(1, 1, 32, 64)):
 def _chunk(col, file):
     """Column ``col`` of ``model/w`` (a [1, 1, 32, 16] box) as written by device (0, ``col``) into its rank's file
     ``file``."""
-    return ChunkRecord(Box((0, 0, 0, 16 * col), (1, 1, 32, 16)), file, 4096, 1024, (0, col), 7)
+    return ChunkRecord(Box((0, 0, 0, 16 * col), (1, 1, 32, 16)), file, 4096, 1024, 7)
 
 
 def _big_mesh_save():
@@ -169,7 +169,7 @@ def _big_mesh_save():
         {"model/w": _entry("model/w", [_chunk(0, 0), _chunk(1, 1)])},
         "gen0",
     )
-    bias = ChunkRecord(Box((0, 0, 0, 0), (1, 1, 1, 64)), 1, 8192, 128, (0, 3), 9)
+    bias = ChunkRecord(Box((0, 0, 0, 0), (1, 1, 1, 64)), 1, 8192, 128, 9)
     r1 = _result(
         1,
         [
@@ -404,14 +404,14 @@ def test_every_rank_raises_the_class_the_failing_rank_raised():
     def body(group, fake):
         def work():
             if group.rank == 1:
-                raise IncompleteCheckpoint("no index.json")
+                raise IncompleteCheckpointError("no index.json")
 
         group.phase("reading the index", work)
 
     _, errors = _run_ranks(3, body)
     assert set(errors) == {0, 1, 2}
-    assert all(type(e) is IncompleteCheckpoint and "rank(s) [1]" in str(e) for e in errors.values())
-    assert "no index.json" in str(errors[1]) and "IncompleteCheckpoint on rank 1" in str(errors[0])
+    assert all(type(e) is IncompleteCheckpointError and "rank(s) [1]" in str(e) for e in errors.values())
+    assert "no index.json" in str(errors[1]) and "IncompleteCheckpointError on rank 1" in str(errors[0])
 
 
 def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
