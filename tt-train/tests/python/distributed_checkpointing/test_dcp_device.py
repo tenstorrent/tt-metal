@@ -258,6 +258,8 @@ def test_lora_declares_the_rows_it_adds_to(tp_mesh, expect_error):
     # A segment that does not split evenly over the TP shards is refused when the layer is built, not at the first save.
     with expect_error(dcp.LayoutError, "segment size 63 is not divisible by the 2 shards"):
         ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(63, 33))
+    with expect_error(dcp.LayoutError, r"fused_segments \(32, 32\) sum to 64 but the fused dim has 96 rows"):
+        ColumnParallelLinear(DIM, 96, has_bias=False, fused_segments=(32, 32))
 
 
 def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_path, monkeypatch, expect_error):
@@ -455,3 +457,36 @@ def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_
     dcp.save(str(tmp_path / "resharded"), model=model3, optimizer=opt3)
     assert model3._fsdp_state.sharded_state == _ShardedState.SHARDED
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def test_fsdp_load_refuses_a_gathered_module_and_an_optimizer_built_before_sharding(fsdp_mesh, tmp_path, expect_error):
+    model = _Stack(DIM)
+    ttml.fsdp.fully_shard(model)
+    opt = make_adamw(model.parameters())
+    train_step(model, opt, DIM)
+    path = str(tmp_path / "step_0000001")
+    dcp.save(path, model=model, optimizer=opt)
+
+    # Loading into a module left gathered: refused with reshard_fsdp=False, resharded first by default.
+    gathered = _Stack(DIM)
+    ttml.fsdp.fully_shard(gathered, reshard_after_forward=False)
+    gathered_opt = make_adamw(gathered.parameters())
+    train_step(gathered, gathered_opt, DIM)
+    x = ttml.autograd.Tensor.from_numpy(
+        np.zeros((1, 1, DIM, DIM), dtype=np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
+    )
+    gathered(x)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    assert gathered._fsdp_state.sharded_state == _ShardedState.UNSHARDED, "precondition"
+    with expect_error(dcp.FSDPStateError, "is not in its sharded state; pass reshard_fsdp=True"):
+        dcp.load(path, model=gathered, optimizer=gathered_opt, reshard_fsdp=False)
+    dcp.load(path, model=gathered, optimizer=gathered_opt)
+    assert gathered._fsdp_state.sharded_state == _ShardedState.SHARDED
+    _assert_same_shards(_model_shards(gathered.parameters()), _model_shards(model.parameters()))
+
+    # An optimizer built before fully_shard holds full-size moments for sharded parameters.
+    early = _Stack(DIM)
+    early_opt = make_adamw(early.parameters())
+    ttml.fsdp.fully_shard(early)
+    with expect_error(dcp.CheckpointError, "was the optimizer created before the model was sharded"):
+        dcp.save(str(tmp_path / "early"), model=early, optimizer=early_opt)
