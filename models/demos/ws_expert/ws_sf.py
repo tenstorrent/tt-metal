@@ -63,6 +63,7 @@ class RCfg:
     own_slices: bool = False  # each chip's slices tensor holds only the slices it owns (WS_OWN_SLICES)
     spread: bool = True  # owners per slice, spread round the cycles (owner_table); False: chip e % N owns expert e
     diag: bool = False  # progress counters in spare CBs for a hang post-mortem (WS_DIAG)
+    defer: bool = False  # forwarder sends do not wait for the payload to leave L1 until the next send (WS_DEFER)
 
 
 def snake(shape):
@@ -353,6 +354,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
     tab_t, TL, meta = tabs["tab_t"], tabs["TL"], tabs["meta"]
     sdefs = [("SST_ADDR", str(sst.buffer_address()))] + ([("WS_DIAG", "1")] if rc.diag else [])
     odefs = [("WS_OWN_SLICES", "1")] if rc.own_slices else []
+    fdefs = [("WS_DEFER", "1")] if rc.defer else []
     ct_ring = [cfg.nexp, KT, KTD, DC, rc.CHT, cfg.G, cfg.GC, NCHIP, rc.S, words.buffer_address()]
     ct_send = [cfg.nexp, KT, KTD, DC, rc.CHT, cfg.G, cfg.GC]
     ct_send += [ex["wgu_ring"].buffer_address(), ex["wd_ring"].buffer_address(), ex["warr"].buffer_address()]
@@ -430,7 +432,7 @@ def build_sf(mesh, cfg: GCfg, rc: RCfg, x_t, idx_t, counts_t, ws_t, out_t, tabs)
                     core_ranges=crs(fcores),
                     compile_time_args=ct_ring + [rc.CRB],
                     runtime_args=fsd,
-                    defines=FAB_DEFS + sdefs,
+                    defines=FAB_DEFS + sdefs + [("SCB_CHUNKS", str(rc.SCB))] + fdefs,
                     config=dm(1),
                 ),
             ]

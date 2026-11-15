@@ -87,33 +87,70 @@ void kernel_main() {
         }
     };
 #endif
+    // With WS_DEFER a send is issued without waiting for its payload to leave L1: that wait (settle) comes before the
+    // next send, or while this RISC waits on anything, and only then does the packet's staging slot count as done
+    // (FWD) or its CB 0 chunk get popped (INJ); without it every send settles at once. Inline writes to L1 go through scratch words (no implicit flush), rotated over 8 slots
+    // with a flush before a slot comes round again; the credit header is reused only after a flush.
+    bool pend = false, pend_inj = false, cr_out = false;
+    uint32_t pend_k = 0, n_inj = 0, scr_n = 0, scr_since = 0;
+    const uint32_t inj_base = get_write_ptr(0);
+    auto flushed = [&]() {
+        noc_async_writes_flushed();
+        scr_since = 0;
+        cr_out = false;
+    };
+    auto settle = [&]() {
+        if (pend) {
+            flushed();
+            if (pend_inj) {
+                cb_pop_front(0, CHT);
+            }
+            pend = false;
+        }
+    };
+    auto inline_l1 = [&](uint64_t dst, uint32_t v) {
+        if (scr_since == 8) {
+            flushed();
+        }
+        const uint32_t scr = words + (8 + scr_n % 8) * 16;
+        ++scr_n;
+        ++scr_since;
+        noc_inline_dw_write<InlineWriteDst::L1, false, false>(dst, v, 0xF, noc_index, NOC_UNICAST_WRITE_VC, scr);
+    };
     auto update_free = [&]() {
         const uint32_t landed = rd(wr::W_LANDED);
-        const uint32_t f = landed < ndone ? landed : ndone;
+        const uint32_t nd = pend && !pend_inj ? pend_k : ndone;
+        const uint32_t f = landed < nd ? landed : nd;
         if (f > free_sent) {
-            noc_inline_dw_write(pair_relay, f);
+            inline_l1(pair_relay, f);
             free_sent = f;
         }
     };
     auto service = [&](bool idle) {
+        if (idle) {
+            settle();
+        }
         update_free();
 #ifdef WS_DIAG
         diag(rd(wr::W_DFREE), rd(wr::W_ARR));
 #endif
         const uint32_t r = rd(wr::W_RELAY);
         if (r > relayed && (idle || r - relayed >= CRB || r == pair_in)) {
-            noc_async_writes_flushed();  // (the credit header's previous packet has left L1)
+            if (cr_out) {
+                flushed();  // (the credit header's previous packet has left L1)
+            }
             fabric_unicast_noc_unicast_inline_write(
                 &conn,
                 hcr,
                 next_chip,
                 my_mesh,
                 tt::tt_fabric::NocUnicastInlineWriteCommandHeader{up_pair_dfree, r});
+            cr_out = true;
             relayed = r;
             ++n_relay;
         }
     };
-    auto send = [&](uint32_t src) {
+    auto send = [&](uint32_t src, bool inj) {
         const uint32_t c0 = wall();
         while (sent - rd(wr::W_DFREE) >= S) {
             service(true);
@@ -123,6 +160,7 @@ void kernel_main() {
         if (sent == 0) {
             t_first = c1;
         }
+        settle();  // (the previous payload and its header are out of L1)
         fabric_unicast_noc_fused_unicast_with_atomic_inc(
             &conn,
             hdr,
@@ -132,7 +170,11 @@ void kernel_main() {
             CHB,
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                 get_noc_addr(dxy & 0xFF, dxy >> 8, stage + (sent % S) * CHB), down_arr, 1, true});
-        noc_async_writes_flushed();  // (payload and header out of L1: the slot and the header may be reused)
+        pend = true;
+        pend_inj = inj;
+#ifndef WS_DEFER
+        settle();
+#endif
         ++sent;
         t_last = wall();
         t_send += t_last - c1;
@@ -144,27 +186,29 @@ void kernel_main() {
     for (uint32_t i = 0; i < len; ++i, ti = i) {
         const uint32_t kind = T[i] & 3;
         if (kind == wr::INJ) {
+            // (chunk n_inj sits at slot n_inj % SCB of CB 0, as the BRISC reads them; a pending one is not popped yet)
             const uint32_t a0 = wall();
-            while (!cb_pages_available_at_front(0, CHT)) {
+            while (!cb_pages_available_at_front(0, CHT * (pend && pend_inj ? 2 : 1))) {
                 service(true);
             }
-            cb_wait_front(0, CHT);
             t_cb += wall() - a0;
-            send(get_read_ptr(0));
-            cb_pop_front(0, CHT);
+            send(inj_base + (n_inj % SCB_CHUNKS) * CHB, true);
+            ++n_inj;
         } else if (kind == wr::FWD) {
             const uint32_t a0 = wall();
             while (rd(wr::W_ARR) < k_in + 1) {
                 service(true);
             }
             t_arr += wall() - a0;
-            send(stage + (k_in % S) * CHB);
+            send(stage + (k_in % S) * CHB, false);
+            pend_k = k_in;
             ndone = ++k_in;
         } else {
             ndone = ++k_in;
         }
         service(false);
     }
+    settle();
     const uint32_t d0 = wall();
     while (free_sent < total_in || relayed < pair_in || rd(wr::W_DFREE) < sent) {
         service(true);
