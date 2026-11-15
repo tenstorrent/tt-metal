@@ -632,3 +632,61 @@ def test_explicit_warmup_after_trace_release_is_preserved(contract, constructor_
     assert [e for e in events if e[0] == "allocate"] == [("allocate", "s1_ref"), ("allocate", "s2_ref")]
     assert len([e for e in events if e[0] == "warmup"]) == 1
     assert events[-1] == ("capture", ("s1_ref", "s2_ref"))
+
+
+def test_live_reference_switch_without_model_rebind(contract, monkeypatch):
+    c = contract
+    hashes = []
+    digest = c.module.file_digest
+    monkeypatch.setattr(c.module, "file_digest", lambda path: (hashes.append(str(path)), digest(path))[1])
+    pipe = c.create()
+    factory = c.native.factory
+    counts = {a["path"]: hashes.count(a["path"]) for a in c.fixture["assets"].values()}
+    first = c.fixture["acceptance"]["first_frame"]["path"]
+    a = c.fixture["reference"]["path"]
+    b = c.bind("other", True)["path"]
+    Image.new("RGB", (128, 128), "blue").save(b)
+    for path in (a, b, a):
+        pipe.generate_r2v("live", reference_path=path, reference_sha256=digest(path), first_frame=first, seed=1)
+        call = c.native.calls[-1][1]
+        assert call["reference_video"] == (path, 1.0)
+        assert call["images"][0][0] == first
+    assert c.native.factory is factory
+    assert {path: hashes.count(path) for path in counts} == counts
+    assert set(counts.values()) == {1}
+    Image.new("RGB", (128, 128), "green").save(b)
+    pipe.generate_r2v("updated", reference_path=b, seed=1)
+    with pytest.raises(ValueError, match="digest"):
+        pipe.generate_r2v("bad", reference_path=b, reference_sha256="0" * 64, seed=1)
+    assert len(c.native.calls) == 4
+
+
+@pytest.mark.parametrize("name,height,width,frames,traced", [
+    ("ltx25-ic-6s-720p", 704, 1280, 145, True),
+    ("ltx25-ic-10s-720p", 704, 1280, 241, False),
+    ("ltx25-ic-6s-1080p", 1088, 1920, 145, True),
+    ("ltx25-ic-10s-1080p", 1088, 1920, 241, False),
+    ("ltx25-ic-6s-iclora", 448, 768, 145, True),
+    ("ltx25-ic-10s-iclora", 448, 768, 241, False),
+])
+def test_named_served_recipe(contract, monkeypatch, name, height, width, frames, traced):
+    c = contract
+    c.fixture["generation"] = c.module.generation_recipe(name)
+    for key in ("first_frame", "last_frame"):
+        binding = c.fixture["acceptance"][key]
+        Image.new("RGB", (width, height), "red").save(binding["path"])
+        binding["sha256"] = c.module.file_digest(binding["path"])
+    monkeypatch.setenv("LTX_PIPELINE", "ltx25")
+    monkeypatch.setenv("LTX_QUALITY", "high")
+    monkeypatch.setenv("LTX_TRACED", str(int(traced)))
+    monkeypatch.setenv("LTX_CHECKPOINT", c.fixture["assets"]["transformer"]["path"])
+    monkeypatch.setenv("LTX_LORAS", "[]")
+    monkeypatch.setenv("LTX25_DIFFVAE", "0")
+    monkeypatch.setenv("LTX25_ROOT", str(c.path.parent))
+    pipe = c.create()
+    assert c.native.factory["traced"] is traced
+    assert (c.native.factory["height"], c.native.factory["width"], c.native.factory["num_frames"]) == (height, width, frames)
+    assert c.native.factory["ref_num_frames"] == 121
+    pipe.generate_r2v("recipe", seed=1)
+    assert c.native.calls[-1][1]["fps"] == 24
+
