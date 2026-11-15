@@ -248,11 +248,14 @@ def dyn_counts(nexp, nchip, T, seed=3):
         for e in range(nexp):
             Ms[c, e] = pick[int(torch.randint(len(pick), (1,), generator=g))]
     last = [nexp - 4 + k for k in range(4)]  # the last expert of groups 0..3
+    huge_g = int(os.environ.get("WSD_HUGE_GROUP", "0"))  # which group's last expert takes chip 1's huge M
+    huge_m = int(os.environ.get("WSD_HUGE_M", str(T)))
+    others = [k for k in range(4) if k != huge_g]
     for c in range(nchip):
-        Ms[c, last[0]] = T if c == 1 else (0 if c % 2 else 1)  # all tokens of chip 1 on one expert; zeros elsewhere
-        Ms[c, last[1]] = 2049 + 7 * c  # above the old MMAX, different on every chip
-        Ms[c, last[2]] = 5000 + 113 * c
-        Ms[c, last[3]] = int(torch.randint(0, 600, (1,), generator=g))
+        Ms[c, last[huge_g]] = huge_m if c == 1 else (0 if c % 2 else 1)  # chip 1: one huge expert; zeros elsewhere
+        Ms[c, last[others[0]]] = 2049 + 7 * c  # above the old MMAX, different on every chip
+        Ms[c, last[others[1]]] = 5000 + 113 * c
+        Ms[c, last[others[2]]] = int(torch.randint(0, 600, (1,), generator=g))
     return Ms
 
 
@@ -264,7 +267,7 @@ def test_ws_fab_glx_dynm(mesh_device):
     nchip = mesh_device.get_num_devices()
     T = 31250
     cfg, ac = GCfg(nexp=128, G=4, T=T, MMAX=T), ACfg(wrap=GLX_FABRIC[1], own_slices=True)
-    Ms = dyn_counts(cfg.nexp, nchip, T)
+    Ms = dyn_counts(cfg.nexp, nchip, T, seed=int(os.environ.get("WSD_SEED", "3")))
     torch.manual_seed(0)
     x = torch.randn(T + 1, cfg.H)
     x[T] = 0
@@ -301,7 +304,7 @@ def test_ws_fab_glx_dynm(mesh_device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     logger.info(f"WSD counts: zeros {int((Ms == 0).sum())}, max {int(Ms.max())}, rows a chip {Ms.sum(1).tolist()[:4]}..")
-    for launch in range(2):
+    for launch in range(int(os.environ.get("WSD_LAUNCHES", "2"))):
         mpd, io, st, sst = build_all(mesh_device, cfg, ac, x_t, idx_t, counts_t, ws_t, out_t)
         ttnn.generic_op(io, mpd)
         ttnn.synchronize_device(mesh_device)
