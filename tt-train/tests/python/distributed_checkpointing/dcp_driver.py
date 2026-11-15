@@ -54,7 +54,8 @@ SEQ_LEN = 32  # a whole tile: the SDPA kernel wants the sequence dimension unpad
 # Across layouts the forward reduces in another order (other shard boundaries, other all-reduces), so the logits and
 # the moments after one more step differ in rounding. Measured on the tiny Llama's cross-world cases on a loudbox over
 # two runs, as a fraction of the reference's largest magnitude: logits 0.004-0.011, post-step moments 0.012-0.025. The
-# bounds leave 2.5-3x headroom; a scrambled fused weight moves the logits by 1.36 (the --strip-fused control).
+# bounds leave 2.5-3x headroom; swapping one block's K and V rows moves the logits by 1.12 (the --scramble-qkv
+# control).
 LOGITS_TOLERANCE = 0.03
 STATE_TOLERANCE = 0.06
 MESH_OPEN_FAILED = 3  # exit status when this host cannot open the requested mesh; the tests skip on it
@@ -90,6 +91,19 @@ def strip_fused_declarations(model) -> int:
                 value.checkpoint_layout = {k: v for k, v in layout.items() if k != "fused"}
                 removed += 1
     return removed
+
+
+def scramble_qkv(params, config: LlamaConfig) -> None:
+    """The negative control of the logits check, on one device: swap the K and V rows of the first block's fused qkv
+    weight, which is what reading its segments in the wrong order does."""
+    name = next(n for n in params if n.endswith("qkv_linear/weight"))
+    tensor = params[name]
+    value = tensor.get_value(NATIVE)
+    weight = gather(tensor)  # one device: the whole weight
+    head_dim = config.hidden_size // config.num_attention_heads
+    q, kv = config.num_attention_heads * head_dim, config.num_key_value_heads * head_dim
+    weight[:, :, q : q + 2 * kv] = np.concatenate([weight[:, :, q + kv : q + 2 * kv], weight[:, :, q : q + kv]], axis=2)
+    tensor.set_value(ttml.autograd.Tensor.from_numpy(weight, value.layout, value.dtype).get_value())
 
 
 def build(tp: bool, fsdp: bool, tie: bool, sizes: dict, bias: bool = False, lora: bool = False):
@@ -369,6 +383,11 @@ def main(argv=None) -> int:
     parser.add_argument("--mgd", default=None, help="mesh graph descriptor to set before opening the mesh")
     parser.add_argument("--logits-tolerance", type=float, default=LOGITS_TOLERANCE)
     parser.add_argument(
+        "--scramble-qkv",
+        action="store_true",
+        help="load, one device: swap the first block's K and V rows after the load (the logits' negative control)",
+    )
+    parser.add_argument(
         "--strip-fused",
         action="store_true",
         help="remove the fused_segments declarations: the negative control, whose cross-TP load must fail on logits",
@@ -451,6 +470,9 @@ def main(argv=None) -> int:
             )
             return 0
         result = dcp.load(args.dir, model=model, optimizer=optimizer)
+        if args.scramble_qkv:
+            assert mesh_shape == (1, 1), "--scramble-qkv swaps rows of a whole weight: one device only"
+            scramble_qkv(params, config)
         actual = reference(model, params, optimizer, config, args.seed)
         resumed = args.resume_step and any(key.startswith(RESUME) for key in expected)
         if resumed:

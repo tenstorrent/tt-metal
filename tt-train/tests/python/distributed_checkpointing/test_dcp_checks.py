@@ -14,7 +14,8 @@ import ttml.distributed_checkpointing as dcp
 
 from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError, MissingKeyError
 from ttml.distributed_checkpointing._index import check_json
-from ttml.distributed_checkpointing._layouts import Identity
+from ttml.distributed_checkpointing._index import Entry
+from ttml.distributed_checkpointing._layouts import Identity, fused_segments
 from ttml.distributed_checkpointing._planner import TensorInfo
 from ttml.distributed_checkpointing._save import _logical_bytes
 from ttml.distributed_checkpointing._state_dict import (
@@ -25,6 +26,7 @@ from ttml.distributed_checkpointing._state_dict import (
     check_param_groups,
     check_undeclared_fusion,
     fsdp_gate,
+    tp_split,
 )
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 from ttml.modules.parameter import Parameter
@@ -170,23 +172,71 @@ def test_parameters_of_cpp_bound_modules_are_named_and_the_walks_pass_over_them(
     assert _cpp_bound_params(_Model(), mixed) == ["Root/cpp_child/gamma"], "only the C++-bound child's parameters"
 
 
-def test_a_cpp_fused_projection_loads_only_split_the_way_it_was_saved(expect_error):
-    key = "model/llama/llama_block_0/attention/kv_linear/weight"
+def _entry(key, label, transform, split):
+    """An index entry of a [1, 1, 128, 64] weight saved under ``label``, as save records it."""
+    return Entry(
+        key, "param", "BF16", "TILE", (1, 1, 128, 64), (1, 1, 128, 64), transform, label, (key,), [], tp_split=split
+    )
+
+
+def test_a_fused_looking_weight_loads_only_with_the_same_undescribed_tp_split(expect_error):
+    """Segments scramble when the per-shard row order one side leaves undeclared differs from the other's: compared
+    through the TP split each side leaves undescribed, FSDP's split left out."""
+    key = "model/Root/blocks/0/attention/qkv_linear/weight"
+    single = _label([Placement.replicate(), Placement.replicate()], (1, 1))
     tp2 = _label([Placement.replicate(), Placement.shard(2)], (1, 2))
     tp4 = _label([Placement.replicate(), Placement.shard(2)], (1, 4))
-    dp2_tp2 = _label([Placement.replicate(), Placement.shard(2)], (2, 2))
+    fsdp2 = _label([Placement.shard(2), Placement.replicate()], (2, 1))
+    declared = {2: fused_segments(2, (64, 32, 32), 2), 4: fused_segments(2, (64, 32, 32), 4)}
 
-    def live(label, undeclared_fusion=True):
-        info = TensorInfo(key, "param", "BF16", "TILE", label, (1, 1, 64, 64), Identity(), (key,))
-        return LiveTensor(key, None, info, undeclared_fusion)
+    def live(label, transform=Identity(), fsdp_axis=None, fused_name=True, cpp_bound=False):
+        info = TensorInfo(
+            key,
+            "param",
+            "BF16",
+            "TILE",
+            label,
+            (1, 1, 128 // label.shard_count(2), 64),
+            transform,
+            (key,),
+            tp_split=tp_split(label, fsdp_axis, 4),
+        )
+        return LiveTensor(key, None, info, fused_name=fused_name, cpp_bound=cpp_bound)
 
-    check_undeclared_fusion(live(tp2), tp2)
-    check_undeclared_fusion(live(dp2_tp2), tp2)  # more replicas split it the same way
-    check_undeclared_fusion(live(tp4, undeclared_fusion=False), tp2)  # a Python module declares its layout
+    saved_tp2 = _entry(key, tp2, Identity(), (1, 1, 2, 1))  # undeclared under TP2: its rows are in TP2's order
+    check_undeclared_fusion(live(tp2), saved_tp2)  # the same TP size, undeclared on both sides: copied as it is
     with expect_error(
-        LayoutError, r"kv_linear/weight .*saved split \[1, 1, 2, 1\] ways per dim and would load split \[1, 1, 4, 1\]"
+        LayoutError, r"leaves a TP split of \[1, 1, 2, 1\] per dim undescribed and the live model \[1, 1, 4, 1\]"
     ):
-        check_undeclared_fusion(live(tp4), tp2)
+        check_undeclared_fusion(live(tp4), saved_tp2)
+    with expect_error(LayoutError, r"undescribed and the live model \[1, 1, 1, 1\]"):
+        check_undeclared_fusion(live(tp2, declared[2]), saved_tp2)  # declaring it now would reorder TP2's rows
+    check_undeclared_fusion(live(tp4, fused_name=False), saved_tp2)  # not a fused-looking name: not checked
+
+    saved_declared = _entry(key, tp2, declared[2], (1, 1, 2, 1))
+    check_undeclared_fusion(live(single), saved_declared)  # one device: canonical rows, nothing undescribed
+    check_undeclared_fusion(live(tp4, declared[4]), saved_declared)
+    with expect_error(
+        LayoutError, r"leaves a TP split of \[1, 1, 1, 1\] per dim undescribed and the live model \[1, 1, 4, 1\]"
+    ):
+        check_undeclared_fusion(live(tp4), saved_declared)
+
+    # FSDP splits rows already in canonical order: an undeclared weight saved under FSDP loads anywhere TP leaves it
+    # whole, where comparing the plain splits would have refused it.
+    saved_fsdp = _entry(key, fsdp2, Identity(), tp_split(fsdp2, 0, 4))
+    assert saved_fsdp.tp_split == (1, 1, 1, 1)
+    check_undeclared_fusion(live(single), saved_fsdp)
+    check_undeclared_fusion(live(tp2, declared[2]), saved_fsdp)
+
+    # A checkpoint written before the TP split was recorded: a C++-bound weight must keep its split, a Python one is
+    # not checked.
+    old = _entry(key, tp2, Identity(), None)
+    check_undeclared_fusion(live(tp4), old)
+    check_undeclared_fusion(live(tp2, cpp_bound=True), old)
+    with expect_error(
+        LayoutError, r"leaves a TP split of \[1, 1, 2, 1\] per dim undescribed and the live model \[1, 1, 4, 1\]"
+    ):
+        check_undeclared_fusion(live(tp4, cpp_bound=True), old)
 
 
 class _Declaring:

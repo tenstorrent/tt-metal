@@ -108,7 +108,7 @@ def _run(args: list[str], what: str, expect_ok: bool = True) -> str:
             print(f"{what}: {line}")
     tail = "\n".join(lines[-60:])
     assert proc.returncode == (0 if expect_ok else 1), f"{what} failed with exit {proc.returncode}:\n{tail}"
-    return proc.stdout
+    return "\n".join(lines)
 
 
 _SAVED: dict[tuple[str, ...], str] = {}
@@ -148,15 +148,29 @@ def test_same_world_through_the_driver_matches_exactly(tmp_path, release_metal_e
     assert "RESULT: OK" in out
 
 
-def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal_env, skip_if_host_too_small, mgd_path):
-    """The negative control of the logits tolerance: with its fused_segments declarations removed, a TP2 checkpoint
-    loads onto one device with its fused rows in TP2's per-shard order, and the logits alone must catch it."""
-    skip_if_host_too_small((2,), "the logits negative control")
+def test_a_tp2_checkpoint_with_its_fused_declarations_stripped_is_refused_on_one_device(
+    tmp_path, release_metal_env, skip_if_host_too_small, mgd_path
+):
+    """Without its fused_segments declarations a TP2 checkpoint holds its fused rows in TP2's per-shard order and its
+    index says nothing about it; loaded onto one device it would scramble Q, K and V, so the load refuses it."""
+    skip_if_host_too_small((2,), "the stripped-declarations case")
     release_metal_env()
     save_world = _resolve(_world("1x2", "dp,tp", ("--tp", "--strip-fused"), "bh_1_2_line_line.textproto"), mgd_path)
     ckpt = str(tmp_path / "step_0000002")
     _run(["save", "--dir", ckpt, "--steps", "2", "--no-resume-step", *save_world], "save")
+    out = _run(["load", "--dir", ckpt, "--steps", "2", *_world("1x1", "dp,tp", (), None)], "load", False)
+    assert "LayoutError" in out and "its name suggests a fused projection" in out, out.splitlines()[-8:]
+
+
+def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal_env, skip_if_host_too_small, mgd_path):
+    """The negative control of the logits tolerance: a TP2 checkpoint loads onto one device, then the first block's K
+    and V rows are swapped, what reading the fused weight in the wrong order does, and the logits must catch it."""
+    skip_if_host_too_small((2,), "the logits negative control")
+    release_metal_env()
+    save_world = _resolve(_world("1x2", "dp,tp", ("--tp",), "bh_1_2_line_line.textproto"), mgd_path)
+    ckpt = str(tmp_path / "step_0000002")
+    _run(["save", "--dir", ckpt, "--steps", "2", "--no-resume-step", *save_world], "save")
     out = _run(
-        ["load", "--dir", ckpt, "--steps", "2", *_world("1x1", "dp,tp", ("--strip-fused",), None)], "load", False
+        ["load", "--dir", ckpt, "--steps", "2", *_world("1x1", "dp,tp", ("--scramble-qkv",), None)], "load", False
     )
     assert "MISMATCH: logits differ" in out, out.splitlines()[-8:]

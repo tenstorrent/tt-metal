@@ -404,10 +404,48 @@ def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_s
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
         dcp.load(path, model=fresh)
     _assert_same_shards(_model_shards(fresh.parameters()), saved)
-    # Its fused kv_linear is the one weight a load at another TP size would scramble, so load refuses that.
+    # Its fused kv_linear is the one weight a load at another TP size would scramble, so load checks its TP split.
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
-        flagged = [lt.key for lt in collect_model(fresh) if lt.undeclared_fusion]
-    assert flagged == ["model/llama/llama_block_0/attention/kv_linear/weight"], flagged
+        live = collect_model(fresh)
+    assert [lt.key for lt in live if lt.fused_name] == ["model/llama/llama_block_0/attention/kv_linear/weight"]
+    assert all(lt.cpp_bound for lt in live)
+    entry = dcp.read_index(path).entries["model/llama/llama_block_0/attention/kv_linear/weight"]
+    assert entry.tp_split == (1, 1, 2, 1), "the index records the TP split it was saved with"
+
+
+class _Qkv(AbstractModuleBase):
+    """A fused-looking projection under TP2, with or without its fused_segments declaration."""
+
+    def __init__(self, dim: int, fused_segments=None) -> None:
+        super().__init__()
+        from ttml.modules import ColumnParallelLinear
+
+        self.qkv_linear = ColumnParallelLinear(dim, 2 * dim, has_bias=False, fused_segments=fused_segments)
+
+
+def test_an_undeclared_fused_weight_loads_only_where_its_row_order_is_left_alike(tp_mesh, tmp_path, expect_error):
+    model = _Qkv(DIM)  # no declaration: its rows are in TP2's per-shard order, which only the TP split records
+    path = str(tmp_path / "undeclared")
+    with pytest.warns(UserWarning, match="declares no fused_segments"):
+        dcp.save(path, model=model)
+    assert dcp.read_index(path).entries["model/_Qkv/qkv_linear/weight"].tp_split == (1, 1, 2, 1)
+    saved = _model_shards(model.parameters())
+
+    same = _Qkv(DIM)
+    with pytest.warns(UserWarning, match="declares no fused_segments"):
+        dcp.load(path, model=same)  # the same TP size, undeclared on both sides: the rows copy as they are
+    _assert_same_shards(_model_shards(same.parameters()), saved)
+
+    # Declaring the segments now would read TP2's per-shard rows as canonical ones: refused, nothing placed.
+    declared = _Qkv(DIM, fused_segments=(DIM, DIM // 2, DIM // 2))
+    before = _model_shards(declared.parameters())
+    with expect_error(
+        dcp.LayoutError,
+        r"qkv_linear/weight: its name suggests a fused projection .*\[1, 1, 2, 1\] per dim undescribed and the live "
+        r"model \[1, 1, 1, 1\]",
+    ):
+        dcp.load(path, model=declared)
+    _assert_same_shards(_model_shards(declared.parameters()), before)
 
 
 def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path, expect_error):

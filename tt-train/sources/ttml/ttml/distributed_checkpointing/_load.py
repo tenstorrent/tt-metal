@@ -217,7 +217,7 @@ def load(
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
     plan: LoadPlan = create_load_plan(index, [lt.info for lt in live], strict=strict, roles=roles)
     for key, kplan in plan.keys.items():
-        check_undeclared_fusion(by_key[key], kplan.entry.label)
+        check_undeclared_fusion(by_key[key], kplan.entry)
     if optimizer is not None:
         check_param_groups(optimizer, index.scalars, strict)  # before anything is placed
     stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
