@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from itertools import product
 from math import prod
-from typing import Callable, Iterable
+from types import MappingProxyType
+from typing import Callable, Iterable, Mapping
 
 from ._boxes import Box, boxes_tile, grid_cell_size
 from ._errors import (
@@ -149,9 +150,12 @@ class SavePlan:
 
 
 @lru_cache(maxsize=4096)
-def _replica_layout(label: Label, local_shape: tuple[int, ...]) -> tuple[dict[tuple[int, ...], tuple[Chunk, ...]], str]:
-    """The replica groups a label gives a tensor of ``local_shape`` (each group's chunks as a tuple, so the cached
-    value cannot be changed through it), and a description of what is wrong with them, empty when nothing is.
+def _replica_layout(
+    label: Label, local_shape: tuple[int, ...]
+) -> tuple[Mapping[tuple[int, ...], tuple[Chunk, ...]], CheckpointError | None]:
+    """The replica groups a label gives a tensor of ``local_shape``, read-only so the cached value cannot be changed
+    through it, and the error that is wrong with them (``None`` when nothing is). The error is returned rather than
+    raised so that a failure is cached too; callers raise it with the key prefixed.
 
     A key's groups depend only on its label and shape, which do not change during training, and most keys of a model
     share a handful of them; caching here makes every save after the first, and every key after the first of each
@@ -159,28 +163,31 @@ def _replica_layout(label: Label, local_shape: tuple[int, ...]) -> tuple[dict[tu
     rank = len(local_shape)
     for axis, placement in enumerate(label.placements):
         if placement.kind == "shard" and not 0 <= placement.dim < rank:
-            return {}, f"distribution axis {axis} shards dim {placement.dim}, out of range for a rank-{rank} tensor"
+            return MappingProxyType({}), TopologyError(
+                f"distribution axis {axis} shards dim {placement.dim}, out of range for a rank-{rank} tensor"
+            )
     groups = {group: tuple(chunks) for group, chunks in replica_groups(chunk_boxes(label, local_shape)).items()}
     boxes = [chunks[0].box for chunks in groups.values()]
     global_shape = label_global_shape(label, local_shape)
     if not boxes_tile(boxes, Box.whole(global_shape)):
-        return groups, (
+        return MappingProxyType(groups), CoverageError(
             f"the {len(boxes)} boxes of its label {label.to_json()} do not tile its global shape {list(global_shape)}"
         )
-    return groups, ""
+    return MappingProxyType(groups), None
 
 
-def _checked_groups(info: TensorInfo) -> dict[tuple[int, ...], tuple[Chunk, ...]]:
+def _checked_groups(info: TensorInfo) -> Mapping[tuple[int, ...], tuple[Chunk, ...]]:
     """The replica groups of a live tensor, after checking that their boxes tile its global shape.
 
-    This is the save-time assertion of the design: every shard dim lies within the tensor's rank, and the unique boxes
-    (one per replica group, duplicates kept) tile the global shape exactly. The boxes are cells of one grid, so the
-    check is linear in the device count, and it is cached per label and shape (``_replica_layout``).
+    This is the save-time assertion of the design: every shard dim lies within the tensor's rank (a
+    ``TopologyError`` otherwise), and the unique boxes (one per replica group, duplicates kept) tile the global shape
+    exactly (a ``CoverageError``). A label whose shard dims are in range always tiles, so the second check only guards
+    against a malformed label. The boxes are cells of one grid, so the check is linear in the device count, and it
+    is cached per label and shape (``_replica_layout``).
     """
     groups, problem = _replica_layout(info.label, tuple(info.local_shape))
-    if problem:
-        error = TopologyError if problem.startswith("distribution axis") else CoverageError
-        raise error(f"{info.key}: {problem}")
+    if problem is not None:
+        raise type(problem)(f"{info.key}: {problem}")
     return groups
 
 

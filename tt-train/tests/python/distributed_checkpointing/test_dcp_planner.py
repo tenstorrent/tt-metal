@@ -264,7 +264,7 @@ def test_live_keys_resolve_tied_names():
     np.testing.assert_array_equal(shards["model/Llama/tok_emb/weight"][()], canonical)
 
 
-def test_a_label_whose_boxes_do_not_tile_is_refused_at_save(expect_error):
+def test_a_label_sharding_a_dim_the_tensor_lacks_is_refused_at_save(expect_error):
     # A shard dim outside the tensor's rank gives every replica group the same box: without the check the save
     # writes duplicate chunks and every later load fails on coverage.
     for dim in (-1, 4):
@@ -318,6 +318,10 @@ def test_save_planning_is_cached_per_label_and_shape(expect_error):
     stats = _replica_layout.cache_info()
     assert stats.misses == 1 and stats.hits == 31, "one grouping for 16 keys of one label, reused by the next save"
     assert [f.items[0].key for f in first.files] == [f.items[0].key for f in second.files]
+    groups, problem = _replica_layout(TP8_DP4, (1, 1, 32, 64))
+    assert problem is None
+    with expect_error(TypeError, "does not support item assignment"):
+        groups[(0,)] = ()  # the cached groups are shared by every key of the label, so they are read-only
     # A cached failure still names the key that hit it.
     bad = Label((Placement.replicate(), Placement.shard(5)), (1, 2), tuple(dist_coords((1, 2))))
     before = _replica_layout.cache_info()
