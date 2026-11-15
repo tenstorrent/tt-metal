@@ -277,13 +277,6 @@ class LoadPlan:
         return [k for k, p in self.keys.items() if p.fast_path]
 
 
-def _sub_box(outer: Box, inner: Box, inner_parent: Box) -> Box:
-    """``inner`` is a sub-box of ``inner_parent``; ``outer`` is ``inner_parent`` in another coordinate system (same
-    sizes, translated). Returns the sub-box of ``outer`` that corresponds to ``inner``."""
-    delta = tuple(a - b for a, b in zip(inner.offsets, inner_parent.offsets))
-    return Box(tuple(o + d for o, d in zip(outer.offsets, delta)), inner.sizes)
-
-
 def _padding_fill(transform: Transform) -> str:
     if isinstance(transform, Pad):
         return transform.fill
@@ -358,7 +351,7 @@ def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
             pieces = []
             for d_piece, c_piece in info.transform.to_canonical(dbox):
                 for c_sub, s_sub in entry.transform.from_canonical(c_piece):
-                    pieces.append((_sub_box(d_piece, c_sub, c_piece), s_sub))
+                    pieces.append((d_piece.corresponding(c_sub, c_piece), s_sub))
             for pad_box in info.transform.padding_boxes(dest_global):
                 overlap = pad_box.intersect(dbox)
                 if overlap is not None:
@@ -373,7 +366,7 @@ def plan_key(entry: Entry, info: TensorInfo) -> KeyPlan:
                 overlap = s_piece.intersect(chunk.box)
                 if overlap is None:
                     continue
-                d_overlap = _sub_box(d_piece, overlap, s_piece)
+                d_overlap = d_piece.corresponding(overlap, s_piece)
                 group_reads.append(
                     ReadItem(
                         info.key, chunk.file, ci, overlap.relative_to(chunk.box), d_overlap.relative_to(dbox), group

@@ -203,11 +203,7 @@ class Compose:
             next_pieces: list[Piece] = []
             for origin, current in pieces:
                 for current_sub, mapped in step.to_canonical(current) if forward else step.from_canonical(current):
-                    # current_sub is a sub-box of current; the same sub-box of origin is its translation.
-                    delta = tuple(a - b for a, b in zip(current_sub.offsets, current.offsets))
-                    next_pieces.append(
-                        (Box(tuple(o + d for o, d in zip(origin.offsets, delta)), current_sub.sizes), mapped)
-                    )
+                    next_pieces.append((origin.corresponding(current_sub, current), mapped))
             pieces = next_pieces
         return pieces
 
