@@ -13,6 +13,7 @@
 // RT: 0 me, 1-4 link-0 branch core xy (x | y << 8) for EAST, WEST, NORTH, SOUTH (0: none), 5 local lander xy,
 //     6.. per chip o, per link l: xy of o's sender core that covers this chip on link l (targets c % 2 == l)
 // CT: 0 NC, 1 GC, 2 G, 3 NEXP, 4 icred, 5 NCHIP, 6 mesh id, 7 credit queue addr, 8 NQ
+// A queue is a ring of NQ entries; before reusing a slot the relay reads the sender's consumed count (word NQ * 4).
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
@@ -34,8 +35,16 @@ void kernel_main() {
     }
     // 16 B staging for the entries (the last rows of this core's icred copy are never used on the relay)
     volatile tt_l1_ptr uint32_t* ent = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icred + (NCHIP * NC - 1) * 16);
+    volatile tt_l1_ptr uint32_t* rps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icred + (NCHIP * NC - 2) * 16);
+    uint32_t consumed[4] = {0, 0, 0, 0};
     auto put = [&](uint32_t d, uint32_t w1, uint32_t w2, uint32_t w3) {
         const uint32_t xy = qxy[d];
+        while (wp[d] - consumed[d] >= NQ) {  // the slot still holds an entry the sender has not read
+            noc_async_read(get_noc_addr(xy & 0xFF, xy >> 8, cq + NQ * 16), (uint32_t)rps, 16);
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            consumed[d] = rps[0];
+        }
         ent[0] = wp[d] + 1;
         ent[1] = w1;
         ent[2] = w2;

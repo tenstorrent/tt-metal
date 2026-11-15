@@ -55,7 +55,8 @@ void kernel_main() {
 #endif
 #ifdef WF_CREDQ
     // credit queue (this direction's link-0 sender): entries {seq, o | c << 8, dst core xy, v} from the relay, sent on
-    // as fabric inline writes of v into chip o's sender word my_chip * NC + c; a {.., 0xFFFFFFFF} entry ends it
+    // as fabric inline writes of v into chip o's sender word my_chip * NC + c; a {.., 0xFFFFFFFF} entry ends it.
+    // WF_NQ entries in a ring; word WF_NQ * 4 holds how many this core has consumed (the relay waits on it)
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hcr = PacketHeaderPool::allocate_header();
     volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WF_CREDQ);
     uint32_t rp = 0;
@@ -79,6 +80,7 @@ void kernel_main() {
             noc_async_writes_flushed();
             invalidate_l1_cache();
         }
+        q[WF_NQ * 4] = rp;
     };
 #else
     auto drain = []() {};

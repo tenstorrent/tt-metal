@@ -164,7 +164,14 @@ def test_ws_fab_recv_bench(mesh_device, G, M):
     assert min(pcs.values()) > 0.999
 
 
-TORUS = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "fabric_router_config": router_cfg(15232)}
+# whole-Galaxy fabric (WS_GLX_FABRIC, default xy; the mesh graph descriptor must match): config, wrapping axes (Y, X)
+GLX_FABRIC = {
+    "xy": (ttnn.FabricConfig.FABRIC_2D_TORUS_XY, (True, True)),
+    "y": (ttnn.FabricConfig.FABRIC_2D_TORUS_Y, (True, False)),
+    "x": (ttnn.FabricConfig.FABRIC_2D_TORUS_X, (False, True)),
+    "mesh": (ttnn.FabricConfig.FABRIC_2D, (False, False)),
+}[os.environ.get("WS_GLX_FABRIC", "xy")]
+TORUS = {"fabric_config": GLX_FABRIC[0], "fabric_router_config": router_cfg(15232)}
 
 
 def make_inputs_owned(mesh, cfg, CHT, Ms, nchip, seed=0):
@@ -214,18 +221,18 @@ def make_inputs_owned(mesh, cfg, CHT, Ms, nchip, seed=0):
 @pytest.mark.parametrize("device_params", [TORUS], indirect=True)
 @pytest.mark.parametrize("nexp,T,M", [(128, 8192, 586), (640, 31250, 586)], ids=["smoke128", "layer640"])
 def test_ws_fab_glx_bench(mesh_device, nexp, T, M):
-    """Step 2 on the whole Galaxy (8 x 4, FABRIC_2D_TORUS_XY): every chip runs the 4 groups on its own tokens, expert
+    """Step 2 on the whole Galaxy (8 x 4, FABRIC_2D_TORUS_XY unless WS_GLX_FABRIC says otherwise): every chip runs the 4 groups on its own tokens, expert
     e owned by chip e % 32 and multicast over the torus. layer640 is a real layer at 1M tokens: 640 experts, 31,250
     tokens a chip, M rows an expert on every chip."""
     nchip = mesh_device.get_num_devices()
-    cfg, ac = GCfg(nexp=nexp, G=4, T=T), ACfg(torus=True, own_slices=True)
+    cfg, ac = GCfg(nexp=nexp, G=4, T=T), ACfg(wrap=GLX_FABRIC[1], own_slices=True)
     Ms = [M] * cfg.nexp
     dev, refs = make_inputs_owned(mesh_device, cfg, ac.CHT, Ms, nchip)
     build_fn = lambda: build_all(
         mesh_device, cfg, ac, dev["x_t"], dev["idx_t"], dev["counts_t"], dev["ws_t"], dev["out_t"]
     )
     chips = list(range(nchip))
-    tag = f"glx {nexp} experts T {T} M {M}"
+    tag = f"glx {os.environ.get('WS_GLX_FABRIC', 'xy')} {nexp} experts T {T} M {M}"
     meas, pcs = launches(mesh_device, build_fn, chips, cfg, Ms, dev, refs, tag)
     summary(tag, cfg, Ms, chips, meas, pcs, aiclk_mhz(0))
     assert min(pcs.values()) > 0.999

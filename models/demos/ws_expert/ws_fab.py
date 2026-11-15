@@ -204,27 +204,25 @@ class ACfg:
     CHT: int = 24
     SCB: int = 8
     RD: int = 4
-    NQ: int = 0  # credit queue entries a link-0 branch sender; 0: room for every credit a chip sends (no wrap)
+    NQ: int = 1024  # credit queue entries a link-0 branch sender (a ring: the relay waits for the sender to consume)
     relay: tuple = (10, 9)
     local: tuple = (9, 9)  # local lander
     branch: dict = field(  # branch -> (link 0 core, link 1 core)
         default_factory=lambda: {"E": ((10, 8), (10, 7)), "W": ((9, 8), (9, 7)), "N": ((10, 6), (9, 6)), "S": ((10, 5), (9, 5))}
     )
-    torus: bool = False  # both axes wrap (FABRIC_2D_TORUS_XY): the branches use the wrap links
+    wrap: tuple = (False, False)  # (Y, X): axes that wrap (FABRIC_2D_TORUS_Y / _X / _XY), the branches use them
     own_slices: bool = False  # ws_t holds only this chip's experts (e % NCHIP == chip), in expert order
 
 
-def branches(mesh_shape, rc, torus=False):
+def branches(mesh_shape, rc, wrap=(False, False)):
     """[(name, first-hop neighbour, (e, w, n, s), covered chips)] of chip rc's multicast branches: E-only and W-only
-    along its row, N and S trunks with E/W teeth on every row they reach. On a torus the extents follow the fabric's
-    shortest routes, whose tie (the half-way chip of an even ring) goes forward (E, S): E covers C // 2 columns,
-    W (C - 1) // 2, S R // 2 rows, N (R - 1) // 2; a multicast range must match those routes."""
+    along its row, N and S trunks with E/W teeth on every row they reach. On a wrapping axis (wrap = (Y, X)) the
+    extents follow the fabric's shortest routes, whose tie (the half-way chip of an even ring) goes forward (E, S):
+    E covers C // 2 columns, W (C - 1) // 2, S R // 2 rows, N (R - 1) // 2; a multicast range must match them."""
     R, Cn = mesh_shape
     r, c = rc
-    if torus:
-        e, w, n, s = Cn // 2, (Cn - 1) // 2, (R - 1) // 2, R // 2
-    else:
-        e, w, n, s = Cn - 1 - c, c, r, R - 1 - r
+    e, w = (Cn // 2, (Cn - 1) // 2) if wrap[1] else (Cn - 1 - c, c)
+    n, s = ((R - 1) // 2, R // 2) if wrap[0] else (r, R - 1 - r)
     col = lambda k: (c + k) % Cn
     row = lambda k: (r + k) % R
     cols = [col(k) for k in range(-w, e + 1)]
@@ -249,11 +247,11 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
     bcore = ac.branch  # name -> (link 0 core, link 1 core)
     all_b = [x for pair in bcore.values() for x in pair]
     send_cores = [ac.local] + all_b
-    # every freed slot of a remote owner's expert is one queue entry: at most NC cores x (experts a group)
-    NQ = ac.NQ or NC * -(-cfg.nexp // cfg.G) + 8
+    NQ = ac.NQ
     icred = sharded_l1(mesh, [ac.relay] + send_cores, [NCHIP * NC, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     sst = sharded_l1(mesh, send_cores, [1, 16], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
-    cq = sharded_l1(mesh, [b[0] for b in bcore.values()], [NQ, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    # (+1 row: the sender's consumed count)
+    cq = sharded_l1(mesh, [b[0] for b in bcore.values()], [NQ + 1, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     from models.demos.ws_expert.ws_group import group_cores
 
     gcores = [c for g in range(cfg.G) for c in group_cores(cfg, g)]
@@ -274,7 +272,7 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
     for r in range(R):
         for c in range(Cn):
             rc, me = (r, c), chip((r, c))
-            brs = branches((R, Cn), rc, ac.torus)
+            brs = branches((R, Cn), rc, ac.wrap)
             # relay: link-0 branch core a direction, local lander, then per owner chip and link the covering core
             qxy = [0, 0, 0, 0]
             for name, nb, rng, _ in brs:
@@ -284,7 +282,7 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
                 if o == me:
                     pair = (ac.local, ac.local)
                 else:
-                    pair = bcore[next(nm for nm, _, _, cov in branches((R, Cn), rc_of(o), ac.torus) if rc in cov)]
+                    pair = bcore[next(nm for nm, _, _, cov in branches((R, Cn), rc_of(o), ac.wrap) if rc in cov)]
                 owner_map += [xy(pair[0]), xy(pair[1])]
             rrt = ttnn.RuntimeArgs()
             rrt[ac.relay[0]][ac.relay[1]] = [me] + qxy + [xy(ac.local)] + owner_map
