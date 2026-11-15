@@ -11,6 +11,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.hy4_preview.config import DENSE
+from models.demos.blackhole.hy4_preview.tt import hy4_dense as D
 from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
 from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Opt
 from models.demos.blackhole.hy4_preview.tt.hy4_chain import HID, NSTREAM
