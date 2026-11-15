@@ -1253,11 +1253,12 @@ def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
 # carry 5 shards on the busiest hop against the 2-link snake's 7.5 (1.5x).
 _GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
 
-# Floors per case, about 5% under the lowest of repeated runs on 110-A Galaxies (FABRIC_2D_TORUS_XY, 2 links). The
-# short case differs by dtype (96-116 GB/s), so one floor per row count would either fail its fp8 and bfloat8 cases or
-# leave bf16 unguarded. Override every floor with TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS when recalibrating.
+# Floors per case: 95% of the lowest of 8 runs on three 110-A Galaxies (FABRIC_2D_TORUS_XY, 2 links). Lowest seen:
+# 55K 113.0 / 99.4 / 113.2 / 94.6 GB/s, 512K 139.0 / 136.8 / 139.2 / 136.0 (bf16 row-major, fp8, bf16 tiled, bfloat8).
+# The short case differs by dtype, so one floor per row count would either fail its fp8 and bfloat8 cases or leave bf16
+# unguarded. Override every floor with TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS when recalibrating.
 _GALAXY_CYLINDER_CI_MIN_BANDWIDTH_GBPS = {
-    55_040: {"bf16_row_major": 107.0, "fp8_row_major": 95.0, "bf16_tiled": 108.0, "bfloat8_tiled": 91.0},
+    55_040: {"bf16_row_major": 107.0, "fp8_row_major": 94.0, "bf16_tiled": 108.0, "bfloat8_tiled": 90.0},
     512 * 1024: {"bf16_row_major": 132.0, "fp8_row_major": 130.0, "bf16_tiled": 132.0, "bfloat8_tiled": 129.0},
 }
 if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_CYLINDER_MIN_GBPS") is not None:
