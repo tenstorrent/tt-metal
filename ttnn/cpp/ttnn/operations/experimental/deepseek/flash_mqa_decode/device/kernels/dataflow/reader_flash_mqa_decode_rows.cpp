@@ -24,6 +24,13 @@ FORCE_INLINE void read_tile_row_pages(
 
 }  // namespace
 
+#ifndef FMQA_LEADERS
+#define FMQA_LEADERS 2
+#endif
+#ifndef FMQA_PIECES
+#define FMQA_PIECES 2
+#endif
+
 void kernel_main() {
     constexpr uint32_t DHt = get_named_compile_time_arg_val("DHt");
     constexpr uint32_t Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t");
@@ -88,8 +95,119 @@ void kernel_main() {
     // lengths: [p, ring_first_row, selected_first_row, 0, n_0 .. n_{R-1}].
     const auto lengths_reader = TensorAccessor(lengths_args, lengths_addr);
     const uint32_t lengths_l1 = get_write_ptr(cb_lengths_scratch);
+    // Transaction id 1 for the lengths, so the early q / table reads below need not be waited for with them.
+    noc_async_read_set_trid(1);
     noc_async_read(lengths_reader.get_noc_addr(0), lengths_l1, (4 + num_rows) * sizeof(uint32_t));
-    noc_async_read_barrier();
+    // Sliding layers with one ring in kv (ring_first_row is always 0): once the window is full, S-block
+    // b <= W / kc attends exactly one chunk, ring chunk b or (b == W / kc) the staging chunk. The leaders of the
+    // column helping column b (S-block b + helper_offset; 0: column b itself) read their slice of the guessed chunk
+    // before the lengths arrive, multicast it to column b and count it there; when the lengths contradict the guess
+    // (window not yet full) they re-read the right chunk and count it again, and column b waits for both counts.
+    constexpr uint32_t helper_offset = get_named_compile_time_arg_val("helper_offset");
+    constexpr uint32_t spec_num_leaders = FMQA_LEADERS;
+    constexpr uint32_t spec_peers = num_head_groups * row_groups;
+    constexpr bool speculate =
+        share_reads && selected_capacity == 0 && max_ring_first_tile_row == 0 && spec_peers % spec_num_leaders == 0;
+    constexpr uint32_t spec_ring_chunks = ring_capacity / k_chunk_size;
+    const uint32_t spec_me = head_group * row_groups + row_group;
+    const bool spec_helper = speculate && s_block >= helper_offset && s_block <= helper_offset + spec_ring_chunks;
+    const uint32_t spec_g = s_block - helper_offset;  // the helped column's chunk (helpers only)
+    const bool spec_leader =
+        spec_helper && spec_me % (spec_peers / spec_num_leaders) == spec_peers / spec_num_leaders - 1;
+    // A helper inside the helped column multicasts with loopback, one outside it plainly.
+    auto spec_multicast = [&](uint32_t src, uint64_t dst, uint32_t bytes) {
+        if constexpr (helper_offset == 0) {
+            noc_async_write_multicast_loopback_src(src, dst, bytes, spec_peers);
+        } else {
+            noc_async_write_multicast(src, dst, bytes, spec_peers);
+        }
+    };
+    // NoC (x, y) of the helped column, in (head group, row group) order.
+    const uint32_t helped_noc_xy_idx = block_noc_xy_idx + 2 * num_s_blocks + 2 * spec_peers;
+    if (spec_leader) {
+        constexpr uint32_t slice_tiles = k_chunk_tiles / spec_num_leaders;
+        constexpr uint32_t piece_tiles = slice_tiles / FMQA_PIECES;
+        const uint32_t first = spec_me / (spec_peers / spec_num_leaders) * slice_tiles;
+        cb_reserve_back(cb_k_shared, k_chunk_tiles);
+        const uint32_t l1 = get_write_ptr(cb_k_shared);
+        const uint32_t tb = get_tile_size(cb_k_shared);
+        const auto spec_kv = TensorAccessor(kv_args, kv_addr);
+        const auto spec_new = TensorAccessor(new_kv_args, new_kv_addr);
+        for (uint32_t i = 0; i < FMQA_PIECES; ++i) {
+            noc_async_read_set_trid(3 + i);
+            for (uint32_t t = first + i * piece_tiles; t < first + (i + 1) * piece_tiles; ++t) {
+                if (spec_g < spec_ring_chunks) {
+                    noc_async_read_page(spec_g * Sk_chunk_t * DHt + t, spec_kv, l1 + t * tb);
+                } else {
+                    noc_async_read_page(t % DHt, spec_new, l1 + t * tb);
+                }
+            }
+        }
+    }
+    noc_async_read_set_trid(2);
+    constexpr uint32_t cs_faces_bytes = 2 * cs_face_bytes;
+    if constexpr (share_reads) {
+        // S-block 0 (always active) issues the group's q rows and the RoPE tables with the lengths: none of them
+        // depends on the lengths. Waited for with the first K chunk.
+        if (s_block == 0) {
+            cb_reserve_back(cb_q_rm, group_rows * DHt);
+            const auto q_reader = TensorAccessor(q_args, q_addr);
+            uint32_t q_l1 = get_write_ptr(cb_q_rm);
+            for (uint32_t j = row_group; j < num_rows; j += row_groups) {
+                for (uint32_t h = 0; h < heads_per_core; ++h) {
+                    noc_async_read(
+                        q_reader.get_noc_addr((head_group * heads_per_core + h) * num_rows + j), q_l1, q_row_bytes);
+                    q_l1 += q_row_bytes;
+                }
+            }
+            const auto cos_reader = TensorAccessor(cos_args, cos_addr);
+            const auto sin_reader = TensorAccessor(sin_args, sin_addr);
+            const uint32_t raw = get_write_ptr(cb_cs_raw);
+            for (uint32_t t = 0; t < rope_tiles; ++t) {
+                noc_async_read(cos_reader.get_noc_addr(t), raw + t * cs_faces_bytes, cs_faces_bytes);
+                noc_async_read(sin_reader.get_noc_addr(t), raw + (rope_tiles + t) * cs_faces_bytes, cs_faces_bytes);
+            }
+        }
+    }
+    noc_async_read_set_trid(0);
+    // Multicast the guessed slice as it lands and count it at once (a core whose lengths contradict the guess waits
+    // for a second count, the re-read). S-block 0's leaders do it after handing q to their group.
+    auto spec_publish = [&]() {
+        // Multicast the guessed slice as it lands (the peers count it only once the lengths confirm it).
+        constexpr uint32_t slice_tiles = k_chunk_tiles / spec_num_leaders;
+        constexpr uint32_t piece_tiles = slice_tiles / FMQA_PIECES;
+        const uint32_t first = spec_me / (spec_peers / spec_num_leaders) * slice_tiles;
+        const uint32_t l1 = get_write_ptr(cb_k_shared);
+        const uint32_t tb = get_tile_size(cb_k_shared);
+        const uint32_t pidx = helped_noc_xy_idx;
+        uint32_t x0 = get_arg_val<uint32_t>(pidx), y0 = get_arg_val<uint32_t>(pidx + 1);
+        uint32_t x1 = get_arg_val<uint32_t>(pidx + 2 * (spec_peers - 1));
+        uint32_t y1 = get_arg_val<uint32_t>(pidx + 2 * (spec_peers - 1) + 1);
+        if (noc_index == 1) {
+            const uint32_t tx = x0, ty = y0;
+            x0 = x1;
+            y0 = y1;
+            x1 = tx;
+            y1 = ty;
+        }
+        for (uint32_t i = 0; i < FMQA_PIECES; ++i) {
+            noc_async_read_barrier_with_trid(3 + i);
+            const uint32_t a = l1 + (first + i * piece_tiles) * tb;
+            spec_multicast(a, get_noc_multicast_addr(x0, y0, x1, y1, a), piece_tiles * tb);
+        }
+        // Counted right away: a core whose lengths contradict the guess waits for a second count (the re-read).
+        noc_async_write_barrier();
+        const uint32_t sem = get_semaphore(kv_semaphore_id);
+        for (uint32_t c = 0; c < spec_peers; ++c) {
+            noc_semaphore_inc(
+                get_noc_addr(get_arg_val<uint32_t>(pidx + 2 * c), get_arg_val<uint32_t>(pidx + 2 * c + 1), sem), 1);
+        }
+        noc_async_atomic_barrier();
+    };
+    if (spec_leader && s_block != 0) {
+        spec_publish();
+    }
+    noc_async_read_barrier_with_trid(1);
     volatile tt_l1_ptr uint32_t* lengths_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lengths_l1);
     uint32_t n[num_rows];
     for (uint32_t j = 0; j < num_rows; ++j) {
@@ -115,7 +233,59 @@ void kernel_main() {
         const uint32_t len = flash_mqa_decode_rows::row_len(plan, j);
         max_len = len > max_len ? len : max_len;
     }
+    if (spec_leader) {
+        const bool hit = spec_g < plan.ring_chunks ? spec_g < spec_ring_chunks
+                                                   : spec_g == plan.ring_chunks && spec_g == spec_ring_chunks;
+        if (!hit && spec_g < max_len) {
+            constexpr uint32_t slice_tiles = k_chunk_tiles / spec_num_leaders;
+            const uint32_t first = spec_me / (spec_peers / spec_num_leaders) * slice_tiles;
+            const uint32_t l1 = get_write_ptr(cb_k_shared);
+            const uint32_t tb = get_tile_size(cb_k_shared);
+            const auto kv_r = TensorAccessor(kv_args, kv_addr);
+            const auto new_r = TensorAccessor(new_kv_args, new_kv_addr);
+            noc_async_write_barrier();  // the guess's multicasts read the slot as their source
+            for (uint32_t t = first; t < first + slice_tiles; ++t) {
+                if (spec_g < plan.ring_chunks) {
+                    noc_async_read_page(spec_g * Sk_chunk_t * DHt + t, kv_r, l1 + t * tb);
+                } else {
+                    noc_async_read_page(t % DHt, new_r, l1 + t * tb);
+                }
+            }
+            noc_async_read_barrier();
+            const uint32_t pidx = helped_noc_xy_idx;
+            uint32_t x0 = get_arg_val<uint32_t>(pidx), y0 = get_arg_val<uint32_t>(pidx + 1);
+            uint32_t x1 = get_arg_val<uint32_t>(pidx + 2 * (spec_peers - 1));
+            uint32_t y1 = get_arg_val<uint32_t>(pidx + 2 * (spec_peers - 1) + 1);
+            if (noc_index == 1) {
+                const uint32_t tx = x0, ty = y0;
+                x0 = x1;
+                y0 = y1;
+                x1 = tx;
+                y1 = ty;
+            }
+            const uint32_t a = l1 + first * tb;
+            spec_multicast(a, get_noc_multicast_addr(x0, y0, x1, y1, a), slice_tiles * tb);
+            noc_async_write_barrier();
+            const uint32_t sem = get_semaphore(kv_semaphore_id);
+            for (uint32_t c = 0; c < spec_peers; ++c) {
+                noc_semaphore_inc(
+                    get_noc_addr(get_arg_val<uint32_t>(pidx + 2 * c), get_arg_val<uint32_t>(pidx + 2 * c + 1), sem), 1);
+            }
+            noc_async_atomic_barrier();
+        }
+    }
     if (s_block >= max_len) {
+        if (speculate && s_block <= spec_ring_chunks) {
+            // The guessed chunk was counted on this core too: consume the counts before leaving.
+            volatile tt_l1_ptr uint32_t* sem =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(kv_semaphore_id));
+            noc_semaphore_wait_min(sem, spec_num_leaders);
+            noc_semaphore_set(sem, 0);
+        }
+        if (spec_leader) {
+            noc_async_read_barrier();  // the speculative reads and multicasts must land before the kernel ends
+            noc_async_write_barrier();
+        }
         return;
     }
 
@@ -207,20 +377,10 @@ void kernel_main() {
     if constexpr (!share_reads) {
         read_q_and_tables();
     } else {
-        // Issued now and waited for with the first K chunk: S-block 0 reads the group's q rows (handed to the group
-        // after the first chunk) and the tables.
-        cb_reserve_back(cb_q_rm, group_rows * DHt);
-        if (s_block == 0) {
-            const auto q_reader = TensorAccessor(q_args, q_addr);
-            uint32_t q_l1 = get_write_ptr(cb_q_rm);
-            for (uint32_t j = row_group; j < num_rows; j += row_groups) {
-                for (uint32_t h = 0; h < heads_per_core; ++h) {
-                    noc_async_read(
-                        q_reader.get_noc_addr((head_group * heads_per_core + h) * num_rows + j), q_l1, q_row_bytes);
-                    q_l1 += q_row_bytes;
-                }
-            }
-            issue_rope_reads();
+        // S-block 0 read the group's q rows and the tables with the lengths; q is handed to the group after the
+        // first K chunk.
+        if (s_block != 0) {
+            cb_reserve_back(cb_q_rm, group_rows * DHt);
         }
     }
 
@@ -275,9 +435,33 @@ void kernel_main() {
             }
             noc_async_atomic_barrier();
         };
+        if (s_block == 0) {
+            // q and the tables (issued with the lengths, transaction id 2) are in: hand q to the group's other active
+            // S-blocks. The tables are built after the K chunks (compute needs them only in the tail).
+            noc_async_read_barrier_with_trid(2);
+            const uint32_t q_base = get_write_ptr(cb_q_rm);
+            for (uint32_t b = 1; b < active_blocks; ++b) {
+                const uint32_t x = get_arg_val<uint32_t>(block_noc_xy_idx + 2 * b);
+                const uint32_t y = get_arg_val<uint32_t>(block_noc_xy_idx + 2 * b + 1);
+                noc_async_write(q_base, get_noc_addr(x, y, q_base), q_bytes);
+            }
+            noc_async_write_barrier();
+            signal_q();
+            cb_push_back(cb_q_rm, group_rows * DHt);
+            if (spec_leader) {
+                spec_publish();
+            }
+        }
         for (uint32_t g = s_block; g < len; g += num_s_blocks) {
             // Row r needs chunk g if g < len(r) and the chunk is shared by rows or r is this row.
             const bool shared_index = g <= plan.ring_chunks || dense;
+            // Sliding layers (no selected rows): every core of the column needs every chunk, so one leader (head group
+            // 0, row group 0) reads it from DRAM in pieces and multicasts each piece as it lands, then publishes the
+            // chunk count on the column's kv semaphores; the others only wait.
+            constexpr bool leader_mode = selected_capacity == 0;
+            constexpr uint32_t num_leaders = FMQA_LEADERS;
+            constexpr uint32_t num_pieces = FMQA_PIECES;
+            static_assert(k_chunk_tiles % (num_leaders * num_pieces) == 0 && num_peers_max % num_leaders == 0);
             uint32_t peers = 0;
             uint32_t my_index = 0;
             for (uint32_t c = 0; c < num_peers_max; ++c) {
@@ -291,22 +475,62 @@ void kernel_main() {
             }
             cb_reserve_back(cb_k_shared, k_chunk_tiles);
             const uint32_t l1 = get_write_ptr(cb_k_shared);
+            if constexpr (leader_mode) {
+                peers = 1;
+                uint32_t x0 = get_arg_val<uint32_t>(peer_noc_xy_idx);
+                uint32_t y0 = get_arg_val<uint32_t>(peer_noc_xy_idx + 1);
+                uint32_t x1 = get_arg_val<uint32_t>(peer_noc_xy_idx + 2 * (num_peers_max - 1));
+                uint32_t y1 = get_arg_val<uint32_t>(peer_noc_xy_idx + 2 * (num_peers_max - 1) + 1);
+                if (noc_index == 1) {
+                    const uint32_t tx = x0, ty = y0;
+                    x0 = x1;
+                    y0 = y1;
+                    x1 = tx;
+                    y1 = ty;
+                }
+                // num_leaders cores spread over the column each read a 1 / num_leaders slice in pieces, multicast
+                // each piece as it lands, then count the slice on every core's kv semaphore.
+                const bool spec_chunk = speculate && g == s_block && s_block <= spec_ring_chunks;
+                const bool spec_hit =
+                    spec_chunk &&
+                    (g < plan.ring_chunks ? g < spec_ring_chunks : g == plan.ring_chunks && g == spec_ring_chunks);
+                // A guessed chunk was counted once already; a wrong guess is counted again after the re-read.
+                expected += spec_chunk && !spec_hit ? 2 * num_leaders : num_leaders;
+                constexpr uint32_t leader_stride = num_peers_max / num_leaders;
+                if (me % leader_stride == leader_stride - 1 && !spec_chunk) {
+                    const uint32_t leader = me / leader_stride;
+                    constexpr uint32_t slice_tiles = k_chunk_tiles / num_leaders;
+                    constexpr uint32_t piece_tiles = slice_tiles / num_pieces;
+                    const uint32_t first = leader * slice_tiles;
+                    {
+                        for (uint32_t i = 0; i < num_pieces; ++i) {
+                            noc_async_read_set_trid(3 + i);
+                            read_chunk(g, j, l1, first + i * piece_tiles, first + (i + 1) * piece_tiles);
+                        }
+                    }
+                    noc_async_read_set_trid(0);
+                    for (uint32_t i = 0; i < num_pieces; ++i) {
+                        noc_async_read_barrier_with_trid(3 + i);
+                        const uint32_t a = l1 + (first + i * piece_tiles) * k_tile_bytes;
+                        noc_async_write_multicast_loopback_src(
+                            a, get_noc_multicast_addr(x0, y0, x1, y1, a), piece_tiles * k_tile_bytes, num_peers_max);
+                    }
+                    noc_async_write_barrier();
+                    for (uint32_t c = 0; c < num_peers_max; ++c) {
+                        const uint32_t x = get_arg_val<uint32_t>(peer_noc_xy_idx + 2 * c);
+                        const uint32_t y = get_arg_val<uint32_t>(peer_noc_xy_idx + 2 * c + 1);
+                        noc_semaphore_inc(get_noc_addr(x, y, kv_sem_addr), 1);
+                    }
+                    noc_async_atomic_barrier();
+                }
+                noc_semaphore_wait_min(kv_sem, expected);
+            }
             const uint32_t t0 = my_index * k_chunk_tiles / peers;
             const uint32_t t1 = (my_index + 1) * k_chunk_tiles / peers;
-            read_chunk(g, j, l1, t0, t1);
-            noc_async_read_barrier();
-            if (g == s_block && s_block == 0) {
-                // q is in: hand it to the group's other active S-blocks (counted after the write barrier below).
-                const uint32_t q_base = get_write_ptr(cb_q_rm);
-                for (uint32_t b = 1; b < active_blocks; ++b) {
-                    const uint32_t x = get_arg_val<uint32_t>(block_noc_xy_idx + 2 * b);
-                    const uint32_t y = get_arg_val<uint32_t>(block_noc_xy_idx + 2 * b + 1);
-                    noc_async_write(q_base, get_noc_addr(x, y, q_base), q_bytes);
-                }
-                if (peers == 1) {
-                    noc_async_write_barrier();
-                }
+            if constexpr (!leader_mode) {
+                read_chunk(g, j, l1, t0, t1);
             }
+            noc_async_read_barrier();
             if (peers > 1) {
                 if (shared_index) {
                     // The peers are (a subset of) this S-block's column of cores: one multicast of the slice to the
@@ -341,9 +565,6 @@ void kernel_main() {
                     }
                 }
                 noc_async_write_barrier();
-                if (g == s_block && s_block == 0) {
-                    signal_q();
-                }
                 for (uint32_t c = 0; c < num_peers_max; ++c) {
                     const uint32_t r = c % row_groups;
                     if (c != me && g < lens[r] && (shared_index || r == row_group)) {
@@ -356,22 +577,18 @@ void kernel_main() {
                 expected += peers - 1;
                 noc_semaphore_wait_min(kv_sem, expected);
             }
-            if (g == s_block) {
-                if (s_block == 0) {
-                    if (peers == 1) {
-                        signal_q();
-                    }
-                    build_rope_tables();
-                } else {
-                    volatile tt_l1_ptr uint32_t* q_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(q_sem_addr);
-                    noc_semaphore_wait(q_sem, 1);
-                    noc_semaphore_set(q_sem, 0);
-                }
+            if (g == s_block && s_block != 0) {
+                volatile tt_l1_ptr uint32_t* q_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(q_sem_addr);
+                noc_semaphore_wait(q_sem, 1);
+                noc_semaphore_set(q_sem, 0);
                 cb_push_back(cb_q_rm, group_rows * DHt);
             }
             cb_push_back(cb_k_shared, k_chunk_tiles);
         }
         noc_semaphore_set(kv_sem, 0);
+        if (s_block == 0) {
+            build_rope_tables();
+        }
     }
     // Shared chunks: every index of this S-block below shared_len, once.
     for (uint32_t g = s_block; !share_reads && g < plan.shared_len; g += num_s_blocks) {
