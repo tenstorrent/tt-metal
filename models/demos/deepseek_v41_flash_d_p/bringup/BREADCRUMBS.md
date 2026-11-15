@@ -2090,3 +2090,33 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   / device 143.9 ms, decoder skip, determinism x2, contract, acks, replica test). Not fixed: the owner should know
   the decode-skip snapshot path has a flake after this merge (suspects: P.64's fused window write and P.65's
   SnapshotSend, both new fabric programs on core row 0 with no cross-chip barrier between them).
+
+## FIX.32 (overseer fix, attempt 1): the P.67 "served-snapshot race" was a prepared-program cache key (DS41-277)
+- Step 1 (first): ATTN_FUSE and CHEAP_CCL defaults set to legacy (code and 'on' kept). Proof: test_decoder_skip_decode
+  20 times in one process after test_determinism on the same model (the order of the failing P.67 batch), both
+  legacy: 20 of 20 PASS, served_bytes_differ 0 every run (tests/test_snapshot_race_loop.py, new).
+- Cause (not a race): `SnapshotSend._pp` (P.65, tt/snapshot_send.py) cached one prepared program per block pattern.
+  Its TensorAccessor compile-time args hold the slab's shape, and an ND-sharded accessor takes the outermost page
+  coordinate as page_id % tensor_shape[0] (tt_metal/hw/inc/api/tensor/tensor_accessor.h:445). test_determinism runs
+  whole chunks on ladder caches with their own 1-batch slab ([1, 1, 128, 512]) and so builds the steady pattern's
+  program (31, 31, 31, 31: the last chip owns the 4 blocks). Reused for the engine's [slots x layers, 1, 128, 512]
+  slab, every (slot, layer) write landed in batch 0 = slot 0, layer 0. In the test only chunk-aligned stops use that
+  pattern; slot 0 layer 0 then holds the last write, the others stale bytes that are equal in both slots, hence exactly
+  4 records (layer 0) a case. The failing P.67 batch had 4 of 4 such cases differ (deterministic), the 3 passing runs
+  were processes without test_determinism first.
+- Evidence: tests/test_snapshot_send_geometry.py (new, ~10 s): own 1-batch slab first, then an engine-like 3-batch
+  slab at batch 2. Before the fix: 64 failures (all 32 chips: batch 2 not written, batch 0 overwritten). After: 0.
+  Model level before the fix (test_determinism, then CHEAP_CCL=on alone, 2 runs): 2 of 2 FAIL, served_bytes_differ 16,
+  the gate's exact records; DIAG: layers 0 and 1 wrong on every chip against the owner's ring.
+- Fix: the program cache key is (pattern, ring geometry, slab geometry), geometry = shape, dtype, layout, memory
+  config (`snapshot_send._geom`). Not a barrier or semaphore change: the fabric ordering was sound (the router flushes
+  the write, acked, before a fused increment: fabric_edm_packet_transmission.hpp flush_write_to_noc_pipeline).
+  WindowSend (P.64) builds its programs once too, but its io tensors (region, kept tail, rows, ring) have one interleaved
+  geometry in every path (asserted in pages and bytes), so it is left as is.
+- Step 2 proof (one process: test_determinism with both on, then 20 runs a side): both on 20 / 20 PASS, ATTN_FUSE alone
+  20 / 20, CHEAP_CCL alone 20 / 20, served_bytes_differ 0 in all 60 runs. Bit-identical to legacy: tests/
+  test_snapshot_send.py (legacy == on == definition, every chip, 6 cases) and tests/test_window_write_fused.py (5 piece
+  patterns, every chip) pass. Host us of the snapshot call with the key: 112.3 (P.65: 108.2; geometry probe 94.3).
+- Step 3: both defaults back to on.
+- Cost of legacy vs on (test_moe_prev_replicas, chunks 1..10 mean, shipped prev lean path, host / wall / device ms):
+  see the table below (legacy: env DS41_ATTN_FUSE=legacy DS41_CHEAP_CCL=legacy; on: the gate's unit, same code).

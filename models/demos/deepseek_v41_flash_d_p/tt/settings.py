@@ -610,7 +610,9 @@ TABLE = {
         "the owner's rows sliced and concatenated, then ttnn.bringup.update_padded_kv_cache: 4-6 launches a layer. "
         "on = one prepared program (tt/snapshot_send.SnapshotSend): each chip copies the blocks it holds, the owner "
         "chip's 128 rows go to every chip's slab over a broadcast tree of 1-hop fabric unicasts (the owner's column, "
-        "then each row); 1 launch a layer, no gather buffer. Data movement only: outputs bit-identical",
+        "then each row); 1 launch a layer, no gather buffer. Data movement only: outputs bit-identical. FIX.32 (DS41-277): "
+        "its prepared programs are keyed by block pattern AND the ring's / slab's geometry (a program built for a "
+        "1-batch slab wrote every engine slab's snapshot into batch 0)",
     ),
     "LEAN_PY": Setting(
         "on",

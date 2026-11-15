@@ -1347,6 +1347,78 @@ tasks:
       run. Never loosen a check; never reset the board.'
     gate_tasks:
     - FIX.30
+- id: FIX.32
+  title: 'Intermittent served-snapshot race after the P.67 merge (DS41-276): safe defaults first, then find and fix it'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.67
+  gate:
+    cmd: BRINGUP_TASK=P.67 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.67 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && BRINGUP_TASK=P.67 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      contract_checks_failed: == 0
+      acks_early: == 0
+      served_bytes_differ: == 0
+      chunk_wall_ms: '> 0'
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed_decoder_skip: == 0
+      acks_early_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      decode_acks_failures: == 0
+      device_ms_total: '> 0'
+      determinism_max_abs_diff: == 0
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/common/bringup/orchestrator.py
+  - models/demos/common/bringup/testing
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - ttnn/ttnn/bringup/INDEX.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CMakeLists.txt
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/README.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/common
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/expert_slot_copy
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/moe_block_nanobind.cpp
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine
+  brief:
+    details: 'OVERSEER 2026-11-14 (owner away-ish, decide autonomously): after P.67 merged the replica branch, test_decoder_skip_decode
+      failed 1 of 4 runs (served_bytes_differ=16: layer 0''s served window snapshot differs between the off and decode runs,
+      4 records a case, only where the stop falls on a chunk boundary, 5120 and 10240). Suspects: P.64''s fused window write
+      (ATTN_FUSE, tt/window_send.py) and P.65''s one-program snapshot broadcast (CHEAP_CCL, tt/snapshot_send.py): new chip-to-chip
+      programs with no all-chip barrier between them (DS41-276). STEP 1 (first, before anything else): make the shipped defaults
+      safe: CHEAP_CCL and ATTN_FUSE default ''legacy'' in tt/settings.py (keep the code and the ''on'' values), and prove
+      the race is gone at those defaults: test_decoder_skip_decode passes 20 runs in a row (a loop in one process is fine;
+      report every run). STEP 2: find the race: which program (bisect with each switch alone, 20 runs each), where (the snapshot
+      read vs the window write / broadcast ordering, semaphores, the chunk-boundary stop path); fix it in the program (a barrier
+      or a semaphore wait, not a host sync per call); prove with 20 consecutive passes with BOTH switches on, outputs bit-identical
+      to legacy. STEP 3: only if step 2 proves out, set both defaults back to ''on''; else leave legacy and report. Measure
+      the host/wall cost of the legacy defaults vs on (real chunks 1..10, test_moe_prev_replicas). SAFETY: a hang or reset
+      need: STOP and report, never reset. Report plainly, short.'
+    gate_tasks:
+    - P.67
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1360,6 +1432,7 @@ tasks:
   - FIX.16
   - FIX.18
   - FIX.31
+  - FIX.32
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
@@ -4028,8 +4101,9 @@ tasks:
       decode_acks_failures: == 0
       device_ms_total: '> 0'
 - id: P.67
-  title: 'Bring the replica branch''s wins to model_bringup: merge bringup/deepseek_v41_flash_d_p/moe_replication @ b9a45fb0b80 (code only; its ledger stays out):
-    MoE replicas learned from the previous chunk (P.45-P.62b), x pieces (P.59), host cuts (P.63-P.66), MoE-half trace (P.61, off)'
+  title: 'Bring the replica branch''s wins to model_bringup: merge bringup/deepseek_v41_flash_d_p/moe_replication @ b9a45fb0b80
+    (code only; its ledger stays out): MoE replicas learned from the previous chunk (P.45-P.62b), x pieces (P.59), host cuts
+    (P.63-P.66), MoE-half trace (P.61, off)'
   step: perf
   role: perf
   device: true
@@ -4059,19 +4133,23 @@ tasks:
   - ttnn/ttnn/bringup/moe_block_main_ttnn/moe_block_nanobind.cpp
   - ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine
   brief:
-    details: 'OWNER 2026-11-14: "bring wins to model_bringup". Take branch bringup/deepseek_v41_flash_d_p/moe_replication at b9a45fb0b80 (local branch in this repo)
-      into model_bringup. It forked at 6bdf324e716; since then model_bringup gained FIX.28-FIX.31 (framework: one-process gates, run records, env keys), P.49/P.50/P.51
-      accepts and X.3 - keep ALL of them. MERGE (git merge or cherry-picks of the replica branch''s code commits, your choice; record which): take every code / test
-      / fork / knowledge change; DO NOT take anything under models/demos/deepseek_v41_flash_d_p/bringup/ledgers/ (the replica run''s own tasks, state, results, dashboard:
-      model_bringup keeps its own). Files both sides changed: models/demos/common/bringup/orchestrator.py, models/demos/deepseek_v41_flash_d_p/tt/attention.py, tt/model.py,
-      bringup/BREADCRUMBS.md, known_issues.md, repo_map.md: merge by hand keeping both sides'' intent; known_issues ids must stay unique (the branch used DS41-236..268:
-      renumber only on a real clash and update references). Take it as is otherwise: change nothing else. Settings defaults as on the branch (EXPERT_X_PIECES=min8k,
-      MOE_REPLICAS=prev, MOE_FILL=piggyback, MOE_PREV_HOST=device, MOE_PREV_HOST2=lean, MOE_PLANNER=folded, MESH_PROGRAMS=on, ATTN_FUSE=on, CHEAP_CCL=on, LEAN_PY=on,
-      MOE_TRACE=off), and every switch must still work with model_bringup''s settings (COMBINE_SPLIT from P.50, DECODER_SKIP=decode from P.51, the P.49 decode cap):
-      check that replicas, the combine split and the decoder-skip path are compatible (P.56''s guard already runs layers off on skipped chunks; confirm on the decode-skip
-      test). Rebuild (build_Release). CHECKS: the model-level gate (ladder, contract, adapter acks, decoder-skip, determinism incl. decoder_skip, the replica test)
-      and the A/B before/after the merge (the orchestrator measures ''before'' on today''s model_bringup first). No fork suites on the 8x4 (owner rule). If a branch
-      change conflicts with a model_bringup rule or test in a way you cannot resolve honestly, stop and report it. Report: what merged, conflicts and how resolved,
+    details: 'OWNER 2026-11-14: "bring wins to model_bringup". Take branch bringup/deepseek_v41_flash_d_p/moe_replication
+      at b9a45fb0b80 (local branch in this repo) into model_bringup. It forked at 6bdf324e716; since then model_bringup gained
+      FIX.28-FIX.31 (framework: one-process gates, run records, env keys), P.49/P.50/P.51 accepts and X.3 - keep ALL of them.
+      MERGE (git merge or cherry-picks of the replica branch''s code commits, your choice; record which): take every code
+      / test / fork / knowledge change; DO NOT take anything under models/demos/deepseek_v41_flash_d_p/bringup/ledgers/ (the
+      replica run''s own tasks, state, results, dashboard: model_bringup keeps its own). Files both sides changed: models/demos/common/bringup/orchestrator.py,
+      models/demos/deepseek_v41_flash_d_p/tt/attention.py, tt/model.py, bringup/BREADCRUMBS.md, known_issues.md, repo_map.md:
+      merge by hand keeping both sides'' intent; known_issues ids must stay unique (the branch used DS41-236..268: renumber
+      only on a real clash and update references). Take it as is otherwise: change nothing else. Settings defaults as on the
+      branch (EXPERT_X_PIECES=min8k, MOE_REPLICAS=prev, MOE_FILL=piggyback, MOE_PREV_HOST=device, MOE_PREV_HOST2=lean, MOE_PLANNER=folded,
+      MESH_PROGRAMS=on, ATTN_FUSE=on, CHEAP_CCL=on, LEAN_PY=on, MOE_TRACE=off), and every switch must still work with model_bringup''s
+      settings (COMBINE_SPLIT from P.50, DECODER_SKIP=decode from P.51, the P.49 decode cap): check that replicas, the combine
+      split and the decoder-skip path are compatible (P.56''s guard already runs layers off on skipped chunks; confirm on
+      the decode-skip test). Rebuild (build_Release). CHECKS: the model-level gate (ladder, contract, adapter acks, decoder-skip,
+      determinism incl. decoder_skip, the replica test) and the A/B before/after the merge (the orchestrator measures ''before''
+      on today''s model_bringup first). No fork suites on the 8x4 (owner rule). If a branch change conflicts with a model_bringup
+      rule or test in a way you cannot resolve honestly, stop and report it. Report: what merged, conflicts and how resolved,
       before/after numbers. SAFETY: a hang or a board reset need: STOP and report, never reset.'
   ab:
     before: true
@@ -4080,12 +4158,14 @@ tasks:
   ab_positions:
   - 51200
   gate:
-    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh
-      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all
-      --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
-      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh --run-all
-      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
