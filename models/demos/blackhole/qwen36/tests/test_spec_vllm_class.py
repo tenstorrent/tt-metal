@@ -677,6 +677,7 @@ def gen_eng(monkeypatch):
     monkeypatch.setattr(gen, "_engine", lambda: eng, raising=False)
     monkeypatch.setattr(gen, "_ensure_ready", lambda kv_cache=None: eng, raising=False)
     monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: t)
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: [t])
     monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda *a, **kw: None)
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
     monkeypatch.setattr(
