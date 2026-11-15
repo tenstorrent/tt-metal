@@ -36,6 +36,11 @@ void bind_mix_streams(nb::module_& mod) {
             sublayer_out (ttnn.Tensor): sublayer output for the current token, [B, S, 1, D].
             streams (ttnn.Tensor): residual-stream stack, [B, S, hc, D].
 
+        A DSpark block of n <= h rows of one session (``h`` in 1/2/4/8): ``streams`` [1, 1, hc*h, D] TILE in
+        ``(h, 32)`` tiles (row ``s*h + j`` = stream ``s`` of block row ``j``), ``sublayer_out`` [1, 1, h, D] in
+        the same tiles, ``post`` [1, n, hc, 1] and ``comb`` [1, n, hc, hc] TILE 32x32 (block row at dim 1). The
+        output takes ``streams``' layout; padding rows come out 0.
+
         Keyword Args:
             memory_config (Optional[ttnn.MemoryConfig]): output memory config. Defaults to the
                 ``streams`` tensor's memory config.

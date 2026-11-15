@@ -49,6 +49,15 @@ void require_width_sharded_l1(const Tensor& t, const char* name) {
         name);
 }
 
+// A several-row block: streams / kv TILE in (h x 32) tiles (h < 32), else 0 (ROW_MAJOR users).
+uint32_t block_height(const Tensor& streams) {
+    if (streams.layout() != Layout::TILE) {
+        return 0;
+    }
+    const uint32_t h = streams.tensor_spec().tile().get_height();
+    return h < TILE_HEIGHT ? h : 0;
+}
+
 std::vector<CoreCoord> shard_cores(const ShardSpec& spec) {
     return corerange_to_cores(spec.grid, std::nullopt, spec.orientation == ShardOrientation::ROW_MAJOR);
 }
@@ -70,27 +79,79 @@ void EngramGateDeviceOperation::validate_on_program_cache_miss(
     require_width_sharded_l1(gate, "gate_weight");
 
     TT_FATAL(
-        streams.layout() == Layout::ROW_MAJOR && streams.dtype() == DataType::BFLOAT16,
-        "engram_gate: streams must be ROW_MAJOR BFLOAT16");
-    TT_FATAL(
-        kv.layout() == Layout::ROW_MAJOR && kv.dtype() == DataType::BFLOAT16,
-        "engram_gate: kv must be ROW_MAJOR BFLOAT16");
-    TT_FATAL(
         gate.layout() == Layout::TILE && gate.dtype() == DataType::FLOAT32,
         "engram_gate: gate_weight must be TILE FLOAT32");
+    const uint32_t block_h = block_height(streams);
+    uint32_t b = 0, hc = 0, d = 0;
+    if (block_h > 0) {
+        // A block of up to h rows: streams [1, 1, hc * h, D], row s * h + j = stream s of block row j.
+        TT_FATAL(
+            block_h == 1 || block_h == 2 || block_h == 4 || block_h == 8,
+            "engram_gate: block tile height must be 1, 2, 4 or 8, got {}",
+            block_h);
+        TT_FATAL(
+            streams.dtype() == DataType::BFLOAT16 && streams.tensor_spec().tile().get_width() == TILE_WIDTH,
+            "engram_gate: block streams must be BFLOAT16 ({} x {} tiles)",
+            block_h,
+            TILE_WIDTH);
+        TT_FATAL(
+            kv.layout() == Layout::TILE && kv.dtype() == DataType::BFLOAT16 &&
+                kv.tensor_spec().tile().get_height() == block_h && kv.tensor_spec().tile().get_width() == TILE_WIDTH,
+            "engram_gate: with block streams, kv must be BFLOAT16 TILE in the same {} x {} tiles",
+            block_h,
+            TILE_WIDTH);
+        const auto& shape = streams.logical_shape();
+        TT_FATAL(
+            shape.rank() == 4 && shape[0] == 1 && shape[1] == 1 && shape[2] % block_h == 0,
+            "engram_gate: block streams must be [1, 1, hc * {}, D], got {}",
+            block_h,
+            shape);
+        b = block_h;
+        hc = shape[2] / block_h;
+        d = shape[3];
+        TT_FATAL(
+            hc * block_h <= TILE_HEIGHT,
+            "engram_gate: hc * h = {} rows must fit one {}-row tile",
+            hc * block_h,
+            TILE_HEIGHT);
+        const auto& kv_shape = kv.padded_shape();
+        TT_FATAL(
+            kv_shape.rank() == 4 && kv_shape[0] == 1 && kv_shape[1] == 1 && kv_shape[2] == block_h &&
+                kv_shape[3] == (hc + 1) * d,
+            "engram_gate: block kv must be [1, 1, {}, {}] (padded), got {}",
+            block_h,
+            (hc + 1) * d,
+            kv_shape);
+        TT_FATAL(
+            streams.memory_config().shard_spec()->shape[0] == hc * block_h &&
+                kv.memory_config().shard_spec()->shape[0] == block_h,
+            "engram_gate: block streams / kv shards must be {} / {} rows tall",
+            hc * block_h,
+            block_h);
+    } else {
+        TT_FATAL(
+            streams.layout() == Layout::ROW_MAJOR && streams.dtype() == DataType::BFLOAT16,
+            "engram_gate: streams must be ROW_MAJOR BFLOAT16");
+        TT_FATAL(
+            kv.layout() == Layout::ROW_MAJOR && kv.dtype() == DataType::BFLOAT16,
+            "engram_gate: kv must be ROW_MAJOR BFLOAT16");
 
-    const auto& shape = streams.logical_shape();
-    TT_FATAL(shape.rank() == 4 && shape[1] == 1, "engram_gate: streams must be [B, 1, hc, D], got {}", shape);
-    const uint32_t b = shape[0], hc = shape[2], d = shape[3];
-    TT_FATAL(TILE_HEIGHT % hc == 0, "engram_gate: hc {} must divide {} (gate_weight row pattern)", hc, TILE_HEIGHT);
+        const auto& shape = streams.logical_shape();
+        TT_FATAL(shape.rank() == 4 && shape[1] == 1, "engram_gate: streams must be [B, 1, hc, D], got {}", shape);
+        b = shape[0];
+        hc = shape[2];
+        d = shape[3];
+        TT_FATAL(TILE_HEIGHT % hc == 0, "engram_gate: hc {} must divide {} (gate_weight row pattern)", hc, TILE_HEIGHT);
 
-    const auto& kv_shape = kv.logical_shape();
-    TT_FATAL(
-        kv_shape.rank() == 4 && kv_shape[0] == 1 && kv_shape[1] == 1 && kv_shape[2] == b && kv_shape[3] == (hc + 1) * d,
-        "engram_gate: kv must be [1, 1, {}, {}], got {}",
-        b,
-        (hc + 1) * d,
-        kv_shape);
+        const auto& kv_shape = kv.logical_shape();
+        TT_FATAL(
+            kv_shape.rank() == 4 && kv_shape[0] == 1 && kv_shape[1] == 1 && kv_shape[2] == b &&
+                kv_shape[3] == (hc + 1) * d,
+            "engram_gate: kv must be [1, 1, {}, {}], got {}",
+            b,
+            (hc + 1) * d,
+            kv_shape);
+    }
     const auto& gate_shape = gate.logical_shape();
     TT_FATAL(
         gate_shape.volume() == TILE_HEIGHT * d && gate_shape[-2] == TILE_HEIGHT && gate_shape[-1] == d,
@@ -152,8 +213,9 @@ void EngramGateDeviceOperation::validate_on_program_cache_miss(
 EngramGateDeviceOperation::spec_return_value_t EngramGateDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& streams = tensor_args.streams;
-    return TensorSpec(
-        streams.logical_shape(), TensorLayout(streams.dtype(), PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
+    const auto page_config = block_height(streams) > 0 ? PageConfig(Layout::TILE, streams.tensor_spec().tile())
+                                                       : PageConfig(Layout::ROW_MAJOR);
+    return TensorSpec(streams.logical_shape(), TensorLayout(streams.dtype(), page_config, args.output_mem_config));
 }
 
 EngramGateDeviceOperation::tensor_return_value_t EngramGateDeviceOperation::create_output_tensors(
@@ -169,8 +231,11 @@ ProgramDescriptor EngramGateDeviceOperation::ProgramFactory::create_descriptor(
     auto* device = streams.device();
 
     const auto& shape = streams.logical_shape();
-    const uint32_t hc = shape[2], d = shape[3];
-    const uint32_t rows = shape[0] * hc;
+    // A block (h x 32 tiles): rows s * h + j of one 32-row tile, hc = streams rows / h.
+    const uint32_t block_h = block_height(streams);
+    const uint32_t hc = block_h > 0 ? shape[2] / block_h : shape[2];
+    const uint32_t d = shape[3];
+    const uint32_t rows = block_h > 0 ? hc * block_h : shape[0] * hc;
     const uint32_t Rt = tt::div_up(rows, TILE_HEIGHT);
 
     // Compute on gate_weight's cores; core c's columns [c*w, (c+1)*w) sit in streams shard c*w / streams_w.
@@ -268,6 +333,7 @@ ProgramDescriptor EngramGateDeviceOperation::ProgramFactory::create_descriptor(
         kv_shard.shape[1],
         static_cast<uint32_t>(kv_cores.size()),
         streams_w * elem_bytes,
+        block_h,
     };
     reader_desc.config = ReaderConfigDescriptor{};
     for (const auto& core : kv_cores) {
@@ -291,6 +357,8 @@ ProgramDescriptor EngramGateDeviceOperation::ProgramFactory::create_descriptor(
         num_cores,
         kExchangeSemaphoreId,
         streams_w * elem_bytes,
+        block_h,
+        hc,
     };
     writer_desc.config = WriterConfigDescriptor{};
     for (const auto& core : cores) {
@@ -325,6 +393,7 @@ ProgramDescriptor EngramGateDeviceOperation::ProgramFactory::create_descriptor(
         std::bit_cast<uint32_t>(1.0f / static_cast<float>(d)),
         std::bit_cast<uint32_t>(args.eps),
         std::bit_cast<uint32_t>(kGateClamp),
+        block_h,
     };
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,

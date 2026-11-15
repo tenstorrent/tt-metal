@@ -36,6 +36,9 @@ struct MixStreamsDeviceOperation {
 // shapes the single-kernel path does not cover.
 bool is_fusable(const Tensor& post, const Tensor& comb, const Tensor& sublayer_out, const Tensor& streams);
 
+// Tile height h of a several-row block's streams (TILE with (h x 32) tiles, h < 32), else 0.
+uint32_t block_height(const Tensor& streams);
+
 }  // namespace ttnn::operations::experimental::deepseek::mix_streams
 
 namespace ttnn::prim {

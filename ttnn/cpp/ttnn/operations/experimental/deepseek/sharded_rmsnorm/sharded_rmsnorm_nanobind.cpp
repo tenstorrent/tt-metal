@@ -34,8 +34,14 @@ void bind_sharded_rmsnorm(nb::module_& mod) {
             output_layout (Optional[ttnn.Layout]): Output layout (``TILE`` or ``ROW_MAJOR``).
                 Defaults to ``input_tensor.layout``.
 
+        Several rows (a DSpark block): ``input_tensor`` ``[1, 1, rows, D]`` TILE in ``(h, 32)`` tiles
+        (``h`` in 1/2/4/8, ``rows <= h``), WIDTH_SHARDED with shard ``[h, W_c]``; every row is normed on
+        its own. ``weight`` is either the ``[1, 1, 1, D]`` 32x32 gamma, or (faster) ``[1, 1, h, D]`` in
+        the input's ``(h, 32)`` tiles with gamma in every row. The output is TILE in the input's tiles,
+        WIDTH_SHARDED like the input (default) or INTERLEAVED.
+
         Returns:
-            ttnn.Tensor: ``[1, 1, 1, D]`` normalized BFLOAT16 tensor.
+            ttnn.Tensor: ``[1, 1, 1, D]`` (or the block's ``[1, 1, rows, D]``) normalized BFLOAT16 tensor.
         )doc",
         &ttnn::experimental::deepseek::sharded_rmsnorm,
         nb::arg("input_tensor"),

@@ -87,7 +87,65 @@ std::optional<Dims> fusable_dims(
     return dims;
 }
 
+// A block of up to h rows of one session: streams [1, 1, hc * h, D] in (h x 32) tiles (row s * h + j = stream s of
+// block row j), sublayer_out [1, 1, h, D] in the same tiles, post [1, n, hc, 1] and comb [1, n, hc, hc] TILE 32x32
+// with block row j at dim 1 (n <= h rows; rows n..h-1 come out 0).
+void validate_block(const MixStreamsParams& attributes, const MixStreamsInputs& tensor_args) {
+    const auto& [post, comb, sub, streams] = tensor_args;
+    const uint32_t h = block_height(streams);
+    TT_FATAL(h == 1 || h == 2 || h == 4 || h == 8, "mix_streams: block tile height must be 1, 2, 4 or 8, got {}", h);
+    for (const Tensor* t : {&post, &comb, &sub, &streams}) {
+        TT_FATAL(
+            t->storage_type() == StorageType::DEVICE && t->dtype() == DataType::BFLOAT16 &&
+                t->layout() == Layout::TILE && t->logical_shape().rank() == 4,
+            "mix_streams: block inputs must be rank-4 BFLOAT16 TILE device tensors");
+    }
+    const uint32_t hc = attributes.num_streams;
+    const uint32_t n = post.logical_shape()[1];
+    const uint32_t d = streams.logical_shape()[3];
+    TT_FATAL(hc >= 1 && hc * h <= tt::constants::TILE_HEIGHT, "mix_streams: hc * h = {} must be <= 32", hc * h);
+    TT_FATAL(n >= 1 && n <= h, "mix_streams: block rows {} must be in [1, {}]", n, h);
+    TT_FATAL(d % tt::constants::TILE_WIDTH == 0, "mix_streams: D {} must be a multiple of 32", d);
+    TT_FATAL(
+        streams.logical_shape() == ttnn::Shape({1, 1, hc * h, d}) &&
+            streams.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+        "mix_streams: block streams must be [1, 1, {}, {}] in {}x32 tiles, got {}",
+        hc * h,
+        d,
+        h,
+        streams.logical_shape());
+    TT_FATAL(
+        sub.padded_shape() == ttnn::Shape({1, 1, h, d}) && sub.tensor_spec().tile().get_height() == h &&
+            sub.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+        "mix_streams: block sublayer_out must be [1, 1, {}, {}] in the streams' {}x32 tiles, got {} ({})",
+        h,
+        d,
+        h,
+        sub.logical_shape(),
+        sub.tensor_spec().tile().get_tile_shape());
+    TT_FATAL(
+        post.logical_shape() == ttnn::Shape({1, n, hc, 1}) && comb.logical_shape() == ttnn::Shape({1, n, hc, hc}),
+        "mix_streams: block post / comb must be [1, {}, {}, 1] / [1, {}, {}, {}], got {} / {}",
+        n,
+        hc,
+        n,
+        hc,
+        hc,
+        post.logical_shape(),
+        comb.logical_shape());
+    for (const Tensor* t : {&post, &comb}) {
+        const auto& tile = t->tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "mix_streams: block post / comb must use 32x32 tiles");
+    }
+}
+
 void validate_tensors(const MixStreamsParams& attributes, const MixStreamsInputs& tensor_args) {
+    if (block_height(tensor_args.streams) > 0) {
+        validate_block(attributes, tensor_args);
+        return;
+    }
     const auto dims = fusable_dims(tensor_args.post, tensor_args.comb, tensor_args.sublayer_out, tensor_args.streams);
     TT_FATAL(
         dims.has_value(),
@@ -110,6 +168,14 @@ void validate_tensors(const MixStreamsParams& attributes, const MixStreamsInputs
 }
 
 }  // namespace
+
+uint32_t block_height(const Tensor& streams) {
+    if (streams.layout() != Layout::TILE) {
+        return 0;
+    }
+    const uint32_t h = streams.tensor_spec().tile().get_height();
+    return h < tt::constants::TILE_HEIGHT ? h : 0;
+}
 
 bool is_fusable(const Tensor& post, const Tensor& comb, const Tensor& sublayer_out, const Tensor& streams) {
     return fusable_dims(post, comb, sublayer_out, streams).has_value();
@@ -166,7 +232,10 @@ Tensor mix_streams(
         /*default_l1_acc=*/true);
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .num_streams = static_cast<uint32_t>(streams.logical_shape()[2]),
+        // A block's streams stack hc streams of h rows each; hc is post's stream dim.
+        .num_streams = ttnn::operations::experimental::deepseek::mix_streams::block_height(streams) > 0
+                           ? static_cast<uint32_t>(post.logical_shape()[2])
+                           : static_cast<uint32_t>(streams.logical_shape()[2]),
         .output_mem_config = memory_config.value_or(streams.memory_config()),
         .compute_kernel_config = kernel_config,
     };

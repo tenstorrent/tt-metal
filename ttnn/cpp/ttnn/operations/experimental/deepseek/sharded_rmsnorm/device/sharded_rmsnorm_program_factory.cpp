@@ -37,6 +37,192 @@ constexpr char kComputeKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/sharded_rmsnorm/device/kernels/compute/"
     "compute_sharded_rmsnorm.cpp";
 
+constexpr uint32_t kCbOnes = tt::CBIndex::c_10;
+
+constexpr char kRowsReaderKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/sharded_rmsnorm/device/kernels/dataflow/"
+    "reader_sharded_rmsnorm_rows.cpp";
+constexpr char kRowsWriterKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/sharded_rmsnorm/device/kernels/dataflow/"
+    "writer_sharded_rmsnorm_rows.cpp";
+constexpr char kRowsComputeKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/sharded_rmsnorm/device/kernels/compute/"
+    "compute_sharded_rmsnorm_rows.cpp";
+
+// Several rows in (h x 32) tiles. Each core accumulates sum_t x_t * x_t elementwise into one (h x 32) fp32
+// tile (row j keeps row j's partial sums per column), the hub sums the cores' tiles and the 32 columns of each
+// row at once as sum_c E_c @ ones[32, 32] (every column of row j then holds row j's sum(x^2)), takes
+// rsqrt(sum / D + eps) on that tile and multicasts it back: each core then scales its tiles by it elementwise
+// (a per-row scale) and by gamma (replicated in every row).
+ShardedRmsNormProgramFactory::cached_program_t create_rows(
+    const ShardedRmsNormParams& operation_attributes,
+    const ShardedRmsNormInputs& tensor_args,
+    ShardedRmsNormTensorReturn& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    const auto& input = tensor_args.input_tensor;
+    const auto& weight = tensor_args.weight;
+    const uint32_t h = row_block_height(input);
+    const auto& in_shard = input.shard_spec().value();
+    const CoreRangeSet& all_cores = in_shard.grid;
+    std::vector<CoreCoord> cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
+    const uint32_t num_cores = static_cast<uint32_t>(cores.size());
+    const uint32_t w_tiles = in_shard.shape[1] / constants::TILE_WIDTH;
+    const uint32_t d = static_cast<uint32_t>(input.logical_shape()[3]);
+    const bool output_is_sharded = output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool gamma_replicated = weight.tensor_spec().tile().get_height() == h;
+
+    IDevice* device = input.device();
+    Program program = CreateProgram();
+
+    const DataFormat bf16 = DataFormat::Float16_b;
+    const DataFormat fp32 = DataFormat::Float32;
+    const tt::tt_metal::Tile block_tile({h, constants::TILE_WIDTH});
+    const tt::tt_metal::Tile row_tile({1, constants::TILE_WIDTH});
+    const tt::tt_metal::Tile full_tile({constants::TILE_HEIGHT, constants::TILE_WIDTH});
+    const uint32_t block_bytes = block_tile.get_tile_size(bf16);
+    const uint32_t stat_bytes = block_tile.get_tile_size(fp32);
+
+    auto make_cb =
+        [&](uint32_t idx, uint32_t num_pages, DataFormat df, const tt::tt_metal::Tile& tile, const Buffer* buffer) {
+            const uint32_t page_bytes = tile.get_tile_size(df);
+            auto cfg = CircularBufferConfig(num_pages * page_bytes, {{idx, df}})
+                           .set_page_size(idx, page_bytes)
+                           .set_tile_dims(idx, tile);
+            if (buffer != nullptr) {
+                cfg.set_globally_allocated_address(*buffer);
+            }
+            return CreateCircularBuffer(program, all_cores, cfg);
+        };
+
+    const CBHandle cb_x_handle = make_cb(kCbX, w_tiles, bf16, block_tile, input.buffer());
+    make_cb(kCbGamma, w_tiles, bf16, block_tile, nullptr);
+    if (!gamma_replicated) {
+        make_cb(kCbGammaRaw, 2 * w_tiles, bf16, row_tile, nullptr);
+    }
+    make_cb(kCbLocalStat, 1, fp32, block_tile, nullptr);
+    make_cb(kCbGather, num_cores, fp32, block_tile, nullptr);
+    make_cb(kCbScaleSrc, 1, fp32, block_tile, nullptr);
+    make_cb(kCbScale, 1, fp32, block_tile, nullptr);
+    make_cb(kCbOnes, 1, bf16, full_tile, nullptr);
+    const CBHandle cb_out_handle =
+        make_cb(kCbOut, w_tiles, bf16, block_tile, output_is_sharded ? output.buffer() : nullptr);
+
+    const uint32_t arrive_sem_id = CreateSemaphore(program, all_cores, 0);
+    const uint32_t ready_sem_id = CreateSemaphore(program, all_cores, 0);
+
+    const CoreCoord hub_phys = device->worker_core_from_logical_core(cores[0]);
+    const bool is_rect = all_cores.ranges().size() == 1;
+    CoreCoord mcast_start_phys{0, 0};
+    CoreCoord mcast_end_phys{0, 0};
+    if (is_rect && num_cores > 1) {
+        const auto& r = all_cores.ranges()[0];
+        mcast_start_phys = device->worker_core_from_logical_core(r.start_coord);
+        mcast_end_phys = device->worker_core_from_logical_core(r.end_coord);
+    }
+
+    std::vector<uint32_t> reader_ct_args = {
+        kCbX,
+        kCbGamma,
+        kCbGammaRaw,
+        kCbOnes,
+        w_tiles,
+        h,
+        gamma_replicated ? 1u : 0u,
+    };
+    TensorAccessorArgs(weight.buffer()).append_to(reader_ct_args);
+
+    std::vector<uint32_t> writer_ct_args = {
+        kCbLocalStat,
+        kCbGather,
+        kCbScaleSrc,
+        kCbScale,
+        kCbOut,
+        w_tiles,
+        num_cores,
+        stat_bytes,
+        block_bytes,
+        arrive_sem_id,
+        ready_sem_id,
+        static_cast<uint32_t>(hub_phys.x),
+        static_cast<uint32_t>(hub_phys.y),
+        is_rect ? 1u : 0u,
+        static_cast<uint32_t>(mcast_start_phys.x),
+        static_cast<uint32_t>(mcast_start_phys.y),
+        static_cast<uint32_t>(mcast_end_phys.x),
+        static_cast<uint32_t>(mcast_end_phys.y),
+        output_is_sharded ? 1u : 0u,
+    };
+    TensorAccessorArgs(output_is_sharded ? static_cast<const Buffer*>(nullptr) : output.buffer())
+        .append_to(writer_ct_args);
+
+    const uint32_t inv_d_bits = std::bit_cast<uint32_t>(1.0f / static_cast<float>(d));
+    const uint32_t eps_bits = std::bit_cast<uint32_t>(operation_attributes.epsilon);
+    const std::vector<uint32_t> compute_ct_args = {
+        kCbX,
+        kCbGamma,
+        kCbLocalStat,
+        kCbGather,
+        kCbOnes,
+        kCbScaleSrc,
+        kCbScale,
+        kCbOut,
+        w_tiles,
+        num_cores,
+        inv_d_bits,
+        eps_bits,
+    };
+
+    const KernelHandle reader_kernel_id =
+        CreateKernel(program, kRowsReaderKernelPath, all_cores, ReaderDataMovementConfig(reader_ct_args));
+    const KernelHandle writer_kernel_id =
+        CreateKernel(program, kRowsWriterKernelPath, all_cores, WriterDataMovementConfig(writer_ct_args));
+    const KernelHandle compute_kernel_id = CreateKernel(
+        program,
+        kRowsComputeKernelPath,
+        all_cores,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = false,
+            .math_approx_mode = false,
+            .compile_args = compute_ct_args,
+        });
+
+    const uint32_t weight_addr = weight.buffer()->address();
+    const uint32_t out_addr = output.buffer()->address();
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& core = cores[i];
+        SetRuntimeArgs(program, reader_kernel_id, core, {weight_addr, i});
+        SetRuntimeArgs(program, compute_kernel_id, core, {i == 0 ? 1u : 0u});
+        std::vector<uint32_t> writer_rt_args = {out_addr, i};
+        if (i == 0 && !is_rect && num_cores > 1) {
+            for (uint32_t j = 1; j < num_cores; ++j) {
+                const auto phys = device->worker_core_from_logical_core(cores[j]);
+                writer_rt_args.push_back(static_cast<uint32_t>(phys.x));
+                writer_rt_args.push_back(static_cast<uint32_t>(phys.y));
+            }
+        }
+        SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+    }
+
+    // The block's input and sharded output CBs alias their buffers the way the ROW_MAJOR path's do, so
+    // override_runtime_arguments' ROW_MAJOR branches rebind them.
+    return ShardedRmsNormProgramFactory::cached_program_t{
+        std::move(program),
+        {.reader_kernel_id = reader_kernel_id,
+         .writer_kernel_id = writer_kernel_id,
+         .cb_in = 0,
+         .cb_x = cb_x_handle,
+         .cb_out = cb_out_handle,
+         .cb_tile_out = 0,
+         .input_is_rm = true,
+         .output_is_sharded = output_is_sharded,
+         .output_is_rm = true,
+         .cores = std::move(cores)}};
+}
+
 }  // namespace
 
 ShardedRmsNormProgramFactory::cached_program_t ShardedRmsNormProgramFactory::create(
@@ -45,6 +231,9 @@ ShardedRmsNormProgramFactory::cached_program_t ShardedRmsNormProgramFactory::cre
     ShardedRmsNormTensorReturn& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    if (row_block_height(tensor_args.input_tensor) > 0) {
+        return create_rows(operation_attributes, tensor_args, tensor_return_value);
+    }
 
     const auto& input = tensor_args.input_tensor;
     const auto& weight = tensor_args.weight;

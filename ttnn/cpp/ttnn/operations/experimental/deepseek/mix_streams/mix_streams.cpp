@@ -216,9 +216,13 @@ Tensor mix_streams(
     const Tensor& streams,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    namespace device = ttnn::operations::experimental::deepseek::mix_streams;
+    if (streams.storage_type() == StorageType::DEVICE && device::block_height(streams) > 0) {
+        // A several-row block in (h x 32) tiles: fused kernel only (validated there).
+        return ttnn::prim::mix_streams(post, comb, sublayer_out, streams, memory_config, compute_kernel_config);
+    }
     validate_inputs(post, comb, sublayer_out, streams);
 
-    namespace device = ttnn::operations::experimental::deepseek::mix_streams;
     if (device::is_fusable(post, comb, sublayer_out, streams)) {
         return ttnn::prim::mix_streams(post, comb, sublayer_out, streams, memory_config, compute_kernel_config);
     }

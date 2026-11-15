@@ -22,4 +22,7 @@ struct ShardedRmsNormInputs {
 
 using ShardedRmsNormTensorReturn = Tensor;
 
+// Tile height of a several-row block input (TILE with h x 32 tiles, h < 32), else 0 (today's one-row path).
+uint32_t row_block_height(const Tensor& input);
+
 }  // namespace ttnn::operations::experimental::deepseek::sharded_rmsnorm
