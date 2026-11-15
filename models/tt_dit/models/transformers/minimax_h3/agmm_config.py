@@ -30,6 +30,7 @@ from loguru import logger
 import ttnn
 
 from ....utils.matmul import agmm_worker_grid
+from . import defaults  # noqa: F401  (the best switch values, before any switch is read)
 from .length_classes import LENGTH_CLASSES, length_class
 
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).

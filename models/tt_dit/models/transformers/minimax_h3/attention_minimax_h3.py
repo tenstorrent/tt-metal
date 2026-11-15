@@ -17,11 +17,11 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.matmul import agmm_worker_grid, get_matmul_config
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
-from . import lofi
-from ....utils.matmul import agmm_worker_grid, get_matmul_config
+from . import defaults, lofi  # noqa: F401  (defaults: the best switch values)
 from .agmm_config import AGMM_BLOCK_SIZES, AGMM_PINNED_BLOCKING, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
 from .mmrs_config import has_row_parallel_mmrs_config, mmrs_blocking_override
@@ -63,13 +63,21 @@ _E2A_LOGGED: list = []
 # HiFi4 fidelity) and writes q, k and v head-split in the attention dtype, so norm_q / norm_k and V's cast go. The
 # qkv weight's heads are reordered so no q / k head straddles a matmul core; the qkv matmul always runs on the
 # non-transposed worker grid then. `grid` = only that grid (the bit-identity baseline for lengths where the op would
-# transpose). Bit-identical. Applies only to attentions built with `fused_qk_norm_rope=True` (the DiT blocks: every
+# transpose). Not bit-identical in the model (the fused norm rounds differently); its one-forward error against a
+# full-precision reference measured lower than the unfused path's. Applies only to attentions built with `fused_qk_norm_rope=True` (the DiT blocks: every
 # call takes the fused [1, 1, N, K] path with RoPE); the token refiner keeps its plain path and weight order.
-_E2B_QK_NORM = os.environ.get("MINIMAX_H3_MK_E2B_QK_NORM", "0")
-if _E2B_QK_NORM not in ("0", "1", "grid"):
-    raise ValueError(f"MINIMAX_H3_MK_E2B_QK_NORM must be 0, 1 or grid, got {_E2B_QK_NORM!r}")
-if _E2B_QK_NORM == "1" and _E2A_HEAD_SPLIT != "1":
-    raise ValueError("MINIMAX_H3_MK_E2B_QK_NORM=1 needs MINIMAX_H3_MK_E2A_HEAD_SPLIT=1")
+
+
+def _e2b_qk_norm() -> str:
+    """Read when the model is built (not at import), so the pipeline can set its length-dependent default first."""
+    value = os.environ.get("MINIMAX_H3_MK_E2B_QK_NORM", "0")
+    if value not in ("0", "1", "grid"):
+        raise ValueError(f"MINIMAX_H3_MK_E2B_QK_NORM must be 0, 1 or grid, got {value!r}")
+    if value == "1" and _E2A_HEAD_SPLIT != "1":
+        raise ValueError("MINIMAX_H3_MK_E2B_QK_NORM=1 needs MINIMAX_H3_MK_E2A_HEAD_SPLIT=1")
+    return value
+
+
 _E2B_LOGGED: list = []
 if _TO_OUT_BFP8_WEIGHT and not _TO_OUT_ROW_PARALLEL:
     raise ValueError("MINIMAX_H3_TO_OUT_BFP8_WEIGHT=1 needs MINIMAX_H3_TO_OUT_ROW_PARALLEL=1")
@@ -79,7 +87,7 @@ def to_out_weight_tag() -> str:
     """Suffix for the transformer weight-cache subfolder: the row-parallel to_out shards its weight by rows (and 19b
     stores it in BFP8), so it must never load (or overwrite) today's cache. Empty with the switches off."""
     # The DiT blocks' qkv weight heads are reordered ("_e2bqk" caches also reordered the refiner's: never load them).
-    e2b = "_e2bdit" if _E2B_QK_NORM == "1" else ""
+    e2b = "_e2bdit" if _e2b_qk_norm() == "1" else ""
     if not _TO_OUT_ROW_PARALLEL:
         return e2b
     return ("_toutrow_bf8" if _TO_OUT_BFP8_WEIGHT else "_toutrow") + e2b
@@ -379,7 +387,7 @@ class MiniMaxH3Attention(Module):
             self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
         # MINIMAX_H3_MK_E2B_QK_NORM: the qkv weight's head order. Fixed for every length: with the switch the qkv
         # matmul always runs on the non-transposed worker grid, whose N split and N block don't depend on M.
-        self._e2b_mode = _E2B_QK_NORM if fused_qk_norm_rope else "0"
+        self._e2b_mode = _e2b_qk_norm() if fused_qk_norm_rope else "0"
         self._e2b_head_perm = None
         self._e2b_full_grid = full_grid
         if self._e2b_mode == "1":

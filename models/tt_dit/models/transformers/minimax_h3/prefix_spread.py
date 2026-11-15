@@ -28,6 +28,8 @@ Pure torch / Python: no ttnn here.
 
 from __future__ import annotations
 
+from . import defaults  # noqa: F401  (the best switch values, before any switch is read)
+
 BLOCK = 64
 
 

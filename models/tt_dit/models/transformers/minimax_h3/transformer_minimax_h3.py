@@ -20,6 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, trace_capture_count, traced_function
+from . import defaults  # noqa: F401  (the best switch values, before any switch is read)
 from . import precision
 from .modulation_cache import ModulationTableCache
 from .sol_prepass_fused import SolPrepassFused

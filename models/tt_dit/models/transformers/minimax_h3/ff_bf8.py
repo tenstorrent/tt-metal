@@ -18,6 +18,8 @@ import os
 
 import ttnn
 
+from . import defaults  # noqa: F401  (the best switch values, before any switch is read)
+
 _VALUE = os.environ.get("MINIMAX_H3_FF1_OUT_BF8", "0").strip()
 if _VALUE not in ("", "0", "1"):
     msg = f"MINIMAX_H3_FF1_OUT_BF8={_VALUE!r}: expected 0 or 1"

@@ -76,7 +76,7 @@ from ...layers.module import Module
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
-from ...models.transformers.minimax_h3 import precision, prefix_spread
+from ...models.transformers.minimax_h3 import defaults, precision, prefix_spread
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables, to_out_weight_tag
 from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
@@ -868,6 +868,13 @@ class MiniMaxH3Pipeline:
         # Read from the partition that will actually be loaded, rather than assuming the
         # two configs stay byte-identical.
         self.transformer_config = self._read_config(self.transformer_subfolder)
+        if "MINIMAX_H3_MK_E2B_QK_NORM" not in os.environ:
+            # The fused QK norm + RoPE pays off only where the shortest rung's qkv matmul is not transposed.
+            cfg = self.transformer_config
+            qkv_n = 3 * cfg.get("num_attention_heads", 56) * cfg.get("attention_head_dim", 128) // self.tp_factor
+            e2b = defaults.e2b_default(self.bucket_ladder[0] // self.sp_factor, qkv_n)
+            os.environ["MINIMAX_H3_MK_E2B_QK_NORM"] = e2b
+            logger.info(f"MINIMAX_H3_MK_E2B_QK_NORM={e2b} (default for {self.bucket_ladder[0]} rows)")
         self.vae_config = MiniMaxH3VaeConfig.from_pretrained(self.weights_dir / "vae")
         self.audio_config = self._read_config("audio_vae")
         # The rotary tables are the caller's job, so these two are config for this class rather than

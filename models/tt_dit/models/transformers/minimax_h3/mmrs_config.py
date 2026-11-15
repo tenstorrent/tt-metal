@@ -48,6 +48,7 @@ import os
 import ttnn
 
 from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, resolves_fused_mmrs_config
+from . import defaults  # noqa: F401  (the best switch values, before any switch is read)
 
 # ff2 per-device K = 14336 / tp 4 = 3584; N = 5376 is the full hidden size (the reduce-scatter
 # fractures it back to 1344 per device on the way out).

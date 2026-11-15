@@ -16,6 +16,7 @@ from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
+from . import defaults  # noqa: F401  (the best switch values, before any switch is read)
 from .agmm_config import agmm_block_size
 from .attention_minimax_h3 import MiniMaxH3Attention
 

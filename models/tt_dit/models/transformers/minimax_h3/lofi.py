@@ -20,6 +20,8 @@ import torch
 
 import ttnn
 
+from . import defaults  # noqa: F401  (the best switch values, before any switch is read)
+
 SECTIONS = ("qkv", "to_out", "ff1", "ff2", "sparse_sdpa", "dense_sdpa")
 
 
