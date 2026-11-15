@@ -167,6 +167,14 @@ constexpr uint32_t RATIO = get_compile_time_arg_val(12);  // value heads per key
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;              // Vb is then the key head's r * Vt v columns
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: conv + L2 norm of one key head's q or k, every sequence
+// R-QKCORE pair cores whose units share one key head: kn^T and d are computed once and held for every unit (host knob
+// SHARE_QK_FINISH); with UNIT_LAG a unit's RMS norm runs after the next unit's token step, so the last state is final
+// before the norms (host knob UNIT_LAG; needs two units of o, z and norm weights in flight).
+constexpr bool HOLD_QK = GDN_HOLD_QK != 0;
+constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;
+// Final-state tiles of pair `pair` start at tile (pair * STATE_STAGGER) mod n_state (rotated through the banks); the
+// writer applies the same rotation. 0 everywhere but R-QKCORE pair cores.
+constexpr uint32_t STATE_STAGGER = GDN_STATE_STAGGER;
 static_assert(CHUNKED || ROLE == GDN_ROLE_LOCAL || QK_CORE, "R-PREP is a chunked regime");
 // A prep core's conv output v is scaled by beta per head (head_prep) before it is sent.
 constexpr uint32_t cb_v_out = PREP ? cb_v_prep : cb_v;
@@ -845,7 +853,7 @@ ALWI void read_state(Buffers& bufs, bool first_in_pair) {
 // S_out = decay S_in (SFPU, fp32 scalar) + kn^T x u_cb (matmul accumulated onto DEST); S_out goes to
 // cb_state_out after the pair's last step, else back into cb_state. Pops S_in.
 template <uint32_t knT_cb>
-ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uint32_t decay_bits) {
+ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uint32_t decay_bits, uint32_t rot = 0) {
     const uint32_t src = first_in_pair ? cb_state_in : cb_state;
     const uint32_t src_mm = first_in_pair ? cb_state_in_mm : cb_state_mm;
     const uint32_t dst = last_in_pair ? cb_state_out : cb_state;
@@ -864,8 +872,14 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
         const uint32_t count = (n_state - first) < UPDATE_BATCH ? (n_state - first) : UPDATE_BATCH;
         tile_regs_acquire();
         begin_loads(src);
+        // To cb_state_out the tiles run rotated by `rot` (packed in run order); the writer maps them back.
+        const uint32_t run0 = dst == cb_state_out ? first + rot : first;
+        auto run_tile = [&](uint32_t i) {
+            const uint32_t t = run0 + i;
+            return STATE_STAGGER != 0 && t >= n_state ? t - n_state : t;
+        };
         for (uint32_t i = 0; i < count; ++i) {
-            load(src, first + i, i);
+            load(src, run_tile(i), i);
         }
         binop_with_scalar_tile_init();
         for (uint32_t i = 0; i < count; ++i) {
@@ -875,18 +889,23 @@ ALWI void update_state(bool first_in_pair, bool last_in_pair, uint32_t u_cb, uin
         reconfig_data_format(u_cb, knT_cb);
         matmul_init(knT_cb, u_cb);
         for (uint32_t i = 0; i < count; ++i) {
-            const uint32_t tile = first + i;
+            const uint32_t tile = run_tile(i);
             matmul_tiles(knT_cb, u_cb, tile / Vb, tile % Vb, i);
         }
         tile_regs_commit();
         tile_regs_wait();
+        // A batch pushed to cb_state_out moves its write pointer: the next batch packs from index 0.
+        const uint32_t pack_base = dst == cb_state_out ? 0 : first;
         for (uint32_t i = 0; i < count; ++i) {
-            pack_first(i, dst, first + i);
+            pack_first(i, dst, pack_base + i);
         }
         tile_regs_release();
+        if (dst == cb_state_out) {
+            cb_push_back(dst, count);  // the writer stores each batch while the next one is computed
+        }
     }
-    cb_push_back(dst, n_state);
     if (dst == cb_state) {
+        cb_push_back(dst, n_state);
         cb_push_back(cb_state_mm, n_state);
     }
     if (!in_place) {
@@ -906,7 +925,8 @@ ALWI void token_step(
     bool first_in_row,
     bool last_in_row,
     uint32_t p,
-    RowScope scope) {
+    RowScope scope,
+    uint32_t rot = 0) {
     // read (5a): [rk; ro] = [kn; qn] x S_{t-1}
     read_state<cb_kq_rows>(bufs, first_in_pair);
     // token vector (5b): w = v - alpha rk, u = beta (sel (*)col w), o = sel (*)col (alpha ro) + d u, with sel the
@@ -1026,7 +1046,7 @@ ALWI void token_step(
         }
     }
     // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
-    update_state<cb_knT>(first_in_pair, last_in_pair, cb_u, alpha_bits);
+    update_state<cb_knT>(first_in_pair, last_in_pair, cb_u, alpha_bits, rot);
     cb_pop_front(cb_u, Vb);
     cb_pop_front(cb_u_f32, Vb);
     cb_pop_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
@@ -1629,15 +1649,26 @@ void kernel_main() {
             cb_wait_front(cb_tri_mask, 2);  // reader-built once (mask, identity), held for the kernel
         }
 
+        const bool hold_qk = HOLD_QK && qk_role == GDN_QK_RECEIVER && unit_stride == Hv * PIECES && T == 1;
+        const bool lag = UNIT_LAG && hold_qk && num_units > 1;
+        RowScope lag_scope = RowScope::of(0, 1);
+        auto lagged_rms = [&](RowScope rms_scope) {
+            cb_wait_front(cb_norm_w, Vb);
+            rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(bufs, v_eps_bits, rms_scope, QK_SHARED);
+            cb_pop_front(cb_norm_w, Vb);
+        };
         for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
             const uint32_t unit = first_unit + unit_idx * unit_stride;
+            const bool last_unit = unit_idx + 1 == num_units;
             const uint32_t seq_lo = (unit / PIECES / Hv) * T;
             const uint32_t seq_hi = seq_lo + T;
             const uint32_t first_tr = seq_lo / TILE_ROWS;
             const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
             cb_wait_front(cb_conv_w, conv_w_pages);
             cb_wait_front(cb_gate_w, 2);
-            cb_wait_front(cb_norm_w, Vb);
+            if (!lag) {
+                cb_wait_front(cb_norm_w, Vb);
+            }
 
             uint32_t token = 0;
             for (uint32_t tr = first_tr; tr <= last_tr; ++tr) {
@@ -1664,7 +1695,9 @@ void kernel_main() {
                             qk_part_block(bufs, qk_role == GDN_QK_Q_INJECTOR, scope);
                         }
                     }
-                    qk_finish_block(bufs);
+                    if (!hold_qk || unit_idx == 0) {
+                        qk_finish_block(bufs);
+                    }
                 } else {
                     if constexpr (CONV_ON_FPU) {
                         conv_block_fpu(scope, cols, 0, cols.count());
@@ -1679,25 +1712,50 @@ void kernel_main() {
                     token += hi - lo;
                 } else {
                     for (uint32_t row = lo; row < hi; ++row, ++token) {
-                        token_step(bufs, token == 0, token == T - 1, row == lo, row + 1 == hi, row - base_row, scope);
+                        token_step(
+                            bufs,
+                            token == 0,
+                            token == T - 1,
+                            row == lo,
+                            row + 1 == hi,
+                            row - base_row,
+                            scope,
+                            (unit / PIECES * STATE_STAGGER) % n_state);
                     }
-                    cb_pop_front(cb_d, D_PAGES);
+                    if (!hold_qk || last_unit) {
+                        cb_pop_front(cb_d, D_PAGES);
+                    }
                 }
                 if (CHUNKED || PIECES == 1) {
                     cb_push_back(cb_o_acc, Vb);  // else pushed by the token step
                 }
-                cb_pop_front(cb_kq_rows, 2 * Kt);
-                if constexpr (qk_shared) {
-                    cb_pop_front(cb_kq_rows_f32, 2 * Kt);
+                if (!hold_qk || last_unit) {
+                    cb_pop_front(cb_kq_rows, 2 * Kt);
+                    if constexpr (qk_shared) {
+                        cb_pop_front(cb_kq_rows_f32, 2 * Kt);
+                    }
+                    cb_pop_front(cb_knT, Kt);
                 }
-                cb_pop_front(cb_knT, Kt);
                 cb_pop_front(cb_v, Vb);
+                if (lag) {
+                    // T = 1: this tile row is the unit's only one.
+                    if (unit_idx > 0) {
+                        lagged_rms(lag_scope);
+                    }
+                    lag_scope = scope;
+                    continue;
+                }
                 rmsnorm_gate_block<cb_o_acc, 1, !CHUNKED>(
                     bufs, v_eps_bits, scope, QK_SHARED && hi - lo == 1);  // token_step's square_o
             }
             cb_pop_front(cb_conv_w, conv_w_pages);
             cb_pop_front(cb_gate_w, 2);
-            cb_pop_front(cb_norm_w, Vb);
+            if (!lag) {
+                cb_pop_front(cb_norm_w, Vb);
+            }
+        }
+        if (lag) {
+            lagged_rms(lag_scope);
         }
     }
 }

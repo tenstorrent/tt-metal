@@ -89,13 +89,24 @@ ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 UNIT_INPUT_DEPTH = 2
 # Pair states (S0) in flight, at most unit_depth (decode B=16: 1 measured 95.5 us vs 93 us at 2).
 STATE_IN_DEPTH = 2
-# R-QKCORE with several units per core: pair cores in logical rows [0, SWAP_NOC_ROWS) read on NOC 1 and write on NOC 0
-# (0: none). It cuts the top rows' first window read at decode B=16 (39 -> 14 us), but their state writes then drain late
-# on NOC 0: 88.8 vs 88.6 us (median of 6), so off. With one unit per core (B=8) slower (52.4 vs 50.3 us).
-SWAP_NOC_ROWS = 0
+# R-QKCORE: pair cores in logical rows [0, SWAP_NOC_ROWS) read on NOC 1 and write on NOC 0 (0: none). NOC 0 brings the
+# top rows' read responses around the torus (their weights / gate rows landed at 25-31 us vs 4-5 us on the lower rows).
+# Decode B=8 / B=16: 0 rows 48.8 / 86 us, 2 rows 42.3 / 73.9, 3 rows 42.6 / 74.1, 4 rows 51.6 / 78, 5 rows 56 / 90.
+SWAP_NOC_ROWS = 3
 # S0 tiles per DRAM read barrier on a core (None: the whole slice at once). Bounds the bulk a core queues at the banks
 # ahead of other cores' small window reads.
 S0_READ_TILES = None
+# R-QKCORE pair cores running several units (sequences of one value head, so one key head): kn^T and d are computed
+# once per core and held for every unit (SHARE_QK_FINISH), and a unit's RMS norm runs after the next unit's token step
+# (UNIT_LAG), so the core's last state is final, and written, while the norms run.
+SHARE_QK_FINISH = True
+UNIT_LAG = True
+# R-QKCORE pair cores: pair p updates and writes its final state starting at tile (p * STATE_STAGGER) mod Kt Vt, so the
+# cores' simultaneous writes spread over the DRAM banks instead of all starting at the bank of tile 0 (0: in order).
+STATE_STAGGER = 3
+# Decode: a unit's S0 read issued with its window rows (own transaction id) instead of after the weights / gate rows.
+# Measured with the NoC swap at B=8 / B=16: 44.7 / 75 us on vs 42.8 / 74.4 off, so off (0).
+EARLY_S0 = 0
 # Finished pair states awaiting the writer, at most unit_depth: the writer issues a core's non-last state after the next
 # unit's coefficients, so compute's next update must not wait for it.
 STATE_OUT_DEPTH = 2
@@ -225,6 +236,7 @@ def _kernel_defines():
         "ROLE_PREP",
         "ROLE_STATE",
         "ROLE_QK",
+        "EARLY_S0",
     ]
     return [(f"GDN_{n}", str(globals()[n])) for n in names]
 
@@ -642,10 +654,16 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         # The deepest per-unit input depth that fits L1 (1 when every core runs one unit).
         unit_depth = min(UNIT_INPUT_DEPTH, max(count for _, _, count, _ in assignment))
 
+        def unit_lag(depth):
+            # The reader must run a unit ahead of the lagged norm: two units of inputs in flight.
+            return bool(qk_cores) and SHARE_QK_FINISH and UNIT_LAG and depth > 1
+
         def local_plan(depth):
             plan = _cb_plan(Kt, v_block_tiles, conv_on_fpu, pieces, chunked, tokens, depth)
             if not qk_cores:
                 return plan
+            # UNIT_LAG holds a unit's o (and o^2) until after the next unit's token step.
+            lag_units = 2 if unit_lag(depth) else 1
             # One plan on pair and q / k cores (the multicast lands at one cb_kq_rows address everywhere): window
             # groups of Vt (pair) or Kt (q / k core) columns, a q / k core's staged current-row and conv_state tiles,
             # its qn / kn stage.
@@ -654,6 +672,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 CB_WINDOW: CONV_TAPS * max(Kt, v_block_tiles) * WINDOW_DEPTH,
                 CB_HIST_STAGE: max(2 * v_block_tiles, Kt * (1 + cs_tiles), 1 + 2 * cs_tiles),
                 CB_QK_STAGE: Kt,
+                CB_O_ACC: v_block_tiles * lag_units,
+                CB_SQ_O: v_block_tiles * lag_units,
             }
             return [(idx, sizes.get(idx[0], pages)) for idx, pages in plan]
 
@@ -945,7 +965,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     if DST_FULL_SYNC:
         compute_kernel_config.dst_full_sync_en = True
 
-    defines = _kernel_defines()
+    defines = _kernel_defines() + [
+        ("GDN_HOLD_QK", str(int(bool(qk_cores) and SHARE_QK_FINISH))),
+        ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
+        ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
+    ]
     kernels = []
     writers = []
 
@@ -957,7 +981,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
 
     kernel_groups = []  # (role, cores, swap the reader / writer NoCs)
     for role, (cores, *_) in roles.items():
-        if role == ROLE_LOCAL and qk_cores and qk_per_core > 1 and SWAP_NOC_ROWS:
+        if role == ROLE_LOCAL and qk_cores and SWAP_NOC_ROWS:
             # Decode R-QKCORE: every pair core reads its S0 at once. NOC 0 brings read responses south, around the
             # torus for the top rows, which then lose to the lower rows' traffic; NOC 1 brings them north. The pair
             # cores in the top SWAP_NOC_ROWS rows read on NOC 1 and write on NOC 0.

@@ -218,8 +218,10 @@ as R-BCAST). Changes against R-STEP decode, u = unit_depth (2 when a core runs s
 | cb_qk_stage | `Kt` | as R-BCAST | the q / k core's qn or kn, multicast source |
 | cb_scratch | 1 | q / k core: reader -> writer token "staging landed" | the writer copies the history rows from history_split(B) on out of the reader's staging |
 | cb_window_zeroed | `WINDOW_DEPTH` | q / k core: one token per column, pushed after the writer zeroed the slot and copied its rows | |
+| cb_o_acc, cb_sq_o | `Vb*l`, l = 2 when UNIT_LAG runs (u > 1) else 1 | 1 -> l (Refinement 9) | UNIT_LAG normalizes unit k after unit k+1's token step, so unit k's o and o^2 stay while unit k+1 packs its own; no other buffer is free in that window (cb_u / cb_reads are in use by the step) |
+| cb_kq_rows (+ f32), cb_knT, cb_d | unchanged | held across a core's units (Refinement 9, SHARE_QK_FINISH) | every unit of a pair core is the same key head: kn^T and d are computed once and popped after the last unit; the writer no longer re-pushes the rows |
 
-Footprint (bf16, Kt = Vt = 4, B = 16, u = 2): 800896 B per core (0.55 of the budget; state 128 KB in, 64 KB working, 128 KB out).
+Footprint (bf16, Kt = Vt = 4, B = 16, u = 2): 800896 B per core before Refinement 9, + 2 x 4 fp32 tiles (32 KiB) for the lagged o / o^2 (0.57 of the budget; state 128 KB in, 64 KB working, 128 KB out).
 
 R-QKCORE data movement (decode B=8 / 16, bf16): recurrent_state 1 crossing each way (6.3 / 12.6 MB per direction);
 mixed_qkv and conv_state q/k columns 1 whole-tile crossing per key head (R-STEP read them as B r row spans), v

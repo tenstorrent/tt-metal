@@ -363,7 +363,7 @@ reader / writer split of the row copies, and half-tile hand-off payloads (faces 
 here: each needs new roles or CB layouts, and the fp32 token-step builds sit ~80 B under the kernel-config text
 budget, so anything added to their compute or reader must be compiled out of them first.
 
-### [ ] Refinement 9 — Decode B=8 / B=16: the state write-back drain and the merging read chain
+### [x] Refinement 9 — Decode B=8 / B=16: the state write-back drain and the merging read chain
 
 **Type**: perf
 
@@ -390,3 +390,5 @@ no write into an input.
 
 **Done when**: measured device-ns on both cases improves toward the goals, precision gates hold, the
 golden suite is green, no regression on `perf_decode_b1` and `model_prefill_4096`.
+
+**Outcome**: model_decode_b8 48.8 -> 40.2 us, model_decode_b16 86.0 -> 73.5 us (device kernel, launches 2..3 of two fresh runs, same session; goals 29.3 / 57.5). Landed: pair cores in the top 3 grid rows read on NOC 1 / write on NOC 0 (SWAP_NOC_ROWS = 3, now also at B=8: their weights / gate-row reads had landed at 25-31 us vs 4-5 us on lower rows; alone 48.8 / 86 -> 42.6 / 74.1); the final state streamed to the writer per update batch; final-state tiles updated, written and read starting at tile (pair * 3) mod 16 (STATE_STAGGER: cores starting together no longer all hit the bank of tile 0; 42.0 -> 40.0 at B=8); multi-unit cores compute kn^T and d once (SHARE_QK_FINISH) and normalize unit k after unit k+1's token step (UNIT_LAG): compute ends ~48 us instead of ~59 at B=16. Measured null or worse, kept as a knob at off: EARLY_S0 (S0 issued with the window rows: 44.7 / 75 vs 42.8 / 74.4 with the swap). Swapping rows 3-4 too, or by x, was slower (51-56 / 78-93 us). Guard set at parity (same-session A/B against HEAD): perf_decode_b1 22.4 vs 22.1, decode_b1_f32 30.2 vs 30.3, prefill_t96 168.5, batched_b2_t40 224, model_prefill_4096 1.06-1.17 ms. What binds now (B=16 zones): the state writes, 12.6 MB starting when the first units' states are final (~30 us) and issued by one RISC per core on one NoC (16 us to issue a 64 KB state under back-pressure), ending 48-72 us with an x gradient per NoC (NOC 1 writes slowest at high x, NOC 0 at low x); and the pair cores in grid rows y = 5-6, whose S0 lands at 28-38 us on either NoC, so their compute ends 60-68 us. Next: split each core's state write across both RISCs / NoCs (the reader is idle after ~35 us), pick each core's NoC pair by its path to the banks rather than by row, and shorten the per-unit token step (10.3 us: update 4.3, token vector 4.5 for one valid row). Not done here: the split writer needs a second consumer protocol for cb_state_out and the per-core NoC choice a path model; each is its own measured pass.

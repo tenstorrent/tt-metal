@@ -78,6 +78,8 @@ constexpr uint32_t CS_COLS_PER_FLUSH = TILE_ROWS / GDN_HISTORY;     // conv_stat
 // then the unit's other inputs issued before that group's flush.
 constexpr uint32_t WINDOW_TRID = 1;
 constexpr uint32_t INPUTS_TRID = 2;
+constexpr uint32_t S0_TRID = 3;  // decode: a unit's S0, issued with its window rows, awaited where compute needs it
+constexpr bool EARLY_S0 = GDN_EARLY_S0 != 0;
 static_assert((STAGE_SLOTS == 0) == (SEG_BYTES % READ_ALIGN == 0), "row staging iff a face row is sub-alignment");
 
 // Byte offset of the left half of tile row p (faces 0/2); the right half is FACE_BYTES further.
@@ -294,6 +296,20 @@ void kernel_main() {
     // R-VSPLIT hands the whole unit over at once; R-STEP has no receivers, so its group divides pair_cols.
     const uint32_t group_cols = WINDOW_GROUP_COLS == pair_cols ? unit_cols : WINDOW_GROUP_COLS;
 
+    // The piece's Kt x Vb slice of pair `pair`'s S0 into `dst`; the caller barriers.
+    // Tiles from (pair * STATE_STAGGER) mod n_state on, so that cores starting together spread over the banks.
+    auto read_s0 = [&](uint32_t dst, uint32_t pair, uint32_t v_first) {
+        const uint32_t rot = (pair * GDN_STATE_STAGGER) % n_state;
+        for (uint32_t k = 0; k < n_state; ++k) {
+            const uint32_t i = k + rot < n_state ? k + rot : k + rot - n_state;
+            const uint32_t page = pair * Kt * Vt + (i / Vb) * Vt + v_first + i % Vb;
+            noc_async_read(state.get_noc_addr(page), dst + i * STATE_TILE_BYTES, STATE_TILE_BYTES);
+            if ((k + 1) % S0_READ_TILES == 0 && k + 1 < n_state) {
+                noc_async_read_barrier();
+            }
+        }
+    };
+
     Noc noc;
     CircularBuffer window_buf(cb_window);
     // Tile-local rows [lo, hi) each cb_window slot may hold non-zero data in. Every write of a window
@@ -477,10 +493,18 @@ void kernel_main() {
                 }
             };
             const bool prefetch = DECODE && !STATE && pass == 0;
+            const bool early_s0 = EARLY_S0 && !PREP && prefetch;
             if (prefetch) {
                 noc_async_read_set_trid(WINDOW_TRID);
                 for (uint32_t col = 0; col < group_cols; ++col) {
                     issue_staged(col, col, seq_first / TILE_ROWS, seq_first % TILE_ROWS, unit_hist_staged);
+                }
+                // EARLY_S0: S0 issued here lands while the weights and gate rows queue, but competes with them.
+                if (early_s0) {
+                    noc_async_read_set_trid(S0_TRID);
+                    cb_reserve_back(cb_state_in, n_state);
+                    cb_reserve_back(cb_state_in_mm, n_state);
+                    read_s0(get_write_ptr(cb_state_in), pair, v_first);
                 }
                 noc_async_read_set_trid(INPUTS_TRID);  // until the first window group's flush
             }
@@ -766,18 +790,14 @@ void kernel_main() {
                     // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs
                     // ----
                     if (tr == first_tr && !PREP) {
-                        cb_reserve_back(cb_state_in, n_state);
-                        cb_reserve_back(cb_state_in_mm, n_state);
-                        const uint32_t state_base = get_write_ptr(cb_state_in);
-                        for (uint32_t i = 0; i < n_state; ++i) {
-                            const uint32_t page = pair * Kt * Vt + (i / Vb) * Vt + v_first + i % Vb;
-                            noc_async_read(
-                                state.get_noc_addr(page), state_base + i * STATE_TILE_BYTES, STATE_TILE_BYTES);
-                            if ((i + 1) % S0_READ_TILES == 0) {
-                                noc_async_read_barrier();
-                            }
+                        if (early_s0) {
+                            noc_async_read_barrier_with_trid(S0_TRID);
+                        } else {
+                            cb_reserve_back(cb_state_in, n_state);
+                            cb_reserve_back(cb_state_in_mm, n_state);
+                            read_s0(get_write_ptr(cb_state_in), pair, v_first);
+                            noc_async_read_barrier();
                         }
-                        noc_async_read_barrier();
                         cb_push_back(cb_state_in, n_state);
                         cb_push_back(cb_state_in_mm, n_state);
                     }

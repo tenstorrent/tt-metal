@@ -63,6 +63,9 @@ constexpr uint32_t RATIO = get_compile_time_arg_val(10);               // value 
 constexpr bool PREP = ROLE == GDN_ROLE_PREP;
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: multicasts its key head's qn or kn, nothing else
+constexpr bool HOLD_QK = GDN_HOLD_QK != 0;     // compute holds the landed q/k rows for every unit (see compute)
+constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;   // compute normalizes unit u after unit u + 1's token step
+constexpr uint32_t STATE_STAGGER = GDN_STATE_STAGGER;  // compute's rotation of the final-state tiles (see compute)
 constexpr uint32_t TILE_WORDS = 1024;  // cb_gates / cb_tok_coef are Float32 compute buffers
 constexpr uint32_t ONE_BITS = 0x3f800000u;  // 1.0f
 
@@ -298,11 +301,15 @@ void land_qk_rows(const QChannel& q_channel, const KChannel& k_channel, uint32_t
 // the caller barriers and pops.
 template <uint32_t Kt, uint32_t Vt, uint32_t Vb, typename Accessor>
 void store_state(const Accessor& state_out, uint32_t first_page) {
-    cb_wait_front(cb_state_out, Kt * Vb);
+    // Compute pushes the final state in update batches: each tile goes out as soon as it is packed.
     const uint32_t state_base = get_read_ptr(cb_state_out);
-    for (uint32_t i = 0; i < Kt * Vb; ++i) {
+    constexpr uint32_t n = Kt * Vb;
+    const uint32_t rot = (first_page / (Kt * Vt) * STATE_STAGGER) % n;
+    for (uint32_t j = 0; j < n; ++j) {
+        cb_wait_front(cb_state_out, j + 1);
+        const uint32_t i = j + rot < n ? j + rot : j + rot - n;
         const uint32_t page = first_page + (i / Vb) * Vt + i % Vb;
-        noc_async_write(state_base + i * STATE_TILE_BYTES, state_out.get_noc_addr(page), STATE_TILE_BYTES);
+        noc_async_write(state_base + j * STATE_TILE_BYTES, state_out.get_noc_addr(page), STATE_TILE_BYTES);
     }
 }
 
@@ -429,6 +436,10 @@ void kernel_main() {
             state_issued = false;
         }
     };
+    const bool hold_qk = HOLD_QK && qk_role == GDN_QK_RECEIVER && unit_stride == Hv * PIECES && T == 1;
+    const bool lag = UNIT_LAG && hold_qk && num_units > 1;
+    // UNIT_LAG: the output rows of the previous unit, stored once compute has normalized them (after this unit's step).
+    uint32_t lag_page = 0, lag_base = 0, lag_lo = 0, lag_hi = 0;
     for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
         const uint32_t unit = first_unit + unit_idx * unit_stride;
         const uint32_t pair = unit / PIECES;
@@ -474,7 +485,7 @@ void kernel_main() {
                 cb_pop_front(cb_gates, 2);
             }
 
-            if (!CHUNKED && qk_role != GDN_QK_OWN) {
+            if (!CHUNKED && qk_role != GDN_QK_OWN && !(hold_qk && unit_idx > 0)) {
                 land_qk_rows(q_channel, k_channel, qk_role, Kt, unit_idx == 0);
             }
 
@@ -527,6 +538,25 @@ void kernel_main() {
             // The state is final after the last tile row's update, before compute's RMS norm produces the output
             // rows: its writes go out first and overlap that norm.
             retire();
+            if (lag) {
+                // T = 1: the unit's only tile row. The last unit's state goes out before the previous unit's rows,
+                // which compute produces only after that state's update.
+                if (unit_idx + 1 == num_units) {
+                    store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
+                    state_issued = true;
+                } else {
+                    pending_state = pair * Kt * Vt + v_first;
+                }
+                if (unit_idx > 0) {
+                    store_rows<false>(out_acc, Vb, lag_page, lag_base, lag_lo, lag_hi);
+                    retiring = true;
+                }
+                lag_page = tr * out_width_tiles + head * Vt + v_first;
+                lag_base = base_row;
+                lag_lo = lo;
+                lag_hi = hi;
+                continue;
+            }
             if (tr == last_tr) {
                 if (unit_idx + 1 == num_units) {
                     store_state<Kt, Vt, Vb>(state_out, pair * Kt * Vt + v_first);
@@ -545,6 +575,14 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_state_out, n_state);
         }
+    }
+    if (lag) {
+        // The previous rows' writes must have left cb_out_rows before the last unit's rows are read from its front.
+        noc_async_writes_flushed();
+        cb_pop_front(cb_out_rows, Vb);
+        retiring = false;
+        store_rows<false>(out_acc, Vb, lag_page, lag_base, lag_lo, lag_hi);
+        retiring = true;
     }
     retire();
 }
