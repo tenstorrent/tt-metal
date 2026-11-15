@@ -12,6 +12,8 @@
 
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_constants.hpp"
+#include "tt_fabric_test_perf_breakdown.hpp"
+#include "kernels/tt_fabric_test_pattern.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
@@ -285,7 +287,7 @@ void TestContext::init(
     const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies,
     bool use_dynamic_policies) {
     fixture_ = std::move(fixture);
-    allocation_policies_ = policies;
+    allocation_policies_ = size_receiver_rings_to_fill_l1(policies);
     use_dynamic_policies_ = use_dynamic_policies;
 
     initialize_memory_maps();
@@ -296,7 +298,7 @@ void TestContext::init(
     }
 
     this->allocator_ = std::make_unique<tt::tt_fabric::fabric_tests::GlobalAllocator>(
-        *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
+        *this->fixture_, *this->fixture_, allocation_policies_, sender_memory_map_, receiver_memory_map_);
 
     bandwidth_profiler_ = std::make_unique<BandwidthProfiler>(*fixture_, *fixture_, *fixture_);
     bandwidth_results_manager_ = std::make_unique<BandwidthResultsManager>();
@@ -311,6 +313,7 @@ void TestContext::prepare_for_test(const TestConfig& config) {
     auto new_policy = policy_manager_->get_new_policy_for_test(config);
 
     if (new_policy.has_value()) {
+        new_policy = size_receiver_rings_to_fill_l1(new_policy.value());
         update_memory_maps(new_policy.value());
 
         allocator_.reset();
@@ -619,6 +622,43 @@ void TestContext::setup_ci_artifacts() {
 }
 
 void TestContext::initialize_memory_maps() { update_memory_maps(allocation_policies_); }
+
+// TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1=1: each receiver config's ring is as large as the receiver core's real L1 allows
+// (up to the compute verifier's request and flag pages at the top), instead of 1 MB split over max_configs_per_core.
+// The chunk size also sets each flow's credits (calculate_credit_config), so deeper rings mean more credits per flow.
+tt::tt_fabric::fabric_tests::AllocatorPolicies TestContext::size_receiver_rings_to_fill_l1(
+    tt::tt_fabric::fabric_tests::AllocatorPolicies policies) const {
+    namespace perf_bd = tt::tt_fabric::fabric_tests::perf_breakdown;
+    using tt::tt_fabric::fabric_tests::SFPU_TILE_BYTES;
+    using tt::tt_fabric::fabric_tests::SFPU_VERIFY_REQ_PAGE_BYTES;
+    if (!perf_bd::receiver_rings_fill_l1()) {
+        return policies;
+    }
+    const uint32_t num_configs = std::max<uint32_t>(policies.receiver_config.max_configs_per_core, 1);
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint32_t l1_end =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED) +
+        hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t verifier_pages_bytes = perf_bd::sfpu_verify_depth() * (SFPU_TILE_BYTES + SFPU_VERIFY_REQ_PAGE_BYTES);
+    const uint32_t rings_end = (l1_end - verifier_pages_bytes) & ~uint32_t{63};
+    // Where the rings start: the receiver layout with empty rings.
+    const tt::tt_fabric::fabric_tests::ReceiverMemoryMap layout_without_rings(
+        fixture_->get_l1_unreserved_base(), fixture_->get_l1_unreserved_size(), fixture_->get_l1_alignment(), 0, num_configs);
+    const uint32_t rings_base = layout_without_rings.payload_chunks.start;
+    TT_FATAL(rings_base < rings_end, "Receiver rings start at {:#x}, past the usable end {:#x}", rings_base, rings_end);
+    const uint32_t ring_bytes = ((rings_end - rings_base) / num_configs) & ~uint32_t{63};
+    log_info(
+        tt::LogTest,
+        "Receiver rings fill L1 (TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1): {} B per config instead of {} B, {} configs per "
+        "core from {:#x} to {:#x}",
+        ring_bytes,
+        policies.default_payload_chunk_size,
+        num_configs,
+        rings_base,
+        rings_end);
+    policies.default_payload_chunk_size = ring_bytes;
+    return policies;
+}
 
 void TestContext::update_memory_maps(const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
     auto l1_unreserved_base = fixture_->get_l1_unreserved_base();

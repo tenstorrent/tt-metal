@@ -41,40 +41,69 @@ const std::unordered_map<std::pair<Topology, std::string>, FabricConfig, tt::tt_
         {{Topology::Torus, "XY"}, FabricConfig::FABRIC_2D_TORUS_XY},
 };
 
-// Prototype (TT_FABRIC_TEST_SENDERS_PER_LINK=K): spread each sender's patterns over K sender cores on the same
-// device/link, so payload generation runs on K RISCs instead of one. Senders that share a link then reach it through
-// the per-link mux like any other client. Only senders without a pinned core are split; patterns go out in contiguous
-// chunks (destination order), which keeps the first-hop directions of one core together.
-static void split_senders_per_link(tt::tt_fabric::fabric_tests::TestConfig& config, uint32_t senders_per_link) {
-    if (senders_per_link <= 1) {
+// Prototype (TT_FABRIC_TEST_MAX_CONFIGS_PER_SENDER=N): a sender with more than N patterns is split into
+// ceil(patterns / N) senders on the same device, link and VC, each with at most N patterns, so every sender core stays
+// within the per-core limits of the fast paths. Today those are the hot state (~39 configs, tt_fabric_test_sender.cpp)
+// and SFPU payload generation (SFPU_PAYLOAD_MAX_CONFIGS = 64), so N = 39 keeps both. Flows are dealt out round-robin
+// (piece p takes flows p, p + K, p + 2K, ...), so the pieces are near-equal and each holds a mix of all destinations,
+// near and far. Contiguous chunks were measured to leave the cores with the far destinations last to finish, on one
+// first-hop connection, 7-20% slower than this on an 8x4 Galaxy. Senders with a pinned core are left alone. Each piece
+// needs its own core and, when several cores share a (direction, link), its own full-size mux channel, so the mux's
+// full-size channel limit caps how far this can go.
+static void split_senders_by_config_budget(
+    tt::tt_fabric::fabric_tests::TestConfig& config, uint32_t max_configs_per_sender) {
+    // No configured max, so no splitting of configs needed
+    if (max_configs_per_sender == 0) {
         return;
     }
+
+    const size_t num_senders_before = config.senders.size();
+    size_t largest_sender_before = 0;
     std::vector<tt::tt_fabric::fabric_tests::SenderConfig> split;
-    split.reserve(config.senders.size() * senders_per_link);
+    split.reserve(config.senders.size());
+
     for (auto& sender : config.senders) {
+        // Get the number of flows for this sender config and update the max # flows
         const size_t num_patterns = sender.patterns.size();
-        if (sender.core.has_value() || num_patterns <= 1) {
+        largest_sender_before = std::max(largest_sender_before, num_patterns);
+
+        // Don't split if the sender has a pinned core, or if there is no need to split
+        // (i.e. the sender has less than the max # flows)
+        if (sender.core.has_value() || num_patterns <= max_configs_per_sender) {
             split.push_back(std::move(sender));
             continue;
         }
-        const size_t num_parts = std::min<size_t>(senders_per_link, num_patterns);
-        size_t begin = 0;
-        for (size_t part = 0; part < num_parts; part++) {
-            const size_t end = begin + (num_patterns - begin) / (num_parts - part);
-            auto piece = sender;
-            piece.patterns.assign(
-                std::make_move_iterator(sender.patterns.begin() + begin),
-                std::make_move_iterator(sender.patterns.begin() + end));
-            split.push_back(std::move(piece));
-            begin = end;
+
+        // Split case: find the # of groupings of flows to split into. This is a ceil op.
+        const size_t num_parts = (num_patterns + max_configs_per_sender - 1) / max_configs_per_sender;
+        auto patterns = std::move(sender.patterns);
+        sender.patterns.clear();
+        std::vector<tt::tt_fabric::fabric_tests::SenderConfig> parts(num_parts, sender);
+        // Flow i goes to part i % num_parts, so every part gets a mix of all destinations.
+        for (size_t i = 0; i < num_patterns; i++) {
+            parts[i % num_parts].patterns.push_back(std::move(patterns[i]));
+        }
+        for (auto& part : parts) {
+            split.push_back(std::move(part));
         }
     }
+    // Replace the original senders with the split senders
     config.senders = std::move(split);
+    if (config.senders.size() != num_senders_before) {
+        log_info(
+            tt::LogTest,
+            "Split {} senders (largest {} configs) into {} senders of at most {} configs "
+            "(TT_FABRIC_TEST_MAX_CONFIGS_PER_SENDER)",
+            num_senders_before,
+            largest_sender_before,
+            config.senders.size(),
+            max_configs_per_sender);
+    }
 }
 
-static uint32_t senders_per_link_override() {
-    const char* v = std::getenv("TT_FABRIC_TEST_SENDERS_PER_LINK");
-    return v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 1;
+static uint32_t max_configs_per_sender_override() {
+    const char* v = std::getenv("TT_FABRIC_TEST_MAX_CONFIGS_PER_SENDER");
+    return v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0;
 }
 
 int main(int argc, char** argv) {
@@ -242,7 +271,7 @@ int main(int argc, char** argv) {
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
-        if (test_config.performance_test_mode != PerformanceTestMode::NONE) {
+        if (test_config.performance_test_mode != PerformanceTestMode::NONE || perf_bd::router_telemetry()) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
@@ -305,14 +334,15 @@ int main(int argc, char** argv) {
             auto build_t0 = perf_bd::Clock::now();
             auto built_tests = builder.build_tests({test_config}, cmdline_parser);
             for (auto& built_test : built_tests) {
-                split_senders_per_link(built_test, senders_per_link_override());
+                split_senders_by_config_budget(built_test, max_configs_per_sender_override());
             }
             if (perf_bd::enabled()) {
                 perf_bd::Collector::get().add_phase("build_tests", perf_bd::ms_since(build_t0));
             }
 
             // Enable telemetry for both benchmark and latency modes to ensure buffer clearing
-            test_context.set_telemetry_enabled(test_config.performance_test_mode != PerformanceTestMode::NONE);
+            test_context.set_telemetry_enabled(
+                test_config.performance_test_mode != PerformanceTestMode::NONE || perf_bd::router_telemetry());
             // Set skip_packet_validation flag
             test_context.set_skip_packet_validation(test_config.skip_packet_validation);
 

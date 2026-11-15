@@ -6,6 +6,7 @@
 #include <limits>
 #include <set>
 #include <string>
+#include <unordered_set>
 
 #include <tt_stl/reflection.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -58,6 +59,48 @@ uint32_t tensix_l1_end() {
 // Int32 tiles a payload of this size takes on the compute engine.
 uint32_t sfpu_payload_tiles(uint32_t payload_bytes) { return (payload_bytes + SFPU_TILE_BYTES - 1) / SFPU_TILE_BYTES; }
 
+// The sender kernel keeps one payload buffer per config, back to back from the payload region's start
+// (SenderKernelMemoryMap::get_payload_buffer_address), and only checks the end with a device ASSERT. Fails on the host
+// when they would run past real L1, for example when one core takes hundreds of configs.
+void check_sender_payload_buffers_fit(const TestSender& sender, const SenderMemoryMap& memory_map) {
+    uint32_t payload_bytes = 0;
+    for (const auto& config_and_keys : sender.configs_) {
+        const auto& config = config_and_keys.first;
+        if (sender_config_carries_payload(config)) {
+            payload_bytes += config.parameters.payload_size_bytes;
+        }
+    }
+    const uint32_t region_end = std::min(memory_map.highest_usable_address, tensix_l1_end());
+    const uint32_t region_bytes = region_end - memory_map.payload_buffers.start;
+    TT_FATAL(
+        payload_bytes <= region_bytes,
+        "Sender core {} has {} configs whose payload buffers take {} B, more than the {} B payload region "
+        "[{:#x}, {:#x}). Spread the configs over more sender cores (TT_FABRIC_TEST_MAX_CONFIGS_PER_SENDER) or use "
+        "smaller packets.",
+        sender.get_core().str(),
+        sender.configs_.size(),
+        payload_bytes,
+        region_bytes,
+        memory_map.payload_buffers.start,
+        region_end);
+}
+
+// Every receive ring must end inside real L1. The receiver memory map checks against the highest usable address, which
+// overshoots real Tensix L1 (tensix_l1_end), so a ring sized near the top (TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1, or a
+// large yaml default_payload_chunk_size) could otherwise run past it unnoticed.
+void check_receiver_rings_fit(const tt::tt_metal::CoreCoord& core, const TestReceiver& receiver) {
+    for (const auto& config_and_key : receiver.configs_) {
+        const auto& config = config_and_key.first;
+        TT_FATAL(
+            config.target_address + config.payload_buffer_size <= tensix_l1_end(),
+            "Receiver core {}: a receive ring [{:#x}, {:#x}) runs past the end of L1 ({:#x})",
+            core.str(),
+            config.target_address,
+            config.target_address + config.payload_buffer_size,
+            tensix_l1_end());
+    }
+}
+
 // Base of a payload generator's page ring of pages of the given tiles, at the top of the sender's L1 region.
 uint32_t sfpu_payload_ring_base(const SenderMemoryMap& memory_map, uint32_t page_tiles) {
     const uint32_t ring_bytes = sfpu_payload_ring_pages() * page_tiles * SFPU_TILE_BYTES;
@@ -98,7 +141,8 @@ uint32_t sfpu_verify_control_base() {
 }
 
 // Which of the receiver's configs are verified on the core's compute engine (TT_FABRIC_TEST_SFPU_VERIFY=1) rather than
-// by the receiver: of configs 0 .. SFPU_VERIFY_MAX_CONFIGS - 1, those landing one payload slot per packet that the
+// by the receiver: of its first TT_FABRIC_TEST_SFPU_VERIFY_MAX_CONFIGS configs (default 8, at most
+// SFPU_VERIFY_MAX_CONFIGS), those landing one payload slot per packet that the
 // verifier can check, a write, fused write or scatter write of at most SFPU_PAYLOAD_MAX_TILES tiles in at most
 // SFPU_VERIFY_MAX_SEGMENTS chunks, whose size keeps every slot 16 B aligned for the unpacker and whose ring has fewer
 // than 65536 slots (a CB's free-space count is 16-bit). None when a receive ring reaches the verifier's request and flag
@@ -114,7 +158,9 @@ std::vector<bool> sfpu_verify_configs(const TestReceiver& receiver, bool benchma
             return sfpu;
         }
     }
-    for (size_t i = 0; i < std::min<size_t>(receiver.configs_.size(), SFPU_VERIFY_MAX_CONFIGS); i++) {
+    const size_t max_verified =
+        std::min<size_t>(perf_breakdown::sfpu_verify_max_configs(), SFPU_VERIFY_MAX_CONFIGS);
+    for (size_t i = 0; i < std::min(receiver.configs_.size(), max_verified); i++) {
         const auto& config = receiver.configs_[i].first;
         const auto type = config.parameters.noc_send_type.type;
         const uint32_t bytes = config.parameters.payload_size_bytes;
@@ -1362,6 +1408,8 @@ void TestDevice::create_sender_kernels() {
         std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
         const size_t highest_usable_address_arg_idx = rt_args.size() - 1;  // last memory map arg
 
+        check_sender_payload_buffers_fit(sender, *sender_memory_map_);
+
         // Prototype (TT_FABRIC_TEST_SFPU_PAYLOAD=1): some configs' payloads come from the core's compute engine instead
         // of the sender storing them (sfpu_payload_configs); the kernel follows each config's choice at runtime.
         const std::vector<bool> sfpu_configs = sfpu_payload_configs(sender, benchmark_mode_, *sender_memory_map_);
@@ -1681,6 +1729,7 @@ void TestDevice::create_receiver_kernels() {
     for (const auto& [core, receiver] : this->receivers_) {
         // Prototype (TT_FABRIC_TEST_SFPU_VERIFY=1): some configs' payloads are checked on the core's compute engine
         // instead of by the receiver (sfpu_verify_configs); the kernel follows each config's choice at runtime.
+        check_receiver_rings_fit(core, receiver);
         const std::vector<bool> sfpu_configs = sfpu_verify_configs(receiver, benchmark_mode_);
         sfpu_coverage_.receiver_configs += sfpu_configs.size();
         sfpu_coverage_.verified += std::count(sfpu_configs.begin(), sfpu_configs.end(), true);
@@ -1931,6 +1980,58 @@ TestDevice::ValidationReadOps TestDevice::initiate_results_readback() const {
     return ops;
 }
 
+// TT_FABRIC_TEST_PERF_PER_CORE=1: one line per sender core with its loop and wait times and what its configs send to
+// (distinct destination chips, hops to them, distinct first-hop connections), to see which cores set the device time.
+void TestDevice::log_sender_core_perf(
+    const tt::tt_metal::CoreCoord& core,
+    const TestSender& sender,
+    const std::vector<uint32_t>& words,
+    uint32_t aiclk_mhz) const {
+    const auto read_slot_cycles = [&words](uint32_t slot) {
+        const uint32_t idx = perf_breakdown::PERF_BREAKDOWN_BASE_WORD_INDEX + 2 * slot;
+        return idx + 1 < words.size() ? static_cast<uint64_t>(words[idx]) | (static_cast<uint64_t>(words[idx + 1]) << 32)
+                                      : uint64_t{0};
+    };
+    const double cycles_per_ms = aiclk_mhz > 0 ? aiclk_mhz * 1000.0 : 1.0;
+
+    std::set<FabricNodeId> destinations;
+    std::unordered_set<ConnectionKey, ConnectionKeyHash> first_hop_connections;
+    uint32_t total_hops = 0;
+    uint32_t max_hops = 0;
+    for (const auto& [config, connection_keys] : sender.configs_) {
+        if (!connection_keys.empty()) {
+            first_hop_connections.insert(connection_keys.front());
+        }
+        uint32_t config_hops = 0;
+        for (const auto& dst : config.dst_node_ids) {
+            destinations.insert(dst);
+            uint32_t dst_hops = 0;
+            for (const auto& [direction, hops] : this->route_manager_->get_hops_to_chip(this->fabric_node_id_, dst)) {
+                dst_hops += hops;
+            }
+            config_hops = std::max(config_hops, dst_hops);
+        }
+        total_hops += config_hops;
+        max_hops = std::max(max_hops, config_hops);
+    }
+    const size_t num_configs = sender.configs_.size();
+    log_info(
+        tt::LogTest,
+        "PERF_CORE snd dev={} core={} configs={} dsts={} hops={:.1f}/{} first_hop_conns={} loop_ms={:.1f} "
+        "slot_wait_ms={:.1f} fill_ms={:.1f} credit_blk={}",
+        this->fabric_node_id_,
+        core.str(),
+        num_configs,
+        destinations.size(),
+        num_configs > 0 ? static_cast<double>(total_hops) / num_configs : 0.0,
+        max_hops,
+        first_hop_connections.size(),
+        read_slot_cycles(perf_breakdown::S_LOOP) / cycles_per_ms,
+        read_slot_cycles(perf_breakdown::S_SLOT_WAIT) / cycles_per_ms,
+        read_slot_cycles(perf_breakdown::S_FILL) / cycles_per_ms,
+        read_slot_cycles(perf_breakdown::S_CREDIT_BLOCKED));
+}
+
 void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) const {
     const auto* fixture = dynamic_cast<const TestFixture*>(this->device_info_provider_.get());
     TT_FATAL(fixture != nullptr, "Failed to cast device_info_provider to TestFixture");
@@ -1949,6 +2050,9 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
             TT_FATAL(pass, "Sender on device: {} core: {} failed", this->fabric_node_id_, core);
             if (collect_perf) {
                 perf_collector.add_sender(data.at(core), sender.configs_.size());
+            }
+            if (collect_perf && perf_breakdown::perf_per_core()) {
+                log_sender_core_perf(core, sender, data.at(core), fixture->get_device_frequency_mhz(this->fabric_node_id_));
             }
             if (collect_perf && perf_breakdown::hot_detail_period() > 0) {
                 const auto& words = data.at(core);

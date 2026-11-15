@@ -359,6 +359,11 @@ public:
     // New split validation methods for non-blocking operation
     ValidationReadOps initiate_results_readback() const;
     void validate_results_after_readback(const ValidationReadOps& ops) const;
+    void log_sender_core_perf(
+        const tt::tt_metal::CoreCoord& core,
+        const TestSender& sender,
+        const std::vector<uint32_t>& words,
+        uint32_t aiclk_mhz) const;
 
     // Original validation method for backward compatibility
     void validate_results() const;

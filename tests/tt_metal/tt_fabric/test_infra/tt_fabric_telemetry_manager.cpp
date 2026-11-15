@@ -16,8 +16,9 @@
 
 namespace {
 // Calculate bandwidth in bytes/cycle given total ETH words and cycles.
-double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
-    constexpr uint32_t bytes_per_eth_word = 16;
+// total_words is the router's 64-bit counter: a busy link passes 2^32 bytes (268M words) within a second or two.
+double calc_bw_bytes_per_cycle(uint64_t total_words, uint64_t cycles) {
+    constexpr uint64_t bytes_per_eth_word = 16;
     return (total_words * bytes_per_eth_word) / static_cast<double>(cycles);
 }
 }  // namespace
