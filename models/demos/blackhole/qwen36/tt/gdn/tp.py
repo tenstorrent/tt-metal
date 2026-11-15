@@ -2160,7 +2160,8 @@ class TPGatedDeltaNet:
         ONE gdn_spec_step reads each row's full state (recurrent state and packed history) from its start block and
         writes the full state after every token into the block that the verify tables name (state_blocks.verify,
         written by GdnBlockState.set_verify_blocks), so nothing is committed or kept here. Arithmetic of
-        gdn_decode_step on the same blocks, token by token. Then the out-projection and all-reduce of decode."""
+        gdn_decode_step on the same blocks, token by token. Then the out-projection and all-reduce of decode; with
+        decode_ar the out-projection writes the RES40 partial (decode_allreduce.ResidualAllReduce.out_matmul)."""
         tw, sb = self.tw, self.state_blocks
         vb = getattr(sb, "verify", None)
         assert vb is not None and valid_len == n_users * vb.T, (
@@ -2202,9 +2203,14 @@ class TPGatedDeltaNet:
             **self._spec_step_options(vb.T),
         )  # [1, n_users * T, Nv * Dv]
         ttnn.deallocate(qkvzab)
-        partial = self._row_proj(gated, tw["out"])
+        partial = None
+        if decode_ar is not None and getattr(self.args, "proj_1d_decode", False):
+            # In RES40 straight from the matmul (the K loop of _row_proj's 1D decode matmul), so no reshard.
+            partial = decode_ar.out_matmul(gated, tw["out"], self.cfg)
+        if partial is None:
+            partial = self._row_proj(gated, tw["out"])
+            partial = ttnn.reshape(partial, (1, 1, valid_len, partial.shape[-1]))
         ttnn.deallocate(gated)
-        partial = ttnn.reshape(partial, (1, 1, valid_len, partial.shape[-1]))
         if decode_ar is not None:
             return decode_ar.all_reduce(partial)
         return tt_all_reduce(

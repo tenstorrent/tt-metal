@@ -40,6 +40,9 @@ class FT:
     def memory_config(self):
         return self._mem
 
+    def is_sharded(self):
+        return self._mem == "RES40"
+
     def __repr__(self):
         return f"FT({self.name}, {self.shape})"
 
@@ -281,9 +284,9 @@ def gdn_layer(monkeypatch):
     monkeypatch.setattr(tp.tpc, "matmul_1d_decode", lambda *a, **k: FT((1, 1, 32, 64), "qkvzab"))
     monkeypatch.setattr(tp, "tt_all_reduce", lambda partial, *a, **k: reduce_scatters.append(partial) or "fractured")
     layer = SimpleNamespace(
-        Nv=6, Nk=2, Dk=128, Dv=128, K=4, qkvz_dim_tp=64, scale=1.0, mesh=None, tt_ccl=None, cfg=None,
-        tw=dict.fromkeys(["qkvz", "conv_taps_rows", "dt_bias_fp32", "neg_exp_A_fp32", "norm_w_1d", "out"]),
-        args=SimpleNamespace(gdn_qkvz_decode_1d_progcfg=None, ccl_topology=lambda: None),
+        Nv=6, Nk=2, Dk=128, Dv=128, K=4, qkvz_dim_tp=64, scale=1.0, mesh=None, tt_ccl=None, cfg="gdn_cfg",
+        tw={**dict.fromkeys(["qkvz", "conv_taps_rows", "dt_bias_fp32", "neg_exp_A_fp32", "norm_w_1d"]), "out": "out_w"},
+        args=SimpleNamespace(gdn_qkvz_decode_1d_progcfg=None, ccl_topology=lambda: None, proj_1d_decode=True),
         state_blocks=SimpleNamespace(verify=SimpleNamespace(T=4, ctrl="ctrl", idx="idx"), rec_k="rk", rec_v="rv", hist="h"),
         _row_proj=lambda gated, w: FT((1, 8, DIM), "partial"),
     )  # fmt: skip
@@ -293,8 +296,14 @@ def gdn_layer(monkeypatch):
 
 
 class RecordingAllReduce:
-    def __init__(self):
-        self.partials = []
+    """A ResidualAllReduce stand-in: ``out_matmul`` writes a RES40 partial (None with ``res40=False``)."""
+
+    def __init__(self, res40=True):
+        self.partials, self.out_matmuls, self.res40 = [], [], res40
+
+    def out_matmul(self, x, weight, compute_cfg):
+        self.out_matmuls.append((x, weight, compute_cfg))
+        return FT((1, 1, 8, DIM), "res40_partial", "RES40") if self.res40 else None
 
     def all_reduce(self, partial):
         self.partials.append(partial)
@@ -311,6 +320,26 @@ def test_the_gdn_verify_on_vllm_blocks_ends_in_the_residual_all_reduce(gdn_layer
     assert [p.shape for p in ar.partials] == [(1, 1, 8, DIM)] and reduce_scatters == []
     assert tp.TPGatedDeltaNet.forward_verify_recurrent(layer, x, 8, pre_gathered=True, n_users=2) == "fractured"
     assert len(reduce_scatters) == 1
+
+
+@pytest.mark.parametrize("res40", [True, False])
+def test_the_gdn_verify_writes_its_out_projection_in_res40(gdn_layer, res40):
+    """On the replicated residual the out-projection is ResidualAllReduce.out_matmul of the gated rows, the out weight
+    and the layer's compute config, handed to the all-reduce as it is; if out_matmul refuses, _row_proj's partial."""
+    tp, layer, _ = gdn_layer
+    row_proj = layer._row_proj
+    if res40:
+        layer._row_proj = lambda gated, w: pytest.fail("the RES40 matmul replaces _row_proj")
+    ar = RecordingAllReduce(res40)
+    x = FT((1, 1, 8, DIM), "x")
+    assert tp.TPGatedDeltaNet.forward_verify_recurrent(layer, x, 8, pre_gathered=True, n_users=2, decode_ar=ar) == (
+        "replicated"
+    )
+    assert ar.out_matmuls == [("gated", "out_w", "gdn_cfg")]
+    assert [p.name for p in ar.partials] == (["res40_partial"] if res40 else ["view"])
+    layer.args.proj_1d_decode, layer._row_proj = False, row_proj
+    tp.TPGatedDeltaNet.forward_verify_recurrent(layer, x, 8, pre_gathered=True, n_users=2, decode_ar=ar)
+    assert len(ar.out_matmuls) == 1, "no RES40 matmul without the 1D decode matmul"
 
 
 def test_the_gdn_verify_without_vllm_blocks_refuses_the_residual_all_reduce(gdn_layer, expect_error):

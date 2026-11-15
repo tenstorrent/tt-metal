@@ -309,6 +309,14 @@ class TPAttention:
             self.args.dim,
         )
 
+    def _wo_res40(self, x, weight, decode_ar):
+        """The wo partial in the replicated decode residual's RES40 layout (ResidualAllReduce.out_matmul in
+        decode_allreduce.py), or None: only for a step that ends in that all-reduce, and only where _wo_proj takes the
+        1D decode matmul, whose K loop the RES40 matmul repeats."""
+        if decode_ar is None or not getattr(self.args, "proj_1d_decode", False):
+            return None
+        return decode_ar.out_matmul(x, weight, self.compute_cfg)
+
     def _wo_proj(self, x, weight):
         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
         matching the in-proj. Falls back to plain interleaved when no sharded memcfg."""
@@ -959,9 +967,11 @@ class TPAttention:
         ttnn.deallocate(attn_flat)
         ttnn.deallocate(gate)
 
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        wo_partial = self._wo_res40(gated_flat, tw["wo"], decode_ar)
+        if wo_partial is None:
+            wo_partial = self._wo_proj(gated_flat, tw["wo"])
+            wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         ttnn.deallocate(gated_flat)
-        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
         return tt_all_reduce(
@@ -1270,9 +1280,11 @@ class TPAttention:
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
             ttnn.deallocate(gated)
-        wo_partial = self._wo_proj(gated_flat, tw["wo"])
+        wo_partial = self._wo_res40(gated_flat, tw["wo"], decode_ar)
+        if wo_partial is None:
+            wo_partial = self._wo_proj(gated_flat, tw["wo"])
+            wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         ttnn.deallocate(gated_flat)
-        wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
         return tt_all_reduce(

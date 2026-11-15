@@ -146,15 +146,22 @@ def _attention(n_users):
 
 
 class RecordingAllReduce:
-    def __init__(self):
-        self.partials = []
+    """A decode_allreduce.ResidualAllReduce stand-in: ``out_matmul`` writes a RES40 partial (or None with
+    ``res40=False``) and records its arguments; ``all_reduce`` records its partial."""
+
+    def __init__(self, res40=True):
+        self.partials, self.out_matmuls, self.res40 = [], [], res40
+
+    def out_matmul(self, x, weight, compute_cfg):
+        self.out_matmuls.append((x, weight, compute_cfg))
+        return FT((1, 1, x.shape[-2], DIM), "res40_partial", "RES40") if self.res40 else None
 
     def all_reduce(self, partial):
         self.partials.append(partial)
         return "replicated"
 
 
-def _verify(a, n_users, T, cos_rows_first=True):
+def _verify(a, n_users, T, cos_rows_first=True, res40=True):
     R = n_users * T
     groups = a._spec_sdpa_plan(T, n_users)[1]
     rope_shape = (1, 1, R, RD) if cos_rows_first else (1, R, 1, RD)
@@ -165,7 +172,7 @@ def _verify(a, n_users, T, cos_rows_first=True):
         spec_page_table=FT((groups, 16), "pt_groups"),
         spec_n_users=n_users,
         spec_user_page_table=FT((n_users, 16), "pt_users"),
-        decode_ar=RecordingAllReduce(),
+        decode_ar=RecordingAllReduce(res40),
     )
     out = a.forward_decode(
         FT((1, 1, R, DIM), "x"), FT((R,), "cur_pos"), FT(rope_shape, "cos"), FT(rope_shape, "sin"), **kw
@@ -410,3 +417,36 @@ def test_the_full_verify_body_keeps_the_unpacked_sdpa(ops, monkeypatch):
     _verify(a, 8, 4, cos_rows_first=False)
     (sdpa,) = _calls(ops, "sdpa")
     assert sdpa[2]["spec_multi_pos_tiles"] == 4 and sdpa[2].get("spec_pack_heads", 0) == 0
+
+
+@pytest.mark.parametrize("full_body", [False, True], ids=["forward_verify", "full_body"])
+def test_the_verify_wo_writes_the_res40_partial(ops, monkeypatch, full_body):
+    """On the replicated residual, both verify bodies write wo in RES40 (ResidualAllReduce.out_matmul on the gated
+    rows, the wo weight and the attention's compute config) and hand that partial to the all-reduce as it is: no
+    _wo_proj, no reshape of the partial."""
+    a = _attention(8)
+    a.decode_sdpa_max_cores = None
+    a.compute_cfg = "attn_cfg"
+    a._wo_proj = lambda t, w: pytest.fail("the RES40 matmul replaces _wo_proj")
+    if full_body:
+        monkeypatch.setattr(tp_mod.TPAttention, "_forward_verify_ok", lambda self, *args: False)
+    out, kw = _verify(a, 8, 4, cos_rows_first=not full_body)
+    ar = kw["decode_ar"]
+    ((x, w, cfg),) = ar.out_matmuls
+    assert w == "wo" and cfg == "attn_cfg" and x.shape[-2:] == (32, NH * HD)
+    assert out == "replicated" and [p.name for p in ar.partials] == ["res40_partial"]
+    assert not any(c[1][0].name == "res40_partial" for c in _calls(ops, "reshape"))
+    freed = [c[1][0] for c in ops if c[0] == "deallocate"]
+    assert x in freed, "the gated rows are freed after the matmul"
+
+
+def test_the_verify_wo_keeps_wo_proj_where_res40_does_not_apply(ops):
+    """out_matmul refuses (None): _wo_proj's partial, viewed as [1, 1, R, dim]. Without the 1D decode matmul
+    (proj_1d_decode off) or without the replicated residual, out_matmul is not asked."""
+    a = _attention(8)
+    _, kw = _verify(a, 8, 4, res40=False)
+    ar = kw["decode_ar"]
+    assert [p.name for p in ar.partials] == ["view(wo_partial)"] and len(ar.out_matmuls) == 1
+    assert a._wo_res40("x", "wo", None) is None
+    a.args.proj_1d_decode = False
+    assert a._wo_res40("x", "wo", ar) is None and len(ar.out_matmuls) == 1
