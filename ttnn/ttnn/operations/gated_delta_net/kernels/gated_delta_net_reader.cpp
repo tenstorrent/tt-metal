@@ -137,12 +137,31 @@ __attribute__((noinline)) void read_row_span(
     }
 }
 
-__attribute__((noinline)) void copy_local_row(
-    uint32_t src_tile, uint32_t src_row, uint32_t dst_tile, uint32_t dst_row) {
-    const uint32_t src = src_tile + row_offset(src_row);
-    const uint32_t dst = dst_tile + row_offset(dst_row);
-    noc_async_read(get_noc_addr(src), dst, SEG_BYTES);
-    noc_async_read(get_noc_addr(src + FACE_BYTES), dst + FACE_BYTES, SEG_BYTES);
+// Rows [src_row, src_row + n) of an L1 tile into rows [dst_row, dst_row + n) of another: one NoC copy per
+// face half per run of rows that stays inside one face in both tiles (rows of a face are contiguous).
+__attribute__((noinline)) void copy_local_rows(
+    uint32_t src_tile, uint32_t src_row, uint32_t dst_tile, uint32_t dst_row, uint32_t n) {
+    constexpr uint32_t FACE_ROWS = TILE_ROWS / 2;
+    if (n == 1) {  // decode: one row per tap
+        const uint32_t src = src_tile + row_offset(src_row);
+        const uint32_t dst = dst_tile + row_offset(dst_row);
+        noc_async_read(get_noc_addr(src), dst, SEG_BYTES);
+        noc_async_read(get_noc_addr(src + FACE_BYTES), dst + FACE_BYTES, SEG_BYTES);
+        return;
+    }
+    while (n != 0) {
+        const uint32_t src_room = FACE_ROWS - (src_row & (FACE_ROWS - 1));
+        const uint32_t dst_room = FACE_ROWS - (dst_row & (FACE_ROWS - 1));
+        uint32_t run = src_room < dst_room ? src_room : dst_room;
+        run = run < n ? run : n;
+        const uint32_t src = src_tile + row_offset(src_row);
+        const uint32_t dst = dst_tile + row_offset(dst_row);
+        noc_async_read(get_noc_addr(src), dst, run * SEG_BYTES);
+        noc_async_read(get_noc_addr(src + FACE_BYTES), dst + FACE_BYTES, run * SEG_BYTES);
+        src_row += run;
+        dst_row += run;
+        n -= run;
+    }
 }
 
 // Tensix-to-DRAM writes need only L1 alignment, so a face-row segment is written directly.
@@ -347,6 +366,11 @@ void kernel_main() {
                 const uint32_t hist_row0 = GDN_HISTORY * seq;
                 const bool hist_needed = lo < seq_lo + GDN_HISTORY;
                 const bool hist_staged = hist_needed && (hist_row0 % TILE_ROWS) + GDN_HISTORY <= TILE_ROWS;
+                // The HISTORY token rows before lo, when all are rows of mixed_qkv inside one tile row (a tile
+                // row continuing its sequence): read once per column as one aligned span into the same
+                // staging tile, then copied out as row runs.
+                const uint32_t prev_row0 = lo - GDN_HISTORY;
+                const bool prev_staged = !hist_needed && prev_row0 / TILE_ROWS == (lo - 1) / TILE_ROWS;
                 for (uint32_t col = 0; col < group_cols; ++col) {
                     const uint32_t ct = pair_col(group_first + col);
                     const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
@@ -360,6 +384,15 @@ void kernel_main() {
                             r0,
                             r0 + GDN_HISTORY,
                             hist_stage + col * TILE_BYTES);
+                    } else if (prev_staged) {
+                        const uint32_t r0 = prev_row0 % TILE_ROWS;
+                        read_row_span(
+                            mixed,
+                            (prev_row0 / TILE_ROWS) * Ct + ct,
+                            r0,
+                            r0 + GDN_HISTORY,
+                            hist_stage + col * TILE_BYTES);
+                        continue;
                     }
                     for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
                         const uint32_t shift = GDN_HISTORY - tap;  // source row = row - shift
@@ -378,16 +411,24 @@ void kernel_main() {
                     }
                 }
                 rows.finish();
-                if (hist_staged) {
+                if (hist_staged || prev_staged) {
                     for (uint32_t col = 0; col < group_cols; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
                         for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
                             const uint32_t shift = GDN_HISTORY - tap;
-                            const uint32_t remote_hi = hi < lo + shift ? hi : lo + shift;
-                            for (uint32_t row = lo; row < remote_hi && row < seq_lo + shift; ++row) {
-                                const uint32_t src = hist_row0 % TILE_ROWS + (row - seq_lo) + tap;
-                                copy_local_row(
-                                    hist_stage + col * TILE_BYTES, src, col_win + tap * TILE_BYTES, row - base_row);
+                            uint32_t end = hi < lo + shift ? hi : lo + shift;
+                            uint32_t src = (prev_row0 + tap) % TILE_ROWS;  // row lo - shift
+                            if (hist_staged) {
+                                end = end < seq_lo + shift ? end : seq_lo + shift;
+                                src = hist_row0 % TILE_ROWS + (lo - seq_lo) + tap;
+                            }
+                            if (end > lo) {
+                                copy_local_rows(
+                                    hist_stage + col * TILE_BYTES,
+                                    src,
+                                    col_win + tap * TILE_BYTES,
+                                    lo - base_row,
+                                    end - lo);
                             }
                         }
                     }
@@ -402,15 +443,19 @@ void kernel_main() {
                     cb_push_back(cb_gate_in, 2);
                     gates_pending = false;
                 }
-                if (hi - lo > 1 || hist_staged) {
+                if (hi - lo > 1 || hist_staged || prev_staged) {
                     for (uint32_t col = 0; col < group_cols && hi - lo > 1; ++col) {
                         const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
                         const uint32_t cur_tap = col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES;
                         for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
                             const uint32_t shift = GDN_HISTORY - tap;
-                            for (uint32_t row = lo + shift; row < hi; ++row) {
-                                const uint32_t p = row - base_row;
-                                copy_local_row(cur_tap, p - shift, col_win + tap * TILE_BYTES, p);
+                            if (hi > lo + shift) {
+                                copy_local_rows(
+                                    cur_tap,
+                                    lo - base_row,
+                                    col_win + tap * TILE_BYTES,
+                                    lo + shift - base_row,
+                                    hi - lo - shift);
                             }
                         }
                     }
