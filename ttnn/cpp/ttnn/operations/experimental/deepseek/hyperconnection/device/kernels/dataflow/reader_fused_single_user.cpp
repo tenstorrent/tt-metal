@@ -65,14 +65,19 @@ void kernel_main() {
     constexpr uint32_t cb_mixed = get_compile_time_arg_val(25);
     constexpr uint32_t sub_elems_per_page = get_compile_time_arg_val(26);
     constexpr uint32_t mix_sem = get_compile_time_arg_val(27);
+    // The fused collapsed RMSNorm: role 0 reads its row_bytes of the gain into cb_norm_gamma.
+    constexpr bool fuse_norm = get_compile_time_arg_val(28) != 0;
+    constexpr uint32_t cb_norm_gamma = get_compile_time_arg_val(29);
+    constexpr uint32_t norm_row_bytes = get_compile_time_arg_val(30);
 
-    constexpr auto pre_bias_args = TensorAccessorArgs<28>();
+    constexpr auto pre_bias_args = TensorAccessorArgs<31>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto comb_bias_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
     constexpr auto pre_mix_args = TensorAccessorArgs<comb_bias_args.next_compile_time_args_offset()>();
     constexpr auto mix_post_args = TensorAccessorArgs<pre_mix_args.next_compile_time_args_offset()>();
     constexpr auto mix_comb_args = TensorAccessorArgs<mix_post_args.next_compile_time_args_offset()>();
     constexpr auto mix_sub_args = TensorAccessorArgs<mix_comb_args.next_compile_time_args_offset()>();
+    constexpr auto norm_gamma_args = TensorAccessorArgs<mix_sub_args.next_compile_time_args_offset()>();
 
     const uint32_t fused_w_addr = get_arg_val<uint32_t>(0);
     const uint32_t pre_bias_addr = get_arg_val<uint32_t>(1);
@@ -133,6 +138,19 @@ void kernel_main() {
         cb_h.reserve_back(hidden_pages);
         cb_h.push_back(hidden_pages);
 
+        // The norm's gain: this core's columns of the [1, D] row, laid out as the collapsed row's h x 32 tiles.
+        if constexpr (fuse_norm) {
+            const auto gamma = TensorAccessor(norm_gamma_args, get_arg_val<uint32_t>(6));
+            CircularBuffer cb_g(cb_norm_gamma);
+            cb_g.reserve_back(row_chunks);
+            noc.async_read(
+                gamma,
+                cb_g,
+                norm_row_bytes,
+                {.page_id = 0, .offset_bytes = get_arg_val<uint32_t>(7)},
+                {.offset_bytes = 0});
+        }
+
         if constexpr (use_pre_mix) {
             const auto pre_mix = TensorAccessor(pre_mix_args, pre_mix_addr);
             CircularBuffer cb_p(cb_pre);
@@ -145,10 +163,10 @@ void kernel_main() {
         }
 
         if constexpr (use_mix) {
-            const auto mix_post = TensorAccessor(mix_post_args, get_arg_val<uint32_t>(6));
-            const auto mix_comb = TensorAccessor(mix_comb_args, get_arg_val<uint32_t>(7));
-            const auto mix_sub = TensorAccessor(mix_sub_args, get_arg_val<uint32_t>(8));
-            const uint32_t col_start = get_arg_val<uint32_t>(9);
+            const auto mix_post = TensorAccessor(mix_post_args, get_arg_val<uint32_t>(8));
+            const auto mix_comb = TensorAccessor(mix_comb_args, get_arg_val<uint32_t>(9));
+            const auto mix_sub = TensorAccessor(mix_sub_args, get_arg_val<uint32_t>(10));
+            const uint32_t col_start = get_arg_val<uint32_t>(11);
             CircularBuffer cb_stg(cb_mix_stage);
             CircularBuffer cb_w(cb_mix_w);
             CircularBuffer cb_s(cb_mix_sub);
@@ -197,12 +215,16 @@ void kernel_main() {
             // The fn dot reads the mixed shard as soon as it is packed.
             CircularBuffer cb_m(cb_mixed);
             cb_m.wait_front(hidden_pages);
-            const uint32_t num_dests = get_arg_val<uint32_t>(10);
+            const uint32_t num_dests = get_arg_val<uint32_t>(12);
             Semaphore<> mixed_ready(mix_sem);
             for (uint32_t i = 0; i < num_dests; ++i) {
-                mixed_ready.up(noc, get_arg_val<uint32_t>(11 + 2 * i), get_arg_val<uint32_t>(12 + 2 * i), 1);
+                mixed_ready.up(noc, get_arg_val<uint32_t>(13 + 2 * i), get_arg_val<uint32_t>(14 + 2 * i), 1);
             }
             noc.async_atomic_barrier();
+        }
+        if constexpr (fuse_norm) {
+            noc.async_read_barrier();
+            CircularBuffer(cb_norm_gamma).push_back(row_chunks);
         }
     }
 

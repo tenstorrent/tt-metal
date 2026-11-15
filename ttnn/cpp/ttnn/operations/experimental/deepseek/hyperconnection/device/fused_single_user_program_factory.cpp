@@ -6,6 +6,8 @@
 
 #include <bit>
 #include <cstdlib>
+#include <initializer_list>
+#include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -41,6 +43,14 @@ constexpr uint32_t kFsCbMixStage = tt::CBIndex::c_11;
 constexpr uint32_t kFsCbMixW = tt::CBIndex::c_12;
 constexpr uint32_t kFsCbMixSub = tt::CBIndex::c_13;
 constexpr uint32_t kFsCbMixedStreams = tt::CBIndex::c_14;
+// The fused collapsed RMSNorm, on the collapse cores: the gain's D/8 columns (h x 32 tiles, as the collapsed row),
+// the core's sum of squares, every collapse core's (gathered here by the norm writer), the scale rsqrt(mean + eps),
+// and the normed row the writer sends to DRAM.
+constexpr uint32_t kFsCbNormGamma = tt::CBIndex::c_16;
+constexpr uint32_t kFsCbNormStat = tt::CBIndex::c_17;
+constexpr uint32_t kFsCbNormGather = tt::CBIndex::c_18;
+constexpr uint32_t kFsCbNormScale = tt::CBIndex::c_19;
+constexpr uint32_t kFsCbNormOut = tt::CBIndex::c_20;
 
 constexpr char kFsReaderKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
@@ -51,6 +61,9 @@ constexpr char kFsComputeKernelPath[] =
 constexpr char kFsWriterKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
     "writer_fused_single_user.cpp";
+constexpr char kFsNormWriterKernelPath[] =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
+    "writer_hc_collapse_norm.cpp";
 
 CoreRangeSet single_core_set(const CoreCoord& core) { return CoreRangeSet({CoreRange(core, core)}); }
 
@@ -107,6 +120,8 @@ FusedSingleUserSharedVariables build_single_user_hc(
     const Buffer* mix_comb_buffer = use_mix ? tensor_args.mix_comb->buffer() : nullptr;
     const Buffer* mix_sub_buffer = use_mix ? tensor_args.mix_sublayer_out->buffer() : nullptr;
     Buffer* mixed_buffer = use_mix ? tensor_return_value.back().buffer() : nullptr;
+    const bool fuse_norm = tensor_args.collapsed_norm_weight.has_value();
+    const Buffer* norm_gamma_buffer = fuse_norm ? tensor_args.collapsed_norm_weight->buffer() : nullptr;
 
     const CoreRangeSet collapse_cores = contiguous_cores(0, kCollapseCoreCount);
     const CoreCoord post_core{8, 0};
@@ -189,7 +204,7 @@ FusedSingleUserSharedVariables build_single_user_hc(
     // into the output shard, with no 32x32 tiles to scatter it into.
     const bool collapsed_row_major = collapsed_out.layout() == Layout::ROW_MAJOR;
     CBHandle collapsed_output_cb = 0;
-    if (!collapsed_row_major) {
+    if (!collapsed_row_major && !fuse_norm) {
         auto config = CircularBufferConfig(
                           d_tiles_per_core * tile_size(collapsed_format), {{kFsCbCollapsedOut, collapsed_format}})
                           .set_page_size(kFsCbCollapsedOut, tile_size(collapsed_format))
@@ -202,7 +217,8 @@ FusedSingleUserSharedVariables build_single_user_hc(
         auto config = CircularBufferConfig(row_chunks * page_bytes, {{kFsCbCollapsedRow, collapsed_format}})
                           .set_page_size(kFsCbCollapsedRow, page_bytes)
                           .set_tile_dims(kFsCbCollapsedRow, row_tile);
-        if (collapsed_row_major) {
+        // With the fused norm, the collapsed row is the norm's input, and the writer sends the normed row to DRAM.
+        if (collapsed_row_major && !fuse_norm) {
             config.set_globally_allocated_address(*collapsed_out.buffer());
             collapsed_output_cb = CreateCircularBuffer(program, collapse_cores, config);
         } else {
@@ -240,6 +256,39 @@ FusedSingleUserSharedVariables build_single_user_hc(
             mixed_readers->readers.size());
     }
 
+    uint32_t norm_sem = 0;
+    const uint32_t norm_row_bytes = d_tiles_per_core * constants::TILE_WIDTH * sizeof(uint16_t);
+    const tt::tt_metal::Tile stat_tile({1, constants::TILE_WIDTH});
+    const uint32_t stat_tile_bytes = stat_tile.get_tile_size(DataFormat::Float32);
+    if (fuse_norm) {
+        TT_FATAL(hidden_row_major, "the fused collapsed RMSNorm works on ROW_MAJOR streams");
+        const uint32_t page_bytes = row_tile.get_tile_size(param_format);
+        for (const uint32_t index : {kFsCbNormGamma, kFsCbNormOut}) {
+            CreateCircularBuffer(
+                program,
+                collapse_cores,
+                CircularBufferConfig(row_chunks * page_bytes, {{index, param_format}})
+                    .set_page_size(index, page_bytes)
+                    .set_tile_dims(index, row_tile));
+        }
+        // The sum-of-squares pack (mul_reduce_scalar's REDUCE_SCALAR packer config) writes past its one 1x32 page:
+        // with cb_stat one page, it zeroed the first slots of cb_gather right behind it, wiping partials that the
+        // other collapse cores had already delivered. cb_stat gets a whole 32x32 fp32 tile's room.
+        const uint32_t stat_cb_bytes = tile_size(DataFormat::Float32);
+        for (const auto& [index, bytes] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
+                 {kFsCbNormStat, stat_cb_bytes},
+                 {kFsCbNormGather, kCollapseCoreCount * stat_tile_bytes},
+                 {kFsCbNormScale, stat_tile_bytes}}) {
+            CreateCircularBuffer(
+                program,
+                collapse_cores,
+                CircularBufferConfig(bytes, {{index, DataFormat::Float32}})
+                    .set_page_size(index, stat_tile_bytes)
+                    .set_tile_dims(index, stat_tile));
+        }
+        norm_sem = CreateSemaphore(program, collapse_cores, 0);
+    }
+
     const uint32_t pre_scale_bits = std::bit_cast<uint32_t>(operation_attributes.pre_scale);
     const uint32_t post_scale_bits = std::bit_cast<uint32_t>(operation_attributes.post_scale);
     const uint32_t comb_scale_bits = std::bit_cast<uint32_t>(operation_attributes.comb_scale);
@@ -275,6 +324,9 @@ FusedSingleUserSharedVariables build_single_user_hc(
             kFsCbMixedStreams,
             mix_sub_page_elems,
             use_mix ? mixed_readers->semaphore_id : 0u,
+            fuse_norm ? 1u : 0u,
+            kFsCbNormGamma,
+            norm_row_bytes,
         };
         TensorAccessorArgs(pre_bias.buffer()).append_to(args);
         TensorAccessorArgs(post_bias.buffer()).append_to(args);
@@ -283,6 +335,7 @@ FusedSingleUserSharedVariables build_single_user_hc(
         TensorAccessorArgs(mix_post_buffer).append_to(args);
         TensorAccessorArgs(mix_comb_buffer).append_to(args);
         TensorAccessorArgs(mix_sub_buffer).append_to(args);
+        TensorAccessorArgs(norm_gamma_buffer).append_to(args);
         return args;
     };
 
@@ -315,6 +368,15 @@ FusedSingleUserSharedVariables build_single_user_hc(
                 kFsCbMixW,
                 kFsCbMixSub,
                 kFsCbMixedStreams,
+                fuse_norm ? 1u : 0u,
+                kFsCbNormGamma,
+                kFsCbNormStat,
+                kFsCbNormGather,
+                kFsCbNormScale,
+                kFsCbNormOut,
+                std::bit_cast<uint32_t>(1.0F / static_cast<float>(d_tiles * constants::TILE_WIDTH)),
+                std::bit_cast<uint32_t>(operation_attributes.collapsed_norm_epsilon),
+                kCollapseCoreCount,
             }};
     };
 
@@ -330,7 +392,8 @@ FusedSingleUserSharedVariables build_single_user_hc(
     shared.collapse_cores = corerange_to_cores(collapse_cores, collapse_cores.num_cores(), true);
     shared.post_core = post_core;
     shared.comb_core = comb_core;
-    shared.has_collapse_writer = hidden_row_major && !collapsed_row_major;
+    shared.has_collapse_writer = (hidden_row_major && !collapsed_row_major) || fuse_norm;
+    shared.fuse_norm = fuse_norm;
     shared.hidden_cb = hidden_cb;
     shared.collapsed_output_cb = collapsed_output_cb;
     shared.has_mix = use_mix;
@@ -362,7 +425,21 @@ FusedSingleUserSharedVariables build_single_user_hc(
         program, kFsReaderKernelPath, collapse_cores, ReaderDataMovementConfig(reader_compile_args(kRoleCollapse)));
     shared.collapse_compute_kernel_id =
         CreateKernel(program, kFsComputeKernelPath, collapse_cores, compute_config(kRoleCollapse));
-    if (shared.has_collapse_writer) {
+    if (fuse_norm) {
+        std::vector<uint32_t> args = {
+            kFsCbNormStat,
+            kFsCbNormGather,
+            kFsCbNormOut,
+            row_chunks,
+            stat_tile_bytes,
+            norm_row_bytes,
+            kCollapseCoreCount,
+            norm_sem,
+        };
+        TensorAccessorArgs(collapsed_out.buffer()).append_to(args);
+        shared.collapse_writer_kernel_id =
+            CreateKernel(program, kFsNormWriterKernelPath, collapse_cores, WriterDataMovementConfig(args));
+    } else if (shared.has_collapse_writer) {
         shared.collapse_writer_kernel_id = CreateKernel(
             program,
             kFsWriterKernelPath,
@@ -382,10 +459,19 @@ FusedSingleUserSharedVariables build_single_user_hc(
         post_bias.buffer()->address(),
         comb_bias.buffer()->address(),
         pre_mix_addr,
-        collapsed_out.buffer()->address()};
+        collapsed_out.buffer()->address(),
+        fuse_norm ? norm_gamma_buffer->address() : 0u};
+    std::vector<uint32_t> collapse_nocs;
+    for (const auto& core : shared.collapse_cores) {
+        const CoreCoord phys = device->worker_core_from_logical_core(core);
+        collapse_nocs.push_back(static_cast<uint32_t>(phys.x));
+        collapse_nocs.push_back(static_cast<uint32_t>(phys.y));
+    }
     for (uint32_t c = 0; c < shared.collapse_cores.size(); ++c) {
         const auto& core = shared.collapse_cores[c];
         std::vector<uint32_t> args = reader_args;
+        // The core's byte offset into the gain row (read only with the fused norm).
+        args.push_back(c * norm_row_bytes);
         if (use_mix) {
             // The mix's inputs, this core's first column, then the cores its mixed shard is pushed to.
             args.push_back(mix_post_buffer->address());
@@ -401,7 +487,11 @@ FusedSingleUserSharedVariables build_single_user_hc(
             }
         }
         SetRuntimeArgs(program, shared.collapse_reader_kernel_id, core, args);
-        if (shared.has_collapse_writer) {
+        if (fuse_norm) {
+            std::vector<uint32_t> writer_args = {collapsed_out.buffer()->address(), c};
+            writer_args.insert(writer_args.end(), collapse_nocs.begin(), collapse_nocs.end());
+            SetRuntimeArgs(program, shared.collapse_writer_kernel_id, core, writer_args);
+        } else if (shared.has_collapse_writer) {
             SetRuntimeArgs(program, shared.collapse_writer_kernel_id, core, {collapsed_out.buffer()->address(), 0u});
         }
     }
@@ -430,7 +520,10 @@ void override_single_user_hc(
     const uint32_t collapsed_addr = tensor_return_value[2].buffer()->address();
     const uint32_t pre_out_addr = tensor_args.pre_mix.has_value() ? tensor_return_value[3].buffer()->address() : 0u;
     UpdateDynamicCircularBufferAddress(program, shared.hidden_cb, *tensor_args.hidden_streams.buffer());
-    UpdateDynamicCircularBufferAddress(program, shared.collapsed_output_cb, *tensor_return_value[2].buffer());
+    if (!shared.fuse_norm) {
+        UpdateDynamicCircularBufferAddress(program, shared.collapsed_output_cb, *tensor_return_value[2].buffer());
+    }
+    const uint32_t norm_gamma_addr = shared.fuse_norm ? tensor_args.collapsed_norm_weight->buffer()->address() : 0u;
     if (shared.has_mix) {
         UpdateDynamicCircularBufferAddress(program, shared.mixed_streams_cb, *tensor_return_value.back().buffer());
     }
@@ -442,15 +535,16 @@ void override_single_user_hc(
         args[3] = comb_bias_addr;
         args[4] = pre_mix_addr;
         args[5] = collapsed_addr;
+        args[6] = norm_gamma_addr;
     };
     auto& collapse_reader_args = GetRuntimeArgs(program, shared.collapse_reader_kernel_id);
     for (const auto& core : shared.collapse_cores) {
         auto& args = collapse_reader_args[core.x][core.y];
         set_reader_args(args);
         if (shared.has_mix) {
-            args[6] = tensor_args.mix_post->buffer()->address();
-            args[7] = tensor_args.mix_comb->buffer()->address();
-            args[8] = tensor_args.mix_sublayer_out->buffer()->address();
+            args[8] = tensor_args.mix_post->buffer()->address();
+            args[9] = tensor_args.mix_comb->buffer()->address();
+            args[10] = tensor_args.mix_sublayer_out->buffer()->address();
         }
     }
     if (shared.has_collapse_writer) {

@@ -222,6 +222,11 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         )
         self.pre_scale, self.post_scale, self.comb_scale = (float(scale[0]), float(scale[1]), float(scale[2]))
 
+    def can_fuse_norm(self) -> bool:
+        """Whether :meth:`forward` can take ``norm`` for one row of streams: the single-user program with the fused
+        ``fn`` dot (Blackhole), whose collapse cores then RMS-normalize the collapsed row themselves."""
+        return self.row_major_streams and self.fused_fn and self.device.arch() == ttnn.Arch.BLACKHOLE
+
     def can_fold_mix(self, post: ttnn.Tensor, comb: ttnn.Tensor, sublayer_out: ttnn.Tensor) -> bool:
         """Whether :meth:`forward` can take the previous sublayer's mix step ``(post, comb, sublayer_out)`` as
         ``mix`` for one row of streams: the single-user program with the fused ``fn`` dot, ``post`` / ``comb``
@@ -247,6 +252,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         pre_mix: ttnn.Tensor | None = None,
         collapsed_layout: ttnn.Layout | None = None,
         mix: tuple | None = None,
+        norm: tuple | None = None,
     ):
         """``hidden_streams`` ``[B,S,hc,D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``.
 
@@ -268,6 +274,10 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         sublayer's mix step into the same program: ``hidden_streams`` are then the streams before it, the collapse
         and ``fn`` see ``mix_streams(post, comb, sublayer_out, hidden_streams)``, and those mixed streams are
         returned fifth, in ``hidden_streams``' spec. ``hidden_streams`` is not consumed.
+
+        ``norm`` ``(weight, eps)`` (see :meth:`can_fuse_norm`; one row) fuses the next sublayer's RMSNorm onto the
+        collapse: ``weight`` is the gain as a bf16 ROW_MAJOR ``[1, 1, 1, D]`` DRAM row, and ``collapsed`` comes back
+        normed, ROW_MAJOR and DRAM interleaved (``collapsed_layout`` is ignored).
         """
         b, s, hc, d = hidden_streams.shape
         t = b * s
@@ -277,6 +287,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         assert mix is None or (
             t == 1 and pre_mix is not None and self.can_fold_mix(*mix)
         ), "the folded mix step needs one row, pre_mix and can_fold_mix"
+        assert norm is None or (t == 1 and self.can_fuse_norm()), "the fused norm needs one row and can_fuse_norm"
 
         if self.row_major_streams:
             assert hidden_streams.layout == ttnn.ROW_MAJOR_LAYOUT, hidden_streams.layout
@@ -284,6 +295,9 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                 mix_kwargs = {}
                 if mix is not None:
                     mix_kwargs = {"mix_post": mix[0], "mix_comb": mix[1], "mix_sublayer_out": mix[2]}
+                if norm is not None:
+                    mix_kwargs.update(collapsed_norm_weight=norm[0], collapsed_norm_epsilon=float(norm[1]))
+                    collapsed_layout = ttnn.ROW_MAJOR_LAYOUT
                 return ttnn.experimental.deepseek.fused_hyperconnection(
                     hidden_streams,
                     pre_bias=self.pre_b,

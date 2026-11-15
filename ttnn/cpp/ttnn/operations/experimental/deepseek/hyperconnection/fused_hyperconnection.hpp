@@ -69,6 +69,9 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 //     each collapse core mixes its own shard of `hidden_streams` first, and the collapse and the fn dot work
 //     on the mixed streams, which are returned last. mix_post [1,1,H,1] / mix_comb [1,1,H,H] are BFLOAT16
 //     TILE interleaved (the `post` / `comb` this op returns), mix_sublayer_out [1,1,1,D] BFLOAT16 ROW_MAJOR.
+//   collapsed_norm_weight / collapsed_norm_epsilon: a single token with ROW_MAJOR `hidden_streams` and a ROW_MAJOR
+//     `collapsed_layout`: fuse RMSNorm(collapsed) * collapsed_norm_weight ([1,1,1,D] BFLOAT16 ROW_MAJOR, DRAM
+//     interleaved) onto the collapse cores. `collapsed` is then the normed row, ROW_MAJOR and DRAM interleaved.
 //
 // Returns [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus pre [B,S,1,H] (BFLOAT16
 // TILE, zero-padded, the layout `pre_mix` takes) when `pre_mix` is given, plus the mixed streams
@@ -94,7 +97,9 @@ std::vector<Tensor> fused_hyperconnection(
     std::optional<float> fn_rms_norm_epsilon = std::nullopt,
     const std::optional<Tensor>& mix_post = std::nullopt,
     const std::optional<Tensor>& mix_comb = std::nullopt,
-    const std::optional<Tensor>& mix_sublayer_out = std::nullopt);
+    const std::optional<Tensor>& mix_sublayer_out = std::nullopt,
+    const std::optional<Tensor>& collapsed_norm_weight = std::nullopt,
+    float collapsed_norm_epsilon = 0.0F);
 
 // `fused_hyperconnection` without the collapse, for stream-major residual stacks [1, H, T, D]
 // (DeepSeek V4.1 prefill), which the caller collapses itself with `stream_mix(streams, pre)`.

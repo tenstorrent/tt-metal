@@ -69,6 +69,10 @@ void bind_fused_hyperconnection(nb::module_& mod) {
                 TILE interleaved.
             mix_comb: The mix step's ``[1, 1, H, H]`` BFLOAT16 TILE interleaved comb.
             mix_sublayer_out: The mix step's ``[1, 1, 1, D]`` BFLOAT16 ROW_MAJOR sublayer output.
+            collapsed_norm_weight: Single token, ROW_MAJOR ``hidden_streams`` and ``collapsed_layout``: the
+                ``[1, 1, 1, D]`` BFLOAT16 ROW_MAJOR DRAM gain of an RMSNorm fused onto ``collapsed``, which is then
+                returned normed, ROW_MAJOR and DRAM interleaved.
+            collapsed_norm_epsilon: That RMSNorm's epsilon.
 
         Returns:
             List of [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus
@@ -97,7 +101,9 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         nb::arg("fn_rms_norm_epsilon") = std::nullopt,
         nb::arg("mix_post") = std::nullopt,
         nb::arg("mix_comb") = std::nullopt,
-        nb::arg("mix_sublayer_out") = std::nullopt);
+        nb::arg("mix_sublayer_out") = std::nullopt,
+        nb::arg("collapsed_norm_weight") = std::nullopt,
+        nb::arg("collapsed_norm_epsilon") = 0.0F);
 
     ttnn::bind_function<"fused_hyperconnection_weights", "ttnn.experimental.deepseek.">(
         mod,

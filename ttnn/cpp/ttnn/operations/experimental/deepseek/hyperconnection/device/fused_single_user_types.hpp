@@ -28,6 +28,8 @@ struct FusedSingleUserParams {
     std::optional<CoreRangeSet> dot_core_grid;
     uint32_t reduce_fan_in = 2;
     std::optional<float> rms_norm_epsilon;
+    // With collapsed_norm_weight: the epsilon of the RMSNorm the collapse cores apply to collapsed.
+    float collapsed_norm_epsilon = 0.0F;
 };
 
 struct FusedSingleUserInputs {
@@ -51,6 +53,11 @@ struct FusedSingleUserInputs {
     std::optional<Tensor> mix_post;
     std::optional<Tensor> mix_comb;
     std::optional<Tensor> mix_sublayer_out;
+    // [1,1,1,D] BFLOAT16 ROW_MAJOR, DRAM interleaved: the gain of an RMSNorm over D the collapse cores apply to
+    // collapsed (collapsed_layout ROW_MAJOR, ROW_MAJOR streams). collapsed is then the normed row, ROW_MAJOR and DRAM
+    // interleaved: each collapse core sums its D/8 squares, the eight swap their partials, and each scales and
+    // writes its own D/8 columns.
+    std::optional<Tensor> collapsed_norm_weight;
 };
 
 // Returns {post [1,1,H,1], comb [1,1,H,H], collapsed [1,1,1,D]}, plus pre [1,1,1,H] when pre_mix is

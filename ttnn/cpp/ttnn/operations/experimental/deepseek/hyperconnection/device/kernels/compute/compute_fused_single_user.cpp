@@ -7,6 +7,14 @@
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/experimental/add_rsqrt.h"
+#include "api/compute/experimental/mul_reduce_scalar.h"
+#include "api/compute/experimental/pack_block.h"
+#include "api/compute/experimental/rmsnorm.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
@@ -49,6 +57,106 @@ void pack_params_outputs(
     }
 }
 
+// The fused collapsed RMSNorm's last step (as compute_sharded_rmsnorm.cpp's): src[src_start .. + num_tiles) times
+// the scalar scale[0][0] and gamma[src_start .. + num_tiles), packed into out_cb. num_tiles fp32 tiles fit in Dst.
+template <uint32_t num_tiles>
+ALWI void scale_norm_chunk(uint32_t src_cb, uint32_t src_start, uint32_t scale_cb, uint32_t gamma_cb, uint32_t out_cb) {
+    reconfig_data_format(scale_cb, scale_cb);
+    tile_regs_acquire();
+    copy_init(scale_cb);
+    copy_tile(scale_cb, 0, 0);
+    reconfig_data_format_srca(scale_cb, src_cb);
+    rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<EltwiseBinaryType::ELWMUL, num_tiles, MathFidelity::HiFi4>(src_cb);
+    rmsnorm_bcast_scalar_reuse_tiles_fidelity<EltwiseBinaryType::ELWMUL, num_tiles, MathFidelity::HiFi4, true>(
+        src_cb, src_start, 0, 0);
+    reconfig_data_format(gamma_cb, gamma_cb);
+    mul_reuse_dest_init_fidelity<EltwiseBinaryReuseDestType::DEST_TO_SRCA, MathFidelity::HiFi4>(gamma_cb);
+    for (uint32_t k = 0; k < num_tiles; ++k) {
+        mul_reuse_dest_tiles_fidelity<EltwiseBinaryReuseDestType::DEST_TO_SRCA, MathFidelity::HiFi4>(
+            gamma_cb, src_start + k, k);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_block_contiguous(0, out_cb, num_tiles);
+    tile_regs_release();
+}
+
+// RMSNorm(collapsed row) * gamma over the collapse cores (see FusedSingleUserInputs::collapsed_norm_weight), on
+// this core's num_chunks h x 32 tiles of the row in cb_x: sum(x^2) into cb_stat, which the norm writer swaps with
+// the other collapse cores into cb_gather; then rsqrt(sum / D + eps) into cb_scale, and x * scale * gamma into
+// cb_out. Each step reconfigures the formats it uses (the row is BFLOAT16, the statistics Float32).
+template <uint32_t num_chunks, uint32_t num_cores, uint32_t inv_d_bits, uint32_t eps_bits>
+ALWI void collapsed_rmsnorm(
+    uint32_t cb_x, uint32_t cb_gamma, uint32_t cb_stat, uint32_t cb_gather, uint32_t cb_scale, uint32_t cb_out) {
+    // 1. sum(x^2) over the core's row into cb_stat[0][0].
+    cb_wait_front(cb_x, num_chunks);
+    cb_reserve_back(cb_stat, 1);
+    reconfig_data_format(cb_x, cb_x);
+    pack_reconfig_data_format(cb_stat);
+    tile_regs_acquire();
+    fill_tile_init();
+    fill_tile(0, 0.0F);
+    mul_reduce_scalar_init_fidelity<MathFidelity::HiFi4>(cb_x, cb_x);
+    mul_reduce_scalar_tile_fidelity<MathFidelity::HiFi4, MathFidelity::HiFi4, true>(
+        cb_x, cb_x, cb_stat, num_chunks, 1.0F, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_stat);
+    mul_reduce_scalar_uninit();
+    tile_regs_release();
+    cb_push_back(cb_stat, 1);
+
+    // 2. Every collapse core's partial, summed in fp32, then rsqrt(sum * (1/D) + eps).
+    cb_wait_front(cb_gather, num_cores);
+    cb_reserve_back(cb_scale, 1);
+    reconfig_data_format(cb_gather, cb_gather);
+    pack_reconfig_data_format(cb_scale);
+    tile_regs_acquire();
+    copy_init(cb_gather);
+    copy_tile(cb_gather, 0, 0);
+    for (uint32_t c = 1; c < num_cores; ++c) {
+        copy_init(cb_gather);
+        copy_tile(cb_gather, c, 1);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+    }
+    add_rsqrt_tile_init();
+    add_rsqrt_tile<false, VectorMode::RC_custom, 1, false, inv_d_bits>(0, eps_bits);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, cb_scale);
+    tile_regs_release();
+    cb_push_back(cb_scale, 1);
+    cb_pop_front(cb_gather, num_cores);
+
+    // 3. x * scale * gamma, at most four fp32 tiles at a time.
+    cb_wait_front(cb_scale, 1);
+    cb_wait_front(cb_gamma, num_chunks);
+    cb_reserve_back(cb_out, num_chunks);
+    pack_reconfig_data_format(cb_out);
+    pack_block_contiguous_init(cb_out);
+    for (uint32_t t = 0; t < num_chunks;) {
+        const uint32_t rem = num_chunks - t;
+        if (rem >= 4) {
+            scale_norm_chunk<4>(cb_x, t, cb_scale, cb_gamma, cb_out);
+            t += 4;
+        } else if (rem == 3) {
+            scale_norm_chunk<3>(cb_x, t, cb_scale, cb_gamma, cb_out);
+            t += 3;
+        } else if (rem == 2) {
+            scale_norm_chunk<2>(cb_x, t, cb_scale, cb_gamma, cb_out);
+            t += 2;
+        } else {
+            scale_norm_chunk<1>(cb_x, t, cb_scale, cb_gamma, cb_out);
+            t += 1;
+        }
+    }
+    cb_push_back(cb_out, num_chunks);
+    cb_pop_front(cb_scale, 1);
+    cb_pop_front(cb_gamma, num_chunks);
+    cb_pop_front(cb_x, num_chunks);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -76,6 +184,16 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t cb_mix_w = get_compile_time_arg_val(18);
     [[maybe_unused]] constexpr uint32_t cb_mix_sub = get_compile_time_arg_val(19);
     [[maybe_unused]] constexpr uint32_t cb_mixed = get_compile_time_arg_val(20);
+    // The fused collapsed RMSNorm (role 0, ROW_MAJOR streams): see collapsed_rmsnorm.
+    constexpr bool fuse_norm = get_compile_time_arg_val(21) != 0;
+    [[maybe_unused]] constexpr uint32_t cb_norm_gamma = get_compile_time_arg_val(22);
+    [[maybe_unused]] constexpr uint32_t cb_norm_stat = get_compile_time_arg_val(23);
+    [[maybe_unused]] constexpr uint32_t cb_norm_gather = get_compile_time_arg_val(24);
+    [[maybe_unused]] constexpr uint32_t cb_norm_scale = get_compile_time_arg_val(25);
+    [[maybe_unused]] constexpr uint32_t cb_norm_out = get_compile_time_arg_val(26);
+    [[maybe_unused]] constexpr uint32_t norm_inv_d_bits = get_compile_time_arg_val(27);
+    [[maybe_unused]] constexpr uint32_t norm_eps_bits = get_compile_time_arg_val(28);
+    [[maybe_unused]] constexpr uint32_t norm_num_cores = get_compile_time_arg_val(29);
 
     if constexpr (role == 0) {
         // Every tile the row-major collapse handles (parameters, pre, hidden, collapsed row) is h x 32.
@@ -180,6 +298,11 @@ void kernel_main() {
             cb_pop_front(cb_hidden, collapse_tiles);
         }
         cb_pop_front(cb_pre, 1);
+        if constexpr (fuse_norm) {
+            static_assert(!fuse_norm || hidden_row_major, "the fused collapsed RMSNorm takes ROW_MAJOR streams");
+            collapsed_rmsnorm<collapse_tiles, norm_num_cores, norm_inv_d_bits, norm_eps_bits>(
+                cb_collapsed, cb_norm_gamma, cb_norm_stat, cb_norm_gather, cb_norm_scale, cb_norm_out);
+        }
     } else if constexpr (role == 1) {
         compute_kernel_hw_startup(cb_params, cb_post_out);
         load_params(cb_params);
