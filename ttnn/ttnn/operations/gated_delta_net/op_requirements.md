@@ -729,7 +729,7 @@ multicast to the state cores (removes 48 cores' reads of the same a / b / A_log 
 the top rows, and ~1 us of SFPU per state core); one conv window of the 4 columns on the q / k cores (staging 1.4 ->
 conv 3.4 us). Not done here: each is a new hand-off or CB layout and the target is met.
 
-### [ ] Refinement 19 — Decode B=16: state reads issued earlier (second producer on the writer RISC)
+### [x] Refinement 19 — Decode B=16: state reads issued earlier (second producer on the writer RISC)
 
 **Type**: perf
 
@@ -752,3 +752,19 @@ its write is issued); next-program test green.
 **Done when**: model_decode_b16 is below 68 us and model_decode_b8 not worse (median of 11 after
 launch 1), or the trace shows the reads cannot be issued earlier and why; golden green, no regression
 on the guard set.
+
+**Outcome**: S0_WRITER (writer RISC reads every unit's S0 into cb_state_in, single producer per core; reader none) is
+implemented, bit-identical in 4 variants x B = 1 / 8 / 16 / 27 x new / in place, and parked off: every variant is
+slower. Device us, median of launches 2..12, B=16 / B=8: off 73.4 / 40.6; issued after the window zeroing 79.3 / 45.0
+(issued before it 82.8 / 46.6: the zeroing queued behind S0 and stalled the reader's window); after the reader's first
+inputs land 85.0 / 47.0; with the NoCs swapped so S0 keeps its SWAP_NOC_ROWS NoC 90.3 / 48.9; on the late rows (NoC
+y = 5-6) only 84.4-84.8 / 45.1-45.7; B=1 12.95 -> 13.7-15.2. Why: with S0 off the reader the late rows' weights / gate
+rows do land early (5-15 us instead of 17-30), but S0 then rides the writer's NoC, the one SWAP_NOC_ROWS tuned against
+for that row, and lands at 38-51 us; swapping the NoCs back moves the small reads and the state writes instead. Per-tensor
+marks show the late rows' every small read (norm_weight, conv_weight, A_log / dt_bias, b / a) lands at 15-30 us although
+issued at 1-2 us, and the R17 NoC trace shows each row's small reads converge on one DRAM endpoint (page 0 of every
+small tensor is in bank 0): the late cores lose a DRAM-bank race against the other cores' S0 bulk, not a RISC-issue race,
+so issuing S0 earlier on any RISC adds to the queue they wait in. Next: take the hot bank out of the small reads (A_log,
+dt_bias and the b / a gate rows once per call on the q / k cores, multicast with qn / kn, as refinement 18 suggests for
+B=1), or hold every core's S0 until all cores' small reads have landed (one cross-core gate); not tried here, both are
+scheme changes beyond this heading.

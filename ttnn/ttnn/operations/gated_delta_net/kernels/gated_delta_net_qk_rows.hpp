@@ -70,6 +70,24 @@ FORCE_INLINE uint32_t state_out_page(uint32_t first_page, uint32_t j, uint32_t s
     return first_page + (i / Vb) * Vt + i % Vb;
 }
 
+// Issues the Kt x Vb slice (columns v_first..) of pair `pair`'s S0 into dst, from tile (pair * stagger) mod Kt Vb on so
+// that cores starting together spread over the banks; a read barrier after every `per_barrier` tiles but the last
+// (the caller completes the rest).
+template <uint32_t Kt, uint32_t Vt, uint32_t Vb, uint32_t TILE_BYTES, typename Accessor>
+FORCE_INLINE void read_state_slice(
+    const Accessor& state, uint32_t dst, uint32_t pair, uint32_t v_first, uint32_t stagger, uint32_t per_barrier) {
+    constexpr uint32_t n = Kt * Vb;
+    const uint32_t rot = (pair * stagger) % n;
+    for (uint32_t k = 0; k < n; ++k) {
+        const uint32_t i = k + rot < n ? k + rot : k + rot - n;
+        const uint32_t page = pair * Kt * Vt + (i / Vb) * Vt + v_first + i % Vb;
+        noc_async_read(state.get_noc_addr(page), dst + i * TILE_BYTES, TILE_BYTES);
+        if ((k + 1) % per_barrier == 0 && k + 1 < n) {
+            noc_async_read_barrier();
+        }
+    }
+}
+
 // Final-state tile j of a core's unit_idx-th unit is the reader's when the unit is one of its first reader_units, or
 // j % share == share - 1 (share 0: none, 1: all). Both are per-core runtime args.
 FORCE_INLINE bool state_tile_on_reader(uint32_t unit_idx, uint32_t j, uint32_t reader_units, uint32_t share) {

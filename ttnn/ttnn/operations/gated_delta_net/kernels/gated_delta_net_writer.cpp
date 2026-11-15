@@ -27,6 +27,8 @@ namespace {
 
 // CB indices and GDN_* spec constants are host defines (gated_delta_net_program_descriptor.py).
 constexpr uint32_t cb_state_out = GDN_CB_STATE_OUT;
+constexpr uint32_t cb_state_in = GDN_CB_STATE_IN;
+constexpr uint32_t cb_state_in_mm = GDN_CB_STATE_IN_MM;
 constexpr uint32_t cb_gates = GDN_CB_GATES;
 constexpr uint32_t cb_tok_coef = GDN_CB_TOK_COEF;
 constexpr uint32_t cb_out_rows = GDN_CB_OUT_ROWS;
@@ -408,6 +410,8 @@ void kernel_main() {
     constexpr auto kr_channel = dataflow_kernel_lib::
         McastArgs<get_named_compile_time_arg_val("qkkr_ct_offset"), get_named_compile_time_arg_val("qkkr_rt_offset")>();
     constexpr auto state_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto state_in_args =
+        TensorAccessorArgs<state_out_args.next_compile_time_args_offset()>();
 
     // Buffer addresses are common runtime args (see the reader).
     const auto out_acc = TensorAccessor(out_args, get_common_arg_val<uint32_t>(0), OUT_TILE_BYTES);
@@ -447,7 +451,8 @@ void kernel_main() {
         }
     }
     // STATE_SPLIT: the reader's final-state tiles (gdn::state_tile_on_reader).
-    const bool split_args = STATE_SPLIT && !QK_CORE && !PREP && !PREP_QK && !STATE;
+    constexpr bool split_args_role = !QK_CORE && !PREP && !PREP_QK && !STATE;  // R-QKCORE pair / local cores
+    const bool split_args = STATE_SPLIT && split_args_role;
     const uint32_t reader_units = split_args ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t reader_share = split_args ? get_arg_val<uint32_t>(arg++) : 0;
     const bool reader_writes = reader_units != 0 || reader_share != 0;
@@ -464,6 +469,34 @@ void kernel_main() {
             cb_reserve_back(cb_window_zeroed, 1);
             cb_push_back(cb_window_zeroed, 1);
         }
+    }
+
+    // S0_WRITER: this RISC, idle until the first gates, reads every unit's S0 on its own NoC after the window zeroing
+    // (or, AFTER_INPUTS, once the reader's first weights / gate rows have landed); the host sets it only where
+    // cb_state_in holds every unit. Unit u's reads carry transaction id u + 1; its S0 goes to compute after the unit's
+    // coefficients and q / k rows.
+    const bool s0_by_writer = GDN_S0_WRITER && split_args_role && get_arg_val<uint32_t>(arg++) != 0;
+    if (s0_by_writer) {
+        const auto state_in = TensorAccessor(state_in_args, get_common_arg_val<uint32_t>(2), STATE_TILE_BYTES);
+        if constexpr (GDN_S0_WRITER_AFTER_INPUTS) {
+            cb_wait_front(GDN_CB_S0_GO, 1);
+            cb_pop_front(GDN_CB_S0_GO, 1);
+        }
+        cb_reserve_back(cb_state_in, num_units * n_state);
+        cb_reserve_back(cb_state_in_mm, num_units * n_state);
+        const uint32_t dst = get_write_ptr(cb_state_in);
+        for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
+            const uint32_t unit = first_unit + unit_idx * unit_stride;
+            noc_async_read_set_trid(unit_idx + 1);
+            gdn::read_state_slice<Kt, Vt, Vb, STATE_TILE_BYTES>(
+                state_in,
+                dst + unit_idx * n_state * STATE_TILE_BYTES,
+                unit / PIECES,
+                (unit % PIECES) * Vb,
+                STATE_STAGGER,
+                n_state);
+        }
+        noc_async_read_set_trid(0);
     }
 
     if constexpr (CHUNKED && !STATE && !PREP_QK) {
@@ -630,6 +663,13 @@ void kernel_main() {
             if (lands && !land_early) {
                 land_qk_rows(q_channel, k_channel, qk_role, Kt, unit_idx == 0);
                 GDN_MARK("m_wr_landed");
+            }
+            if (s0_by_writer) {
+                // After the unit's coefficients and q / k rows: compute uses those before S0.
+                noc_async_read_barrier_with_trid(unit_idx + 1);
+                cb_push_back(cb_state_in, n_state);
+                cb_push_back(cb_state_in_mm, n_state);
+                GDN_MARK("m_wr_s0");
             }
             if constexpr (QK_RAW) {
                 // One unit per core (QK_CORES_VSPLIT): the inverse norms of its key head, once.

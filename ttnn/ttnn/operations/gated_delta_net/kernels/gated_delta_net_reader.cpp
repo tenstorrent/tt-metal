@@ -339,15 +339,8 @@ void kernel_main() {
     // The piece's Kt x Vb slice of pair `pair`'s S0 into `dst`; the caller barriers.
     // Tiles from (pair * STATE_STAGGER) mod n_state on, so that cores starting together spread over the banks.
     auto read_s0 = [&](uint32_t dst, uint32_t pair, uint32_t v_first) {
-        const uint32_t rot = (pair * GDN_STATE_STAGGER) % n_state;
-        for (uint32_t k = 0; k < n_state; ++k) {
-            const uint32_t i = k + rot < n_state ? k + rot : k + rot - n_state;
-            const uint32_t page = pair * Kt * Vt + (i / Vb) * Vt + v_first + i % Vb;
-            noc_async_read(state.get_noc_addr(page), dst + i * STATE_TILE_BYTES, STATE_TILE_BYTES);
-            if ((k + 1) % S0_READ_TILES == 0 && k + 1 < n_state) {
-                noc_async_read_barrier();
-            }
-        }
+        gdn::read_state_slice<Kt, Vt, Vb, STATE_TILE_BYTES>(
+            state, dst, pair, v_first, GDN_STATE_STAGGER, S0_READ_TILES);
     };
 
     Noc noc;
@@ -489,6 +482,8 @@ void kernel_main() {
     }
     const uint32_t reader_units = STATE_SPLIT ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t reader_share = STATE_SPLIT ? get_arg_val<uint32_t>(arg++) : 0;
+    // S0_WRITER: the writer reads this core's S0 (every unit's) on its own NoC, this RISC none.
+    const bool s0_by_writer = GDN_S0_WRITER && get_arg_val<uint32_t>(arg++) != 0;
 
     uint32_t kq_rows_landed = 0;  // PREP_SHARE_QK prep core: tile rows of qn / kn handed to compute
     uint32_t prev_head = 0xffffffffu;
@@ -548,7 +543,7 @@ void kernel_main() {
                 }
             };
             const bool prefetch = DECODE && !STATE && pass == 0;
-            const bool early_s0 = EARLY_S0 && !PREP && prefetch;
+            const bool early_s0 = EARLY_S0 && !PREP && prefetch && !s0_by_writer;
             if (prefetch) {
                 noc_async_read_set_trid(WINDOW_TRID);
                 for (uint32_t col = 0; col < group_cols; ++col) {
@@ -835,6 +830,10 @@ void kernel_main() {
                                 noc_async_read_barrier_with_trid(INPUTS_TRID);  // weights and gate rows
                                 GDN_MARK("m_rd_inputs");
                                 noc_async_read_set_trid(0);
+                                if (GDN_S0_WRITER_AFTER_INPUTS && s0_by_writer && unit_idx == 0) {
+                                    cb_reserve_back(GDN_CB_S0_GO, 1);
+                                    cb_push_back(GDN_CB_S0_GO, 1);
+                                }
                                 rows.finish_staged();
                             }
                             if (weights_pending) {
@@ -881,7 +880,7 @@ void kernel_main() {
                     }
                     // ---- S0 of the piece (Kt x Vb slice of the pair state), after the first tile row's prep inputs
                     // ----
-                    if (tr == first_tr && !PREP && !PREP_QK && !STATE) {
+                    if (tr == first_tr && !PREP && !PREP_QK && !STATE && !s0_by_writer) {
                         if (early_s0) {
                             noc_async_read_barrier_with_trid(S0_TRID);
                         } else {

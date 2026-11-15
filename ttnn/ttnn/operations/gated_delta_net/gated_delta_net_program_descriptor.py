@@ -169,6 +169,20 @@ STATE_STAGGER = 3
 # Decode: a unit's S0 read issued with its window rows (own transaction id) instead of after the weights / gate rows.
 # Measured with the NoC swap at B=8 / B=16: 44.7 / 75 us on vs 42.8 / 74.4 off, so off (0).
 EARLY_S0 = 0
+# R-QKCORE pair cores whose every unit's S0 fits cb_state_in (STATE_IN_DEPTH): the writer RISC, idle until the first
+# gates, reads S0 (every unit's at once, one transaction id each) on its NoC instead of the reader after each unit's
+# window, weights and gate rows. Off: it moves S0 to the other NoC, which the SWAP_NOC_ROWS tuning picked against.
+# Decode B=16 / B=8 (median of launches 2..12), off 73.4 / 40.6 us; on, issued after the window zeroing 79.3 / 45.0,
+# after the reader's first inputs 85.0 / 47.0 (the late rows' weights / gates then land at 5-15 us instead of 17-30, but
+# their S0 at 38-51 us), with KEEP_NOC 90.3 / 48.9, rows 3-4 only 84.4-84.8 / 45.1-45.7. B=1 12.95 -> 13.7-14.2.
+S0_WRITER = False
+# S0_WRITER: the writer issues S0 once the reader's first unit's weights and gate rows have landed (reader-to-writer
+# token, CB_S0_GO) instead of right after the window zeroing.
+S0_WRITER_AFTER_INPUTS = True
+# S0_WRITER: on its cores the reader and writer swap NoCs relative to SWAP_NOC_ROWS, so S0 keeps the NoC picked for it.
+S0_WRITER_KEEP_NOC = False
+# S0_WRITER: the logical rows whose pair cores take it (None: every row).
+S0_WRITER_ROWS = None
 # Finished pair states awaiting the writer, at most unit_depth: the writer issues a core's non-last state after the next
 # unit's coefficients, so compute's next update must not wait for it.
 STATE_OUT_DEPTH = 2
@@ -264,6 +278,7 @@ CB_V_PREP = 49
 CB_ZW = 50  # R-PREP prep core: norm_weight (*)row silu(z) of its rows, ahead of the o that the RMS norm scales
 CB_STATE_DONE = 51  # STATE_SPLIT: reader-to-writer token per final state, once the reader's tiles of it have left
 CB_RINV_IN = 52  # QK_RAW_HANDOFF: the landed inverse norms of k (tile 0) and q (tile 1), column 0 per token row
+CB_S0_GO = 53  # S0_WRITER_AFTER_INPUTS: reader-to-writer token, the first unit's weights and gate rows have landed
 NUM_CB_SLOTS = 64
 SIGNAL_PAGE_BYTES = 32  # one-page handshake CB
 OSUM_SEM_ID = 0  # R-VSPLIT: partial sums o^2 that have landed from peer pieces (cumulative count)
@@ -917,8 +932,9 @@ def reader_addresses(inputs, outputs):
     return [t.buffer_address() for t in inputs] + [outputs[1].buffer_address(), outputs[2].buffer_address()]
 
 
-def writer_addresses(outputs):
-    return [outputs[0].buffer_address(), outputs[2].buffer_address()]
+def writer_addresses(inputs, outputs):
+    # recurrent_state last: read by the writer under S0_WRITER.
+    return [outputs[0].buffer_address(), outputs[2].buffer_address(), inputs[5].buffer_address()]
 
 
 def _mcast_rects(device, cores):
@@ -1319,6 +1335,25 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         return count - 1 if qk_cores and STATE_READER_EARLY_UNITS and count <= out_states else 0
 
     state_split = any(reader_share(c, n) or reader_units(n) for c, _, n, _ in assignment)
+
+    def s0_writer(core, count):
+        """The writer reads the core's S0 (S0_WRITER): R-QKCORE pair cores whose units' S0 all fit cb_state_in."""
+        row = S0_WRITER_ROWS is None or core.y in S0_WRITER_ROWS
+        return int(bool(qk_cores) and S0_WRITER and row and count <= min(STATE_IN_DEPTH, unit_depth))
+
+    s0_writer_any = prep is None and any(s0_writer(c, n) for c, _, n, _ in assignment)
+    if s0_writer_any and S0_WRITER_AFTER_INPUTS:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=SIGNAL_PAGE_BYTES,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_S0_GO, data_format=ttnn.bfloat16, page_size=SIGNAL_PAGE_BYTES
+                    )
+                ],
+            )
+        )
     if state_split:
         cbs.append(
             ttnn.CBDescriptor(
@@ -1349,7 +1384,9 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     geometry_ct = [token_tile_bytes, FP32_TILE_BYTES]
     reader_accessor_ct = [arg for t in reader_tensors for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
     writer_accessor_ct = [
-        arg for t in (output, recurrent_state_out) for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        arg
+        for t in (output, recurrent_state_out, inputs[5])
+        for arg in ttnn.TensorAccessorArgs(t).get_compile_time_args()
     ]
 
     def role_ct(role):
@@ -1417,6 +1454,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             group_first = first_unit - first_unit % (heads * pieces)
             producers = [len(group_producers[group_first]) // 2] + group_producers[group_first]
         share = [reader_units(count), reader_share(core, count)] if state_split else []
+        share += [s0_writer(core, count)] if s0_writer_any else []
         rts[0][core.x, core.y] = (
             [first_unit, count, tokens, role, zero_slots] + rows + producers + cs_args(core) + share
         )
@@ -1515,6 +1553,8 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         ("GDN_UNIT_LAG", str(int(prep is None and unit_lag(unit_depth)))),
         ("GDN_STATE_STAGGER", str(STATE_STAGGER if qk_cores else 0)),
         ("GDN_STATE_SPLIT", str(int(state_split))),
+        ("GDN_S0_WRITER", str(int(s0_writer_any))),
+        ("GDN_S0_WRITER_AFTER_INPUTS", str(int(S0_WRITER_AFTER_INPUTS))),
         ("GDN_CS_IN_PLACE", str(int(cs_in_place))),
         ("GDN_PROFILE_ZONES", str(0 if _noc_tracing() else int(PROFILE_ZONES))),
     ]
@@ -1546,8 +1586,13 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             # Decode R-QKCORE: every pair core reads its S0 at once. NOC 0 brings read responses south, around the
             # torus for the top rows, which then lose to the lower rows' traffic; NOC 1 brings them north. The pair
             # cores in the top SWAP_NOC_ROWS rows read on NOC 1 and write on NOC 0.
-            top = [c for c in cores if c.y < SWAP_NOC_ROWS]
-            kernel_groups += [(role, top, True), (role, [c for c in cores if c.y >= SWAP_NOC_ROWS], False)]
+            # S0_WRITER_KEEP_NOC: on the rows where S0 is the writer's, the writer takes the NoC the reader would have.
+            def swapped(c):
+                s0_by_writer = s0_writer_any and S0_WRITER_KEEP_NOC and roles[role][1][c.x, c.y][-1]
+                return (c.y < SWAP_NOC_ROWS) != bool(s0_by_writer)
+
+            kernel_groups += [(role, [c for c in cores if swapped(c)], True)]
+            kernel_groups += [(role, [c for c in cores if not swapped(c)], False)]
         elif role in (ROLE_PREP, ROLE_PREP_QK) and PREP_SEND_NOC == "auto":
             # Each prep core writes on the NoC with the shorter paths to its state cores (NOC 0 routes toward higher x
             # and y, NOC 1 toward lower, both around the torus); the reader takes the other one.
@@ -1600,7 +1645,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             core_ranges=ranges,
             compile_time_args=writer_ct,
             runtime_args=writer_rt,
-            common_runtime_args=writer_addresses(outputs),
+            common_runtime_args=writer_addresses(inputs, outputs),
             named_compile_time_args=role_label,
             defines=group_defines,
             config=writer_config,
@@ -1697,7 +1742,7 @@ def cached_program_descriptor(key, inputs, outputs, *, epsilon, compute_kernel_c
         return descriptor
     _program_cache.move_to_end(key)
     descriptor, readers, writers = entry
-    reader_args, writer_args = reader_addresses(inputs, outputs), writer_addresses(outputs)
+    reader_args, writer_args = reader_addresses(inputs, outputs), writer_addresses(inputs, outputs)
     for kernel in readers:
         kernel.common_runtime_args = reader_args
     for kernel in writers:
