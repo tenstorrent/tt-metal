@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""perf_decode_b1 config (feature_spec.LOOSE_CASES[0]): correctness gate plus a fixed launch count
-for `run_safe_pytest.sh --profile` device-kernel-time measurement."""
+"""perf_decode_b1 (feature_spec.LOOSE_CASES[0]) and one shape per kernel path (fp32 / bf16 decode, decode
+with shared tile rows, prefill over several tile rows, batched prefill): a correctness gate plus a fixed
+launch count for `run_safe_pytest.sh --profile` device-kernel-time measurement."""
 
 import pytest
 import torch
@@ -15,26 +16,44 @@ from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net impor
     make_inputs,
     reference,
 )
-from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_bf16 import _rel_metrics, _to_device
+from tests.ttnn.unit_tests.operations.gated_delta_net.test_gated_delta_net_bf16 import _rel_metrics
 
 LAUNCHES = 3
 
 
+def _to_device(tensors, device, token_dtype):
+    return [
+        ttnn.from_torch(
+            tensors[name],
+            dtype=ttnn.float32 if name == "recurrent_state" else token_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for name in ORDER
+    ]
+
+
 @pytest.mark.parametrize(
-    "inputs",
+    "inputs, token_dtype",
     [
-        pytest.param(((1, 1, 2560), (1, 12, 128, 128)), id="perf_decode_b1"),
-        pytest.param(((1, 8, 2560), (8, 12, 128, 128)), id="model_decode_b8"),
+        pytest.param(((1, 1, 2560), (1, 12, 128, 128)), ttnn.bfloat16, id="perf_decode_b1"),
+        pytest.param(((1, 8, 2560), (8, 12, 128, 128)), ttnn.bfloat16, id="model_decode_b8"),
+        pytest.param(((1, 16, 2560), (16, 12, 128, 128)), ttnn.bfloat16, id="model_decode_b16"),
+        pytest.param(((1, 1, 2560), (1, 12, 128, 128)), ttnn.float32, id="decode_b1_f32"),
+        pytest.param(((1, 96, 2560), (1, 12, 128, 128)), ttnn.bfloat16, id="prefill_t96"),
+        pytest.param(((1, 80, 2560), (2, 12, 128, 128)), ttnn.bfloat16, id="batched_b2_t40"),
     ],
 )
-def test_perf_decode(device, inputs):
+def test_perf_decode(device, inputs, token_dtype):
     torch.manual_seed(0)
     tensors = make_inputs(inputs)
-    for name in ORDER:
-        if name != "recurrent_state":
-            tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
+    if token_dtype == ttnn.bfloat16:
+        for name in ORDER:
+            if name != "recurrent_state":
+                tensors[name] = tensors[name].to(torch.bfloat16).to(torch.float32)
     expected = reference(*(tensors[name] for name in ORDER))
-    device_inputs = _to_device(tensors, device, None)
+    device_inputs = _to_device(tensors, device, token_dtype)
     for _ in range(LAUNCHES):
         out, cs, rs = gated_delta_net(*device_inputs, compute_kernel_config=compute_config())
     out_t, cs_t, rs_t = (ttnn.to_torch(t).to(torch.float32) for t in (out, cs, rs))

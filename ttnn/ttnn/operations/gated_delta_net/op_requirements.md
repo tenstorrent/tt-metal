@@ -59,7 +59,7 @@ the LOOSE_CASES `perf_decode_b1`, `model_decode_b8`, `model_decode_b16`, `model_
 **Done when**: every `dtype=bfloat16` golden cell and bf16 LOOSE_CASE passes; float32 cells unchanged;
 `verify_supported` shows 0 loud categories.
 
-### [ ] Refinement 2 — Cut the per-pair fixed cost of perf_decode_b1
+### [x] Refinement 2 — Cut the per-pair fixed cost of perf_decode_b1
 
 **Type**: perf
 
@@ -103,6 +103,27 @@ RMS 0.01) still hold, the golden suite is green, and there is no regression acro
 config-spanning guard set (one representative per distinct kernel path: decode B=1, decode B>1 with
 shared tile rows, prefill single tile row, prefill multi tile row, batched_prefill; float32 and
 bfloat16).
+
+**Outcome**: perf_decode_b1 (bf16 config) 101.6 us -> 42.1 us device kernel time (2.4x, 12 cores);
+guard set all faster (decode B=8 127.8 -> 87.3, B=16 264.5 -> 172.0, fp32 decode B=1 105.0 -> 62.6,
+bf16 prefill T=96 2150 -> 1714, batched B=2 T=40 1016 -> 833 us). Levers that landed: FPU conv for
+bf16 tokens (4 row-broadcast ELWMULs accumulated in one DEST tile on raw conv_weight tiles, no tap
+expansion); band-scoped SFPU (the 4-row band holding the token rows: silu, gates chain, squares,
+rsqrt post-op, column/row broadcasts, binaries); scalar alpha (read_tile_value) for the state decay
+and the u term, which also lets the update batch fill DEST (4 vs 3 tiles); one unpack init per format
+run instead of per CB; reader window assembly per window group (gcd(Kt, Vt) columns) with one flush
+per group, the window zeroed once by the idle writer and re-zeroed only when a slot's dirty rows are
+not covered; conv_state_out copy batched 10 columns per flush. Parked as knobs: DST_FULL_SYNC (measured
+54.5 vs 53.2 us, loses math/pack overlap) and CONV_ON_FPU ("auto" = bf16 only; fp32 operands would be
+truncated to 19 bits). Measured null and reverted: RISC word copies of staged rows (49.0 vs 43.1 us,
+NCRISC L1 loads cost more than a NoC copy + barrier). Where the time is now (per-core zones, B=1):
+reader window assembly ~10 us before the conv can finish (32 staged 64 B row reads + L1 shifts per
+group, round-trip bound), then a serial compute chain of L2 norm ~7 us, token step ~12 us (u/o windows
+5.4, state update 4.7, read matmul 1.7), RMS norm ~5 us, writer state drain ~2.6 us. Next levers:
+spread each pair over cores (Refinement 3, R-VSPLIT, 98 of 110 cores idle at B=1), coalesce the
+history-row reads (3 contiguous rows per face in one aligned read), and fuse the u and o windows.
+Not done here: R-VSPLIT is its own queued refinement, and the remaining per-window costs are now
+fixed init/unpack overheads that a cross-core split divides directly.
 
 ### [ ] Refinement 3 — R-VSPLIT: spread each pair's state columns across cores for perf_decode_b1
 
