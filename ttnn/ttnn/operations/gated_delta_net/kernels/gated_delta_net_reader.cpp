@@ -14,7 +14,6 @@
 // staging) unless the pair owns the whole tile row.
 
 #include <stdint.h>
-#include "api/debug/kernel_profiler.hpp"
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
@@ -202,7 +201,6 @@ void kernel_main() {
     bool window_zeroing = true;
     RowReader rows(STAGE_SLOTS == 0 ? 0 : get_write_ptr(cb_row_stage));
 
-    DeviceZoneScopedN("R_SCALER");
     dataflow_kernel_lib::
         prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
 
@@ -221,36 +219,33 @@ void kernel_main() {
             return 2 * Hk * Kt + head * Vt + (idx - 2 * Kt);
         };
 
-        {
-            DeviceZoneScopedN("R_PAIR");
-            // ---- load_pair_block ----
-            cb_reserve_back(cb_conv_w, conv_w_pages);
-            cb_reserve_back(cb_gate_w, 2);
-            cb_reserve_back(cb_norm_w, Vt);
-            const uint32_t conv_w_base = get_write_ptr(cb_conv_w);
-            for (uint32_t idx = 0; idx < pair_cols; ++idx) {
-                const uint32_t ct = pair_col(idx);
-                if constexpr (CONV_W_RAW) {
-                    // Tap j stays at row j; compute broadcasts it by row index.
-                    noc_async_read(conv_w.get_noc_addr(ct), conv_w_base + idx * TILE_BYTES, TILE_BYTES);
-                } else {
-                    for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
-                        rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * idx + tap) * TILE_BYTES, 0);
-                    }
+        // ---- load_pair_block ----
+        cb_reserve_back(cb_conv_w, conv_w_pages);
+        cb_reserve_back(cb_gate_w, 2);
+        cb_reserve_back(cb_norm_w, Vt);
+        const uint32_t conv_w_base = get_write_ptr(cb_conv_w);
+        for (uint32_t idx = 0; idx < pair_cols; ++idx) {
+            const uint32_t ct = pair_col(idx);
+            if constexpr (CONV_W_RAW) {
+                // Tap j stays at row j; compute broadcasts it by row index.
+                noc_async_read(conv_w.get_noc_addr(ct), conv_w_base + idx * TILE_BYTES, TILE_BYTES);
+            } else {
+                for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
+                    rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * idx + tap) * TILE_BYTES, 0);
                 }
             }
-            const uint32_t gate_w_base = get_write_ptr(cb_gate_w);
-            noc_async_read(a_log.get_noc_addr(head / TILE_ROWS), gate_w_base, TILE_BYTES);
-            noc_async_read(dt_bias.get_noc_addr(head / TILE_ROWS), gate_w_base + TILE_BYTES, TILE_BYTES);
-            const uint32_t norm_w_base = get_write_ptr(cb_norm_w);
-            for (uint32_t vt = 0; vt < Vt; ++vt) {
-                noc_async_read(norm_w.get_noc_addr(vt), norm_w_base + vt * TILE_BYTES, TILE_BYTES);
-            }
-            rows.finish();
-            cb_push_back(cb_conv_w, conv_w_pages);
-            cb_push_back(cb_gate_w, 2);
-            cb_push_back(cb_norm_w, Vt);
         }
+        const uint32_t gate_w_base = get_write_ptr(cb_gate_w);
+        noc_async_read(a_log.get_noc_addr(head / TILE_ROWS), gate_w_base, TILE_BYTES);
+        noc_async_read(dt_bias.get_noc_addr(head / TILE_ROWS), gate_w_base + TILE_BYTES, TILE_BYTES);
+        const uint32_t norm_w_base = get_write_ptr(cb_norm_w);
+        for (uint32_t vt = 0; vt < Vt; ++vt) {
+            noc_async_read(norm_w.get_noc_addr(vt), norm_w_base + vt * TILE_BYTES, TILE_BYTES);
+        }
+        rows.finish();
+        cb_push_back(cb_conv_w, conv_w_pages);
+        cb_push_back(cb_gate_w, 2);
+        cb_push_back(cb_norm_w, Vt);
 
         const uint32_t seq_lo = seq * T;
         const uint32_t seq_hi = seq_lo + T;
@@ -261,100 +256,79 @@ void kernel_main() {
             const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
-            {
-                DeviceZoneScopedN("R_GATE");
-                // ---- gate inputs: b, a tiles of the gate column ----
-                cb_reserve_back(cb_gate_in, 2);
-                const uint32_t gate_in_base = get_write_ptr(cb_gate_in);
-                const uint32_t gate_page = tr * Gt + head / TILE_ROWS;
-                noc_async_read(b_acc.get_noc_addr(gate_page), gate_in_base, TILE_BYTES);
-                noc_async_read(a_acc.get_noc_addr(gate_page), gate_in_base + TILE_BYTES, TILE_BYTES);
-                noc_async_read_barrier();
-                cb_push_back(cb_gate_in, 2);
-            }
-            {
-                DeviceZoneScopedN("R_WIN");
+            // ---- gate inputs: b, a tiles of the gate column ----
+            cb_reserve_back(cb_gate_in, 2);
+            const uint32_t gate_in_base = get_write_ptr(cb_gate_in);
+            const uint32_t gate_page = tr * Gt + head / TILE_ROWS;
+            noc_async_read(b_acc.get_noc_addr(gate_page), gate_in_base, TILE_BYTES);
+            noc_async_read(a_acc.get_noc_addr(gate_page), gate_in_base + TILE_BYTES, TILE_BYTES);
+            noc_async_read_barrier();
+            cb_push_back(cb_gate_in, 2);
 
-                // ---- conv window: X_j[p] = xx[row(p) + j - 3], WINDOW_GROUP_COLS column tiles per hand-off ----
-                // Per group: one zero fill, one flush of every DRAM row read (current rows + history rows),
-                // then one flush of the L1 row shifts that source the current-row tiles. A uniform group
-                // size keeps every reservation contiguous in cb_window (its size is a multiple of a group).
-                constexpr uint32_t group_cols = WINDOW_GROUP_COLS;
-                constexpr uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
-                for (uint32_t group_first = 0; group_first < pair_cols; group_first += group_cols) {
-                    cb_reserve_back(cb_window, group_tiles);
-                    const uint32_t win = get_write_ptr(cb_window);
-                    if (window_zeroing) {
-                        // The writer zeroes the whole buffer at kernel start, off this RISC's critical path.
-                        cb_wait_front(cb_window_zeroed, 1);
-                        cb_pop_front(cb_window_zeroed, 1);
-                        window_zeroing = false;
-                    }
-                    // Rows outside [lo, hi) are other sequences or padding: zero, never sourced.
-                    const uint32_t row_lo = lo - base_row;
-                    const uint32_t row_hi = hi - base_row;
-                    if (dirty_lo[window_slot] < row_lo || dirty_hi[window_slot] > row_hi) {
-                        DeviceZoneScopedN("R_ZERO");
-                        noc.async_write_zeros(window_buf, group_tiles * TILE_BYTES, {.offset_bytes = 0});
-                        noc.write_zeros_l1_barrier();
-                    }
-                    dirty_lo[window_slot] = row_lo;
-                    dirty_hi[window_slot] = row_hi;
-                    window_slot = window_slot + 1 == WINDOW_SLOTS ? 0 : window_slot + 1;
-                    {
-                        DeviceZoneScopedN("R_ISSUE");
-                        for (uint32_t col = 0; col < group_cols; ++col) {
-                            const uint32_t ct = pair_col(group_first + col);
-                            const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
-                            read_tile_rows(
-                                rows,
-                                mixed,
-                                tr * Ct + ct,
-                                base_row,
-                                lo,
-                                hi,
-                                col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
-                            for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
-                                const uint32_t shift = GDN_HISTORY - tap;  // source row = row - shift
-                                const uint32_t remote_hi = hi < lo + shift ? hi : lo + shift;
-                                for (uint32_t row = lo; row < remote_hi; ++row) {
-                                    const uint32_t p = row - base_row;
-                                    const uint32_t tap_tile = col_win + tap * TILE_BYTES;
-                                    if (row >= seq_lo + shift) {
-                                        const uint32_t src = row - shift;
-                                        rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
-                                    } else {
-                                        // History row n = t + tap of sequence seq (t = row - seq_lo).
-                                        const uint32_t src = GDN_HISTORY * seq + (row - seq_lo) + tap;
-                                        rows.read(
-                                            conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    {
-                        DeviceZoneScopedN("R_FIN");
-                        rows.finish();
-                    }
-                    if (hi - lo > 1) {
-                        for (uint32_t col = 0; col < group_cols; ++col) {
-                            const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
-                            const uint32_t cur_tap = col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES;
-                            for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
-                                const uint32_t shift = GDN_HISTORY - tap;
-                                for (uint32_t row = lo + shift; row < hi; ++row) {
-                                    const uint32_t p = row - base_row;
-                                    copy_local_row(cur_tap, p - shift, col_win + tap * TILE_BYTES, p);
-                                }
-                            }
-                        }
-                        noc_async_read_barrier();
-                    }
-                    cb_push_back(cb_window, group_tiles);
+            // ---- conv window: X_j[p] = xx[row(p) + j - 3], WINDOW_GROUP_COLS column tiles per hand-off ----
+            // Per group: one zero fill, one flush of every DRAM row read (current rows + history rows),
+            // then one flush of the L1 row shifts that source the current-row tiles. A uniform group
+            // size keeps every reservation contiguous in cb_window (its size is a multiple of a group).
+            constexpr uint32_t group_cols = WINDOW_GROUP_COLS;
+            constexpr uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
+            for (uint32_t group_first = 0; group_first < pair_cols; group_first += group_cols) {
+                cb_reserve_back(cb_window, group_tiles);
+                const uint32_t win = get_write_ptr(cb_window);
+                if (window_zeroing) {
+                    // The writer zeroes the whole buffer at kernel start, off this RISC's critical path.
+                    cb_wait_front(cb_window_zeroed, 1);
+                    cb_pop_front(cb_window_zeroed, 1);
+                    window_zeroing = false;
                 }
+                // Rows outside [lo, hi) are other sequences or padding: zero, never sourced.
+                const uint32_t row_lo = lo - base_row;
+                const uint32_t row_hi = hi - base_row;
+                if (dirty_lo[window_slot] < row_lo || dirty_hi[window_slot] > row_hi) {
+                    noc.async_write_zeros(window_buf, group_tiles * TILE_BYTES, {.offset_bytes = 0});
+                    noc.write_zeros_l1_barrier();
+                }
+                dirty_lo[window_slot] = row_lo;
+                dirty_hi[window_slot] = row_hi;
+                window_slot = window_slot + 1 == WINDOW_SLOTS ? 0 : window_slot + 1;
+                for (uint32_t col = 0; col < group_cols; ++col) {
+                    const uint32_t ct = pair_col(group_first + col);
+                    const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
+                    read_tile_rows(
+                        rows, mixed, tr * Ct + ct, base_row, lo, hi, col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
+                    for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
+                        const uint32_t shift = GDN_HISTORY - tap;  // source row = row - shift
+                        const uint32_t remote_hi = hi < lo + shift ? hi : lo + shift;
+                        for (uint32_t row = lo; row < remote_hi; ++row) {
+                            const uint32_t p = row - base_row;
+                            const uint32_t tap_tile = col_win + tap * TILE_BYTES;
+                            if (row >= seq_lo + shift) {
+                                const uint32_t src = row - shift;
+                                rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
+                            } else {
+                                // History row n = t + tap of sequence seq (t = row - seq_lo).
+                                const uint32_t src = GDN_HISTORY * seq + (row - seq_lo) + tap;
+                                rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
+                            }
+                        }
+                    }
+                }
+                rows.finish();
+                if (hi - lo > 1) {
+                    for (uint32_t col = 0; col < group_cols; ++col) {
+                        const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
+                        const uint32_t cur_tap = col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES;
+                        for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
+                            const uint32_t shift = GDN_HISTORY - tap;
+                            for (uint32_t row = lo + shift; row < hi; ++row) {
+                                const uint32_t p = row - base_row;
+                                copy_local_row(cur_tap, p - shift, col_win + tap * TILE_BYTES, p);
+                            }
+                        }
+                    }
+                    noc_async_read_barrier();
+                }
+                cb_push_back(cb_window, group_tiles);
             }
-            DeviceZoneScopedN("R_STZ");
             // ---- S0 of the pair, after the first tile row's prep inputs ----
             if (tr == first_tr) {
                 cb_reserve_back(cb_state_in, n_state);
@@ -380,7 +354,6 @@ void kernel_main() {
             cb_push_back(cb_z, Vt);
         }
 
-        DeviceZoneScopedN("R_CS");
         // ---- copy_conv_state_block: conv_state_out[3b + n] = xx[b, T + n] ----
         // Columns are staged HISTORY rows apiece in the rows of one scratch tile: one read flush and one
         // write barrier per CS_COLS_PER_FLUSH columns.

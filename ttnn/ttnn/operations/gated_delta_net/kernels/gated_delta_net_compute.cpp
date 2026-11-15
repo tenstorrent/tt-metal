@@ -24,7 +24,6 @@
 // math thread waits for the SFPU before the FPU accumulates onto SFPU results.
 
 #include <cstdint>
-#include "api/debug/kernel_profiler.hpp"
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
@@ -596,81 +595,73 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
     DataflowBuffer& src_mm_buf = first_in_pair ? bufs.state_in_mm : bufs.state_mm;
 
     // read (5a): [rk; ro] = [kn; qn] x S_{t-1}
-    {
-        DeviceZoneScopedN("Z_MM");
-        cb_wait_front(src, n_state);
-        cb_wait_front(src_mm, n_state);
-        ckl::matmul_block<
-            false,
-            false,
-            ckl::LastBlockTarget::Out,
-            ckl::OutputCBLayout::TileRowMajor,
-            ckl::matmul_config::InitMode::Short,
-            ckl::InputPolicy::WaitAndRetainOnLastBlock,
-            ckl::InputPolicy::NoWaitNoPop>(
-            bufs.kq_rows,
-            src_mm_buf,
-            bufs.reads,
-            bufs.reads,
-            ckl::MatmulBlockShape::of(2, Vt / MM_SUBBLOCK_W, 1, MM_SUBBLOCK_W, Kt, 1));
-    }
-    {
-        DeviceZoneScopedN("Z_UO");
-        // token vector (5b): u = beta_sel (*)col (v - alpha (*)col rk); o = alpha_sel (*)col ro + d (*)col u
-        cb_wait_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
-        cb_wait_front(cb_reads, 2 * Vt);
-        cb_reserve_back(cb_u, Vt);
-        cb_reserve_back(cb_u_f32, Vt);
-        for (uint32_t vt = 0; vt < Vt; ++vt) {
-            tile_regs_acquire();
-            begin_loads(cb_reads);
-            load(cb_reads, vt, 0);
-            load(cb_tok_coef, COEF_ALPHA, 1);
-            load(cb_tok_coef, COEF_BETA_SEL, 3);
-            load(cb_v, vt, 2);
-            sfpu_bcast_col_init();
-            mul_bcast_col_scoped(0, 1, scope);
-            sub_binary_tile_init();
-            binary_scoped<ckernel::BinaryOp::SUB>(2, 0, 2, scope);
-            sfpu_bcast_col_init();
-            mul_bcast_col_scoped(2, 3, scope);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_first(2, cb_u, vt);
-            tile_regs_release();
-        }
-        cb_push_back(cb_u, Vt);
-        cb_push_back(cb_u_f32, Vt);
-        cb_wait_front(cb_u, Vt);
-        cb_wait_front(cb_u_f32, Vt);
-        for (uint32_t vt = 0; vt < Vt; ++vt) {
-            tile_regs_acquire();
-            begin_loads(cb_reads);
-            load(cb_reads, Vt + vt, 0);
-            load(cb_tok_coef, COEF_ALPHA_SEL, 1);
-            load(cb_u_f32, vt, 2);
-            load(cb_d, 0, 3);
-            sfpu_bcast_col_init();
-            mul_bcast_col_scoped(0, 1, scope);
-            mul_bcast_col_scoped(2, 3, scope);
-            add_binary_tile_init();
-            binary_scoped<ckernel::BinaryOp::ADD>(0, 2, 0, scope);
-            tile_regs_commit();
-            tile_regs_wait();
-            if (!first_in_row) {
-                pack_reconfig_l1_acc(1);
-            }
-            pack_first(0, cb_o_acc, vt);
-            pack_reconfig_l1_acc(0);
-            tile_regs_release();
-        }
-        cb_pop_front(cb_reads, 2 * Vt);
-    }
-    DeviceZoneScopedN("Z_UPD");
-    // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
-    // alpha is one scalar per token (element (0, 0) of the alpha page): an fp32 scalar SFPU multiply,
-    // with no broadcast tile in DEST.
+    cb_wait_front(src, n_state);
+    cb_wait_front(src_mm, n_state);
+    ckl::matmul_block<
+        false,
+        false,
+        ckl::LastBlockTarget::Out,
+        ckl::OutputCBLayout::TileRowMajor,
+        ckl::matmul_config::InitMode::Short,
+        ckl::InputPolicy::WaitAndRetainOnLastBlock,
+        ckl::InputPolicy::NoWaitNoPop>(
+        bufs.kq_rows,
+        src_mm_buf,
+        bufs.reads,
+        bufs.reads,
+        ckl::MatmulBlockShape::of(2, Vt / MM_SUBBLOCK_W, 1, MM_SUBBLOCK_W, Kt, 1));
+    // token vector (5b): u = beta_sel (*)col (v - alpha rk); o = alpha_sel (*)col ro + d (*)col u
+    cb_wait_front(cb_tok_coef, GDN_TOK_COEF_PAGES);
+    // alpha is one scalar per token (element (0, 0) of the alpha page): fp32 scalar SFPU multiplies
+    // here and in the state decay, with no broadcast tile in DEST.
     const uint32_t alpha_bits = read_tile_value(cb_tok_coef, COEF_ALPHA, 0);
+    cb_wait_front(cb_reads, 2 * Vt);
+    cb_reserve_back(cb_u, Vt);
+    cb_reserve_back(cb_u_f32, Vt);
+    for (uint32_t vt = 0; vt < Vt; ++vt) {
+        tile_regs_acquire();
+        begin_loads(cb_reads);
+        load(cb_reads, vt, 0);
+        load(cb_tok_coef, COEF_BETA_SEL, 3);
+        load(cb_v, vt, 2);
+        binop_with_scalar_tile_init();
+        binop_scalar_scoped<MUL_UNARY>(0, alpha_bits, scope);
+        sub_binary_tile_init();
+        binary_scoped<ckernel::BinaryOp::SUB>(2, 0, 2, scope);
+        sfpu_bcast_col_init();
+        mul_bcast_col_scoped(2, 3, scope);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_first(2, cb_u, vt);
+        tile_regs_release();
+    }
+    cb_push_back(cb_u, Vt);
+    cb_push_back(cb_u_f32, Vt);
+    cb_wait_front(cb_u, Vt);
+    cb_wait_front(cb_u_f32, Vt);
+    for (uint32_t vt = 0; vt < Vt; ++vt) {
+        tile_regs_acquire();
+        begin_loads(cb_reads);
+        load(cb_reads, Vt + vt, 0);
+        load(cb_tok_coef, COEF_ALPHA_SEL, 1);
+        load(cb_u_f32, vt, 2);
+        load(cb_d, 0, 3);
+        sfpu_bcast_col_init();
+        mul_bcast_col_scoped(0, 1, scope);
+        mul_bcast_col_scoped(2, 3, scope);
+        add_binary_tile_init();
+        binary_scoped<ckernel::BinaryOp::ADD>(0, 2, 0, scope);
+        tile_regs_commit();
+        tile_regs_wait();
+        if (!first_in_row) {
+            pack_reconfig_l1_acc(1);
+        }
+        pack_first(0, cb_o_acc, vt);
+        pack_reconfig_l1_acc(0);
+        tile_regs_release();
+    }
+    cb_pop_front(cb_reads, 2 * Vt);
+    // update (5c): S_t = alpha S_{t-1} (SFPU, fp32) + kn^T u (matmul accumulated onto DEST)
     const bool in_place = (src == dst);
     if (in_place) {
         // One allocation of exactly n_state pages: after the pop the read pointer wraps back onto
@@ -784,26 +775,16 @@ void kernel_main() {
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
             const RowScope scope = RowScope::of(lo - base_row, hi - base_row);
-            {
-                DeviceZoneScopedN("Z_GATES");
-                gates_block(scope);
+            gates_block(scope);
+            if constexpr (CONV_ON_FPU) {
+                conv_block_fpu(scope);
+            } else {
+                conv_block(scope);
             }
-            {
-                DeviceZoneScopedN("Z_CONV");
-                if constexpr (CONV_ON_FPU) {
-                    conv_block_fpu(scope);
-                } else {
-                    conv_block(scope);
-                }
-            }
-            {
-                DeviceZoneScopedN("Z_L2N");
-                l2norm_block(bufs, scope);
-            }
+            l2norm_block(bufs, scope);
 
             cb_reserve_back(cb_o_acc, Vt);
             for (uint32_t row = lo; row < hi; ++row, ++token) {
-                DeviceZoneScopedN("Z_STEP");
                 token_step(bufs, token == 0, token == T - 1, row == lo, scope);
             }
             cb_push_back(cb_o_acc, Vt);
@@ -812,10 +793,7 @@ void kernel_main() {
             cb_pop_front(cb_d, 1);
             cb_pop_front(cb_v, Vt);
 
-            {
-                DeviceZoneScopedN("Z_RMSN");
-                rmsnorm_gate_block(bufs, v_eps_bits, scope);
-            }
+            rmsnorm_gate_block(bufs, v_eps_bits, scope);
         }
         cb_pop_front(cb_conv_w, conv_w_pages);
         cb_pop_front(cb_gate_w, 2);
