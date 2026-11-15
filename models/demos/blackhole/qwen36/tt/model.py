@@ -1973,7 +1973,8 @@ class Qwen36Model:
         _vfy_rows_out). ``accept_rows``: {spec_step STEP_* row: B ints}, the rows of the step buffer that only the device
         acceptance reads (spec_accept.StepAccept), staged in the same copy; None stages zeros. ``step_staged``: a chain
         program (spec_chain.ChainInputs) enqueued before wrote the step buffer, so ``tokens`` and ``positions`` are not
-        staged, and the caller checked the grouped KV write over every position the rows can take."""
+        staged, and the caller checked the grouped KV write over every position the rows can take. A ``sample_plan``
+        without seeds (spec_sample.chained_sampling_plan) stages no seeds: the chain program wrote them."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
         if sample_plan is not None and self._vfy_sampler is None:

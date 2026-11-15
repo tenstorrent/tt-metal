@@ -31,7 +31,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tt.mtp import draft_argmax
 from models.demos.blackhole.qwen36.tt.spec_accept import StepAccept, greedy_counts
 from models.demos.blackhole.qwen36.tt.spec_chain import ChainInputs, chain_overlay
-from models.demos.blackhole.qwen36.tt.spec_sample import sampling_plan, with_draws
+from models.demos.blackhole.qwen36.tt.spec_sample import chained_sampling_plan, drawn_users, sampling_plan, with_draws
 from models.demos.blackhole.qwen36.tt.spec_step import (
     DRAFT_PENDING,
     STEP_DECLINED,
@@ -1990,10 +1990,13 @@ class MTPBlockEngine(MTPSpecEngine):
             self._dr_pack,
             blocks._verify_ctrl,
             blocks.dims.nv,
+            sampler=sampler,
         )
         self._chain.body()
         ttnn.synchronize_device(self.mesh)
         blocks.clear_verify_blocks()  # the warm pass wrote the ctrl pages
+        if sampler is not None:
+            sampler.seeds_written()
 
     def _capture_step(self):
         """The step trace, over the verify trace's ids output (which exists from the verify capture on)."""
@@ -2222,7 +2225,7 @@ class MTPBlockEngine(MTPSpecEngine):
         if all(declined) or (B == 1 and p0[0] + nv[0] > self.eager_reseed_len):
             return None
         self._check_scratch(self._last_pt)
-        drawn = [bool(sample_plan is not None and sample_plan.sampled[u * T]) for u in range(B)]
+        drawn = drawn_users(sample_plan, B, T)
         rows = {
             STEP_NUM_VALID: nv,
             STEP_DRAWN: [int(d) for d in drawn],
@@ -2372,10 +2375,11 @@ class MTPBlockEngine(MTPSpecEngine):
         """A verify that continues the unread ``predecessor`` row for row: each live row of the block (placeholders
         from the runner) is the predecessor's last committed token at the device's count, then up to
         ``num_valid_drafts`` of the drafts its drafter made, from the start state of that count
-        (``mamba_state.groups[g].start_blocks_by_count``). Built on the device by the chain program when the
-        predecessor ran the device acceptance and drafter and this verify's propose is decided for every count; else
-        from the engine's own read and walk of the predecessor (_materialize). Returns VerifyResult with a
-        PendingVerify."""
+        (``mamba_state.groups[g].start_blocks_by_count``). On a device-sampled step (``sampling``) a sampled row draws
+        its columns as on an unchained verify, a seeded row with the seeds of the positions that count gives. Built on
+        the device by the chain program when the predecessor ran the device acceptance and drafter and this verify's
+        propose is decided for every count; else from the engine's own read and walk of the predecessor
+        (_materialize). Returns VerifyResult with a PendingVerify."""
         B, K, T = self.B, self.K, self.T
         if not self._pending or predecessor is not self._pending[-1] or predecessor.successor is not None:
             raise ValueError("spec_predecessor is not the engine's last verify still to propose")
@@ -2390,16 +2394,23 @@ class MTPBlockEngine(MTPSpecEngine):
             )
         if slot_remap is not None and [int(x) for x in slot_remap] != list(range(B)):
             raise ValueError(f"a chained verify moves no row, got slot_remap {list(slot_remap)}")
+        plan = seed_cand = None
         if sampling is not None:
-            plan = sampling_plan(sampling, torch.where(active, start_pos[:, 0], -1).tolist(), T)
-            if plan.any_sampled:
-                raise ValueError("a chained verify serves greedy rows only")
+            p0_prev = [int(predecessor.p0[u]) if bool(active[u]) else -1 for u in range(B)]
+            plan, seed_cand = chained_sampling_plan(sampling, p0_prev, T)
+            plan = plan if plan.any_sampled else None
+        if plan is not None and not self.sample_on_device:
+            raise ValueError(
+                "a chained verify of a device-sampled step needs the verify sampler, which the engine prepares only "
+                "after warmup_model_decode(can_sample_on_device=True)"
+            )
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
         reason = self._chain_refusal(predecessor, active, hint, start_pos, page_table)
         if reason is None:
             return VerifyResult(
-                "argmax_ids", self._verify_chained(predecessor, active, hint, start_pos, page_table, mamba_state)
+                "argmax_ids",
+                self._verify_chained(predecessor, active, hint, start_pos, page_table, mamba_state, plan, seed_cand),
             )
         logger.debug(f"[spec_engine] chained verify built from a read predecessor: {reason}")
         self.materialized_steps += 1
@@ -2414,14 +2425,14 @@ class MTPBlockEngine(MTPSpecEngine):
 
     def _chain_refusal(self, predecessor, active, hint, start_pos, page_table):
         """Why the chain program cannot build this chained verify, or None. It needs its trace, a predecessor that ran
-        the device acceptance and drafter with no draws, no prompt to finish, a propose decided alike for every count
-        the predecessor can accept, and a grouped KV write free of collisions at every such count. Touches no engine
-        state."""
+        the device acceptance and drafter (over its draws on a device-sampled step), no prompt to finish, a propose
+        decided alike for every count the predecessor can accept, and a grouped KV write free of collisions at every
+        such count. Touches no engine state."""
         B, T = self.B, self.T
         if self._chain_trace is None or not self._one_enqueue_ready():
             return "no chain trace"
-        if predecessor.plan is None or predecessor.sample_plan is not None:
-            return "the predecessor ran no device acceptance and drafter of greedy ids"
+        if predecessor.plan is None:
+            return "the predecessor ran no device acceptance and drafter"
         if any(bool(active[u]) and u in self._fresh for u in range(B)):
             return "a row's prompt is not finished"
         offered = {u for u in range(B) if not predecessor.plan.declined[u]}
@@ -2465,9 +2476,13 @@ class MTPBlockEngine(MTPSpecEngine):
                         return False
         return True
 
-    def _verify_chained(self, predecessor, active, hint, start_pos, page_table, mamba_state):
-        """Stage the host rows and the ctrl candidates, replay the chain trace, then the verify, step and drafter
-        traces, and enqueue the reads. The predecessor's propose fills the block's tokens and positions."""
+    def _verify_chained(
+        self, predecessor, active, hint, start_pos, page_table, mamba_state, sample_plan=None, seed_cand=None
+    ):
+        """Stage the host rows, the ctrl candidates and the seed candidates, replay the chain trace, then the verify,
+        [sampler,] step and drafter traces, and enqueue the reads. ``sample_plan`` (spec_sample.chained_sampling_plan,
+        or None): the drawing rows and their parameters; the chain program writes their seeds from ``seed_cand``. The
+        predecessor's propose fills the block's tokens and positions."""
         B, T, model = self.B, self.T, self.model
         if self.verify_steps % ONE_ENQUEUE_LOG_EVERY == 0:
             self._log_one_enqueue_counts()
@@ -2491,8 +2506,17 @@ class MTPBlockEngine(MTPSpecEngine):
         blocks = model.gdn_blocks
         blocks.set_verify_blocks(mamba_state, stage_ctrl=False)
         p0_prev = [int(predecessor.p0[u]) if bool(active[u]) else 0 for u in range(B)]
-        overlay = chain_overlay(p0_prev, active.tolist(), list(self._rope_deltas), nv, plan.declined, plan.keep)
-        self._chain.stage(overlay, blocks.ctrl_candidates(mamba_state))
+        overlay = chain_overlay(
+            p0_prev,
+            active.tolist(),
+            list(self._rope_deltas),
+            nv,
+            plan.declined,
+            plan.keep,
+            drawn_users(predecessor.sample_plan, B, T),
+            drawn_users(sample_plan, B, T),
+        )
+        self._chain.stage(overlay, blocks.ctrl_candidates(mamba_state), seed_cand)
         self._stage_table(self._draft_table(pt, plan.declined), "_mtp_pt", "_mtp_pt_staged")
         pt_rows = pt.repeat_interleave(T, dim=0)
         if self._acc_pt_staged is None or not torch.equal(self._acc_pt_staged, pt_rows):
@@ -2500,6 +2524,9 @@ class MTPBlockEngine(MTPSpecEngine):
             self._acc_pt_staged = pt_rows
         ttnn.execute_trace(self.mesh, self._chain_trace, cq_id=0, blocking=False)
         blocks.ctrl_written()
+        sampler = getattr(model, "_vfy_sampler", None)
+        if sampler is not None:
+            sampler.seeds_written()
         model.verify_enqueue(
             [[0] * T] * B,
             [0] * B,
@@ -2508,9 +2535,19 @@ class MTPBlockEngine(MTPSpecEngine):
             inactive=(~active).tolist(),
             rope_deltas=list(self._rope_deltas),
             step_staged=True,
+            **({} if sample_plan is None else {"sample_plan": sample_plan}),
         )
         step = PendingVerify(
-            B, self.K, nv, active, pt, self._last_cap_blocks, self._no_draft, plan=plan, rope_deltas=self._rope_deltas
+            B,
+            self.K,
+            nv,
+            active,
+            pt,
+            self._last_cap_blocks,
+            self._no_draft,
+            plan=plan,
+            sample_plan=sample_plan,
+            rope_deltas=self._rope_deltas,
         )
         predecessor.successor = step
         self._pending.append(step)
