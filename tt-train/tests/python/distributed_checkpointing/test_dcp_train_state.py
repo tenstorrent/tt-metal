@@ -20,7 +20,7 @@ from dcp_oracle import Loader
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.distributed_checkpointing._errors import CheckpointError, VersionError
-from ttml.distributed_checkpointing._index import read_header, write_header
+from ttml.distributed_checkpointing._index import read_header_json, write_header
 from ttml.distributed_checkpointing._train_state import (
     TRAIN_STATE_KEY,
     capture_rng,
@@ -113,7 +113,7 @@ def test_scheduler_and_dataloader_round_trip_through_the_header(tmp_path):
     state = capture_train_state(scheduler=sched, dataloader=loader, rng=False)
     assert set(state) == {"scheduler", "dataloader"} and state["dataloader"] == {"position": 3}
     write_header(str(tmp_path), {"user": {"step": 3}, TRAIN_STATE_KEY: state})
-    back = read_header(str(tmp_path))[TRAIN_STATE_KEY]
+    back = read_header_json(str(tmp_path))[TRAIN_STATE_KEY]
     assert back == state
 
     opt2 = _Opt([1e-3, 2e-3])
