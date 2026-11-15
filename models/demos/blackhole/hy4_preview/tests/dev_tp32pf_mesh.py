@@ -39,6 +39,7 @@ try:
     p("tp32 weights from cache:", tpe.from_cache)
     ccl = CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
     blk = Hy4MoeTp32PrefillBlock(md, ccl, gate, tpe, N)
+    blk.keep_route = True
     for rep in range(REPS):
         idx = torch.stack([(torch.arange(N) + 80 * r + 17 * rep) % X.shape[0] for r in range(ROWS)])
         x = X[idx.flatten()].reshape(ROWS, N, HID).to(torch.bfloat16)
@@ -50,10 +51,19 @@ try:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(ROWS, COLS)),
         )
+        blk.dram_log = []
         t0 = time.time()
         y2 = blk.forward(xd)  # [1,1,N,D/8] per chip
         ttnn.synchronize_device(md)
-        p("rep", rep, "forward eager (incl host plan) s", round(time.time() - t0, 2))
+        p("rep", rep, "forward eager s", round(time.time() - t0, 2), "plan mode", blk.plan_mode)
+        base = blk.dram_log[0][1]
+        p(
+            "DRAM per bank MB (delta vs forward start, allocated):",
+            [(n_, round((b_ - base) / 2**20, 1)) for n_, b_ in blk.dram_log],
+            "peak MB/bank",
+            round((max(b_ for _, b_ in blk.dram_log) - base) / 2**20, 1),
+        )
+        blk.dram_log = None
         sh = D.allreduce_cols(shared.forward(xd))
         ttnn.synchronize_device(md)
         full = torch.zeros(ROWS, N, HID)
@@ -77,13 +87,21 @@ try:
             [float(full[r].norm()) for r in range(ROWS)],
             [float(ref[r].norm()) for r in range(ROWS)],
         )
-        ids, scs = blk.last
         if os.environ.get("TIME", "1") == "1":
-            # eager per-stage times with the plan kept fixed
-            pl = build_plan(ids, scs, nc=blk.nc, xl1=blk.ex.k1v != "c")
-            pt = PlanTensors(md, pl, mapper=blk.repl)
+            p("TIME stage: begin")
+            route = blk.last_route if blk.plan_mode == "dev" else None
+            if route is None:
+                ids, scs = blk.last
+                pl = build_plan(ids, scs, nc=blk.nc, xl1=blk.ex.k1v != "c")
+                pt = PlanTensors(md, pl, mapper=blk.repl)
+            else:
+                pt = blk.pb(route, blk.tt)
+            ttnn.synchronize_device(md)
+            p("TIME stage: plan tensors built (device plan)")
             act, out = blk.ex.alloc(blk.tt)
             h_rm = ttnn.to_layout(xd, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.synchronize_device(md)
+            p("TIME stage: h_rm ready")
 
             def stage(fn, n=5):
                 ts = []
@@ -98,10 +116,20 @@ try:
                 return statistics.median(ts)
 
             x_all = blk._ag_rows(h_rm, 2)
+            ttnn.synchronize_device(md)
+            p("TIME stage: x_all ready")
             res = {}
+            if route is not None:
+                res["plan_us"] = stage(lambda: blk.pb(route, blk.tt, pt) and None)
+                p("TIME stage: plan_us done", res["plan_us"])
+            p("TIME stage: stages loop")
             res["ag_x_us"] = stage(lambda: blk._ag_rows(h_rm, 2))
-            res["k1_us"] = stage(lambda: blk.ex.k1(x_all, pt, act))
-            res["k2x6_us"] = stage(lambda: [blk.ex.k2(S, pt, act, out, blk.tt) for S in range(6)] and None)
+            res["k1_us"] = stage(lambda: (blk.ex.k1c if blk.ex.k1v == "c" else blk.ex.k1)(x_all, pt, act))
+            res["k2x6_us"] = stage(
+                lambda: blk.ex.k2f(pt, act, out, blk.tt)
+                if blk.ex.k2v == "f"
+                else [blk.ex.k2(S, pt, act, out, blk.tt) for S in range(6)] and None
+            )
             res["rs_cols_us"] = stage(lambda: blk._rs(out, 3, 1, ttnn.Topology.Ring))
             y_ = blk._rs(out, 3, 1, ttnn.Topology.Ring)
             res["rs_rows_us"] = stage(lambda: blk._rs(y_, 2, 0, ttnn.Topology.Linear))
@@ -117,6 +145,8 @@ try:
 
                 def body():
                     xa = blk._ag_rows(h_rm, 2)
+                    if route is not None:
+                        blk.pb(route, blk.tt, pt)
                     blk.ex(xa, pt, act, out, blk.tt)
                     a_ = blk._rs(out, 3, 1, ttnn.Topology.Ring)
                     b_ = blk._rs(a_, 2, 0, ttnn.Topology.Linear)

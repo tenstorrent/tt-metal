@@ -42,16 +42,90 @@ def u32_cb(cs, idx, nbytes, page=2048):
 
 
 class PlanTensors:
-    """device copies of one Plan (replicated per chip by the caller's mapper)"""
+    """device copies of one Plan (replicated per chip by the caller's mapper), or (from the device builder) the tensors it filled:
+    plan [nc, 512] u32, gidx / dest [cap / 16, 512] u32 (row r = word r), sc [cap / 32, 1024] bf16 (row r = element r); all row-major, pages of 2 KB
+    """
 
-    def __init__(self, md, pl, mapper=None):
+    def __init__(self, md=None, pl=None, mapper=None, tensors=None):
+        if tensors is not None:
+            self.plan, self.gidx, self.dest, self.sc = tensors
+            return
         kw = dict(device=md, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if mapper is not None:
             kw["mesh_mapper"] = mapper
         self.plan = ttnn.from_torch(pl.plan, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **kw)
         self.gidx = ttnn.from_torch(pl.gidx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **kw)
         self.dest = ttnn.from_torch(pl.dest, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, **kw)
-        self.sc = ttnn.from_torch(pl.sc.reshape(1, 1, -1, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, **kw)
+        self.sc = ttnn.from_torch(pl.sc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, **kw)
+
+    def free(self):
+        for t_ in (self.plan, self.gidx, self.dest, self.sc):
+            ttnn.deallocate(t_)
+
+
+class Tp32PlanBuilder:
+    """device plan builder (tt/tp32pf_kernels/plan_build.cpp, one core): route words [1,1,Tt/32,512] int32 RM (per token 8 ids then 8 bf16 score
+    bit words) -> PlanTensors (same content as hy4_tp32pf_plan.build_plan(xl1=False))"""
+
+    def __init__(self, md, nc=110):
+        self.md, self.nc = md, nc
+        self.cs = _core_set([ttnn.CoreCoord(0, 0)])
+
+    def alloc(self, tt):
+        cap = mt_cap(tt)
+        md, A = self.md, ttnn.allocate_tensor_on_device
+        mk = lambda shp, dt: A(ttnn.Shape(shp), dt, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG)
+        return PlanTensors(
+            tensors=(
+                mk([self.nc, 512], ttnn.uint32),
+                mk([cap // 16, 512], ttnn.uint32),
+                mk([cap // 16, 512], ttnn.uint32),
+                mk([cap // 32, 1024], ttnn.bfloat16),
+            )
+        )
+
+    def __call__(self, route, tt, pt=None):
+        pt = pt or self.alloc(tt)
+        cap = mt_cap(tt)
+        rows = cap * 32
+        nbytes = tt * 64 + rows * 10 + self.nc * 2048 + 5 * 256 * 4 + self.nc * 8
+        npages = (nbytes + 2047) // 2048
+        CB = 0
+        cbs = [u32_cb(self.cs, CB, npages * 2048)]
+        kern = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/plan_build.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=self.cs,
+            compile_time_args=[CB, tt, self.nc, cap, npages, int(os.environ.get("TP32PF_PLAN_MODE", "0"))]
+            + _acc(route)
+            + _acc(pt.plan)
+            + _acc(pt.gidx)
+            + _acc(pt.dest)
+            + _acc(pt.sc),
+            runtime_args=ttnn.RuntimeArgs(),
+            common_runtime_args=[
+                route.buffer_address(),
+                pt.plan.buffer_address(),
+                pt.gidx.buffer_address(),
+                pt.dest.buffer_address(),
+                pt.sc.buffer_address(),
+            ],
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        prog = ttnn.ProgramDescriptor(kernels=[kern], semaphores=[], cbs=cbs)
+        prog.custom_program_hash = _hash(
+            0x7F24,
+            int(os.environ.get("TP32PF_PLAN_MODE", "0")),
+            tt,
+            self.nc,
+            route.buffer_address(),
+            pt.plan.buffer_address(),
+            pt.gidx.buffer_address(),
+            pt.dest.buffer_address(),
+            pt.sc.buffer_address(),
+        )
+        ttnn.generic_op([route, pt.plan, pt.gidx, pt.dest, pt.sc], prog)
+        return pt
 
 
 class Tp32PrefillExperts:
@@ -69,6 +143,7 @@ class Tp32PrefillExperts:
         self.xl1 = int(os.environ.get("TP32PF_XL1", "1"))
         self.split = int(os.environ.get("TP32PF_SPLIT", "0"))
         self.k1v = os.environ.get("TP32PF_K1", "c")
+        self.k2v = os.environ.get("TP32PF_K2", "b")
 
     def alloc(self, tt):
         cap = mt_cap(tt)
@@ -152,6 +227,9 @@ class Tp32PrefillExperts:
 
     # ------------------------------------------------------------------ K1b
     def k1(self, x, pt, act):
+        assert (
+            pt.gidx.shape[-1] == 64
+        ), "legacy K1b needs the old 256 B-page gidx plan (hy4_tp32pf_plan before the 2 KB-row tables); use k1c"
         cs, cores = self.cs, self.cores
         CB_X, CB_W, CB_O, CB_META, CB_WS, CB_RM, CB_PART, CB_SC, CB_O2, CB_IX, CB_XS, CB_RM1 = range(12)
         tok = int(x.shape[2])
@@ -357,8 +435,85 @@ class Tp32PrefillExperts:
         )
         ttnn.generic_op([act, self.w2, pt.plan, pt.dest, out], prog)
 
+    def k2f(self, pt, act, out, tt):
+        """all 6 column passes in one launch (HY4_TP32PF_K2=f)"""
+        cs, cores = self.cs, self.cores
+        nown = tt // 32
+        assert nown <= self.nc and nown <= 64
+        CB_A, CB_W, CB_RM, CB_META, CB_SLOT, CB_SUM, CB_TIL, CB_WS = range(8)
+        cbs = [
+            tile_cb(cs, CB_A, 8, ttnn.bfloat16),
+            tile_cb(cs, CB_W, 2 * 64, ttnn.bfloat4_b, TB4),
+            tile_cb(cs, CB_RM, 128, ttnn.bfloat16),
+            u32_cb(cs, CB_META, 2048),
+            tile_cb(cs, CB_SLOT, 256, ttnn.bfloat16),
+            tile_cb(cs, CB_SUM, 32, ttnn.bfloat16),
+            tile_cb(cs, CB_TIL, 32, ttnn.bfloat16),
+            u32_cb(cs, CB_WS, 8192, 2048),
+        ]
+        rt = ttnn.RuntimeArgs()
+        for i, c in enumerate(cores):
+            rt[c.x][c.y] = [i]
+        rd = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/k2f_reader.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cs,
+            compile_time_args=[CB_W, CB_A, CB_META, 6] + _acc(pt.plan) + _acc(act),
+            runtime_args=rt,
+            common_runtime_args=[self.w2.buffer_address(), pt.plan.buffer_address(), act.buffer_address()],
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        common_w = [pt.plan.buffer_address(), pt.dest.buffer_address(), out.buffer_address()]
+        for q in self.phys:
+            common_w += [q.x, q.y]
+        wr = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/k2f_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cs,
+            compile_time_args=[CB_RM, CB_WS, CB_SLOT, CB_TIL, nown, 6, 0, self.nc, 1]
+            + _acc(pt.plan)
+            + _acc(pt.dest)
+            + _acc(out),
+            runtime_args=rt,
+            common_runtime_args=common_w,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        cp = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/k2f_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=cs,
+            compile_time_args=[CB_A, CB_W, CB_RM, CB_META, CB_SLOT, CB_SUM, CB_TIL, nown, 0, 0, 6],
+            runtime_args=rt,
+            common_runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, math_approx_mode=True
+            ),
+        )
+        prog = ttnn.ProgramDescriptor(
+            kernels=[rd, wr, cp],
+            semaphores=[
+                ttnn.SemaphoreDescriptor(id=0, core_ranges=cs, initial_value=0),
+                ttnn.SemaphoreDescriptor(id=1, core_ranges=cs, initial_value=0),
+            ],
+            cbs=cbs,
+        )
+        prog.custom_program_hash = _hash(
+            0x7F25,
+            self.nc,
+            nown,
+            self.w2.buffer_address(),
+            pt.plan.buffer_address(),
+            pt.dest.buffer_address(),
+            act.buffer_address(),
+            out.buffer_address(),
+        )
+        ttnn.generic_op([act, self.w2, pt.plan, pt.dest, out], prog)
+
     def __call__(self, x, pt, act, out, tt):
         (self.k1c if self.k1v == "c" else self.k1)(x, pt, act)
-        for S in range(6):
-            self.k2(S, pt, act, out, tt)
+        if self.k2v == "f":
+            self.k2f(pt, act, out, tt)
+        else:
+            for S in range(6):
+                self.k2(S, pt, act, out, tt)
         return out

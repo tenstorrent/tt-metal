@@ -9,7 +9,7 @@ plan (host in v0) -> K1b/K2b (single weight copy, the decode W01/W2 v1 layout) -
 import os
 
 import ttnn
-from models.demos.blackhole.hy4_preview.tt.hy4_tp32_prefill import PlanTensors, Tp32PrefillExperts
+from models.demos.blackhole.hy4_preview.tt.hy4_tp32_prefill import PlanTensors, Tp32PlanBuilder, Tp32PrefillExperts
 from models.demos.blackhole.hy4_preview.tt.hy4_tp32pf_plan import build_plan
 
 HID = 6144
@@ -28,6 +28,11 @@ class Hy4MoeTp32PrefillBlock:
         self.repl = ttnn.ReplicateTensorToMesh(md)
         self.t_plan = 0.0
         self.last = None
+        self.last_route = None
+        self.keep_route = False
+        self.dram_log = None  # tests: list -> (stage, allocated bytes per bank) samples
+        self.plan_mode = os.environ.get("HY4_TP32PF_PLAN", "dev")
+        self.pb = Tp32PlanBuilder(md, nc=nc)
 
     def _ag_rows(self, t, dim):
         if self.async_ccl:
@@ -80,38 +85,59 @@ class Hy4MoeTp32PrefillBlock:
         return w, idx
 
     def _pack_route(self, w, idx):
+        """w bf16 RM [n,1,1,8], idx uint16 RM [n,1,1,8] -> int32 RM [1,1,n/32,512]: per token 8 ids then 8 words whose low 16 bits are the bf16 score bits."""
         n = self.n
-        f32 = lambda a: ttnn.typecast(ttnn.to_layout(ttnn.reshape(a, [1, 1, n, TOPK]), ttnn.TILE_LAYOUT), ttnn.float32)
-        pk_t = ttnn.concat([f32(idx), f32(w)], dim=3)  # [1,1,n,16] fp32 (ids exact, scores bf16-exact)
-        return ttnn.to_layout(pk_t, ttnn.ROW_MAJOR_LAYOUT)
+        idx = ttnn.to_memory_config(idx, ttnn.DRAM_MEMORY_CONFIG)
+        w = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
+        r = ttnn.concat(
+            [ttnn.reshape(idx, [n, 1, 1, TOPK]), ttnn.bitcast(ttnn.reshape(w, [n, 1, 1, TOPK]), ttnn.uint16)], dim=3
+        )
+        r = ttnn.typecast(r, ttnn.int32)
+        return ttnn.reshape(r, [1, 1, n // 32, 512])
+
+    def _probe(self, name):
+        if self.dram_log is not None:
+            v = ttnn.get_memory_view(self.md, ttnn.BufferType.DRAM)
+            self.dram_log.append((name, int(v.total_bytes_allocated_per_bank)))
 
     def forward(self, h, plan=None, routing=None):
         """routing: optional (w, idx) to bypass the router (tests)"""
         n, tt = self.n, self.tt
         w, idx = routing if routing is not None else self.route(h)
         pk = self._pack_route(w, idx)
-        pk_all = self._ag_rows(pk, 2)  # [1,1,Tt,16] fp32 RM on every chip
+        self._probe("start")
+        pk_all = self._ag_rows(pk, 2)  # [1,1,Tt/32,512] int32 RM on every chip
         x_rm = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         x_all = self._ag_rows(x_rm, 2)  # [1,1,Tt,D] RM
+        self._probe("x_all + x_rm")
         ttnn.deallocate(x_rm)
-        # v0: plan on the host from chip (0, 0)
-        dev0 = ttnn.get_device_tensors(pk_all)[0]
-        r = ttnn.to_torch(dev0).reshape(tt, 2 * TOPK).float()
-        ids = r[:, :TOPK].round().long()
-        sc = r[:, TOPK:]
-        pl = build_plan(ids, sc, nc=self.nc, xl1=self.ex.k1v != "c")
-        pt = PlanTensors(self.md, pl, mapper=self.repl)
         act, out = self.ex.alloc(tt)
+        self._probe("act + out")
+        if self.plan_mode == "dev":
+            pt = self.pb(pk_all, tt)
+            self.last_route = pk_all  # kept (not freed) only when keep_route is set by a test
+            if not self.keep_route:
+                self.last_route = None
+        else:
+            dev0 = ttnn.get_device_tensors(pk_all)[0]
+            r = ttnn.to_torch(dev0).reshape(tt, 2 * TOPK).to(torch.int64)
+            ids = r[:, :TOPK]
+            sc = (r[:, TOPK:] & 0xFFFF).to(torch.int16).view(torch.bfloat16).float()
+            pl = build_plan(ids, sc, nc=self.nc, xl1=self.ex.k1v != "c")
+            pt = PlanTensors(self.md, pl, mapper=self.repl)
+            self.last = (ids, sc)
+        self._probe("plan tensors")
         self.ex(x_all, pt, act, out, tt)
         ttnn.deallocate(x_all)
         ttnn.deallocate(act)
-        ttnn.deallocate(pk_all)
+        if not (self.plan_mode == "dev" and self.keep_route):
+            ttnn.deallocate(pk_all)
         ttnn.deallocate(pk)
-        for t_ in (pt.plan, pt.gidx, pt.dest, pt.sc):
-            ttnn.deallocate(t_)
+        pt.free()
         y = self._rs(out, 3, 1, ttnn.Topology.Ring)  # [1,1,Tt,D/8]
+        self._probe("rs cols (out + y)")
         ttnn.deallocate(out)
         y2 = self._rs(y, 2, 0, ttnn.Topology.Linear)  # [1,1,n,D/8]
         ttnn.deallocate(y)
-        self.last = (ids, sc)
+        self._probe("end")
         return y2

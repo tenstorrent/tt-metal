@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t me = get_arg_val<uint32_t>(0);
     const auto xa = TensorAccessor(x_args, get_common_arg_val<uint32_t>(0), ROW);
     const auto pa = TensorAccessor(p_args, get_common_arg_val<uint32_t>(1), 2048);
-    const auto ga = TensorAccessor(g_args, get_common_arg_val<uint32_t>(2), 256);
+    const auto ga = TensorAccessor(g_args, get_common_arg_val<uint32_t>(2), 2048);
     const auto sa = TensorAccessor(s_args, get_common_arg_val<uint32_t>(3), 2048);
     cb_reserve_back(cb_meta, 1);
     const uint32_t ml = get_write_ptr(cb_meta);
@@ -38,19 +38,32 @@ void kernel_main() {
             const uint32_t mt = mt0 + m;
             noc_async_read_set_trid(3);
             {
-                const uint64_t na = ga.get_noc_addr(mt >> 1);
-                noc_async_read_one_packet_set_state<true>(na, 256, 1);
+                // the 32 token ids of this M-tile: 128 B at word (mt * 32) of the row-major gidx table (pages of 512
+                // words)
+                const uint64_t na = ga.get_noc_addr(mt >> 4, (mt & 15) * 128);
+                noc_async_read_one_packet_set_state<true>(na, 128, 1);
                 noc_async_read_one_packet_with_state_with_trid((uint32_t)na, 0, ixl, 3);
             }
-            cb_reserve_back(cb_sc, 1);
             {
-                const uint64_t na = sa.get_noc_addr(mt);
-                noc_async_read_one_packet_set_state<true>(na, 2048, 2);
-                noc_async_read_one_packet_with_state_with_trid((uint32_t)na, 0, get_write_ptr(cb_sc), 3);
+                // the 32 bf16 scores of this M-tile: 64 B at u16 (mt * 32) of the score table (pages of 1024 u16)
+                const uint64_t na = sa.get_noc_addr(mt >> 5, (mt & 31) * 64);
+                noc_async_read_one_packet_set_state<true>(na, 64, 2);
+                noc_async_read_one_packet_with_state_with_trid((uint32_t)na, 0, ixl + 256, 3);
             }
             noc_async_read_barrier_with_trid(3);
+            cb_reserve_back(cb_sc, 1);
+            {
+                // column-0 broadcast tile: element (r, 0) of a 32x32 bf16 tile = u16 r * 16 (r < 16) / 512 + (r - 16) *
+                // 16
+                volatile tt_l1_ptr uint16_t* sv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ixl + 256);
+                volatile tt_l1_ptr uint16_t* tv = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_sc));
+                for (uint32_t r = 0; r < 16; ++r) {
+                    tv[r * 16] = sv[r];
+                    tv[512 + r * 16] = sv[16 + r];
+                }
+            }
             cb_push_back(cb_sc, 1);
-            const uint32_t half = (mt & 1) * 32;
+            const uint32_t half = 0;
             cb_reserve_back(cb_rm, 192);
             const uint32_t xw = get_write_ptr(cb_rm);
             noc_async_read_set_trid(2);

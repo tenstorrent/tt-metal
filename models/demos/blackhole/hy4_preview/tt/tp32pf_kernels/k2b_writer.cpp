@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr auto o_args = TensorAccessorArgs<d_args.next_compile_time_args_offset()>();
     const uint32_t me = get_arg_val<uint32_t>(0);
     const auto pa = TensorAccessor(p_args, get_common_arg_val<uint32_t>(0), 2048);
-    const auto da = TensorAccessor(d_args, get_common_arg_val<uint32_t>(1), 256);
+    const auto da = TensorAccessor(d_args, get_common_arg_val<uint32_t>(1), 2048);
     const auto oa = TensorAccessor(o_args, get_common_arg_val<uint32_t>(2), 2048);
     cb_reserve_back(cb_ws, 4);
     const uint32_t ml = get_write_ptr(cb_ws);
@@ -44,7 +44,7 @@ void kernel_main() {
         const uint32_t mt0 = plan[2 + 3 * u], mtc = plan[3 + 3 * u];
         // the whole unit's destination words in one go (one 256 B page per pair of M-tiles)
         for (uint32_t pr = 0; pr < mtc / 2; ++pr) {
-            noc_async_read(da.get_noc_addr((mt0 + 2 * pr) >> 1), dl + pr * 256, 256);
+            noc_async_read(da.get_noc_addr((mt0 + 2 * pr) >> 4, ((mt0 + 2 * pr) & 15) * 128), dl + pr * 256, 256);
         }
         noc_async_read_barrier();
         for (uint32_t pr = 0; pr < mtc / 2; ++pr) {

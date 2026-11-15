@@ -8,10 +8,10 @@ Conventions
   * pair p = (token t, slot j); expert e = ids[t, j]; pairs are grouped by expert (stable, by (e, t, j)), every expert's pairs are
     padded to an EVEN number of M-tiles (32 rows each); M-tile mt of expert e starts at global M-tile start[e].
   * unit = (expert e, first M-tile mt0, M-tile count mtc (even)); each core runs a list of units (LPT balanced by cost).
-  * gidx[mt // 2][64]: token of every padded row (pad rows -> token 0).
-  * dest[mt // 2][64]: u32 per padded row for the K2 combine: 0xFFFFFFFF = pad; else owner << 16 | slot j << 8 | token % 32,
+  * gidx [cap / 16][512] (row r = word r): token of every padded row (pad rows -> token 0).
+  * dest [cap / 16][512]: u32 per padded row for the K2 combine: 0xFFFFFFFF = pad; else owner << 16 | slot j << 8 | token % 32,
     owner = token // 32 (an owner core o < Tt // 32 collects the 8 partial rows of the 32 tokens t in [32 o, 32 o + 32)).
-  * sc[mt]: bf16 tile whose column 0 holds the score of the 32 rows of M-tile mt (K1 scales the act rows by it; padded rows 0).
+  * sc [cap / 32][1024] bf16: score of every padded row (K1 builds the column tile of its M-tile from it; padded rows 0).
 """
 from dataclasses import dataclass
 
@@ -25,9 +25,9 @@ NREAL_OFF = 304  # plan[NREAL_OFF + u] = number of real (non-padding) M-tiles of
 @dataclass
 class Plan:
     plan: torch.Tensor  # [nc, 512] int32
-    gidx: torch.Tensor  # [mt_cap // 2, 64] int32
-    dest: torch.Tensor  # [mt_cap // 2, 64] int32 (bit pattern of u32)
-    sc: torch.Tensor  # [mt_cap * 32, 32] bf16 (TILE layout when uploaded)
+    gidx: torch.Tensor  # [mt_cap / 16, 512] int32
+    dest: torch.Tensor  # [mt_cap / 16, 512] int32 (bit pattern of u32)
+    sc: torch.Tensor  # [mt_cap / 32, 1024] bf16 row-major
     mt_used: int
     mts: list
     start: list
@@ -37,7 +37,7 @@ class Plan:
 def mt_cap(tt, ne=256):
     """static bound on the padded M-tile count: ceil(pairs / 32) + one extra pair-of-tiles per expert, even."""
     c = (tt * 8 + 31) // 32 + 2 * ne
-    return (c + 1) // 2 * 2
+    return (c + 31) // 32 * 32
 
 
 def build_plan(ids, scores, nc=110, ne=256, unit_cost=(10, 8), split=0, xl1=True):
@@ -69,9 +69,6 @@ def build_plan(ids, scores, nc=110, ne=256, unit_cost=(10, 8), split=0, xl1=True
         gidx[r0 : r0 + c] = ((t // tpc) << 16 | (t % tpc)).to(torch.int32) if xl1 else t.to(torch.int32)
         dest[r0 : r0 + c] = ((t // 32) << 16 | (j << 8) | (t % 32)).to(torch.int32)
         scv[r0 : r0 + c] = scores.reshape(-1)[ps].float()
-    # score tiles: element (r, 0) of tile mt = score of row mt * 32 + r
-    sc = torch.zeros(cap, 32, 32, dtype=torch.float32)
-    sc[:, :, 0] = scv.reshape(cap, 32)
     # units
     units_all = []
     for e in range(ne):
@@ -103,9 +100,9 @@ def build_plan(ids, scores, nc=110, ne=256, unit_cost=(10, 8), split=0, xl1=True
             plan[c, NREAL_OFF + k] = max(0, min(m, real_e - (s0 - start[e])))
     return Plan(
         plan=plan,
-        gidx=gidx.reshape(cap // 2, 64),
-        dest=dest.reshape(cap // 2, 64),
-        sc=sc.reshape(cap * 32, 32).to(torch.bfloat16),
+        gidx=gidx.reshape(cap // 16, 512),
+        dest=dest.reshape(cap // 16, 512),
+        sc=scv.reshape(cap // 32, 1024).to(torch.bfloat16),
         mt_used=s,
         mts=mts,
         start=start,

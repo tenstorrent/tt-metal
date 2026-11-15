@@ -10,7 +10,13 @@ import torch
 import ttnn
 from models.demos.blackhole.hy4_preview.tests.dev_common import p, pcc
 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32 import bank_tiles_tensor
-from models.demos.blackhole.hy4_preview.tt.hy4_tp32_prefill import HID, LIMIT, PlanTensors, Tp32PrefillExperts
+from models.demos.blackhole.hy4_preview.tt.hy4_tp32_prefill import (
+    HID,
+    LIMIT,
+    PlanTensors,
+    Tp32PlanBuilder,
+    Tp32PrefillExperts,
+)
 from models.demos.blackhole.hy4_preview.tt.hy4_tp32pf_plan import build_plan
 
 TT = int(os.environ.get("TT", "2048"))
@@ -43,6 +49,27 @@ def traced_us(md, fn, n=6, rep_=2):
         ts.append((time.perf_counter() - t0) / rep_ * 1e6)
     ttnn.release_trace(md, tid)
     return statistics.median(ts)
+
+
+def plan_eq(a, b):
+    a, b = a.to(torch.int64) & 0xFFFFFFFF, b.to(torch.int64) & 0xFFFFFFFF
+    for c in range(a.shape[0]):
+        nu = int(b[c, 0])
+        if (
+            int(a[c, 0]) != nu
+            or not torch.equal(a[c, 1 : 1 + 3 * nu], b[c, 1 : 1 + 3 * nu])
+            or not torch.equal(a[c, 304 : 304 + nu], b[c, 304 : 304 + nu])
+        ):
+            return False
+    return True
+
+
+def k2all(ex, pt, act, out, TT):
+    if ex.k2v == "f":
+        ex.k2f(pt, act, out, TT)
+    else:
+        for S in range(6):
+            ex.k2(S, pt, act, out, TT)
 
 
 def main():
@@ -104,6 +131,49 @@ def main():
         )
         pt = PlanTensors(md, pl)
         act, out = ex.alloc(TT)
+        if os.environ.get("PLAN", "host") == "dev" or STAGE == "plan":
+            sbits = sc.to(torch.bfloat16).view(torch.int16).to(torch.int32) & 0xFFFF
+            route_t = torch.cat([ids.to(torch.int32), sbits], dim=1).reshape(1, 1, TT // 32, 512).to(torch.int32)
+            route = ttnn.from_torch(
+                route_t,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=md,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            pbld = Tp32PlanBuilder(md, nc=NC)
+            ptd = pbld(route, TT)
+            ttnn.synchronize_device(md)
+            gh = lambda t_, shp: ttnn.to_torch(t_).reshape(shp)
+            eq = {
+                "plan": plan_eq(gh(ptd.plan, pl.plan.shape), pl.plan),
+                "gidx": bool(
+                    torch.equal(
+                        gh(ptd.gidx, pl.gidx.shape).to(torch.int64) & 0xFFFFFFFF, pl.gidx.to(torch.int64) & 0xFFFFFFFF
+                    )
+                ),
+                "dest": bool(
+                    torch.equal(
+                        gh(ptd.dest, pl.dest.shape).to(torch.int64) & 0xFFFFFFFF, pl.dest.to(torch.int64) & 0xFFFFFFFF
+                    )
+                ),
+                "sc": bool(torch.equal(gh(ptd.sc, pl.sc.shape).float(), pl.sc.float())),
+            }
+            p("rep", rep, "device plan == host plan:", eq)
+            if STAGE == "plan":
+                if not all(eq.values()):
+                    pd_ = gh(ptd.plan, pl.plan.shape).to(torch.int64) & 0xFFFFFFFF
+                    p(
+                        "plan row0 dev",
+                        pd_[0, :16].tolist(),
+                        "host",
+                        (pl.plan[0, :16].to(torch.int64) & 0xFFFFFFFF).tolist(),
+                    )
+                if TRACE:
+                    us_p = traced_us(md, lambda: pbld(route, TT, ptd))
+                    p("rep", rep, "plan builder us", round(us_p, 1))
+                continue
+            pt = ptd
         if STAGE == "k2":
             # K2 alone: random act rows (already scaled), reference = sum over the 8 slots of act_row @ W2 slice
             cap_ = pl.dest.shape[0] * 2
@@ -213,8 +283,9 @@ def main():
                     int((~torch.isfinite(Od).all(1)).sum()),
                 )
                 break
-            for S in range(int(os.environ.get("NPASS", "6"))):
-                ex.k2(S, pt, act, out, TT)
+            k2all(ex, pt, act, out, TT) if ex.k2v == "f" else [
+                ex.k2(S, pt, act, out, TT) for S in range(int(os.environ.get("NPASS", "6")))
+            ]
             ttnn.synchronize_device(md)
             O = ttnn.to_torch(out).reshape(TT, HID).float()
             toks = torch.randperm(TT, generator=torch.Generator().manual_seed(rep))[:NCHK].tolist()
@@ -246,7 +317,7 @@ def main():
                 float(Gg[:, colmask].abs().max()),
             )
             if TRACE:
-                us2 = traced_us(md, lambda: [ex.k2(S, pt, act, out, TT) for S in range(6)])
+                us2 = traced_us(md, lambda: k2all(ex, pt, act, out, TT))
                 p("rep", rep, "K2 x6 us", round(us2, 1))
                 us21 = traced_us(md, lambda: ex.k2(0, pt, act, out, TT))
                 p("rep", rep, "K2 one pass us", round(us21, 1))
@@ -370,8 +441,7 @@ def main():
             float(G.abs().max()),
         )
         if STAGE == "full":
-            for S in range(6):
-                ex.k2(S, pt, act, out, TT)
+            k2all(ex, pt, act, out, TT)
             ttnn.synchronize_device(md)
             O = ttnn.to_torch(out).reshape(TT, HID).float()
             refs, gots = [], []
@@ -404,7 +474,7 @@ def main():
             us1 = traced_us(md, lambda: (ex.k1c if ex.k1v == "c" else ex.k1)(x, pt, act))
             p("rep", rep, "K1 us", round(us1, 1))
             if STAGE == "full":
-                us2 = traced_us(md, lambda: [ex.k2(S, pt, act, out, TT) for S in range(6)])
+                us2 = traced_us(md, lambda: k2all(ex, pt, act, out, TT))
                 p("rep", rep, "K2 x6 us", round(us2, 1))
                 p("rep", rep, "K1 + K2 us", round(us1 + us2, 1))
                 us21 = traced_us(md, lambda: ex.k2(0, pt, act, out, TT))
