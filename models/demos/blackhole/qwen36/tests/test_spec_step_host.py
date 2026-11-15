@@ -27,7 +27,7 @@ from models.demos.blackhole.qwen36.tt.spec_engine import (
     reseed_row_plan,
     reseed_rows_host,
 )
-from models.demos.blackhole.qwen36.tt.spec_sample import VerifySampler, sampling_plan
+from models.demos.blackhole.qwen36.tt.spec_sample import NO_CORE, VerifySampler, chained_sampling_plan, sampling_plan
 from models.demos.blackhole.qwen36.tt.spec_step import (
     DRAFT_PENDING,
     VERIFY_POSITIONS,
@@ -203,18 +203,26 @@ def test_the_verify_stages_one_step_buffer_and_changed_tables_only(monkeypatch):
 
 
 def test_the_sampler_copies_its_request_parameters_when_they_change(monkeypatch):
-    """Top-k, top-p and temperature are copied when they change; the seeds whenever they change (every step of an
-    unseeded row)."""
+    """Top-k, top-p, temperature and the user ids are copied when they change; the seeds whenever they change (every
+    step of an unseeded row). A row that draws nothing seeds no core (user id NO_CORE). A chained plan copies no seeds:
+    the chain program wrote them, so the next host plan copies its seeds even when they equal the last ones."""
     s = VerifySampler.__new__(VerifySampler)
-    s.k, s.p, s.temp, s.seeds, s._staged = "k", "p", "temp", "seeds", {}
+    s.k, s.p, s.temp, s.seeds, s.user_ids, s._staged = "k", "p", "temp", "seeds", "user_ids", {}
+    hosts = {}
     s._host = lambda t, dtype: t
     copies = []
-    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", lambda h, d: copies.append(d))
+
+    def copy(h, d):
+        copies.append(d)
+        hosts[d] = h
+
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", copy)
     params = SimpleNamespace(temperature=[1.0, 0.0], top_k=[20, 1], top_p=[0.95, 1.0], seed=[None, None])
     seeds = iter(range(1, 100))
     plan = lambda: sampling_plan(params, [10, 20], 4, fresh_seed=lambda: next(seeds))
     s.stage(plan())
-    assert copies == ["k", "p", "temp", "seeds"]
+    assert copies == ["k", "p", "temp", "user_ids", "seeds"]
+    assert hosts["user_ids"].tolist() == [0, 1, 2, 3] + [NO_CORE] * 4
     copies.clear()
     s.stage(plan())
     assert copies == ["seeds"], "fresh seeds every step, the parameters once"
@@ -222,6 +230,19 @@ def test_the_sampler_copies_its_request_parameters_when_they_change(monkeypatch)
     copies.clear()
     s.stage(plan())
     assert copies == ["k", "seeds"]
+    params.seed = [7, None]
+    seeded = sampling_plan(params, [10, 20], 4)
+    copies.clear()
+    s.stage(seeded)
+    s.stage(seeded)
+    assert copies == ["seeds"]
+    chained, _ = chained_sampling_plan(params, [6, -1], 4)
+    copies.clear()
+    s.stage(chained)
+    assert copies == [], "the chain program writes a chained verify's seeds"
+    s.seeds_written()
+    s.stage(seeded)
+    assert copies == ["seeds"], "the chain program overwrote the seeds the host staged last"
 
 
 def test_the_drafter_derives_its_inputs_from_the_pack(monkeypatch):
