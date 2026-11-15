@@ -325,14 +325,12 @@ def staging_dir(final_dir: str, nonce: int) -> str:
     return f"{final_dir.rstrip('/')}{PARTIAL_MARK}{int(nonce)}"
 
 
-def begin_staging(final_dir: str, nonce: int | None = None, shared: bool = False) -> tuple[str, int]:
-    """Create ``<final_dir>.partial-<nonce>/data``; returns the staging path and the nonce. A multi-rank save
-    passes the nonce its ranks agreed on and ``shared=True``, since several ranks create the same directory."""
-    if nonce is None:
-        nonce = secrets.randbits(31)
+def begin_staging(final_dir: str, nonce: int, shared: bool) -> str:
+    """Create ``<final_dir>.partial-<nonce>/data`` and return the staging path. Save passes the nonce its ranks agreed
+    on; with ``shared`` the directory may already exist, since every rank of a multi-rank save creates it."""
     staging = staging_dir(final_dir, nonce)
     os.makedirs(os.path.join(staging, DATA_DIR), exist_ok=shared)
-    return staging, nonce
+    return staging
 
 
 def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> None:

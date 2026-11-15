@@ -208,7 +208,7 @@ def test_read_user_header_returns_only_the_dict_passed_to_save(tmp_path):
 
 def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     final = str(tmp_path / "step_0000010")
-    staging, nonce = begin_staging(final)
+    staging = begin_staging(final, nonce=100, shared=False)
     assert ".partial-" in staging and os.path.isdir(os.path.join(staging, "data"))
     write_header(staging, {"step": 10})
     write_index(staging, _index())
@@ -227,7 +227,7 @@ def test_staging_becomes_complete_only_at_finalize(tmp_path, expect_error):
     with expect_error(IncompleteCheckpointError, "no index.json"):
         read_index(str(tmp_path / "nowhere"))
 
-    staging2, _ = begin_staging(final)
+    staging2 = begin_staging(final, nonce=1, shared=False)
     write_index(staging2, _index())
     with expect_error(CheckpointError, "already exists"):
         finalize_staging(staging2, final)
@@ -256,7 +256,7 @@ def test_crc_column_keeps_known_checksums_and_is_validated(expect_error):
 
 def test_an_unreadable_index_or_header_is_an_incomplete_checkpoint(tmp_path, expect_error):
     final = str(tmp_path / "step_0000010")
-    staging, _ = begin_staging(final)
+    staging = begin_staging(final, nonce=2, shared=False)
     write_index(staging, _index())
     write_header(staging, {"step": 10})
     finalize_staging(staging, final)
@@ -291,12 +291,12 @@ def test_only_bool_int_float_and_str_scalars_are_stored(expect_error):
 
 def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypatch, expect_error):
     final = str(tmp_path / "step_0000010")
-    staging, _ = begin_staging(final)
+    staging = begin_staging(final, nonce=3, shared=False)
     write_index(staging, _index())
     finalize_staging(staging, final)
     previous = read_index(final).checkpoint_id
 
-    staging2, _ = begin_staging(final)
+    staging2 = begin_staging(final, nonce=4, shared=False)
     replacement = _index()
     replacement.checkpoint_id = "replacement"
     write_index(staging2, replacement)
@@ -321,10 +321,10 @@ def test_a_failed_overwrite_that_cannot_roll_back_says_where_the_previous_checkp
     tmp_path, monkeypatch, expect_error
 ):
     final = str(tmp_path / "step_0000010")
-    staging, _ = begin_staging(final)
+    staging = begin_staging(final, nonce=5, shared=False)
     write_index(staging, _index())
     finalize_staging(staging, final)
-    staging2, _ = begin_staging(final)
+    staging2 = begin_staging(final, nonce=6, shared=False)
     write_index(staging2, _index())
     real_rename = os.rename
 
@@ -345,10 +345,10 @@ def test_a_failed_overwrite_that_cannot_roll_back_says_where_the_previous_checkp
 
 def test_an_overwrite_warns_when_the_previous_checkpoint_cannot_be_removed(tmp_path, monkeypatch):
     final = str(tmp_path / "step_0000010")
-    staging, _ = begin_staging(final)
+    staging = begin_staging(final, nonce=7, shared=False)
     write_index(staging, _index())
     finalize_staging(staging, final)
-    staging2, _ = begin_staging(final)
+    staging2 = begin_staging(final, nonce=8, shared=False)
     write_index(staging2, _index())
 
     def busy_rmtree(path, onerror):  # an NFS server keeping an open file as .nfsXXXX
