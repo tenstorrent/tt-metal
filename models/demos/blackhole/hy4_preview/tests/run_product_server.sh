@@ -17,7 +17,7 @@ MAXLEN=${MAXLEN:-65536}; NSEQ=${NSEQ:-4}; SPEC_K=${SPEC_K:-3}
 LIBDIR=${LIBDIR-$PR/integ/libs}
 FLAGS_DEFAULT="HY4_POOL=1 HY4_POOL_PF=1 HY4_KV_FMT=scaled_fp8 HY4_OPT=all HY4_IHC_FUSED=1 HY4_FUSE=sparse,xchg HY4_XM_NSPLIT=8 HY4_SKINNY=shared,router,oproj,hproj HY4_PF_OPT=all,moeall MOE_RING_FAST=1"
 FLAGS=${FLAGS-$FLAGS_DEFAULT}
-TRACE=${TRACE:-1900000000}
+TRACE=${TRACE:-3000000000}
 mkdir -p $O/traces $O/gen $O/root $O/logs $P/logs
 [ -d $O/kern ] || mkdir -p $O/kern
 chmod -R 777 $O $HC

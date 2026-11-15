@@ -292,9 +292,15 @@ class Hy4Engine:
         first = self.prefill(prompts)
         t1 = time.time()
         if self.spec:
-            wp = self.runner.capture("G")
+            # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its
+            # replays): run both round bodies eagerly first, then capture. (p4 / p5: the first sampled round hung at 78 layers after greedy rounds had replayed.)
+            self.runner.body("G")
+            ttnn.synchronize_device(self.md)
             if self.sampled:
-                self.live = [True] * ROWS
+                self.runner.body("S")
+                ttnn.synchronize_device(self.md)
+            self.runner.capture("G")
+            if self.sampled:
                 self.runner.capture("S")
             logger.info(f"HY4 warm-up: spec traces captured ({list(self.runner.traces)})")
         else:
