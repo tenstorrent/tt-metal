@@ -52,9 +52,9 @@ TINY = dict(
 )
 SEQ_LEN = 32  # a whole tile: the SDPA kernel wants the sequence dimension unpadded
 # Across layouts the forward reduces in another order (other shard boundaries, other all-reduces), so the logits and
-# the moments after one more step differ in rounding. Measured on the tiny Llama's cross-world cases on a loudbox, as a
-# fraction of the reference's largest magnitude: logits 0.004-0.011, post-step moments 0.012-0.022. The bounds leave
-# about 3x headroom; a scrambled fused weight moves the logits by 1.36 (the --strip-fused control).
+# the moments after one more step differ in rounding. Measured on the tiny Llama's cross-world cases on a loudbox over
+# two runs, as a fraction of the reference's largest magnitude: logits 0.004-0.011, post-step moments 0.012-0.025. The
+# bounds leave 2.5-3x headroom; a scrambled fused weight moves the logits by 1.36 (the --strip-fused control).
 LOGITS_TOLERANCE = 0.03
 STATE_TOLERANCE = 0.06
 MESH_OPEN_FAILED = 3  # exit status when this host cannot open the requested mesh; the tests skip on it
