@@ -768,3 +768,39 @@ so issuing S0 earlier on any RISC adds to the queue they wait in. Next: take the
 dt_bias and the b / a gate rows once per call on the q / k cores, multicast with qn / kn, as refinement 18 suggests for
 B=1), or hold every core's S0 until all cores' small reads have landed (one cross-core gate); not tried here, both are
 scheme changes beyond this heading.
+
+### [ ] Refinement 20 — Decode: small inputs read once per call and multicast, off the hot DRAM bank
+
+**Type**: perf
+
+**Goal**: operator numbers at a5e332f (median of 11 after launch 1): model_decode_b1 12.9 us (bound
+4.8, target 5.3), model_decode_b8 40.4 us (bound 26.4, target 29.3), model_decode_b16 73.2 us (bound
+51.7, target 57.5). Refinement 19 located what holds B=8 / B=16: every state core reads the same
+small tensors itself (norm_weight, conv_weight, A_log, dt_bias, the b / a gate rows), page 0 of each
+sits in DRAM bank 0, and on the late rows those reads land at 15 to 30 us although issued at 1 to 2 us
+because they queue on that bank behind the other cores' S0 bulk; the compute of those cores, and so
+the write-back of the whole call, starts that late. Refinement 18 named the same lever for B=1 (48
+cores read the same a / b / A_log / dt_bias pages and each spends about 1 us of SFPU on the gates).
+Do both outcomes' "next": (1) the gate inputs are read once per call by the q / k cores (or one
+dedicated core per key head or per sequence, whichever the trace favours), the gates exp(g) and beta
+are computed there once per (sequence, value head) and multicast to the state cores together with
+the inverse norms; norm_weight and the z row likewise where a state core needs them (measure whether
+norm_weight is better multicast or kept in a per-core read issued before S0); the state cores then
+issue no small DRAM read at all before S0; (2) alternatively or in addition, a cross-core gate that
+holds every core's S0 until the small reads have landed, if (1) leaves any small read on the state
+cores; (3) from refinement 18: send y_k^T with y_k from the k core so that the state cores drop
+their transposes, and one conv window of the 4 columns on the q / k cores. Measure with the zone
+timeline and a NoC trace (refinement 17) before and after: time at which the last state core has all
+its small inputs, time of the first and last S0 landing, time compute ends, per B.
+
+**Verifier notes**: guard set prefill T=128, model_prefill_4096 and decode fp32 must not regress, and
+none of B=1 / B=8 / B=16 may regress while another improves. Gates computed once must be bit-identical
+or within the existing accuracy gates (state-carry cases at 0.002). In place stays correct and
+bit-identical to the default path; the next-program test (refinement 16) and `NocDrainOnReturn` cover
+every new kernel path; kernel text sizes stay under the limit in traced builds
+(`kernel_text_sizes.py`). Host time per call is reported (decode runs by trace replay in the model, so
+device time decides, but prefill's untraced host time must not rise).
+
+**Done when**: model_decode_b16 is below 68 us and model_decode_b8 below 37 us (median of 11 after
+launch 1), model_decode_b1 not worse than 13.0 us, or the timeline shows the small reads are no longer
+on the critical path and names what is; golden green, no regression on the guard set.
