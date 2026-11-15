@@ -12,6 +12,10 @@
 // CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 PAIRS, 5 HT, 6 CHT, 7 G, 8 GC, then TensorAccessorArgs(slices)
 #include "api/dataflow/dataflow_api.h"
 
+#ifndef NOWN
+#define NOWN 1  // one sender chip set reads every expert (step 1); step 2 passes the owner count
+#endif
+
 void kernel_main() {
     constexpr uint32_t NEXP = get_compile_time_arg_val(0), KT = get_compile_time_arg_val(1);
     constexpr uint32_t KTD = get_compile_time_arg_val(2), DCOLS = get_compile_time_arg_val(3);
