@@ -11,10 +11,20 @@ The caller reduces the partial over the 32 chips (reduce-scatter).
 import os
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tt.skinny import _acc, _core_set, _hash
+from models.demos.blackhole.deepseek_v41_flash.tt.skinny import _acc, _core_set
+from models.demos.blackhole.deepseek_v41_flash.tt.skinny import _hash as _hash0
 from models.demos.blackhole.deepseek_v41_flash.tt.skinny_shared import _fb
 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32 import TB4
 from models.demos.blackhole.hy4_preview.tt.hy4_tp32pf_plan import mt_cap
+
+NOADDR = (
+    os.environ.get("TP32PF_HASH", "noaddr") == "noaddr"
+)  # program hash without buffer addresses (rely on runtime-arg override on a cache hit)
+
+
+def _hash(*vals):
+    return _hash0(*[v for v in vals if not (NOADDR and isinstance(v, int) and v >= (1 << 24))])
+
 
 KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tp32pf_kernels")
 LIMIT = 10.0
@@ -88,33 +98,49 @@ class Tp32PlanBuilder:
         pt = pt or self.alloc(tt)
         cap = mt_cap(tt)
         rows = cap * 32
-        nbytes = tt * 64 + rows * 10 + self.nc * 2048 + 5 * 256 * 4 + self.nc * 8
+        nbytes = tt * 64 + rows * 10 + self.nc * 2048 + 8 * 256 * 4 + self.nc * 8 + 64
         npages = (nbytes + 2047) // 2048
         CB = 0
         cbs = [u32_cb(self.cs, CB, npages * 2048)]
-        kern = ttnn.KernelDescriptor(
-            kernel_source=f"{KDIR}/plan_build.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=self.cs,
-            compile_time_args=[CB, tt, self.nc, cap, npages, int(os.environ.get("TP32PF_PLAN_MODE", "0"))]
-            + _acc(route)
-            + _acc(pt.plan)
-            + _acc(pt.gidx)
-            + _acc(pt.dest)
-            + _acc(pt.sc),
-            runtime_args=ttnn.RuntimeArgs(),
-            common_runtime_args=[
-                route.buffer_address(),
-                pt.plan.buffer_address(),
-                pt.gidx.buffer_address(),
-                pt.dest.buffer_address(),
-                pt.sc.buffer_address(),
-            ],
-            config=ttnn.ReaderConfigDescriptor(),
-        )
-        prog = ttnn.ProgramDescriptor(kernels=[kern], semaphores=[], cbs=cbs)
+        impl = os.environ.get("TP32PF_PLAN_IMPL", "1")
+        common = [
+            route.buffer_address(),
+            pt.plan.buffer_address(),
+            pt.gidx.buffer_address(),
+            pt.dest.buffer_address(),
+            pt.sc.buffer_address(),
+        ]
+        accs = _acc(route) + _acc(pt.plan) + _acc(pt.gidx) + _acc(pt.dest) + _acc(pt.sc)
+        if impl == "2":  # two RISCs of one core (plan_build2.cpp)
+            kerns = [
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/plan_build2.cpp",
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=self.cs,
+                    compile_time_args=[CB, tt, self.nc, cap, npages, role] + accs,
+                    runtime_args=ttnn.RuntimeArgs(),
+                    common_runtime_args=common,
+                    config=cfg,
+                )
+                for role, cfg in ((0, ttnn.ReaderConfigDescriptor()), (1, ttnn.WriterConfigDescriptor()))
+            ]
+        else:
+            kerns = [
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/plan_build.cpp",
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=self.cs,
+                    compile_time_args=[CB, tt, self.nc, cap, npages, int(os.environ.get("TP32PF_PLAN_MODE", "0"))]
+                    + accs,
+                    runtime_args=ttnn.RuntimeArgs(),
+                    common_runtime_args=common,
+                    config=ttnn.ReaderConfigDescriptor(),
+                )
+            ]
+        prog = ttnn.ProgramDescriptor(kernels=kerns, semaphores=[], cbs=cbs)
         prog.custom_program_hash = _hash(
             0x7F24,
+            impl,
             int(os.environ.get("TP32PF_PLAN_MODE", "0")),
             tt,
             self.nc,
