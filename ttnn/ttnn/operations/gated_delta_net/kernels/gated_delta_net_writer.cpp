@@ -381,6 +381,7 @@ FORCE_INLINE void pop_state(uint32_t n_state, bool reader_writes) {
 }
 
 void kernel_main() {
+    const gdn::NocDrainOnReturn drain;
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t Hv = get_compile_time_arg_val(2);
