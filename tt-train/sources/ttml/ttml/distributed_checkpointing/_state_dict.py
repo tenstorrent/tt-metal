@@ -28,7 +28,7 @@ import ttnn
 import ttml
 from ttml.modules.parameter import Parameter
 
-from ._errors import CheckpointError, FSDPStateError, LazyParameterError, TopologyError
+from ._errors import CheckpointError, FSDPStateError, LayoutError, LazyParameterError, TopologyError
 from ._layouts import Identity, declared_transform
 from ._planner import TensorInfo
 from ._topology import Label, Placement, global_shape
@@ -66,6 +66,9 @@ class LiveTensor:
     key: str
     tensor: Any  # ttml.autograd.Tensor
     info: TensorInfo
+    # A parameter of a C++-bound module whose name suggests a fused projection (or the optimizer state of one): its
+    # segment order cannot be declared, so it can only be loaded split the way it was saved.
+    undeclared_fusion: bool = False
 
 
 def label_of(value) -> Label:
@@ -151,6 +154,10 @@ def _python_parameters(model, params) -> tuple[dict[int, list[str]], dict[int, d
     return names, declarations
 
 
+def _module_name(key: str) -> str:
+    return key.rsplit("/", 2)[-2] if key.count("/") >= 2 else key
+
+
 def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) -> None:
     """A TP-sharded weight that looks fused by name but declares no segments loads silently wrong across TP sizes.
 
@@ -163,8 +170,7 @@ def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) 
     shards = int(np.prod([label.dist_shape[a] for a in axes])) if axes else 1
     if shards <= 1:
         return
-    module_name = key.rsplit("/", 2)[-2] if key.count("/") >= 2 else key
-    if _FUSION_HINT.search(module_name):
+    if _FUSION_HINT.search(_module_name(key)):
         warnings.warn(
             f"{key} is sharded on dim 2 across {shards} devices and its name suggests a fused projection, but it "
             f"declares no fused_segments; a checkpoint of it reshards correctly only between equal TP sizes",
@@ -184,6 +190,7 @@ def collect_model(model) -> list[LiveTensor]:
             f"it was saved at",
             stacklevel=3,
         )
+    cpp_bound = set(cpp_bound)
     live: list[LiveTensor] = []
     for fqn, tensor in params.items():
         value = tensor.get_value(NATIVE)
@@ -201,7 +208,8 @@ def collect_model(model) -> list[LiveTensor]:
         _lint_fusion(key, label, declaration, tensor)
         live_keys = tuple(sorted({key, *(f"model/{n}" for n in names.get(id(tensor), []))}))
         info = TensorInfo(key, "param", dtype_name(value), layout_name(value), label, local_shape, transform, live_keys)
-        live.append(LiveTensor(key, tensor, info))
+        undeclared_fusion = fqn in cpp_bound and bool(_FUSION_HINT.search(_module_name(key)))
+        live.append(LiveTensor(key, tensor, info, undeclared_fusion))
     return live
 
 
@@ -228,7 +236,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     warnings.warn(
                         f"{key} is not keyed by a parameter of the model; saved with an identity layout", stacklevel=3
                     )
-                    transform, live_keys, ref = Identity(), (key,), None
+                    transform, live_keys, ref, undeclared_fusion = Identity(), (key,), None, False
                 else:
                     if local_shape != param.info.local_shape:
                         raise CheckpointError(
@@ -239,6 +247,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     prefix = "optimizer/" + "/".join(path) + "/"
                     live_keys = tuple(sorted(prefix + n[len("model/") :] for n in param.info.live_keys))
                     ref = param.key
+                    undeclared_fusion = param.undeclared_fusion
                 info = TensorInfo(
                     key,
                     "optimizer_state",
@@ -251,7 +260,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
                     ref,
                     path,
                 )
-                live.append(LiveTensor(key, tensor, info))
+                live.append(LiveTensor(key, tensor, info, undeclared_fusion))
         elif isinstance(node, dict):
             for name, child in node.items():
                 walk(child, path + (str(name),))
@@ -262,6 +271,23 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
 
     walk(optimizer.get_state_dict(), ())
     return live, scalars
+
+
+def check_undeclared_fusion(live: LiveTensor, saved: Label) -> None:
+    """A C++-bound fused projection (``DistributedLlama``'s ``kv_linear``, say) stores its segments per shard, which no
+    declaration describes, so the checkpoint's chunks are in an order only the same split restores. Loading it split
+    another way would plan cleanly and scramble the segments, so it is refused."""
+    if not live.undeclared_fusion:
+        return
+    rank = len(live.info.local_shape)
+    before = tuple(saved.shard_count(d) for d in range(rank))
+    after = tuple(live.info.label.shard_count(d) for d in range(rank))
+    if before != after:
+        raise LayoutError(
+            f"{live.key} belongs to a C++-bound module whose name suggests a fused projection, so its segments are "
+            f"stored per shard in an order it cannot declare; it was saved split {list(before)} ways per dim and "
+            f"would load split {list(after)}, which would scramble the segments. Load it at the TP size it was saved at"
+        )
 
 
 def check_param_groups(optimizer, scalars: dict[str, Any]) -> None:

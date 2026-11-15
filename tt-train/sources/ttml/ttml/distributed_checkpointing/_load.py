@@ -33,6 +33,7 @@ from ._state_dict import (
     LiveTensor,
     check_label_unchanged,
     check_param_groups,
+    check_undeclared_fusion,
     collect_model,
     collect_optimizer,
     fsdp_gate,
@@ -188,6 +189,8 @@ def load(
     by_key = {lt.key: lt for lt in live}
     roles = {"param", "buffer"} | ({"optimizer_state"} if optimizer is not None else set())
     plan: LoadPlan = create_load_plan(index, [lt.info for lt in live], strict=strict, roles=roles)
+    for key, kplan in plan.keys.items():
+        check_undeclared_fusion(by_key[key], kplan.entry.label)
     if optimizer is not None:
         check_param_groups(optimizer, index.scalars)  # before anything is placed
     stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}

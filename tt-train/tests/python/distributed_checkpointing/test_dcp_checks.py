@@ -9,14 +9,18 @@ import warnings
 
 import numpy as np
 
-from ttml.distributed_checkpointing._errors import CheckpointError
+from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError
 from ttml.distributed_checkpointing._index import check_json
+from ttml.distributed_checkpointing._layouts import Identity
+from ttml.distributed_checkpointing._planner import TensorInfo
 from ttml.distributed_checkpointing._save import _logical_bytes
 from ttml.distributed_checkpointing._state_dict import (
+    LiveTensor,
     _cpp_bound_params,
     _lint_fusion,
     _python_parameters,
     check_param_groups,
+    check_undeclared_fusion,
     fsdp_gate,
 )
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
@@ -143,3 +147,22 @@ def test_parameters_of_cpp_bound_modules_are_named_and_the_walks_pass_over_them(
     assert fsdp_gate(_CppModel(), True) == []
     mixed = {"Root/cpp_child/gamma": 0, "Root/cpp_childish/w": 1, "Root/w": 2}
     assert _cpp_bound_params(_Model(), mixed) == ["Root/cpp_child/gamma"], "only the C++-bound child's parameters"
+
+
+def test_a_cpp_fused_projection_loads_only_split_the_way_it_was_saved(expect_error):
+    key = "model/llama/llama_block_0/attention/kv_linear/weight"
+    tp2 = _label([Placement.replicate(), Placement.shard(2)], (1, 2))
+    tp4 = _label([Placement.replicate(), Placement.shard(2)], (1, 4))
+    dp2_tp2 = _label([Placement.replicate(), Placement.shard(2)], (2, 2))
+
+    def live(label, undeclared_fusion=True):
+        info = TensorInfo(key, "param", "BF16", "TILE", label, (1, 1, 64, 64), Identity(), (key,))
+        return LiveTensor(key, None, info, undeclared_fusion)
+
+    check_undeclared_fusion(live(tp2), tp2)
+    check_undeclared_fusion(live(dp2_tp2), tp2)  # more replicas split it the same way
+    check_undeclared_fusion(live(tp4, undeclared_fusion=False), tp2)  # a Python module declares its layout
+    with expect_error(
+        LayoutError, r"kv_linear/weight .*saved split \[1, 1, 2, 1\] ways per dim and would load split \[1, 1, 4, 1\]"
+    ):
+        check_undeclared_fusion(live(tp4), tp2)

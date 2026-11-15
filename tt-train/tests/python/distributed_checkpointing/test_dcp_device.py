@@ -21,6 +21,7 @@ from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
+from ttml.distributed_checkpointing._state_dict import collect_model
 from ttml.fsdp import _ShardedState
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
@@ -317,6 +318,10 @@ def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_s
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
         dcp.load(path, model=fresh)
     _assert_same_shards(_model_shards(fresh.parameters()), saved)
+    # Its fused kv_linear is the one weight a load at another TP size would scramble, so load refuses that.
+    with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
+        flagged = [lt.key for lt in collect_model(fresh) if lt.undeclared_fusion]
+    assert flagged == ["model/llama/llama_block_0/attention/kv_linear/weight"], flagged
 
 
 def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):
