@@ -49,22 +49,8 @@ from typing import Any, Callable, Protocol
 
 import ttnn
 
-from ._errors import (
-    CheckpointError,
-    CheckpointFatalError,
-    CoverageError,
-    DtypeMismatchError,
-    FSDPStateError,
-    IncompleteCheckpointError,
-    LayoutError,
-    LazyParameterError,
-    MissingKeyError,
-    RoleMismatchError,
-    ShapeMismatchError,
-    TopologyError,
-    UnexpectedKeyError,
-    VersionError,
-)
+from . import _errors
+from ._errors import CheckpointError, CheckpointFatalError
 from ._index import Entry, FileRecord, Index, _entry_from_json, _entry_to_json
 from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
@@ -79,21 +65,13 @@ DCP_TAG = 0x7DC0
 # and MPI_Send / MPI_Recv take an int count (ttnn's MPI context throws past INT_MAX).
 MAX_PAYLOAD = (1 << 31) - 1
 
-# The error classes a phase carries across the ranks: status 0 is success, status k the class at index k - 1.
-ERROR_CLASSES: tuple[type[CheckpointError], ...] = (
-    CheckpointError,
-    IncompleteCheckpointError,
-    VersionError,
-    LayoutError,
-    ShapeMismatchError,
-    DtypeMismatchError,
-    MissingKeyError,
-    UnexpectedKeyError,
-    CoverageError,
-    TopologyError,
-    FSDPStateError,
-    LazyParameterError,
-    RoleMismatchError,
+# The error classes a phase carries across the ranks: status 0 is success, status k the class at index k - 1. They
+# are every class _errors defines, in definition order, so a new error is carried without being listed here; all but
+# CheckpointFatalError, which a failed exchange raises outside any status.
+ERROR_CLASSES: tuple[type[CheckpointError], ...] = (CheckpointError,) + tuple(
+    cls
+    for cls in vars(_errors).values()
+    if isinstance(cls, type) and issubclass(cls, CheckpointError) and cls not in (CheckpointError, CheckpointFatalError)
 )
 
 

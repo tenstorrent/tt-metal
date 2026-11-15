@@ -425,6 +425,14 @@ def test_an_interrupt_on_one_rank_is_exchanged_before_it_propagates():
     assert type(errors[0]) is CheckpointError and "writing the shards failed on rank(s) [1] of 2" in str(errors[0])
 
 
+def test_every_exported_error_class_crosses_the_ranks():
+    import ttml.distributed_checkpointing as dcp
+
+    exported = {name for name in dcp.__all__ if name.endswith("Error")} - {"CheckpointFatalError"}
+    assert {cls.__name__ for cls in _coordinator.ERROR_CLASSES} == exported
+    assert _coordinator.ERROR_CLASSES[0] is CheckpointError, "status 1, the class of anything else"
+
+
 def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
     monkeypatch.setattr(_coordinator, "MAX_PAYLOAD", 64)
 
