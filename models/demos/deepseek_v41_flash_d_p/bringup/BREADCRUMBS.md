@@ -2165,3 +2165,53 @@ Measured (8x4, `gate FIX.31 --check`, after the last edit)
   unrelated names (prev_end, prev_hi) and one docstring of tests/workloads.py naming the deleted file it came from.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.33 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
+
+## FIX.34 (overseer, OWNER 2026-11-15): realistic prefill perf at 51k..1M under DECODER_SKIP=decode (no model change)
+
+- New test `tests/test_skip_positions.py` (BATCH_SHARED; one model load for all points; no model code changed). Points
+  51200, 128000, 256000, 512000, 768000, 1024000 (SKIP_POS overrides). Per point two chunks, each timed alone:
+  steady = `begin_chunk(.., p, last=False)`; resumed = `begin_chunk(.., p, last=False, write_start=p + 128)` (128 rows
+  encoder replay, windows truncated at p, 4992 new rows).
+- Preceding chunk: every iteration (warm-up, timed, profiled) first runs the REAL previous chunk tokens[p-5120:p] at
+  p-5120 (last=False, untimed, synced), then the timed chunk; never the same chunk twice in a row; no steady_state()
+  (the window carry / engram tail / any MoE state are the previous chunk's). Long-range caches: a fresh state sized
+  p+5120 and random ids (seed 0), test_profile's BRINGUP_POS mechanism (F230, testing/profile.PositionGolden).
+- Wall: testing/profile.warm_up (F196/F200: until no new program and settled), then 10 timed runs with cache misses
+  refused; median and spread; begin_chunk to the sync. Device: one rt-profiler run (F155); `<kind>_device_ms_p<p>` =
+  the slowest chip's total; `_secmax` = test_profile's device_ms_total (slowest chip per section, summed); phases as
+  test_profile, plus section chunk_input (begin_chunk + embedding, ~0.2 ms, uncounted in test_profile).
+- Settings: DS41_DECODER_SKIP=decode (gate env); DS41_ENGRAM_TABLE set to its shipped default (resident) when unset,
+  since pytest otherwise reads F222's test value mmap (DS41-245). Everything else shipped defaults.
+- Gotcha (DS41-279): the 8x4 spec's target.seq is 56320, so the loaded model's position tables stop there; the first
+  gate run reported p128000..p1024000 "not run: p + chunk > max_seq 56320". The test now raises target.seq in memory
+  to the longest point (as profile.run_profile does for BRINGUP_POS), capped at deploy.seq (1,044,480).
+- Memory (checked first): every point fits. Allocator DRAM a chip (lockstep mesh): load 15.90 GiB (max_seq 1,029,120),
+  with the point's state 16.13 (p51200) .. 21.71 GiB (p1024000) of 31.83; prior evidence P.32 test_dram at 1M
+  (1,049,600, served slabs): peak 18.39 GiB. Values are after allocation, not an in-op peak (test_dram's peak is
+  ~+1.2 GiB over load).
+- Results (8x4, chunk 5120, gate check log FIX.34.check.log):
+
+| point | chunk | tokens | wall ms (spread) | device ms | host ms | tok/s | experts | attention | indexer | attn_res | ffn_res | compressor |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 51200 | steady | 5120 | 106.7 (7.8) | 81.6 | 25.1 | 47985 | 46.9 | 22.9 | 1.3 | 4.3 | 4.1 | 1.9 |
+| 51200 | resumed | 4992 | 107.2 (5.8) | 81.4 | 25.8 | 46567 | 45.9 | 22.9 | 1.3 | 4.2 | 4.2 | 2.7 |
+| 128000 | steady | 5120 | 107.6 (46.2) | 82.4 | 25.2 | 47584 | 46.2 | 22.7 | 2.5 | 4.2 | 3.9 | 1.7 |
+| 128000 | resumed | 4992 | 109.4 (10.2) | 82.8 | 26.6 | 45631 | 46.0 | 22.8 | 2.5 | 4.2 | 3.9 | 2.7 |
+| 256000 | steady | 5120 | 106.4 (25.2) | 85.7 | 20.7 | 48120 | 47.4 | 23.0 | 4.7 | 4.3 | 4.0 | 1.9 |
+| 256000 | resumed | 4992 | 112.9 (37.4) | 85.1 | 27.8 | 44216 | 46.1 | 23.1 | 4.7 | 4.2 | 3.9 | 2.8 |
+| 512000 | steady | 5120 | 112.5 (24.6) | 88.5 | 24.0 | 45511 | 46.2 | 22.8 | 8.9 | 4.3 | 3.9 | 1.7 |
+| 512000 | resumed | 4992 | 114.3 (35.3) | 89.5 | 24.8 | 43675 | 47.1 | 22.2 | 8.9 | 3.6 | 3.6 | 2.7 |
+| 768000 | steady | 5120 | 115.7 (5.3) | 93.0 | 22.7 | 44252 | 46.5 | 23.0 | 13.1 | 4.3 | 4.2 | 1.7 |
+| 768000 | resumed | 4992 | 120.3 (6.2) | 95.3 | 25.0 | 41496 | 47.3 | 22.9 | 13.1 | 4.3 | 4.1 | 2.9 |
+| 1024000 | steady | 5120 | 120.4 (6.3) | 99.1 | 21.3 | 42525 | 47.5 | 23.1 | 17.3 | 4.1 | 4.1 | 2.1 |
+| 1024000 | resumed | 4992 | 125.5 (6.8) | 97.9 | 27.6 | 39777 | 46.2 | 23.0 | 17.3 | 4.3 | 4.1 | 2.7 |
+
+  (device = slowest chip; section columns in ms, slowest chip per section; the full table with every section is the
+  metric skip_positions_table in results/FIX.34.json.) What grows with position: the indexer (1.3 -> 17.3 ms, linear in
+  the keys scored); experts, attention and the residuals are flat. Resumed costs ~+1 ms compressor (the replay) and up
+  to ~5 ms wall; its tok/s counts only the 4992 new rows. Spread outliers (one run of 10 at +20..40 ms at 128k-512k)
+  are host-side; the medians are stable.
+- Re-run: `PYTHONPATH=$PWD DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py` (via devjob: ~11 min with the load), or the gate:
+  `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.34 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
