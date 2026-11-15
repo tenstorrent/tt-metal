@@ -41,13 +41,63 @@ class Hy4MTP:
             )
             self._wb = {id(t): wb(t) for t in (self.w_e, self.w_h, self.w_fin, ly.w_in32, ly.w_post32)}
             self.ckc_norm = compute_cfg(self.md, "hifi4", False)
+        # HY4_MTP_NORM=fused (verify-opt track, draft-only numerics, fp32 throughout): 6-op rms (eps*D folded into one add, sqrt(D) folded into the weight) and ONE batched call for the
+        # enorm/hnorm pair of ``pre`` (rows [e; h] share the sum-of-squares ops; the two weights ride in one [2S, D] tensor) instead of 2 x 7 ops
+        self.fused_norm = os.environ.get("HY4_MTP_NORM", "exact") == "fused"
+        if self.fused_norm:
+            self._sq = float(HID) ** 0.5
+            self._wsc = {}
+            self._wh = {
+                k: sd[k + ".weight"].float().reshape(1, 1, 1, HID) for k in ("enorm", "hnorm", "final_layernorm")
+            }
         self.shared = ly.shared_dec if getattr(ly, "shared_dec", None) is not None else with_decode_cfg(ly.shared)
 
+    def _rms6(self, x32, wsc):
+        """x32 [1,1,n,D] fp32, wsc = weight * sqrt(D) (fp32, [1,1,1,D] or [1,1,n,D]) -> bf16 [1,1,n,D]."""
+        sq = ttnn.multiply(x32, x32)
+        ss = ttnn.sum(sq, dim=3, keepdim=True)
+        ttnn.deallocate(sq)
+        r = ttnn.rsqrt(ttnn.add(ss, self.eps * HID))
+        ttnn.deallocate(ss)
+        y = ttnn.multiply(x32, r)
+        ttnn.deallocate(r)
+        z = ttnn.multiply(y, wsc, dtype=ttnn.bfloat16)
+        ttnn.deallocate(y)
+        return z
+
+    def _wscaled(self, key, w32, n=1):
+        k = (key, n)
+        if k not in self._wsc:
+            w = (
+                self._wh[key]
+                if key in self._wh
+                else ttnn.to_torch(ttnn.get_device_tensors(w32)[0]).float().reshape(1, 1, 1, HID)
+            )
+            self._wsc[k] = upload(self.md, (w * self._sq).expand(1, 1, n, HID).contiguous(), ttnn.float32)
+        return self._wsc[k]
+
     def _norm(self, x32, w32):
+        if self.fused_norm:
+            key = {id(self.w_e): "enorm", id(self.w_h): "hnorm", id(self.w_fin): "final_layernorm"}.get(
+                id(w32), id(w32)
+            )
+            return self._rms6(x32, self._wscaled(key, w32))
         if not self.fast_norm:
             return rms_exact(x32, w32, self.eps)
         xb = ttnn.typecast(x32, ttnn.bfloat16)
         return ttnn.rms_norm(xb, weight=self._wb[id(w32)], epsilon=self.eps, compute_kernel_config=self.ckc_norm)
+
+    def _wscaled2(self, S):
+        k = ("eh", S)
+        if k not in self._wsc:
+            import torch as _t
+
+            w = (
+                _t.cat([self._wh["enorm"].expand(1, 1, S, HID), self._wh["hnorm"].expand(1, 1, S, HID)], dim=2)
+                * self._sq
+            )
+            self._wsc[k] = upload(self.md, w.contiguous(), ttnn.float32)
+        return self._wsc[k]
 
     def embed(self, tok):
         """tok uint32 [1, S] ROW_MAJOR replicated -> bf16 [1,1,S,D] replicated (shared embedding table, vocab column-sharded on the hidden dim)."""
@@ -62,13 +112,26 @@ class Hy4MTP:
         ch = self.ch
         e32 = ttnn.typecast(e, ttnn.float32)
         h32 = ttnn.typecast(h, ttnn.float32)
-        en = self._norm(e32, self.w_e)
-        hn = self._norm(h32, self.w_h)
-        for t in (e32, h32):
-            ttnn.deallocate(t)
-        cat = ttnn.concat([en, hn], dim=3)
-        for t in (en, hn):
-            ttnn.deallocate(t)
+        if self.fused_norm:
+            S = int(e32.shape[2])
+            both = ttnn.concat([e32, h32], dim=2)  # [1,1,2S,D]
+            for t in (e32, h32):
+                ttnn.deallocate(t)
+            w2 = self._wscaled2(S)
+            z = self._rms6(both, w2)
+            ttnn.deallocate(both)
+            cat = ttnn.concat(
+                [ttnn.slice(z, [0, 0, 0, 0], [1, 1, S, HID]), ttnn.slice(z, [0, 0, S, 0], [1, 1, 2 * S, HID])], dim=3
+            )
+            ttnn.deallocate(z)
+        else:
+            en = self._norm(e32, self.w_e)
+            hn = self._norm(h32, self.w_h)
+            for t in (e32, h32):
+                ttnn.deallocate(t)
+            cat = ttnn.concat([en, hn], dim=3)
+            for t in (en, hn):
+                ttnn.deallocate(t)
         x = ttnn.linear(cat, self.ly.eh_proj, compute_kernel_config=self.ckc)  # [1,1,S,D/8] per column
         ttnn.deallocate(cat)
         xg = ch.mc.allgather(x, ch.ccl, axis=1, dim=3)

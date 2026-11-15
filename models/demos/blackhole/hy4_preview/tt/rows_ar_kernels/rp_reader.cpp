@@ -54,13 +54,14 @@ void kernel_main() {
         // DRAM reads must be 64 B aligned: block b is read from the tile row A = (b T) & ~1 (even row = 64 B aligned),
         // H rows: the token row b T sits at tile row (b T - A) <= 1 of the wire tile
 #ifdef RP_PK
-        const uint32_t scr = get_write_ptr(CB_SCR);  // [b][i][f] 64 B pieces
+        constexpr uint32_t RB = (T >= 2) ? 32 * T : 64;  // read piece: T rows of one face (T = 4: 128 B, 64 B aligned)
+        const uint32_t scr = get_write_ptr(CB_SCR);      // [b][i][f] RB-byte pieces
         for (uint32_t b = 0; b < NB; ++b) {
             const uint32_t A = (b * T) & ~1u;
             for (uint32_t i = 0; i < Q; ++i) {
                 for (uint32_t f = 0; f < 2; ++f) {
                     noc_async_read(
-                        in_acc.get_noc_addr(p * Q + i, f * 512 + A * 32), scr + ((b * Q + i) * 2 + f) * 64, 64);
+                        in_acc.get_noc_addr(p * Q + i, f * 512 + A * 32), scr + ((b * Q + i) * 2 + f) * RB, RB);
                 }
             }
         }
@@ -74,7 +75,7 @@ void kernel_main() {
                     for (uint32_t t = 0; t < T; ++t) {
                         const uint32_t y = i * T + t;
                         noc_async_write(
-                            scr + ((b * Q + i) * 2 + f) * 64 + (sh + t) * 32,
+                            scr + ((b * Q + i) * 2 + f) * RB + (sh + t) * 32,
                             get_noc_addr(base + ((y >> 4) * 2 + f) * 512 + (y & 15) * 32),
                             32);
                     }

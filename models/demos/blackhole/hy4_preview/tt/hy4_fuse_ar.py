@@ -407,7 +407,7 @@ def shared_rp(md, T):
 
     key = ("rp", id(md), T)
     if key not in _SHARED:
-        _SHARED[key] = Hy4RowsReduce(md, T=T, h=2, nrp=int(os.environ.get("HY4_RP_NRP", "16")))
+        _SHARED[key] = Hy4RowsReduce(md, T=T, h=2, nrp=int(os.environ.get("HY4_RP_NRP", "24" if T == 4 else "16")))
     return _SHARED[key]
 
 

@@ -34,13 +34,21 @@ class Hy4RowsReduce:
         rows, cols = tuple(md.shape)
         self.mode = mode or ("axis0" if rows == 4 else "row4")
         assert self.mode in ("axis0", "row4")
-        assert 4 * T <= 8 and h >= T and h in (2, 4, 8), (T, h)
         assert NTILE % nrp == 0
         self.Q = NTILE // nrp
         # pack: the Q tile columns x T rows of a block are the rows of ONE 32x32 tile (compute = 1 tile instead of Q, 1 KB..2 KB packet); needs h == 2, Q * T <= 32
         self.pk = (os.environ.get("HY4_RP_PACK", "1") == "1") if pack is None else bool(pack)
         if self.pk:
-            assert h == 2 and self.Q * T <= 32, (h, self.Q, T)
+            assert h == 2 and self.Q * T <= 32 and 4 * T <= 16, (
+                h,
+                self.Q,
+                T,
+            )  # T = 4 (verify S = 4: 16 token rows): nrp = 24 -> Q = 8, Q * T = 32 (one full packed tile)
+        else:
+            assert 4 * T <= 8 and h >= T and h in (2, 4, 8), (T, h)
+        self.rb = (
+            32 * T if T >= 2 else 64
+        )  # bytes of one packed-mode read piece (T rows of one face: 64 B aligned; T = 4: 128 B)
         self.ntc = 1 if self.pk else self.Q  # tiles of one chunk (compute / CB unit)
         self.tileb = 2048 if self.pk else 64 * h
         self.tdh = 32 if self.pk else h
@@ -164,10 +172,10 @@ class Hy4RowsReduce:
                     ],
                 )
                 cb_scr = ttnn.CBDescriptor(
-                    total_size=2 * Q * 256,
+                    total_size=NB * Q * 2 * self.rb,
                     core_ranges=red_set,
                     format_descriptors=[
-                        ttnn.CBFormatDescriptor(buffer_index=CB_SCR, data_format=ttnn.bfloat16, page_size=256)
+                        ttnn.CBFormatDescriptor(buffer_index=CB_SCR, data_format=ttnn.bfloat16, page_size=self.rb)
                     ],
                 )
                 NTC = self.ntc

@@ -7,6 +7,8 @@ drafts that may be accepted: token budget), ``act``. ``SpecDerive.derive(p)`` tu
 col info, dense ids; same values as ``PoolCtx.set_step`` + host rope, proven by tests/mtp_spec_dev.py). ``accept`` computes m (leading run of d_{j+1} == a_j, capped), the pending token, the new position
 P + m + 1 and the one-hot of row m (used to pick the MTP s0 output / hidden of row m) entirely with elementwise ops on [1,1,1,16] vectors.
 """
+import os
+
 import torch
 
 import ttnn
@@ -157,6 +159,14 @@ class MTPRoundTail:
         self.sampling = sampling  # SpecSampling (lossless draft-q rejection sampling) or None (greedy)
         self.ch, self.mtp, self.sd, self.ctx, self.k, self.S = ch, mtp, derive, ctx, k, k + 1
         self.greedy = greedy  # fn(logits [1,1,T,V/8]) -> uint32 [T,1] ids (hy4_mtp.greedy_tokens)
+        # HY4_DRAFT_HEAD=bfp8 (verify-opt track, DRAFT-ONLY numerics: the verify rows decide every token): the draft lm_head matmuls (k per round, DRAM-bound at 455 us each with the bf16 weights)
+        # read a bfp8 copy of the head (half the bytes). Built here (outside any trace); the main-model head stays bf16.
+        self.lm_draft, self.ckc_draft = ch.lm_head, ch.ckc_head
+        if os.environ.get("HY4_DRAFT_HEAD", "bf16") == "bfp8":
+            from models.demos.blackhole.hy4_preview.tt.hy4_common import compute_cfg
+
+            self.lm_draft = ttnn.typecast(ch.lm_head, ttnn.bfloat8_b)
+            self.ckc_draft = compute_cfg(ch.md, os.environ.get("HY4_DRAFT_HEAD_FID", "hifi2"), True)
         md, S = ch.md, self.S
         R = int(md.shape[0])
         rep = lambda t, dt=ttnn.float32, lay=ttnn.TILE_LAYOUT: upload(md, t, dt, lay)
@@ -209,7 +219,7 @@ class MTPRoundTail:
         drafts = []
         h_cur = hm
         for i in range(k):
-            lg = ttnn.linear(h_cur, ch.lm_head, compute_kernel_config=ch.ckc_head, dtype=ttnn.float32)
+            lg = ttnn.linear(h_cur, self.lm_draft, compute_kernel_config=self.ckc_draft, dtype=ttnn.float32)
             if self.sampling is None:
                 t = self.greedy(lg)  # [1,1] u32
                 drafts.append(
