@@ -561,9 +561,46 @@ def part_path(base: str, rank: int) -> str:
     return f"{base}-w{rank:03d}.npz"
 
 
+# How a TPBlock's parameters split over the TP axis (tp_block.py): the dim each sharded one is cut along.
+TP_BLOCK_SHARDED_DIMS = {"up/weight": 2, "up/bias": 3, "down/weight": 3}
+
+
+def load_tp_block(directory: str) -> list[str]:
+    """Load ``directory/ckpt``, a TPBlock checkpoint the two-rank module wrote on its shared [1, 4] mesh, into a
+    TPBlock on this process's single device, and compare every parameter with the global array rebuilt from the
+    shards the two ranks dumped next to it (``shards_<rank>.npz``): sharded parameters by concatenating the four
+    devices' shards in TP order, replicated ones from the first device. Nothing here goes through DCP's topology."""
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from tp_block import TPBlock
+
+    from dcp_shards import param_shards
+
+    shards: dict[str, dict[tuple[int, ...], np.ndarray]] = {}
+    for rank in (0, 1):
+        with np.load(os.path.join(directory, f"shards_{rank}.npz")) as part:
+            for key in part.files:
+                name, coord = key.split("@")
+                shards.setdefault(name, {})[tuple(int(c) for c in coord.split("-"))] = part[key]
+    model = TPBlock(64)
+    params = model.parameters()
+    dcp.load(os.path.join(directory, "ckpt"), model=model)
+    loaded = param_shards(params, [(0, 0)])
+    problems = []
+    for name in params:
+        by_coord = shards[name]
+        dim = next((d for suffix, d in TP_BLOCK_SHARDED_DIMS.items() if name.endswith(suffix)), None)
+        if dim is None:
+            expected = by_coord[(0, 0)]
+        else:
+            expected = np.concatenate([by_coord[c] for c in sorted(by_coord)], axis=dim)
+        if not np.array_equal(loaded[(name, (0, 0))], expected):
+            problems.append(f"{name} differs from the two ranks' shards")
+    return problems
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["save", "load"])
+    parser.add_argument("command", choices=["save", "load", "load-tp-block"])
     parser.add_argument("--dir", required=True, help="checkpoint directory")
     parser.add_argument("--mesh", required=True, help="mesh shape, e.g. 2x2")
     parser.add_argument("--axes", required=True, help="comma-separated axis names, e.g. dp,tp")
@@ -613,6 +650,16 @@ def main(argv=None) -> int:
 
     mesh_shape = parse_mesh(args.mesh)
     axes = tuple(args.axes.split(","))
+    if args.command == "load-tp-block":
+        open_world(mesh_shape, axes, args.tp, args.mgd)
+        try:
+            problems = load_tp_block(args.dir)
+        finally:
+            ttml.close_device_mesh()
+        for problem in problems:
+            print("MISMATCH:", problem)
+        print("RESULT:", "OK" if not problems else f"{len(problems)} mismatch(es)")
+        return 0 if not problems else 1
     reference_base = args.dir.rstrip("/") + ".reference"
     actual_base = args.dir.rstrip("/") + ".actual"
     saved_resume = False

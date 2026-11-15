@@ -254,3 +254,26 @@ def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypa
     with expect_error(dcp.CheckpointError, r"the ranks disagree on strict and whether an optimizer is loaded: rank"):
         dcp.load(path, model=model, strict=rank == 0)
     ttnn.distributed_context_barrier()
+
+
+def test_a_checkpoint_for_the_one_process_load(two_ranks):
+    """The save half of a cross-world case: two ranks co-owning the [1, 4] mesh write a TPBlock checkpoint, so most
+    keys' chunks come from both ranks' files, and dump their own shards next to it. ``test_dcp_cross_world`` runs this
+    test alone, with ``DCP_CROSS_WORLD_DIR`` set, then loads the checkpoint on one process."""
+    out = os.environ.get("DCP_CROSS_WORLD_DIR")
+    if not out:
+        pytest.skip("run by test_dcp_cross_world with DCP_CROSS_WORLD_DIR set")
+    rank, local, root = two_ranks
+    ttml.init.manual_seed(0)
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    dcp.save(os.path.join(out, "ckpt"), model=model)
+    shards = param_shards(params, local)
+    assert len(shards) == len(params) * len(local)
+    np.savez(
+        os.path.join(out, f"shards_{rank}.npz"),
+        **{f"{name}@{'-'.join(map(str, coord))}": array for (name, coord), array in shards.items()},
+    )
+    index = dcp.read_index(os.path.join(out, "ckpt"))
+    assert {f.world_rank for f in index.files} == {0, 1}
+    ttnn.distributed_context_barrier()

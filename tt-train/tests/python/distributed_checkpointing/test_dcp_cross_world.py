@@ -216,3 +216,32 @@ def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal
         ["load", "--dir", ckpt, "--steps", "2", *_world("1x1", "dp,tp", ("--strip-fused",), None)], "load", False
     )
     assert "MISMATCH: logits differ" in out, out.splitlines()[-8:]
+
+
+DUAL_RANK_MGD = "tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto"
+
+
+def test_a_checkpoint_two_ranks_wrote_on_one_mesh_loads_on_one_process(
+    tmp_path, release_metal_env, skip_if_host_too_small
+):
+    """Two ranks co-owning one [1, 4] mesh split most keys' chunks between their files (the other two-rank cases
+    give each rank a whole mesh, so each key is written by one rank). The test_dcp_multirank module's source test
+    saves such a checkpoint under tt-run; one process with one device loads it, and every parameter must equal the
+    global array rebuilt from the two ranks' own shards."""
+    skip_if_host_too_small((4,), "the dual-rank save")
+    if TT_RUN is None:
+        pytest.skip("tt-run is not installed")
+    mgd = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), DUAL_RANK_MGD)
+    if not os.path.isfile(mgd):
+        pytest.skip(f"no descriptor {mgd}")
+    release_metal_env()
+    env = dict(os.environ, DCP_CROSS_WORLD_DIR=str(tmp_path))
+    env.pop("TT_MESH_GRAPH_DESC_PATH", None)
+    module = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_dcp_multirank.py")
+    save = [TT_RUN, "--mesh-graph-descriptor", mgd, "--hosts", socket.gethostname(), "--mpi-args", "--tag-output"]
+    save += [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", module, "-k", "for_the_one_process_load"]
+    proc = run_world(save, env, CHILD_TIMEOUT_S)
+    tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-40:])
+    assert proc.returncode == 0 and os.path.isfile(tmp_path / "shards_1.npz"), f"the dual-rank save failed:\n{tail}"
+    out = _run(["load-tp-block", "--dir", str(tmp_path), "--mesh", "1x1", "--axes", "dp,tp"], "load")
+    assert "RESULT: OK" in out, out.splitlines()[-5:]
