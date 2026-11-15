@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from math import prod
@@ -94,15 +95,23 @@ def _read_into(
 
 
 def _read_chunk(
-    fd: int, data_start: int, plan: KeyPlan, items: list[ReadItem], itemsize: int, carrier, arrays: dict
+    fd: int, data_start: int, plan: KeyPlan, items: list[ReadItem], itemsize: int, carrier, arrays: dict, path: str
 ) -> int:
     """The reads of one chunk: one ``pread`` of the whole chunk, sliced in memory, when the items need at least half
     of it (on a single host the destination shards together cover every chunk), else one read per contiguous run.
-    Returns bytes read."""
+    A whole chunk is checked against the CRC32 that save recorded for it; a partial read cannot be, since the checksum
+    covers the whole chunk. Returns bytes read."""
     record = plan.entry.chunks[items[0].chunk]
     needed = sum(it.src.volume for it in items) * itemsize
     if 2 * needed >= record.nbytes:
         raw = pread_all(fd, record.nbytes, data_start + record.data_offset)
+        if record.crc32 is not None:
+            crc = zlib.crc32(raw)
+            if crc != record.crc32:
+                raise CheckpointError(
+                    f"{plan.key}: chunk {items[0].chunk} ({record.box}) in {path} fails its CRC32 check (recorded "
+                    f"{record.crc32:08x}, read {crc:08x}); the checkpoint is corrupt"
+                )
         chunk = np.frombuffer(raw, dtype=carrier).reshape(record.box.sizes)
         for it in items:
             arrays[it.group][it.dst.slices()] = chunk[it.src.slices()]
@@ -215,6 +224,7 @@ def load(
 
     fds: dict[int, int] = {}
     data_start: dict[int, int] = {}
+    paths: dict[int, str] = {}
     placed: list[str] = []
     device = mesh_device()
     bytes_read = 0
@@ -223,7 +233,7 @@ def load(
         needed = {r.file for kp in plan.keys.values() for r in kp.reads}
         for file_index in sorted(needed):
             record = index.files[file_index]
-            path = os.path.join(ckpt_dir, record.path)
+            path = paths[file_index] = os.path.join(ckpt_dir, record.path)
             if not os.path.isfile(path):
                 raise CheckpointError(f"data file {path} listed in the index is missing")
             fds[file_index] = os.open(path, os.O_RDONLY)
@@ -257,6 +267,7 @@ def load(
                         info.itemsize,
                         carrier,
                         arrays,
+                        paths[its[0].file],
                     )
                     for its in by_chunk.values()
                 ]
