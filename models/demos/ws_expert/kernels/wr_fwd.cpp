@@ -37,6 +37,14 @@
 #include "wr_seq.hpp"
 using namespace tt::tt_fabric::mesh::experimental;
 
+// The downstream router normally waits for a packet's write to be acknowledged before its arrival increment (flush);
+// WS_ARR_NOFLUSH relies instead on the router's write and increment reaching the same core in order.
+#ifdef WS_ARR_NOFLUSH
+constexpr bool ARR_FLUSH = false;
+#else
+constexpr bool ARR_FLUSH = true;
+#endif
+
 void kernel_main() {
     constexpr uint32_t CHT = get_compile_time_arg_val(4), S = get_compile_time_arg_val(8);
     constexpr uint32_t words = get_compile_time_arg_val(9), CRB = get_compile_time_arg_val(10);
@@ -179,7 +187,7 @@ void kernel_main() {
             src,
             CHB,
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                get_noc_addr(dxy & 0xFF, dxy >> 8, stage + (sent % S) * CHB), down_arr, 1, true});
+                get_noc_addr(dxy & 0xFF, dxy >> 8, stage + (sent % S) * CHB), down_arr, 1, ARR_FLUSH});
         pend = true;
         pend_inj = inj;
 #ifndef WS_DEFER
