@@ -229,7 +229,14 @@ class Hy4ChainLayer:
             from models.demos.blackhole.hy4_preview.tt.hy4_moe_weights import load_moe_layer
             from models.demos.blackhole.hy4_preview.tt.hy4_prefill_moe import Hy4UnifiedMoE
 
-            W = load_moe_layer(L, W=ch.W, prefix="mtp.0." if self.mtp else None)
+            tp32_only = (
+                os.environ.get("HY4_TP32_ONLY", "0") == "1"
+            )  # tp32-single: TP32 is the ONLY routed-expert copy (no ring weights, no prefill um)
+            if tp32_only:
+                assert (
+                    os.environ.get("HY4_MOE_TP32", "0") == "1" and not self.mtp
+                ), "HY4_TP32_ONLY needs HY4_MOE_TP32=1, MTP=0"
+            W = load_moe_layer(L, W=ch.W, prefix="mtp.0." if self.mtp else None, load_experts=not tp32_only)
             self.t_read = time.time() - t0
             self.blk = Hy4MoEBlock(
                 md,
@@ -241,9 +248,14 @@ class Hy4ChainLayer:
                 ch.moe_buffers = (
                     self.blk.decode.buffers
                 )  # dispatch/combine scratch shared by all layers (as the DSV4 model does)
-            self.blk.warmup()
-            self.um = Hy4UnifiedMoE(
-                md, L, ring=(self.blk.decode.expert_state.tt_w0_w1, self.blk.decode.expert_state.tt_w2)
+            if not tp32_only:
+                self.blk.warmup()
+            self.um = (
+                None
+                if tp32_only
+                else Hy4UnifiedMoE(
+                    md, L, ring=(self.blk.decode.expert_state.tt_w0_w1, self.blk.decode.expert_state.tt_w2)
+                )
             )
             sw = [W[k][256] for k in ("shared_w0", "shared_w1", "shared_w2")]
             self.shared = D.make_shared(
@@ -264,6 +276,10 @@ class Hy4ChainLayer:
 
                 _root = _TC.cache_root()
                 Wf = None
+                if tp32_only:
+                    assert (
+                        _root and _TC.check_layer(_root, L) is not None
+                    ), f"TP32-only needs the TP32 cache for layer {L}"
                 if not (
                     _root and _TC.check_layer(_root, L) is not None
                 ):  # no TP32 dump for this layer: pack from the checkpoint
@@ -316,6 +332,9 @@ class Hy4ChainLayer:
             return D.allreduce_cols(self.dense.forward(h))
         from models.demos.blackhole.hy4_preview.tt.hy4_prefill_moe import COLS, moe_cols
 
+        assert (
+            self.um is not None
+        ), "HY4_TP32_ONLY: no ring experts, the MoE prefill needs the TP32 grouped-GEMM kernel (tp32-prefill-build K1/K2, not built)"
         n = h.shape[2]
         G = n // 256
         h4 = ttnn.reshape(h, [G, COLS, 32, HID])
