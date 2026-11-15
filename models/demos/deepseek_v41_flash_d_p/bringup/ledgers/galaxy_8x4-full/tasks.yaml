@@ -4441,6 +4441,70 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.68
+  title: 'Rebuild this branch as model_bringup + expert replication (owner 2026-11-15): take model_bringup @ 8b2b9df34dd''s code with FIX.33''s replica removal undone (= 0e397ef379a + 1f12f2ce34b); ledger stays this branch''s'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.66
+  paths:
+  - models/demos/common/bringup
+  - models/demos/common/bringup/orchestrator.py
+  - models/demos/common/bringup/testing
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - ttnn/ttnn/bringup/INDEX.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CMakeLists.txt
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/README.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/common
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/expert_slot_copy
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/moe_block_nanobind.cpp
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/expert_slot_copy
+  brief:
+    details: 'OWNER 2026-11-15: this branch = model_bringup + the expert-replication work, nothing else. model_bringup (local branch dnijemcevic/model_bringup @ 8b2b9df34dd) now holds the orthogonal wins without replication: it took this branch whole (P.67), fixed the served-snapshot race in P.65''s tt/snapshot_send.py (FIX.32, DS41-277: programs keyed by pattern AND ring/slab geometry), set spec agents.timeout_s 0, added the orchestrator''s wait for an agent''s detached gate (1f12f2ce34b), then removed every replica piece (FIX.33 ba3edbdc7ef). TARGET CODE (everything outside models/demos/deepseek_v41_flash_d_p/bringup/ledgers/, which stays THIS branch''s): model_bringup @ 0e397ef379a (P.67 + FIX.32 + X.3 with replicas on: X.3 passed there) plus 1f12f2ce34b''s framework change (orchestrator.py + selftest/test_agent_gate_wait.py). HOW: git merge -s ours --no-commit dnijemcevic/model_bringup (so model_bringup is a parent and later merges from it only bring new work), then take the target code paths (git checkout 0e397ef379a -- <non-ledger paths>; cherry-pick -n 1f12f2ce34b''s code), keep this branch''s ledgers/ untouched, commit. PROVE the replica-only difference: git diff dnijemcevic/model_bringup HEAD outside ledgers/ must be exactly FIX.33''s removal reversed (list any other file and why). Rebuild (./build_metal.sh). Settings defaults: MOE_REPLICAS=prev and the rest as at 0e397ef379a. CHECKS: the gate below (ladder, profile, decoder-skip, determinism, contract, adapter acks, the replica test) and the A/B before/after (before = this branch today, b9a45fb0b80, which still has the P.65 race). Report: what changed, the diff proof, before/after numbers. SAFETY: a hang or a reset need: STOP and report, never reset. Report plainly, short.'
+  ab:
+    before: true
+    env:
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      contract_checks_failed: == 0
+      acks_early: == 0
+      served_bytes_differ: == 0
+      chunk_wall_ms: '> 0'
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed_decoder_skip: == 0
+      acks_early_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      decode_acks_failures: == 0
+      device_ms_total: '> 0'
+      determinism_max_abs_diff: == 0
 - id: P.54
   title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
   step: perf
