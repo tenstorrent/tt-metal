@@ -62,6 +62,10 @@ class Hy4MoeTp32Block:
     def _pack_route(self, w, idx):
         """w bf16 RM [T,1,1,8], idx uint16 RM [T,1,1,8] -> int32 RM [1,1,1,16 T]: per token 8 ids then 8 words whose low 16 bits are the bf16 score bits."""
         T = self.T
+        # the skinny router writes the dispatch formats (L1 sharded): bring both to interleaved DRAM first
+        idx = ttnn.to_memory_config(idx, ttnn.DRAM_MEMORY_CONFIG)
+        w = ttnn.to_memory_config(w, ttnn.DRAM_MEMORY_CONFIG)
+
         ids = ttnn.typecast(ttnn.to_layout(ttnn.reshape(idx, [1, 1, T, 8]), ttnn.TILE_LAYOUT), ttnn.int32)
         sc = ttnn.typecast(ttnn.to_layout(ttnn.reshape(w, [1, 1, T, 8]), ttnn.TILE_LAYOUT), ttnn.float32)
         sb = ttnn.bitwise_right_shift(ttnn.bitcast(sc, ttnn.int32), 16)
