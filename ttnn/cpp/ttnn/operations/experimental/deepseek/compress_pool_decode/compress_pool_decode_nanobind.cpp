@@ -92,7 +92,8 @@ void bind_compress_pool_decode(::nanobind::module_& mod) {
         nb::arg("page_row") = std::nullopt,
         nb::arg("dense_kv") = std::nullopt,
         nb::arg("dense_entry") = std::nullopt,
-        nb::arg("key_row") = std::nullopt);
+        nb::arg("key_row") = std::nullopt,
+        nb::arg("kv_gate_interleave") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

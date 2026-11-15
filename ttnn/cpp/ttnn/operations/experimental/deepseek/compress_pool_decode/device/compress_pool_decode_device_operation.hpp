@@ -38,6 +38,9 @@ struct CompressPoolDecodeParams {
     bool has_key_row = false;
     // Rows per page-table block of idx_key_cache / comp_kv.
     uint32_t block_rows = 0;
+    // kv is the TP-gathered row [rank r: r's kv_gate_interleave kv columns | its gate columns], and gate is the
+    // same tensor: each core reads its 32 kv (and gate) columns from their rank's block. 0: separate rows.
+    uint32_t kv_gate_interleave = 0;
 };
 
 struct CompressPoolDecodeInputs {
@@ -100,6 +103,7 @@ std::vector<ttnn::Tensor> compress_pool_decode(
     const std::optional<ttnn::Tensor>& page_row,
     const std::optional<ttnn::Tensor>& dense_kv,
     const std::optional<ttnn::Tensor>& dense_entry,
-    const std::optional<ttnn::Tensor>& key_row);
+    const std::optional<ttnn::Tensor>& key_row,
+    uint32_t kv_gate_interleave = 0);
 
 }  // namespace ttnn::prim

@@ -249,7 +249,23 @@ void CompressPoolDecodeDeviceOperation::validate_on_program_cache_miss(
         num_cores,
         grid.x * grid.y);
 
-    validate_row_input(t.kv, "kv", head_dim);
+    const uint32_t interleave = args.kv_gate_interleave;
+    if (interleave) {
+        // The gathered row holds both: validate it as one row of 2 * head_dim, read in interleave-wide blocks.
+        TT_FATAL(
+            interleave % TILE_WIDTH == 0 && head_dim % interleave == 0 && !t.kv.is_sharded(),
+            "compress_pool_decode: kv_gate_interleave ({}) must be a multiple of {} dividing head_dim ({}), with kv "
+            "interleaved",
+            interleave,
+            TILE_WIDTH,
+            head_dim);
+        TT_FATAL(
+            t.gate.has_value() && t.gate->buffer() == t.kv.buffer(),
+            "compress_pool_decode: with kv_gate_interleave, gate must be kv");
+        validate_row_input(t.kv, "kv", 2 * head_dim);
+    } else {
+        validate_row_input(t.kv, "kv", head_dim);
+    }
 
     TT_FATAL(
         t.norm_weight.storage_type() == StorageType::DEVICE, "compress_pool_decode: norm_weight must be on device");
@@ -278,7 +294,9 @@ void CompressPoolDecodeDeviceOperation::validate_on_program_cache_miss(
         any_window == all_window,
         "compress_pool_decode: gate, win_kv, win_gate, and win_slot must all be provided or all omitted");
     if (all_window) {
-        validate_row_input(*t.gate, "gate", head_dim);
+        if (!interleave) {
+            validate_row_input(*t.gate, "gate", head_dim);
+        }
         validate_window_cache(*t.win_kv, "win_kv", head_dim);
         validate_window_cache(*t.win_gate, "win_gate", head_dim);
         TT_FATAL(
@@ -377,10 +395,11 @@ std::vector<ttnn::Tensor> compress_pool_decode(
     const std::optional<ttnn::Tensor>& page_row,
     const std::optional<ttnn::Tensor>& dense_kv,
     const std::optional<ttnn::Tensor>& dense_entry,
-    const std::optional<ttnn::Tensor>& key_row) {
+    const std::optional<ttnn::Tensor>& key_row,
+    uint32_t kv_gate_interleave) {
     using OperationType =
         ttnn::operations::experimental::deepseek::compress_pool_decode::CompressPoolDecodeDeviceOperation;
-    const uint32_t head_dim = kv.logical_shape()[-1];
+    const uint32_t head_dim = kv.logical_shape()[-1] / (kv_gate_interleave ? 2u : 1u);
     const bool has_window = win_kv.has_value();
     const bool has_rope = cos.has_value();
     const uint32_t rope_dim = has_rope ? cos->logical_shape()[-1] : 0u;
@@ -411,6 +430,7 @@ std::vector<ttnn::Tensor> compress_pool_decode(
         .has_page_row = page_row.has_value(),
         .has_key_row = key_row.has_value(),
         .block_rows = block_rows,
+        .kv_gate_interleave = kv_gate_interleave,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .kv = kv,

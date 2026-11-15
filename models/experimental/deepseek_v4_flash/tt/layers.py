@@ -15,6 +15,7 @@ tensor is TILE unless its docstring says otherwise.
 
 import itertools
 import math
+import os
 from typing import Callable, Optional
 
 import ttnn
@@ -23,6 +24,10 @@ from .common import SINGLE_USER_TILE, DeepSeekV4Module, _HIFI4, width_sharded_l1
 from .system_config import active_system_config
 from .weight_cache import _CachePath, _load_weight, _materialize
 import torch
+
+# ``to_replicated_rm_hs_activation`` builds a DRAM row's replica as one core's shard multicast by
+# ``all_gather_for_matmul`` instead of a ``num_cores``-row repeat and reshard. ``DEEPSEEK_V4_GATHER_REPLICA=0``: repeat.
+_GATHER_REPLICA = os.environ.get("DEEPSEEK_V4_GATHER_REPLICA", "1") not in ("0", "", "false", "False")
 
 # How every pipe list built here was made, keyed by ``id(pipes)``, so a model can drop its pipes (freeing their
 # L1) and build identical ones later (see :meth:`~.model.DeepSeekV4Model.release_prefetch_buffers`). Pipe lists
@@ -971,6 +976,26 @@ class LinearDecode(DeepSeekV4Module):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        box = grid.bounding_box()
+        if (
+            _GATHER_REPLICA
+            and not replica
+            and not x.is_sharded()
+            and x.layout == ttnn.ROW_MAJOR_LAYOUT
+            and x.dtype == ttnn.bfloat16
+            and box.grid_size().x * box.grid_size().y == num_cores
+        ):
+            # One core's [M, K] shard, multicast to the grid by all_gather_for_matmul: two light ops instead of a
+            # num_cores-row repeat and its reshard.
+            one_core = ttnn.create_sharded_memory_config(
+                (m, k),
+                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(box.start, box.start)}),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            x = ttnn.to_memory_config(ttnn.reshape(x, [1, 1, m, k]), one_core)
+            return ttnn.experimental.deepseek.all_gather_for_matmul(x, ttnn.CoreRangeSet({box}))
         if x.is_sharded():
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if replica:

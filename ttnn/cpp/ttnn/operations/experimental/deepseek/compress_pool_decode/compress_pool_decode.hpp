@@ -61,6 +61,7 @@ std::vector<Tensor> compress_pool_decode(
     const std::optional<Tensor>& page_row = std::nullopt,
     const std::optional<Tensor>& dense_kv = std::nullopt,
     const std::optional<Tensor>& dense_entry = std::nullopt,
-    const std::optional<Tensor>& key_row = std::nullopt);
+    const std::optional<Tensor>& key_row = std::nullopt,
+    uint32_t kv_gate_interleave = 0);
 
 }  // namespace ttnn::experimental::deepseek
