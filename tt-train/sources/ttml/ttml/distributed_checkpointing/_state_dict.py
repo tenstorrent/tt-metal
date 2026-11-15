@@ -5,8 +5,9 @@
 """The live state: every tensor a model and optimizer hold, with its label, its layout declaration and its names.
 
 Keys are ``model/<fqn>`` for parameters, with ``<fqn>`` the name ``module.parameters()`` surfaces (slash-joined from
-the root module's name), and ``optimizer/<state path>/<fqn>`` for optimizer state tensors. Scalars in the optimizer
-state (steps, learning rates, flags) are collected separately and stored in the index.
+the root module's name), ``model/<fqn>`` for buffers likewise (``named_buffers()``, a DeepSeek MoE's expert bias say),
+and ``optimizer/<state path>/<fqn>`` for optimizer state tensors. Scalars in the optimizer state (steps, learning
+rates, flags) are collected separately and stored in the index.
 
 Topology labels are read from the live tensors and trusted. The one fact a label cannot carry, how a fused
 projection orders its segments, comes from the declaration the fusing layer put on its ``Parameter``
@@ -115,6 +116,12 @@ def _named_modules(model):
     return walk() if walk is not None else ()
 
 
+def _named_buffers(model):
+    """The Python module tree's buffers; a C++-bound model exposes none."""
+    walk = getattr(model, "named_buffers", None)
+    return walk() if walk is not None else ()
+
+
 def _cpp_bound_params(model, params) -> list[str]:
     """The names of the parameters held by C++-bound modules: the whole model when the model itself is C++-bound,
     else the parameters under a child that has no Python attributes. Such parameters cannot carry a Python layout
@@ -187,7 +194,8 @@ def _lint_fusion(key: str, label: Label, declaration: dict, tensor: Any = None) 
 
 
 def collect_model(model) -> list[LiveTensor]:
-    """Every parameter of ``model`` as a ``LiveTensor``, in ``parameters()`` order."""
+    """Every parameter of ``model`` as a ``LiveTensor``, in ``parameters()`` order, then every buffer (role
+    ``"buffer"``, identity layout) in ``named_buffers()`` order."""
     params = model.parameters()
     names, declarations = _python_parameters(model, params)
     cpp_bound = _cpp_bound_params(model, params)
@@ -218,6 +226,29 @@ def collect_model(model) -> list[LiveTensor]:
         info = TensorInfo(key, "param", dtype_name(value), layout_name(value), label, local_shape, transform, live_keys)
         undeclared_fusion = fqn in cpp_bound and bool(_FUSION_HINT.search(_module_name(key)))
         live.append(LiveTensor(key, tensor, info, undeclared_fusion))
+    live.extend(_collect_buffers(model, _root_name(model, params)))
+    return live
+
+
+def _collect_buffers(model, root: str) -> list[LiveTensor]:
+    """Buffers are state a training step updates without the optimizer (a MoE's load-balancing bias): saved and
+    loaded like parameters, under role ``"buffer"``. A buffer reachable under several names is one entry."""
+    names: dict[int, list[str]] = {}
+    tensors: dict[int, Any] = {}
+    for name, tensor in _named_buffers(model):  # the autograd tensors the Buffer wrappers registered
+        tensors[id(tensor)] = tensor
+        names.setdefault(id(tensor), []).append(f"model/{root}/{name.replace('.', '/')}")
+    live: list[LiveTensor] = []
+    for ident, keys in names.items():
+        tensor = tensors[ident]
+        value = tensor.get_value(NATIVE)
+        label = label_of(value)
+        local_shape = tuple(int(n) for n in value.shape)
+        live_keys = tuple(sorted(set(keys)))
+        info = TensorInfo(
+            keys[0], "buffer", dtype_name(value), layout_name(value), label, local_shape, Identity(), live_keys
+        )
+        live.append(LiveTensor(keys[0], tensor, info))
     return live
 
 
@@ -228,7 +259,7 @@ def collect_optimizer(optimizer, params: list[LiveTensor]) -> tuple[list[LiveTen
     shape must match the parameter's, the one invariant every optimizer keeps (state is created as zeros of its
     parameter), so a mismatch means the optimizer was created before the model was sharded.
     """
-    by_fqn = {lt.key[len("model/") :]: lt for lt in params}
+    by_fqn = {lt.key[len("model/") :]: lt for lt in params if lt.info.role == "param"}
     live: list[LiveTensor] = []
     scalars: dict[str, Any] = {}
 
