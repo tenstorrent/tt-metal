@@ -1,12 +1,12 @@
 {
   "summary": {
     "total": 108,
-    "supported_pass": 64,
+    "supported_pass": 99,
     "supported_fail": 0,
     "supported_marked_xfail": 0,
     "supported_skipped": 0,
     "supported_other": 0,
-    "xfail_expected": 35,
+    "xfail_expected": 0,
     "xpass_drift": 0,
     "xfail_wrong_mode": 0,
     "xfail_other": 0,
@@ -29,9 +29,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x3x256_3x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x3x256_3x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -51,9 +73,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x16x256_16x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x32x256_32x3x32x64-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x32x256_32x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "tile_aligned",
@@ -73,9 +117,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x2560_1x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x8x2560_8x12x128x128-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x8x2560_8x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -95,9 +161,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x16x2560_16x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x10240_1x48x128x128-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x10240_1x48x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -117,9 +205,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x4096_1x16x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x2x256_1x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x2x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -139,9 +249,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x3x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x5x256_1x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x5x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -161,9 +293,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x31x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x32x256_1x3x32x64-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x32x256_1x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "tile_aligned",
@@ -183,9 +337,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x33x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x256_1x3x32x64-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x256_1x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "tile_aligned",
@@ -205,9 +381,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x100x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x512x256_1x3x32x64-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x512x256_1x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "tile_aligned",
@@ -227,9 +425,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x256_1x2x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x40x320_1x2x64x32-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x40x320_1x2x64x32-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -249,9 +469,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x4096_1x16x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x2560_1x12x128x128-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x2560_1x12x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "tile_aligned",
@@ -271,9 +513,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x4096x2560_1x12x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x10x256_2x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=batched_prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "batched_prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x10x256_2x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=batched_prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -293,9 +557,31 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x96x256_3x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=batched_prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "batched_prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x66x256_2x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=batched_prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "batched_prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x66x256_2x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=batched_prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -315,6 +601,17 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x8192x256_1x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x40x256_40x3x32x64-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
         "axes": {
           "dtype": "FLOAT32",
@@ -326,9 +623,86 @@
         "status": "passed"
       },
       {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x40x256_40x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x5x1760_1x33x32x32-alignment=h_non_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x5x1760_1x33x32x32-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[perf_decode_b1-1x1x2560_1x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_decode_b8-1x8x2560_8x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_decode_b16-1x16x2560_16x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "h_non_aligned",
+          "sequence_mode": "decode"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_prefill_4096-1x4096x2560_1x12x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_prefill_then_decode-1x72x2560_1x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "h_non_aligned",
@@ -351,6 +725,17 @@
         "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[state_carry_f32-1x768x640_1x3x128x128-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
         "axes": {
           "dtype": "FLOAT32",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "alignment": "tile_aligned",
+          "sequence_mode": "prefill"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[state_carry_bf16-1x768x640_1x3x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
+        "axes": {
+          "dtype": "BFLOAT16",
           "layout": "TILE",
           "fp32_dest_acc_en": true,
           "alignment": "tile_aligned",
@@ -720,393 +1105,6 @@
           "sequence_mode": "prefill"
         },
         "status": "passed"
-      }
-    ],
-    "xfail_expected": [
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x3x256_3x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x16x256_16x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x32x256_32x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x2560_1x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x8x2560_8x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x16x2560_16x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x10240_1x48x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x1x4096_1x16x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x2x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x3x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x5x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x31x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x32x256_1x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x33x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x256_1x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x100x256_1x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x512x256_1x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x256_1x2x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x40x320_1x2x64x32-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x4096_1x16x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x64x2560_1x12x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x4096x2560_1x12x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x10x256_2x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=batched_prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "batched_prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x96x256_3x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=batched_prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "batched_prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x66x256_2x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=batched_prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "batched_prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x8192x256_1x3x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x40x256_40x3x32x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op[1x5x1760_1x33x32x32-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[perf_decode_b1-1x1x2560_1x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_decode_b8-1x8x2560_8x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_decode_b16-1x16x2560_16x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=decode]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "decode"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_prefill_4096-1x4096x2560_1x12x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[model_prefill_then_decode-1x72x2560_1x12x128x128-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "h_non_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
-      },
-      {
-        "nodeid": "eval/golden_tests/gated_delta_net/test_golden.py::test_op_loose[state_carry_bf16-1x768x640_1x3x128x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-layout=TILE-sequence_mode=prefill]",
-        "axes": {
-          "dtype": "BFLOAT16",
-          "layout": "TILE",
-          "fp32_dest_acc_en": true,
-          "alignment": "tile_aligned",
-          "sequence_mode": "prefill"
-        },
-        "status": "xfail"
       }
     ],
     "no_axes_found": [

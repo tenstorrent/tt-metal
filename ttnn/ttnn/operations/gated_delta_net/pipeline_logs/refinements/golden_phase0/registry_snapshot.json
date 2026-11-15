@@ -1,7 +1,8 @@
 {
   "supported": {
     "dtype": [
-      "FLOAT32"
+      "FLOAT32",
+      "BFLOAT16"
     ],
     "layout": [
       "TILE"
