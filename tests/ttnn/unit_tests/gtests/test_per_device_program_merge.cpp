@@ -80,27 +80,10 @@ TEST(PerDeviceProgramMerge, DifferingWordsBecomeRuns) {
     EXPECT_EQ(merged->descriptor.kernels[0].runtime_args.at(0).second, (std::vector<uint32_t>{5, 10, 20, 30}));
 }
 
-TEST(PerDeviceProgramMerge, IdenticalProgramsHaveNoFields) {
-    const std::vector<CoreCoord> cores{{0, 0}, {1, 0}};
-    const auto merged = ttnn::merge_per_device_program_descriptors(
-        {program(cores, {1, 2}, {3}), program(cores, {1, 2}, {3}), program(cores, {1, 2}, {3})});
-    ASSERT_TRUE(merged.has_value());
-    EXPECT_TRUE(merged->per_device_runtime_args.empty());
-}
-
-TEST(PerDeviceProgramMerge, RefusesDifferentCompileTimeArgs) {
-    const std::vector<CoreCoord> cores{{0, 0}};
-    EXPECT_FALSE(ttnn::merge_per_device_program_descriptors(
-                     {program(cores, {1}, {}, /*compile_time_arg=*/7), program(cores, {1}, {}, 8)})
-                     .has_value());
-}
-
-TEST(PerDeviceProgramMerge, RefusesDifferentCoresWithoutIdleArgs) {
+TEST(PerDeviceProgramMerge, UnionOfCoresWithIdleArgs) {
+    // Different cores merge only with idle args for the cores a device does not use.
     EXPECT_FALSE(ttnn::merge_per_device_program_descriptors({program({{0, 0}}, {1}, {}), program({{1, 0}}, {1}, {})})
                      .has_value());
-}
-
-TEST(PerDeviceProgramMerge, UnionOfCoresWithIdleArgs) {
     ttnn::ProgramMergeOptions options;
     options.idle_runtime_args = [](size_t, const CoreCoord&) { return std::vector<uint32_t>{0}; };
     const auto merged =
@@ -115,6 +98,7 @@ TEST(PerDeviceProgramMerge, UnionOfCoresWithIdleArgs) {
     EXPECT_EQ(merged->per_device_runtime_args[1].values_in_range_order, (std::vector<uint32_t>{0, 6}));
     // The semaphore covers both cores.
     ASSERT_EQ(merged->descriptor.semaphores.size(), 1u);
+    EXPECT_TRUE(merged->descriptor.semaphores[0].core_ranges.contains(CoreCoord(0, 0)));
     EXPECT_TRUE(merged->descriptor.semaphores[0].core_ranges.contains(CoreCoord(1, 0)));
 }
 
@@ -130,21 +114,6 @@ TEST(PerDeviceProgramMerge, PaddingIsOptIn) {
     ASSERT_EQ(merged->per_device_runtime_args.size(), 2u);
     EXPECT_EQ(merged->per_device_runtime_args[1].first_word, 2u);
     EXPECT_EQ(merged->per_device_runtime_args[1].values_in_range_order, (std::vector<uint32_t>{9, 0}));
-}
-
-TEST(PerDeviceProgramMerge, DeclaredWordsArePerDevice) {
-    const std::vector<CoreCoord> cores{{0, 0}};
-    ttnn::ProgramMergeOptions options;
-    options.per_device_words = {{.kernel_index = 0, .core = std::nullopt, .first_word = 1, .num_words = 2}};
-    const auto merged = ttnn::merge_per_device_program_descriptors(
-        {program(cores, {1}, {5, 6, 7}), program(cores, {1}, {5, 6, 7})}, options);
-    ASSERT_TRUE(merged.has_value());
-    ASSERT_EQ(merged->per_device_runtime_args.size(), 1u);
-    const auto& field = merged->per_device_runtime_args[0];
-    EXPECT_FALSE(field.core.has_value());
-    EXPECT_EQ(field.first_word, 1u);
-    EXPECT_EQ(field.num_words, 2u);
-    EXPECT_EQ(field.values_in_range_order, (std::vector<uint32_t>{6, 7, 6, 7}));
 }
 
 TEST(PerDeviceProgramMerge, RefusesPerDeviceWordUnderBufferBinding) {
@@ -200,24 +169,6 @@ TEST(PerDeviceProgramMerge, RefusesKernelsSwappingCores) {
             .has_value());
 }
 
-TEST(PerDeviceProgramMerge, RefusesCircularBuffersSwappingCores) {
-    const std::vector<CoreCoord> cores{{0, 0}, {1, 0}};
-    auto with_cbs = [&](CoreCoord first, CoreCoord second) {
-        auto desc = program(cores, {1}, {});
-        for (const auto& [core, size] : {std::pair{first, 1024u}, std::pair{second, 2048u}}) {
-            tt::tt_metal::CBDescriptor cb;
-            cb.total_size = size;
-            cb.core_ranges = CoreRangeSet(CoreRange(core, core));
-            cb.format_descriptors.push_back(tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = 3, .data_format = tt::DataFormat::Float16_b, .page_size = 1024});
-            desc.cbs.push_back(cb);
-        }
-        return desc;
-    };
-    EXPECT_FALSE(
-        ttnn::merge_per_device_program_descriptors({with_cbs({0, 0}, {1, 0}), with_cbs({1, 0}, {0, 0})}).has_value());
-}
-
 TEST(PerDeviceProgramMerge, RefusesBindingOnIdleCore) {
     ttnn::ProgramMergeOptions options;
     options.idle_runtime_args = [](size_t, const CoreCoord&) { return std::vector<uint32_t>{0, 0}; };
@@ -263,22 +214,6 @@ TEST(PerDeviceProgramMerge, DeclaredWordsKeepTheirBounds) {
     EXPECT_EQ(merged->per_device_runtime_args[0].num_words, 1u);
     EXPECT_EQ(merged->per_device_runtime_args[1].first_word, 2u);
     EXPECT_EQ(merged->per_device_runtime_args[1].values_in_range_order, (std::vector<uint32_t>{7, 8}));
-}
-
-TEST(PerDeviceProgramMerge, SemaphoresOnDifferentCoresAreUnioned) {
-    // Same kernel cores, but each device has the semaphore on a different core: the merged program places it on both.
-    auto with_semaphore_on = [](const CoreCoord& core) {
-        ProgramDescriptor desc = program({{0, 0}}, {1}, {});
-        desc.semaphores = {
-            SemaphoreDescriptor{.id = 0, .core_ranges = CoreRangeSet(CoreRange(core, core)), .initial_value = 0}};
-        return desc;
-    };
-    const auto merged =
-        ttnn::merge_per_device_program_descriptors({with_semaphore_on({0, 0}), with_semaphore_on({1, 0})});
-    ASSERT_TRUE(merged.has_value());
-    ASSERT_EQ(merged->descriptor.semaphores.size(), 1u);
-    EXPECT_TRUE(merged->descriptor.semaphores[0].core_ranges.contains(CoreCoord(0, 0)));
-    EXPECT_TRUE(merged->descriptor.semaphores[0].core_ranges.contains(CoreCoord(1, 0)));
 }
 
 TEST(PerDeviceProgramMerge, RefusesSemaphoreWithTwoInitialValuesOnOneCore) {

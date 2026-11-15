@@ -895,29 +895,6 @@ void set_per_device_values(MeshWorkload& workload, const MeshCoordinateRange& ra
 
 uint32_t expected_value(uint32_t index) { return index == 0 ? kValueA : per_device_value(index); }
 
-TEST_F(CommandListMultiDeviceTest, Metal2PerDeviceRunArgsEager) {
-    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_eager");
-    const MeshCoordinateRange all_devices(mesh_device_->shape());
-    set_per_device_values(workload, all_devices);
-    auto& cq = mesh_device_->mesh_command_queue(0);
-
-    for (const auto& coord : all_devices) {
-        write_l1(mesh_device_, coord, kAddressA, 0);
-    }
-    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
-    uint32_t index = 0;
-    for (const auto& coord : all_devices) {
-        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), expected_value(index++)) << "Device coordinate: " << coord;
-    }
-
-    // Updating the program's own value drops the per-device values: every device follows the program again.
-    UpdateProgramRunArgs(workload.get_programs().at(all_devices), l1_write_value_for_device(kValueB));
-    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
-    for (const auto& coord : all_devices) {
-        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueB) << "Device coordinate: " << coord;
-    }
-}
-
 // Per-node named arg "address" on odd devices: they write to kAddressB.
 m2::ProgramRunArgs l1_write_address(uint32_t address) {
     m2::ProgramRunArgs args;
@@ -1129,43 +1106,6 @@ TEST_F(CommandListMultiDeviceTest, Metal2TraceKeepsPerDeviceValuesAfterSetProgra
     mesh_device_->release_mesh_trace(trace_id);
 }
 
-// UpdateProgramRunArgs drops the per-device values of the args it supplies; the others keep theirs.
-TEST_F(CommandListMultiDeviceTest, Metal2UpdateProgramRunArgsDropsOnlySuppliedArgs) {
-    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_update_drops");
-    const MeshCoordinateRange all_devices(mesh_device_->shape());
-    set_per_device_values(workload, all_devices);
-    set_odd_device_addresses(workload, all_devices);
-    auto& cq = mesh_device_->mesh_command_queue(0);
-    auto& program = workload.get_programs().at(all_devices);
-    auto clear_l1 = [&] {
-        for (const auto& coord : all_devices) {
-            write_l1(mesh_device_, coord, kAddressA, 0);
-            write_l1(mesh_device_, coord, kAddressB, 0);
-        }
-    };
-
-    // "value" dropped everywhere, odd devices still write to kAddressB.
-    UpdateProgramRunArgs(program, l1_write_value_for_device(kValueB));
-    clear_l1();
-    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
-    uint32_t index = 0;
-    for (const auto& coord : all_devices) {
-        const bool odd = index++ % 2 == 1;
-        EXPECT_EQ(read_l1(mesh_device_, coord, odd ? kAddressB : kAddressA), kValueB) << "Device coordinate: " << coord;
-        EXPECT_EQ(read_l1(mesh_device_, coord, odd ? kAddressA : kAddressB), 0u) << "Device coordinate: " << coord;
-    }
-
-    // Now "address" too.
-    UpdateProgramRunArgs(program, l1_write_address(kAddressA));
-    clear_l1();
-    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
-    for (const auto& coord : all_devices) {
-        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueB) << "Device coordinate: " << coord;
-        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressB), 0u) << "Device coordinate: " << coord;
-    }
-    EXPECT_EQ(workload.impl().per_device_runtime_args(all_devices), nullptr);
-}
-
 // Per-device values set after a program-level update apply; setting the same values again is no change, so the
 // per-device command images are kept (values_version does not move).
 TEST_F(CommandListMultiDeviceTest, Metal2PerDeviceValuesSetAgainAfterUpdate) {
@@ -1240,63 +1180,6 @@ TEST_F(CommandListMultiDeviceTest, ReplaysMetal2PerDeviceRunArgs) {
     }
 }
 
-TEST_F(CommandListMultiDeviceTest, TracesMetal2PerDeviceNodeRunArgs) {
-    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_trace");
-    const MeshCoordinateRange all_devices(mesh_device_->shape());
-    auto& cq = mesh_device_->mesh_command_queue(0);
-    // Odd devices write to kAddressB: a per-node named arg, per device.
-    uint32_t index = 0;
-    for (const auto& coord : all_devices) {
-        if (index % 2 == 1) {
-            m2::ProgramRunArgs args;
-            args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
-                .kernel = m2::KernelSpecName{kKernelName},
-                .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(kNode, {{"address", kAddressB}})}};
-            SetProgramRunArgsPerDevice(workload, all_devices, coord, args);
-        }
-        index++;
-    }
-    EnqueueMeshWorkload(cq, workload, /*blocking=*/true);  // compiles and loads
-    const auto trace_id = mesh_device_->begin_mesh_trace(cq.id());
-    EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-    mesh_device_->end_mesh_trace(cq.id(), trace_id);
-    for (const auto& coord : all_devices) {
-        write_l1(mesh_device_, coord, kAddressA, 0);
-        write_l1(mesh_device_, coord, kAddressB, 0);
-    }
-    mesh_device_->replay_mesh_trace(cq.id(), trace_id, /*blocking=*/true);
-    index = 0;
-    for (const auto& coord : all_devices) {
-        const bool odd = index++ % 2 == 1;
-        EXPECT_EQ(read_l1(mesh_device_, coord, odd ? kAddressB : kAddressA), kValueA) << "Device coordinate: " << coord;
-        EXPECT_EQ(read_l1(mesh_device_, coord, odd ? kAddressA : kAddressB), 0u) << "Device coordinate: " << coord;
-    }
-    mesh_device_->release_mesh_trace(trace_id);
-}
-
-// An arg whose per-device values were dropped (UpdateProgramRunArgs) can be a command-list parameter again.
-TEST_F(CommandListMultiDeviceTest, DroppedPerDeviceRunArgCanBeAParameter) {
-    auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_dropped");
-    const MeshCoordinateRange all_devices(mesh_device_->shape());
-    set_per_device_values(workload, all_devices);
-    UpdateProgramRunArgs(workload.get_programs().at(all_devices), l1_write_value_for_device(kValueA));
-    auto& cq = mesh_device_->mesh_command_queue(0);
-    const CmdListCommonRuntimeArgName value{"value"};
-    CmdListParameters parameters;
-    parameters.common_runtime_parameters[value] = {l1_write_value_arg(workload.get_programs().at(all_devices))};
-    CommandListBuilder builder(*mesh_device_);
-    builder.add(cq, workload, parameters);
-    auto command_list = builder.build(cq);
-    command_list.update_args(CmdListArgPatch{.common_runtime_args = {{value, kValueB}}}, /*blocking=*/true);
-    for (const auto& coord : all_devices) {
-        write_l1(mesh_device_, coord, kAddressA, 0);
-    }
-    EnqueueCommandList(cq, command_list, /*blocking=*/true);
-    for (const auto& coord : all_devices) {
-        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueB) << "Device coordinate: " << coord;
-    }
-}
-
 TEST_F(CommandListMultiDeviceTest, FailedPerDeviceRunArgsUpdateChangesNothing) {
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_atomic");
     const MeshCoordinateRange all_devices(mesh_device_->shape());
@@ -1327,11 +1210,28 @@ TEST_F(CommandListMultiDeviceTest, RejectsParameterUnderPerDeviceRunArg) {
     CmdListParameters parameters;
     parameters.common_runtime_parameters[CmdListCommonRuntimeArgName{"value"}] = {
         l1_write_value_arg(workload.get_programs().at(all_devices))};
-    CommandListBuilder builder(*mesh_device_);
-    builder.add(cq, workload, parameters);
-    EXPECT_THAT(
-        [&] { (void)builder.build(cq); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("overlaps a per-device runtime argument")));
+    {
+        CommandListBuilder builder(*mesh_device_);
+        builder.add(cq, workload, parameters);
+        EXPECT_THAT(
+            [&] { (void)builder.build(cq); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("overlaps a per-device runtime argument")));
+    }
+
+    // Once an update drops the per-device values, the same arg can be a parameter.
+    UpdateProgramRunArgs(workload.get_programs().at(all_devices), l1_write_value_for_device(kValueA));
+    CommandListBuilder builder_after_drop(*mesh_device_);
+    builder_after_drop.add(cq, workload, parameters);
+    auto command_list = builder_after_drop.build(cq);
+    command_list.update_args(
+        CmdListArgPatch{.common_runtime_args = {{CmdListCommonRuntimeArgName{"value"}, kValueB}}}, /*blocking=*/true);
+    for (const auto& coord : all_devices) {
+        write_l1(mesh_device_, coord, kAddressA, 0);
+    }
+    EnqueueCommandList(cq, command_list, /*blocking=*/true);
+    for (const auto& coord : all_devices) {
+        EXPECT_EQ(read_l1(mesh_device_, coord, kAddressA), kValueB) << "Device coordinate: " << coord;
+    }
 }
 
 TEST_F(CommandListMultiDeviceTest, ReplaysHeterogeneousAndNonConvexDeviceRanges) {

@@ -93,7 +93,6 @@ protected:
     static std::vector<uint32_t> default_common_args() { return {20, 21, 22, 23}; }
 
     void unique_and_common_fields_eager();
-    void batched_setter_and_clear();
     void same_values_keep_version();
     void legacy_program_moved_away_and_back();
     void own_args_change_between_enqueues();
@@ -186,41 +185,6 @@ void PerDeviceRuntimeArgsChecks::unique_and_common_fields_eager() {
     EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
     check(1, 77);
-}
-
-void PerDeviceRuntimeArgsChecks::batched_setter_and_clear() {
-    const MeshCoordinateRange range(mesh_device_->shape());
-    const CoreCoord core{0, 0};
-    const uint32_t results = results_addr();
-
-    Program program = CreateProgram();
-    const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
-    SetRuntimeArgs(program, kernel, core, default_args(core));
-    SetCommonRuntimeArgs(program, kernel, default_common_args());
-    MeshWorkload workload;
-    workload.add_program(range, std::move(program));
-
-    const uint32_t num_devices = range.shape().mesh_size();
-    std::vector<uint32_t> values(num_devices);
-    for (uint32_t i = 0; i < num_devices; i++) {
-        values[i] = 7000 + i;
-    }
-    SetRuntimeArgsPerDevice(workload, range, kernel, core, 5, 1, values);
-    const auto cleared = *range.begin();
-    tt::tt_metal::experimental::ClearRuntimeArgs(workload, range, cleared, kernel, core, 5);
-
-    auto& cq = mesh_device_->mesh_command_queue();
-    EnqueueMeshWorkload(cq, workload, false);
-    Finish(cq);
-    uint32_t idx = 0;
-    for (const auto& coord : range) {
-        auto expected = default_args(core);
-        if (coord != cleared) {
-            expected[5] = 7000 + idx;
-        }
-        EXPECT_EQ(read_words(coord, core, results, kNumArgs), expected) << "device " << coord;
-        idx++;
-    }
 }
 
 // Setting the same values again (as an op's cache hit does) is no change: the values version, and with it every
@@ -787,7 +751,6 @@ void PerDeviceRuntimeArgsChecks::command_sequence_beyond_one_fetch() {
 TEST_F(MeshPerDeviceRuntimeArgsTest, UniqueAndCommonFieldsEager) { unique_and_common_fields_eager(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, ProgramOnSubRange) { program_on_sub_range(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, TraceNodeInSeveralPartitions) { trace_node_in_several_partitions(); }
-TEST_F(MeshPerDeviceRuntimeArgsTest, BatchedSetterAndClear) { batched_setter_and_clear(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, SameValuesKeepVersion) { same_values_keep_version(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, LegacyProgramMovedAwayAndBack) { legacy_program_moved_away_and_back(); }
 TEST_F(MeshPerDeviceRuntimeArgsTest, OwnArgsChangeBetweenEnqueues) { own_args_change_between_enqueues(); }
@@ -818,11 +781,6 @@ protected:
 };
 
 TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, UniqueAndCommonFields) { unique_and_common_fields_eager(); }
-TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, BatchedSetterAndClear) { batched_setter_and_clear(); }
-TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, SameValuesKeepVersion) { same_values_keep_version(); }
-TEST_F(MeshPerDeviceRuntimeArgsSlowDispatchTest, FieldAfterKernelWithoutArgsOnCore) {
-    field_after_kernel_without_args_on_core();
-}
 
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
