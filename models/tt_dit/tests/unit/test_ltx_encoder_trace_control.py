@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import unittest
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from typing import overload
@@ -231,6 +232,7 @@ class EncoderLifecycleTests(unittest.TestCase):
             {"Tracer", "_tree_map", "_verify_value", "_clone_tensor"},
             dict(
                 ttnn=native,
+                weakref=weakref,
                 overload=overload,
                 logger=Mock(),
                 _kernel_prewarm_capturing=False,

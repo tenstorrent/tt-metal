@@ -118,6 +118,7 @@ session. Existing separately named custom fixture recipes remain compatible.
 | `ltx25-ic-10s-720p` | 704 × 1280 | 241 | 121 | false |
 | `ltx25-ic-6s-1080p` | 1088 × 1920 | 145 | 121 | true |
 | `ltx25-ic-10s-1080p` | 1088 × 1920 | 241 | 121 | false |
+| `ltx25-ic-5s-iclora` | 448 × 768 | 121 | 121 | true |
 | `ltx25-ic-6s-iclora` | 448 × 768 | 145 | 121 | true |
 | `ltx25-ic-10s-iclora` | 448 × 768 | 241 | 121 | false |
 

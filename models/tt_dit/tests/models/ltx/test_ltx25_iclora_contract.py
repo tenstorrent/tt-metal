@@ -662,6 +662,7 @@ def test_live_reference_switch_without_model_rebind(contract, monkeypatch):
 
 
 @pytest.mark.parametrize("name,height,width,frames,traced", [
+    ("ltx25-ic-5s-iclora", 448, 768, 121, True),
     ("ltx25-ic-6s-720p", 704, 1280, 145, True),
     ("ltx25-ic-10s-720p", 704, 1280, 241, False),
     ("ltx25-ic-6s-1080p", 1088, 1920, 145, True),
@@ -776,6 +777,10 @@ def test_live_native_cache_and_endpoint_updates_after_replay(contract, monkeypat
         assert native.encode_image.call_count == encodes
         assert native._ref_latent_cache is cache
         assert len(cache) <= c.module.REFERENCE_CACHE_ENTRIES
+    alias = c.path.parent / "same-bytes.png"
+    alias.write_bytes(Path(a).read_bytes())
+    pipe.generate_r2v("alias", reference_path=alias, seed=1)
+    assert native.encode_image.call_count == 4
     first = c.fixture["acceptance"]["first_frame"]["path"]
     last = c.fixture["acceptance"]["last_frame"]["path"]
     pipe.generate_r2v("pins", reference_path=a, first_frame=first, last_frame=last, seed=1)
@@ -808,3 +813,34 @@ def test_served_stage2_settings_use_existing_registration(contract, monkeypatch,
         assert set(rows) == {(m, 4096, 4096) for m in (8928, 10464, 12000)}
         assert all(row == (((12, 8), 6, 4, 16, 2, 2, None, 1), {"mm_window_blocks": None}) for row in rows.values())
 
+
+@pytest.mark.parametrize("error", [RuntimeError("unexpected failure"), KeyboardInterrupt()])
+def test_live_reference_failure_cleans_cache_and_unlocks(contract, monkeypatch, error):
+    c = contract
+    pipe = c.create()
+    def fail(prompt, **kw):
+        key = (c.module.file_digest(kw["reference_video"][0]), 9, 128, 128)
+        c.native._ref_latent_cache[key] = (object(), object())
+        raise error
+    original = c.native.generate
+    monkeypatch.setattr(c.native, "generate", fail)
+    with pytest.raises(type(error)):  # allow-pytest.raises: CPU-only contract
+        pipe.generate_r2v("fail", reference_path=c.fixture["reference"]["path"], seed=1)
+    assert not c.native._ref_latent_cache
+    monkeypatch.setattr(c.native, "generate", original)
+    pipe.generate_r2v("recovered", seed=1)
+
+
+def test_worker_metadata_and_folding_drift(contract, monkeypatch):
+    c = contract
+    for name in c.module.WORKER_PATH_ENV:
+        monkeypatch.setenv(name, str(c.path.parent))
+    for name, value in c.module.WORKER_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("LTX_EDGE_WORKER_URL", "https://worker.example.invalid")
+    monkeypatch.setenv("LTX_MESH", "bh_4x8sp1tp0_ring")
+    pipe = c.create(traced=True)
+    pipe.generate_r2v("supported", seed=1)
+    monkeypatch.delenv("LTX_FUSE_GATE_ON_DEVICE")
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only contract
+        pipe.generate_r2v("drift", seed=1)

@@ -75,6 +75,7 @@ SERVED_RECIPES = {
     for length, frames in (("6s", 145), ("10s", 241))
     for resolution, height, width in (("720p", 704, 1280), ("1080p", 1088, 1920), ("iclora", 448, 768))
 }
+SERVED_RECIPES["ltx25-ic-5s-iclora"] = (448, 768, 121, True)
 REFERENCE_CACHE_ENTRIES = 2
 # Worker routing/export metadata. These do not override explicit pipeline assets
 # or generation arguments. Unknown LTX knobs still fail closed.
