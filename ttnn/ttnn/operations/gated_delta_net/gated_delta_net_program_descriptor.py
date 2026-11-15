@@ -23,6 +23,9 @@ PAIRS_PER_BLOCK = 1  # pairs per work-split unit
 TOKEN_TILE_ROWS_PER_BLOCK = 1  # prep / norm block along t (tile rows); only 1 is built
 V_BLOCK_TILES = None  # state column block; None = Vt (R-VSPLIT deferred)
 MAX_CORES = None  # optional grid cap; None = full compute grid
+# Conv taps on the FPU (row-broadcast ELWMUL accumulated in DEST) instead of the SFPU. Exact only for
+# bf16 token operands (srcA/srcB hold 19 bits), so "auto" enables it for bf16 tokens only.
+CONV_ON_FPU = "auto"
 
 # ---- Buffer-depth knobs ----
 WINDOW_DEPTH = 2  # channel groups of tap tiles in flight
@@ -86,16 +89,16 @@ def _kernel_defines():
 
 
 # Pages per CB; each entry is (index list sharing one allocation, pages, page bytes, unpack-to-dest).
-def _cb_plan(Kt, Vt):
+def _cb_plan(Kt, Vt, conv_on_fpu=False):
     n_state = Kt * Vt
     trb = TOKEN_TILE_ROWS_PER_BLOCK
     return [
         ((CB_STATE_IN, CB_STATE_IN_MM), n_state * STATE_IN_DEPTH),
         ((CB_STATE, CB_STATE_MM), n_state),
         ((CB_STATE_OUT,), n_state * STATE_OUT_DEPTH),
-        ((CB_CONV_W,), CONV_TAPS * (2 * Kt + Vt)),
+        ((CB_CONV_W,), (1 if conv_on_fpu else CONV_TAPS) * (2 * Kt + Vt)),
         ((CB_WINDOW,), CONV_TAPS * max(Kt, Vt) * WINDOW_DEPTH),
-        ((CB_CONV_ACC,), CONV_ACC_DEPTH),
+        ((CB_CONV_ACC,), 0 if conv_on_fpu else CONV_ACC_DEPTH),
         ((CB_Y_QK,), 2 * Kt * trb),
         ((CB_V,), Vt * trb),
         # L2-norm and RMS-norm squares / rsqrt columns get separate buffers: they are pushed in
@@ -145,6 +148,10 @@ U2D_CBS = (
 )
 
 
+def _conv_on_fpu(dtype):
+    return dtype == ttnn.bfloat16 if CONV_ON_FPU == "auto" else bool(CONV_ON_FPU)
+
+
 def _tile_bytes(dtype):
     return FP32_TILE_BYTES if dtype == ttnn.float32 else BF16_TILE_BYTES
 
@@ -159,7 +166,8 @@ def _row_stage_bytes(token_tile_bytes):
 def l1_footprint_bytes(Kt, Vt, dtype):
     token_bytes = _tile_bytes(dtype)
     cb_bytes = sum(
-        pages * (token_bytes if indices[0] in TOKEN_CBS else FP32_TILE_BYTES) for indices, pages in _cb_plan(Kt, Vt)
+        pages * (token_bytes if indices[0] in TOKEN_CBS else FP32_TILE_BYTES)
+        for indices, pages in _cb_plan(Kt, Vt, _conv_on_fpu(dtype))
     )
     return cb_bytes + BF16_TILE_BYTES + _row_stage_bytes(token_bytes)
 
@@ -211,7 +219,10 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     token_dtype = mixed_qkv.dtype
     token_tile_bytes = _tile_bytes(token_dtype)
     cbs = []
-    for indices, pages in _cb_plan(Kt, Vt):
+    conv_on_fpu = _conv_on_fpu(token_dtype)
+    for indices, pages in _cb_plan(Kt, Vt, conv_on_fpu):
+        if pages == 0:
+            continue
         is_token = indices[0] in TOKEN_CBS
         dtype = token_dtype if is_token else ttnn.float32
         page_bytes = token_tile_bytes if is_token else FP32_TILE_BYTES
@@ -262,6 +273,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     geometry_ct = [token_tile_bytes, FP32_TILE_BYTES]
     reader_ct = [Kt, Vt, value_heads, key_heads, Ct, Gt, *geometry_ct, ttnn.get_dram_alignment()]
     reader_ct.append(ROW_STAGE_SLOTS if row_stage_bytes else 0)
+    reader_ct.append(int(conv_on_fpu))
     for t in reader_tensors:
         reader_ct.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     reader_addrs = [t.buffer_address() for t in reader_tensors]
@@ -280,6 +292,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         _largest_divisor_at_most(Vt, 4),  # read-matmul subblock width (fp32 half-sync DEST: 4 tiles)
         _float_bits(value_dim**0.5),
         _float_bits(key_dim**-0.5),
+        int(conv_on_fpu),
     ]
 
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()

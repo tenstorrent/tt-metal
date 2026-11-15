@@ -4,7 +4,7 @@
 // gated_delta_net reader (NCRISC).
 //
 // Per pair (b, h) of this core's contiguous range:
-//   load_pair_block: conv tap tiles (row j of conv_weight -> row 0 of tap tile j), A_log / dt_bias
+//   load_pair_block: conv_weight tiles (raw for the FPU conv, else row j -> row 0 of tap tile j), A_log / dt_bias
 //                    gate-column tiles, norm_weight tiles.
 //   per tile row of the pair: b/a gate tiles, the conv window (4 tap tiles per column tile, rows
 //                    outside the pair's token rows zero), S0 after the first tile row's prep
@@ -41,8 +41,10 @@ constexpr uint32_t TILE_BYTES = get_compile_time_arg_val(6);        // token-ten
 constexpr uint32_t STATE_TILE_BYTES = get_compile_time_arg_val(7);  // fp32 state tile
 constexpr uint32_t READ_ALIGN = get_compile_time_arg_val(8);        // DRAM read alignment
 constexpr uint32_t STAGE_SLOTS = get_compile_time_arg_val(9);       // 0: face rows are read directly
+constexpr bool CONV_W_RAW = get_compile_time_arg_val(10) != 0;      // raw conv_weight tiles (FPU conv)
 constexpr uint32_t FACE_BYTES = TILE_BYTES / 4;                     // one 16x16 face
 constexpr uint32_t SEG_BYTES = FACE_BYTES / 16;                     // one face row
+constexpr uint32_t CS_COLS_PER_FLUSH = TILE_ROWS / GDN_HISTORY;     // conv_state_out columns per scratch tile
 static_assert((STAGE_SLOTS == 0) == (SEG_BYTES % READ_ALIGN == 0), "row staging iff a face row is sub-alignment");
 
 // Byte offset of the left half of tile row p (faces 0/2); the right half is FACE_BYTES further.
@@ -150,8 +152,9 @@ void kernel_main() {
     constexpr uint32_t n_state = Kt * Vt;
     constexpr uint32_t z_width_tiles = Hv * Vt;
     constexpr uint32_t pair_cols = 2 * Kt + Vt;
+    constexpr uint32_t conv_w_pages = CONV_W_RAW ? pair_cols : GDN_CONV_TAPS * pair_cols;
 
-    constexpr auto mixed_args = TensorAccessorArgs<10>();
+    constexpr auto mixed_args = TensorAccessorArgs<11>();
     constexpr auto z_args = TensorAccessorArgs<mixed_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
     constexpr auto a_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
@@ -202,14 +205,19 @@ void kernel_main() {
         };
 
         // ---- load_pair_block ----
-        cb_reserve_back(cb_conv_w, GDN_CONV_TAPS * pair_cols);
+        cb_reserve_back(cb_conv_w, conv_w_pages);
         cb_reserve_back(cb_gate_w, 2);
         cb_reserve_back(cb_norm_w, Vt);
         const uint32_t conv_w_base = get_write_ptr(cb_conv_w);
         for (uint32_t idx = 0; idx < pair_cols; ++idx) {
             const uint32_t ct = pair_col(idx);
-            for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
-                rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * idx + tap) * TILE_BYTES, 0);
+            if constexpr (CONV_W_RAW) {
+                // Tap j stays at row j; compute broadcasts it by row index.
+                noc_async_read(conv_w.get_noc_addr(ct), conv_w_base + idx * TILE_BYTES, TILE_BYTES);
+            } else {
+                for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
+                    rows.read(conv_w, ct, tap, conv_w_base + (GDN_CONV_TAPS * idx + tap) * TILE_BYTES, 0);
+                }
             }
         }
         const uint32_t gate_w_base = get_write_ptr(cb_gate_w);
@@ -220,7 +228,7 @@ void kernel_main() {
             noc_async_read(norm_w.get_noc_addr(vt), norm_w_base + vt * TILE_BYTES, TILE_BYTES);
         }
         rows.finish();
-        cb_push_back(cb_conv_w, GDN_CONV_TAPS * pair_cols);
+        cb_push_back(cb_conv_w, conv_w_pages);
         cb_push_back(cb_gate_w, 2);
         cb_push_back(cb_norm_w, Vt);
 
@@ -243,38 +251,58 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_gate_in, 2);
 
-            // ---- conv window: X_j[p] = xx[row(p) + j - 3], one column tile per hand-off ----
-            for (uint32_t idx = 0; idx < pair_cols; ++idx) {
-                const uint32_t ct = pair_col(idx);
-                cb_reserve_back(cb_window, GDN_CONV_TAPS);
+            // ---- conv window: X_j[p] = xx[row(p) + j - 3], one channel group (q, k or v) per hand-off ----
+            // Per group: one zero fill, one flush of every DRAM row read (current rows + history rows),
+            // then one flush of the L1 row shifts that source the current-row tiles.
+            for (uint32_t group_first = 0; group_first < pair_cols;) {
+                const uint32_t group_cols = group_first < 2 * Kt ? Kt : Vt;
+                const uint32_t group_tiles = GDN_CONV_TAPS * group_cols;
+                cb_reserve_back(cb_window, group_tiles);
                 const uint32_t win = get_write_ptr(cb_window);
-                const uint32_t cur_tap = win + (GDN_CONV_TAPS - 1) * TILE_BYTES;
                 if (!owned) {
                     // Rows outside [lo, hi) are other sequences or padding: zero, never sourced.
-                    noc.async_write_zeros(window_buf, GDN_CONV_TAPS * TILE_BYTES, {.offset_bytes = 0});
+                    noc.async_write_zeros(window_buf, group_tiles * TILE_BYTES, {.offset_bytes = 0});
                     noc.write_zeros_l1_barrier();
                 }
-                read_tile_rows(rows, mixed, tr * Ct + ct, base_row, lo, hi, cur_tap);
-                rows.finish();
-                for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
-                    const uint32_t tap_tile = win + tap * TILE_BYTES;
-                    for (uint32_t row = lo; row < hi; ++row) {
-                        const uint32_t p = row - base_row;
+                for (uint32_t col = 0; col < group_cols; ++col) {
+                    const uint32_t ct = pair_col(group_first + col);
+                    const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
+                    read_tile_rows(
+                        rows, mixed, tr * Ct + ct, base_row, lo, hi, col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES);
+                    for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
                         const uint32_t shift = GDN_HISTORY - tap;  // source row = row - shift
-                        if (row >= lo + shift) {
-                            copy_local_row(cur_tap, p - shift, tap_tile, p);
-                        } else if (row >= seq_lo + shift) {
-                            const uint32_t src = row - shift;
-                            rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
-                        } else {
-                            // History row n = t + tap of sequence seq (t = row - seq_lo).
-                            const uint32_t src = GDN_HISTORY * seq + (row - seq_lo) + tap;
-                            rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
+                        const uint32_t remote_hi = hi < lo + shift ? hi : lo + shift;
+                        for (uint32_t row = lo; row < remote_hi; ++row) {
+                            const uint32_t p = row - base_row;
+                            const uint32_t tap_tile = col_win + tap * TILE_BYTES;
+                            if (row >= seq_lo + shift) {
+                                const uint32_t src = row - shift;
+                                rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
+                            } else {
+                                // History row n = t + tap of sequence seq (t = row - seq_lo).
+                                const uint32_t src = GDN_HISTORY * seq + (row - seq_lo) + tap;
+                                rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, tap_tile, p);
+                            }
                         }
                     }
                 }
                 rows.finish();
-                cb_push_back(cb_window, GDN_CONV_TAPS);
+                if (hi - lo > 1) {
+                    for (uint32_t col = 0; col < group_cols; ++col) {
+                        const uint32_t col_win = win + col * GDN_CONV_TAPS * TILE_BYTES;
+                        const uint32_t cur_tap = col_win + (GDN_CONV_TAPS - 1) * TILE_BYTES;
+                        for (uint32_t tap = 0; tap < GDN_CONV_TAPS - 1; ++tap) {
+                            const uint32_t shift = GDN_HISTORY - tap;
+                            for (uint32_t row = lo + shift; row < hi; ++row) {
+                                const uint32_t p = row - base_row;
+                                copy_local_row(cur_tap, p - shift, col_win + tap * TILE_BYTES, p);
+                            }
+                        }
+                    }
+                    noc_async_read_barrier();
+                }
+                cb_push_back(cb_window, group_tiles);
+                group_first += group_cols;
             }
 
             // ---- S0 of the pair, after the first tile row's prep inputs ----
@@ -303,23 +331,34 @@ void kernel_main() {
         }
 
         // ---- copy_conv_state_block: conv_state_out[3b + n] = xx[b, T + n] ----
+        // Columns are staged HISTORY rows apiece in the rows of one scratch tile: one read flush and one
+        // write barrier per CS_COLS_PER_FLUSH columns.
         const uint32_t scratch = get_write_ptr(cb_scratch);
         const uint32_t first_idx = (head % ratio == 0) ? 0 : 2 * Kt;  // q/k columns written by one head per key head
-        for (uint32_t idx = first_idx; idx < pair_cols; ++idx) {
-            const uint32_t ct = pair_col(idx);
-            for (uint32_t n = 0; n < GDN_HISTORY; ++n) {
-                if (T + n < GDN_HISTORY) {
-                    const uint32_t src = GDN_HISTORY * seq + T + n;
-                    rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, scratch, n);
-                } else {
-                    const uint32_t src = seq_lo + T + n - GDN_HISTORY;
-                    rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, scratch, n);
+        for (uint32_t flush_first = first_idx; flush_first < pair_cols; flush_first += CS_COLS_PER_FLUSH) {
+            const uint32_t flush_end =
+                pair_cols < flush_first + CS_COLS_PER_FLUSH ? pair_cols : flush_first + CS_COLS_PER_FLUSH;
+            for (uint32_t idx = flush_first; idx < flush_end; ++idx) {
+                const uint32_t ct = pair_col(idx);
+                const uint32_t slot_row = (idx - flush_first) * GDN_HISTORY;
+                for (uint32_t n = 0; n < GDN_HISTORY; ++n) {
+                    if (T + n < GDN_HISTORY) {
+                        const uint32_t src = GDN_HISTORY * seq + T + n;
+                        rows.read(conv_state, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, scratch, slot_row + n);
+                    } else {
+                        const uint32_t src = seq_lo + T + n - GDN_HISTORY;
+                        rows.read(mixed, (src / TILE_ROWS) * Ct + ct, src % TILE_ROWS, scratch, slot_row + n);
+                    }
                 }
             }
             rows.finish();
-            for (uint32_t n = 0; n < GDN_HISTORY; ++n) {
-                const uint32_t dst = GDN_HISTORY * seq + n;
-                write_row(conv_state_out, scratch, n, (dst / TILE_ROWS) * Ct + ct, dst % TILE_ROWS);
+            for (uint32_t idx = flush_first; idx < flush_end; ++idx) {
+                const uint32_t ct = pair_col(idx);
+                const uint32_t slot_row = (idx - flush_first) * GDN_HISTORY;
+                for (uint32_t n = 0; n < GDN_HISTORY; ++n) {
+                    const uint32_t dst = GDN_HISTORY * seq + n;
+                    write_row(conv_state_out, scratch, slot_row + n, (dst / TILE_ROWS) * Ct + ct, dst % TILE_ROWS);
+                }
             }
             noc_async_write_barrier();
         }

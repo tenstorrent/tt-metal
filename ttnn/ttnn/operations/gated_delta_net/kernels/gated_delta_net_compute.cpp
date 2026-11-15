@@ -10,6 +10,9 @@
 // (SFPU squares). Raw LLK where the design names a custom block op, with the reasons:
 //   - every row / column broadcast must stay fp32 (alpha, the L2 scale, S): the only broadcast in
 //     eltwise_chain is BinaryFpu (srcB, 19-bit), so these use sfpu_*_bcast_{row,col} in DEST;
+//   - conv_block_fpu (bf16 tokens): the four taps of a column are FPU row-broadcast multiplies
+//     (srcB = conv weight row) summed in one fp32 DEST tile, which ELWMUL accumulates into; no
+//     helper accumulates FPU binaries into DEST. fp32 tokens keep the SFPU path (srcA/srcB are 19-bit);
 //   - the state update accumulates the increment matmul onto an SFPU-decayed fp32 state already in
 //     DEST; matmul_block owns DEST acquire/pack and cannot seed DEST with it.
 // DEST discipline in the raw windows: every unpack-to-DEST load of a window is issued before its
@@ -17,6 +20,7 @@
 // math thread waits for the SFPU before the FPU accumulates onto SFPU results.
 
 #include <cstdint>
+#include "api/debug/kernel_profiler.hpp"
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
@@ -29,6 +33,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/eltwise_unary/negative.h"
@@ -91,6 +96,9 @@ constexpr uint32_t Hv = get_compile_time_arg_val(2);
 constexpr uint32_t MM_SUBBLOCK_W = get_compile_time_arg_val(3);
 constexpr uint32_t SQRT_V_BITS = get_compile_time_arg_val(4);
 constexpr uint32_t Q_SCALE_BITS = get_compile_time_arg_val(5);
+constexpr bool CONV_ON_FPU = get_compile_time_arg_val(6) != 0;
+// FPU conv reads raw conv_weight tiles (tap j at row j); the SFPU conv one row-0 tile per tap.
+constexpr uint32_t conv_w_pages = CONV_ON_FPU ? (2 * Kt + Vt) : GDN_CONV_TAPS * (2 * Kt + Vt);
 constexpr uint32_t n_state = Kt * Vt;
 constexpr uint32_t pair_cols = 2 * Kt + Vt;
 // fp32 half-sync DEST: state tiles per update batch, one slot kept for the alpha column.
@@ -119,6 +127,46 @@ ALWI void wait_sfpu_before_fpu() {
 #ifdef TRISC_MATH
     TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::WAIT_SFPU);
 #endif
+}
+
+// Valid token rows [row_lo, row_hi) of a tile row (tile-local). When they sit in one 4-row band, the
+// row-local SFPU ops run on that band of both faces only (4 of 32 vector ops, sfpu_tile_scope); rows
+// outside it keep their pre-op DEST values, which no valid row reads.
+struct RowScope {
+    uint32_t band;  // band index 0..7, or FULL_TILE
+    static constexpr uint32_t FULL_TILE = 0xffffffffu;
+    static RowScope of(uint32_t row_lo, uint32_t row_hi) {
+        return {(row_lo >> 2) == ((row_hi - 1) >> 2) ? (row_lo >> 2) : FULL_TILE};
+    }
+};
+
+// One SFPU body of ITERATIONS=2 (one 4-row band, both column parities) on `band` of both faces of its half.
+template <typename Body>
+ALWI void sfpu_band(uint32_t dst, uint32_t band, Body body) {
+#ifdef TRISC_MATH
+    _llk_math_eltwise_sfpu_start_(dst);
+    if (band >= 4) {
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    }
+    for (uint32_t b = 0; b < (band & 3); ++b) {
+        math::inc_dst_addr<4>();
+    }
+    body();
+    _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+    body();
+    _llk_math_eltwise_sfpu_done_();
+#endif
+}
+
+ALWI void silu_scoped(uint32_t dst, RowScope scope) {
+    if (scope.band == RowScope::FULL_TILE) {
+        silu_tile(dst);
+    } else {
+#ifdef TRISC_MATH
+        sfpu_band(dst, scope.band, [] { ckernel::sfpu::calculate_silu<DST_ACCUM_MODE, 2>(); });
+#endif
+    }
 }
 
 struct Buffers {
@@ -194,7 +242,7 @@ ALWI void conv_two_taps(uint32_t col, uint32_t tap0) {
 
 // ---------------------------------------------------------------- conv_block
 // y = silu(sum_j X_j (*)row W_j) per column tile of the pair; q, k -> cb_y_qk, v -> cb_v.
-ALWI void conv_block() {
+ALWI void conv_block(RowScope scope) {
     cb_reserve_back(cb_y_qk, 2 * Kt);
     cb_reserve_back(cb_v, Vt);
     for (uint32_t col = 0; col < pair_cols; ++col) {
@@ -218,7 +266,7 @@ ALWI void conv_block() {
         begin_loads(cb_conv_acc);
         load(cb_conv_acc, 0, 0);
         silu_tile_init();
-        silu_tile(0);
+        silu_scoped(0, scope);
         tile_regs_commit();
         tile_regs_wait();
         if (col < 2 * Kt) {
@@ -228,6 +276,36 @@ ALWI void conv_block() {
         }
         tile_regs_release();
         cb_pop_front(cb_conv_acc, 1);
+    }
+    cb_push_back(cb_y_qk, 2 * Kt);
+    cb_push_back(cb_v, Vt);
+}
+
+// ---------------------------------------------------------------- conv_block_fpu
+// Same contract as conv_block: DEST = sum_j X_j (*)row W_j by FPU ELWMUL accumulation (DEST is zero
+// after acquire), then silu in the same window. Exact for bf16 operands; products accumulate in fp32.
+ALWI void conv_block_fpu(RowScope scope) {
+    cb_reserve_back(cb_y_qk, 2 * Kt);
+    cb_reserve_back(cb_v, Vt);
+    for (uint32_t col = 0; col < pair_cols; ++col) {
+        cb_wait_front(cb_window, GDN_CONV_TAPS);
+        tile_regs_acquire();
+        reconfig_data_format(cb_window, cb_conv_w);
+        mul_bcast_rows_init(cb_window, cb_conv_w);
+        for (uint32_t tap = 0; tap < GDN_CONV_TAPS; ++tap) {
+            mul_tiles_bcast_rows(cb_window, cb_conv_w, tap, col, 0, tap);
+        }
+        silu_tile_init();
+        silu_scoped(0, scope);
+        tile_regs_commit();
+        tile_regs_wait();
+        if (col < 2 * Kt) {
+            pack_first(0, cb_y_qk, col);
+        } else {
+            pack_first(0, cb_v, col - 2 * Kt);
+        }
+        tile_regs_release();
+        cb_pop_front(cb_window, GDN_CONV_TAPS);
     }
     cb_push_back(cb_y_qk, 2 * Kt);
     cb_push_back(cb_v, Vt);
@@ -490,7 +568,7 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
 // ---------------------------------------------------------------- rmsnorm_gate_block
 // out = ((o (*)col rsqrt(mean o^2 + eps)) (*)row w) * silu(z), with
 // rsqrt(mean o^2 + eps) = sqrt(V) * rsqrt(sum o^2 + V eps).
-ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits) {
+ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits, RowScope scope) {
     square_block<cb_o_acc, cb_sq_o>(bufs.o_acc, bufs.sq_o, 0, Vt);
     row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, Vt, RsqrtPost{v_eps_bits, SQRT_V_BITS});
     cb_wait_front(cb_rinv_o, 1);
@@ -511,7 +589,7 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits) {
         sfpu_bcast_row_init();
         sfpu_mul_bcast_row(0, 2);
         silu_tile_init();
-        silu_tile(3);
+        silu_scoped(3, scope);
         mul_binary_tile_init();
         mul_binary_tile(0, 3, 0);
         tile_regs_commit();
@@ -541,7 +619,7 @@ void kernel_main() {
         const uint32_t seq_hi = seq_lo + T;
         const uint32_t first_tr = seq_lo / TILE_ROWS;
         const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
-        cb_wait_front(cb_conv_w, GDN_CONV_TAPS * pair_cols);
+        cb_wait_front(cb_conv_w, conv_w_pages);
         cb_wait_front(cb_gate_w, 2);
         cb_wait_front(cb_norm_w, Vt);
 
@@ -551,12 +629,27 @@ void kernel_main() {
             const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
             const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
 
-            gates_block();
-            conv_block();
-            l2norm_block(bufs);
+            const RowScope scope = RowScope::of(lo - base_row, hi - base_row);
+            {
+                DeviceZoneScopedN("Z_GATES");
+                gates_block();
+            }
+            {
+                DeviceZoneScopedN("Z_CONV");
+                if constexpr (CONV_ON_FPU) {
+                    conv_block_fpu(scope);
+                } else {
+                    conv_block(scope);
+                }
+            }
+            {
+                DeviceZoneScopedN("Z_L2N");
+                l2norm_block(bufs);
+            }
 
             cb_reserve_back(cb_o_acc, Vt);
             for (uint32_t row = lo; row < hi; ++row, ++token) {
+                DeviceZoneScopedN("Z_STEP");
                 token_step(bufs, token == 0, token == T - 1, row == lo);
             }
             cb_push_back(cb_o_acc, Vt);
@@ -565,9 +658,12 @@ void kernel_main() {
             cb_pop_front(cb_d, 1);
             cb_pop_front(cb_v, Vt);
 
-            rmsnorm_gate_block(bufs, v_eps_bits);
+            {
+                DeviceZoneScopedN("Z_RMSN");
+                rmsnorm_gate_block(bufs, v_eps_bits, scope);
+            }
         }
-        cb_pop_front(cb_conv_w, GDN_CONV_TAPS * pair_cols);
+        cb_pop_front(cb_conv_w, conv_w_pages);
         cb_pop_front(cb_gate_w, 2);
         cb_pop_front(cb_norm_w, Vt);
     }
