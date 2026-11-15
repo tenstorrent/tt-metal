@@ -10,6 +10,8 @@ slicing of the canonical array says it should hold. The cases are the design's w
 both directions.
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 import pytest
 from dcp_oracle import (
@@ -35,9 +37,9 @@ from ttml.distributed_checkpointing._errors import (
     TopologyError,
     UnexpectedKeyError,
 )
-from ttml.distributed_checkpointing._index import data_file_name
-from ttml.distributed_checkpointing._layouts import Identity, Pad, fused_segments
-from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
+from ttml.distributed_checkpointing._index import ChunkRecord, data_file_name
+from ttml.distributed_checkpointing._layouts import Compose, Identity, Pad, fused_segments
+from ttml.distributed_checkpointing._planner import TensorInfo, _ChunkLookup, create_load_plan, create_save_plan
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 
 TP8_DP4 = world([R(), S(2)], (4, 8))
@@ -277,8 +279,82 @@ def test_a_missing_chunk_is_a_coverage_error(expect_error):
     ckpt = FakeCheckpoint()
     ckpt.save({"w": (canonical, TP8_DP4, Identity())})
     del ckpt.index.entries["w"].chunks[3]
-    with expect_error(CoverageError, "do not tile"):
+    with expect_error(CoverageError, "w: the checkpoint's 7 chunks do not tile its global shape"):
         ckpt.load({"w": (SINGLE, Identity(), (1, 1, 64, 32))})
+
+
+@dataclass(frozen=True)
+class _DroppingIdentity(Identity):
+    """A broken transform that maps only the first half of every box's rows: what the per-shard check guards against,
+    since the transforms the planner ships all partition the boxes they map."""
+
+    def to_canonical(self, box):
+        half = box.with_dim(2, box.offsets[2], box.sizes[2] // 2)
+        return [(half, half)]
+
+
+def test_a_destination_shard_the_reads_leave_short_is_a_coverage_error(expect_error):
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (arange((1, 1, 64, 32)), SINGLE, Identity())})
+    with expect_error(CoverageError, r"w: the saved chunks do not tile destination shard .*1024 of 2048 elements"):
+        ckpt.load({"w": (SINGLE, _DroppingIdentity(), (1, 1, 64, 32))})
+
+
+def test_chunks_that_are_not_one_grid_are_found_by_scanning():
+    # Two writers that split the rows unevenly (3 + 7) are not cells of one grid, so the planner scans the chunks.
+    canonical = arange((1, 1, 10, 4))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (canonical, SINGLE, Identity())})
+    row = 4 * canonical.itemsize
+    raw = canonical.tobytes()
+    ckpt.files = {0: bytearray(raw[: 3 * row]), 1: bytearray(raw[3 * row :])}
+    entry = ckpt.index.entries["w"]
+    entry.chunks = [
+        ChunkRecord(Box((0, 0, 0, 0), (1, 1, 3, 4)), 0, 0, 3 * row),
+        ChunkRecord(Box((0, 0, 3, 0), (1, 1, 7, 4)), 1, 0, 7 * row),
+    ]
+    assert _ChunkLookup(entry).by_cell is None, "the uneven chunks take the scan path"
+    tp2 = world([R(), S(2)], (1, 2))
+    _, shards = ckpt.load({"w": (tp2, Identity(), (1, 1, 10, 4))})
+    assert_shards_equal(shards["w"], expected_shards(canonical, tp2))
+
+
+def test_roles_scope_the_unexpected_keys_of_a_load(expect_error):
+    ckpt = FakeCheckpoint()
+    ckpt.save(
+        {"w": (arange((1, 1, 64, 32)), SINGLE, Identity()), "opt/w": (arange((1, 1, 64, 32)), SINGLE, Identity())}
+    )
+    ckpt.index.entries["opt/w"].role = "optimizer_state"
+    model_only = [TensorInfo("w", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("w",))]
+    assert create_load_plan(ckpt.index, model_only, strict=False).unexpected == ["opt/w"]
+    with expect_error(UnexpectedKeyError, "opt/w"):
+        create_load_plan(ckpt.index, model_only, strict=True)
+    plan = create_load_plan(ckpt.index, model_only, strict=True, roles=["param"])
+    assert plan.unexpected == [] and list(plan.keys) == ["w"], "optimizer state is out of a model-only load's scope"
+
+
+def test_a_renamed_tensor_loads_through_its_previous_live_name():
+    canonical = arange((1, 1, 64, 32))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"model/old": (canonical, SINGLE, Identity())})
+    renamed = TensorInfo(
+        "model/new", "param", "F32", "TILE", SINGLE, (1, 1, 64, 32), Identity(), ("model/new", "model/old")
+    )
+    plan = create_load_plan(ckpt.index, [renamed])
+    assert plan.keys["model/new"].entry.key == "model/old" and plan.missing == []
+
+
+def test_padding_through_a_compose_is_filled_with_zeros():
+    # Fusion on dim 2 and padding on dim 3 compose; a load that grows the padded extent fills the new padding.
+    tp2 = world([R(), S(2)], (1, 2))
+    src_t = Compose((Pad(3, 24, 32), fused_segments(2, (8, 8), 2)))
+    dst_t = Compose((Pad(3, 24, 40), fused_segments(2, (8, 8), 2)))
+    canonical = arange((1, 1, 16, 24))
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (device_global(canonical, src_t, (1, 1, 16, 32), pad_value=-1.0), tp2, src_t)})
+    plan, shards = ckpt.load({"w": (tp2, dst_t, (1, 1, 16, 40))})
+    assert plan.keys["w"].fills and all(f.fill == "zeros" for f in plan.keys["w"].fills)
+    assert_shards_equal(shards["w"], expected_shards(device_global(canonical, dst_t, (1, 1, 16, 40), 0.0), tp2))
 
 
 def test_live_keys_resolve_tied_names():
