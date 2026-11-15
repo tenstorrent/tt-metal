@@ -4474,6 +4474,82 @@ tasks:
       need: STOP and report, never reset. Report plainly, short.'
     gate_tasks:
     - P.68
+- id: P.70
+  title: 'DS41-280: replicas usable under DECODER_SKIP=decode (NCALL from the MoE layers a chunk calls), then re-measure 51k..1M'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.69
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py && DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      contract_checks_failed: == 0
+      acks_early: == 0
+      served_bytes_differ: == 0
+      chunk_wall_ms: '> 0'
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed_decoder_skip: == 0
+      acks_early_decoder_skip: == 0
+      unwritten_records_changed_decoder_skip: == 0
+      decode_acks_failures: == 0
+      device_ms_total: '> 0'
+      determinism_max_abs_diff: == 0
+      steady_tok_s_p1024000: '> 0'
+      resumed_tok_s_p1024000: '> 0'
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/common/bringup/orchestrator.py
+  - models/demos/common/bringup/testing
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - ttnn/ttnn/bringup/INDEX.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/CMakeLists.txt
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/README.md
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/common
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/expert_slot_copy
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/moe_block_nanobind.cpp
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine
+  - ttnn/ttnn/bringup/moe_block_main_ttnn/expert_slot_copy
+  brief:
+    details: 'OVERSEER 2026-11-15 (owner delegated autonomy on this branch; the owner''s measurement needs replicas to actually
+      work under the realistic setting): fix DS41-280. Under DECODER_SKIP=decode only layers 0-19 call the MoE, so a layer''s
+      next call comes 20 MoE calls later, but expert_prev''s guard (PrevReplicas.before) waits for NCALL = every MoE layer
+      BUILT (40): no plan is ever usable (P.69: ready 0/20 at every point), while planning and copies still cost. FIX: NCALL
+      (and everything sized or fenced by it: the ring of W page sets, the G[0] ordinal arithmetic, the planner''s ready ordinal,
+      the folded planner''s last-call rule) from the MoE layers a chunk ACTUALLY calls (20 under decode, 40 otherwise; a chunk
+      whose call set differs, e.g. a skipped-decoder last chunk or replay128''s tail, must stay correct: derive it per chunk
+      from the model''s call plan, or fall back to off for that chunk). FIRST explain why the guard needs NCALL (what it fences:
+      a copy landing before its use, a ring slot not reused while read) and show the new count keeps every one of those guarantees.
+      Outputs must stay bit-identical to MOE_REPLICAS=off (test_moe_prev_replicas, under both DECODER_SKIP=off and decode),
+      determinism 0, decode-skip passes. Then the measurement: the gate re-runs test_skip_positions (unchanged); report ready
+      x/20 per point (must be > 0 now) and the table vs model_bringup''s FIX.34 (results/FIX.34.json on dnijemcevic/model_bringup)
+      with per-point differences. SAFETY: a hang or reset need: STOP and report, never reset. Report plainly, short.'
+    gate_tasks:
+    - P.68
+    - P.69
 - id: P.68
   title: 'Rebuild this branch as model_bringup + expert replication (owner 2026-11-15): take model_bringup @ 8b2b9df34dd''s code with FIX.33''s replica removal undone (= 0e397ef379a + 1f12f2ce34b); ledger stays this branch''s'
   step: perf
