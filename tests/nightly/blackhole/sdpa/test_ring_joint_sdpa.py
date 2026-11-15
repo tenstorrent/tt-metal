@@ -9190,7 +9190,7 @@ def _h3_dynamic_mesh_config():
     return MESH_CONFIG
 
 
-def _blocked_sdpa_reference(q, k, v, block_rows=4096, causal=False):
+def _blocked_sdpa_reference(q, k, v, block_rows=4096):
     """fp32 attention for one head, one Q row block at a time, so a 120k x 120k score matrix never materializes."""
     scale = q.shape[-1] ** -0.5
     k_t = k.float().transpose(-1, -2)
@@ -9199,8 +9199,6 @@ def _blocked_sdpa_reference(q, k, v, block_rows=4096, causal=False):
     for start in range(0, q.shape[0], block_rows):
         end = min(start + block_rows, q.shape[0])
         scores = torch.matmul(q[start:end].float(), k_t) * scale
-        if causal:
-            scores += torch.triu(torch.full_like(scores, float("-inf")), diagonal=start + 1)
         out[start:end] = torch.matmul(torch.softmax(scores, dim=-1), v32)
     return out
 
@@ -9530,7 +9528,7 @@ H3_CAUSAL_DYNAMIC_TILE_ROWS = [t for pair in zip(range(20, 10, -1), range(1, 11)
 def test_ring_joint_attention_dynamic_local_n_causal_flat_cache(topology, variant, fp32_dest_acc_en):
     """Unbalanced causal attention, MHA and grouped GQA, on both compute paths and both fabrics: one cached program
     serves every per-chip length in either direction, with a pinned chunk pair wider than the short shards. A hang
-    fails the test through its timeout."""
+    fails the test through its timeout. Causal is checked at the padded total only, which is the encoder's call."""
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
     (q_heads_per_chip, kv_heads_per_chip), qk_chunks = H3_CAUSAL_DYNAMIC_VARIANTS[variant]
@@ -9581,13 +9579,13 @@ def test_ring_joint_attention_dynamic_local_n_causal_flat_cache(topology, varian
             )
             got = _h3_dynamic_to_torch(runtime, out).float()
             assert torch.isfinite(got).all(), f"{tile_rows} tile rows: non-finite output"
+            ref = torch_sdpa_reference(q.float(), k.float(), v.float(), is_causal=True)
             worst = 1.0
             for h in checked_heads:
-                ref = _blocked_sdpa_reference(q[0, h], k[0, h // group], v[0, h // group], causal=True)
                 # Per chip shard: one chip's wrong mask would be diluted over the whole sequence.
                 for chip in range(sp):
                     shard = slice(chip * rows, (chip + 1) * rows)
-                    pcc, _ = compute_pcc_rmse(ref[shard], got[0, h, shard])
+                    pcc, _ = compute_pcc_rmse(ref[0, h, shard], got[0, h, shard])
                     worst = min(worst, pcc)
                     assert pcc >= pcc_threshold, f"{tile_rows} tile rows, head {h}, chip {chip}: PCC {pcc}"
             logger.info(f"{variant} {tile_rows} tile rows: min PCC={worst:.6f}")

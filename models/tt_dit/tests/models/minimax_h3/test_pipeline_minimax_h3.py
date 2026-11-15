@@ -36,6 +36,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     _resolve_audio_t_shard,
     _resolve_denoise_path,
     _resolve_dit_fsdp,
+    _resolve_encoder_dynamic_length,
     _resolve_max_sequence_length,
     validate_bucket_ladder,
 )
@@ -254,6 +255,21 @@ def test_resolve_dit_fsdp(monkeypatch, expect_error):
         _resolve_dit_fsdp(bh, dit_fsdp=None, task="t2va", dynamic_length=False)
 
 
+def test_resolve_encoder_dynamic_length():
+    bh, quad, wormhole = _PRESETS_BH[(4, 8)], _PRESETS_BH[(4, 32)], _PRESETS_WH[(4, 8)]
+    # on with `dynamic_length` on both Blackhole presets, for the t2va task (which serves fl2va too) only
+    for preset in (bh, quad):
+        assert _resolve_encoder_dynamic_length(None, preset, dynamic_length=True, task="t2va")
+        assert not _resolve_encoder_dynamic_length(None, preset, dynamic_length=False, task="t2va")
+        assert not _resolve_encoder_dynamic_length(None, preset, dynamic_length=True, task="ref2va")
+    # off where the preset does not enable it
+    for preset in (wormhole, {}):
+        assert not _resolve_encoder_dynamic_length(None, preset, dynamic_length=True, task="t2va")
+    # an explicit value always wins
+    assert _resolve_encoder_dynamic_length(True, wormhole, dynamic_length=False, task="ref2va")
+    assert not _resolve_encoder_dynamic_length(False, bh, dynamic_length=True, task="t2va")
+
+
 # Pure (no-device) coverage for the per-mesh bucket ladders.
 @pytest.mark.parametrize("task", ["t2va", "ref2va"])
 def test_preset_bucket_ladder_is_aligned(task):
@@ -340,11 +356,11 @@ def test_prompt_encoder_warm_walk_leaves_no_program(mesh_device, reset_seeds, en
         warmup=False,
         trace_audio=False,
     )
-    if not pipeline._reduced_prompt_warm:
-        pytest.skip("this mesh keeps the full layout x length warm-up")
+    assert pipeline._reduced_prompt_warm
     pipeline._warm_prompt_encoder_envelope()
     warmed = mesh_device.num_program_cache_entries()
-    pipeline._warm_prompt_encoder_envelope(full=True)
+    pipeline._reduced_prompt_warm = False
+    pipeline._warm_prompt_encoder_envelope()
     left = mesh_device.num_program_cache_entries() - warmed
     assert left == 0, f"the reduced warm-up left {left} programs for the full envelope to compile"
 

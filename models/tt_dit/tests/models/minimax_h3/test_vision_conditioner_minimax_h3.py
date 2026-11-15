@@ -33,7 +33,7 @@ from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.hf_local_mirror import ensure_cached
-from ....utils.tensor import bf16_tensor, from_torch, local_device_to_torch
+from ....utils.tensor import bf16_tensor, local_device_to_torch
 from .common_av import is_host
 
 _LOCAL_MIRROR = "/data/cglagovich/MiniMax-H3-diffusers"
@@ -725,31 +725,31 @@ def test_fused_conditioner_two_refs_real_weights(
 )
 # Decoder-only parallel configs: `sp_on` shards the sequence, `is_fsdp` the weights, on the non-TP axis.
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis", "sp_on", "is_fsdp", "num_links"),
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_on", "is_fsdp", "num_links", "dynamic_length"),
     [
-        pytest.param((4, 8), (4, 8), 0, False, True, 2, id="tp4_fsdp8"),
-        pytest.param((4, 8), (4, 8), 0, True, True, 2, id="tp4_sp8_fsdp8"),
-        pytest.param((4, 8), (4, 8), 1, True, False, 2, id="tp8_sp4"),
+        pytest.param((4, 8), (4, 8), 0, False, True, 2, False, id="tp4_fsdp8"),
+        pytest.param((4, 8), (4, 8), 0, True, True, 2, False, id="tp4_sp8_fsdp8"),
+        pytest.param((4, 8), (4, 8), 1, True, False, 2, False, id="tp8_sp4"),
+        pytest.param((4, 8), (4, 8), 0, True, True, 2, True, id="tp4_sp8_fsdp8_dynamic"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("check_pcc", [pytest.param(True, id="check"), pytest.param(False, id="perf")])
 # 512 is a whole number of SEQ_BUCKET_SIZE=128 buckets, so the encoder pads nothing.
 @pytest.mark.parametrize("seq_len", [512], ids=["prompt_512"])
-@pytest.mark.parametrize("dynamic_length", [False, True], ids=["per_length", "dynamic"])
 def test_fused_conditioner_t2va_real_weights(
-    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, check_pcc, seq_len, dynamic_length
+    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, dynamic_length, check_pcc, seq_len
 ):
     """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only.
-    `dynamic` runs the encoder's one-program-set path, which needs SP and two K heads per chip (TP=4)."""
+    `dynamic_length` runs the encoder's one-program-set path, which needs SP and two K heads per chip (TP=4)."""
     path, reference = conditioner
+    if dynamic_length and mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("dynamic_length is Blackhole only")
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     shape = tuple(submesh.shape)
     tp_factor = shape[tp_axis]
     sp_axis = (1 - tp_axis) if sp_on else None
     sp_factor = shape[sp_axis] if sp_on else 1
-    if dynamic_length and not (sp_on and tp_factor == 4):
-        pytest.skip("the dynamic path needs sequence parallelism and more than one K head per chip")
     cfg = reference.language_model.config
 
     torch.manual_seed(0)
@@ -800,24 +800,7 @@ def test_fused_conditioner_t2va_real_weights(
         dcos, dsin = create_rope_tensors(
             1, seq_len, None, head_dim, rope_params["rope_theta"], rope_params["mrope_section"]
         )
-        if dynamic_length:
-            # The dynamic path takes its inputs split per chip, the rope tables tilized on the host.
-            tt_ids = from_torch(
-                ids.to(torch.int32),
-                device=submesh,
-                dtype=ttnn.uint32,
-                layout=ttnn.Layout.ROW_MAJOR,
-                mesh_axes=[None, sp_axis],
-            )
-            tt_dcos, tt_dsin = (
-                ttnn.to_device(
-                    from_torch(t, device=submesh, mesh_axes=[None, None, sp_axis, None], on_host=True), submesh
-                )
-                for t in (dcos, dsin)
-            )
-        else:
-            tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
-            tt_dcos, tt_dsin = bf16_tensor(dcos, device=submesh), bf16_tensor(dsin, device=submesh)
+        tt_ids, (tt_dcos, tt_dsin) = encoder.upload_inputs(ids, dcos, dsin)
         ttnn.synchronize_device(submesh)
         t1 = time.time()
         out = encoder.forward(tt_ids, attention_mask=None, pos_embeds=(tt_dcos, tt_dsin))[0]

@@ -284,13 +284,13 @@ def _resolve_dit_fsdp(preset: Mapping, *, dit_fsdp: bool | None, task: str, dyna
 
 
 def _resolve_encoder_dynamic_length(
-    requested: bool | None, *, dynamic_length: bool, blackhole: bool, task: str, mesh_shape: tuple[int, ...]
+    requested: bool | None, preset: Mapping, *, dynamic_length: bool, task: str
 ) -> bool:
-    """kwarg, else on with `dynamic_length` where the encoder's path is tested: Blackhole 4x8 (ring or line) and
-    4x32, not ref2va."""
+    """kwarg, else on with `dynamic_length` where the preset enables it (the meshes the encoder's path is tested
+    on), not for ref2va."""
     if requested is not None:
         return bool(requested)
-    return dynamic_length and blackhole and task != "ref2va" and mesh_shape in ((4, 8), (4, 32))
+    return dynamic_length and task != "ref2va" and preset.get("encoder_dynamic_length", False)
 
 
 def _resolve_audio_t_shard(
@@ -425,6 +425,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         # Dynamic length by default; the ladder and `bucket_denoise` stay as the backup path (any bucketed
         # kwarg or MINIMAX_H3_DYNAMIC_LENGTH=0 selects it) and the top rung is the default admission cap.
         "dynamic_length": True,
+        # With `dynamic_length` the prompt encoder takes its row count at run time too (t2va and fl2va).
+        "encoder_dynamic_length": True,
         "bucket_denoise": True,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
         "use_persistent_ccl_buffers": False,
@@ -445,6 +447,8 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         # (the padded-sequence zero rows), and rebuilding those inside a trace capture is a fatal write.
         "coresident": True,
         "trace_denoise": True,
+        # Follows `dynamic_length`, which is opt-in here.
+        "encoder_dynamic_length": True,
         "use_persistent_ccl_buffers": True,
         # Unsharded on both paths, as the bucketed quad has always run: the dynamic-ref2va FSDP default is a 4x8
         # rule and a 32-way weight all-gather is unmeasured. Dynamic ref2va on the quad is unmeasured too: its
@@ -612,7 +616,8 @@ def _is_host_rank() -> bool:
 
 
 _TQDM_BAR_FORMAT = "\033[A\r\033[K{l_bar}{bar}{r_bar}\n"
-# Decoder layers per warm-up encode: one compiles the layer programs, the next three take the deepstack adds.
+# Decoder layers per warm-up encode: every layer has the same programs; the deepstack adds follow layers 0 to 2 and
+# layer 3 is the first without one.
 _PROMPT_WARM_LAYERS = 4
 
 
@@ -657,8 +662,8 @@ class MiniMaxH3Pipeline:
         length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
         the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path.
 
-        `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` on
-        the Blackhole 4x8 (ring or line) and 4x32 for t2va/fl2va only."""
+        `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` where
+        the mesh preset enables it (the Blackhole 4x8 and 4x32), for t2va/fl2va only."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
@@ -713,7 +718,6 @@ class MiniMaxH3Pipeline:
         self._force_pad_to: int | None = None
         self._force_prompt_pad: int | None = None
         self._force_vision_pad: int | None = None
-        # Decoder layers a warm-up encode runs: every layer has the same programs, so a few compile them all.
         self._warm_encoder_layers: int | None = None
         self._tt_video = StateTensor()
         self._tt_audio = StateTensor()
@@ -860,21 +864,11 @@ class MiniMaxH3Pipeline:
         # on every device and no length-keyed `mesh_partition` program. On Wormhole and on the dynamic-length path.
         self._shard_assembly_indices = (is_wormhole_b0() or self.dynamic_length) and self.sp_factor > 1
 
-        self.encoder_dynamic_length = _resolve_encoder_dynamic_length(
-            encoder_dynamic_length,
-            dynamic_length=self.dynamic_length,
-            blackhole=is_blackhole(),
-            task=task,
-            mesh_shape=shape,
-        )
-        # The prompt-encoder warm-up without the layout x length product, where it is proven to miss nothing.
-        self._reduced_prompt_warm = _resolve_encoder_dynamic_length(
-            None,
-            dynamic_length=self.dynamic_length,
-            blackhole=is_blackhole(),
-            task=task,
-            mesh_shape=shape,
-        )
+        where = dict(dynamic_length=self.dynamic_length, task=task)
+        self.encoder_dynamic_length = _resolve_encoder_dynamic_length(encoder_dynamic_length, preset, **where)
+        # The default also selects the prompt-encoder warm-up without the layout x length product, which is proven
+        # to miss nothing there with the encoder flag on or off.
+        self._reduced_prompt_warm = _resolve_encoder_dynamic_length(None, preset, **where)
 
         self._host_log("building the Qwen3-VL text encoder")
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -1470,31 +1464,7 @@ class MiniMaxH3Pipeline:
             position_ids=position_ids,
             interleaved=has_vision,
         )
-        if self.encoder_dynamic_length:
-            # Split per chip on the host; the rope tables are tilized there too, so no upload program is keyed
-            # on the length.
-            tt_ids = from_torch(
-                input_ids.to(torch.int32),
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.Layout.ROW_MAJOR,
-                mesh_axes=[None, self.sp_axis],
-            )
-            pos_embeds = tuple(
-                ttnn.to_device(
-                    from_torch(t, device=self.mesh_device, mesh_axes=[None, None, self.sp_axis, None], on_host=True),
-                    self.mesh_device,
-                )
-                for t in (cos, sin)
-            )
-        else:
-            tt_ids = ttnn.from_torch(
-                input_ids,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh_device,
-            )
-            pos_embeds = (bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device))
+        tt_ids, pos_embeds = encoder.upload_inputs(input_ids, cos, sin)
         # Causal, and a single un-padded presentation, so no mask is needed.
         taps = encoder.forward(
             tt_ids, attention_mask=None, pos_embeds=pos_embeds, num_layers=self._warm_encoder_layers, **vision_kwargs
@@ -2687,10 +2657,9 @@ class MiniMaxH3Pipeline:
         else:
             self._warm_prompt_encoder_envelope()
 
-    def _warm_prompt_encoder_envelope(self, *, full: bool = False) -> None:
+    def _warm_prompt_encoder_envelope(self) -> None:
         """Compile every prompt-encoding program a served t2va/fl2va request can reach, strictly
-        before trace capture (a replay can overwrite a program compiled after capture). `full` runs the
-        whole layout x length product at full depth, which the reduced walk must leave nothing for.
+        before trace capture (a replay can overwrite a program compiled after capture).
         """
         if self.sp_factor <= 1:
             return
@@ -2726,7 +2695,7 @@ class MiniMaxH3Pipeline:
             units.append((n_keyframes, canvas, vision_len, min(MINIMAX_H3_MAX_TEXT_TOKENS, caps.prompt - vision_len)))
         spans = [(align_up(vision_len + 1), align_up(vision_len + budget)) for *_, vision_len, budget in units]
 
-        reduced = self._reduced_prompt_warm and not full
+        reduced = self._reduced_prompt_warm
         if reduced:
             # A length-free encoder has two program sets at most, met at its shortest and longest length.
             ends = (alignment, align_up(caps.prompt)) if self.encoder_dynamic_length else None

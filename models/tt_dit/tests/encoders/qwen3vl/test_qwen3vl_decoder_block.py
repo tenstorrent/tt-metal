@@ -366,8 +366,10 @@ _DYNAMIC_RING = {**ring_params_8k_req_exact_devices, "l1_small_size": 65536}
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_decoder_block_dynamic_length(mesh_device, capacity):
+def test_decoder_block_dynamic_length(mesh_device, capacity, expect_error):
     """`dynamic_length` tracks the default layer and adds no program of its own for a new length."""
+    if mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("dynamic_length is Blackhole only")
     torch.manual_seed(0)
     tp_axis, sp_axis = 0, 1
     sp = tuple(mesh_device.shape)[sp_axis]
@@ -405,13 +407,7 @@ def test_decoder_block_dynamic_length(mesh_device, capacity):
     for rows in (160, 32, 96, 64, 128, capacity):
         seq_len = rows * sp
         x = torch.randn(1, seq_len, HIDDEN_SIZE)
-        logical_n = tensor.from_torch(
-            torch.tensor([seq_len], dtype=torch.int64).reshape(1, 1, 1, 1),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.Layout.ROW_MAJOR,
-            mesh_axes=[..., None, None],
-        )
+        logical_n = tensor.logical_length_tensor(seq_len, device=mesh_device)
 
         def run(block, **kwargs):
             inputs = _shard_seq(x, mesh_device, sp_axis, 1, seq_len)
@@ -427,3 +423,5 @@ def test_decoder_block_dynamic_length(mesh_device, capacity):
         assert_quality(expected, got, pcc=0.9999)
     logger.info(f"programs added by the dynamic layer per length: {added}")
     assert added[1:] == [1, 0, 0, 0, 0], f"programs added per length: {added}"
+    with expect_error(ValueError, "logical_n"):
+        run(dynamic)

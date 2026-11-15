@@ -3401,9 +3401,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         .math_approx_mode = math_approx_mode,
     };
     if (ksplit_count > 1 || (dynamic_local_n && !use_streaming_compute)) {
-        // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
-        // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%. The fp32
-        // compute path under dynamic_local_n is 1,168 B over at O3 too (causal GQA, q128/k512).
+        // Code size, not correctness: at O3 the K-split merge epilogue and the fp32 path under dynamic_local_n push
+        // the compute binaries past the kernel config buffer ("Program size too large"). O2 fits.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
 

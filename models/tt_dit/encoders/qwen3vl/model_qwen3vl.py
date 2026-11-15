@@ -57,12 +57,12 @@ class Qwen3VlContext:
     use_persistent_ccl_buffers: bool = True
     # One program set for every sequence length up to `kv_gather_capacity`; inputs arrive split per chip.
     dynamic_length: bool = False
-    # The RoPE rotation of the dynamic path, built by the first attention layer.
-    rotate_half: object | None = None
 
     def __post_init__(self) -> None:
         if self.dynamic_length and (self.sp_axis is None or self.kv_gather_capacity is None):
             raise ValueError("dynamic_length needs sequence parallelism and a kv_gather_capacity")
+        if self.dynamic_length and self.device.arch() != ttnn.device.Arch.BLACKHOLE:
+            raise ValueError("dynamic_length is Blackhole only")
         if self.sp_axis is None:
             return
         if self.sp_axis == self.tp_axis:
@@ -72,15 +72,10 @@ class Qwen3VlContext:
 
     @property
     def row_capacity(self) -> int | None:
-        """Rows per chip at `kv_gather_capacity`."""
-        if self.sp_axis is None or self.kv_gather_capacity is None:
+        """Rows per chip at `kv_gather_capacity` under `dynamic_length`; None follows the live shape."""
+        if not self.dynamic_length:
             return None
         return self.kv_gather_capacity // self.device.shape[self.sp_axis]
-
-    @property
-    def gather_rows(self) -> int | None:
-        """Row count the all-gather hyperparameters are picked for; None follows the live shape."""
-        return self.row_capacity if self.dynamic_length else None
 
 
 def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[int]) -> list[tuple[int, int]]:
@@ -259,7 +254,7 @@ class Qwen3VlTextEncoder(Module):
         self._sp_axis = ctx.sp_axis
         self._sp_factor = device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
         self._dynamic_length = ctx.dynamic_length
-        self._gather_rows = ctx.gather_rows
+        self._row_capacity = ctx.row_capacity
         self._mrope_section = mrope_section
         # See Qwen3VlAttention: head_dim is not derivable from hidden_size / num_heads for every
         # Qwen3-VL checkpoint. The rope tables are built at this width, so it must agree.
@@ -350,10 +345,10 @@ class Qwen3VlTextEncoder(Module):
                 dim=-1,
                 mesh_axis=self._tp_axis,
                 use_hyperparams=True,
-                hyperparam_rows=self._gather_rows,
+                hyperparam_rows=self._row_capacity,
             )
+            # The copy is one program per length, and the gather output is already a fresh tensor.
             if not self._dynamic_length:
-                # clone to move out of persistent buffer
                 input_embeds = ttnn.clone(input_embeds)
 
         if self._sp_axis is not None and not self._dynamic_length:
@@ -367,21 +362,11 @@ class Qwen3VlTextEncoder(Module):
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
 
-        # The padded length as a device scalar: the ring attention's row count is then a runtime argument.
         logical_n = None
         if self._dynamic_length:
-            logical_n = tensor.from_torch(
-                torch.tensor([seq_len * self._sp_factor], dtype=torch.int64).reshape(1, 1, 1, 1),
-                device=self._device,
-                dtype=ttnn.uint32,
-                layout=ttnn.Layout.ROW_MAJOR,
-                mesh_axes=[..., None, None],
-            )
+            logical_n = tensor.logical_length_tensor(seq_len * self._sp_factor, device=self._device)
 
-        depth = len(self.layers) if num_layers is None else num_layers
-        for layer_idx, decoder_layer in enumerate(self.layers):
-            if layer_idx == depth:
-                break
+        for layer_idx, decoder_layer in enumerate(itertools.islice(self.layers, num_layers)):
             hidden_states = decoder_layer.forward(
                 hidden_states,
                 attention_bias=attention_bias,
@@ -393,7 +378,7 @@ class Qwen3VlTextEncoder(Module):
             if layer_idx < len(deepstack_rows):
                 hidden_states = ttnn.add(hidden_states, deepstack_rows[layer_idx])
             if self._activation_layers is not None and (
-                layer_idx in self._activation_layers or (num_layers is not None and layer_idx == depth - 1)
+                layer_idx in self._activation_layers or (num_layers is not None and layer_idx == num_layers - 1)
             ):
                 captured.append(hidden_states)
 
@@ -404,7 +389,7 @@ class Qwen3VlTextEncoder(Module):
         if self._sp_axis is not None:
             captured = [
                 self._ccl_manager.all_gather(
-                    x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True, hyperparam_rows=self._gather_rows
+                    x, dim=1, mesh_axis=self._sp_axis, use_hyperparams=True, hyperparam_rows=self._row_capacity
                 )
                 for x in captured
             ]
@@ -475,6 +460,30 @@ class Qwen3VlTextEncoder(Module):
             self._rope_theta,
             self._mrope_section,
         )
+
+    def upload_inputs(
+        self, input_ids: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+    ) -> tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """`(input_ids, pos_embeds)` on the device as `forward` takes them: under `dynamic_length` split per chip
+        on the host, the rope tables tilized there too, so no upload program is keyed on the length."""
+        if not self._dynamic_length:
+            ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._device)
+            return ids, (tensor.bf16_tensor(cos, device=self._device), tensor.bf16_tensor(sin, device=self._device))
+        ids = tensor.from_torch(
+            input_ids.to(torch.int32),
+            device=self._device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[None, self._sp_axis],
+        )
+        cos, sin = (
+            ttnn.to_device(
+                tensor.from_torch(t, device=self._device, mesh_axes=[None, None, self._sp_axis, None], on_host=True),
+                self._device,
+            )
+            for t in (cos, sin)
+        )
+        return ids, (cos, sin)
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L684
@@ -616,11 +625,9 @@ class Qwen3VlAttention(Module):
         self._sp_factor = ctx.device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
         self._kv_gather_capacity = ctx.kv_gather_capacity
         self._dynamic_length = ctx.dynamic_length
-        self._gather_rows = ctx.gather_rows
-        if ctx.dynamic_length and ctx.rotate_half is None:
-            ctx.rotate_half = _MatmulRotateHalf(ctx.device, head_dim)  # shared by every layer
-        self._rotate_half = ctx.rotate_half or _rotate_half
-        self._empty_joint = self._empty_joint_tensors() if ctx.dynamic_length else None
+        self._row_capacity = ctx.row_capacity
+        self._rotate_half = _MatmulRotateHalf(ctx.device, head_dim) if ctx.dynamic_length else _rotate_half
+        self._empty_joint = self._empty_joint_tensors() if ctx.sp_axis is not None else None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         def _prepare_qkv(q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
@@ -721,14 +728,14 @@ class Qwen3VlAttention(Module):
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather(
-                x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True, hyperparam_rows=self._gather_rows
+                x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True, hyperparam_rows=self._row_capacity
             )
 
         x = self.o_proj.forward(x, matmul_config=self._o_config)
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather(
-                x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True, hyperparam_rows=self._gather_rows
+                x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True, hyperparam_rows=self._row_capacity
             )
 
         return x
@@ -791,12 +798,13 @@ class Qwen3VlAttention(Module):
         """Causal ring attention over a sequence sharded on the SP axis (zero-width joint slots)."""
         sp_axis, ccl = self._sp_axis, self._ccl_manager
         local_seq_len = q.shape[2]
+        if self._dynamic_length and logical_n is None:
+            raise ValueError("dynamic_length needs logical_n")
         # With the length as a runtime argument the chunks are fixed, so the config never changes the program.
-        dynamic = self._dynamic_length and logical_n is not None
-        config_rows = SEQ_BUCKET_SIZE if dynamic else local_seq_len
+        config_rows = SEQ_BUCKET_SIZE if self._dynamic_length else local_seq_len
         pc, worker_grid = self._ring_program_config(config_rows)
         compute_kernel_config = self._ring_compute_kernel_config(config_rows)
-        empty_q, empty_kv = self._empty_joint or self._empty_joint_tensors()
+        empty_q, empty_kv = self._empty_joint
         attn, _joint, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q,
             k,
@@ -811,7 +819,7 @@ class Qwen3VlAttention(Module):
                 v.shape, 2, sp_axis, dtype=v.dtype, capacity=self._kv_gather_capacity
             ),
             joint_strategy="rear",
-            logical_n=logical_n if dynamic else local_seq_len * self._sp_factor,
+            logical_n=logical_n if self._dynamic_length else local_seq_len * self._sp_factor,
             program_config=pc,
             compute_kernel_config=compute_kernel_config,
             dim=2,
@@ -826,7 +834,7 @@ class Qwen3VlAttention(Module):
             use_column_major_ccl=True,
             is_causal=True,
             is_balanced=False,
-            dynamic_local_n=dynamic,
+            dynamic_local_n=self._dynamic_length,
         )
         return attn
 
@@ -888,7 +896,7 @@ class Qwen3VlMlp(Module):
 
         self._ccl_manager = ctx.ccl_manager
         self._tp_axis = ctx.tp_axis
-        self._gather_rows = ctx.gather_rows
+        self._row_capacity = ctx.row_capacity
         # A persistent reduce-scatter pair is keyed on the live shape.
         self._use_persistent_ccl_buffers = ctx.use_persistent_ccl_buffers and not ctx.dynamic_length
         # Only the line reduce-scatter program is free of the row count.
@@ -907,7 +915,7 @@ class Qwen3VlMlp(Module):
 
         if self._tp_axis is not None:
             x = self._ccl_manager.all_gather(
-                x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True, hyperparam_rows=self._gather_rows
+                x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True, hyperparam_rows=self._row_capacity
             )
 
         return x
@@ -922,13 +930,10 @@ class Qwen3VlRmsNorm(RMSNorm):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        self._row_capacity = ctx.row_capacity if ctx.dynamic_length else None
+        self._row_capacity = ctx.row_capacity
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        row_capacity = None
-        if self._row_capacity is not None:
-            row_capacity = self._row_capacity * math.prod(list(x.shape)[:-2])
-        return super().forward(x, compute_kernel_config=self._compute_kernel_config, row_capacity=row_capacity)
+        return super().forward(x, compute_kernel_config=self._compute_kernel_config, row_capacity=self._row_capacity)
 
 
 def _pinned_matmul_config(ctx: Qwen3VlContext, in_features: int, out_features: int):

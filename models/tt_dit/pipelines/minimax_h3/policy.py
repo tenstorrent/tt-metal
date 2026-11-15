@@ -419,7 +419,7 @@ def served_envelope(task: str, *, patch_alignment: int | None = None) -> Iterato
 def prompt_warm_walk(
     spans: Sequence[tuple[int, int]], alignment: int, lengths: Sequence[int] | None = None
 ) -> list[tuple[int, int]]:
-    """`(unit, padded length)` encodes for the prompt-encoder warm-up: every unit once, every length once.
+    """`(unit, padded length)` encodes for the prompt-encoder warm-up: every unit and every length at least once.
 
     `spans[unit]` is the `(first, last)` padded prompt length that warm unit reaches; a unit with no room for
     text (`last < first`) is skipped. The text decoder's programs are keyed on the padded length and the vision
@@ -427,19 +427,18 @@ def prompt_warm_walk(
     an encode (default: all reachable).
     """
     reachable = {length for first, last in spans for length in range(first, last + 1, alignment)}
-    wanted = reachable if lengths is None else reachable & set(lengths)
+    pending = reachable if lengths is None else reachable & set(lengths)
     walk: list[tuple[int, int]] = []
-    covered: set[int] = set()
     for unit, (first, last) in enumerate(spans):
         if last < first:
             continue
-        candidates = (length for length in range(last, first - 1, -alignment) if length in wanted - covered)
+        candidates = (length for length in range(last, first - 1, -alignment) if length in pending)
         length = next(candidates, first)
         walk.append((unit, length))
-        covered.add(length)
+        pending.discard(length)
     for unit, (first, last) in enumerate(spans):
         for length in range(first, last + 1, alignment):
-            if length in wanted - covered:
+            if length in pending:
                 walk.append((unit, length))
-                covered.add(length)
+                pending.discard(length)
     return walk

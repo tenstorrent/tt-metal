@@ -451,8 +451,7 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
     // One-head GQA builds no chain under dynamic_local_n but is untested, so it is refused too.
     TT_FATAL(
         tensor_args.gathered_k.logical_shape()[1] > 1,
-        "dynamic_local_n requires more than one K head per chip (the one-head K/V chain is built per length). "
-        "Got {}",
+        "dynamic_local_n requires more than one K head per chip. Got {}",
         tensor_args.gathered_k.logical_shape()[1]);
     TT_FATAL(
         tensor_args.input_q.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&

@@ -57,9 +57,12 @@ class RMSNorm(Module):
         program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
         row_capacity: int | None = None,
     ) -> ttnn.Tensor:
-        """`row_capacity` (rows with the dims above them folded in, a multiple of 32) selects a program that
-        serves every row count up to it; its result is close to, not bit-identical with, the default one."""
+        """`row_capacity` (largest row count of dim -2, a multiple of 32) selects a program that serves every
+        row count up to it; its result is close to, not bit-identical with, the default one."""
         if row_capacity is not None:
+            if program_config is not None:
+                msg = "row_capacity takes no program_config"
+                raise ValueError(msg)
             return self._forward_row_capacity(x, compute_kernel_config, row_capacity)
         return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
@@ -76,11 +79,9 @@ class RMSNorm(Module):
             msg = "row_capacity supports neither a bias nor a fused activation"
             raise ValueError(msg)
         shape = list(x.shape)
-        if len(shape) < 4:
-            x = ttnn.reshape(x, [1] * (4 - len(shape)) + shape)
         # The fused distributed RMSNorm without a cluster axis normalizes each [1, batch, N, C] row locally.
         x = ttnn.experimental.dit_fused_distributed_rmsnorm(
-            x,
+            ttnn.unsqueeze_to_4D(x),
             None,
             self.mesh_device,
             [],
@@ -88,9 +89,9 @@ class RMSNorm(Module):
             epsilon=self.norm_eps,
             weight=self.weight.data if self.weight is not None else None,
             compute_kernel_config=compute_kernel_config,
-            row_capacity=row_capacity,
+            row_capacity=row_capacity * math.prod(shape[:-2]),
         )
-        return ttnn.reshape(x, shape) if len(shape) < 4 else x
+        return ttnn.reshape(x, shape)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:

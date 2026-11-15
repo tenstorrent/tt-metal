@@ -398,8 +398,9 @@ log records the choice (`dit_fsdp: on (dynamic ref2va)`).
 
 **Prompt encoder.** On the Blackhole 4x8 (ring or line) and 4x32 the text encoder takes its row count at run time
 too (`encoder_dynamic_length`, on with `dynamic_length` there; off for ref2va and Wormhole).
-One program set serves every prompt length, so the warm-up encodes each keyframe layout once and only the shortest
-and the longest prompt. `create_pipeline(..., encoder_dynamic_length=False)` keeps one program set per length.
+One program set serves every prompt length (the K rotation alone has a second program past 64 rows per chip), so
+the warm-up encodes each keyframe layout once and only the shortest and the longest prompt.
+`create_pipeline(..., encoder_dynamic_length=False)` keeps one program set per length.
 
 **Backup.** The 4x8 ladder path is kept behind a flag for a few weeks and then removed. It is selected by
 `create_pipeline(..., dynamic_length=False)`, by `MINIMAX_H3_DYNAMIC_LENGTH=0` in the environment, or by
@@ -466,9 +467,10 @@ pipeline-level hashes.
   shared-K chain is host-built per length. Grouped GQA (the prompt encoder) builds no K/V chain there, and
   causal attention is served unbalanced.
 - Eager only. Runtime arguments are frozen in a captured trace, so a replay serves the captured length
-  whatever the buffers hold. Four guards: the pipeline refuses `dynamic_length` with `trace_denoise` or
-  `trace_audio` (and ignores the preset's audio trace), the transformer's `forward` raises while a trace
-  capture is active, and the `Tracer` rejects a replay input whose shape differs from the captured one.
+  whatever the buffers hold. Five guards: the pipeline refuses `dynamic_length` with `trace_denoise` or
+  `trace_audio` (and ignores the preset's audio trace), the transformer's and the text encoder's `forward` raise
+  while a trace capture is active, and the `Tracer` rejects a replay input whose shape differs from the captured
+  one.
 - Device state. Sized once and written in place, true rows leading: the assembly source table, the ring
   attention's K/V gather pair and the prompt arena (at the arena caps / `max_sequence_length`); the fused
   norms' worker split is likewise fixed at `max_sequence_length / SP` rows. Per request: the hidden stream,
