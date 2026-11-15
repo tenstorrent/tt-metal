@@ -89,12 +89,19 @@ void kernel_main() {
     const uint32_t tstart = wall();
 
 #ifdef WS_DIAG
-    uint32_t dg_cr = 0;
+    uint32_t dg_cr = 0, dg_i = 0, dg_p4 = 0, dg_q4 = 0;
 #endif
     // one slice: expert e's for target a's core
     auto send_slice = [&](uint32_t e, uint32_t a) {
         const uint32_t g = e % G, n = e / G;
         const uint32_t c = a & 0xFF, tx = (a >> 8) & 0xFF, ty = (a >> 16) & 0xFF;
+#ifdef WS_DIAG
+        // (hang post-mortem: CB 4 pushed = 256 slices landed + this slice's core, popped = 256 slices landed + e)
+        cb_push_back(4, 256 * dg_i + c - dg_p4);
+        dg_p4 = 256 * dg_i + c;
+        cb_pop_front(4, 256 * dg_i + (e & 0xFF) - dg_q4);
+        dg_q4 = 256 * dg_i + (e & 0xFF);
+#endif
         if (n >= 2) {  // every covered chip freed expert n - 2's slot of core c
             const uint32_t a0 = wall();
             for (uint32_t k = 0; k < NCHIP; ++k) {
@@ -179,6 +186,7 @@ void kernel_main() {
         cb_push_back(3, 1);
         cb_pop_front(3, 256 - dg_cr);  // (popped back on a multiple of 256)
         dg_cr = 0;
+        ++dg_i;
 #endif
     }
 #else

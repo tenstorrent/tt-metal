@@ -267,6 +267,7 @@ def run(mesh, cfg: GCfg, rc: RCfg, Ms, dev, refs, tag, warm=WARM, meas=MEAS):
     check_schedule(tuple(mesh.shape), rc, cfg, tabs["seqs"], tabs["items"])
     clk = aiclk_mhz(0)
     nf = len(rings(tuple(mesh.shape), rc))
+    logger.info(f"WSS {tag}: compute grid {mesh.compute_with_storage_grid_size()}, ring tables {tabs['TL']} entries")
     rows, fw = [], None
     for i in range(warm + meas):
         logger.debug(f"WSS {tag} launch {i + 1} of {warm + meas}")
