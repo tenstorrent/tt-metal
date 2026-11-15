@@ -9,7 +9,6 @@ number; a failing collective is fatal and ends the exchanges)."""
 import json
 import threading
 
-import pytest
 import ttnn
 
 from ttml.distributed_checkpointing._boxes import Box
@@ -95,12 +94,12 @@ def test_each_rank_plans_only_its_owned_chunks_and_files():
     assert "model/b" not in plans[other].entries() and "model/b" in plans[bias_writer].entries()
 
 
-def test_the_ranks_must_cover_the_label_and_agree_on_its_description():
+def test_the_ranks_must_cover_the_label_and_agree_on_its_description(expect_error):
     infos = [_info("model/w", [R, S(3)], (1, 4), (1, 1, 32, 16))]
-    with pytest.raises(CheckpointError, match="no rank holds"):
+    with expect_error(CheckpointError, "no rank holds"):
         merge_plan_parts([PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2)]), infos)])
     different = [_info("model/w", [R, S(2)], (1, 4), (1, 1, 32, 16))]
-    with pytest.raises(CheckpointError, match="describes it differently"):
+    with expect_error(CheckpointError, "describes it differently"):
         merge_plan_parts(
             [PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2), (0, 3)]), different)]
         )
@@ -184,7 +183,7 @@ def _big_mesh_save():
     return election, r0, r1
 
 
-def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_generators():
+def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_generators(expect_error):
     election, r0, r1 = _big_mesh_save()
     index, header = merge_results([r1, r0], election, "step_0000003")
     assert [f.path for f in index.files] == [
@@ -201,7 +200,7 @@ def test_merge_results_builds_one_index_with_remapped_files_and_every_ranks_gene
     assert header["train_state"]["rng"]["ranks"] == {"0": {"ttml": "gen0"}, "1": {"ttml": "gen1"}}
     # The index must hold exactly the elected chunks.
     short = _result(1, r1.files, {"model/w": _entry("model/w", [_chunk(2, 0)])}, "gen1")
-    with pytest.raises(CheckpointError, match="chunk"):
+    with expect_error(CheckpointError, r"model/[wb]: \d chunk\(s\) reported by the ranks, \d elected"):
         merge_results([r0, short], election, "x")
     # Parts travel as bytes without loss.
     assert ResultPart.from_bytes(r1.to_bytes()).to_bytes() == r1.to_bytes()
@@ -299,14 +298,14 @@ def test_a_failing_rank_stops_every_rank_and_names_itself():
     assert "disk full" in str(errors[1]) and "disk full" not in str(errors[0])
 
 
-def test_a_failing_collective_is_fatal_and_ends_the_exchanges():
+def test_a_failing_collective_is_fatal_and_ends_the_exchanges(expect_error):
     def body(group, fake):
         if group.rank == 2:
             fake.die.add(2)
         try:
             group.allgather(1)
         except CheckpointFatalError:
-            with pytest.raises(CheckpointFatalError, match="no further exchange"):
+            with expect_error(CheckpointFatalError, "no further exchange"):
                 group.allgather(2)
             raise
 
@@ -326,18 +325,18 @@ def test_a_failing_collective_is_fatal_and_ends_the_exchanges():
     assert isinstance(errors[2], CheckpointFatalError) and "peer may have died" in str(errors[2])
 
 
-def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_anything():
+def test_after_a_fatal_failure_no_later_save_or_load_in_the_process_exchanges_anything(expect_error):
     """A retry must not reach the other ranks: MPI pairs collectives by order, so an exchange on a communicator that
     failed could hang, or be paired with an unrelated one on a rank that moved on. The transport outlives the group
     of one save or load and records the failure, so a group built later on it raises before exchanging anything."""
     fake = _Fake(2)
     fake.die.add(1)
     transport = fake.transport(1)
-    with pytest.raises(CheckpointFatalError, match="peer may have died"):
+    with expect_error(CheckpointFatalError, "peer may have died"):
         Group(transport).allgather(1)
     calls = []
     transport.allgather_int = lambda value: calls.append(value) or [value, value]  # would succeed if reached
-    with pytest.raises(CheckpointFatalError, match="already failed in this process"):
+    with expect_error(CheckpointFatalError, "already failed in this process"):
         Group(transport).phase("a later save", lambda: None)
     assert calls == [], "the retry reached the transport"
 
@@ -439,17 +438,17 @@ def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
     assert "more than a transfer can carry" in str(errors[1]), "the failing rank names the cause; the others name it"
 
 
-def test_ranks_with_different_scheduler_or_dataloader_state_are_refused():
+def test_ranks_with_different_scheduler_or_dataloader_state_are_refused(expect_error):
     parts = _big_mesh_parts()
     parts[0].train_state_hash, parts[1].train_state_hash = 11, 12
-    with pytest.raises(CheckpointError, match=r"rank\(s\) \[1\] differs from rank 0"):
+    with expect_error(CheckpointError, r"rank\(s\) \[1\] differs from rank 0"):
         merge_plan_parts(parts)
     parts[1].train_state_hash = 11
     assert merge_plan_parts(parts).owners
     assert PlanPart.from_bytes(parts[1].to_bytes()).train_state_hash == 11
 
 
-def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset():
+def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset(expect_error):
     # Each rank's optimizer holds the shared layer and its own stage; the index records the union of the lists.
     election, r0, r1 = _big_mesh_save()
     r0.scalars = {"optimizer/num_param_groups": 1, "optimizer/param_groups.0.params": "shared/w\nstage0/w"}
@@ -465,13 +464,13 @@ def test_param_group_members_are_merged_across_ranks_and_checked_as_a_subset():
             return self.state
 
     check_param_groups(_Opt(["shared/w", "stage1/w"]), index.scalars, strict=True)  # each rank holds part of the union
-    with pytest.raises(CheckpointError, match="holds params the checkpoint's group 0 does not"):
+    with expect_error(CheckpointError, "holds params the checkpoint's group 0 does not"):
         check_param_groups(_Opt(["shared/w", "stage2/w"]), index.scalars, strict=True)
 
 
-def test_the_group_of_one_runs_phases_directly_and_keeps_error_types():
+def test_the_group_of_one_runs_phases_directly_and_keeps_error_types(expect_error):
     group = Group(LoopbackTransport())
     assert group.phase("x", lambda: 5) == 5 and group.gather(b"p") == [b"p"] and group.broadcast(b"q") == b"q"
     assert group.agree("x", 3) == [3] and group.allgather(4) == [4] and group.is_coordinator
-    with pytest.raises(ValueError, match="raw"):
+    with expect_error(ValueError, "raw"):
         group.phase("x", lambda: (_ for _ in ()).throw(ValueError("raw")))
