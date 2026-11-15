@@ -13,6 +13,7 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling.tt_sampling import TTSampling
+from models.demos.qwen38_27b_qb2.tt.decoder import slot_dim, slot_rows
 from models.demos.qwen38_27b_qb2.tt.model import Qwen38Model
 
 
@@ -552,10 +553,10 @@ class Qwen38Generator:
                 tensor = getattr(state, name)
                 if tensor is None:
                     continue
-                parts = [tensor[i : i + 1] for i in range(self.cache.batch_size)]
+                parts = [slot_rows(tensor, i, i + 1) for i in range(self.cache.batch_size)]
                 for slot in slots:
                     parts[slot] = ttnn.zeros_like(parts[slot])
-                ttnn.copy(ttnn.concat(parts, dim=0) if len(parts) > 1 else parts[0], tensor)
+                ttnn.copy(ttnn.concat(parts, dim=slot_dim(tensor)) if len(parts) > 1 else parts[0], tensor)
         # All row slices and the same-shaped zero/concat/copy programs are now
         # warm. Their transient outputs die here, before any decode replay.
         self._recurrent_reset_warmed = self.cache
@@ -572,7 +573,7 @@ class Qwen38Generator:
             for name in ("conv", "recurrent"):
                 tensor = getattr(state, name)
                 if tensor is not None:
-                    ttnn.copy(ttnn.concat([tensor[i : i + 1] for i in order], dim=0), tensor)
+                    ttnn.copy(ttnn.concat([slot_rows(tensor, i, i + 1) for i in order], dim=slot_dim(tensor)), tensor)
 
     def set_batch_sampling_params(self, *, top_k, top_p, temperature, seed=None):
         """Bind scheduler sampling rows; steady replay retains device RNG state."""
@@ -809,9 +810,13 @@ class Qwen38Generator:
                 or state.recurrent.layout != ttnn.TILE_LAYOUT
                 or state.recurrent.memory_config() != ttnn.DRAM_MEMORY_CONFIG
                 or state.conv is None
-                or tuple(state.conv.shape) != (cache.batch_size, 3, 2560)
                 or state.conv.dtype != ttnn.bfloat16
-                or state.conv.layout != ttnn.ROW_MAJOR_LAYOUT
+                or (tuple(state.conv.shape), state.conv.layout)
+                != (
+                    ((cache.batch_size, 3, 2560), ttnn.ROW_MAJOR_LAYOUT)
+                    if layer.gdn_chain
+                    else ((1, 3 * cache.batch_size, 2560), ttnn.TILE_LAYOUT)
+                )
                 or state.conv.memory_config() != ttnn.DRAM_MEMORY_CONFIG
             ):
                 raise ValueError("Linear state violates the FP32 recurrence / BF16 row-major convolution contract")

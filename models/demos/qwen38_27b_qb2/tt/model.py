@@ -15,7 +15,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedd
 
 import ttnn
 from models.common.tt_ccl import TT_CCL
-from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState
+from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState, slot_dim, slot_padding, slot_rows
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, validate_qb2_mesh
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
 
@@ -304,7 +304,9 @@ class Qwen38Model:
         table = page_table[slot : slot + 1, :]
         for layer, state in zip(self.layers, cache.layers):
             if layer.kind == "linear_attention" and cache.batch_size > 1:
-                local = DecoderState(conv=state.conv[slot : slot + 1], recurrent=state.recurrent[slot : slot + 1])
+                local = DecoderState(
+                    conv=slot_rows(state.conv, slot, slot + 1), recurrent=state.recurrent[slot : slot + 1]
+                )
             else:
                 local = state
             x = layer.prefill_forward(
@@ -314,10 +316,10 @@ class Qwen38Model:
                 # Slice outputs do not alias their source. Scatter the request state back.
                 for name in ("conv", "recurrent"):
                     before = getattr(state, name)
-                    pieces = ([before[:slot]] if slot else []) + [getattr(local, name)]
+                    pieces = ([slot_rows(before, 0, slot)] if slot else []) + [getattr(local, name)]
                     if slot + 1 < cache.batch_size:
-                        pieces.append(before[slot + 1 :])
-                    ttnn.copy(ttnn.concat(pieces, dim=0), before)
+                        pieces.append(slot_rows(before, slot + 1, cache.batch_size))
+                    ttnn.copy(ttnn.concat(pieces, dim=slot_dim(before)), before)
         if not all_logits:
             x = x[:, length - 1 : length, :]
         return self.logits(x, decode=not all_logits)
@@ -353,16 +355,16 @@ class Qwen38Model:
         for layer, state in zip(self.layers, cache.layers):
             local = state
             if layer.kind == "linear_attention" and batch != cache.batch_size:
-                local = DecoderState(conv=state.conv[first:end], recurrent=state.recurrent[first:end])
+                local = DecoderState(conv=slot_rows(state.conv, first, end), recurrent=state.recurrent[first:end])
             forward = layer.prefill_sharded_forward if sharded else layer.prefill_forward
             x = forward(x, state=local, start_pos=start_pos, page_table=table, cos=cc, sin=ss)
             if local is not state:
                 for name in ("conv", "recurrent"):
                     before = getattr(state, name)
-                    pieces = ([before[:first]] if first else []) + [getattr(local, name)]
+                    pieces = ([slot_rows(before, 0, first)] if first else []) + [getattr(local, name)]
                     if end < cache.batch_size:
-                        pieces.append(before[end:])
-                    ttnn.copy(ttnn.concat(pieces, dim=0), before)
+                        pieces.append(slot_rows(before, end, cache.batch_size))
+                    ttnn.copy(ttnn.concat(pieces, dim=slot_dim(before)), before)
         if not return_logits:
             return []
         # Public logits retain independent ownership, even with a shared head call.
@@ -407,10 +409,10 @@ class Qwen38Model:
             for name in ("conv", "recurrent"):
                 tensor = getattr(state, name)
                 if tensor is not None:
-                    rows = [tensor[i : i + 1] for i in slots]
-                    value = ttnn.concat(rows, dim=0) if len(rows) > 1 else ttnn.clone(rows[0])
+                    rows = [slot_rows(tensor, i, i + 1) for i in slots]
+                    value = ttnn.concat(rows, dim=slot_dim(tensor)) if len(rows) > 1 else ttnn.clone(rows[0])
                     if len(slots) < bucket:
-                        value = ttnn.pad(value, [(0, bucket - len(slots))] + [(0, 0)] * (len(value.shape) - 1), value=0)
+                        value = ttnn.pad(value, slot_padding(value, bucket - len(slots)), value=0)
                     setattr(packed, name, value)
             layers.append(packed)
         packed_cache = ModelCache(layers, bucket, cache.capacity, cache.num_pages)
@@ -444,12 +446,10 @@ class Qwen38Model:
                 source, target = getattr(original, name), getattr(packed, name)
                 if source is None:
                     continue
-                rows = [source[i : i + 1] for i in slots]
-                value = ttnn.concat(rows, dim=0) if len(rows) > 1 else rows[0]
+                rows = [slot_rows(source, i, i + 1) for i in slots]
+                value = ttnn.concat(rows, dim=slot_dim(source)) if len(rows) > 1 else rows[0]
                 if len(slots) < packed_cache.batch_size:
-                    value = ttnn.pad(
-                        value, [(0, packed_cache.batch_size - len(slots))] + [(0, 0)] * (len(value.shape) - 1), value=0
-                    )
+                    value = ttnn.pad(value, slot_padding(value, packed_cache.batch_size - len(slots)), value=0)
                 ttnn.copy(value, target)
         self._resident_decode_valid = True
 
@@ -476,9 +476,13 @@ class Qwen38Model:
                         if live and inverse[end] != inverse[start] + end - start:
                             break
                         end += 1
-                    rows.append(source[inverse[start] : inverse[start] + end - start] if live else target[start:end])
+                    rows.append(
+                        slot_rows(source, inverse[start], inverse[start] + end - start)
+                        if live
+                        else slot_rows(target, start, end)
+                    )
                     start = end
-                ttnn.copy(ttnn.concat(rows, dim=0) if len(rows) > 1 else rows[0], target)
+                ttnn.copy(ttnn.concat(rows, dim=slot_dim(target)) if len(rows) > 1 else rows[0], target)
 
     def _decode_bucket(self, tokens, positions, cache, page_table, rope_indices, slots, bucket):
         """Pack active rows on device, execute one fixed bucket, restore scheduler rows.
@@ -497,6 +501,18 @@ class Qwen38Model:
                 # Device pad is traceable. full_like on row-major integers
                 # uploads host data and is forbidden during trace capture.
                 packed = ttnn.pad(packed, [(0, bucket - len(slots))] + [(0, 0)] * (len(packed.shape) - 1), value=fill)
+            return packed
+
+        def pack_state(tensor):
+            contiguous = slots == tuple(range(slots[0], slots[0] + len(slots)))
+            rows = (
+                [slot_rows(tensor, slots[0], slots[-1] + 1)]
+                if contiguous
+                else [slot_rows(tensor, i, i + 1) for i in slots]
+            )
+            packed = ttnn.concat(rows, dim=slot_dim(tensor)) if len(rows) > 1 else rows[0]
+            if len(slots) < bucket:
+                packed = ttnn.pad(packed, slot_padding(packed, bucket - len(slots)), value=0)
             return packed
 
         ids = pack(ttnn.reshape(tokens, [32, 1]))
@@ -520,8 +536,8 @@ class Qwen38Model:
                     DecoderState(
                         key=state.key,
                         value=state.value,
-                        conv=pack(state.conv) if state.conv is not None else None,
-                        recurrent=pack(state.recurrent) if state.recurrent is not None else None,
+                        conv=pack_state(state.conv) if state.conv is not None else None,
+                        recurrent=pack_state(state.recurrent) if state.recurrent is not None else None,
                     )
                 )
             packed_cache = ModelCache(layers, bucket, cache.capacity, cache.num_pages)
@@ -559,10 +575,16 @@ class Qwen38Model:
             preserved = {}
             if inactive and layer.kind == "linear_attention":
                 preserved = {
-                    name: {i: getattr(state, name)[i : i + 1] for i in inactive} for name in ("conv", "recurrent")
+                    name: {i: slot_rows(getattr(state, name), i, i + 1) for i in inactive}
+                    for name in ("conv", "recurrent")
                 }
             x = layer.decode_forward(x, state=state, current_pos=positions, page_table=page_table, cos=cc, sin=ss)
             for name, rows in preserved.items():
                 target = getattr(state, name)
-                ttnn.copy(ttnn.concat([rows[i] if i in rows else target[i : i + 1] for i in range(b)], dim=0), target)
+                ttnn.copy(
+                    ttnn.concat(
+                        [rows[i] if i in rows else slot_rows(target, i, i + 1) for i in range(b)], dim=slot_dim(target)
+                    ),
+                    target,
+                )
         return self.logits(x, decode=True)

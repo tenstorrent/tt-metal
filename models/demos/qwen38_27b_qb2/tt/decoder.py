@@ -15,6 +15,7 @@ Weight conversion and state allocation are setup boundaries. Forward methods
 and their helpers contain only TTNN device operations and shape orchestration.
 """
 
+import os
 from dataclasses import dataclass
 
 import ttnn
@@ -25,6 +26,7 @@ from models.demos.qwen38_27b_qb2.tt.cache_initialization import (
     require_cache_initialization_ready,
 )
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
+from ttnn.operations.gated_delta_net import gated_delta_net
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -86,12 +88,38 @@ class DecoderState:
     conv: object = None
 
 
+def slot_dim(tensor):
+    """Axis that holds the slots of a per-slot linear-attention state tensor."""
+    # The fused GDN op keeps the conv history as TILE [1, 3 * slots, C]: three rows per slot.
+    return 1 if len(tensor.shape) == 3 and getattr(tensor, "layout", None) == ttnn.TILE_LAYOUT else 0
+
+
+def slot_rows(tensor, first, end):
+    """Slots [first, end) of a per-slot linear-attention state tensor."""
+    if slot_dim(tensor):
+        return tensor[:, 3 * first : 3 * end, :]
+    return tensor[first:end]
+
+
+def slot_padding(tensor, count):
+    """ttnn.pad argument that appends count slots."""
+    padding = [(0, 0)] * len(tensor.shape)
+    padding[slot_dim(tensor)] = (0, 3 * count if slot_dim(tensor) else count)
+    return padding
+
+
+def gdn_chain():
+    """QWEN38_GDN=chain keeps linear attention on the chain of native ops, for A/B runs."""
+    return os.environ.get("QWEN38_GDN", "fused") == "chain"
+
+
 class Qwen38Decoder(LightweightModule):
     PAGE_SIZE = 32
     CHUNK_SIZE = DEFAULT_POLICY["chunk_size"]
 
     def __init__(self):
         self._cache_initialization_pending = None
+        self.gdn_chain = gdn_chain()
 
     @classmethod
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, replicated_mesh=False):
@@ -168,6 +196,7 @@ class Qwen38Decoder(LightweightModule):
                 "ones": upload(torch.ones(1, 1, c, c), ttnn.float32),
                 "masks": upload(masks, ttnn.float32),
             }
+            self._gdn_setup(state_dict, hf_config, lambda tensor, dim: upload(tensor))
         if self.kind == "full_attention":
             c = hf_config
             qg = state_dict["self_attn.q_proj.weight"].reshape(c.num_attention_heads, 2, c.head_dim, c.hidden_size)
@@ -249,6 +278,23 @@ class Qwen38Decoder(LightweightModule):
                 self.dram_weights[name] = ttnn.to_memory_config(tensor, memory)
         return self
 
+    def _gdn_setup(self, state_dict, hf_config, upload, parts=1):
+        """Weights of the fused gated_delta_net op; hf_config holds the head counts over all parts."""
+        import torch
+
+        hk, hv = hf_config.linear_num_key_heads, hf_config.linear_num_value_heads
+        kd, vd = hf_config.linear_key_head_dim, hf_config.linear_value_head_dim
+        cq, ck, cv = state_dict["linear_attn.conv1d.weight"].float().split([hk * kd, hk * kd, hv * vd])
+        local = [torch.cat(p) for p in zip(cq.chunk(parts), ck.chunk(parts), cv.chunk(parts))]
+        self.gdn_weights = (
+            # [4, C] per part: row j is tap j, the last row multiplies the current token.
+            upload(torch.cat([p[:, 0, :].T for p in local], dim=1), 1),
+            # Raw A_log and dt_bias: the op computes the decay itself.
+            upload(state_dict["linear_attn.A_log"].float().reshape(-1), 0),
+            upload(state_dict["linear_attn.dt_bias"].float().reshape(-1), 0),
+            self.weights["linear_attn.norm.weight"],
+        )
+
     def allocate_state(self, *, batch_size, num_pages=None):
         """Setup only. Page ownership and page-table construction belong to caller."""
 
@@ -278,7 +324,11 @@ class Qwen38Decoder(LightweightModule):
             recurrent=zeros(
                 [batch_size, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim], ttnn.float32
             ),
-            conv=zeros([batch_size, 3, width], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+            conv=(
+                zeros([batch_size, 3, width], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+                if self.gdn_chain
+                else zeros([1, 3 * batch_size, width], ttnn.bfloat16)
+            ),
         )
 
     def _role(self, name):
@@ -875,6 +925,52 @@ class Qwen38Decoder(LightweightModule):
         return self._attention_output(attention, gate)
 
     def _delta(self, x, state):
+        """Everything between the packed projection and out_proj as one device program."""
+        if self.gdn_chain:
+            return self._delta_chain(x, state)
+        if len(x.shape) == 4:
+            b, t = x.shape[-2], 1
+        else:
+            b, t, _ = x.shape
+        c = self.config
+        h, hv, d = c.linear_num_key_heads, c.linear_num_value_heads, c.linear_key_head_dim
+        conv_width = (2 * h + hv) * d
+        z_width = hv * d
+        gate_width = (hv + 31) // 32 * 32
+        compact = t == 1 and self.policy.get("dram", False)
+        if compact:
+            # Base-class call: one physical row per sequence and no crop of the padded columns;
+            # the slices below take the live columns.
+            packed = Qwen38Decoder._linear(self, x, "linear_attn.packed", keep_sharded=True)
+        else:
+            packed = self._linear(x, "linear_attn.packed")
+        if packed.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            packed = ttnn.to_memory_config(packed, ttnn.DRAM_MEMORY_CONFIG)
+        if tuple(packed.shape) != (1, b * t, packed.shape[-1]):
+            packed = ttnn.reshape(packed, [1, b * t, packed.shape[-1]])
+        qkv = packed[:, :, :conv_width]
+        z = packed[:, :, conv_width : conv_width + z_width]
+        # The op takes both gate inputs raw.
+        beta = packed[:, :, conv_width + z_width : conv_width + z_width + hv]
+        a = packed[:, :, conv_width + z_width + gate_width : conv_width + z_width + gate_width + hv]
+        # Both states are written in place: trace replay finds them at the captured addresses.
+        output, _, _ = gated_delta_net(
+            qkv,
+            z,
+            beta,
+            a,
+            state.conv,
+            state.recurrent,
+            *self.gdn_weights,
+            epsilon=self.eps,
+            conv_state_out=state.conv,
+            recurrent_state_out=state.recurrent,
+        )
+        output = ttnn.reshape(output, [1, 1, b, z_width] if compact else [b, t, z_width])
+        return self._linear(output, "linear_attn.out_proj")
+
+    def _delta_chain(self, x, state):
+        """The chain of native ops the fused program replaces (QWEN38_GDN=chain)."""
         if len(x.shape) == 4:
             b, t = x.shape[-2], 1
         else:

@@ -4,6 +4,7 @@
 
 import gc
 import importlib.util
+import os
 import sys
 import traceback
 import unittest
@@ -11,6 +12,9 @@ import weakref
 from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import patch
+
+# The fused GDN op keeps the conv history in tile layout; QWEN38_GDN=chain keeps the row-major one.
+CONV_LAYOUT = "row" if os.environ.get("QWEN38_GDN") == "chain" else "tile"
 
 SOURCE = Path(__file__).resolve().parents[2] / "tt"
 
@@ -261,9 +265,9 @@ class TestCacheInitialization(unittest.TestCase):
 
     def test_actual_decoder_convolution_and_tiny_kv_keep_original_path(self):
         state = self.decoder("linear_attention").allocate_state(batch_size=1)
-        self.assertEqual(state.conv.layout, "row")
+        self.assertEqual(state.conv.layout, CONV_LAYOUT)
         self.assertFalse(state.recurrent.pending)
-        self.assertEqual(self.runtime.events, ["allocate", "fill", "sync", ("host_zero", "row")])
+        self.assertEqual(self.runtime.events, ["allocate", "fill", "sync", ("host_zero", CONV_LAYOUT)])
         self.runtime.events.clear()
         self.decoder().allocate_state(batch_size=1, num_pages=129)
         self.assertEqual(self.runtime.events, [("host_zero", "tile")] * 2)
@@ -287,7 +291,7 @@ class TestCacheInitialization(unittest.TestCase):
             self.decoder("linear_attention").allocate_state(batch_size=1)
         self.assertEqual(len(self.runtime.allocated), 1)
         self.assertFalse(self.runtime.allocated[0].pending)
-        self.assertEqual(self.runtime.events[-2:], ["sync", ("host_zero", "row")])
+        self.assertEqual(self.runtime.events[-2:], ["sync", ("host_zero", CONV_LAYOUT)])
 
     def test_actual_tp_setup_failure_follows_completed_base_state(self):
         base = self.decoder(policy={"fused_input": True, "ccl_dtype": "bfloat16"})

@@ -259,6 +259,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
                 "ones": upload(torch.ones(1, 1, 32, 32), ttnn.float32),
                 "masks": upload(masks, ttnn.float32),
             }
+            self._gdn_setup(state_dict, hf_config, lambda tensor, dim: upload(tensor, dim=dim), parts=self.TP)
         if self.policy.get("packed_mlp", False):
             gate, up = split(state_dict["mlp.gate_proj.weight"]), split(state_dict["mlp.up_proj.weight"])
             weight("mlp.gate_up", [torch.cat(parts) for parts in zip(gate, up)])
