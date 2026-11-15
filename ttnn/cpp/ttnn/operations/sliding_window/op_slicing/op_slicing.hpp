@@ -53,6 +53,8 @@ public:
     virtual std::pair<std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> input_prologue() const {
         return {std::nullopt, std::nullopt};
     }
+    // Called with the slice index before each run_L1_op (0 when the op runs unsliced).
+    virtual void start_slice(uint32_t /*slice_index*/) {}
 };
 
 Op2DSliceConfig determine_slice_config(

@@ -5,12 +5,17 @@
 #include <cstdint>
 
 #include "internal/mod_div_lib.h"
+#include "api/tile_constants.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
+#ifdef EPILOGUE_STATS
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/reduce.h"
+#endif
 #include "api/compute/tilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -203,6 +208,83 @@ inline void reblock_and_untilize(
     interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
+#ifdef EPILOGUE_STATS
+// Adds the column sums of x and of x * x of `ntiles` output tiles (one subblock, row-major from first_tile) into
+// rows 0 of stats tiles col and STATS_NTILES + col (packer L1 accumulation). Rows at or past valid_rows (shard
+// padding past the image) are masked out of the core's last partial tile row and skipped beyond it.
+template <uint32_t out_cb>
+ALWI void epilogue_stats_tiles(
+    uint32_t first_tile,
+    uint32_t ntiles,
+    uint32_t subblock_w,
+    uint32_t col_base,
+    uint32_t row_base,
+    uint32_t valid_rows) {
+    // A growing wait: the output CB is the core's whole shard (height-sharded, TILE out), popped only after the kernel.
+    cb_wait_front(out_cb, first_tile + ntiles);
+    for (uint32_t k = 0; k < ntiles; ++k) {
+        const uint32_t tile = first_tile + k;
+        const uint32_t col = col_base + (k % subblock_w);
+        const uint32_t row = row_base + k / subblock_w;
+        if (row * tt::constants::TILE_HEIGHT >= valid_rows) {
+            continue;
+        }
+        const bool partial = (row + 1) * tt::constants::TILE_HEIGHT > valid_rows;
+        uint32_t src_cb = out_cb;
+        uint32_t src_tile = tile;
+        if (partial) {
+            tile_regs_acquire();
+            reconfig_data_format(out_cb, STATS_MASK_CB);
+            mul_init(out_cb, STATS_MASK_CB);
+            mul_tiles(out_cb, STATS_MASK_CB, tile, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(STATS_SCRATCH_CB);
+            pack_reconfig_l1_acc(0);
+            cb_reserve_back(STATS_SCRATCH_CB, 1);
+            pack_tile(0, STATS_SCRATCH_CB);
+            cb_push_back(STATS_SCRATCH_CB, 1);
+            tile_regs_release();
+            cb_wait_front(STATS_SCRATCH_CB, 1);
+            src_cb = STATS_SCRATCH_CB;
+            src_tile = 0;
+        }
+        const uint32_t square_page = partial ? 1 : 0;
+        tile_regs_acquire();
+        reconfig_data_format(src_cb, STATS_SCALER_CB);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(src_cb, STATS_SCALER_CB, STATS_CB);
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(src_cb, STATS_SCALER_CB, src_tile, 0, 0);
+        reduce_uninit();
+        reconfig_data_format(src_cb, src_cb);
+        mul_init(src_cb, src_cb);
+        mul_tiles(src_cb, src_cb, src_tile, src_tile, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(STATS_SCRATCH_CB);
+        pack_reconfig_l1_acc(0);
+        cb_reserve_back(STATS_SCRATCH_CB, 1);
+        pack_tile(1, STATS_SCRATCH_CB);
+        cb_push_back(STATS_SCRATCH_CB, 1);
+        pack_reconfig_data_format(STATS_CB);
+        pack_reconfig_l1_acc(1);
+        pack_tile<true>(0, STATS_CB, col);
+        tile_regs_release();
+        tile_regs_acquire();
+        cb_wait_front(STATS_SCRATCH_CB, 1 + square_page);
+        reconfig_data_format(STATS_SCRATCH_CB, STATS_SCALER_CB);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(STATS_SCRATCH_CB, STATS_SCALER_CB, STATS_CB);
+        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(STATS_SCRATCH_CB, STATS_SCALER_CB, square_page, 0, 0);
+        reduce_uninit();
+        cb_pop_front(STATS_SCRATCH_CB, 1 + square_page);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, STATS_CB, STATS_NTILES + col);
+        tile_regs_release();
+    }
+    pack_reconfig_l1_acc(0);
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
@@ -293,6 +375,15 @@ void kernel_main() {
     DataflowBuffer dfb_untilize_mode_out(untilize_mode_out_cb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
+#ifdef EPILOGUE_STATS
+    // The only compute runtime arg with epilogue stats (the host keeps the output on the input cores, so there is no
+    // skip-compute arg): this core's output rows that are image pixels.
+    const uint32_t stats_valid_rows = get_arg_val<uint32_t>(0);
+    uint32_t stats_tiles_pushed = 0;
+    cb_reserve_back(STATS_CB, 2 * STATS_NTILES);
+    cb_wait_front(STATS_SCALER_CB, 1);
+    cb_wait_front(STATS_MASK_CB, 1);
+#endif
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -492,6 +583,24 @@ void kernel_main() {
 
                         tile_regs_release();
                         curr_out_dfb.push_back(out_subblock_num_tiles);
+#ifdef EPILOGUE_STATS
+                        if constexpr (!fuse_bias && !untilize_out) {
+                            if (last_inner_dim_block) {
+                                epilogue_stats_tiles<out_cb_id>(
+                                    stats_tiles_pushed,
+                                    out_subblock_num_tiles,
+                                    out_subblock_w,
+                                    in1_block_w_i * in1_block_w + in1_index_subblock_offset,
+                                    (in0_block_h_i * in0_num_subblocks + in0_subblock_i) * out_subblock_h,
+                                    stats_valid_rows);
+                                stats_tiles_pushed += out_subblock_num_tiles;
+                                reconfig_data_format(in1_cb_id, mm_in0_cb_id);
+                                matmul_block_init(
+                                    mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                                pack_reconfig_data_format(mm_out_cb_id);
+                            }
+                        }
+#endif
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks
@@ -560,6 +669,21 @@ void kernel_main() {
                         }
                         tile_regs_release();
                         dfb_untilize_mode_out.push_back(out_subblock_num_tiles);
+#ifdef EPILOGUE_STATS
+                        if constexpr (!untilize_out) {
+                            epilogue_stats_tiles<out_cb_id>(
+                                stats_tiles_pushed,
+                                out_subblock_num_tiles,
+                                out_subblock_w,
+                                in1_block_w_i * in1_block_w + in1_index_subblock_offset,
+                                (in0_block_h_i * in0_num_subblocks + in0_subblock_i) * out_subblock_h,
+                                stats_valid_rows);
+                            stats_tiles_pushed += out_subblock_num_tiles;
+                            reconfig_data_format(matmul_partials_cb, bias_cb_id);
+                            add_bcast_rows_init(matmul_partials_cb, bias_cb_id);
+                            pack_reconfig_data_format(untilize_mode_out_cb_id);
+                        }
+#endif
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks
@@ -617,4 +741,7 @@ void kernel_main() {
             dfb_bias.pop_front(bias_ntiles_w);
         }
     }
+#ifdef EPILOGUE_STATS
+    cb_push_back(STATS_CB, 2 * STATS_NTILES);
+#endif
 }  // void kernel_main()

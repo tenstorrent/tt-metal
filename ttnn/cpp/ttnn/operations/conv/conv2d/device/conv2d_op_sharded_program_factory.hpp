@@ -20,6 +20,12 @@ struct Conv2dShardedProgramFactory {
         const Conv2dInputs& tensor_args,
         Tensor& output_tensor,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    // desc.kernels starts with the weights sender writer, then the receiver writer when the weights are multicast.
+    static constexpr uint32_t kWriterSenderKernel = 0;
+    static constexpr uint32_t kWriterReceiverKernel = 1;
+    // The writers' common runtime args with epilogue_stats: the stats buffer, then the page base.
+    static constexpr uint32_t kStatsPageBaseArg = 1;
 };
 
 }  // namespace ttnn::prim

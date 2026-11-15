@@ -5,6 +5,7 @@
 #include <functional>
 #include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -683,7 +684,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         is_conv_1d_depthwise_conv,
         skip_activation_mcast,
         input_channels_padded,
-        reader_indices_actual_page_size);
+        reader_indices_actual_page_size,
+        operation_attributes.epilogue_stats);
 
     // Emit CBDescriptors directly onto the ProgramDescriptor.  The framework
     // tracks the globally-allocated CBs (ACT_SHARDED on input, OUT/PARTIALS on
@@ -952,6 +954,36 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_defines["ACTIVATION_REUSE"] = "1";
     }
 
+    const bool epilogue_stats = operation_attributes.epilogue_stats;
+    if (epilogue_stats) {
+        for (auto* defines : {&compute_defines, &reader_defines, &writer_defines, &writer_mcast_sender_defines}) {
+            (*defines)["EPILOGUE_STATS"] = "1";
+            (*defines)["STATS_CB"] = std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::STATS).index);
+            (*defines)["STATS_SCALER_CB"] = std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::STATS_SCALER).index);
+            (*defines)["STATS_SCRATCH_CB"] =
+                std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::STATS_SCRATCH).index);
+            (*defines)["STATS_MASK_CB"] = std::to_string(get_cb_info_by_name(cb_info, Conv2dCb::STATS_MASK).index);
+            (*defines)["STATS_NTILES"] = std::to_string(per_core_out_matrix_width_ntiles);
+        }
+    }
+    // Output rows of input core k that are image pixels; the last cores' shards run past the image.
+    const uint32_t stats_rows_per_core = per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
+    const uint32_t stats_total_rows = batch * sliding_window_config.get_output_shape()[1] * output_image_width;
+    const auto stats_valid_rows = [&](uint32_t core_index) {
+        const uint32_t start = core_index * stats_rows_per_core;
+        return start >= stats_total_rows ? 0u : std::min(stats_rows_per_core, stats_total_rows - start);
+    };
+    // First stats page of input core k within this slice's pages.
+    std::map<CoreCoord, uint32_t> stats_core_page;
+    if (epilogue_stats) {
+        uint32_t core_index = 0;
+        for (const CoreRange& range : input_cores.ranges()) {
+            for (const CoreCoord& core : range) {
+                stats_core_page[core] = 2 * per_core_out_matrix_width_ntiles * core_index++;
+            }
+        }
+    }
+
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
@@ -1050,6 +1082,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
+    if (epilogue_stats) {
+        const std::string stats_cta = std::to_string(writer_compile_time_args.size());
+        writer_defines["STATS_CTA"] = stats_cta;
+        writer_mcast_sender_defines["STATS_CTA"] = stats_cta;
+        tt::tt_metal::TensorAccessorArgs(tensor_args.epilogue_stats->buffer()).append_to(writer_compile_time_args);
+    }
 
     const bool check_skip_compute = input_cores != output_cores;
 
@@ -1302,6 +1340,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     }
                 }
                 std::vector<uint32_t> reader_rt_args{core_index, reader_remaining_tiles_to_push};
+                if (epilogue_stats) {
+                    reader_rt_args.push_back(stats_valid_rows(core_index));
+                }
                 reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
                 core_index++;
             }
@@ -1370,6 +1411,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     }
                 }
                 sender_rt_args.push_back(writer_remaining_tiles_to_push);
+                if (epilogue_stats) {
+                    sender_rt_args.push_back(stats_core_page.at(core));
+                }
                 writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             }
         }
@@ -1397,6 +1441,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                         }
                     }
                     receiver_args.push_back(writer_remaining_tiles_to_push);
+                    if (epilogue_stats) {
+                        receiver_args.push_back(input_cores.contains(core) ? stats_core_page.at(core) : 0);
+                    }
                 }
                 writer_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(receiver_args));
             }
@@ -1416,6 +1463,24 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         }
     }
 
+    if (epilogue_stats) {
+        // validate_on_program_cache_miss keeps the output on the input cores, so no skip_compute arg precedes this.
+        uint32_t core_index = 0;
+        for (const CoreRange& range : input_cores.ranges()) {
+            for (const CoreCoord& core : range) {
+                compute_kernel_desc.runtime_args.emplace_back(
+                    core, std::vector<uint32_t>{stats_valid_rows(core_index++)});
+            }
+        }
+        KernelDescriptor::RTArgList stats_args;
+        stats_args.push_back(tensor_args.epilogue_stats->buffer());
+        stats_args.push_back(operation_attributes.epilogue_stats_page_base);
+        writer_mcast_sender_desc.emplace_common_runtime_args(stats_args);
+        if (create_writer_mcast_receiver) {
+            writer_mcast_receiver_desc.emplace_common_runtime_args(stats_args);
+        }
+    }
+
     // Descriptor-path CB-size check (mirrors the legacy post_conv2d_op_memory_checks
     // CB-sizing equality).  The L1-allocator delta half of the legacy check requires a
     // realised Program and so isn't reachable here: the framework realises the Program
@@ -1430,6 +1495,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         const std::array weights_kernels{std::ref(writer_mcast_sender_desc), std::ref(writer_mcast_receiver_desc)};
         weights_mcast->attach(desc, "weights_mcast", weights_kernels, static_cast<uint32_t>(desc.semaphores.size()));
     }
+    TT_FATAL(
+        desc.kernels.empty(),
+        "the writer kernels must be the program's first: Conv2dDeviceOperation::get_dynamic_runtime_args writes them");
     desc.kernels.push_back(std::move(writer_mcast_sender_desc));
     if (create_writer_mcast_receiver) {
         desc.kernels.push_back(std::move(writer_mcast_receiver_desc));

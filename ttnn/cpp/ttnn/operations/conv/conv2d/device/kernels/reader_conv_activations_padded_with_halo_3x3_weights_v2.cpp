@@ -4,6 +4,10 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
+#ifdef EPILOGUE_STATS
+#include "ttnn/cpp/ttnn/kernel/dataflow/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
@@ -49,8 +53,21 @@ void kernel_main() {
     constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(40) == 1;
 
     uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(runtime_arg_idx++);
+#ifdef EPILOGUE_STATS
+    const uint32_t stats_valid_rows = get_arg_val<uint32_t>(runtime_arg_idx++);
+#endif
 
     Noc noc;
+#ifdef EPILOGUE_STATS
+    DataflowBuffer dfb_stats(STATS_CB);
+    zero_out_tiles<STATS_CB>(noc, dfb_stats);
+    DataflowBuffer dfb_stats_scaler(STATS_SCALER_CB);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<STATS_SCALER_CB, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(
+            dfb_stats_scaler);
+    DataflowBuffer dfb_stats_mask(STATS_MASK_CB);
+    generate_mask_h(dfb_stats_mask, stats_valid_rows % tt::constants::TILE_HEIGHT);
+#endif
 
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act>(noc, dfb_act);

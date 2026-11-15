@@ -15,6 +15,7 @@ SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfi
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 PaddingMode = ttnn._ttnn.operations.conv.PaddingMode
 Conv2dFusedOps = ttnn._ttnn.operations.conv.Conv2dFusedOps
+conv2d_epilogue_stats_num_pages = ttnn._ttnn.operations.conv.conv2d_epilogue_stats_num_pages
 
 # TODO: Remove Conv2dSliceConfig and update all relevant models & tests
 Conv2dSliceConfig = ttnn._ttnn.operations.sliding_window.Op2DSliceConfig

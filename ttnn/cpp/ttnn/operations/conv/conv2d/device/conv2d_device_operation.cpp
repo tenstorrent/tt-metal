@@ -38,6 +38,31 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
     return Conv2dShardedProgramFactory{};
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> Conv2dDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& args,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& /*output_tensor*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    if (!args.epilogue_stats) {
+        return {};
+    }
+    using Factory = Conv2dShardedProgramFactory;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args{
+        {.kernel_idx = Factory::kWriterSenderKernel,
+         .arg_idx = Factory::kStatsPageBaseArg,
+         .value = args.epilogue_stats_page_base,
+         .is_common = true}};
+    if (!ttnn::operations::conv::conv_skip_mcast(args.parallelization_config, TensorMemoryLayout::HEIGHT_SHARDED)
+             .skip_weights_mcast) {
+        dynamic_args.push_back(
+            {.kernel_idx = Factory::kWriterReceiverKernel,
+             .arg_idx = Factory::kStatsPageBaseArg,
+             .value = args.epilogue_stats_page_base,
+             .is_common = true});
+    }
+    return dynamic_args;
+}
+
 tt::tt_metal::TensorSpec Conv2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     const auto& input_tensor_a_shape = args.input_tensor_shape;
@@ -99,6 +124,36 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = tensor_args.b;
     TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Activation tensor should be sharded.");
     TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Weights tensor should not be sharded.");
+    if (args.epilogue_stats) {
+        TT_FATAL(tensor_args.epilogue_stats.has_value(), "conv2d epilogue_stats needs the stats tensor");
+        const Tensor& stats = tensor_args.epilogue_stats.value();
+        TT_FATAL(
+            stats.dtype() == DataType::FLOAT32 && stats.layout() == Layout::TILE &&
+                stats.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "conv2d epilogue_stats needs a FLOAT32 TILE interleaved tensor, got {} {} {}",
+            stats.dtype(),
+            stats.layout(),
+            stats.memory_config());
+        TT_FATAL(!args.untilize_out, "conv2d epilogue_stats needs a TILE output");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                args.memory_config.shard_spec().has_value() &&
+                args.memory_config.shard_spec()->grid == input_tensor_a.shard_spec()->grid,
+            "conv2d epilogue_stats needs a height-sharded conv whose output has the input's cores");
+        const uint32_t pages =
+            2 * args.parallelization_config.num_cores_nhw * args.parallelization_config.per_core_out_matrix_width_ntile;
+        TT_FATAL(
+            args.epilogue_stats_slice_stride == 0 || pages <= args.epilogue_stats_slice_stride,
+            "conv2d epilogue_stats: this slice writes {} pages, more than the slice stride {}",
+            pages,
+            args.epilogue_stats_slice_stride);
+        TT_FATAL(
+            args.epilogue_stats_page_base + pages <= stats.buffer()->num_pages(),
+            "conv2d epilogue_stats: pages [{}, {}) do not fit the {}-page stats tensor",
+            args.epilogue_stats_page_base,
+            args.epilogue_stats_page_base + pages,
+            stats.buffer()->num_pages());
+    }
     if (args.untilize_out) {
         TT_FATAL(
             (args.dtype == DataType::BFLOAT16) || (args.dtype == DataType::FLOAT32),
@@ -211,7 +266,10 @@ Tensor conv2d(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader) {
+    std::optional<bool> force_split_reader,
+    const std::optional<Tensor>& epilogue_stats,
+    uint32_t epilogue_stats_page_base,
+    uint32_t epilogue_stats_slice_stride) {
     using OperationType = Conv2dDeviceOperation;
 
     TT_FATAL(b.layout() == Layout::TILE, "Weights should be in TILE layout.");
@@ -235,11 +293,15 @@ Tensor conv2d(
         .enable_activation_reuse = enable_activation_reuse,
         .config_tensors_in_dram = config_tensors_in_dram,
         .force_split_reader = force_split_reader,
+        .epilogue_stats = epilogue_stats.has_value(),
+        .epilogue_stats_slice_stride = epilogue_stats_slice_stride,
+        .epilogue_stats_page_base = epilogue_stats_page_base,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .a = a,
         .b = b,
         .bias = bias,
+        .epilogue_stats = epilogue_stats,
     };
 
     auto* device = a.device();
