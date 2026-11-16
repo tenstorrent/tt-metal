@@ -4510,3 +4510,412 @@ def test_alloc_pool_frozen_and_spec_switch_capture():
     capture counts / warns a lazy capture. The modules import ttnn at module level: a child with a stub ttnn"""
     _stub_child(_POOL_SPEC_CHILD, "POOL_SPEC_OK")
     assert "ttnn" not in sys.modules
+
+
+# ==================================== page-table refresh (GLM53_PT_CHANGED_ROWS, GLM53_SPEC_PT_LAZY)
+def test_page_rows_changed_only(monkeypatch):
+    """GLM53_PT_CHANGED_ROWS (default 1): _write_page_rows' full path over the rows that changed only -- with every
+    live row passed while some grew (the served verify / decode), a new request's row replaced and a row cut at a
+    repeated block, the published logical / physical tables, the coverage and the owner-block map equal the full path's
+    over every passed row (=0)"""
+
+    def run(flag):
+        monkeypatch.setenv("GLM53_PT_CHANGED_ROWS", flag)
+        be = _MockPrefixBackend(B)
+        gen = Glm53Generator(be, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+        kv = gen.allocate_kv_cache(B, SEQ, num_blocks=NUM_BLOCKS, null_block=0)
+        gen.shared_pages = True
+        b = gen._binding(kv)
+        n = {0: 5, 1: 9, 2: 3, 3: 12}
+
+        def row(s, blocks=None):
+            r = torch.full((BPS,), -1, dtype=torch.int64)
+            bl = blocks if blocks is not None else _blocks(s, n[s] * BLOCK_SIZE)
+            r[: len(bl)] = torch.tensor(bl, dtype=torch.int64)
+            return r
+
+        used = lambda: {s: (n[s] - 1) * BLOCK_SIZE + 1 for s in n}  # noqa: E731
+        gen._write_page_rows(b, {s: row(s) for s in n}, used())
+        snaps = []
+        for grow in ([1], [0, 3], [], [2]):
+            for s in grow:
+                n[s] += 1
+            gen._write_page_rows(b, {s: row(s) for s in n}, used())
+            snaps.append((b.pt_shadow.clone(), b.phys.clone(), b.coverage.clone()))
+        n[2] = 4  # a new request in slot 2: another pool's blocks (the old row's released by its owner first)
+        gen.release_slot(kv, 2)
+        new2 = [1 + 3 * BPS + 20 + j for j in range(4)]
+        gen._write_page_rows(b, {0: row(0), 1: row(1), 2: row(2, new2), 3: row(3)}, used())
+        snaps.append((b.pt_shadow.clone(), b.phys.clone(), b.coverage.clone()))
+        rep = _blocks(1, n[1] * BLOCK_SIZE)
+        gen._write_page_rows(b, {0: row(0), 1: row(1, rep + [rep[2]]), 2: row(2, new2), 3: row(3)}, used())
+        snaps.append((b.pt_shadow.clone(), b.phys.clone(), b.coverage.clone()))
+        o = b.obm
+        return snaps, (dict(o.rows), dict(o.phys), dict(o.refs)), b.io.page_table.t.clone(), dict(gen.counters)
+
+    s0, m0, t0, c0 = run("0")
+    s1, m1, t1, c1 = run("1")
+    assert len(s0) == len(s1) == 6
+    for a, b_ in zip(s0, s1):
+        assert all(torch.equal(x, y) for x, y in zip(a, b_))
+    assert m0 == m1 and torch.equal(t0, t1)
+    assert c0.get("page_rows_skipped", 0) == 0 and c1["page_rows_skipped"] == 3 + 2 + 3 + 3 + 3
+    assert c0["page_rows_unchanged"] == c1["page_rows_unchanged"] == 1  # (the round where nothing grew)
+    assert "ttnn" not in sys.modules
+
+
+_PT_LAZY_CHILD = r"""
+import os
+import random
+import sys
+from types import SimpleNamespace
+from unittest import mock
+
+import torch
+
+# (the host test module and the generator first, ttnn-free; then the stub for spec_mtp / stack_model's module-level
+# ttnn imports only)
+import models.demos.glm53_flash.tests.test_stack_adapter_host as T
+from models.autoports.zai_org_glm_5_3_flash.tt import dsa_shard as DSH
+from models.autoports.zai_org_glm_5_3_flash.tt.generator import Glm53Generator
+
+assert "ttnn" not in sys.modules
+sys.modules["ttnn"] = mock.MagicMock()
+import ttnn  # noqa: E402
+
+from models.autoports.zai_org_glm_5_3_flash.tt import spec_mtp as SM  # noqa: E402
+from models.autoports.zai_org_glm_5_3_flash.tt import stack_model as STM  # noqa: E402
+
+BPU, BS, MB, CHUNK = 2, 64, 16, 4
+SERVED = (("lone", 1, 3), ("primary", 4, 3), ("alt", 8, 1))  # the served 1 M steps (name, G users, K drafts)
+
+
+class Dev:
+    # a device buffer: data = the last host tensor copied in (every copy logged by name)
+    def __init__(self, rig, name, rows):
+        self.rig, self.name, self.shape, self.data = rig, name, (rows, rig.bl), None
+        rig.devs[name] = self
+
+
+def _copy(host, dev):
+    dev.rig.log.append(dev.name)
+    dev.data = host.clone()
+
+
+ttnn.from_torch = lambda t, **kw: t.clone()
+ttnn.copy_host_to_device_tensor = _copy
+CALLS, RIG = [], [None]
+
+
+def _prepare(self):  # (the eager compile runs read the step's tables: they must be the published ones)
+    CALLS.append(("prepare", self.name, RIG[0].holds(self)))
+
+
+def _capture(self):
+    CALLS.append(("capture", self.name, RIG[0].holds(self)))
+    return self.traces
+
+
+SM.SpecMTP.prepare, SM.SpecMTP.capture = _prepare, _capture
+
+
+class Rig:
+    # the real StackBackend.write of the page table on the sharded pool (C owner chips) + real SpecMTP / SpecSwitch
+    # tables, every device buffer a Dev
+    def __init__(self, C, bps, steps=SERVED, switch=True, pool=False):
+        self.C, self.bps, self.log, self.devs, self.value = C, bps, [], {}, None
+        self.bl = DSH.ShardMap(C, BS).local_cap(bps * BS) // BS
+        be = self.be = STM.StackBackend.__new__(STM.StackBackend)
+        be.mesh, be.tp, be.chunk = SimpleNamespace(get_num_devices=lambda: C), C, CHUNK
+        self.io = SimpleNamespace(page_table=SimpleNamespace(name="page_table", t=Dev(self, "pt", MB)))
+        be._kv = SimpleNamespace(extra={"dsa_shard": (C, 10**6, BPU), "bps_local": self.bl, "io": self.io,
+                                        "pt_c": [Dev(self, f"pt_c{c}", CHUNK) for c in range(MB // CHUNK)]})
+        self.steps = [self.step(n, G, K, pool) for n, G, K in steps]
+        be.spec = SM.SpecSwitch(self.steps) if switch else self.steps[0]
+        RIG[0] = self
+
+    def step(self, name, G, K, pool):
+        x = SM.SpecMTP.__new__(SM.SpecMTP)
+        x.__dict__.update(name=name, groups=G, K=K, slots=tuple(u * (K + 1) for u in range(max(1, G))),
+                          shard=(self.C, 10**6, BPU), be=self.be, mesh=self.be.mesh, mtp_private=False,
+                          mtp_sparse=not pool, drafter="mtp", _pt_rows=None, traces={})
+        x.pt_v = Dev(self, name + ".pt_v", 32)
+        x.pt_vc = Dev(self, name + ".pt_vc", 32) if G and K >= 2 and not pool else None
+        x.pt_m = Dev(self, name + ".pt_m", 32) if pool else x.pt_v  # (GLM53_SPEC_MTP_CACHE=pool: global rows)
+        x.pt_mc = Dev(self, name + ".pt_mc", 32) if pool and G else x.pt_m
+        return x
+
+    def publish(self, value):  # (Glm53Generator._publish_page_table's two backend calls)
+        value = torch.as_tensor(value).to(torch.int32)
+        STM.StackBackend.write(self.be, self.io.page_table, value)
+        STM.StackBackend.set_page_table_host(self.be, self.be._kv, value)
+        self.value = value.clone()
+
+    def cur(self):
+        sp = self.be.spec
+        return sp.steps[sp.cur] if isinstance(sp, SM.SpecSwitch) else sp
+
+    def ref(self, x):
+        # the bytes the old code (every step written, localized on its own) leaves in x's tables: built here from
+        # dsa_shard.local_rows directly
+        G, g = max(1, x.groups), x.K + 1
+        rows = self.value[list(x.slots)].to(torch.int64)
+        loc = torch.stack(DSH.local_rows(rows, G, self.C, BPU, self.bl))
+        by_row = [min(r // g, G - 1) for r in range(32)] if x.groups else [0] * 32
+        by_user = [min(r, G - 1) for r in range(32)]
+        out = {x.pt_v.name: loc[:, by_row].reshape(-1, self.bl)}
+        if x.pt_vc is not None:
+            out[x.pt_vc.name] = loc[:, by_user].reshape(-1, self.bl)
+        if x.pt_m is not x.pt_v:
+            out[x.pt_m.name] = rows[by_row]
+            if x.groups:
+                out[x.pt_mc.name] = rows[by_user]
+        return out
+
+    def holds(self, x):
+        return all(self.devs[k].data is not None and torch.equal(self.devs[k].data.to(torch.int64), v.to(torch.int64))
+                   for k, v in self.ref(x).items())
+
+    def main_ok(self):
+        loc = DSH.local_rows(self.value.to(torch.int64), MB, self.C, BPU, self.bl)
+        assert torch.equal(self.devs["pt"].data, torch.cat(loc))
+        for c in range(MB // CHUNK):
+            assert torch.equal(self.devs[f"pt_c{c}"].data, torch.cat([lt[c * CHUNK : (c + 1) * CHUNK] for lt in loc]))
+
+    def snap(self):  # (what the next replay reads: the main tables + the current step's)
+        x = self.cur()
+        names = ["pt"] + [f"pt_c{c}" for c in range(MB // CHUNK)] + list(self.ref(x))
+        return {k: self.devs[k].data.clone() for k in names}
+
+
+def script(C, bps, n, seed, nsteps):
+    # a random op sequence over physical tables (column j on owner (j // BPU) % C, physical block owner + C x id, id 0 =
+    # the owner's null block): block crossings, releases, new requests, slot remaps, prefix attaches (shared blocks),
+    # same-table publishes, step switches, entries (the current step's rows set directly), prepare, capture
+    rng, ids, nxt = random.Random(seed), {}, [1]
+    own = (torch.arange(bps) // BPU) % C
+
+    def fresh(k):
+        nxt[0] += k
+        return list(range(nxt[0] - k, nxt[0]))
+
+    def table():
+        v = own.expand(MB, -1).clone()
+        for s, i in ids.items():
+            v[s, : len(i)] = own[: len(i)] + C * torch.tensor(i, dtype=torch.int64)
+        return v
+
+    for s in (0, 2, 4):
+        ids[s] = fresh(rng.randint(2, bps // 2))
+    ev = [("publish", table())]
+    kinds = ["grow"] * 6 + ["release", "new", "new", "remap", "attach", "same", "select", "select", "enter",
+                            "prepare", "capture"]  # fmt: skip
+    for _ in range(n):
+        k = rng.choice(kinds)
+        if k in ("grow", "release", "remap", "attach") and not ids:
+            k = "new"
+        if k == "grow":
+            s = rng.choice(sorted(ids))
+            if len(ids[s]) < bps:
+                ids[s].append(fresh(1)[0])
+        elif k == "release":
+            del ids[rng.choice(sorted(ids))]
+        elif k == "new":
+            ids[rng.randrange(MB)] = fresh(rng.randint(1, bps // 2))
+        elif k == "remap":  # (the adapter's slot remap: two slots trade rows)
+            a, b = rng.sample(range(MB), 2)
+            ra, rb = ids.pop(a, None), ids.pop(b, None)
+            if ra is not None:
+                ids[b] = ra
+            if rb is not None:
+                ids[a] = rb
+        elif k == "attach":  # (a prefix hit: another live row's first blocks, then fresh ones)
+            t = rng.choice(sorted(ids))
+            h = rng.randint(1, len(ids[t]))
+            ids[rng.randrange(MB)] = ids[t][:h] + fresh(rng.randint(0, bps - h))
+        if k in ("select",):
+            ev.append(("select", rng.randrange(nsteps)))
+        elif k in ("enter", "prepare", "capture"):
+            ev.append((k,))
+        else:
+            ev.append(("publish", table()))
+    return ev + [("prepare",), ("capture",)]
+
+
+def run(rig, ev, lazy):
+    os.environ["GLM53_SPEC_PT_LAZY"] = lazy
+    snaps, stale = [], 0
+    CALLS.clear()
+    for e in ev:
+        sp = rig.be.spec
+        if e[0] == "publish":
+            rig.publish(e[1])
+        elif e[0] == "select":
+            if isinstance(sp, SM.SpecSwitch):
+                sp.select(e[1])
+        elif e[0] == "enter":  # (SpecMTP.enter: the current step's users' rows, set directly, then the boot replay)
+            x = rig.cur()
+            if x.groups:
+                sp.set_page_tables([rig.value[s] for s in x.slots])
+            else:
+                sp.set_page_table(rig.value[0])
+        elif e[0] == "prepare":
+            sp.prepare()
+        else:
+            sp.capture()
+        rig.main_ok()
+        assert rig.holds(rig.cur()), (lazy, e[0], rig.cur().name)  # (what the next replay of the current step reads)
+        stale += sum(not rig.holds(x) for x in rig.steps)
+        snaps.append(rig.snap())
+    assert CALLS and all(ok for _, _, ok in CALLS), CALLS  # (prepare / capture met every step up to date)
+    if isinstance(rig.be.spec, SM.SpecSwitch):  # (every step brought up to date once it is current)
+        for i in range(len(rig.steps)):
+            rig.be.spec.select(i)
+            assert rig.holds(rig.steps[i]), (lazy, i)
+    return snaps, stale, len(rig.log)
+
+
+# ---- 1. fuzz: the served steps on the sharded pool (and a pool-MTP-cache variant, a lone step without a switch):
+#         after every op the main tables and the CURRENT step's tables hold exactly the old full write's bytes, and
+#         GLM53_SPEC_PT_LAZY=1 snapshots equal =0's; lazy leaves non-current steps stale and writes less
+for cfg in (dict(), dict(pool=True), dict(switch=False, steps=(("one", 4, 3),)), dict(switch=False, steps=(("one", 0, 3),)),
+            dict(switch=False, steps=(("one", 0, 3),), pool=True)):  # fmt: skip
+    for seed in (1, 2, 3):
+        ev = script(8, 48, 220, seed, len(cfg.get("steps", SERVED)))
+        s0, st0, w0 = run(Rig(8, 48, **cfg), ev, "0")
+        s1, st1, w1 = run(Rig(8, 48, **cfg), ev, "1")
+        assert len(s0) == len(s1) and all(a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a)
+                                          for a, b in zip(s0, s1)), (cfg, seed)  # fmt: skip
+        assert st0 == 0, (cfg, seed, st0)
+        if cfg.get("switch", True):
+            assert st1 > 0 and w1 < w0, (cfg, seed, st1, w1, w0)
+        else:
+            assert st1 == 0 and w1 == w0, (cfg, seed, st1, w1, w0)
+
+# ---- 2. the write counts of the served pattern (lone current; users on slots 0 / 2 / 4): a block crossing in slot 0
+#         writes the main table, its chunk table and every step whose bases hold slot 0 (old) or the lone step only
+#         (lazy); a select writes the stale step once
+for lazy, want in (("0", [["pt", "pt_c0", "lone.pt_v", "lone.pt_vc", "primary.pt_v", "primary.pt_vc", "alt.pt_v"],
+                          ["pt", "pt_c0", "alt.pt_v"], ["pt", "pt_c1", "primary.pt_v", "primary.pt_vc", "alt.pt_v"],
+                          [], [], []]),
+                   ("1", [["pt", "pt_c0", "lone.pt_v", "lone.pt_vc"], ["pt", "pt_c0"], ["pt", "pt_c1"],
+                          ["alt.pt_v"], ["primary.pt_v", "primary.pt_vc"], []])):  # fmt: skip
+    os.environ["GLM53_SPEC_PT_LAZY"] = lazy
+    rig = Rig(8, 48)
+    own = (torch.arange(48) // BPU) % 8
+    n, base = {0: 5, 2: 9, 4: 3}, {0: 1, 2: 100, 4: 200}
+
+    def table():
+        v = own.expand(MB, -1).clone()
+        for s, k in n.items():
+            v[s, :k] = own[:k] + 8 * (base[s] + torch.arange(k))
+        return v
+
+    rig.publish(table())
+    got = []
+    for act in ("grow 0", "grow 2", "grow 4", "select 2", "select 1", "select 0"):
+        rig.log.clear()
+        what, s = act.split()
+        if what == "grow":
+            n[int(s)] += 1
+            rig.publish(table())
+        else:
+            rig.be.spec.select(int(s))
+        got.append(list(rig.log))
+        assert rig.holds(rig.cur())
+    assert got == want, (lazy, got)
+
+
+# ---- 3. the generator's publishes (Glm53Generator._write_page_rows on the owner-block map, GLM53_PT_CHANGED_ROWS):
+#         rows growing a block, a release + a new request, two slots trading rows, a repeated-block cut, step
+#         switches; the shim backend forwards every page-table write to the real StackBackend.write
+def gen_run(lazy):
+    os.environ["GLM53_SPEC_PT_LAZY"] = lazy
+    hold = [None]
+
+    class Be(T._MockPrefixBackend):
+        def allocate_decode_io(self, kv):
+            io = super().allocate_decode_io(kv)
+            self.pt_buf = io.page_table
+            return io
+
+        def write(self, buf, value):
+            super().write(buf, value)
+            if buf is getattr(self, "pt_buf", None):
+                if hold[0] is None:
+                    hold[0] = Rig(self.C, int(torch.as_tensor(value).shape[1]))
+                hold[0].publish(value)
+
+    be = Be(MB)
+    gen = Glm53Generator(be, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=MB, max_seq_len=T.SEQ)
+    kv = gen.allocate_kv_cache(MB, T.SEQ, num_blocks=MB * T.BPS + MB, null_block=0)
+    gen.shared_pages = True
+    b, rig = gen._binding(kv), hold[0]
+    n = {0: 5, 2: 9, 4: 3, 8: 12, 12: 4, 14: 6}
+
+    def row(s, blocks=None):
+        r = torch.full((T.BPS,), -1, dtype=torch.int64)
+        bl = blocks if blocks is not None else T._blocks(s, n[s] * T.BLOCK_SIZE)
+        r[: len(bl)] = torch.tensor(bl, dtype=torch.int64)
+        return r
+
+    used = lambda: {s: (n[s] - 1) * T.BLOCK_SIZE + 1 for s in n}  # noqa: E731
+    snaps = []
+
+    def pub(rows=None):
+        gen._write_page_rows(b, rows if rows is not None else {s: row(s) for s in n}, used())
+        rig.main_ok()
+        assert rig.holds(rig.cur())
+        snaps.append(rig.snap())
+
+    pub()
+    for grow, sel in (([0], None), ([2, 8], 2), ([], None), ([4], 1), ([0, 12, 14], 0), ([2], 2)):
+        for s in grow:
+            n[s] += 1
+        pub()
+        if sel is not None:
+            rig.be.spec.select(sel)
+            assert rig.holds(rig.cur())
+            snaps.append(rig.snap())
+    n[4] = 4  # a new request in slot 4 (the old row released by its owner first): another pool's blocks
+    gen.release_slot(kv, 4)
+    new4 = [1 + 15 * T.BPS + j for j in range(4)]
+    pub({s: row(s, new4 if s == 4 else None) for s in n})
+    rows = {s: row(s, new4 if s == 4 else None) for s in n}
+    rows[0], rows[2], n[0], n[2] = rows[2], rows[0], n[2], n[0]  # (slots 0 and 2 trade rows: a remap)
+    pub(rows)
+    rep = T._blocks(8, n[8] * T.BLOCK_SIZE)
+    rows[8] = row(8, rep + [rep[2]])  # (a repeated block: the row is cut there)
+    pub(rows)
+    rig.be.spec.prepare()
+    for i in range(len(rig.steps)):
+        rig.be.spec.select(i)
+        assert rig.holds(rig.steps[i])
+    return snaps, len(rig.log), int(gen.counters["page_table_refresh"])
+
+
+CALLS.clear()
+g0, w0, r0 = gen_run("0")
+g1, w1, r1 = gen_run("1")
+assert len(g0) == len(g1) and r0 == r1 and w1 < w0, (len(g0), len(g1), r0, r1, w0, w1)
+assert all(a.keys() == b.keys() and all(torch.equal(a[k], b[k]) for k in a) for a, b in zip(g0, g1))
+assert CALLS and all(ok for _, _, ok in CALLS), CALLS
+print("PT_LAZY_OK")
+"""
+
+
+def test_spec_pt_lazy_tables():
+    """GLM53_SPEC_PT_LAZY (default 1): a page-table publish writes the CURRENT speculative step's tables only, its
+    chip-local rows gathered from the backend's localized table; another step is written when made current (select) or
+    before prepare / capture. Against the old path (=0: every step written at every publish, each localizing its own
+    rows), on the real StackBackend.write + SpecMTP / SpecSwitch table code with stub device buffers: (1) random op
+    sequences on the served lone 1x3 + primary 4x3 + alternate 8x1 steps (the sharded pool; a pool-MTP-cache variant; a
+    lone step without a switch) -- block crossings, releases, new requests, slot remaps, prefix attaches, same-table
+    publishes, step switches, entries, prepare, capture: after every op the main / chunk tables and the current step's
+    tables hold exactly the bytes dsa_shard.local_rows gives (=0 too), the two runs' snapshots are equal, lazy leaves
+    non-current steps stale and writes fewer tensors; (2) the served write counts (a slot-0 crossing: 7 tensor writes ->
+    4, a crossing on another step's base: 3 -> 2, the stale step written once at its select); (3) the generator's own
+    publishes (Glm53Generator._write_page_rows on the owner-block map) through the real backend write, with a release +
+    new request, a slot remap and a repeated-block cut. spec_mtp / stack_model import ttnn: a child with a stub ttnn"""
+    _stub_child(_PT_LAZY_CHILD, "PT_LAZY_OK")
+    assert "ttnn" not in sys.modules

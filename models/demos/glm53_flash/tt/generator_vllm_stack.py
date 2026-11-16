@@ -345,7 +345,7 @@ SPEC_TIMING_EVERY = max(1, int(os.environ.get("GLM53_STACK_SPEC_TIMING_EVERY", "
 class _SpecTiming:
     """the per-window accumulators of GLM53_STACK_SPEC_TIMING (one adapter; the engine thread drives every call)"""
 
-    KEYS = ("outside", "adapter", "submit", "collect", "prefill", "seed")
+    KEYS = ("outside", "adapter", "submit", "collect", "prefill", "seed", "lead", "pages", "rest")
     # the prefill call's pieces (seconds while an outermost prefill_forward runs; "confirm" = the scheduler's, outside)
     PHASES = (
         "confirm",
@@ -370,7 +370,8 @@ class _SpecTiming:
 
     def reset(self):
         self.sum = {k: 0.0 for k in self.KEYS}
-        self.n = {"decode": 0, "fused": 0, "fallback": 0, "prefill": 0, "seed": 0, "outside_pf": 0, "steps": 0}
+        self.n = {"decode": 0, "fused": 0, "fallback": 0, "prefill": 0, "seed": 0, "outside_pf": 0, "steps": 0,
+                  "chains": 0, "refreshes": 0}  # fmt: skip
         self.pf_outside = 0.0
         self.ph = {k: 0.0 for k in self.PHASES}
         self.pf_rows = self.pf_attaches = 0
@@ -420,6 +421,14 @@ class _SpecTiming:
             f"ms outside before each); seeds {self.n['seed']} mean {ms('seed', max(1, self.n['seed'])):.1f} ms; "
             f"spec {stats}"
         )  # fmt: skip
+        if self.n["chains"]:  # (GLM53_SPEC_STEPS_PER_CALL: Glm53Generator.spec_step_chain's marks)
+            c = self.n["chains"]
+            logger.info(
+                f"GLM53 stack spec chain lead-in ({c} chains, {self.n['refreshes']} page-table refreshes): before the "
+                f"first replay {1e3 * self.sum['lead'] / c:.2f} ms per chain (device idle; page-row write "
+                f"{1e3 * self.sum['pages'] / c:.2f} ms), after it {1e3 * self.sum['rest'] / c:.2f} ms per chain (the "
+                f"other replays + record copies, overlapping the device)"
+            )
         if self.n["prefill"]:
             n = self.n["prefill"]
             logger.info(
@@ -468,10 +477,18 @@ def _install_spec_timing(cls):
 
             def chained(*a, **k):
                 t0, c0 = pc(), t.sum["collect"]
+                r0 = int(g.counters.get("page_table_refresh", 0))
                 try:
                     return chain(*a, **k)
                 finally:
                     t.sum["submit"] += (pc() - t0) - (t.sum["collect"] - c0)
+                    mk = getattr(g, "chain_marks", None)  # (t0, page-row seconds, first replay enqueued, submitted)
+                    if mk is not None and mk[0] >= t0:
+                        t.n["chains"] += 1
+                        t.n["refreshes"] += int(g.counters.get("page_table_refresh", 0)) - r0
+                        t.sum["lead"] += mk[2] - mk[0]
+                        t.sum["pages"] += mk[1]
+                        t.sum["rest"] += mk[3] - mk[2]
 
             g.spec_step_chain = chained
         g._spec_timing_wrapped = True

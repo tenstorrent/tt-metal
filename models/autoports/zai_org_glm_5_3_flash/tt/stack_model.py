@@ -1258,11 +1258,12 @@ class StackBackend(ModelBackend):
         self._kv = kv
         return io
 
-    def _write_local_tables(self, buf: Buf, value: torch.Tensor) -> None:
+    def _write_local_tables(self, buf: Buf, value: torch.Tensor) -> torch.Tensor:
         """GLM53_DSA_SHARD: the generator's physical global table [B, bps] (block g of column j on chip g % C, local block
         g // C) -> chip r's LOCAL table [rows, bps_local] (column j = local block j of the slot's local positions;
         tt/dsa_shard.py ShardMap.page_table_local), every chip its own content, in place (the live decode trace keeps
-        its buffer); rows past B and columns past the table point at local block 0 (every chip's null block)"""
+        its buffer); rows past B and columns past the table point at local block 0 (every chip's null block). Returns
+        the C local tables as written, [C, rows, bps_local] (the speculative steps gather their rows from it)"""
         from models.autoports.zai_org_glm_5_3_flash.tt import dsa_shard as DSH
 
         # GLM53_PT_INCREMENTAL (dsa_shard.LocalTableCache): only the changed rows are re-localized on the host, and a
@@ -1273,12 +1274,14 @@ class StackBackend(ModelBackend):
         shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)  # rank r = mesh device r (row-major: TPMlaShard's rank)
         to = lambda t: ttnn.from_torch(t.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT,  # noqa: E731
                                        mesh_mapper=shard)  # fmt: skip
-        ttnn.copy_host_to_device_tensor(to(torch.cat(local)), buf.t)
+        allc = torch.cat(local)
+        ttnn.copy_host_to_device_tensor(to(allc), buf.t)
         for c, ptc in enumerate(pt_c):
             if changed and not any(c * self.chunk <= s < (c + 1) * self.chunk for s in changed):
                 continue  # no changed row in this chunk: its device table already holds these rows
             ttnn.copy_host_to_device_tensor(to(torch.cat([lt[c * self.chunk : (c + 1) * self.chunk] for lt in local])),
                                             ptc)  # fmt: skip
+        return allc.reshape(len(local), -1, int(allc.shape[-1]))
 
     def shard_local_rows(self, value: torch.Tensor, rows: int) -> list:
         """GLM53_DSA_SHARD: physical global page-table rows [n, bps] (block g of column j on chip g % C, local block
@@ -1318,11 +1321,16 @@ class StackBackend(ModelBackend):
         elif buf.name == "page_table" and self._kv.extra.get("dsa_shard") is not None:
             self._pt_last = (buf.t, value.to(torch.int32).clone())  # set_page_table_host's same-value check
             self._pt_host = value.to(torch.int64).clone()  # the PHYSICAL global table (owner-aware, owner_blocks.py)
-            self._write_local_tables(buf, value)
+            local = self._write_local_tables(buf, value)
             if (
                 getattr(self, "spec", None) is not None
             ):  # Stage 17 on the shard: slot 0's PHYSICAL row (spec_mtp localizes; GLM53_SPEC_MULTI: the group bases')
-                self.spec.set_table(value)
+                from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import spec_pt_lazy
+
+                if spec_pt_lazy():  # (the steps' chip-local rows gathered from the tables just written)
+                    self.spec.set_table(value, local=local)
+                else:
+                    self.spec.set_table(value)
         elif buf.name == "page_table":
             self._pt_last = (buf.t, value.to(torch.int32).clone())  # set_page_table_host's same-value check
             self._pt_host = value.to(torch.int64).clone()  # host shadow of the device page table

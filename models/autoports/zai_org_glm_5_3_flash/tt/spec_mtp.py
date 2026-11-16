@@ -71,6 +71,18 @@ def write_rows(mesh, t: ttnn.Tensor, host: torch.Tensor, dtype=ttnn.uint32) -> N
                                                     mesh_mapper=_repl(mesh)), t)  # fmt: skip
 
 
+def spec_pt_lazy(env=os.environ) -> bool:
+    """GLM53_SPEC_PT_LAZY (default 1): a page-table publish (StackBackend.write) writes the speculative-step tables
+    only the next replays read -- the CURRENT step's (SpecSwitch: another step's when it is made current: select,
+    prepare, capture; a step's pt_v / pt_vc / pt_m / pt_mc are read by its own programs only) -- and that step takes
+    its chip-LOCAL rows from the backend's localized table (StackBackend._write_local_tables; local_rows is row-wise,
+    so the same rows) instead of localizing them again. The served 1 M chain (lone 1x3 + primary 4x3 + alternate 8x1
+    on the 32-chip shard) refreshes before its first replay: a block crossing in slot 0 wrote 5 step tables after 3
+    localizations (+ the main and chunk tables: 7 sharded copies, ~12 ms host before them, host mock); now the
+    current step's 1-2. 0: every step's tables at every publish, each step localizing its rows (as before)"""
+    return env.get("GLM53_SPEC_PT_LAZY", "1") == "1"
+
+
 def read_rows(mesh, t: ttnn.Tensor) -> torch.Tensor:
     d = ttnn.get_device_tensors(t)[0] if int(mesh.get_num_devices()) > 1 else t
     return ttnn.to_torch(d).to(torch.int64)
@@ -1411,8 +1423,10 @@ class SpecMTP:
         else:
             ttnn.execute_trace(self.mesh, tr, cq_id=0, blocking=blocking)
 
-    def set_page_table(self, row: torch.Tensor):
-        """the user's page-table row -> rows 0..K of pt_v (the verify / MTP launches index the page table by launch row)"""
+    def set_page_table(self, row: torch.Tensor, local: torch.Tensor | None = None):
+        """the user's page-table row -> rows 0..K of pt_v (the verify / MTP launches index the page table by launch row).
+        local [C, 1, bps_local] (set_table under GLM53_SPEC_PT_LAZY): the row's chip-LOCAL rows the backend made, else
+        localized here"""
         row = row.reshape(-1).to(torch.int32)
         if self._pt_rows is not None and torch.equal(self._pt_rows, row):
             return
@@ -1420,19 +1434,25 @@ class SpecMTP:
         if self.shard is None:
             write_rows(self.mesh, self.pt_v, host, ttnn.int32)
         else:  # row = slot 0's PHYSICAL row: chip r's local row in rows 0..31 of its pt_v; the MTP layer's global rows
-            local = self.be.shard_local_rows(row.reshape(1, -1), 1)
+            if local is None:
+                local = self.be.shard_local_rows(row.reshape(1, -1), 1)
+                lh = torch.cat([lt.reshape(1, -1).repeat(32, 1) for lt in local])
+            else:  # (the same chip-major rows in one op: chip r's row on its 32 rows)
+                lh = local.expand(-1, 32, -1).reshape(-1, int(local.shape[-1]))
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(
-                torch.cat([lt.reshape(1, -1).repeat(32, 1) for lt in local]).to(torch.int32).contiguous(),
+                lh.to(torch.int32).contiguous(),
                 dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
                 self.pt_v)  # fmt: skip
             if not self.mtp_private and not self.mtp_sparse:  # (the private MTP cache's row is constant)
                 write_rows(self.mesh, self.pt_m, host, ttnn.int32)
         self._pt_rows = row.clone()
 
-    def set_page_tables(self, rows) -> None:
+    def set_page_tables(self, rows, local: torch.Tensor | None = None) -> None:
         """GLM53_SPEC_MULTI: the users' page-table rows (group order = self.slots) -> pt_v rows u (K + 1) + j = user u's
         (the shard: each chip's LOCAL rows of the PHYSICAL ones); GLM53_SPEC_MTP_CACHE=pool: the MTP tables likewise
-        (catch-up rows by group, chained row u = user u); the private MTP tables are constant (_mtp_private_tables)"""
+        (catch-up rows by group, chained row u = user u); the private MTP tables are constant (_mtp_private_tables).
+        local [C, G, bps_local] (set_table under GLM53_SPEC_PT_LAZY): the rows' chip-LOCAL rows the backend made, else
+        localized here"""
         assert self.groups and len(rows) == self.groups, (self.groups, len(rows))
         key = torch.stack([torch.as_tensor(r).reshape(-1).to(torch.int32) for r in rows])
         old = self._pt_rows
@@ -1444,15 +1464,19 @@ class SpecMTP:
         if self.shard is None:
             write_rows(self.mesh, self.pt_v, host, ttnn.int32)
         else:
-            local = self.be.shard_local_rows(key, G)
+            by_user = [min(r, G - 1) for r in range(32)]
+            if local is None:
+                local = self.be.shard_local_rows(key, G)
+                rows_of = lambda sel: torch.cat([torch.as_tensor(lt).reshape(G, -1)[sel] for lt in local])  # noqa: E731
+            else:  # (the same chip-major rows in one gather: [C, 32, bps_local] -> chip r's 32 rows)
+                rows_of = lambda sel: local[:, sel].reshape(-1, int(local.shape[-1]))  # noqa: E731
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(
-                torch.cat([torch.as_tensor(lt).reshape(G, -1)[by_row] for lt in local]).to(torch.int32).contiguous(),
+                rows_of(by_row).to(torch.int32).contiguous(),
                 dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
                 self.pt_v)  # fmt: skip
             if self.pt_vc is not None:  # (v2 sparse chained rows: row u = user u's local row)
-                by_user = [min(r, G - 1) for r in range(32)]
                 ttnn.copy_host_to_device_tensor(ttnn.from_torch(
-                    torch.cat([torch.as_tensor(lt).reshape(G, -1)[by_user] for lt in local]).to(torch.int32).contiguous(),
+                    rows_of(by_user).to(torch.int32).contiguous(),
                     dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
                     self.pt_vc)  # fmt: skip
         if not self.mtp_private and not self.mtp_sparse and self.drafter == "mtp":
@@ -1461,14 +1485,16 @@ class SpecMTP:
             write_rows(self.mesh, self.pt_mc, key[[min(r, G - 1) for r in range(32)]], ttnn.int32)
         self._pt_rows = key.clone()
 
-    def set_table(self, value: torch.Tensor) -> None:
+    def set_table(self, value: torch.Tensor, local: torch.Tensor | None = None) -> None:
         """StackBackend's page-table write (every slot's row): the speculating rows -- slot 0's (set_page_table), or
-        with GLM53_SPEC_MULTI the group bases' (set_page_tables)"""
+        with GLM53_SPEC_MULTI the group bases' (set_page_tables). local [C, rows, bps_local] (GLM53_SPEC_PT_LAZY, the
+        sharded pool): the backend's chip-LOCAL tables of `value`, row s = slot s's (_write_local_tables)"""
         if not self.groups:
-            self.set_page_table(value[0])
+            self.set_page_table(value[0], local=None if local is None else local[:, 0:1])
             return
         if int(value.shape[0]) > max(self.slots):
-            self.set_page_tables([value[s] for s in self.slots])
+            self.set_page_tables([value[s] for s in self.slots],
+                                 local=None if local is None else local[:, list(self.slots)])  # fmt: skip
 
     def set_active(self, groups) -> None:
         """GLM53_SPEC_PARTIAL: the groups (indices into slots) the next entry serves -> the verify launch's KDA row masks
@@ -1601,6 +1627,11 @@ class SpecSwitch:
         assert len(steps) >= 2 and all(int(getattr(x, "groups", 0) or 0) for x in steps), "multi-user steps only"
         self.__dict__["steps"] = list(steps)
         self.__dict__["cur"] = 0
+        # GLM53_SPEC_PT_LAZY: the newest published page table ((value, local) of set_table) and the steps not written
+        # with it yet -- never the current one; a step's tables are read by its own programs only, which run once it is
+        # current (select) or in prepare / capture, and each of those brings it up to date first (_pt_flush)
+        self.__dict__["pt_pending"] = None
+        self.__dict__["pt_stale"] = set()
 
     def __getattr__(self, name):
         d = self.__dict__
@@ -1613,7 +1644,24 @@ class SpecSwitch:
 
     def select(self, i: int) -> None:
         assert 0 <= int(i) < len(self.steps), (i, len(self.steps))
+        self._pt_flush(int(i))
         self.__dict__["cur"] = int(i)
+
+    def _pt_flush(self, i: int) -> None:
+        """GLM53_SPEC_PT_LAZY: step i's page-table rows brought to the newest published table (its own compare skips
+        rows it already holds); a no-op for a step that is up to date"""
+        d = self.__dict__
+        if i in d["pt_stale"]:
+            self._set(d["steps"][i], *d["pt_pending"])
+            d["pt_stale"].discard(i)
+
+    @staticmethod
+    def _set(x, value, local) -> None:
+        """step x's set_table, `local` passed only when there is one"""
+        if local is None:
+            x.set_table(value)
+        else:
+            x.set_table(value, local=local)
 
     def group_of(self, slot):
         """a group base of ANY step (the TP prefill arms its request's MTP fill: generator_vllm_stack places the users
@@ -1624,12 +1672,24 @@ class SpecSwitch:
                 return u
         return None
 
-    def set_table(self, value) -> None:  # (every step keeps its users' page-table rows current)
-        for x in self.steps:
-            x.set_table(value)
+    def set_table(self, value, local=None) -> None:
+        """every step keeps its users' page-table rows current; GLM53_SPEC_PT_LAZY: the current step's now, the others'
+        when they are next made current / prepared / captured (local: as SpecMTP.set_table's)"""
+        d = self.__dict__
+        lazy = spec_pt_lazy()
+        for i, x in enumerate(d["steps"]):
+            if not lazy or i == d["cur"]:
+                self._set(x, value, local)
+        if lazy:
+            # (a clone: the caller's tensor is the publish's own, but a flush may come several publishes later)
+            d["pt_pending"] = (torch.as_tensor(value).clone(), local)
+            d["pt_stale"] = {i for i in range(len(d["steps"])) if i != d["cur"]}
+        else:
+            d["pt_pending"], d["pt_stale"] = None, set()
 
     def prepare(self) -> None:
-        for x in self.steps:
+        for i, x in enumerate(self.steps):
+            self._pt_flush(i)  # (the eager compile runs read the step's tables)
             x.prepare()
 
     def capture(self):
@@ -1640,7 +1700,8 @@ class SpecSwitch:
         that raises releases every step's traces (each SpecMTP.capture releases its own half-captured set) and
         re-raises -- a later capture never meets some steps captured and the others not."""
         try:
-            for x in self.steps:
+            for i, x in enumerate(self.steps):
+                self._pt_flush(i)
                 x.capture()
         except BaseException:
             self.release()

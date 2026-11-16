@@ -1514,6 +1514,16 @@ class Glm53Generator(_ReadinessGenerator):
         if rows and self._rows_unchanged(b, rows, used):
             self.counters["page_rows_unchanged"] += 1
             return
+        if len(rows) > 1 and os.environ.get("GLM53_PT_CHANGED_ROWS", "1") == "1":
+            # GLM53_PT_CHANGED_ROWS (default 1): the full path below for the rows that changed only. A row
+            # _rows_unchanged passes on its own would come out of it exactly as published (same entries, coverage,
+            # physical row: owner_blocks' EXTEND path keeps every listed block), so dropping it changes no table; the
+            # served verify / decode pass EVERY live row while one grew a block, and the full path's Python over the
+            # others cost ~9.5 ms per refresh at 8 live rows of 20 K covered blocks (1 M build: 12.2 -> 2.9 ms, host
+            # mock). 0: every passed row takes the full path (as before)
+            n_in = len(rows)
+            rows = {s: r for s, r in rows.items() if not self._rows_unchanged(b, {s: r}, used)}
+            self.counters["page_rows_skipped"] = self.counters.get("page_rows_skipped", 0) + n_in - len(rows)
         bs = self.backend.block_size
         new, cov = b.pt_shadow.clone(), b.coverage.clone()
         for slot, row in rows.items():
@@ -2999,6 +3009,7 @@ class Glm53Generator(_ReadinessGenerator):
         single step's check, per step) or the slot's page-table coverage (every verify position of the m' steps and the
         last step's drafts inside mapped blocks); the first step keeps spec_step's checks. page_row: as
         spec_step_submit's (written once, before the first replay)."""
+        t0, tp = _time.perf_counter(), 0.0
         b = self._binding(kv_cache)
         self._spec_settle(b)
         sp = self.backend.spec
@@ -3009,7 +3020,9 @@ class Glm53Generator(_ReadinessGenerator):
         L = {s: int(b.slots[s].seq_len) for s in bases}
         if page_row is not None:
             rows = {int(s): r for s, r in page_row.items()} if multi else {0: page_row}
+            tp = _time.perf_counter()
             self._write_page_rows(b, rows, {s: L[s] + K + 1 for s in rows})
+            tp = _time.perf_counter() - tp
         lim, bs = self._spec_limit(b), int(self.backend.block_size)
         if any(L[s] + 2 * K + 1 > lim for s in bases):
             raise ValueError(f"speculative step at lengths {L}: the next step's positions pass the context")
@@ -3017,11 +3030,15 @@ class Glm53Generator(_ReadinessGenerator):
         while n < int(m) and all(L[s] + (n + 1) * (K + 1) + K <= min(lim, int(b.coverage[s]) * bs) for s in bases):
             n += 1
         read_async = getattr(sp, "read_async", None)
-        handles = []
+        handles, t_first = [], None
         for _ in range(n):
             sp.step()
+            t_first = _time.perf_counter() if t_first is None else t_first
             pending, events = read_async() if callable(read_async) else (sp.read(), [])
             handles.append(SpecPending(binding=b, L=None, pending=pending, events=list(events)))
+        # (entry, page-row write seconds, first replay enqueued, every replay + record copy enqueued): the served
+        # adapter's GLM53_STACK_SPEC_TIMING splits the submit into the lead-in the device waits for and the rest
+        self.chain_marks = (t0, tp, t_first, _time.perf_counter())
         c = self.counters
         c["spec_readback_async"] = c.get("spec_readback_async", 0) + sum(bool(h.events) for h in handles)
         c["spec_chains"] = c.get("spec_chains", 0) + 1
