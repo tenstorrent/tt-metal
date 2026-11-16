@@ -139,7 +139,7 @@ class TTNNGPTCore:
             x,
             block["c_fc"]["weight"],
             bias=block["c_fc"]["bias"],
-            activation=None if prg_fc is not None and prg_fc.fused_activation else "gelu",
+            activation=None if prg_fc is not None and prg_fc.fused_activation else "gelu_tanh",
             compute_kernel_config=self.compute_kernel_config,
             program_config=prg_fc,
         )

@@ -140,7 +140,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         self.data_mapper = self.mesh_mapper if data_mapper is None else data_mapper
         self.ln_sharded = True  # single-token decode: use the width-sharded LayerNorm path
         b0 = self.params["blocks"][0]
-        gelu = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, False)  # False = not the fast approximation
+        gelu = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, False)  # gelu_new (tanh form); False = accurate
         self._prg = {  # decode-only matmul configs, keyed by weight; c_fc carries its gelu
             n: _decode_matmul_cfg(device, *tuple(b0[n]["weight"].shape)[-2:], gelu if n == "c_fc" else None)
             for n in ("c_attn", "attn_proj", "c_fc", "mlp_proj")
