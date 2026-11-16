@@ -106,11 +106,19 @@ struct UnifiedRoutedExpertFfnParams {
         "x_is_row_major",
         "activation",
         "fuse_bias",
+        "compute_kernel_config",
         "min_active_tokens",
         "max_active_tokens");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            compute_kernel_config,
+            min_active_tokens,
+            max_active_tokens);
     }
 };
 
