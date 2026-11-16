@@ -593,7 +593,7 @@ void kernel_main() {
                     v_reserved = true;
                     v_chain.signal_ready(noc);
                 }
-                if (k_chain_moves && k_chain.should_forward(k_head, 0)) {
+                if (k_chain_moves && k_chain.should_forward(nq, 0)) {
                     k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 if (!v_reserved) {

@@ -720,10 +720,10 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 invalidate_l1_cache();
             });
             const uint32_t growth = ckernel::read_tile_value(cb_exp_max_diff, 0, 0);
-            // A sign-set word (-0.0 or a tiny negative from rounding) is no growth: only positive values above the
-            // threshold rescale.
-            const uint32_t growth_bits = growth & 0xFFFFu;
-            rescale = growth_bits < 0x8000u && growth_bits > kLazyThrBits;
+            // bf16 bits compared as a signed 16-bit integer: positive values keep their order and a sign-set word
+            // (-0.0 or a tiny negative from rounding: no growth) is negative, so only positive growth above the
+            // threshold rescales. (One signed compare: the riscv-tt GCC 15 crashes on the equivalent range check.)
+            rescale = static_cast<int16_t>(growth & 0xFFFFu) > static_cast<int16_t>(kLazyThrBits);
         }
 
         // ---- S3: rescale: alpha = exp((old max - new max) * scale) into cb_exp_max_diff and the new max into every
