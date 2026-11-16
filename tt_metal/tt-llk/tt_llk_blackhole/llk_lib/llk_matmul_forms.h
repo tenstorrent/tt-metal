@@ -84,19 +84,6 @@ constexpr bool matmul_format_is_32bit(const DataFormat f)
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
 }
 
-// lofi_wide of matmul_plain_row_form over the kernel's CB formats
-template <std::size_t N>
-constexpr bool matmul_kernel_lofi_wide(const std::uint8_t (&formats)[N])
-{
-    std::uint32_t f32 = 0;
-    bool tf32         = false;
-    for (const std::uint8_t f : formats)
-    {
-        f32 += f == static_cast<std::uint8_t>(DataFormat::Float32);
-        tf32 = tf32 || f == static_cast<std::uint8_t>(DataFormat::Tf32);
-    }
-    return tf32 || f32 >= 2;
-}
 
 // A LoFi kernel with a 32-bit operand beside a 16-bit or block float one, read from CBs 0 and 1, the in0 and in1 CBs of the production
 // matmul kernels (other Float32 CBs of a kernel, as partials or flags, are not operands). Its plain calls at half sync take the run-time
@@ -239,10 +226,6 @@ constexpr char matmul_default_form()
     }
 }
 
-// The math form of a call that keys no k steps per DEST section (a plain matmul_block), from constants of the whole kernel so its init
-// and calls agree: the row form, but at LoFi full sync, whose plain calls may take another reuse direction (at half sync they all run
-// direction 0), at HiFi2 half sync with a 32-bit DEST where a section may pack to Float32, and at LoFi half sync with a 32-bit DEST where
-// a 32-bit format is an operand or the output (lofi_wide: a Tf32 CB, or a Float32 CB besides the one Float32 partials CB).
 // The plain calls the kernel-wide row form keeps on the tile MOP at HiFi2 half sync with a 32-bit DEST: a kernel whose front end sees
 // a constant block (bmm) takes the row form there too (census 49 keys, all faster); one with run-time blocks (minimal_matmul) keeps the
 // tile MOP, whose one-tile kt=1 block the row form's per-call cost loses on
@@ -251,12 +234,13 @@ constexpr bool matmul_hifi2_half_wide(const MathFidelity fidelity, const bool ha
     return fidelity == MathFidelity::HiFi2 && half_sync && fp32_dest && may_pack_32bit;
 }
 
+// The math form of a call that keys no k steps per DEST section (a plain matmul_block), from constants of the whole kernel so its init
+// and calls agree: the row form above LoFi, whose plain calls may take another reuse direction, but at HiFi2 half sync with a 32-bit DEST
+// where a section may pack to Float32.
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest>
-constexpr bool matmul_plain_row_form(const bool may_pack_32bit, const bool lofi_wide)
+constexpr bool matmul_plain_row_form(const bool may_pack_32bit)
 {
-    return !(math_fidelity == MathFidelity::LoFi && dst_sync == DstSync::SyncFull) &&
-           !(math_fidelity == MathFidelity::HiFi2 && dst_sync == DstSync::SyncHalf && fp32_dest && may_pack_32bit) &&
-           !(math_fidelity == MathFidelity::LoFi && dst_sync == DstSync::SyncHalf && fp32_dest && lofi_wide);
+    return math_fidelity != MathFidelity::LoFi && !(math_fidelity == MathFidelity::HiFi2 && dst_sync == DstSync::SyncHalf && fp32_dest && may_pack_32bit);
 }
 
 

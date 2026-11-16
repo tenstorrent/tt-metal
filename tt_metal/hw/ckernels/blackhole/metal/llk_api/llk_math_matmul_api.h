@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_size_mode.h"
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
@@ -54,15 +53,6 @@ inline void llk_math_matmul_init_impl(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
-// matmul_kernel_lofi_wide over the kernel's CBs (true where unknown)
-constexpr bool llk_math_matmul_kernel_lofi_wide() {
-#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
-    return matmul_kernel_lofi_wide(unpack_src_format);
-#else
-    return true;
-#endif
-}
-
 // Whether a CB of the kernel holds a 32-bit format: unpack_src_format lists every CB, outputs included.
 constexpr bool llk_math_matmul_kernel_has_32bit_cb() {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
@@ -82,10 +72,8 @@ constexpr bool llk_math_matmul_kernel_has_32bit_cb() {
 template <bool row_mop, std::uint32_t kt_per_section, DataFormat out_format>
 constexpr bool llk_math_matmul_tile_mop() {
     if constexpr (kt_per_section == 0) {
-        // size mode keeps the tile MOP at LoFi, as main
         return !row_mop &&
-               (!matmul_plain_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE>(llk_math_matmul_kernel_has_32bit_cb(), llk_math_matmul_kernel_lofi_wide()) ||
-                (MATH_FIDELITY == MathFidelity::LoFi && LLK_SIZE_MODE));
+               !matmul_plain_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE>(llk_math_matmul_kernel_has_32bit_cb());
     } else {
         return !row_mop &&
                !matmul_math_row_form<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>();
