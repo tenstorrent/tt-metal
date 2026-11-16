@@ -108,7 +108,7 @@ bool stage_tensor(const FifoConsumer& requests, const TensorStream& stream, uint
         }
         WAYPOINT("TRSW");
         // A staged count tells the pusher its block has landed.
-        noc_async_read_barrier();
+        noc_async_read_barrier_with_trid(kTrid);
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
             if (reading & (1u << i)) {
                 *region.staged(i) = ++staged[i];

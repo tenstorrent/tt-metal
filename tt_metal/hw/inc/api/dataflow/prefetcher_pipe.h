@@ -580,13 +580,16 @@ public:
     // (collective credit after all per-receiver writes) or push_back_to_receiver()
     // (per-receiver credit) as appropriate.
     // Multi-DM: no-op when this hart does not own receiver_idx.
-    template <typename Src>
+    // Quasar: NocOptions::TXN_ID tags the write with noc_opts.trid, so flush_writes with the same id waits on
+    // this sender's writes alone rather than on every write from the core.
+    template <NocOptions opts = NocOptions::DEFAULT, typename Src>
     FORCE_INLINE void write_to_receiver(
         const Noc& noc,
         uint32_t receiver_idx,
         const Src& src,
         uint32_t num_entries,
-        const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
+        const typename noc_traits_t<Src>::src_args_type& src_args = {},
+        const NocOptVals& noc_opts = {}) {
         if (!owns_receiver(receiver_idx)) {
             return;
         }
@@ -597,21 +600,26 @@ public:
         assert_contiguous_write(iface, wr_offset, num_entries);
         destination_offset_bytes_ = 0;
 #ifdef ARCH_QUASAR
-        noc.async_write(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx});
+        noc.async_write<opts>(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx}, noc_opts);
 #else
-        noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx});
+        static_assert(!has_flag(opts, NocOptions::TXN_ID), "flush_writes cannot wait on a transaction id here");
+        noc.async_write<opts | NocOptions::POSTED>(
+            src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx}, noc_opts);
 #endif
     }
 
     // Flush payload writes from this core before publishing pages_sent.
     // WH/BH: posted flush (depart queue). Quasar: write barrier so destination TL1 is
     // complete before pages_sent — posted payload + credit can otherwise reorder for
-    // interleaved STRIDED relay consumers under same-program backpressure.
-    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}) {
+    // interleaved STRIDED relay consumers under same-program backpressure. With
+    // NocOptions::TXN_ID (Quasar only) the barrier waits only on writes tagged noc_opts.trid.
+    template <NocOptions opts = NocOptions::DEFAULT>
+    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}, const NocOptVals& noc_opts = {}) {
 #ifdef ARCH_QUASAR
-        noc.async_write_barrier();
+        noc.async_write_barrier<opts>(noc_opts);
 #else
-        noc.async_writes_flushed<NocOptions::POSTED>();
+        static_assert(!has_flag(opts, NocOptions::TXN_ID), "Posted writes flushed does not support TXN_ID");
+        noc.async_writes_flushed<opts | NocOptions::POSTED>();
 #endif
     }
 

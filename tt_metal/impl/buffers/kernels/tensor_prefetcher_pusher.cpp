@@ -100,7 +100,7 @@ bool push_tensor(
                 continue;
             }
             const CoreLocalMem<uint8_t> block(stream.stage_slot_addr(i, pushed[i] % fifo::kStageSlotsPerReceiver));
-            pipe.write_to_receiver(noc, r, block, 1);
+            pipe.write_to_receiver<NocOptions::TXN_ID>(noc, r, block, 1, {}, {.trid = tensor_prefetcher::kTrid});
             writing |= 1u << i;
         }
         if (writing == 0) {
@@ -118,8 +118,9 @@ bool push_tensor(
         }
         WAYPOINT("TPPW");
         // The blocks must land before the credits that advertise them, and before the reader may reuse
-        // their stage slots. Every lane's writes went out on `noc`, so one flush covers them all.
-        pipes[0].flush_writes(noc);
+        // their stage slots. Every lane's writes went out on `noc` with this kernel's id, so one flush covers them
+        // all and waits on nothing else.
+        pipes[0].flush_writes<NocOptions::TXN_ID>(noc, {.trid = tensor_prefetcher::kTrid});
         for (uint32_t i = 0; i < stream.num_receivers; ++i) {
             if (writing & (1u << i)) {
                 pipes[stream.lane[i]].push_back_to_receiver(stream.receiver_in_lane[i], 1, noc);

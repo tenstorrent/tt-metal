@@ -40,7 +40,7 @@ public:
                                        ? get_noc_addr_from_bank_id<true>(xy, entry->selector_addr)
                                        : get_noc_addr(xy & 0xFFFFu, xy >> 16, entry->selector_addr);
         noc_async_read(mask_addr, scratch_base_, read_bytes);
-        noc_async_read_barrier();
+        noc_async_read_barrier_with_trid(kTrid);
         // Group g is listed at a position no later than g, so the mask's words become the list in place.
         volatile tt_l1_ptr uint16_t* words = listed_groups();
         uint32_t num_selected = 0;
