@@ -293,9 +293,11 @@ void kernel_main() {
             if (kt == k0) {
                 gguf_zero_tile<pack>(0);
             }
-            // The group step for each DEST set: k0 starts a group.
-            if (group_step && t < 2) {
+            // The group step at t = 0 (set 0; k0 starts a group), copied to set 1 at t = 1.
+            if (group_step && t == 0) {
                 gguf_decode_group<fmt, pack>(out);
+            } else if (group_step && t == 1) {
+                gguf_decode_group_copy<fmt, int(out_of(1)) - int(out_of(0)), pack>(out_of(0));
             }
             gguf_decode_tile<fmt, pack>(out, t);
             gguf_decode_overlap_tile_done();
