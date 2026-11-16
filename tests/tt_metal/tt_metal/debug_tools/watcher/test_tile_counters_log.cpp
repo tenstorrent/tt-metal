@@ -169,10 +169,11 @@ void RunTest(
     constexpr uint32_t poll_interval_ms = 1000;
     auto start = std::chrono::steady_clock::now();
 
-    while (!FileContainsAllStrings(fixture->log_file_name, expected_mismatch_patterns)) {
+    while (!FileContainsAllStrings(fixture->log_file_name, expected_mismatch_patterns, /*report_missing=*/false)) {
         auto elapsed_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
         if (elapsed_ms >= timeout_ms) {
+            FileContainsAllStrings(fixture->log_file_name, expected_mismatch_patterns);  // logs what's missing
             release_threads();
             FAIL() << "Timed out after " << timeout_ms << "ms waiting for watcher to log TC mismatches (" << mode_name
                    << ")";
