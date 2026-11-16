@@ -7,13 +7,15 @@ through a published KV chunk table and this host's device map (``mesh chip uniqu
 ``read_dram_umd``. Keys are (config name, table row, position), so a prefill table and a decode table with
 different layouts still name the same logical chunk the same way.
 
-compare: merge every host's digest per side and compare the two sides key by key. It fails on any byte difference
-and on any chunk that only one side hashed (a host left out of a digest). Two files of one side that hash the
-same chunk differently are an error, not a merge.
+compare: merge every host's digest per side and compare the two sides key by key. It fails on any byte difference,
+on any chunk that only one side hashed, and on a side whose merged digests hold fewer chunks than its table names
+(a host left out, which the key comparison cannot see when both sides lose the same chunks). Two files of one
+side that hash the same chunk differently, or that were taken with different arguments, are an error.
 
 Run digest after a P->D run with the KV Manager fleet down and before any board reset: device DRAM keeps its
 contents after the processes exit. Decode writes slot 1 only at positions >= P after the migration, so [0, P)
-still holds the migrated bytes. The KDA configs are left out: decode advances that state after the handoff.
+still holds the migrated bytes. A chunk that P ends inside is skipped, and digest prints how many positions that
+leaves unchecked. The KDA configs are left out: decode advances that state after the handoff.
 
   python -m models.demos.common.prefill.runners.migration_chunk_digest digest --table T.pb --device-map /tmp/x.txt --slot S --positions P --configs 00,01 --out F
   python -m models.demos.common.prefill.runners.migration_chunk_digest compare --src 'prefill_*.json' --dst 'decode_*.json'
@@ -57,14 +59,19 @@ def digest(args) -> None:
     local = _device_map(args.device_map)
     names = {table.config_name(i): i for i in range(table.num_configs())}
     wanted = [names[n] for n in args.configs.split(",")]
-    out, skipped_remote, t0 = {}, 0, time.monotonic()
+    out, skipped_remote, unchecked, t0 = {}, 0, {}, time.monotonic()
     for cfg_id in wanted:
         cfg = table.config(cfg_id)
         step = int(cfg.chunk_n_tokens)
+        # A chunk is hashed whole, and one that P ends inside also holds positions >= P, which decode has
+        # written since the migration. Only the chunks wholly below P are compared.
+        whole = args.positions // step * step
+        if whole != args.positions:
+            unchecked[table.config_name(cfg_id)] = args.positions - whole
         for row in range(int(cfg.num_layers)):
             if table.lookup(row, 0, args.slot, cfg_id).size_bytes == 0:
                 continue
-            for pos in range(0, args.positions, step):
+            for pos in range(0, whole, step):
                 loc = table.lookup(row, pos, args.slot, cfg_id)
                 nodes = table.get_device_group(loc.device_group_index).fabric_node_ids
                 uid = next((local[_node_key(n)] for n in nodes if _node_key(n) in local), None)
@@ -73,24 +80,39 @@ def digest(args) -> None:
                     continue
                 raw = dis.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)
                 out[f"{table.config_name(cfg_id)}/{row}/{pos}"] = hashlib.sha1(bytes(raw)).hexdigest()
-    json.dump({"host": socket.gethostname(), "chunks": out}, open(args.out, "w"))
+    # Every host walks the whole table, so each one knows how many chunks its side holds across all hosts.
+    scope = {"slot": args.slot, "positions": args.positions, "configs": sorted(args.configs.split(","))}
+    json.dump(
+        {"host": socket.gethostname(), "scope": scope, "expected_chunks": len(out) + skipped_remote, "chunks": out},
+        open(args.out, "w"),
+    )
     print(
         f"{socket.gethostname()}: {len(out)} chunk(s) hashed, {skipped_remote} on other hosts, "
         f"{time.monotonic() - t0:.1f} s -> {args.out}"
     )
+    for name, n in unchecked.items():
+        print(f"  config {name}: --positions {args.positions} ends inside a chunk; last {n} position(s) NOT checked")
 
 
 def compare(args) -> int:
     def load(pattern):
-        merged, origin = {}, {}
+        """One side's merged chunks, and how many its table names for the digested scope."""
+        merged, origin, stated = {}, {}, None
         for f in sorted(glob.glob(pattern)):
-            for key, digest in json.load(open(f))["chunks"].items():
+            doc = json.load(open(f))
+            if "expected_chunks" not in doc or "scope" not in doc:
+                raise SystemExit(f"{f}: no expected_chunks/scope; take the digest again with this version")
+            this = (doc["scope"], int(doc["expected_chunks"]))
+            if stated is not None and this != stated[0]:
+                raise SystemExit(f"{stated[1]} and {f} differ in scope or table: {stated[0]} vs {this}")
+            stated = stated or (this, f)
+            for key, digest in doc["chunks"].items():
                 if key in merged and merged[key] != digest:
                     raise SystemExit(f"{key}: {origin[key]} and {f} hashed different bytes for the same chunk")
                 merged[key], origin[key] = digest, f
-        return merged
+        return merged, (stated[0][1] if stated else 0)
 
-    src, dst = load(args.src), load(args.dst)
+    (src, src_expected), (dst, dst_expected) = load(args.src), load(args.dst)
     both = sorted(set(src) & set(dst))
     bad = [k for k in both if src[k] != dst[k]]
     per_cfg = {}
@@ -104,10 +126,19 @@ def compare(args) -> int:
     only = sorted(set(src) ^ set(dst))
     if only:
         print(f"  {len(only)} key(s) on one side only, e.g. {only[:5]}")
+    short = [
+        (side, len(got), want)
+        for side, got, want in (("src", src, src_expected), ("dst", dst, dst_expected))
+        if len(got) != want
+    ]
+    for side, got, want in short:
+        print(f"  {side}: {got} chunk(s) hashed but its table names {want}; a host's digest is missing")
+    if src_expected != dst_expected:
+        print(f"  the two tables name different chunk counts: src {src_expected}, dst {dst_expected}")
     if bad:
         layers = sorted({int(k.split("/")[1]) for k in bad})
         print(f"  mismatched layers: {layers[:30]}; first: {bad[:5]}")
-    return 1 if bad or only or not both else 0
+    return 1 if bad or only or short or src_expected != dst_expected or not both else 0
 
 
 def main() -> int:
