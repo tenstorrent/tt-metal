@@ -23,6 +23,4 @@
   skus:
     wh_n150_civ2:
       timeout: 25
-    bh_p150b_civ2:
-      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
