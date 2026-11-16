@@ -1802,11 +1802,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         The base ``HybridAttentionForCausalLM.get_kv_cache_spec`` assumes
         all layers share one ``head_size`` / ``num_kv_heads`` (only the
         sliding-vs-full *spec class* changes). That's true for Gemma3 but
-        not Gemma4: sliding layers use ``head_dim`` (256 on E2B/E4B),
-        full layers use ``global_head_dim`` (512). Sliding and full also
-        each have their own ``num_key_value_heads`` (with the full count
-        falling back to the sliding count when ``num_global_key_value_heads``
-        is unset). Emitting one uniform spec made the K tensor produced
+        not Gemma4: sliding layers use head dim 256, full layers 512, and
+        the two types have their own KV head counts (``layer_type_attention``
+        reads them; the full count falls back to the sliding count when the
+        config does not set it). Emitting one uniform spec made the K tensor produced
         by full-attention layers mismatch the cache shape and trip
         ``Last dim of input tensor must match last dim of cache tensor``
         in ``paged_update_cache``.

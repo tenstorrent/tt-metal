@@ -141,10 +141,10 @@ class Gemma4VllmLayout:
         """Build the layout for a Gemma4 (or Gemma4-like) HF config.
 
         Args:
-            hf_config: HF config with ``layer_types``, ``num_key_value_heads``,
-                ``head_dim``, and the Gemma4-specific ``num_global_key_value_heads``
-                / ``global_head_dim`` (falls back to the sliding values when
-                unset, matching :class:`Gemma4ForCausalLM.get_kv_cache_spec`).
+            hf_config: HF text config with ``layer_types``. KV heads and head
+                dim per layer type come from ``layer_type_attention``
+                (full attention falls back to the sliding values when unset,
+                matching :class:`Gemma4ForCausalLM.get_kv_cache_spec`).
             num_blocks: blocks per physical buffer (= vLLM's per-tensor
                 ``num_blocks`` after memory budget partitioning).
             max_model_len: drives ``max_num_blocks_per_req`` exactly like

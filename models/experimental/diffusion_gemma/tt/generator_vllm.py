@@ -622,8 +622,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         """Per-layer KV spec (copied from the gemma4 bridge geometry).
 
         DiffusionGemma's text backbone == Gemma-4 26B-A4B: sliding layers use
-        ``head_dim`` (256) / ``num_key_value_heads``; full-attention layers use
-        ``global_head_dim`` (512) / ``num_global_key_value_heads``. Every layer emits
+        head dim 256, full-attention layers 512, each with its own KV head
+        count, all read through ``layer_type_attention``. Every layer emits
         a ``FullAttentionSpec`` (uniform type) so vLLM merges them into ONE KV-cache
         group backed by the whole block pool — hybrid groups are disabled
         (``_HYBRID_KV_CACHE_GROUPS_ENABLED = False``) and the diffusion forward uses
