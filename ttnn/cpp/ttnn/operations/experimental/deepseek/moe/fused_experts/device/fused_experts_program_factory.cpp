@@ -9,7 +9,9 @@
 #include <array>
 #include <bit>
 #include <numeric>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -1035,13 +1037,17 @@ ProgramDescriptor build_program_descriptor(
     constexpr uint32_t sem_expert_go_id = 14;
     // And the reduce stage's (the senders') ready count, also on the control core.
     constexpr uint32_t sem_reduce_ready_id = 15;
+    // On the route merge, one bump per row the control core routes (its merge ring entry written).
+    constexpr uint32_t sem_merge_go_id = 15;
     if (persistent != nullptr) {
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = sem_expert_go_id,
-            .core_type = CoreType::WORKER,
-            .core_ranges = route_merge_set,
-            .initial_value = 0,
-        });
+        for (uint32_t id : {sem_expert_go_id, sem_merge_go_id}) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id,
+                .core_type = CoreType::WORKER,
+                .core_ranges = route_merge_set,
+                .initial_value = 0,
+            });
+        }
     }
 
     // CBs are allocated identically on all cores so the broadcast CBs land at the same
@@ -1628,6 +1634,7 @@ ProgramDescriptor build_program_descriptor(
     if (persistent != nullptr) {
         sender_desc.defines.emplace_back("FE_ROUTE_STAGE", "1");
         sender_desc.defines.emplace_back("FE_SEM_EXPERT_GO", std::to_string(sem_expert_go_id));
+        sender_desc.defines.emplace_back("FE_SEM_MERGE_GO", std::to_string(sem_merge_go_id));
     }
     // Pass the routing buffers as BufferBindings (not raw addresses) so the framework
     // patches the addresses on program-cache hits instead of rebuilding the descriptor.
@@ -2131,19 +2138,29 @@ ProgramDescriptor build_program_descriptor(
     make_writer(writer_noc0_cores, DataMovementProcessor::RISCV_0, NOC::NOC_0);
 
     // ---- In-op router on the router cores: bias reader + top-k (NoC 0) and the gate compute. ----
-    // The persistent op's candidate slots (two halves of one slot per chip), in the reduce scratch past a sender's
-    // staging and source ring, at the same address on every core: the route merge's, the reducer's own copy, and
-    // the exchange sender's (router_reduce.cpp, fe_reduce_sender.cpp).
+    // The persistent op's candidate slots (one slot per chip for each requester, whose one row in flight they hold),
+    // in the reduce scratch past a sender's staging and source ring, at the same address on every core: the route
+    // merge's, the reducer's own copy, and the exchange sender's (router_reduce.cpp, fe_reduce_sender.cpp). Then the
+    // route merge's ring of the routed rows' headers (persistent.h kFeMergeRingBytes).
+    const uint32_t cand_sets =
+        persistent != nullptr
+            ? static_cast<uint32_t>(operation_attributes.persistent->input_socket_config_addresses.size())
+            : 0u;
+    constexpr uint32_t kMergeRingBytes = 16u * 64u;
     auto cand_slots_addr = [&]() -> uint32_t {
         const uint32_t ar_core_bytes =
             (operation_attributes.output_memory_config.shard_spec()->shape[1] / TILE_DIM) * out_tile_bytes;
         const uint32_t offset = tt::align(2u * ar_cores_per_link * ar_core_bytes + kFeSourceRingBytes, 64u);
+        const uint32_t end = offset + cand_sets * num_router_cores * router_cand_slot_bytes + kMergeRingBytes;
         TT_FATAL(
-            offset + 2u * num_router_cores * router_cand_slot_bytes <= all_reduce->scratch->aligned_size_per_bank(),
-            "fused_experts: the sharded router's candidate slots end at {} B, past the {} B scratch",
-            offset + 2u * num_router_cores * router_cand_slot_bytes,
+            end <= all_reduce->scratch->aligned_size_per_bank(),
+            "fused_experts: the sharded router's candidate slots and merge ring end at {} B, past the {} B scratch",
+            end,
             all_reduce->scratch->aligned_size_per_bank());
         return static_cast<uint32_t>(all_reduce->scratch->address()) + offset;
+    };
+    auto merge_ring_addr = [&]() -> uint32_t {
+        return cand_slots_addr() + cand_sets * num_router_cores * router_cand_slot_bytes;
     };
     if (sharded_router) {
         TT_FATAL(fuse_ar && !ar_senders.empty(), "fused_experts: the sharded router exchanges through link 0's sender");
@@ -2264,6 +2281,8 @@ ProgramDescriptor build_program_descriptor(
                 kernel.core_ranges.contains(CoreRangeSet(CoreRange(route_merge, route_merge)))) {
                 kernel.defines.emplace_back("FE_ROUTER_SHARDED", "1");
                 kernel.defines.emplace_back("FE_CAND_ADDR", std::to_string(cand_slots_addr()) + "u");
+                kernel.defines.emplace_back("FE_NUM_REQUESTERS", std::to_string(cand_sets) + "u");
+                kernel.defines.emplace_back("FE_MERGE_RING_ADDR", std::to_string(merge_ring_addr()) + "u");
             }
         }
     } else if (run_router) {
@@ -2671,13 +2690,21 @@ ProgramDescriptor build_program_descriptor(
                 route_rect[2],
                 route_rect[3],
                 route_rect[4] + 1u,
-                // The router stage's ready reports: every router core's, and the route merge's.
-                sharded_router ? kRouterParts + 2u : num_router_cores + 1u,
+                // The router stage's ready reports: the partial cores' and the reducer's (the route merge reports
+                // none: it runs on its own count, see fe_ctrl.cpp).
+                kRouterParts + 1u,
                 sem_route_ready_id,
                 static_cast<uint32_t>(route_merge_noc.x),
                 static_cast<uint32_t>(route_merge_noc.y),
                 sem_expert_go_id,
                 sem_reduce_ready_id,
+                merge_ring_addr(),
+                sem_merge_go_id,
+                // TT_FE_FIXED_ORDER=1: every chip takes the requesters in strict turn (with on-demand ones), as the
+                // op did before taking them in any order; for A/B checks.
+                std::getenv("TT_FE_FIXED_ORDER") != nullptr && std::string_view{std::getenv("TT_FE_FIXED_ORDER")} == "1"
+                    ? 0u
+                    : 1u,
             };
             TensorAccessorArgs(*layer_table_buffer).append_to(ctrl_ct_args);
             KernelDescriptor ctrl_desc;
@@ -2748,8 +2775,19 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
     const auto& persistent = operation_attributes.persistent;
     const auto& shard = output.shard_spec().value();
     const uint32_t halves = persistent.has_value() ? 2u : 1u;
-    const uint32_t scratch_slots =
+    uint32_t scratch_slots =
         halves * std::max(ar.ring_size, tt::div_up(static_cast<uint32_t>(shard.grid.num_cores()), ar.num_links));
+    if (persistent.has_value()) {
+        // Past the staging, the sharded router's candidate slots -- one per chip for each requester -- and the route
+        // merge's ring (see cand_slots_addr): whole slots more for them, and one for the source ring and alignment.
+        const uint32_t slot_bytes = static_cast<uint32_t>(shard.shape[0] * shard.shape[1] * output.element_size());
+        const uint32_t cand_slot_bytes =
+            tt::align(fused_experts_input_rows(input) * operation_attributes.top_k * 12u, 64u);
+        const uint32_t cand_bytes = static_cast<uint32_t>(persistent->input_socket_config_addresses.size()) *
+                                        persistent->num_chips * cand_slot_bytes +
+                                    16u * 64u;
+        scratch_slots += tt::div_up(cand_bytes, slot_bytes) + 1u;
+    }
     auto scratch_shape = output.logical_shape();
     scratch_shape[-2] *= scratch_slots;
     const ShardSpec scratch_shard{shard.grid, {shard.shape[0] * scratch_slots, shard.shape[1]}, shard.orientation};

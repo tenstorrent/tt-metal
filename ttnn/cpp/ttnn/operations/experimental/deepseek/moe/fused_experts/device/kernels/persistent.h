@@ -11,11 +11,12 @@
 // The persistent op (FE_PERSISTENT): every kernel loops, one iteration per token row the requesters'
 // input sockets bring.
 //
-// The control core (fe_ctrl.cpp) takes a page off the next requester's input D2D socket -- a header whose first
+// The control core (fe_ctrl.cpp) takes a page off any requester's input D2D socket -- a header whose first
 // word is the layer id, then the hidden row -- and runs three stages, each with its own go and its own
-// ready count, so up to three rows are in flight:
-//   1. the router row (router scores, top-k, the expert-id merge), counted on the control core's
-//      sem_route_ready: the merge core holds the ids until the grid's go (FE_SEM_EXPERT_GO);
+// ready count, so up to three rows are in flight (the router stage up to one row per requester ahead):
+//   1. the router row (router scores, this chip's top-k), counted on the control core's sem_route_ready, and the
+//      expert-id merge of every chip's candidates, on its own count (FE_SEM_MERGE_GO, a ring of the routed rows'
+//      headers): the merge core holds the ids until the grid's go (FE_SEM_EXPERT_GO);
 //   2. the worker grid (gate/up, down, the within-chip reduce), counted on the control core's
 //      sem_ready;
 //   3. the reduce senders (the cross-chip reduce), a row behind the grid, counted on sem_reduce_ready;
@@ -26,6 +27,11 @@
 // workload tensor -- the TRISCs cannot address program semaphores, and a RISC that clears only its own
 // go word at stop leaves no stale go behind for the next launch. The reduce senders take the grid's go
 // on program semaphore FE_SEM_GO.
+//
+// The chips need not take the requesters' rows in the same order: a chip's only input from the others is their
+// router candidates, kept per requester (each requester has one request in flight), and its router stage never
+// waits on them -- only the merge does, which the grid follows in this chip's own order. Every chip routes every
+// row a requester sends, so every merge completes.
 //
 // Because a stage's go of iteration i + 1 needs that stage done with iteration i, every CB is empty at
 // the top of an iteration, so each RISC rewinds its CB pointers there (fe_rewind_cbs) and every
@@ -58,6 +64,8 @@ constexpr uint32_t kFeHdrRouterBias = 4;
 // The layer's routed picks per row when fewer than the op's top_k (0: top_k): the DSpark drafter's layers on the
 // target's server take 3 of their (padded) experts per row.
 constexpr uint32_t kFeHdrTopK = 5;
+// The row's requester, in the router row's header (the reducer's candidate slot) and the merge ring's.
+constexpr uint32_t kFeHdrRequester = 6;
 // Bit k set when requester k is served on demand rather than in turn (the same in every row; the control core reads
 // row 0's): see fe_ctrl.cpp.
 constexpr uint32_t kFeHdrOnDemand = 7;
@@ -77,6 +85,11 @@ constexpr uint32_t kFeGoWords = 5;
 // Then, on the control core, each iteration's requester, for the root's output kernel. The control core
 // runs at most a few iterations ahead of it.
 constexpr uint32_t kFeSourceRing = 16;
+// The merge ring: the headers of the rows the router stage takes, in order, kFeSourceRing deep (the router stage
+// runs at most one row per requester ahead of the grid, whose go waits on the merge before it).
+constexpr uint32_t kFeMergeRingBytes = kFeSourceRing * kFeHdrWords * 4u;
+// A merge ring entry's layer word for the stop.
+constexpr uint32_t kFeStopLayerWord = 0xFFFFFFFFu;
 
 #if defined(FE_PERSISTENT)
 

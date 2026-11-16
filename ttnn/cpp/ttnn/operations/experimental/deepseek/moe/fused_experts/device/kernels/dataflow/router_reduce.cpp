@@ -15,10 +15,12 @@
 //   3. takes its bf16 [score, ranking] tiles from cb_rout and keeps the top_k of its 32 experts by ranking, best
 //      first and of equal rankings the lower id first, as (order key, global expert id, fp32 score) triplets --
 //      the candidates router_topk.cpp makes for one tile column;
-//   4. writes them into this chip's slot of the iteration's half of the candidate slots, at the same address on
-//      the route merge core (whose sem_router it bumps) and on the exchange sender, which forwards them to every
-//      other chip's route merge (fe_reduce_sender.cpp). The sender's half is reused two iterations on, so before
-//      writing iteration i there it waits until the sender has forwarded iteration i - 2.
+//   4. writes them into this chip's slot of the row's requester's candidate slots (the header's kFeHdrRequester:
+//      one set per requester, each with one row in flight), at the same address on the route merge core (whose
+//      sem_router it bumps) and on the exchange sender, which forwards them to every other chip's route merge
+//      (fe_reduce_sender.cpp). A requester's slot is written again only for its next row, which it sends once every
+//      chip's partials of this one are back -- after every chip has merged these candidates, so after the sender
+//      has forwarded them.
 //
 // Compile-time args:
 //   0: cb_parts   1: num_parts   2: cb_rbias   3: cb_rout   4: top_k   5: my_chip   6: cand_slot_bytes
@@ -128,7 +130,11 @@ void kernel_main() {
             break;
         }
         const uint32_t words_l1 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_ADDR));
-        topk_rows(words_l1, cand_addr + ((it & 1u) * num_slots + my_chip) * cand_slot_bytes, rows / 2u, rows);
+        topk_rows(
+            words_l1,
+            cand_addr + (fe_header(kFeHdrRequester) * num_slots + my_chip) * cand_slot_bytes,
+            rows / 2u,
+            rows);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_TOPK_SEM_DONE)) = it + 1u;
     }
     return;
@@ -175,7 +181,8 @@ void kernel_main() {
         // 3. A 1x32 tile is its 32 values in column order: expert i's score is half-word i, its ranking 32 + i;
         // row r of a taller tile is face row r of both faces.
         cb_wait_front(cb_rout_id, 2);
-        const uint32_t slot_l1 = cand_addr + ((iter & 1u) * num_slots + my_chip) * cand_slot_bytes;
+        invalidate_l1_cache();
+        const uint32_t slot_l1 = cand_addr + (fe_header(kFeHdrRequester) * num_slots + my_chip) * cand_slot_bytes;
         {
             DeviceZoneScopedN("FE_R_TOPK");
             // Both tiles' rows, two bf16 per word: score (tile 0) and ranking (tile 1) of expert i of row r at face
@@ -202,10 +209,6 @@ void kernel_main() {
         noc_async_write(slot_l1, get_noc_addr(merge_x, merge_y, slot_l1), cand_slot_bytes);
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(merge_x, merge_y, get_semaphore(sem_router_id)), 1);
-        if (iter >= 2u) {
-            DeviceZoneScopedN("FE_R_FWD_WAIT");
-            noc_semaphore_wait_min(forwarded, iter - 1u);
-        }
         noc_async_write(slot_l1, get_noc_addr(sender_x, sender_y, slot_l1), cand_slot_bytes);
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(sender_x, sender_y, sender_ready_addr), 1);
