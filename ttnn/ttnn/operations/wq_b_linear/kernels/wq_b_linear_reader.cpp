@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // W stream: this core's (tensor_k_tiles x core_n_tiles) slice into a whole-slice resident cb_w_stream.
-// Every K-block batch is issued up front under its own read trid; compute is released per K-block.
+// Up to w_reads_in_flight K-block batches are outstanding, each under its own read trid; compute is
+// released per K-block.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"

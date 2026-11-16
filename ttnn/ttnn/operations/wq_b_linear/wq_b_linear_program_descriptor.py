@@ -14,9 +14,13 @@ import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-K_BLOCK_TILES = 8
+K_BLOCK_TILES = 6
 MIN_CORES = 16
 MAX_READ_TRIDS = 15
+W_READS_IN_FLIGHT = 1
+# Flag + ready handshake issues linked multicasts (~1.6x the throughput of the unlinked writes the
+# Counter / no-handshake protocol needs on Blackhole); False selects Counter without handshake.
+X_MCAST_LINKED = True
 
 CB_X_RESIDENT = 0
 CB_W_STREAM = 1
@@ -51,6 +55,12 @@ def _subblock(block_m_tiles, core_n_tiles, dest_limit):
     return best
 
 
+def _x_mcast_config():
+    if X_MCAST_LINKED:
+        return ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True, data_ready=ttnn.McastDataReady.Flag)
+    return ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False, data_ready=ttnn.McastDataReady.Counter)
+
+
 def _copy_compute_config(cfg):
     return ttnn.ComputeConfigDescriptor(
         math_fidelity=cfg.math_fidelity,
@@ -73,7 +83,7 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
     num_k_blocks = tensor_k_tiles // k_block_tiles
     x_cb_k_blocks = num_k_blocks
     w_cb_k_blocks = num_k_blocks
-    w_reads_in_flight = min(num_k_blocks, MAX_READ_TRIDS)
+    w_reads_in_flight = min(num_k_blocks, W_READS_IN_FLIGHT, MAX_READ_TRIDS)
 
     grid = device.compute_with_storage_grid_size()
     grid_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
@@ -190,7 +200,7 @@ def create_program_descriptor(x_tensor, w_tensor, y_tensor, compute_cfg):
 
     x_mcast = ttnn.Mcast(
         device,
-        ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False, data_ready=ttnn.McastDataReady.Counter),
+        _x_mcast_config(),
         grid_cores,
         num_grid_cores,
         ttnn.McastRotatingSenderConfig(injector_cores, sender_order=ttnn.McastCoreOrder.RowMajor),

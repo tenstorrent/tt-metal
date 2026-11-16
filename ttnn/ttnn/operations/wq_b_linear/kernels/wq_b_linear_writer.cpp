@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // x broadcast + y store. Every grid core walks the num_k_blocks multicast rounds in order: the round's
-// injector (rotating sender) multicasts its prefetched slot in place, every other core waits on the
-// monotone Counter. No ready handshake: each round lands in its own write-once slot of cb_x_resident.
-// Then the core writes its (block_m_tiles x core_n_tiles) y block to L1-interleaved y.
+// injector (rotating sender) multicasts its prefetched slot in place, every other core receives it.
+// Each round lands in its own write-once slot of cb_x_resident. Then the core writes its
+// (block_m_tiles x core_n_tiles) y block to L1-interleaved y.
 
 #include <cstdint>
 #include <optional>
