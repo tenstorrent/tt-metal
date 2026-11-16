@@ -120,9 +120,16 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
             device=device,
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
         )
-        lead = torch.full((1, 1, rows, SAMPLE_K), _MASK_NEG)
-        lead[..., 0] = 0.0
-        consts = {"lead": lead, "zeros": torch.zeros(1, 1, rows, SAMPLE_K), "gate": torch.zeros(1, 1, 1, 1)}
+        # Each rank's weight row: its weight in column 0 behind no-candidate fill. Greedy also puts -rank * 2^-16 in
+        # column 0 (_lead), so of ranks whose top logits tie exactly the lowest rank, i.e. the lowest id, wins.
+        self.lead = ttnn.from_torch(
+            self._lead(greedy=True),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+        )
+        consts = {"zeros": torch.zeros(1, 1, rows, SAMPLE_K), "gate": torch.zeros(1, 1, 1, 1)}
         for name, value in consts.items():
             setattr(
                 self,
@@ -133,6 +140,16 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
             )
         self.inv_temp = ttnn.from_torch(
             torch.ones(1, 1, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=replicate
+        )
+        # Added to a rank's candidate values: greedy keeps only the first candidate, the lowest id of an exact top
+        # tie (the candidates come sorted, ties by lower id), since ttnn.sampling's sort does not keep the order of
+        # equal values. Zeros when sampling.
+        self.candidate_mask = ttnn.from_torch(
+            self._candidate_mask(greedy=True),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=replicate,
         )
         # ttnn.sampling's local sort consumes candidate tiles in pairs and hangs on a single one, so the rank's
         # top-SAMPLE_K row is widened by a tile of never-picked candidates.
@@ -157,6 +174,17 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
         self.p = ttnn.from_torch(torch.ones(rows), dtype=ttnn.bfloat16, device=device, mesh_mapper=replicate)
         self.one = ttnn.from_torch(torch.ones(rows), dtype=ttnn.bfloat16, device=device, mesh_mapper=replicate)
 
+    def _lead(self, greedy: bool) -> torch.Tensor:
+        lead = torch.full((self.tp_size, 1, self.rows, SAMPLE_K), _MASK_NEG)
+        lead[..., 0] = -torch.arange(self.tp_size).reshape(-1, 1, 1) * 2.0**-16 if greedy else 0.0
+        return lead
+
+    def _candidate_mask(self, greedy: bool) -> torch.Tensor:
+        mask = torch.zeros(1, 1, self.rows, 2 * SAMPLE_K)
+        if greedy:
+            mask[..., 1:] = _MASK_NEG
+        return mask
+
     def set_sampling(self, temperature: float, seed: int) -> None:
         """Sample at ``temperature`` (0, the initial state, is greedy) from PRNGs seeded with ``seed``.
 
@@ -167,6 +195,14 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
         host_to_device(torch.full((self.rows,), 1 if greedy else SAMPLE_K, dtype=torch.int32), self.k)
         host_to_device(torch.full((1, 1, 1, 1), 1.0 if greedy else 1.0 / temperature), self.inv_temp)
         host_to_device(torch.full((1, 1, 1, 1), 0.0 if greedy else 1.0), self.gate)
+        host_to_device(self._candidate_mask(greedy), self.candidate_mask)
+        lead = ttnn.from_torch(
+            self._lead(greedy),
+            dtype=self.lead.dtype,
+            layout=self.lead.layout,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+        )
+        ttnn.copy_host_to_device_tensor(lead, self.lead)
         ttnn.manual_seed(seed, device=self.device)
 
     def forward(self, logits: ttnn.Tensor) -> ttnn.Tensor:
@@ -181,19 +217,23 @@ class DeepSeekV41DeviceSampler(DeepSeekV4Module):
                 fill_value=_MASK_NEG,
                 num_workers=SAMPLE_WORKERS.get(rows, SAMPLE_WORKERS_ROWS),
             )
+            vals = ttnn.add(vals, self.candidate_mask)
             token = ttnn.sampling(vals, idx, k=self.k, p=self.p, temp=self.one)
         else:
             vals, idx = ttnn.topk(logits, SAMPLE_K, dim=-1, largest=True, sorted=True)
             idx = ttnn.add(ttnn.typecast(idx, ttnn.int32), self.offsets, dtype=ttnn.int32)
             idx = ttnn.to_layout(ttnn.concat([idx, self.fill_idx], dim=-1), ttnn.ROW_MAJOR_LAYOUT)
             vals = ttnn.multiply(vals, self.inv_temp)
-            token = ttnn.sampling(ttnn.concat([vals, self.fill_vals], dim=-1), idx, k=self.k, p=self.p, temp=self.one)
+            # ttnn.topk's order of equal values is its own: greedy picks its first, not necessarily the lowest id.
+            vals = ttnn.add(ttnn.concat([vals, self.fill_vals], dim=-1), self.candidate_mask)
+            token = ttnn.sampling(vals, idx, k=self.k, p=self.p, temp=self.one)
         if self.tp_size > 1:
             scaled = ttnn.typecast(vals, ttnn.float32)
             top = ttnn.max(scaled, dim=-1, keepdim=True)
             spread = ttnn.log(ttnn.sum(ttnn.exp(ttnn.subtract(scaled, top)), dim=-1, keepdim=True))
             weight = ttnn.add(top, ttnn.multiply(spread, self.gate))
-            # Each rank's row: its weight in column 0 behind no-candidate fill, and its token in every column.
+            # Each rank's row: its weight in column 0 behind no-candidate fill (and the greedy rank order), and its
+            # token in every column.
             weights = ttnn.add(self.lead, weight)
             if rows > 1:  # [1, 1, 1, R] -> one token per row
                 token = ttnn.reshape(token, [1, 1, rows, 1])

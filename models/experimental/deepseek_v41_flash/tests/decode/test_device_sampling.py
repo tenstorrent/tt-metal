@@ -126,6 +126,63 @@ def test_device_sampling_greedy(stage):
 
 @pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize("rows", [1, 4])
+def test_device_sampling_greedy_ties(stage, rows):
+    """Greedy at an exact bf16 tie of the top logits picks the lowest id, within a rank and across ranks, in every
+    row of a block; also after a temperature run switched back to greedy."""
+    generator = torch.Generator().manual_seed(2)
+
+    def block_logits():
+        logits = 4.0 * torch.randn(rows, VOCAB, generator=generator)
+        want = []
+        for j in range(rows):
+            n = 2 + int(torch.randint(3, (1,), generator=generator))
+            if j % 2:  # one rank
+                r = int(torch.randint(TP_SIZE, (1,), generator=generator))
+                tied = torch.randperm(LOCAL, generator=generator)[:n] + r * LOCAL
+            else:  # across ranks
+                tied = torch.randperm(VOCAB, generator=generator)[:n]
+            logits[j, tied] = float(logits[j].max()) + 1.0
+            want.append(int(tied.min()))
+        return logits, want
+
+    def upload(logits, dst):
+        host = ttnn.from_torch(
+            logits.reshape(1, 1, rows, VOCAB),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(dst.device(), dim=-1),
+        )
+        ttnn.copy_host_to_device_tensor(host, dst)
+
+    logits, _ = block_logits()
+    logits_dev = ttnn.from_torch(
+        logits.reshape(1, 1, rows, VOCAB),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=stage,
+        mesh_mapper=ttnn.ShardTensorToMesh(stage, dim=-1),
+    )
+    sampler = DeepSeekV41DeviceSampler(stage, LOCAL, PCIE_ALIGNMENT, rows=rows)
+    tid, out = _capture(stage, sampler, logits_dev)
+    try:
+        for trial in range(12):
+            if trial == 6:
+                sampler.set_sampling(1.0, seed=7)
+                ttnn.execute_trace(stage, tid, cq_id=0, blocking=True)
+                sampler.set_sampling(0.0, seed=7)
+            logits, want = block_logits()
+            upload(logits, logits_dev)
+            ttnn.execute_trace(stage, tid, cq_id=0, blocking=False)
+            got = [int(x) for x in ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1)[:rows]]
+            logger.info(f"greedy tie trial {trial}: device {got}, lowest tied ids {want}")
+            assert got == want
+    finally:
+        ttnn.release_trace(stage, tid)
+
+
+@pytest.mark.parametrize("device_params", _DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
 @pytest.mark.parametrize("temperature", [1.0, 0.7])
 def test_device_sampling_distribution(stage, temperature):
     logits = _support_logits(torch.Generator().manual_seed(1))
