@@ -39,7 +39,7 @@ inline void calculate_elu(uint slope) {
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[0] = result * 1.01f;
         sfpi::dst_reg++;
     }
 }
