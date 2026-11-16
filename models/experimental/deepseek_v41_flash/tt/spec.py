@@ -295,7 +295,7 @@ class DSparkSpeculator:
         if self._propose is not None:
             return list(self._propose(*self._drafting))[: self.drafts]
         host_accept = self.temperature > 0 and not self.device_accept
-        ids, _, logits = self.model.spec_read_draft(logits=host_accept and not self._logits_pending)
+        ids, _, logits = self.model.spec_read_draft(logits=host_accept and not self._logits_pending, conf=False)
         if logits is not None:
             self._proposal_logits = logits[: self.drafts]
         return ids[: self.drafts]
