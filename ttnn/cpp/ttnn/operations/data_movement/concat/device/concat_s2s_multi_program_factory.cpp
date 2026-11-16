@@ -99,7 +99,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     if (rm_layout) {
         std::vector<uint32_t> all_stick_sizes;
         all_stick_sizes.reserve(input_tensors.size() + 1);
-        all_stick_sizes.push_back(output.shard_spec().value().shape[1]);
+        all_stick_sizes.push_back(element_size * output.shard_spec().value().shape[1]);
         std::transform(
             input_tensors.begin(), input_tensors.end(), std::back_inserter(all_stick_sizes), [](const Tensor& tensor) {
                 return tensor.element_size() * tensor.shard_spec().value().shape[1];

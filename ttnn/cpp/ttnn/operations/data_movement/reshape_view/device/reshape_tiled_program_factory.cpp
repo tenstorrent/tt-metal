@@ -228,9 +228,6 @@ Tensor compute_reshape_mapping_host_tensor(
             return a.size() < b.size();
         })->size();
 
-    // Ensure that map data is always aligned
-    max_input_segments += max_input_segments % (tt::tt_metal::hal::get_l1_alignment());
-
     // initialize to 0 because that will be checked by the kernel as a stopping condition
     std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
     auto it = flat_mapping_vector.begin();
