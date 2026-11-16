@@ -41,9 +41,8 @@ namespace {
 // standard deviation, so squaring d as it is loses both ends of the range.
 //
 // The scale s is a power of two within a factor of two of max|d|, read from the exponent bits of
-// max|d|, so d / s is exact whenever the reciprocal of s is. A constant plane has no deviation and
-// gets s = 1. Valid while max|d| is below about 8.5e37: Blackhole's reciprocal returns 0 for inputs
-// at or above 2^126. The max is over the last two dimensions, whatever the rank, and ttnn::max fills
+// max|d|. 1 / s is formed from the same bits, so d / s is exact. A constant plane has no deviation
+// and gets s = 1. The max is over the last two dimensions, whatever the rank, and ttnn::max fills
 // the tile padding with -inf first, so only logical elements set the scale.
 //
 // The scale is FLOAT32 for a FLOAT32 input and bfloat16 for any other. A bfloat8_b tile shares one
@@ -51,44 +50,56 @@ namespace {
 // the one real value can flush it to 0: the where below writes 1.0 there, which turns a bfloat8_b
 // max below about 2^-7 into 0. So the max goes to bfloat16 before the where, and the scale stays
 // bfloat16.
-Tensor _deviation_scale(const Tensor& abs_deviation, const std::optional<MemoryConfig>& output_mem_config) {
+//
+// Returns the bits of s: UINT32 for FLOAT32 and UINT16 for bfloat16.
+Tensor _deviation_scale_bits(const Tensor& abs_deviation, const std::optional<MemoryConfig>& output_mem_config) {
     ttsl::SmallVector<int> dims = {-2, -1};
     Tensor m = ttnn::max(abs_deviation, dims, true, output_mem_config);
     if (m.dtype() != DataType::FLOAT32 && m.dtype() != DataType::BFLOAT16) {
         m = ttnn::typecast(m, DataType::BFLOAT16, output_mem_config);
     }
     m = ttnn::where(m, m, 1.0f, output_mem_config);
-    if (m.dtype() == DataType::FLOAT32) {
-        constexpr int32_t float32_exponent_bits = 0x7F800000;
-        Tensor exponent = ttnn::bitwise_and(
-            ttnn::bitcast(m, DataType::UINT32, output_mem_config), float32_exponent_bits, output_mem_config);
-        return ttnn::bitcast(exponent, DataType::FLOAT32, output_mem_config);
-    }
-    constexpr int32_t bfloat16_exponent_bits = 0x7F80;
-    Tensor exponent = ttnn::bitwise_and(
-        ttnn::bitcast(m, DataType::UINT16, output_mem_config), bfloat16_exponent_bits, output_mem_config);
-    return ttnn::bitcast(exponent, DataType::BFLOAT16, output_mem_config);
+    const bool float32 = m.dtype() == DataType::FLOAT32;
+    const int32_t exponent_bits = float32 ? 0x7F800000 : 0x7F80;
+    return ttnn::bitwise_and(
+        ttnn::bitcast(m, float32 ? DataType::UINT32 : DataType::UINT16, output_mem_config),
+        exponent_bits,
+        output_mem_config);
 }
 
-// mean((d / scale)^2) over H x W, every d / scale in (-2, 2). The reciprocal of the scale and the
-// square ride on the multiply.
+DataType _float_dtype_of_bits(const Tensor& bits) {
+    return bits.dtype() == DataType::UINT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
+}
+
+// s from the bits that _deviation_scale_bits returns.
+Tensor _scale_from_bits(const Tensor& scale_bits, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::bitcast(scale_bits, _float_dtype_of_bits(scale_bits), output_mem_config);
+}
+
+// 1 / s from the bits of s, exactly. For s = 2^k the biased exponent of 2^-k is 254 minus that of
+// 2^k, so bits(1 / s) = 0x7F000000 - bits(s) in FLOAT32 and 0x7F00 - bits(s) in bfloat16. That
+// holds while 2^-k is a normal float, so for max|d| below 2^127, about 1.7e38. The reciprocal op
+// is not exact there: in ttsim's Blackhole model its FLOAT32 result for 2^k is 2^-k * (1 - 2^-8)
+// for k = 119 to 125, and 0 from k = 126.
+Tensor _reciprocal_from_bits(const Tensor& scale_bits, const std::optional<MemoryConfig>& output_mem_config) {
+    const uint32_t reciprocal_bits = scale_bits.dtype() == DataType::UINT32 ? 0x7F000000u : 0x7F00u;
+    return ttnn::bitcast(
+        ttnn::subtract(reciprocal_bits, scale_bits, std::nullopt, output_mem_config),
+        _float_dtype_of_bits(scale_bits),
+        output_mem_config);
+}
+
+// mean((d / scale)^2) over H x W, every d / scale in (-2, 2). The square rides on the multiply by
+// 1 / scale.
 Tensor _mean_of_squares(
     const Tensor& y,
     const Tensor& deviation,
-    const Tensor& deviation_scale,
+    const Tensor& reciprocal_of_scale,
     const std::optional<MemoryConfig>& output_mem_config) {
     const std::array square_of_scaled = {
         operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::SQUARE}};
-    const std::array recip_of_scale = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RECIP}};
-    Tensor sqr_x = ttnn::multiply(
-        deviation,
-        deviation_scale,
-        std::nullopt,
-        output_mem_config,
-        std::nullopt,
-        square_of_scaled,
-        {},
-        recip_of_scale);
+    Tensor sqr_x =
+        ttnn::multiply(deviation, reciprocal_of_scale, std::nullopt, output_mem_config, std::nullopt, square_of_scaled);
     ttsl::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
     const auto& logical_shape = y.logical_shape();
@@ -181,15 +192,15 @@ Tensor _mean_fp32(const Tensor& x, const std::optional<MemoryConfig>& memory_con
 struct ScaledMeanSquaredDeviation {
     // mean((d / scale)^2) with d = y - mean(y). Below 4, since every |d| / scale is below 2.
     Tensor mean_square;
-    // _deviation_scale of |d|: a power of two within a factor of two of max|d|.
+    // The scale of |d| from _deviation_scale_bits: a power of two within a factor of two of max|d|.
     Tensor scale;
 };
 
-// mean((y - mean(y))^2) over H and W, factored so that d^2 is never formed; see _deviation_scale. Both means divide by
-// the logical H * W and leave out the tile padding. ttnn::bcast would round FP32 deviations to bfloat16 precision;
-// ttnn::subtract keeps them. FP32 inputs subtract on the SFPU anyway; for bfloat16 the SFPU is requested, because the
-// FPU would truncate the FP32 mean to TF32. The subtraction stores |d|, which is all the scale and the square need. The
-// reciprocal of the scale and the square ride on a multiply that overwrites |d| in place, so on tile-aligned planes
+// mean((y - mean(y))^2) over H and W, factored so that d^2 is never formed; see _deviation_scale_bits. Both means
+// divide by the logical H * W and leave out the tile padding. ttnn::bcast would round FP32 deviations to bfloat16
+// precision; ttnn::subtract keeps them. FP32 inputs subtract on the SFPU anyway; for bfloat16 the SFPU is requested,
+// because the FPU would truncate the FP32 mean to TF32. The subtraction stores |d|, which is all the scale and the
+// square need. The square rides on a multiply by 1 / scale that overwrites |d| in place, so on tile-aligned planes
 // only one input-sized tensor is live beside y: with y sharded at 512 KiB a core, a second one would not fit in L1.
 // Every tensor here stays where y is; var_hw and std_hw put only their result in output_mem_config.
 ScaledMeanSquaredDeviation _mean_squared_deviation_hw(const Tensor& y) {
@@ -201,12 +212,12 @@ ScaledMeanSquaredDeviation _mean_squared_deviation_hw(const Tensor& y) {
         y.dtype() == DataType::BFLOAT16 ? std::optional<bool>(false) : std::nullopt;
     Tensor abs_deviation = ttnn::subtract(
         y, mean_y, std::nullopt, std::nullopt, std::nullopt, abs_of_difference, {}, {}, fast_and_approximate_mode);
-    Tensor scale = _deviation_scale(abs_deviation, std::nullopt);
+    const Tensor scale_bits = _deviation_scale_bits(abs_deviation, std::nullopt);
     const std::array square_of_scaled = {
         operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::SQUARE}};
-    const std::array recip_of_scale = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RECIP}};
-    Tensor scaled_square = ttnn::multiply_(abs_deviation, scale, square_of_scaled, {}, recip_of_scale);
-    return {ttnn::mean(scaled_square, dims, true), scale};
+    Tensor scaled_square =
+        ttnn::multiply_(abs_deviation, _reciprocal_from_bits(scale_bits, std::nullopt), square_of_scaled);
+    return {ttnn::mean(scaled_square, dims, true), _scale_from_bits(scale_bits, std::nullopt)};
 }
 
 std::vector<Tensor> split_tensor_for_glu(
@@ -297,20 +308,21 @@ Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_m
     Tensor y_minus_mean_y = ttnn::subtract(y, mean_y);
     // The rms is taken on d / scale, so only mean((d / scale)^2), which is at most 4, is formed. The
     // per-plane factor 1 / std = rsqrt(mean((d / scale)^2)) / scale is finite while std is above
-    // 2^-128. The reciprocal of the scale and the rsqrt ride on the multiply that forms it. The scale
-    // goes first, so for a bfloat8_b input that factor is bfloat16, like the scale.
-    Tensor scale = detail::_deviation_scale(ttnn::abs(y_minus_mean_y, output_mem_config), output_mem_config);
-    Tensor scaled_var = detail::_mean_of_squares(y, y_minus_mean_y, scale, output_mem_config);
+    // 2^-128. Only 1 / scale is needed. The rsqrt rides on the multiply by 1 / scale that forms the
+    // factor, and 1 / scale goes first, so for a bfloat8_b input that factor is bfloat16, like 1 / scale.
+    const Tensor scale_bits =
+        detail::_deviation_scale_bits(ttnn::abs(y_minus_mean_y, output_mem_config), output_mem_config);
+    const Tensor reciprocal_of_scale = detail::_reciprocal_from_bits(scale_bits, output_mem_config);
+    Tensor scaled_var = detail::_mean_of_squares(y, y_minus_mean_y, reciprocal_of_scale, output_mem_config);
     // The rsqrt writes its result in scaled_var's format before the multiply reads it, and makes inf of the zero tile
     // padding. In bfloat8_b that inf would flush the real value beside it to 0, so the rsqrt reads a bfloat16 copy.
     if (scaled_var.dtype() != DataType::FLOAT32 && scaled_var.dtype() != DataType::BFLOAT16) {
         scaled_var = ttnn::typecast(scaled_var, DataType::BFLOAT16, output_mem_config);
     }
-    const std::array recip_of_scale = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RECIP}};
     const std::array rsqrt_of_scaled_var = {
         operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSQRT}};
     Tensor inv_std = ttnn::multiply(
-        scale, scaled_var, std::nullopt, output_mem_config, std::nullopt, {}, recip_of_scale, rsqrt_of_scaled_var);
+        reciprocal_of_scale, scaled_var, std::nullopt, output_mem_config, std::nullopt, {}, {}, rsqrt_of_scaled_var);
     return ttnn::multiply(y_minus_mean_y, inv_std, std::nullopt, output_mem_config);
 }
 
