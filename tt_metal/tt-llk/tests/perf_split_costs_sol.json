@@ -38,6 +38,7 @@
   "perf_eltwise_binary": 1542.2,
   "perf_eltwise_binary_broadcast": 2867.5,
   "perf_eltwise_binary_sfpu": 820.6,
+  "perf_eltwise_mul_scalar_block": 27.3,
   "perf_eltwise_unary_datacopy": 804.0,
   "perf_eltwise_unary_sfpu": 1126.5,
   "perf_eltwise_unary_typecast": 4.1,
