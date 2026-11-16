@@ -707,9 +707,13 @@ class _ExpertParallelExperts(OptimizedExperts):
             )
 
         fused = state_dict["experts.gate_up_proj"]
+        gate, up = fused[:, :width, :], fused[:, width:, :]
+        # WS1: pack [up | gate] (GegluDecode's order) so batched decode needs no slices; prefill slices to match.
+        up_first = rows_dtypes is not None
+        first, second = (up, gate) if up_first else (gate, up)
         weights = SimpleNamespace(
-            gate_proj=weight(fused[:, :width, :].transpose(-2, -1).unsqueeze(0)),
-            up_proj=weight(fused[:, width:, :].transpose(-2, -1).unsqueeze(0)),
+            gate_proj=weight(first.transpose(-2, -1).unsqueeze(0)),
+            up_proj=weight(second.transpose(-2, -1).unsqueeze(0)),
             down_proj=weight(state_dict["experts.down_proj"].transpose(-2, -1).unsqueeze(0)),
             intermediate_size_per_device=width,
         )
@@ -737,8 +741,19 @@ class _ExpertParallelExperts(OptimizedExperts):
             activation_dtype=None if sliding else ttnn.bfloat8_b,
         )
 
+        self.up_first = up_first
         # WS1: batched decode (2-32 users) reads these, in the decode precision policy (prefill keeps its own).
         self.rows_gate, self.rows_down = self.prefill_gate, self.prefill_down
+        # Router tables: this chip's first global expert (chip c owns experts [32c, 32c + 32)).
+        first_expert = torch.arange(4, dtype=torch.int32).mul(32).reshape(1, 4, 1, 1).repeat(1, 1, 1, 16)
+        self.topk_base = ttnn.from_torch(
+            first_expert,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
         if rows_dtypes is not None:
             gate_dtype, down_dtype = rows_dtypes
             if self.rows_gate.dtype != gate_dtype:
@@ -804,20 +819,31 @@ class _ExpertParallelExperts(OptimizedExperts):
             for rows in (1, *range(32, self.short_prefill_batch_tokens + 1, 32))
         }
 
-    def decode_rows(self, x, routing):
-        """Batched decode: one row tile of users over the union of their selected local experts."""
-        local = ttnn.gather(
-            ttnn.to_layout(routing, ttnn.ROW_MAJOR_LAYOUT),
-            dim=-1,
-            index=self.route_indices[32],
+    def decode_rows(self, x, w, sparsity):
+        """Batched decode (2-32 users on one row tile) over the union of their selected local experts:
+        gate_up ``sparse_matmul``, ``GegluDecode``, down ``sparse_matmul``, ``MoeCombine`` (4 programs).
+        ``w`` / ``sparsity`` are this chip's ``RouterTopk`` tables."""
+        from models.demos.gemma4.custom_ops.geglu_decode import GegluDecode
+        from models.demos.gemma4.custom_ops.moe_combine import MoeCombine
+
+        rows = x.shape[-2]
+        gate_config, down_config = self.prefill_configs[32]
+        common = dict(
+            sparsity=sparsity,
+            nnz=None,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([32, 32]),
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.prefill_compute,
         )
-        gate, down = self.prefill_gate, self.prefill_down
-        self.prefill_gate, self.prefill_down = self.rows_gate, self.rows_down
-        try:
-            return self._active_prefill(x, ttnn.to_layout(local, ttnn.TILE_LAYOUT))
-        finally:
-            self.prefill_gate, self.prefill_down = gate, down
+        gu = ttnn.sparse_matmul(x, self.rows_gate, program_config=gate_config, **common)
+        hidden = GegluDecode.op(ttnn.reshape(gu, (1, 32, rows, 2 * self.width)))
+        ttnn.deallocate(gu)
+        down = ttnn.sparse_matmul(hidden, self.rows_down, program_config=down_config, is_input_a_sparse=True, **common)
+        ttnn.deallocate(hidden)
+        out = MoeCombine.op(ttnn.reshape(down, (1, 32, rows, self.config.hidden_size)), w)
+        ttnn.deallocate(down)
+        return out
 
     def __call__(self, x, routing):
         if x.shape[-2] == 1:
@@ -860,6 +886,8 @@ class _ExpertParallelExperts(OptimizedExperts):
         gu = ttnn.sparse_matmul(x, self.gate_up, program_config=self.gate_config, **common)
         gu = ttnn.reshape(gu, (1, 32, 1, 2 * self.width))
         gate, up = gu[..., : self.width], gu[..., self.width :]
+        if getattr(self, "up_first", False):
+            gate, up = up, gate
         hidden = ttnn.mul(gate, up, input_tensor_a_activations=self.decode_gelu_activations)
         down = ttnn.sparse_matmul(hidden, self.down, program_config=self.down_config, is_input_a_sparse=True, **common)
         down = ttnn.reshape(down, (1, 32, 1, self.config.hidden_size))
@@ -1962,15 +1990,10 @@ class MultichipDecoder(OptimizedDecoder):
         attention = attention if attention.is_sharded() else shard(attention)
         residual = ttnn.add(x, norm(attention, "post_attention"), memory_config=cfg.memory)
         normalized = ttnn.sharded_to_interleaved(norm(residual, None), ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.float32)
-        routes = self.layer.moe.router(residual, normalized=normalized, decode_rows=True)
+        experts = self.layer.moe.experts.prefill
+        w, sparsity = self.layer.moe.router.decode_rows_tables(normalized, experts.topk_base, 32)
         expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
-        pad = (-rows) % 32
-        if pad:
-            expert_input = ttnn.pad(expert_input, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
-            routes = ttnn.pad(routes, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
-        routed = self.layer.moe.experts.prefill.decode_rows(expert_input, routes)
-        if pad:
-            routed = routed[:, :, :rows, :]
+        routed = experts.decode_rows(expert_input, w, sparsity)
         shared_mlp = self.layer.shared_mlp
         if getattr(shared_mlp, "input_gamma_folded", False):
             shared_input = ttnn.typecast(normalized, ttnn.bfloat16)  # gamma is in the decode weights
