@@ -476,3 +476,8 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
   55% a chip): with linked payloads the soak hung after about 600 launches (37 s; device timeout at 00:23:22), host
   MMIO reads to device 2 timed out (4 B load 224 ms against 2 ms), and the watcher cancelled the test step and
   killed the container; the node stayed up. The unlinked soak did not run (stopped at the MMIO timeout).
+- Unlinked tray soak (ws_lane_s2, same load; util tile 51.5% a chip against 55% linked): hung after about 170
+  launches (12 s; device timeout at 00:31:09), no MMIO timeout; harness triage, reset exit 0. check_noc_status: device
+  5, group 0's column-0 core (1,7) BRISC NOC0, every write sent but the 20 acks of its last multicast missing (the
+  linked hangs: writes issued but not sent). Unlinked multicasts do not remove the wedge; the hang is somewhere in the
+  group program's NOC0 traffic under fabric load, not in the multicast linking. No further runs.
