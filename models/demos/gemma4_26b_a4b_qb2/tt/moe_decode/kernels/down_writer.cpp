@@ -7,7 +7,7 @@
 // cb_sync page.
 // compile-time args: [cb_out, cb_w, cb_sync, cb_route, kts, k, cols, w_tile_bytes, route_page_bytes, banks]
 //                    + TensorAccessorArgs(out, route)
-// runtime args: [out_addr, col, w_addr, route_addr, bank, local column in the bank, cpb]
+// runtime args: [out_addr, col, w_addr, route_addr, bank, local column in the bank, cpb, flat_off (OUT_FLAT)]
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ckernel.h"
@@ -59,9 +59,14 @@ void kernel_main() {
 
     cb_wait_front(cb_out, 1);
     const uint32_t src = get_read_ptr(cb_out);
+#ifdef OUT_FLAT
+    // flat output (fused_decode/boundary.py partial buffer): the column's 32 values at byte flat_off + 64 col
+    noc_async_write(src, s_o.get_noc_addr(0) + get_arg_val<uint32_t>(7) + col * 2 * row_bytes, 2 * row_bytes);
+#else
     const uint64_t dst = s_o.get_noc_addr(col);
     noc_async_write(src, dst, row_bytes);
     noc_async_write(src + row_bytes, dst + face_bytes, row_bytes);
+#endif
     noc_async_write_barrier();
     cb_pop_front(cb_out, 1);
 }

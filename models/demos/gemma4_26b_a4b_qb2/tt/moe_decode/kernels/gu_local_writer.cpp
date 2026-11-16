@@ -52,12 +52,17 @@ void kernel_main() {
         const auto s_x = TensorAccessor(x_args, x_addr, tile_bytes);
         cb_reserve_back(cb_x, ks);
         uint32_t l1 = get_write_ptr(cb_x);
+#ifdef X_FLAT
+        // flat x (value h at byte 2 h of one contiguous shard): the K slice is one read
+        noc_async_read(s_x.get_noc_addr(0) + kofs * tiny_bytes, l1, ks * tiny_bytes);
+#else
         for (uint32_t t = 0; t < ks; ++t) {
             const uint64_t src = s_x.get_noc_addr(kofs + t);
             noc_async_read(src, l1, row_bytes);
             noc_async_read(src + face_bytes, l1 + row_bytes, row_bytes);
             l1 += tiny_bytes;
         }
+#endif
         noc_async_read_barrier();
         cb_push_back(cb_x, ks);
         const uint32_t recv = get_write_ptr(cb_recv);  // same address on every core

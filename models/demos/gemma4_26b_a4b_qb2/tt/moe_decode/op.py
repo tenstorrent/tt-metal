@@ -231,11 +231,12 @@ class MoeDecodeB1:
             ),
         ]
 
-    def gate_up_local(self, x, route, w_gul, readers=3, bias=None):
+    def gate_up_local(self, x, route, w_gul, readers=3, bias=None, x_flat=False):
         """Bank-local gate|up (kernels gu_local_*.cpp): ``readers`` cores on each DRAM bank's row read only that
         bank (its K slice of their columns of the routed experts) and push fp32 partial (g, u) tiles to the reducer
         core owning each (slot, pair) unit, which sums the banks and applies the activation and the routing weight.
-        A reducer owns several units when the units outnumber the free cores."""
+        A reducer owns several units when the units outnumber the free cores. x_flat: x is a flat BF16 vector (value h
+        at byte 2 h of a one-core sharded tensor, fused_decode/boundary.py), each K slice one contiguous read."""
         from models.demos.gpt_oss.tt.fused_decode.stream import row_placement
 
         device = x.device()
@@ -283,6 +284,7 @@ class MoeDecodeB1:
         compute_ct = [cb_x, cb_w, cb_part, cb_recv, cb_hout, 0, nr, self.k, self.banks, cb_bias]
         bias_addr = bias.buffer_address() if bias is not None else 0
         defines = [("HAS_BIAS", "1")] if bias is not None else []
+        writer_defines = defines + ([("X_FLAT", "1")] if x_flat else [])
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         addrs = [x.buffer_address(), h.buffer_address(), route.buffer_address()]
         for c, b, r in reader_cores:
@@ -302,16 +304,21 @@ class MoeDecodeB1:
             (writer_ct, writer_rt),
             compute_ct,
             compute_rt,
-            defines=defines,
+            defines=writer_defines,
             compute_defines=self.compute_defines + defines,
         )
         io = [w_gul, x, route, h] + ([bias] if bias is not None else [])
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs))
         return h
 
-    def down(self, h, route, w_down, out=None, bias_row=None):
-        """``bias_row``: the down weights carry the experts' biases in this row (``down_layout(..., bias=...)``)."""
+    def down(self, h, route, w_down, out=None, bias_row=None, flat_out=None):
+        """``bias_row``: the down weights carry the experts' biases in this row (``down_layout(..., bias=...)``).
+        ``flat_out`` = (tensor, byte offset): write the result as a flat BF16 vector (value h at byte offset + 2 h of a
+        one-core sharded tensor, fused_decode/boundary.py) instead of row 0 of a TILE tensor."""
         device = h.device()
+        flat_off = 0
+        if flat_out is not None:
+            out, flat_off = flat_out
         if out is None:
             out = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, 1, self.hidden]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
@@ -392,8 +399,10 @@ class MoeDecodeB1:
                 bank,
                 local,
                 cpb,
+                flat_off,
             ]
         defines = [("HAS_BIAS", "1")] if bias_row is not None else []
+        defines += [("OUT_FLAT", "1")] if flat_out is not None else []
         kernels = self._kernels(
             "down",
             core_set,
@@ -405,13 +414,13 @@ class MoeDecodeB1:
         ttnn.generic_op([w_down, route, h, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
         return out
 
-    def __call__(self, x, route, w_gu, w_down, bias_gu=None, down_bias_row=None):
+    def __call__(self, x, route, w_gu, w_down, bias_gu=None, down_bias_row=None, x_flat=False, flat_out=None):
         """``w_gu`` / ``w_down`` in the ``gate_up_local_layout`` / ``down_layout`` (``tp_expert_layouts``). Biases:
         ``bias_gu`` the ``gate_up_bias_layout`` rows (``upload_rows_per_chip``); the down bias rides in row
         ``down_bias_row`` of the down weights (``down_layout(..., bias=, bias_row=)``; on tensor-parallel chips put
         it on one chip only, the all-reduce sums the chips)."""
-        h = self.gate_up_local(x, route, w_gu, readers=self.local_readers, bias=bias_gu)
-        return self.down(h, route, w_down, bias_row=down_bias_row)
+        h = self.gate_up_local(x, route, w_gu, readers=self.local_readers, bias=bias_gu, x_flat=x_flat)
+        return self.down(h, route, w_down, bias_row=down_bias_row, flat_out=flat_out)
 
 
 def router_topk_b1(logits, pes, k, out=None, core=None):
