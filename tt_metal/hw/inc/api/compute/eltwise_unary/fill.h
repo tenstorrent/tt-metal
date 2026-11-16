@@ -93,7 +93,8 @@ ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
  * Fills rows [row_begin, row_end) of the 32x32 tile in DST with the given value and leaves every other row as it is:
  * a 4-row band that lies inside the range is written with whole-vector stores, a band cut by row_begin or row_end with
  * a lane-masked store. The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking
- * and is only available on the compute engine. Call *fill_tile_init* first.
+ * and is only available on the compute engine. Call *fill_tile_init* first. Not supported on Quasar: a kernel that
+ * calls it fails to build.
  *
  * Return value: None
  *

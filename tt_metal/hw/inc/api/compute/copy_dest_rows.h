@@ -22,7 +22,8 @@ namespace ckernel {
  * half (faces 2 and 3), so a 16x32 tile has bands 0..3.
  *
  * The DST register buffer must be in acquired state via *tile_regs_acquire* call, and *copy_dest_values_init* must
- * have run before. This call is blocking and is only available on the compute engine.
+ * have run before. This call is blocking and is only available on the compute engine. Not supported on Quasar: a
+ * kernel that calls it fails to build.
  *
  * Return value: None
  *
@@ -59,7 +60,8 @@ ALWI void copy_dest_rows(uint32_t idst_out, uint32_t out_band, uint32_t idst_in,
  * are the tile's upper half (faces 0 and 1), 16..31 the lower half, so a 16x32 tile has rows 0..15.
  *
  * The DST register buffer must be in acquired state via *tile_regs_acquire* call, and *copy_dest_values_init* must
- * have run before. This call is blocking and is only available on the compute engine.
+ * have run before. This call is blocking and is only available on the compute engine. Not supported on Quasar: a
+ * kernel that calls it fails to build.
  *
  * Return value: None
  *
