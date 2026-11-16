@@ -109,7 +109,7 @@ def _silu_bw_torch_reference(grad, x, flush):
 
 
 def _silu_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 for any grad where x < -131.7, where even exp(x) * 2^64 is below the smallest normal."""
     result = _silu_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
     result = torch.where(torch.isfinite(x32) & (x32 < -131.75), torch.zeros_like(result), result)
