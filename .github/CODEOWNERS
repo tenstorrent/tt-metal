@@ -175,7 +175,7 @@ tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/ethernet/eth_ptp.hpp @mo-tenstorrent @yusufbashiTT @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
-tt_metal/hw/inc/**/tensor/ @abhullar-tt @akerteszTT @riverwuTT
+tt_metal/hw/inc/**/tensor/ @abhullar-tt @jbaumanTT @aliaksei-sala
 tt_metal/hw/inc/api/tensor/ @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT
