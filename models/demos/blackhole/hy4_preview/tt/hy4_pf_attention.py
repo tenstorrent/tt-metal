@@ -258,7 +258,12 @@ class Hy4AttentionPF(Hy4AttentionPool):
     def prefill_chunk(self, h, start, ids_in=None, ids_override=None, append=True, tabs=None, ids_are_global=False):
         """h [1,1,n,6144] TILE bf16 with n a multiple of 512 (PF_ROWS = 512 or 1024: a longer call is processed as n/512 consecutive pool pages) -> (out [1,1,n,6144], local ids [1,1,n,2048]);
         ids_in = local ids of the index-source layer (shared layers), or global natural ids [1,1,n,2048] when ids_are_global.
+        chain_mode (HY4_PF_HYBRID, set by Hy4PoolPrefill for short prompts): the old chain prefill of ``Hy4Attention`` (replicated SCALED_FP8 cache, global ids), hand-off into the pool afterwards.
         """
+        if getattr(self, "chain_mode", False):
+            from models.demos.blackhole.hy4_preview.tt.hy4_attention import Hy4Attention
+
+            return Hy4Attention.prefill_chunk(self, h, start, ids_in=ids_in, ids_override=ids_override)
         n = h.shape[2]
         if n == CH:
             return self._pf_chunk512(h, start, ids_in, append, tabs, ids_are_global)

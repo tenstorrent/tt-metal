@@ -31,6 +31,7 @@ class PrefillResult:
     hidden: list = (
         None  # optional: final normed hidden of the last prompt token per user ([6144] fp32), keep_hidden=True
     )
+    handoff_sec: float = 0.0
     logits: list = None  # optional: logits row of the last prompt token per user (fp32 [V]), keep_logits=True
 
 
@@ -148,11 +149,64 @@ class Hy4PoolPrefill:
         if ids is not None:
             ttnn.deallocate(ids)
 
-    def prefill(self, prompts, keep_hidden=False, keep_logits=False, sync_every_chunk=True, mtp=None, keep_rows=None):
+    def _chain_mode(self, on):
+        for ly in self.ch.layers:  # the MTP layer (ch.mtp_layers) always writes the pool directly
+            ly.attn.chain_mode = on
+
+    def _handoff(self, nrows):
+        """chain prefill caches (replicated SCALED_FP8 rows + indexer keys) -> pool, only the mesh rows of the current mask (``wr_mask``, set_keep); then free the chain caches (``Hy4ServePool.handoff_rows``)."""
+        HP = self._HP
+        assert nrows % HP.CHUNK == 0 and nrows // HP.CHUNK <= self.dec.pages
+        npg = nrows // HP.CHUNK
+        for ly, kv, kp in zip(self.ch.layers, self.dec.kv_pools, self.dec.key_pools):
+            rows = ly.attn.cache.rows
+            assert int(rows.shape[2]) >= nrows and rows.dtype == ttnn.fp8_e4m3, (rows.shape, rows.dtype)
+            HP.slice_copy(rows, kv, self.wr_mask, 64, HP.ROWB, npg, kernel="slice_copy_masked.cpp")
+            if kp is not None:
+                k = ly.attn.indexer.keys
+                kb = ttnn.typecast(k, ttnn.bfloat8_b) if k.dtype != ttnn.bfloat8_b else k
+                kv4 = ttnn.reshape(kp, [1, 1, self.dec.pages * 64, 128])
+                HP.slice_copy(kb, kv4, self.wr_mask, 8, HP.KEYTILE, npg, kernel="slice_copy_masked.cpp")
+                if kb is not k:
+                    ttnn.deallocate(kb)
+        ttnn.synchronize_device(self.md)
+        self.ch.reset()
+        for ly in self.ch.layers:  # lazily cached indexer tensors grow with the prompt: drop them (serve-long D75-1)
+            ix = getattr(ly.attn, "indexer", None)
+            if ix is None:
+                continue
+            for d_ in (getattr(ix, "_sent", None), getattr(ix, "_mask_full", None)):
+                if d_:
+                    for t in d_.values():
+                        ttnn.deallocate(t)
+                    d_.clear()
+        ttnn.synchronize_device(self.md)
+
+    def prefill(
+        self,
+        prompts,
+        keep_hidden=False,
+        keep_logits=False,
+        sync_every_chunk=True,
+        mtp=None,
+        keep_rows=None,
+        chain=False,
+    ):
         """prompts: list (<= rows) of token-id lists (a missing / empty user is a pad prompt). Returns PrefillResult.
         mtp: an Hy4MTP -> the MTP layer prompt KV is written per chunk (``mtp_prompt_chunk``). keep_rows: the mesh rows being prefilled (the pool writes of the others are suppressed: live decode users).
         """
         ch, md, PF = self.ch, self.md, self.pf_rows
+        if chain:
+            PF = 512  # chain prefill: chunks of 512 rows, replicated cache, hand-off at the end (HY4_PF_HYBRID)
+            self._chain_mode(True)
+        try:
+            return self._prefill(prompts, keep_hidden, keep_logits, sync_every_chunk, mtp, keep_rows, chain, PF)
+        finally:
+            if chain:
+                self._chain_mode(False)
+
+    def _prefill(self, prompts, keep_hidden, keep_logits, sync_every_chunk, mtp, keep_rows, chain, PF):
+        ch, md = self.ch, self.md
         if keep_rows is not None:
             self.set_keep(keep_rows)
         prompts = [list(p) for p in prompts] + [[PAD]] * (self.rows - len(prompts))
@@ -224,6 +278,10 @@ class Hy4PoolPrefill:
             self.log(event="prefill_chunk", c=c, of=nch, chunk_sec=round(dt, 3), sec=round(time.time() - t0, 1), **mem)
         for t in ids_by_layer.values():
             ttnn.deallocate(t)
+        if chain:
+            th = time.time()
+            self._handoff(nch * 512)
+            res.handoff_sec = time.time() - th
         res.total_sec = time.time() - t0
         return res
 

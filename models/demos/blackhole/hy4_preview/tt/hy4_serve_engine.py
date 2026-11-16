@@ -67,6 +67,9 @@ class Hy4Engine:
         self.sampled = self.spec and os.environ.get("HY4_SPEC_SAMPLED", "1") == "1"
         self.S = self.K + 1 if self.spec else 1
         self.pf_rows = int(os.environ.get("HY4_SERVE_PF_ROWS", "512"))
+        # HY4_PF_HYBRID=<cap tokens> (default 0 = off): prompts of at most cap tokens (longest of the call) use the OLD chain prefill (replicated SCALED_FP8 cache, 512-row chunks) + masked hand-off into the pool
+        # (clean on stray tokens / GPQA thinking, program product-race RESULT_RACE sec 8); longer prompts use the direct-to-pool prefill. The cap is bounded by the replicated cache (scratch DRAM).
+        self.hybrid_cap = int(os.environ.get("HY4_PF_HYBRID", "0"))
         ckpt = os.environ.get("HY4_CKPT", "/ckpt")
         nl = int(os.environ.get("HY4_SERVE_LAYERS", "78"))
         t0 = time.time()
@@ -172,8 +175,14 @@ class Hy4Engine:
         self.drain()
         rows = sorted(prompts_by_row)
         prompts = [prompts_by_row.get(r, [PAD]) for r in range(ROWS)]
+        chain = self.hybrid_cap > 0 and max(len(prompts_by_row[r]) for r in rows) <= self.hybrid_cap
         res = self.pp.prefill(
-            prompts, keep_hidden=self.spec, keep_logits=True, mtp=self.mtp if self.spec else None, keep_rows=rows
+            prompts,
+            keep_hidden=self.spec,
+            keep_logits=True,
+            mtp=self.mtp if self.spec else None,
+            keep_rows=rows,
+            chain=chain,
         )
         first = {}
         for r in rows:
@@ -183,7 +192,7 @@ class Hy4Engine:
         if self.spec:
             self._seed_rows(rows, first, res, prompts_by_row, sampling or {})
         logger.info(
-            f"HY4 prefill call: rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
+            f"HY4 prefill call: mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
             f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) chunks_s={[round(x, 1) for x in res.chunk_sec[:6]]}..{[round(x, 1) for x in res.chunk_sec[-2:]]} seed={time.perf_counter() - t1:.2f}s"
         )
         return first
@@ -369,8 +378,21 @@ class Hy4Engine:
         n = min(3072, self.max_seq_len - 8)
         prompts = {r: torch.randint(1000, 100000, (n,), generator=g).tolist() for r in range(ROWS)}
         self._dram("before warm prefill")
+        cap, self.hybrid_cap = (
+            self.hybrid_cap,
+            0,
+        )  # the first warm prefill goes through the direct-to-pool path (creates its persistent tensors)
         first = self.prefill(prompts)
+        self.hybrid_cap = cap
         self._dram("after warm prefill")
+        if (
+            self.hybrid_cap > 0
+        ):  # chain prefill + hand-off once before any capture: every lazily created persistent tensor of that path exists before the traces (D75-1)
+            tw = time.time()
+            ch_prompts = {r: prompts[r][:1024] for r in range(ROWS)}
+            self.prefill(ch_prompts)
+            self._dram("after warm chain prefill")
+            logger.info(f"HY4 warm-up: chain prefill 4 x 1024 {time.time() - tw:.1f} s (hybrid cap {self.hybrid_cap})")
         t1 = time.time()
         if self.spec:
             # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its
@@ -400,8 +422,33 @@ class Hy4Engine:
         for r in range(ROWS):
             self.release(r)
         self.pp.set_keep(None)
+        probe = os.environ.get("HY4_PF_HYBRID_PROBE", "")
+        if probe:
+            self._probe_chain_cap([int(x) for x in probe.split(",")])
         from models.demos.blackhole.hy4_preview.tt.hy4_chain import dram_view
 
         logger.info(
             f"HY4 warm-up: prefill 4 x {n} {t1 - t0:.1f} s (compile incl.), captures {time.time() - t1:.1f} s, dram {dram_view(self.md)}; first tokens {first}"
         )
+
+    def _probe_chain_cap(self, lens):
+        """HY4_PF_HYBRID_PROBE=n1,n2,...: after the captures, chain prefill of ONE n-token prompt (row 0; the cache size does not depend on the number of rows) per length, ascending; logs the DRAM low-water mark
+        and stops at the first failure (the state after a failure is not trusted: probe-only boot, TERM and reset afterwards).
+        """
+        from models.demos.blackhole.hy4_preview.tt.hy4_chain import dram_view
+
+        g = torch.Generator().manual_seed(1)
+        for n in lens:
+            toks = torch.randint(1000, 100000, (n,), generator=g).tolist()
+            t0 = time.time()
+            try:
+                self.pp.mem = None
+                res = self.pp.prefill([toks], keep_rows=[0], chain=True)
+                ttnn.synchronize_device(self.md)
+                logger.info(
+                    f"HY4 PROBE chain n={n}: OK {time.time() - t0:.1f} s (handoff {res.handoff_sec:.1f} s), dram {dram_view(self.md)}"
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"HY4 PROBE chain n={n}: FAIL {type(e).__name__}: {str(e)[:300]}")
+                break
+        self.pp.set_keep(None)
