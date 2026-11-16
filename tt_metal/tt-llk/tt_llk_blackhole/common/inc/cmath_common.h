@@ -314,8 +314,7 @@ inline void dest_section_flip()
     }
     else
     {
-        // dest_offset_id is 0 or 1: the half base without a branch on the flip (a write address keeps get_dest_buffer_base)
-        std::uint32_t base_addr = dest_offset_id * DEST_REGISTER_HALF_SIZE;
+        std::uint32_t base_addr = get_dest_buffer_base();
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
     }
@@ -333,7 +332,7 @@ inline void dest_section_post_flip()
     }
     else
     {
-        const std::uint32_t base_addr = dest_offset_id * DEST_REGISTER_HALF_SIZE;
+        const std::uint32_t base_addr = get_dest_buffer_base();
         TTI_STALLWAIT(p_stall::STALL_SYNC | p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
         TTI_SEMPOST(semaphore::t6_sem(semaphore::MATH_PACK));
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
