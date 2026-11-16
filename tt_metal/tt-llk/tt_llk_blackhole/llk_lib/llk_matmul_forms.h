@@ -98,10 +98,11 @@ constexpr bool matmul_kernel_lofi_wide(const std::uint8_t (&formats)[N])
     return tf32 || f32 >= 2;
 }
 
-// A LoFi kernel with a 32-bit operand (a Float32 CB besides the one Float32 partials CB; a Tf32 CB is an output and adds none) beside a
-// 16-bit or block float one: its plain calls at half sync take the run-time direction (matmul_api_reuse_dir 3), which holds the wider operand
+// A LoFi kernel with a 32-bit operand beside a 16-bit or block float one: a Float32 CB besides the partials (one Float32 CB with a 32-bit
+// DEST; a Tf32 CB is an output and adds none). Its plain calls at half sync take the run-time direction (matmul_api_reuse_dir 3), which
+// holds the wider operand.
 template <std::size_t N>
-constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N])
+constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N], const bool fp32_dest)
 {
     bool fast         = false;
     std::uint32_t f32 = 0;
@@ -111,7 +112,7 @@ constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N])
         fast = fast || d == DataFormat::Float16 || d == DataFormat::Float16_b || d == DataFormat::Bfp8_b || d == DataFormat::Bfp4_b;
         f32 += d == DataFormat::Float32;
     }
-    return fast && f32 >= 2;
+    return fast && f32 >= (fp32_dest ? 2u : 1u);
 }
 
 // The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): LoFi at half sync, and above LoFi except the
@@ -125,7 +126,7 @@ constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full
     {
         // small LoFi blocks are bound by the unpack's context poll; half sync only, and not where the plain calls take the run-time
         // direction (matmul_kernel_lofi_mix, a 32-bit operand beside a fast one), which the ttsync unpack does not run
-        return !full_sync && !matmul_kernel_lofi_mix(formats);
+        return !full_sync && !matmul_kernel_lofi_mix(formats, fp32_dest);
     }
     if (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest)
     {

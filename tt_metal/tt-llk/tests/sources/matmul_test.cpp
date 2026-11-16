@@ -48,7 +48,7 @@
 // matmul_api_runtime_dir resolves it for the key's operands (in1 is unpacker A, in0 unpacker B)
 #include "llk_matmul_forms.h"
 constexpr bool matmul_prod_runtime_dir = MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf &&
-                                         static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS);
+                                         static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS, is_fp32_dest_acc_en);
 #undef MATMUL_REUSE_DIR
 #define MATMUL_REUSE_DIR                                                                                                                        \
     (matmul_prod_runtime_dir ? ckernel::matmul_reuse_dir(ckernel::MathFidelity::LoFi, static_cast<DataFormat>(UNPACK_B_IN), static_cast<DataFormat>(UNPACK_A_IN), \

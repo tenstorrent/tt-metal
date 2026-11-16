@@ -263,9 +263,9 @@ class MATMUL_PRODUCTION(TemplateParameter):
 
     @staticmethod
     def kernel_formats_of(formats, math_fidelity, dest_sync, dest_acc, dims) -> tuple:
-        """Every CB format of the key's production kernel: in1, in0 and the output, plus those the kernel adds (partials, bias,
-        scratch) from LLK_MATMUL_KERNEL_FORMATS_MAP, a TSV with in1, in0, out, fid, fp32, full, rt, ct, kt and unpack_formats as
-        mm-census census_prod/keys_cbfmt.tsv, and LLK_MATMUL_KERNEL_FORMATS (DataFormat names joined by +).
+        """The format of every CB of the key's production kernel, one entry per CB as unpack_src_format holds them (the LoFi rules count
+        Float32 CBs): unpack_cb_formats of LLK_MATMUL_KERNEL_FORMATS_MAP (a TSV as mm-census census_prod/keys_cbfmt.tsv), else in0, in1, the
+        output and a partials CB (Float32 with a 32-bit DEST); plus LLK_MATMUL_KERNEL_FORMATS (DataFormat names joined by +).
         """
         own = (
             formats.input_format.name,
@@ -276,8 +276,11 @@ class MATMUL_PRODUCTION(TemplateParameter):
             f for f in os.environ.get("LLK_MATMUL_KERNEL_FORMATS", "").split("+") if f
         )
         path = os.environ.get("LLK_MATMUL_KERNEL_FORMATS_MAP")
+        partials = (
+            "Float32" if dest_acc == DestAccumulation.Yes else formats.output_format.name
+        )
         if not path:
-            return tuple(dict.fromkeys(own + extra))
+            return own + (partials,) + extra
         import csv
 
         key = (
@@ -303,22 +306,13 @@ class MATMUL_PRODUCTION(TemplateParameter):
                 r["ct"],
                 r["kt"],
             ) == key:
-                return tuple(
-                    dict.fromkeys(
-                        own
-                        + extra
-                        + tuple(
-                            sorted(
-                                f
-                                for f in set(
-                                    r["unpack_formats"].replace("|", " ").split()
-                                )
-                                if f in DataFormat.__members__
-                            )
-                        )
-                    )
+                cbs = tuple(
+                    c.split(":", 1)[1]
+                    for c in r["unpack_cb_formats"].replace("|", " ").split()
+                    if ":" in c and c.split(":", 1)[1] in DataFormat.__members__
                 )
-        return tuple(dict.fromkeys(own + extra))
+                return (cbs or own + (partials,)) + extra
+        return own + (partials,) + extra
 
     @staticmethod
     def apply(templates: list, runtimes: list, formats) -> list:
