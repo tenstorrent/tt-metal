@@ -23,12 +23,15 @@ from types import SimpleNamespace
 import torch
 
 import ttnn
+from models.demos.gemma4_26b_a4b_qb2.tt.mtp.argmax import DraftArgmax
 from models.demos.gemma4_26b_a4b_qb2.tt.mtp.drafter import load_drafter, shared_layers
 from models.demos.gemma4_26b_a4b_qb2.tt.mtp.lean_drafter import LeanDrafter
 
 EOS = (1, 106)
 # Verify K/V writes: "op" = gemma4 PagedUpdateRows (one program per tensor), "loop" = one paged_update_cache per row.
 KV_WRITES = os.environ.get("GEMMA4_26B_MTP_KV_WRITES", "op")
+# Draft-token argmax: "fast" = tt/mtp/argmax.py (~0.28 ms), "sampler" = the plain decode's sampler (~0.52 ms).
+DRAFT_ARGMAX = os.environ.get("GEMMA4_26B_MTP_DRAFT_ARGMAX", "fast")
 
 
 class SpeculativeDecoder:
@@ -41,6 +44,9 @@ class SpeculativeDecoder:
             drafter = LeanDrafter(self.model) if lean else load_drafter(self.model)
         self.drafter = drafter
         self.lean = isinstance(drafter, LeanDrafter)
+        self.draft_argmax = (
+            DraftArgmax(self.model, self.model.config.vocab_size // 4) if DRAFT_ARGMAX == "fast" else None
+        )
         layers = shared_layers(self.model)
         self.layer_by_type = layers
         # "hf": the drafter attends positions <= p when slot p holds K/V (a rejected draft's), else <= p - 1.
@@ -193,8 +199,11 @@ class SpeculativeDecoder:
         ctx = self._draft_context(s["cache"], s["table"], s["d_pos_u"], s["d_pos_i"])
         for _ in range(K):
             logits, hidden = self._draft_step(tok, hidden, ctx)
-            ids = self._argmax(logits, 1)
-            tok = ttnn.reshape(ttnn.slice(ids, (0, 0, 0, 0), (1, 1, 1, 1)), (1, 1))
+            if self.draft_argmax is not None:
+                tok = self.draft_argmax(logits)
+            else:
+                ids = self._argmax(logits, 1)
+                tok = ttnn.reshape(ttnn.slice(ids, (0, 0, 0, 0), (1, 1, 1, 1)), (1, 1))
             drafts.append(tok)
         verify_ids = ttnn.concat([s["anchor"]] + drafts, dim=1)  # [1, K + 1]
         logits, vhidden = self.model.decode_forward(

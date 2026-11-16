@@ -39,7 +39,7 @@ def main():
     try:
         gen = build_generator(None, mesh, max_seq_len=args.max_seq_len)
         spec = None
-        plain_cache = {}
+        plain_cache, rows_cache = {}, {}
         for k in [int(v) for v in args.k.split(",")]:
             if spec is not None:
                 spec.release()
@@ -66,8 +66,12 @@ def main():
                     tokens = spec.generate(list(ids), args.tokens)
                 rows_ref = None
                 if args.ref_rows:
-                    rows_ref = spec.generate_plain_rows(list(ids), args.tokens)
-                    margins = spec.stats_rows["margins"]
+                    if text not in rows_cache:
+                        rows_cache[text] = (
+                            spec.generate_plain_rows(list(ids), args.tokens),
+                            spec.stats_rows["margins"],
+                        )
+                    rows_ref, margins = rows_cache[text]
                 same = tokens == plain
                 first_diff = next((i for i, (a, b) in enumerate(zip(tokens, plain)) if a != b), None)
                 row = {
