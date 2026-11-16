@@ -13,16 +13,10 @@ struct EluBf16Config {
         0xc0c80000u, 0x00000000u, 0x41200000u, 0x00000000u, 0x3f800000u, 0x3effdb9eu, 0x3e295070u,
         0x3d22c6dbu, 0x3be47be7u, 0x3a5c41d7u, 0x38800000u, 0x36050000u, 0x00000000u, 0x3f800000u,
         0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u};
-    static constexpr int kParkRows[] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-                                        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
-    static constexpr uint32_t kRowBase = 64u;
-    static constexpr uint32_t kRowLimit = 108u;
-    static constexpr uint32_t kParkedCount = 0u;
     static constexpr uint32_t kLowerBits = 0xc0c80000u;
     static constexpr uint32_t kTerminalBits = 0xbf800000u;
     static constexpr bool kOrdered = true;
     static constexpr uint32_t degree(uint32_t segment) { return kDegree[segment]; }
-    static constexpr int park_row(uint32_t index) { return kParkRows[index]; }
     static constexpr float lut(uint32_t index) { return __builtin_bit_cast(float, kLutBits[index]); }
 };
 }  // namespace ckernel::sfpu
