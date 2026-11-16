@@ -489,12 +489,22 @@ void kernel_main() {
                             ++merged;
                         }
                     }
+                    // A layer may pick fewer per row than the op's top_k (persistent.h kFeHdrTopK: the DSpark
+                    // drafter's top-3): the rest of each row's list is parked on the sentinel, which the weight
+                    // pass skips, so it neither runs nor enters the row's weight normalization.
+                    invalidate_l1_cache();
+                    const uint32_t layer_k = fe_header(kFeHdrTopK);
+                    const uint32_t row_k = layer_k != 0u && layer_k < top_k ? layer_k : top_k;
                     for (uint32_t b = 0; b < batch; ++b) {
                         for (uint32_t j = 0; j < top_k; ++j) {
                             const uint16_t e = static_cast<uint16_t>(run_id[b * top_k + j]);
                             router_score_bits[b * top_k + j] = run_score[b * top_k + j];
-                            sel_ids[b * top_k + j] = e;
-                            bitmap[e >> 5] |= 1u << (e & 31u);
+                            if (j < row_k) {
+                                sel_ids[b * top_k + j] = e;
+                                bitmap[e >> 5] |= 1u << (e & 31u);
+                            } else {
+                                sel_ids[b * top_k + j] = static_cast<uint16_t>(num_weights);
+                            }
                         }
                     }
                     // This half is written next two iterations on, after this merge is done.
@@ -745,8 +755,13 @@ void kernel_main() {
             // word (its router-row header, which the next route go rewrites only after this iteration).
             {
                 const uint32_t hits_l1 = FE_HDR_ADDR + kFeHdrHits * 4u;
+                // At least one per group: a union smaller than the 6 groups (a top-3 drafter block of alike rows)
+                // runs its padding slots -- expert 0 at a zero weight, exact zeros in the fold -- rather than
+                // leaving a group without an expert, which the grid's loops do not expect.
+                const uint32_t union_hits = n < num_active ? n : num_active;
+                constexpr uint32_t kMinHits = num_active < 6u ? num_active : 6u;
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hits_l1) =
-                    ((iter + 1u) << 8) | (n < num_active ? n : num_active);
+                    ((iter + 1u) << 8) | (union_hits > kMinHits ? union_hits : kMinHits);
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(hits_l1),
                     MulticastEndpoint{},

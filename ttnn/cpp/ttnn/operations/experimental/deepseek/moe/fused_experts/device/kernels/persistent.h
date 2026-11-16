@@ -55,6 +55,12 @@ constexpr uint32_t kFeHdrSharedGateUp = 1;
 constexpr uint32_t kFeHdrSharedDown = 2;
 constexpr uint32_t kFeHdrRouterGate = 3;
 constexpr uint32_t kFeHdrRouterBias = 4;
+// The layer's routed picks per row when fewer than the op's top_k (0: top_k): the DSpark drafter's layers on the
+// target's server take 3 of their (padded) experts per row.
+constexpr uint32_t kFeHdrTopK = 5;
+// Bit k set when requester k is served on demand rather than in turn (the same in every row; the control core reads
+// row 0's): see fe_ctrl.cpp.
+constexpr uint32_t kFeHdrOnDemand = 7;
 // Several-row requests (FE_GROUP_EXPERTS > 1): the route merge's hit count -- the size of the union of the rows'
 // selections -- as (iter + 1) << 8 | hits, written into every grid core's header after the control core's (whose
 // layer-table row holds 0 here). Word 8 keeps it 16-byte aligned for the merge's multicast.

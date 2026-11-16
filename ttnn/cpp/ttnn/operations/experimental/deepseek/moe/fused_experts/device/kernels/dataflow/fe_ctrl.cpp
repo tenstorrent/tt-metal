@@ -136,15 +136,46 @@ void kernel_main() {
         noc_async_write_barrier();
     };
 
+    // Requesters served on demand (kFeHdrOnDemand, e.g. the DSpark drafter): their pages are taken whenever one is
+    // in, without a turn; the others keep the strict round robin among themselves. That every chip still runs the
+    // same row in an iteration rests on the caller's contract: an on-demand requester sends only while no other
+    // requester has a request outstanding (the drafter runs between verify steps, never during one), so whenever
+    // one has a page in, it is the only page any chip can see.
+    const uint32_t on_demand =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(headers_l1)[kFeHdrOnDemand] & ((1u << num_requesters) - 1u);
     uint32_t open = (1u << num_requesters) - 1u;
     uint32_t k = num_requesters - 1u;
+    uint32_t turn = num_requesters - 1u;
     for (uint32_t iter = 0;;) {
-        do {
-            k = k + 1u == num_requesters ? 0u : k + 1u;
-        } while (((open >> k) & 1u) == 0u);
-        {
+        if (on_demand == 0u) {
+            do {
+                k = k + 1u == num_requesters ? 0u : k + 1u;
+            } while (((open >> k) & 1u) == 0u);
             DeviceZoneScopedN("FE_CTRL_PAGE_WAIT");
             socket_wait_for_pages(in[k], 1);
+        } else {
+            DeviceZoneScopedN("FE_CTRL_PAGE_WAIT");
+            // The next in-turn requester still open, if any; then poll it and every open on-demand one.
+            const uint32_t in_turn = open & ~on_demand;
+            uint32_t next = turn;
+            if (in_turn != 0u) {
+                do {
+                    next = next + 1u == num_requesters ? 0u : next + 1u;
+                } while (((in_turn >> next) & 1u) == 0u);
+            }
+            for (bool found = false; !found;) {
+                for (uint32_t r = 0; r < num_requesters && !found; ++r) {
+                    if ((((open & on_demand) >> r) & 1u) != 0u && socket_wait_for_pages(in[r], 1, 1)) {
+                        k = r;
+                        found = true;
+                    }
+                }
+                if (!found && in_turn != 0u && socket_wait_for_pages(in[next], 1, 1)) {
+                    k = next;
+                    turn = next;
+                    found = true;
+                }
+            }
         }
         const uint32_t page = in[k].read_ptr;
         invalidate_l1_cache();
