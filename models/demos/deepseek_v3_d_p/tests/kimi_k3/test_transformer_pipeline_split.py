@@ -311,7 +311,8 @@ def _worst_shard_pcc(want, got) -> float:
 # Bar for everything rank 1 produces (layers 12-15, the layer-15 caches, the final output). Measured on 8x4
 # (bh-glx-120-b08u02, 2026-11-16): worst shard 0.99949 (kvpe cache of layer 15), layers 0.99956-0.99967. The
 # test is deterministic, so the bar's margin is for numerics moving, not noise: 0.998 admits ~4x the measured
-# 1 - PCC, and a rank that lost the inherited sealed set lands far lower (the golden split's bar is 0.98).
+# 1 - PCC. A rank that lost the inherited sealed set is expected, not measured on these weights, to land far
+# lower.
 POST_CUT_SHARD_PCC = 0.998
 
 
