@@ -240,6 +240,10 @@ def _l1_report(device) -> str:
     )
 
 
+# The block verify's Engram lookup: before the dispatch (1), or on the feed thread after the packet (0).
+ENGRAM_BEFORE_DISPATCH = os.environ.get("DEEPSEEK_V41_VERIFY_ENGRAM_EARLY", "1") not in ("0", "", "false", "False")
+
+
 class DeepSeekV41Model(DeepSeekV4Model):
     """V4.1 decode stack on V4's traced pipeline.
 
@@ -3754,6 +3758,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
         sm["block_staging"] = const(
             torch.zeros(1, 1, ttnn.TILE_SIZE, cfg.head_dim), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        # attention_qkv_decode also writes the block's kv rows here, ROW_MAJOR on one core: the ring commit's input.
+        sm["block_commit_rows"] = const(
+            torch.zeros(1, 1, t, cfg.head_dim),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=self.layers[sm["layers"][0]].self_attn._commit_rows_config(t),
+        )
         one_hot = torch.zeros(1, t, 1, hc)
         one_hot[..., 0] = 1
         sm["block_pre_mix_init"] = const(one_hot)
@@ -3833,6 +3843,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "entry": {r: out[("entry", r)] for r in sm["kv_ratios"]},
             "odd": odd,
             "staging": sm["block_staging"],
+            "commit_rows": sm.get("block_commit_rows"),
             "page_row": sm["block_page_row"],
         }
         return ctx
@@ -3845,6 +3856,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             sin=sin,
             neg_sin=neg_sin,
             staging=ctx["staging"],
+            commit_rows=ctx["commit_rows"],
             lengths=ctx["lengths"][r],
             ring_slots=ctx["ring_slots"],
         )
@@ -4100,9 +4112,12 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
             if not hasattr(self, "_engram_by_layer"):
                 self._engram_by_layer = dict(self._engram_layers)
+            if ENGRAM_BEFORE_DISPATCH:
+                # The step reaches layer 1's Engram rows ~0.2 ms in; looked up after the dispatch they arrive late.
+                engram_rows = dict(engram_rows())
             tid = sm["block_tids"][pos % 2 == 1]
             if getattr(self, "_verify_timing", None) is not None:
-                self._verify_timing.append({"pre_lock": t_lock - t_start, "pre": time.perf_counter() - t_lock})
+                self._verify_timing.append({"pre_lock": t_lock - t_start, "engram": time.perf_counter() - t_lock})
 
             def replay() -> None:
                 ttnn.execute_trace(sm["device"], tid, cq_id=0, blocking=False)

@@ -1879,6 +1879,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         entry: ttnn.Tensor | None = None,
         dense_entry: ttnn.Tensor | None = None,
         page_row: ttnn.Tensor | None = None,
+        commit_rows: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """One verify block of ``R`` rows (positions ``p .. p + R - 1`` of one session) through this layer's
         attention; returns its all-reduced output, the ``(R, 32)`` block ``[1, 1, R, D]``.
@@ -1917,6 +1918,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             w_comp=self.comp_proj.weight if comp else None,
             comp_output=self.fused_comp_block if comp else None,
             memory_config=self.block_q_memory_config(rows),
+            commit_rows=commit_rows,
         )
         if self.is_kv_source:
             assert comp, "a block's compressor columns come out of attention_qkv_decode"
@@ -1989,14 +1991,18 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         # The ring held positions <= p - 1 for the attention; now the block's rows go in at their slots.
         # The staging tile's first R rows, un-tiled, then onto one core (paged_update_cache's input). A sharded
         # untilize_with_unpadding output keeps a tile-high shard, which paged_update_cache rejects.
-        new_rows = ttnn.to_memory_config(
-            ttnn.untilize_with_unpadding(
-                staging, output_tensor_end=[0, 0, rows - 1, self.head_dim - 1], memory_config=ttnn.L1_MEMORY_CONFIG
-            ),
-            self._commit_rows_config(rows),
-        )
-        ttnn.experimental.paged_update_cache(scache.kv, new_rows, update_idxs_tensor=ring_slots)
-        ttnn.deallocate(new_rows)
+        if commit_rows is not None:
+            # attention_qkv_decode wrote the rows ROW_MAJOR on one core too: paged_update_cache's input as it is.
+            ttnn.experimental.paged_update_cache(scache.kv, commit_rows, update_idxs_tensor=ring_slots)
+        else:
+            new_rows = ttnn.to_memory_config(
+                ttnn.untilize_with_unpadding(
+                    staging, output_tensor_end=[0, 0, rows - 1, self.head_dim - 1], memory_config=ttnn.L1_MEMORY_CONFIG
+                ),
+                self._commit_rows_config(rows),
+            )
+            ttnn.experimental.paged_update_cache(scache.kv, new_rows, update_idxs_tensor=ring_slots)
+            ttnn.deallocate(new_rows)
         return self._project_out_block(attn)
 
     def decode_inputs(self, pos: int, cos_half: torch.Tensor, sin_half: torch.Tensor, rows: int = 1) -> dict:
