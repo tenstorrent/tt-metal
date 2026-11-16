@@ -7,7 +7,12 @@ The plugin's rule (vllm_tt_plugin.mamba_state, stage C06): a step of n query tok
 query token t into ``windows[i, t]``, which is block-table column t in mamba_cache_mode "none" and column W + t with
 W = (start_pos + n - 1) // block_size in mode "align"; its start state is in ``start_blocks[i]``, the previous step's
 ``windows[i, a - 1]`` for the count a that step committed, or the block a prefill wrote. A prefill writes its end state
-into ``windows[i, 0]``."""
+into ``windows[i, 0]``.
+
+Under asynchronous scheduling vLLM schedules a step before it reads the verify in flight and counts that verify's
+drafts as accepted, and the window follows that count (``scheduled``) while the start block follows the count the
+verify committed. A chained verify (``chained``) is built before that count is known: it names the start block of every
+count (``start_blocks_by_count``) and the same window."""
 
 from dataclasses import dataclass
 
@@ -73,23 +78,45 @@ class SpecBlocks:
         self.count[row] = 1
         return dest, starts
 
-    def decode(self, row, start_pos, n):
-        """(windows per group [1 + K blocks], start block per group) of a step of n query tokens at start_pos."""
-        W = 0 if self.mode == "none" else (start_pos + n - 1) // self.bs
+    def decode(self, row, start_pos, n, scheduled=None):
+        """(windows per group [1 + K blocks], start block per group) of a step of n query tokens at start_pos.
+        ``scheduled``: the tokens vLLM counted as computed when it scheduled the step with 1 + K tokens, when that
+        differs from start_pos; the window then follows it."""
+        W = self._window(start_pos, n, scheduled)
         starts = [self.last[row][g][self.count[row] - 1] for g in self.groups]
         windows = [[self._block(row, g, W + t) for t in range(self.K + 1)] for g in self.groups]
         self.last[row] = windows
         self.count[row] = 1
         return windows, starts
 
+    def chained(self, row, scheduled):
+        """(windows per group, start block of each count per group [1 + K blocks, count c at index c - 1]) of a
+        chained verify over the row's unread verify, which vLLM counted as accepting all its drafts (``scheduled``
+        tokens computed). The unread verify's count is not passed to commit(): commit() takes the chained verify's."""
+        W = self._window(None, None, scheduled)
+        by_count = [list(self.last[row][g]) for g in self.groups]
+        windows = [[self._block(row, g, W + t) for t in range(self.K + 1)] for g in self.groups]
+        self.last[row] = windows
+        self.count[row] = 1
+        return windows, by_count
+
+    def _window(self, start_pos, n, scheduled):
+        if self.mode == "none":
+            return 0
+        if scheduled is None:
+            return (start_pos + n - 1) // self.bs
+        return (scheduled + self.K) // self.bs
+
     def commit(self, row, a):
         """The accept walk committed a tokens of the row's last step."""
         assert 1 <= a <= len(self.last[row][0]), a
         self.count[row] = a
 
-    def state(self, rows, bmax, intermediate=None):
+    def state(self, rows, bmax, intermediate=None, by_count=None):
         """mamba_state for ``rows``: {row: (windows per group, starts per group or None)}; other rows are padding
-        (block 0). ``intermediate``: rows whose prefill chunk does not end their prompt (prefill steps only)."""
+        (block 0). ``intermediate``: rows whose prefill chunk does not end their prompt (prefill steps only).
+        ``by_count``: a chained verify's {row: start block of each count per group}; a row's start_blocks entry then
+        holds count 1 + K, as the plugin sends it."""
         groups = []
         for g, names in enumerate(self.layout.group_names):
             windows = torch.zeros(bmax, self.K + 1, dtype=torch.int32)
@@ -99,7 +126,15 @@ class SpecBlocks:
                 windows[r, : len(w)] = torch.tensor(w, dtype=torch.int32)
                 if start is not None:
                     starts[r] = start[g]
-            groups.append(GroupState(layer_names=names, windows=windows, start_blocks=starts))
+            counts = None
+            if by_count is not None:
+                counts = torch.zeros(bmax, self.K + 1, dtype=torch.int32)
+                for r, blocks in by_count.items():
+                    counts[r] = torch.tensor(blocks[g], dtype=torch.int32)
+                    starts[r] = blocks[g][self.K]
+            groups.append(
+                GroupState(layer_names=names, windows=windows, start_blocks=starts, start_blocks_by_count=counts)
+            )
         mask = None
         if intermediate is not None:
             mask = torch.ones(bmax, dtype=torch.bool)
