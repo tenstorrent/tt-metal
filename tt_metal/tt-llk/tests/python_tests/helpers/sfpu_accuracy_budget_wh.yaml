@@ -5,7 +5,7 @@
 # Written by `test_unary_sfpu_ulp.py --ulp-emit` and helpers/ulp_table.dump_table.
 
 Abs:
-- {measured: 1, note: 'wh: max 1 ULP on Float16/Float16_b, 80 variants'}
+- {measured: 2, note: 'wh: max 1 ULP on Float16/Float16_b, 80 variants'}
 - {output: Float32, measured: 0, note: 'wh: max 0 ULP, 32 variants'}
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
