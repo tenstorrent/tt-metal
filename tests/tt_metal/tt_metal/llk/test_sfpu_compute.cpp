@@ -1157,6 +1157,7 @@ std::map<std::string, std::string> fill_rows_reference_defines(const std::string
 }
 std::vector<std::tuple<size_t, std::string>> fill_rows_test_params() {
     std::vector<std::tuple<size_t, std::string>> params;
+    params.reserve(sfpu_row_range_ops.size());
     for (const auto& [op_name, c] : sfpu_row_range_ops) {
         params.emplace_back(1, op_name);
     }

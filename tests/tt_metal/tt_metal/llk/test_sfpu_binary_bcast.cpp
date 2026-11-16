@@ -709,7 +709,7 @@ TEST_P(SfpuBcastScalarFixture, TensixSfpuBcastScalar) {
         GTEST_SKIP() << "The SFPU scalar broadcast is only supported on Wormhole B0 and Blackhole";
     }
 
-    const ScalarCase sc = GetParam();
+    const ScalarCase& sc = GetParam();
     log_info(tt::LogTest, "Testing SFPU bcast scalar: {}", sc.name);
 
     for (auto& device : this->devices_) {
