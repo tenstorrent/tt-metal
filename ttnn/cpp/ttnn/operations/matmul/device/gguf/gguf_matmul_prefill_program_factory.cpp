@@ -38,7 +38,10 @@ bool prefill_format_supported(DataType dtype) {
         case DataType::GGUF_Q4_1:
         case DataType::GGUF_Q5_0:
         case DataType::GGUF_Q5_1:
+        case DataType::GGUF_Q2_K:
+        case DataType::GGUF_Q3_K:
         case DataType::GGUF_Q4_K:
+        case DataType::GGUF_Q5_K:
         case DataType::GGUF_Q6_K: return true;
         default: return false;
     }
