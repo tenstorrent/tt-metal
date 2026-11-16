@@ -81,7 +81,8 @@ inline constexpr uint32_t max_windows_per_chip = 8;
 
 // One client's attachment to the service on one seat. Construction attaches, launching the kernel when none runs;
 // destruction detaches. If the process dies first, the KMD detaches on its behalf (ExitWrite) and the OS drops its
-// seat lock. Not copyable or movable; not thread-safe (one submitting thread per instance).
+// seat lock. Not copyable or movable. One submitting thread per instance; other threads may call only done_count(),
+// heartbeat(), state() and describe_state().
 class SeatClient {
 public:
     // Under the seat's gate: takes the client seat lock, then joins the running kernel, or launches `image` (which
@@ -128,8 +129,13 @@ public:
     // is empty, longer than abi::BATCH_MAX_COMMANDS, or holds a command issue() would reject.
     [[nodiscard]] std::optional<uint64_t> issue_batch(std::span<const abi::KernelCommand> commands);
 
-    // Commands issued and not yet completed (a CMD_BATCH counts once).
+    // Commands issued and not yet completed (a CMD_BATCH counts once). Submitting thread only, like completed() and
+    // done().
     uint32_t in_flight() const;
+
+    // Commands the kernel has completed (a CMD_BATCH counts once), from the control page in host memory. 32-bit, so it
+    // wraps.
+    uint32_t done_count() const;
 
     // Commands completed so far (a CMD_BATCH counts once). 64-bit, so it does not wrap.
     uint64_t completed() const { return issued_ - in_flight(); }
@@ -141,9 +147,17 @@ public:
     // slot words.
     void drain(std::chrono::milliseconds timeout) const;
 
-    // The command block header words in L1: abi::ServiceState, and the slot-scan heartbeat.
+    // abi::ServiceState, from L1 over PCIe.
     uint32_t state() const;
+
+    // The kernel's slot-scan heartbeat, from the control page in host memory: the kernel publishes it at least every
+    // abi::CONTROL_PAGE_HEARTBEAT_TICKS while this client is attached, so a value that stops changing means the kernel
+    // stopped. 0 until the first publish. Costs no PCIe read and stays readable when the chip hangs, unlike the live
+    // counter in L1 (l1_heartbeat()), which the client reads only before attach and in describe_state().
     uint32_t heartbeat() const;
+
+    // The seat's state, L1 heartbeat and slot words, and the control page's done_count, for error messages.
+    std::string describe_state() const;
 
     // The endpoint a command names for host memory at `device_addr` (a sysmem IOVA on this chip): `device_addr` paired
     // with the chip's PCIe tile coords.
@@ -166,7 +180,9 @@ private:
     std::optional<uint64_t> post(const abi::KernelCommand& command);
     bool in_own_bank(uint16_t noc_xy_addr, uint64_t addr, uint32_t size) const;
     abi::KernelCommand local_if_own_bank(const abi::KernelCommand& command) const;
-    std::string describe_state() const;
+    // The kernel's live heartbeat counter in L1, over PCIe. For when the control page copy has nothing yet (classify(),
+    // before attach) or may lag (describe_state()).
+    uint32_t l1_heartbeat() const;
     void validate(const abi::KernelCommand& command) const;
 
     Seat seat_;

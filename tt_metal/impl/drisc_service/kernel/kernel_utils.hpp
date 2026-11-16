@@ -16,6 +16,7 @@
 #include "internal/dataflow/dataflow_api_common.h"
 #include "internal/dataflow/dataflow_cmd_bufs.h"
 // clang-format on
+#include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 #include "l1_layout.hpp"
 
@@ -28,14 +29,16 @@ inline uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 inline uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 inline uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
-// Readies the NoC for this kernel. The kernel never writes NIU_CFG_0 (experimental/drisc_mode.h, "Who sets the
-// mode"): the host put the core in reset and set both NIU modes to tt-metal's DRISC firmware layout before starting it
-// (DriscCore::force_stop), and the seat's NIU is one that layout leaves in stream mode (bank_seats).
-inline void noc_boot() {
+// Readies the NoC for this kernel. Sets both NIU modes to `noc2axi_niu_mask` as tt-metal's DRISC firmware does at its
+// boot (experimental/drisc_mode.h, "Who sets the mode"); the seat's NIU is one that layout leaves in stream mode
+// (bank_seats). The kernel writes NIU_CFG_0 nowhere else.
+inline void noc_boot(uint8_t noc2axi_niu_mask) {
     // Requests of a kernel stopped mid-flight survive the relaunch; let them complete before reprogramming the NoC.
     for (uint32_t trid = 0; trid <= NOC_MAX_TRANSACTION_ID; ++trid) {
         while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid));
     }
+
+    experimental::drisc_init_niu_modes(noc2axi_niu_mask);
 
     // Off: the D-cache is not coherent with NoC-landed control words.
     set_l1_data_cache<false>();

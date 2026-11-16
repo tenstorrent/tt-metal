@@ -33,10 +33,9 @@ public:
     // `translated` names the DRISC in TRANSLATED coords. Throws when `chip` is not an MMIO-attached Blackhole chip.
     DriscCore(tt::umd::Cluster& cluster, ChipId chip, const tt::umd::CoreCoord& translated);
 
-    // Puts the core in reset, then sets each NIU's NIU_CFG_0 bit 15 (NOC2AXI) to bit N of `noc2axi_mask` for NIU N,
-    // the state DRISC firmware leaves it in. The service's only writer of NIU modes: its kernel never changes them.
-    // Safe on a core in any state, running or hung.
-    void force_stop(uint8_t noc2axi_mask) const;
+    // Puts the core in reset. Safe on a core in any state, running or hung. Leaves the NIU modes as they are: the
+    // service kernel sets them at its boot (abi::ServiceHeader::noc2axi_niu_mask).
+    void force_stop() const;
 
     // Loads a firmware-style ELF (linked with firmware_drisc.ld) as tt-metal loads DRISC firmware: text to its address,
     // the local-memory data image to MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH, and the reset PC to MEM_DRISC_FIRMWARE_BASE.
