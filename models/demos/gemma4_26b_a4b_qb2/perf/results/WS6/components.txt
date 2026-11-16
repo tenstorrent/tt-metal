@@ -1,0 +1,20 @@
+WS6 round components, K=5, batch 1, traced (ms per call; trace replays back to back, ~30-50 replays)
+source: ad hoc benches on ws6-mtp (breakdown / argmax / drafter scripts), device profile of one round (tracy)
+
+verify (target batched decode, return_hidden)            rows=4      rows=6
+  one paged_update_cache for all rows (racy, timing only)  14.82       15.00
+  PagedUpdateRows (final)                                  15.03       15.25
+  one paged_update_cache per row (first version)             -         16.31
+verify argmax (common sampler, 32 rows)                     0.52
+plain batch-1 decode step (integration, WS1 proof)          11.64
+
+drafter step                       demo Gemma4AssistantModel   lean (tt/mtp/lean_drafter.py)
+  traced                           1.70                        0.97
+  device programs                  231                         95
+  device kernel time               1.23                        0.78  (LM head BFP8 0.21)
+draft argmax                        sampler 0.52                fast (tt/mtp/argmax.py) 0.21
+
+full round K=5                      first version 29.1          final 23.4 (in the decode loop, incl. host)
+device profile of one final round: 2261 programs, 20.2 ms kernel time
+  (verify 1577 programs / 15.1 ms, 5 drafter steps incl. argmax 137 programs / ~1.0 ms each)
+host per round: input refresh (11 small tensors) 0.17, id readback 0.02, seed copy 0.05
