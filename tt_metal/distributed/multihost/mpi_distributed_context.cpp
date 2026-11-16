@@ -294,7 +294,14 @@ void MPIContext::create(int argc, char** argv) {
     }
 }
 
-ContextPtr MPIContext::job_world() const { return mpi_job_world_; }
+ContextPtr MPIContext::job_world() const {
+    // Normally created by create(). Still needed when an application initialized MPI itself and installed its
+    // own MPIContext through set_current_world() without ever calling create().
+    if (!mpi_job_world_) {
+        mpi_job_world_ = std::make_shared<MPIContext>(MPI_COMM_WORLD);
+    }
+    return mpi_job_world_;
+}
 
 bool MPIContext::is_runtime_initialized() const {
     int is_mpi_initialized;
