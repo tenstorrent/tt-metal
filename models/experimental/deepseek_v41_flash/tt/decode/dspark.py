@@ -128,9 +128,17 @@ DSPARK_BLOCK = os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_OPS", "1") == "1"
 # default prompt, 3.25 vs 3.18 on gsm8k; 3 rows: 2.11), and fits the 4-row tiles and requests of the block ops.
 DSPARK_BLOCK_SIZE = int(os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_SIZE", "4"))
 # The greedy block draft's FFNs (router, routed experts and shared expert) on the target's persistent MoE server, as its
-# on-demand requester (the model builds that; see DeepSeekV41Model._launch_moe_server): DEEPSEEK_V4_DSPARK_SERVER_MOE=1.
-# 0, the default until the server side is validated, keeps them on the drafter's row (TP4 fused_experts, shared matmuls).
-DSPARK_SERVER_MOE = os.environ.get("DEEPSEEK_V4_DSPARK_SERVER_MOE", "0") not in ("0", "", "false", "False")
+# on-demand requester (the model builds that; see DeepSeekV41Model._launch_moe_server). DEEPSEEK_V4_DSPARK_SERVER_MOE=0
+# keeps them on the drafter's row (TP4 fused_experts and the shared expert's matmuls). TOK=300: draft 4.28 -> 2.80 ms,
+# 143.5 -> 144.8 tok/s/u on the default prompt, 205.4 -> 215.5 on gsm8k (tokens/round 2.27 -> 2.08, 3.25 -> 3.08).
+DSPARK_SERVER_MOE = os.environ.get("DEEPSEEK_V4_DSPARK_SERVER_MOE", "1") not in ("0", "", "false", "False")
+# The greedy draft's Markov head: each step's bias matmul streams the rank's [G / TP * rank, V / G] slice of it. bfloat8_b
+# keeps tokens/round (TOK=300: 2.27 / 3.25) and saves ~25 us a step; bfloat4_b drops the default prompt to 2.17.
+DSPARK_MARKOV_DTYPE = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b, "bf4": ttnn.bfloat4_b}[
+    os.environ.get("DEEPSEEK_V4_DSPARK_MARKOV_DTYPE", "bf8")
+]
+# The TP4 path's router gate dtype (experiment: the persistent server's router reads it at bfloat8_b).
+_GATE_DTYPE = {"bf16": ttnn.bfloat16, "bf8": ttnn.bfloat8_b}[os.environ.get("DEEPSEEK_V4_DSPARK_GATE_DTYPE", "bf16")]
 # Layer id of drafter stage 0 on that server (persistent_moe.DSPARK_LAYER_BASE).
 DSPARK_SERVER_LAYER_BASE = 40
 # The routed experts' dtype: bfloat4_b by default (half the bytes fused_experts streams; the same tokens per round as
@@ -214,10 +222,10 @@ def host_to_device(value: torch.Tensor, dst: ttnn.Tensor) -> None:
 
 def _upload_packet(values: dict, fields: dict, dst: ttnn.Tensor) -> None:
     """Pack ``values`` (name -> ints) at their ``fields`` ``(offset, n)`` into the INT32 packet ``dst``."""
-    packet = torch.zeros(tuple(dst.shape), dtype=torch.int32)
+    flat = [0] * dst.shape[-1]
     for name, (offset, n) in fields.items():
-        packet[..., offset : offset + n] = torch.tensor(values[name], dtype=torch.int32)
-    host_to_device(packet, dst)
+        flat[offset : offset + n] = values[name]
+    host_to_device(torch.tensor(flat, dtype=torch.int32).reshape(tuple(dst.shape)), dst)
 
 
 def _packet_fields(pkt: ttnn.Tensor, fields: dict) -> dict:
@@ -423,7 +431,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         gate = _memo(weights["ffn.gate.weight"])
         bias = _memo(weights["ffn.gate.bias"])
         temp = getattr(config, "gate_temp", 1.0)
-        self.gate = Linear(lambda: gate() / temp, device, cache.file("ffn.gate"), dtype=ttnn.bfloat16)
+        self.gate = Linear(lambda: gate() / temp, device, cache.file("ffn.gate"), dtype=_GATE_DTYPE)
         # The op ranks on bf16 ``scores + bias``; shifting the bias by its max keeps it where bf16 is fine.
         bias_file = cache.file("ffn.gate.bias_shifted")
         self.gate_bias = _load_weight(
@@ -968,7 +976,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             host = ttnn.to_torch(ttnn.get_device_tensors(self.markov_head)[0])
             self.markov_head_local = ttnn.from_torch(
                 host,
-                dtype=ttnn.bfloat16,
+                dtype=DSPARK_MARKOV_DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
