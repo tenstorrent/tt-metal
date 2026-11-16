@@ -553,6 +553,16 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_MUL_INT_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "mul_int_tile_init<DataFormat::Int32>();"},
       {"SFPU_OP_CHAIN_0", "mul_int_tile<DataFormat::Int32>(0, 1, 0);"}}},
+    // mul_int_sm_shift23: sign * ((|a| * |b|) >> 23), the requant rescale. Its operands need more than 23 bits,
+    // so they are Int32 L1 tiles unpacked to DEST (is_int32_binary_sfpu_op), in either DEST encoding.
+    {"mul_int_sm_shift23",
+     {{"SFPU_OP_BINARY_MUL_INT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "mul_int_tile_sm_and_shift23_init<DataFormat::Int32>();"},
+      {"SFPU_OP_CHAIN_0", "mul_int_tile_sm_and_shift23<DataFormat::Int32>(0, 1, 0);"}}},
+    {"mul_int_sm_shift23_smag",
+     {{"SFPU_OP_BINARY_MUL_INT_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "mul_int_tile_sm_and_shift23_init<DataFormat::Int32>();"},
+      {"SFPU_OP_CHAIN_0", "mul_int_tile_sm_and_shift23<DataFormat::Int32, true>(0, 1, 0);"}}},
     {"gt_int",
      {{"SFPU_OP_BINARY_GT_INT_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "gt_int_tile_init<DataFormat::Int32>();"},
@@ -1376,11 +1386,17 @@ bool is_int8_binary_sfpu_op(const std::string& op_name) {
            (op_name == "copy_dest_int");
 }
 
+// mul_int_sm_shift23 in its two DEST encodings. The _smag variant stages sign-magnitude words in L1, which
+// unpack-to-dest copies through unchanged.
+bool is_int32_sm_shift23_op(const std::string& op_name) {
+    return op_name == "mul_int_sm_shift23" || op_name == "mul_int_sm_shift23_smag";
+}
+
 // Native Int32 binary ops: two's-complement Int32 L1 operands with negative values, routed to a 32-bit Dest
-// through unpack-to-dest, Int32 out. Golden: int32_binary_result.
+// through unpack-to-dest, Int32 out. Golden: int32_binary_result, or the sm_shift23 golden for that op.
 bool is_int32_binary_sfpu_op(const std::string& op_name) {
     return op_name == "lt_int32" || op_name == "le_int32" || op_name == "gt_int32" || op_name == "ge_int32" ||
-           op_name == "eq_int32" || op_name == "ne_int32";
+           op_name == "eq_int32" || op_name == "ne_int32" || is_int32_sm_shift23_op(op_name);
 }
 
 bool is_float_compare_binary_op(const std::string& op_name) {
@@ -1478,9 +1494,113 @@ int32_t int32_binary_result(const std::string& op_name, int32_t lhs, int32_t rhs
     TT_THROW("Unsupported int32 binary op_name in test");
 }
 
+// mul_int_sm_shift23 operands and results as (negative, magnitude), in the op's DEST encoding.
+struct SignMagnitude {
+    bool negative;
+    uint32_t magnitude;
+};
+
+SignMagnitude decode_int32(uint32_t word, bool sign_magnitude) {
+    if (sign_magnitude) {
+        return {(word >> 31) != 0, word & 0x7FFFFFFFu};
+    }
+    const auto value = std::bit_cast<int32_t>(word);
+    return {value < 0, static_cast<uint32_t>(std::abs(static_cast<int64_t>(value)))};
+}
+
+uint32_t encode_int32(SignMagnitude v, bool sign_magnitude) {
+    if (sign_magnitude) {
+        return (v.negative ? 0x80000000u : 0u) | v.magnitude;
+    }
+    const auto magnitude = static_cast<int64_t>(v.magnitude);
+    return std::bit_cast<uint32_t>(static_cast<int32_t>(v.negative ? -magnitude : magnitude));
+}
+
+// Exact sign * ((|a| * |b|) >> 23) wherever the contract holds (|y| < 2^23). Outside it, the kernel's own sum of
+// 23-bit partial products, which never forms a_hi * b_hi and keeps only the low 23 bits of each cross product.
+std::vector<uint32_t> compute_packed_int32_sm_shift23_golden(
+    const std::vector<uint32_t>& packed_lhs, const std::vector<uint32_t>& packed_rhs, bool sign_magnitude) {
+    constexpr uint64_t low23 = (1u << 23) - 1;
+    std::vector<uint32_t> packed_golden(packed_lhs.size());
+    for (size_t i = 0; i < packed_lhs.size(); ++i) {
+        const SignMagnitude a = decode_int32(packed_lhs[i], sign_magnitude);
+        const SignMagnitude b = decode_int32(packed_rhs[i], sign_magnitude);
+        const uint64_t ma = a.magnitude;
+        const uint64_t mb = b.magnitude;
+        uint64_t magnitude = (ma * mb) >> 23;
+        if (magnitude >= (1u << 23)) {
+            magnitude = (((ma & low23) * (mb & low23)) >> 23) + (((ma >> 23) * (mb & low23)) & low23) +
+                        (((ma & low23) * (mb >> 23)) & low23);
+        }
+        const bool negative = (a.negative != b.negative) && magnitude != 0;
+        packed_golden[i] = encode_int32({negative, static_cast<uint32_t>(magnitude)}, sign_magnitude);
+    }
+    return packed_golden;
+}
+
+// Random lanes cycle through the three regimes that stay inside the contract: both magnitudes below 2^23, then a
+// wide LHS against an RHS below 2^15 (exercises a_hi * b_lo), then the mirror (a_lo * b_hi). Planted lanes come first.
+std::pair<vector<uint32_t>, vector<uint32_t>> generate_int32_sm_shift23_inputs(
+    const unsigned int numel, bool sign_magnitude, const int seed) {
+    constexpr uint32_t int_max = std::numeric_limits<int32_t>::max();
+    constexpr uint32_t below_2_23 = (1u << 23) - 1;
+    constexpr uint32_t below_2_15 = (1u << 15) - 1;
+    // {negative, magnitude} pairs. Zero results with mixed signs must come back +0; a negative zero operand only
+    // exists in sign-magnitude and decays to 0 in two's complement. The last two are deliberately out of range.
+    constexpr std::pair<SignMagnitude, SignMagnitude> planted[] = {
+        {{false, 0}, {false, 5}},
+        {{false, 0}, {true, 5}},
+        {{true, 0}, {false, 5}},
+        {{true, 0}, {true, 0}},
+        {{true, 1}, {false, 1}},
+        {{true, 1u << 12}, {false, 1u << 10}},
+        {{false, below_2_23}, {true, below_2_23}},
+        {{true, below_2_23}, {true, below_2_23}},
+        {{false, int_max}, {true, 1}},
+        {{true, int_max}, {false, below_2_15}},
+        {{false, below_2_15}, {true, int_max}},
+        {{false, int_max}, {false, int_max}},
+        {{true, int_max}, {false, int_max}},
+    };
+    std::mt19937 rng(seed);
+    std::uniform_int_distribution<uint32_t> narrow(0, below_2_23);
+    std::uniform_int_distribution<uint32_t> wide(1u << 23, int_max);
+    std::uniform_int_distribution<uint32_t> small(0, below_2_15);
+    std::bernoulli_distribution negative(0.5);
+
+    vector<uint32_t> lhs(numel), rhs(numel);
+    for (unsigned int i = 0; i < numel; ++i) {
+        SignMagnitude a{negative(rng), 0};
+        SignMagnitude b{negative(rng), 0};
+        switch (i % 3) {
+            case 0:
+                a.magnitude = narrow(rng);
+                b.magnitude = narrow(rng);
+                break;
+            case 1:
+                a.magnitude = wide(rng);
+                b.magnitude = small(rng);
+                break;
+            default:
+                a.magnitude = small(rng);
+                b.magnitude = wide(rng);
+                break;
+        }
+        if (i < std::size(planted)) {
+            std::tie(a, b) = planted[i];
+        }
+        lhs[i] = encode_int32(a, sign_magnitude);
+        rhs[i] = encode_int32(b, sign_magnitude);
+    }
+    return {lhs, rhs};
+}
+
 std::vector<uint32_t> compute_packed_int32_binary_golden(
     const std::vector<uint32_t>& packed_lhs, const std::vector<uint32_t>& packed_rhs, const std::string& op_name) {
     TT_FATAL(packed_lhs.size() == packed_rhs.size(), "lhs/rhs packed size mismatch");
+    if (is_int32_sm_shift23_op(op_name)) {
+        return compute_packed_int32_sm_shift23_golden(packed_lhs, packed_rhs, op_name == "mul_int_sm_shift23_smag");
+    }
     std::vector<uint32_t> packed_golden(packed_lhs.size());
     for (size_t i = 0; i < packed_lhs.size(); ++i) {
         packed_golden[i] = std::bit_cast<uint32_t>(
@@ -2212,6 +2332,9 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
     const unsigned int numel, const std::string& op_name, const int seed) {
     if (is_non_negative_int8_binary_op(op_name)) {
         return generate_non_negative_int8_binary_inputs(numel, op_name, seed);
+    }
+    if (is_int32_sm_shift23_op(op_name)) {
+        return generate_int32_sm_shift23_inputs(numel, op_name == "mul_int_sm_shift23_smag", seed);
     }
     if (is_int32_binary_sfpu_op(op_name)) {
         return generate_int32_binary_inputs(numel, seed);
@@ -5014,6 +5137,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "atan2"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),
+        std::make_tuple(1, "mul_int_sm_shift23"),
+        std::make_tuple(1, "mul_int_sm_shift23_smag"),
         std::make_tuple(1, "gt_int"),
         std::make_tuple(1, "lt_int32"),
         std::make_tuple(1, "le_int32"),
