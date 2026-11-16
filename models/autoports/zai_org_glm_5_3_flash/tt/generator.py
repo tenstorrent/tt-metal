@@ -1637,6 +1637,13 @@ class Glm53Generator(_ReadinessGenerator):
         mapped atomically, a refused row leaves its previous mapping."""
         phys, done = b.phys.clone(), []
         slots = list(slots)
+        if keep:
+            # rows that reuse cached blocks (keep > 0: a prefix hit's computed columns, a live request's length) map
+            # first, so their blocks are referenced before another row's fresh columns make a full owner chip reclaim
+            # its least recently released cached block. In the call's order, served AgentX c32 (an exact-split call of
+            # three rows) mapped a new request first, which evicted a block of the next row's confirmed hit: "logical
+            # block 897 at computed column 896 of slot 4 has no device content", and the engine stopped.
+            slots.sort(key=lambda s: 0 if keep.get(s, 0) > 0 else 1)
         # rows only IDLE slots hold (an owned cache's identity rows, a finished request's) are reclaimable: a row being
         # written that lists one of their blocks releases them (the idle slot loses its coverage; a later admission
         # writes its rows again)

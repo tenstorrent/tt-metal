@@ -1184,6 +1184,24 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     assert kv.state[g] == gp and first_g == (gp[-1] + 1) % VOCAB and pc.stats["exact_uncut_splits"] == 2
     ad.release_request(3)
     assert ad.confirm_prefix_cache_hit(gp + _prompt(30, 95), [], 640) == 640
+    # ---- one call, two rows (an exact-split inner call): a new request's fresh column on a full owner chip and a
+    #      confirmed hit listing that chip's least recently released cached block. The hit's row maps first (its
+    #      blocks referenced), so the fresh column reclaims another cached block; in the call's order the fresh row
+    #      evicted the hit's block and the hit's row raised (served AgentX c32 stopped the engine on it)
+    o2 = OwnerBlockMap(2, 3, 1)  # 2 chips x 2 usable blocks (local 0 is the null block), column j on chip j % 2
+    o2.set_row(0, [10, 11], 2)
+    o2.release_slot(0)  # 10 (chip 0) and 11 (chip 1) cached: 10 is chip 0's least recently released
+    o2.set_row(2, [12], 1)
+    o2.release_slot(2)  # chip 0 is full of cached blocks (10, 12)
+    null4 = torch.tensor([o2.null(j) for j in range(4)], dtype=torch.int64)
+    bnd = SimpleNamespace(obm=o2, max_batch=4, null_row=null4, phys=null4.expand(4, 4).clone(),
+                          slots=[SimpleNamespace(active=False) for _ in range(4)])  # fmt: skip
+    tbl = torch.full((4, 4), -1, dtype=torch.int64)
+    tbl[1, 0] = 20  # slot 1: a new request, column 0 on chip 0
+    tbl[3, :2] = torch.tensor([10, 11])  # slot 3: a hit on slot 0's cached blocks (2 computed columns)
+    _phys, done, err = Glm53Generator._physical_rows(bnd, tbl, torch.tensor([0, 1, 0, 2]), [1, 3], keep={3: 2})
+    assert err is None and done == [3, 1]
+    assert o2.physical(10) is not None and o2.physical(11) is not None and o2.physical(12) is None
 
 
 class _MockHostTierBackend(_MockPrefixBackend):
