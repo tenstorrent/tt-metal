@@ -13,10 +13,10 @@ import ttnn
 from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import (
     IMAGE_DIR_ENV,
+    available_iterations,
     get_batch,
     get_data_loader,
     image_dir,
-    num_images,
 )
 from models.demos.vision.classification.vit.common.tests.vit_trace_2cq import VitTrace2CQ
 
@@ -38,10 +38,9 @@ def test_run_vit_trace_2cqs_inference(
     entire_dataset=False,
 ):
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    iterations = iterations // mesh_device.get_num_devices()
-
-    if entire_dataset:
-        iterations = num_images() // batch_size
+    iterations = available_iterations(
+        batch_size, None if entire_dataset else iterations // mesh_device.get_num_devices()
+    )
 
     profiler.clear()
     with torch.no_grad():

@@ -12,7 +12,11 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.vision.classification.vit.blackhole.tt import ttnn_optimized_sharded_vit_bh
 from models.demos.vision.classification.vit.common.common import load_torch_model
-from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import get_batch, get_data_loader
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import (
+    available_iterations,
+    get_batch,
+    get_data_loader,
+)
 from models.perf.perf_utils import prep_perf_report
 
 
@@ -62,10 +66,11 @@ def test_vit(device, model_location_generator):
 
     # IMAGENET INFERENCE
     #####################
-    data_loader = get_data_loader(batch_size, 2)
+    iterations = available_iterations(batch_size, 2)
+    data_loader = get_data_loader(batch_size, iterations)
 
     durations = []
-    for iter in range(2):
+    for iter in range(iterations):
         torch_pixel_values, labels = get_batch(data_loader, image_processor)
         start = time.time()
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))

@@ -52,6 +52,19 @@ def num_images():
     return None if root is None else len(labelled_images(root))
 
 
+def available_iterations(batch_size, iterations=None):
+    """The batches a run can take: iterations, capped by the full batches of the labelled folder, or all of
+    them when iterations is None. Synthetic inputs are unlimited."""
+    count = num_images()
+    if count is None:
+        assert iterations is not None, f"set {IMAGE_DIR_ENV} to run over a whole labelled folder"
+        return iterations
+    full_batches = count // batch_size
+    if full_batches == 0:
+        raise ValueError(f"{IMAGE_DIR_ENV} holds {count} images, fewer than one batch of {batch_size}")
+    return full_batches if iterations is None else min(iterations, full_batches)
+
+
 def get_data_loader(batch_size, iterations, seed=0):
     """iterations batches of InputExamples: the labelled images from VIT_IMAGE_DIR when it is set, else
     distinct random images without labels."""
