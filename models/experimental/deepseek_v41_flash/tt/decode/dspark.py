@@ -69,9 +69,10 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import DECODE_LA
 from models.experimental.deepseek_v41_flash.tt.decode.attention import _rope_tail, _rows_on_one_core
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DECODE_LAYOUTS as MOE_LAYOUTS
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
-from models.experimental.deepseek_v4_flash.tt.common import _HIFI4, _MASK_NEG, DeepSeekV4Module
+from models.experimental.deepseek_v4_flash.tt.common import _HIFI4, _MASK_NEG, CCL_TOPOLOGY, DeepSeekV4Module
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     _decode_activation,
+    _tp_cluster_axis,
     _interleaved_rotate_matrix,
     make_rope_table,
 )
@@ -260,6 +261,9 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         self.scale = self.head_dim**-0.5
         self.limit = config.swiglu_limit
         self.experts = experts
+        # fused_experts' experts per block (0: the experts' own setting). A block is one gather / broadcast barrier;
+        # the arithmetic is the same at any size, only L1 bounds it.
+        self.experts_block = 0
         tag = f".tp{tp}"
         row = ttnn.ShardTensorToMesh(device, dim=0) if tp > 1 else None
         # A LinearDecode weight is [K, N] (or [1, 1, K, N] when prefetched): columns are the last dim.
@@ -517,7 +521,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             top_k=experts.top_k,
             routed_scaling_factor=experts.routed_scaling_factor,
             routing_eps=experts.routing_eps,
-            experts_block_size=min(experts.experts_block_size, num_experts),
+            experts_block_size=min(self.experts_block or experts.experts_block_size, num_experts),
         )
         routed = ttnn.to_layout(ttnn.reshape(out, [1, 1, t, d]), ttnn.TILE_LAYOUT)
         x_rep = _decode_activation(self.shared_w1, x)
@@ -688,6 +692,36 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             device=device,
             mesh_mapper=replicate,
         )
+        # The greedy draft (draft(greedy=True)) runs each Markov step on this rank's slice of the vocabulary: the
+        # lm_head's V / TP columns (before its all-gather) are groups [r * G / TP, (r + 1) * G / TP) of the grouped
+        # layout, so the rank's rows of markov_head and a G / TP block-diagonal embedding give its slice of the bias,
+        # and only the biased [G / TP, V / G] rows are gathered for the argmax: a quarter of the bias matmul's weight
+        # reads and no vocab-wide logits gather. The products and sums are the full matmul's (the other ranks' rows
+        # only added zeros), so the rows, and the ids, are the same.
+        self.head_tp = getattr(lm_head, "tp_size", 1) if hasattr(lm_head, "linear") else 1
+        self.markov_head_local = self.markov_blocks_local = None
+        if self.head_tp > 1:
+            if groups % self.head_tp:
+                raise ValueError(f"{groups} Markov groups do not split over TP{self.head_tp}")
+            local_groups = groups // self.head_tp
+            host = ttnn.to_torch(ttnn.get_device_tensors(self.markov_head)[0])
+            self.markov_head_local = ttnn.from_torch(
+                host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-2),
+            )
+            self.markov_blocks_local = ttnn.from_torch(
+                torch.kron(torch.eye(local_groups), torch.ones(1, rank)).reshape(
+                    1, 1, local_groups, local_groups * rank
+                ),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=replicate,
+            )
         conf = _memo(last["confidence_head.proj.weight"])  # [1, D + rank]
         self.conf_hidden = Linear(
             lambda: conf()[:, : self.hidden], device, head_cache.file("confidence.hidden"), dtype=ttnn.float32
@@ -994,7 +1028,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         for stage in self.stages:
             stage.write_main(main_x, cos, sin, slots)
 
-    def draft(self) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def draft(self, greedy: bool = False) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Draft the block :meth:`set_block` staged: :attr:`out`'s ``(ids [1, 1, block] uint32, confidence [1, 1,
         block, 1] fp32, logits [1, 1, block, V] bf16 ROW_MAJOR)``.
 
@@ -1002,12 +1036,22 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         ``logits[i]`` plus ``temperature`` times Gumbel noise (from the staged uniforms), is the proposal for
         position ``frontier + 2 + i``: a sample from ``softmax(logits[i] / temperature)``, the argmax when greedy.
         ``confidence[i]`` scores it.
+
+        ``greedy`` drafts at temperature 0 whatever :meth:`set_sampling` staged, with the same ids, and leaves
+        ``logits`` as they were: it skips the noise and the logits rows, and with a TP ``lm_head`` runs the Markov
+        steps on each rank's slice of the vocabulary (see :attr:`head_tp`).
         """
         f = _packet_fields(self.inputs["block"], self._block_fields)
         ids, pos, q_pos = (ttnn.typecast(f[name], ttnn.uint32) for name in ("ids", "pos", "q_pos"))
         scalar = [1, 1, 1, 1]
         return self._draft(
-            ids, pos, q_pos, _as_float(f["frontier_slot"], scalar), _as_float(f["live"], scalar), f["ring_base"]
+            ids,
+            pos,
+            q_pos,
+            _as_float(f["frontier_slot"], scalar),
+            _as_float(f["live"], scalar),
+            f["ring_base"],
+            greedy=greedy,
         )
 
     def accept_draft(self, sampled: bool) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -1080,6 +1124,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         frontier_slot: ttnn.Tensor,
         live: ttnn.Tensor,
         ring_base: ttnn.Tensor,
+        greedy: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         inp, t = self.inputs, self.block
         x_embed, token, rope, bias_row = self._block_inputs(ids, pos, q_pos, frontier_slot, live)
@@ -1102,7 +1147,11 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             compute_kernel_config=_HIFI4,
         )
         x = rows_from_tokens(collapsed)
-        logits = self.lm_head(_rms(x, self.norm, self.eps))
+        normed = _rms(x, self.norm, self.eps)
+        if greedy:
+            ids, embeds = self._markov_greedy(normed, token)
+            return self._finish_draft(x, ids, embeds, None)
+        logits = self.lm_head(normed)
 
         rank, vocab = self.markov_embed.shape[-1], logits.shape[-1]
         groups, wide = MARKOV_GROUPS, vocab // MARKOV_GROUPS
@@ -1127,16 +1176,60 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             best = ttnn.argmax(ttnn.to_layout(noisy, ttnn.ROW_MAJOR_LAYOUT))
             ids.append(ttnn.reshape(best, [1, 1, 1]))
             token = ttnn.reshape(best, [1, 1])
+        rows = ttnn.reshape(ttnn.to_layout(ttnn.concat(rows, dim=1), ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, vocab])
+        return self._finish_draft(x, ids, embeds, rows)
+
+    def _finish_draft(self, x, ids: list, embeds: list, rows) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """The confidence head over the block's rows ``x`` and Markov inputs ``embeds``, then :attr:`out` (``rows``
+        None keeps the last logits)."""
         markov = ttnn.to_layout(ttnn.concat(embeds, dim=2), ttnn.TILE_LAYOUT)
         conf = ttnn.add(
             ttnn.linear(x, self.conf_hidden.weight, dtype=ttnn.float32, compute_kernel_config=_HIFI4),
             ttnn.linear(markov, self.conf_markov.weight, dtype=ttnn.float32, compute_kernel_config=_HIFI4),
         )
         out = self.out
-        for name, value in (
-            ("ids", ttnn.concat(ids, dim=-1)),
-            ("conf", conf),
-            ("rows", ttnn.reshape(ttnn.to_layout(ttnn.concat(rows, dim=1), ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, vocab])),
-        ):
-            ttnn.copy(ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG), out[name])
+        for name, value in (("ids", ttnn.concat(ids, dim=-1)), ("conf", conf), ("rows", rows)):
+            if value is not None:
+                ttnn.copy(ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG), out[name])
         return out["ids"], out["conf"], out["rows"]
+
+    def _markov_greedy(self, normed: ttnn.Tensor, token: ttnn.Tensor) -> tuple[list, list]:
+        """The greedy Markov steps from the head's input ``normed`` ``[1, 1, T, D]`` and the block's token: ``(ids,
+        embeds)``, as :meth:`_draft`'s loop at temperature 0 (the noise is ``0 *`` finite there, an exact no-op).
+
+        With a TP ``lm_head`` each rank keeps its ``V / TP`` logits columns and biases them with its rows of the
+        Markov head; the ranks' biased rows, gathered in rank order, are the full grouped row."""
+        t, rank = self.block, self.markov_embed.shape[-1]
+        tp = self.head_tp
+        if tp > 1:
+            logits = self.lm_head.linear(normed)
+            head, blocks_const = self.markov_head_local, self.markov_blocks_local
+        else:
+            logits = self.lm_head(normed)
+            head, blocks_const = self.markov_head, self.markov_blocks
+        groups = MARKOV_GROUPS // tp
+        wide = logits.shape[-1] // groups
+        grouped = ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), [1, t, groups, wide]), ttnn.TILE_LAYOUT
+        )
+        ids, embeds = [], []
+        for i in range(t):
+            embed = ttnn.reshape(ttnn.embedding(token, self.markov_embed), [1, 1, 1, rank])
+            embeds.append(embed)
+            blocks = ttnn.to_layout(ttnn.repeat(embed, ttnn.Shape([1, 1, 1, groups])), ttnn.TILE_LAYOUT)
+            bias = ttnn.matmul(ttnn.multiply(blocks_const, blocks), head, compute_kernel_config=_HIFI4)
+            row = ttnn.add(ttnn.slice(grouped, [0, i, 0, 0], [1, i + 1, groups, wide]), bias)
+            if tp > 1:
+                row = ttnn.all_gather(
+                    row,
+                    dim=2,
+                    cluster_axis=_tp_cluster_axis(self.device),
+                    num_links=1,
+                    topology=CCL_TOPOLOGY,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            # Over the whole [MARKOV_GROUPS, V / MARKOV_GROUPS] row: its flat index is the vocabulary id.
+            best = ttnn.argmax(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT))
+            ids.append(ttnn.reshape(best, [1, 1, 1]))
+            token = ttnn.reshape(best, [1, 1])
+        return ids, embeds

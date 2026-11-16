@@ -3338,6 +3338,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             self.dspark.write_main()
             self.dspark.refresh_uniforms(1, accept=self.spec_device_accept)
             self.dspark.draft()
+            self.dspark.draft(greedy=True)
             if self.spec_device_accept:
                 for sampled in (False, True):
                     self.dspark.accept_draft(sampled)
@@ -3378,6 +3379,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self.dspark.draft()
             ttnn.end_trace_capture(device, tid, cq_id=0)
             self._spec_tids["draft"] = tid
+            tid = ttnn.begin_trace_capture(device, cq_id=0)
+            with _trace_capture_guard():
+                self.dspark.draft(greedy=True)
+            ttnn.end_trace_capture(device, tid, cq_id=0)
+            self._spec_tids["draft_greedy"] = tid
             for sampled in (False, True) if self.spec_device_accept else ():
                 tid = ttnn.begin_trace_capture(device, cq_id=0)
                 with _trace_capture_guard():
@@ -4117,7 +4123,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         d.set_block(token, frontier, self._resident_slot())
         if seed is not None:
             d.refresh_uniforms(seed, accept=False)
-        ttnn.execute_trace(d.device, self._spec_tids["draft"], cq_id=0, blocking=False)
+        # A greedy draft has its own trace (same ids, no noise, no logits rows): spec_read_draft reads no logits then.
+        tid = self._spec_tids["draft_greedy" if d.temperature == 0 else "draft"]
+        ttnn.execute_trace(d.device, tid, cq_id=0, blocking=False)
 
     def spec_accept_draft(
         self, start: int, drafts: int, sampled: bool, seed: Optional[int] = None
@@ -4139,13 +4147,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
         m, token = (int(v) for v in accept)
         return m, token, [int(i) for i in ids]
 
-    def spec_read_draft(self, logits: bool = False) -> tuple[list[int], list[float], Optional[torch.Tensor]]:
-        """The last draft's proposals, confidence logits and (with ``logits``) rows' logits ``[block_size, V]``,
-        off the drafter (waiting for it)."""
+    def spec_read_draft(
+        self, logits: bool = False, conf: bool = True
+    ) -> tuple[list[int], Optional[list[float]], Optional[torch.Tensor]]:
+        """The last draft's proposals, (with ``conf``) confidence logits and (with ``logits``) rows' logits
+        ``[block_size, V]``, off the drafter (waiting for it). Each is one readback; the ids alone are the round's."""
         d = self.dspark
-        ids, conf = (ttnn.to_torch(ttnn.get_device_tensors(d.out[name])[0]) for name in ("ids", "conf"))
+        ids = ttnn.to_torch(ttnn.get_device_tensors(d.out["ids"])[0])
+        confidences = None
+        if conf:
+            confidences = [float(c) for c in ttnn.to_torch(ttnn.get_device_tensors(d.out["conf"])[0]).flatten()]
         rows = self.spec_draft_logits() if logits else None
-        return [int(i) for i in ids.flatten()], [float(c) for c in conf.flatten()], rows
+        return [int(i) for i in ids.flatten()], confidences, rows
 
     def spec_draft_logits(self) -> torch.Tensor:
         """The last draft's rows' logits ``[block_size, V]``, off the drafter. They stay there until the next
