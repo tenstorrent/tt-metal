@@ -106,14 +106,13 @@ MergeInputs make_inputs(uint32_t B, uint32_t H, uint32_t S, uint32_t D, uint32_t
     return in;
 }
 
-// Uploads the inputs, the step output as step_output_dtype (BFLOAT16 or FLOAT32), and replaces the host
-// step output with the values the device holds, so the reference sees exactly what the merge sees.
-DeviceMergeInputs upload(MergeInputs& in, ttnn::DataType step_output_dtype = ttnn::DataType::BFLOAT16) {
+// Uploads the inputs, the step output as BFLOAT16, and replaces the host step output with the
+// values the device holds, so the reference sees exactly what the merge sees.
+DeviceMergeInputs upload(MergeInputs& in) {
     DeviceMergeInputs dev{
         .accum = to_device_fp32(in.accum),
         .running_lse = to_device_fp32(in.running_lse),
-        .step_output = step_output_dtype == ttnn::DataType::FLOAT32 ? to_device_fp32(in.step_output)
-                                                                     : to_device_bf16(in.step_output),
+        .step_output = to_device_bf16(in.step_output),
         .intermediates = to_device_fp32(in.intermediates),
     };
     in.step_output = ttml::core::to_xtensor<float>(dev.step_output);
@@ -268,12 +267,11 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // One merge over rows of every kind, against the float64 reference.
-static void check_single_merge(const MergeShape& shape, ttnn::DataType step_output_dtype) {
+static void check_single_merge(const MergeShape& shape) {
     const auto [B, H, S_param, D] = shape;
     const uint32_t S = resolve_seq_len(S_param);
     MergeInputs in = make_inputs(B, H, S, D, /*seed=*/7U);
-    DeviceMergeInputs dev = upload(in, step_output_dtype);
-    ASSERT_EQ(dev.step_output.dtype(), step_output_dtype);
+    DeviceMergeInputs dev = upload(in);
     const MergeResult ref = reference_merge(in);
 
     ttml::ops::distributed::detail::online_softmax_merge(
@@ -289,8 +287,7 @@ static void check_single_merge(const MergeShape& shape, ttnn::DataType step_outp
     const ErrorStats lse_err = compare(lse, ref.lse);
     const double accum_over_bound = accum_error_over_bound(accum, ref);
     fmt::print(
-        "[merge {}] accum max_abs {:.3e} max_rel {:.3e} (error/bound {:.2f}) | lse max_abs {:.3e} max_rel {:.3e}\n",
-        step_output_dtype == ttnn::DataType::FLOAT32 ? "fp32 step" : "bf16 step",
+        "[merge] accum max_abs {:.3e} max_rel {:.3e} (error/bound {:.2f}) | lse max_abs {:.3e} max_rel {:.3e}\n",
         accum_err.max_abs,
         accum_err.max_rel,
         accum_over_bound,
@@ -316,12 +313,7 @@ static void check_single_merge(const MergeShape& shape, ttnn::DataType step_outp
 
 // The ring passes the SDPA kernel's BFLOAT16 output.
 TEST_P(RingAttentionMergeTest, SingleMergeMatchesReference) {
-    check_single_merge(GetParam(), ttnn::DataType::BFLOAT16);
-}
-
-// online_softmax_merge also accepts a FLOAT32 step output.
-TEST_P(RingAttentionMergeTest, SingleMergeFp32StepOutputMatchesReference) {
-    check_single_merge(GetParam(), ttnn::DataType::FLOAT32);
+    check_single_merge(GetParam());
 }
 
 // A full ring of merges starting from (O = 0, L = -inf), some steps skipped, against the direct

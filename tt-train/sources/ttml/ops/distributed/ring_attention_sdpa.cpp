@@ -81,8 +81,8 @@ void online_softmax_merge(
         running_lse.dtype(),
         step_intermediates.dtype());
     TT_FATAL(
-        step_output.dtype() == ttnn::DataType::BFLOAT16 || step_output.dtype() == ttnn::DataType::FLOAT32,
-        "online_softmax_merge: step_output must be BFLOAT16 or FLOAT32, got {}",
+        step_output.dtype() == ttnn::DataType::BFLOAT16,
+        "online_softmax_merge: step_output must be BFLOAT16, got {}",
         step_output.dtype());
     TT_FATAL(
         step_intermediates.logical_shape()[-1] == 32U,
