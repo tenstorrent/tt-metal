@@ -80,15 +80,12 @@ class TracedStep:
         return False
 
 
-def time_traced(traced, samples=1):
-    """Host ms of one replay through a sync, per sample. The perf gates time one replay, with no warm-up replay."""
-    result = []
-    for _ in range(samples):
-        ttnn.synchronize_device(traced.mesh_device)
-        t0 = time.perf_counter()
-        traced.replay()
-        result.append((time.perf_counter() - t0) * 1e3)
-    return result
+def time_traced(traced):
+    """Host ms of one replay through a sync (no warm-up replay), as a one-sample list."""
+    ttnn.synchronize_device(traced.mesh_device)
+    t0 = time.perf_counter()
+    traced.replay()
+    return [(time.perf_counter() - t0) * 1e3]
 
 
 def measure_host(mesh_device, step, *, attach=None, detach=None):

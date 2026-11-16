@@ -12,6 +12,7 @@ across calls.
 from __future__ import annotations
 
 import statistics
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -20,7 +21,6 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
@@ -31,8 +31,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     make_actual_start,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
-from models.demos.deepseek_v3_d_p.tests.measure.gate import band_failure
-from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, time_traced
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 
@@ -381,20 +379,28 @@ def test_qkv_convolution_exchange_kimi_k3_perf(
         exchange.check(interval, exchange.to_host(outputs))
         _release(outputs)
 
-        def calls() -> None:
-            for _ in range(_PERF_CALLS_PER_TRACE):
-                # Released inside the trace, as the layer releases them after their use.
-                _release(exchange.run(actual_start, actual_end))
-
-        with TracedStep(mesh_device, calls, compile_runs=0) as traced:  # the checked call above compiled
-            traced.capture()
-            traced.replay()
-            per_trace = time_traced(traced, samples=_PERF_SAMPLES)
-        samples_us = [ms * 1e3 / _PERF_CALLS_PER_TRACE for ms in per_trace]
+        trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for _ in range(_PERF_CALLS_PER_TRACE):
+            # Released inside the trace, as the layer releases them after their use.
+            _release(exchange.run(actual_start, actual_end))
+        ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
+        try:
+            ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
+            samples_us = []
+            for _ in range(_PERF_SAMPLES):
+                begin = time.perf_counter()
+                ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                samples_us.append((time.perf_counter() - begin) * 1e6 / _PERF_CALLS_PER_TRACE)
+        finally:
+            ttnn.release_trace(mesh_device, trace)
         median_us = statistics.median(samples_us)
         logger.info(f"qkv_causal_conv1d_silu_with_carry Kimi-K3 perf: {median_us:.1f} us per call, {samples_us}")
-        failure = band_failure("per call", median_us, reference_us, _PERF_MARGIN, unit="us")
-        assert_perf_gate(failure is None, failure or "")
+        lower, upper = reference_us * (1 - _PERF_MARGIN), reference_us * (1 + _PERF_MARGIN)
+        assert lower <= median_us <= upper, (
+            f"{median_us:.1f} us per call outside [{lower:.1f}, {upper:.1f}] "
+            f"(reference {reference_us} us, margin +/- {_PERF_MARGIN * 100:.0f}%)"
+        )
     finally:
         for tensor in (actual_start, actual_end):
             ttnn.deallocate(tensor)

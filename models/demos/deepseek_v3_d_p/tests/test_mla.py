@@ -18,7 +18,6 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -28,7 +27,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.measure.determinism import RUNS, check_determinism
-from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, band_failure, gate
+from models.demos.deepseek_v3_d_p.tests.measure.gate import MARGIN, gate
 from models.demos.deepseek_v3_d_p.tests.measure.trace import TracedStep, measure_host
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -60,7 +59,6 @@ from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_m
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
 from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
-from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
@@ -525,30 +523,11 @@ ROTATED_VALID_LISTS = [
 ]
 ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial", "multislab", "allfull"]
 
-# Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
-# subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
-# the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 9_996_000
-K3_CHUNKED_RT_PERF_MARGIN = 0.03
-# Host-time targets (ms) for the same forward, untraced and traced. Report-only until calibrated from CI; the
-# realtime-profiler gate above cannot see sub-device overlap and goes once these exist.
-K3_CHUNKED_HOST_TARGETS_MS = {"untraced": None, "traced": None}
+# Host-time targets (ms), untraced and traced (tests/measure): measured on one Galaxy (3 runs) and scaled to the CI
+# host (untraced x0.95, the sparse MLA ratio; traced x1.0, device-bound).
+K3_CHUNKED_HOST_TARGETS_MS = {"untraced": 11.07, "traced": 10.01}
 # The determinism check and the host-time gate replay a captured forward, so these meshes reserve a trace region.
 _CHUNKED_DEVICE_PARAMS = {"l1_small_size": 1152, "trace_region_size": 16 * 1024 * 1024}
-
-
-def _rt_profile_forward_ns(mesh_device, run_fn):
-    """Profile one region; return (result, total_ns) where each program contributes its MAX duration
-    across chips (slowest chip gates that program) -- the sparse-MLA/PR #49840 convention."""
-    result, records = profile_realtime_program(mesh_device, run_fn, collect_all=True)
-    per_program = {}
-    for record in records:
-        runtime_id = record["runtime_id"]
-        if not runtime_id:  # 0 is the profiler's own sentinel
-            continue
-        duration_ns = float(record["duration_ns"])
-        per_program[runtime_id] = max(per_program.get(runtime_id, 0.0), duration_ns)
-    return result, sum(per_program.values())
 
 
 def _run_chunked_prefill(
@@ -565,7 +544,6 @@ def _run_chunked_prefill(
     use_metadata_tensor=False,
     determinism_check=False,
     host_times=None,
-    profile=False,
     tight_cache=False,
     tp_shard_kv=False,
     sp_axis=0,
@@ -591,10 +569,8 @@ def _run_chunked_prefill(
     if determinism_check and reference is not None:
         pytest.skip("determinism_check needs reference=None (func) -- accuracy is the cpu/trace path's job")
     # Same exclusion, same reason: a reference run pays a CPU torch pass this measurement does not want.
-    if profile and reference is not None:
-        pytest.skip("profile needs reference=None (func) -- accuracy is the cpu/trace path's job")
-    if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
-        pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
+    if host_times is not None and reference is not None:
+        pytest.skip("host_times needs reference=None (func) -- accuracy is the cpu/trace path's job")
     tp_axis = 1 - sp_axis
     if topology is None:
         topology = per_axis_topology()
@@ -800,7 +776,6 @@ def _run_chunked_prefill(
 
     # ---- iterate: interleave users by local iter index (exercises cross-user isolation) ----
     det_failures = []
-    profiled_ns = 0.0
     n_iters = max(len(u["group"]) for u in users)
     logger.info(f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)")
     for i in range(n_iters):
@@ -896,19 +871,14 @@ def _run_chunked_prefill(
                 logger.info(f"  user {u} iter {i}: determinism {'FAIL' if failure else 'PASS'}")
                 if failure:
                     det_failures.append((u, i, failure))
-            if profile:
-                tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, _forward)
-                profiled_ns += fwd_ns
-                logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (realtime profiler)")
-                if host_times is not None:
-                    host_times["untraced"], host_times["traced"], host_times["trace_pcc"] = measure_host(
-                        mesh_device,
-                        _forward,
-                        attach=mla_tt.set_trace_controller,
-                        detach=lambda: mla_tt.set_trace_controller(None),
-                    )
-            else:
-                tt_out = _forward()
+            if host_times is not None:
+                host_times["untraced"], host_times["traced"], host_times["trace_pcc"] = measure_host(
+                    mesh_device,
+                    _forward,
+                    attach=mla_tt.set_trace_controller,
+                    detach=lambda: mla_tt.set_trace_controller(None),
+                )
+            tt_out = _forward()
             out_flat = ttnn.to_torch(
                 tt_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -938,8 +908,8 @@ def _run_chunked_prefill(
         ttnn.synchronize_device(mesh_device)
         ttnn.distributed_context_barrier()
 
-    if profile:
-        return profiled_ns
+    if host_times is not None:
+        return
 
     if determinism_check:
         if det_failures:
@@ -1505,53 +1475,33 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
 @pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
-    """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
-    timed with the realtime (lightweight) profiler instead of Tracy.
-
-    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
-    Tracy merge path, which averages collectives across chips, while this takes the max for every
-    program. K3's forward is ~7% CCL, so the two disagree by construction."""
+    """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk, host time untraced
+    and traced (tests/measure), and the traced output against eager."""
     require_high_power("kimi_k3 MLA chunked perf")
-    topology = per_axis_topology(device_params["fabric_config"])
     clock = hold_full_cpu_clock()
     request.addfinalizer(clock.restore)
     host = {}
-    total_ns = _run_chunked_prefill(
+    _run_chunked_prefill(
         request,
         mesh_device,
         reference=None,
-        topology=topology,
-        profile=True,
+        topology=per_axis_topology(device_params["fabric_config"]),
         iters_isl=[5120],
         prefill_len=50 * 1024,
         host_times=host,
     )
-    device_failure = band_failure("device time", total_ns / 1e6, K3_CHUNKED_RT_PERF_NS / 1e6, K3_CHUNKED_RT_PERF_MARGIN)
-    logger.info(
-        f"kimi_k3 chunked 50k+5k realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
-        f"expected {K3_CHUNKED_RT_PERF_NS:,} ns ±{K3_CHUNKED_RT_PERF_MARGIN:.0%}"
+    results = {}
+    for mode in ("untraced", "traced"):
+        target = K3_CHUNKED_HOST_TARGETS_MS[mode]
+        results[mode] = (host[mode], min(host[mode]), target, MARGIN[mode])
+        emit_perf_metrics(
+            f"kimi_k3_mla_chunked_50k_5k_torus-xy-8x4_{mode}",
+            f"Kimi-K3 MLA chunked 50k+5k perf (torus-xy 8x4, {mode})",
+            {"prefill_len": 50 * 1024, "chunk": 5120, "mode": mode, "samples_ms": host[mode], "target_ms": target},
+        )
+    pcc = host["trace_pcc"]
+    gate(
+        "kimi_k3 MLA chunked 50k+5k",
+        results,
+        [f"traced output differs from untraced: min per-device PCC {pcc:.6f}" if pcc < 0.9999 else None],
     )
-    emit_perf_metrics(
-        "kimi_k3_mla_chunked_50k_5k_torus-xy-8x4",
-        "Kimi-K3 MLA chunked 50k+5k perf (torus-xy 8x4)",
-        {
-            "prefill_len": 50 * 1024,
-            "chunk": 5120,
-            "measured_ns": total_ns,
-            "measured_ms": total_ns / 1e6,
-            "expected_ns": K3_CHUNKED_RT_PERF_NS,
-            "perf_margin_pct": K3_CHUNKED_RT_PERF_MARGIN * 100.0,
-            "within_band": device_failure is None,
-            "host_untraced_ms": min(host["untraced"]),
-            "host_traced_ms": host["traced"][0],
-        },
-    )
-    pcc_failure = (
-        f"traced output differs from untraced: min per-device PCC {host['trace_pcc']:.6f}"
-        if host["trace_pcc"] < 0.9999
-        else None
-    )
-    results = {m: (host[m], min(host[m]), K3_CHUNKED_HOST_TARGETS_MS[m], MARGIN[m]) for m in ("untraced", "traced")}
-    # Report-only until K3_CHUNKED_HOST_TARGETS_MS has targets; fails on PCC. Then the device gate decides.
-    gate("kimi_k3 MLA chunked 50k+5k host", results, [pcc_failure], skip_unmeasured=False)
-    assert_perf_gate(device_failure is None, device_failure or "")
