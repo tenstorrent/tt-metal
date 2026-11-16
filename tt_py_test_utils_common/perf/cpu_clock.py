@@ -164,9 +164,9 @@ class FullCpuClock:
 
     def restore(self):
         """Write back each clamped thread's previous uclamp_min; threads created since (which inherited the clamp) get
-        the creating thread's previous value, and threads that were not clamped are left alone. Idempotent. Child
-        processes started meanwhile keep the clamp until they exit. Returns True if every write succeeded (see
-        restore_errors)."""
+        the previous value of the thread that created the hold, since a spawning worker's own value is not recoverable;
+        threads that were not clamped are left alone. Idempotent. Child processes started meanwhile keep the clamp
+        until they exit. Returns True if every write succeeded (see restore_errors)."""
         if self._libc is None:
             return not self.restore_errors
         libc, self._libc = self._libc, None

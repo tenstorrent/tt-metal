@@ -25,7 +25,7 @@ top-k). Untraced: fastest of UNTRACED_SAMPLES calls after UNTRACED_WARMUP discar
 the captured trace. Each (case, box, scenario, mode) is gated two-sided against PERF_TARGETS_MS ± PERF_MARGIN[mode] (a
 case without targets only reports), and the traced output must match the untraced one (one extra untimed run of each,
 for triage, plus one untimed eager forward with a per-op host profile). Each layer runs standalone (no next-layer KV
-prefetch overlapped with its attention), as the first layer of a stage.
+prefetch overlapped with its attention); the shared layer reuses its push plan, as it would inside a stage.
 
 test_mla_chunked_perf: the exploration matrix (QuietBox, LoudBox, Galaxy; skipped on CI), reports only.
 GLM-5.3 (last full indexer layer, 21-slot index cache) and K3.1 x warm/cold/long x sparse with a BF16 or
@@ -166,6 +166,8 @@ def _galaxy_box() -> PerfBox:
 
 
 def detect_box(num_devices: int, matrix: bool = False) -> PerfBox | None:
+    if not ttnn.device.is_blackhole():  # DSA ops are Blackhole-only; an 8-chip Wormhole T3K is not a LoudBox
+        return None
     if num_devices == 32:
         return _galaxy_box()
     if num_devices == 8:
@@ -331,6 +333,9 @@ def build_sparse_perf_case(
     ttnn.deallocate(kvpe_cache.storage)
     del case, mla, kvpe_cache, index_kv_cache
     gc.collect()
+    # Inside a stage a shared layer reuses the sparse KV push plan its full layer built; only a stage's first layer
+    # rebuilds it. This standalone layer is not marked first, so it builds the plan in warm-up and then reuses it: the
+    # in-stage case. Plan construction is outside its timing and determinism checks.
     shared_layer_idx = [i for i, mode in enumerate(config.indexer_types) if mode == "shared"][-1]
     shared = ttMLA(
         config,
@@ -373,7 +378,7 @@ def _gate_params():
                 {},
                 "kimi_k3_1",
                 "kimi_k3_1",
-                marks=pytest.mark.skip(reason="sparse MLA perf gate runs on Galaxy and LoudBox only"),
+                marks=pytest.mark.skip(reason="sparse MLA perf gate runs on Blackhole Galaxy and LoudBox only"),
             )
         ]
     params = []
