@@ -37,6 +37,12 @@
 #define GDN_SMALL_IN_GATE_PAGES 0
 #endif
 
+// R-PREP norm split (host PREP_NORM_SPLIT): a prep core preps all of its tile rows first and normalizes afterwards
+// the rows norm_offset, + norm_stride, ..., which need not be the rows it prepped.
+#ifndef GDN_PREP_NORM_SPLIT
+#define GDN_PREP_NORM_SPLIT 0
+#endif
+
 #ifndef GDN_QK_Q_READER_PCT
 #define GDN_QK_Q_READER_PCT 50
 #endif

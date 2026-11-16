@@ -69,6 +69,7 @@ constexpr bool PREP = ROLE == GDN_ROLE_PREP;
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;  // R-QKCORE: multicasts its key head's qn or kn, nothing else
 constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;  // R-PREP q / k core: writes qn or kn to its prep cores (RATIO)
+constexpr bool NORM_SPLIT = GDN_PREP_NORM_SPLIT != 0;  // R-PREP: a row's o goes to its norm core (see prep_writer)
 constexpr bool HOLD_QK = GDN_HOLD_QK != 0;     // compute holds the landed q/k rows for every unit (see compute)
 constexpr bool QK_RAW = GDN_QK_RAW != 0;       // q / k cores send y, then the inverse norms (host QK_RAW_HANDOFF)
 constexpr bool UNIT_LAG = GDN_UNIT_LAG != 0;   // compute normalizes unit u after unit u + 1's token step
@@ -165,6 +166,9 @@ FORCE_INLINE void push_chunk_coefs(
 template <uint32_t Kt, uint32_t Vt, uint32_t Hv, typename Accessor>
 void prep_writer(
     const Accessor& out_acc, uint32_t first_unit, uint32_t T, uint32_t tr_offset, uint32_t tr_stride, uint32_t arg) {
+    // The tile rows this core normalizes and stores (its prep rows unless NORM_SPLIT).
+    const uint32_t norm_offset = get_arg_val<uint32_t>(arg++);
+    const uint32_t norm_stride = get_arg_val<uint32_t>(arg++);
     constexpr uint32_t Vb = Vt / PIECES;
     constexpr uint32_t GROUP = RATIO * PIECES;
     constexpr uint32_t T_BYTES = STATE_TILE_BYTES;
@@ -227,18 +231,23 @@ void prep_writer(
             push_chunk_coefs(gates, (head0 + j) % TILE_ROWS, base_row, lo, hi);
         }
         cb_pop_front(cb_gates, 2);
-        if (sent >= 1) {
-            land_o(sent);
-        }
-        if (sent >= 2) {
-            store(tr - 2 * tr_stride);
+        if constexpr (!NORM_SPLIT) {
+            if (sent >= 1) {
+                land_o(sent);
+            }
+            if (sent >= 2) {
+                store(tr - 2 * tr_stride);
+            }
         }
 
         // Every state core of the group grants each of its rows once, in order; this core's next row is granted
         // only after this one has landed (stride >= inbox slots), so the cumulative count identifies the row.
         granted.wait_min((sent + 1) * GROUP);
         // The row's o slot is free (compute has normalized the row that used it), so the row may be sent.
-        cb_reserve_back(cb_o_in, O_PAGES);
+        // NORM_SPLIT: a norm core's cb_o_in holds every row it normalizes (host), so no row waits for a slot.
+        if constexpr (!NORM_SPLIT) {
+            cb_reserve_back(cb_o_in, O_PAGES);
+        }
         const uint32_t slot = (tr - first_tr) % INBOX_SLOTS;
         // One head block at a time, each part sent as compute pushes it (pack order: exp(c) | QD, M | kq | knT | v).
         for (uint32_t j = 0; j < RATIO; ++j) {
@@ -270,6 +279,16 @@ void prep_writer(
             Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
             landed.up(noc, cons_x[c], cons_y[c], 1);
         }
+    }
+    if constexpr (NORM_SPLIT) {
+        // The state cores are at most an inbox apart (<= the norm cores per group, host), so the cumulative count
+        // identifies the row here too.
+        uint32_t landed_rows = 0;
+        for (uint32_t tr = first_tr + norm_offset; tr <= last_tr; tr += norm_stride) {
+            land_o(++landed_rows);
+            store(tr);
+        }
+        return;
     }
     if (sent >= 1) {
         land_o(sent);
@@ -460,6 +479,9 @@ void kernel_main() {
             producer_y[q] = get_arg_val<uint32_t>(arg++);
         }
     }
+    // R-PREP state core: tile row i's o goes to prep core norm_first + i % norm_count (all of them unless NORM_SPLIT).
+    const uint32_t norm_first = STATE ? get_arg_val<uint32_t>(arg++) : 0;
+    const uint32_t norm_count = STATE ? get_arg_val<uint32_t>(arg++) : 1;
     // STATE_SPLIT: the reader's final-state tiles (gdn::state_tile_on_reader).
     constexpr bool split_args_role = !QK_CORE && !PREP && !PREP_QK && !STATE;  // R-QKCORE pair / local cores
     const bool split_args = STATE_SPLIT && split_args_role;
@@ -761,9 +783,9 @@ void kernel_main() {
             if constexpr (STATE) {
                 // ---- R-PREP: o of the piece into its place in slot k % GDN_O_IN_DEPTH of the row's prep core ----
                 const uint32_t i = tr - first_tr;
-                const uint32_t q = i % producers;
+                const uint32_t q = norm_first + i % norm_count;
                 const uint32_t head_in_group = head % RATIO;
-                const uint32_t o_slot = (i / producers) % GDN_O_IN_DEPTH;
+                const uint32_t o_slot = (i / norm_count) % GDN_O_IN_DEPTH;
                 const uint32_t dst = cb_region_base(cb_in_kq, GDN_OFFSET_IN_KQ) + GDN_OFFSET_O_IN +
                                      (o_slot * RATIO * Vt + head_in_group * Vt + v_first) * STATE_TILE_BYTES;
                 cb_wait_front(cb_o_acc, Vb);

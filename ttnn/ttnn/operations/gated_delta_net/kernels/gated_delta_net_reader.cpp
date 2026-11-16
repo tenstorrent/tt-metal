@@ -76,6 +76,7 @@ constexpr bool PREP = ROLE == GDN_ROLE_PREP;    // R-PREP prep core: token-row i
 constexpr bool STATE = ROLE == GDN_ROLE_STATE;  // R-PREP state core: inbox, S0, z, norm_weight
 constexpr bool QK_CORE = ROLE == GDN_ROLE_QK;   // R-QKCORE: q or k columns of one key head, every decode sequence
 constexpr bool PREP_QK = ROLE == GDN_ROLE_PREP_QK;  // R-PREP q / k core: window of its q or k columns, nothing else
+constexpr bool NORM_SPLIT = PREP && GDN_PREP_NORM_SPLIT != 0;  // z of the rows it normalizes, after its prep rows
 // PREP_SHARE_QK semaphores after the inbox's: qn / kn tile rows landed on a prep core (cumulative each).
 constexpr uint32_t QN_LANDED_SEM_ID = GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 2;
 constexpr uint32_t KN_LANDED_SEM_ID = QN_LANDED_SEM_ID + 1;
@@ -303,6 +304,9 @@ void kernel_main() {
     const uint32_t tr_offset = get_arg_val<uint32_t>(arg++);
     const uint32_t tr_stride = get_arg_val<uint32_t>(arg++);
     const uint32_t unit_stride = get_arg_val<uint32_t>(arg++);  // units first_unit, + stride, ... (R-QKCORE: Hv)
+    // R-PREP prep core: the tile rows it normalizes (its prep rows unless NORM_SPLIT).
+    const uint32_t norm_offset = PREP ? get_arg_val<uint32_t>(arg++) : 0;
+    const uint32_t norm_stride = PREP ? get_arg_val<uint32_t>(arg++) : 1;
     // R-PREP prep core under PREP_SHARE_QK (qk role receiver): NoC (x, y) of its position's q and k cores, then its
     // index among their destinations (its grant counter there).
     const bool kq_landing = PREP && qk_role == GDN_QK_RECEIVER;
@@ -632,6 +636,21 @@ void kernel_main() {
                 const uint32_t seq_hi = seq_lo + T;
                 const uint32_t first_tr = seq_lo / TILE_ROWS;
                 const uint32_t last_tr = (seq_hi - 1) / TILE_ROWS;
+                // ---- z columns of the unit, one tile row ----
+                auto read_z = [&](uint32_t tr) {
+                    const uint32_t base_row = tr * TILE_ROWS;
+                    const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
+                    const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
+                    cb_reserve_back(cb_z, Vb);
+                    const uint32_t z_base = get_write_ptr(cb_z);
+                    for (uint32_t vt = 0; vt < Vb; ++vt) {
+                        const uint32_t page = tr * z_width_tiles + head * Vt + v_first + vt;
+                        read_tile_rows(rows, z_acc, page, base_row, lo, hi, z_base + vt * TILE_BYTES);
+                    }
+                    rows.finish();
+                    cb_push_back(cb_z, Vb);
+                    GDN_MARK("m_rd_z");
+                };
                 for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride) {
                     const uint32_t base_row = tr * TILE_ROWS;
                     const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
@@ -944,21 +963,19 @@ void kernel_main() {
                     if constexpr (STATE || PREP_QK) {
                         continue;
                     }
-                    // ---- z columns of the unit ----
-                    cb_reserve_back(cb_z, Vb);
-                    const uint32_t z_base = get_write_ptr(cb_z);
-                    for (uint32_t vt = 0; vt < Vb; ++vt) {
-                        const uint32_t page = tr * z_width_tiles + head * Vt + v_first + vt;
-                        read_tile_rows(rows, z_acc, page, base_row, lo, hi, z_base + vt * TILE_BYTES);
+                    if constexpr (!NORM_SPLIT) {
+                        read_z(tr);
                     }
-                    rows.finish();
-                    cb_push_back(cb_z, Vb);
-                    GDN_MARK("m_rd_z");
                     if (kq_landing) {
                         ++kq_rows_landed;
                         Semaphore<>(QN_LANDED_SEM_ID).wait_min(kq_rows_landed);
                         Semaphore<>(KN_LANDED_SEM_ID).wait_min(kq_rows_landed);
                         cb_push_back(cb_kq_rows, 2 * Kt);
+                    }
+                }
+                if constexpr (NORM_SPLIT) {
+                    for (uint32_t tr = first_tr + norm_offset; tr <= last_tr; tr += norm_stride) {
+                        read_z(tr);
                     }
                 }
 
