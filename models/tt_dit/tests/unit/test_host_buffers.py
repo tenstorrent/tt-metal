@@ -58,6 +58,47 @@ def test_idle_bytes_stay_under_the_cap(monkeypatch):
     assert sum(s.size for s in idle) <= 8 << 20
 
 
+def test_eviction_behind_a_live_slab_of_another_size(monkeypatch):
+    # list.remove compared arrays element by element and raised once the slab to drop
+    # was not first in the pool.
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_POOL_MB", "10")
+    live = empty_uint8((3, 1 << 20))
+    idle = empty_uint8((2, 1 << 20))
+    del idle
+    gc.collect()
+    big = empty_uint8((6, 1 << 20))
+    assert big.shape == (6, 1 << 20)
+    assert [s.size for s in host_buffers._slabs] == [3 << 20, 6 << 20]
+    del live
+
+
+def test_live_and_idle_bytes_stay_under_the_cap(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_POOL_MB", "8")
+    held = [empty_uint8((rows, 1 << 20)) for rows in (3, 4, 5)]
+    assert all(h.shape[0] == r for h, r in zip(held, (3, 4, 5)))
+    assert sum(s.size for s in host_buffers._slabs) <= 8 << 20
+    del held
+    gc.collect()
+    assert sum(s.size for s in host_buffers._slabs) <= 8 << 20
+
+
+def test_idle_slabs_stay_when_dropping_them_would_not_make_room(monkeypatch):
+    monkeypatch.setattr(host_buffers, "_slabs", [])
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_POOL_MB", "8")
+    live = empty_uint8((5, 1 << 20))
+    idle = empty_uint8((2, 1 << 20))
+    del idle
+    gc.collect()
+    empty_uint8((4, 1 << 20))  # 5 live + 4 > 8 even with the idle 2 dropped
+    assert [s.size for s in host_buffers._slabs] == [5 << 20, 2 << 20]
+    del live
+
+def test_malformed_cap_falls_back_to_the_default(monkeypatch):
+    monkeypatch.setenv("TT_DIT_HOST_BUFFER_POOL_MB", "3G")
+    assert host_buffers._max_idle_bytes() == 3072 << 20
+
 def test_planar_concat_into_a_recycled_buffer_matches_a_fresh_one():
     pc = pytest.importorskip("models.tt_dit.utils.planar_concat")
     if not pc.HAS_CPP_PLANAR_CONCAT:
