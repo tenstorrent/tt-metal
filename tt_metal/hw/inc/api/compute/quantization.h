@@ -31,6 +31,9 @@ ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
 
+// Quasar implements the Int32-output quant family and no 8-bit pack / unbias kernel, so the wrappers
+// fenced off below are not declared there. See ckernel_sfpu_quant.h in its llk_api for the mapping.
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Quantize variant writing an int8 output tensor.
@@ -49,6 +52,7 @@ ALWI void quant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32_int8_pack, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -69,6 +73,7 @@ ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Re-quantize variant writing an int8 output tensor.
@@ -147,6 +152,7 @@ ALWI void requant_int8_in_int8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t
         odst,
         VectorMode::RC)));
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -167,6 +173,7 @@ ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dequant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * De-quantize variant reading an int8 input tensor.
@@ -192,6 +199,7 @@ ALWI void dequant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -209,6 +217,7 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX), zero_point)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Initialize the sfpu with the zero point argument of the quantization Op, rounding into the
@@ -239,6 +248,7 @@ ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
 ALWI void quant_int8_tile_init(const uint32_t zero_point) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, DataFormat::Int8), zero_point)));
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -260,6 +270,7 @@ ALWI void requant_tile_init(const uint32_t zero_point, const uint32_t out_zero_p
     MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX), zero_point, out_zero_point)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Initialize the sfpu with the zero point argument of the re-quantization Op, rounding into the
@@ -365,6 +376,7 @@ ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point, const ui
     MATH((SFPU_BINARY_INIT_FN_ARGS(
         requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8, true), zero_point, out_zero_point)));
 }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -385,6 +397,7 @@ ALWI void dequant_tile_init(const uint32_t zero_point) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROX), zero_point)));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Initialize the sfpu for dequantize reading an int8 input tensor. Must be called before using the dequant
@@ -403,5 +416,6 @@ ALWI void dequant_tile_init(const uint32_t zero_point) {
 ALWI void dequant_int8_tile_init(const uint32_t zero_point) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROX, false, true), zero_point)));
 }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel
