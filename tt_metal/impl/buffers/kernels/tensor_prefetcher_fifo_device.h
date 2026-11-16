@@ -23,9 +23,9 @@
 #include "api/debug/waypoint.h"
 #include "internal/prefetcher_pipe_init.h"
 #include "internal/risc_attribs.h"
-#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "tt_metal/impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
+#include "tt_metal/impl/dispatch/kernels/dispatch_noc_trids.hpp"
 
 namespace tensor_prefetcher {
 
@@ -36,14 +36,11 @@ using tt::tt_metal::TensorPrefetcherLayoutMode;
 using tt::tt_metal::TensorPrefetcherRequestHeader;
 using tt::tt_metal::TensorPrefetcherTensorLayout;
 
-// This kernel's NoC transaction id. Its reads and writes carry it, so it waits on its own transactions instead of
-// every transaction on the dispatch engine: the counters an untagged barrier reads cover the whole tile, which
-// includes the command queues' traffic. cq_prefetch takes ids from the bottom of the user pool, so the Tensor
-// prefetcher kernels take them from the top of the runtime pool, one per kernel. No dataflow buffer claims that
-// pool on a dispatch engine.
-inline constexpr uint32_t kTrid = HW_TXN_ID_MAX - TENSOR_PREFETCHER_KERNEL_INDEX;
-static_assert(
-    HW_TXN_ID_MAX + 1 - fifo::kMaxKernels >= DFB_TXN_ID_BASE, "Every kernel's id must be in the runtime pool");
+// This kernel's NoC transaction id, from its range in dispatch_noc_trids.hpp. Its reads and writes carry it, so it
+// waits on its own transactions instead of every untagged transaction on the dispatch engine, which includes the
+// command queues' traffic.
+inline constexpr uint32_t kTrid = dispatch_noc_trids::tensor_prefetcher_trid(TENSOR_PREFETCHER_KERNEL_INDEX);
+static_assert(fifo::kMaxKernels == dispatch_noc_trids::kTensorPrefetcherMaxKernels, "One id per kernel");
 
 // Every word in the region is shared with the host, the other kernels or the NoC, none of which snoop
 // this core's data cache, so it is always accessed through the uncached L1 alias.
