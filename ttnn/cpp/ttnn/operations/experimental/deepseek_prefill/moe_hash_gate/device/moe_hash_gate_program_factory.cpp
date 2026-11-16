@@ -194,6 +194,7 @@ tt::tt_metal::ProgramDescriptor MoeHashGateDeviceOperation::ProgramFactory::crea
         {"scores_page_size", scores_page_size},
         {"weights_page_size", weights_page_size},
         {"indices_page_size", indices_page_size},
+        {"padding_config_page_size", padding_config_page_size},
         {"experts", experts},
         {"width_tiles", width_tiles},
         {"tile_height", tile_height},
