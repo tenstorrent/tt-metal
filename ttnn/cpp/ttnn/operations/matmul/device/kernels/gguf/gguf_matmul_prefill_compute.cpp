@@ -7,8 +7,8 @@
 // of the input (c_1: units of ur rows x kb tiles, [ur][kb]) in sh x sw subblocks. Partials accumulate in L1 (c_24,
 // Float32, packer L1 accumulation); in the last K block each unit of rows goes to c_16 as bf16 once its sums are
 // complete. Decode on the math thread: GGUF_PF_PIPE 1, decode_block (the next page's copy beside each decode);
-// GGUF_PF_PIPE 0, per tile the page is copied into DEST tile 1 and decoded into tile 0 (block-float codes: tiles 2 and
-// 1), then packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0 adds the partners'
+// GGUF_PF_PIPE 0 (block-float codes never), per tile the page is copied into DEST tile 1 and decoded into tile 0, then
+// packed. K split (krole): band 1 packs its sums to c_17 for the writer to send, band 0 adds the partners'
 // (c_18); both in units of ur rows x the planned N tiles, the rows of each N tile together (subblocks of ur x 1).
 // Compile args: format id, mc, kb, M chunks, ur (sh divides it), N passes (the core's N tiles in passes of up to the
 // width below; a pass without any only consumes the input), c_16's pages. Runtime args: N
@@ -21,7 +21,6 @@
 #include "api/compute/cb_api.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/experimental/dest_srca_mm.h"
 #include "api/compute/experimental/gguf_decode.h"
@@ -31,6 +30,8 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "experimental/ckernel_gguf_page.h"
+#if GGUF_PF_PIPE
+#include "api/compute/eltwise_binary.h"
 
 namespace {
 
@@ -46,7 +47,7 @@ using namespace ckernel;
 template <uint32_t fmt>
 constexpr bool decode_block_fits() {
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
-    return !gguf::bfp_codes<fmt> && L.page_tiles == 1 && (L.group_tiles == 1 || L.group_tiles % 2 == 0);
+    return L.page_tiles == 1 && (L.group_tiles == 1 || L.group_tiles % 2 == 0);
 }
 
 template <uint32_t fmt>
@@ -62,7 +63,17 @@ ALWI void decode_block(const uint32_t nc, const uint32_t nca, const uint32_t gro
     if constexpr (!decode_block_fits<fmt>()) {
         return;
     }
-    constexpr auto out_of = [](uint32_t set) -> uint32_t { return set ? 4 : 1; };
+    // Block-float codes: decoded tiles 3 and 5, pages 4 and 6, the codes in the 16-bit rows that the decoded tiles'
+    // rows address (tiles 1 and 2), as in gguf_matmul_compute.cpp.
+    constexpr bool bfp = gguf::bfp_codes<fmt>;
+    constexpr auto out_of = [](uint32_t set) -> uint32_t { return bfp ? (set ? 5 : 3) : (set ? 4 : 1); };
+    auto post = [&](uint32_t set) {
+        if constexpr (bfp) {
+            dest_srca_mm_page_post_codes(out_of(set) + 1, out_of(set));
+        } else {
+            dest_srca_mm_page_post(out_of(set) + 1);
+        }
+    };
     const uint32_t tiles = groups * nc * L.group_tiles;
     MATH((_llk_math_pack_sync_init_<DstSync::SyncFull, DST_ACCUM_MODE>()));
     PACK((_llk_pack_dest_init_<DstSync::SyncFull, DST_ACCUM_MODE>()));
@@ -70,15 +81,20 @@ ALWI void decode_block(const uint32_t nc, const uint32_t nca, const uint32_t gro
     gguf_decode_overlap_acquire();
     MATH((t6_semaphore_init(semaphore::FPU_SFPU, 0, 2)));
     MATH((t6_semaphore_init(semaphore::PACK_DONE, 2, 2)));
-    dest_srca_mm_page_post(out_of(0) + 1);
+    post(0);
     for (uint32_t i = 0; i < tiles; i++) {
         const uint32_t set = i & 1, t = i % L.group_tiles, rec = i / L.group_tiles;
         cb_wait_front(cb_page, 1);
-        dest_srca_mm_page_unpack(cb_page, 0);
+        if constexpr (bfp) {
+            dest_srca_mm_page_unpack_codes(
+                cb_page, 0, gguf::BFP_CODES, gguf::BFP_CODE_EXP, L.scale_offset, gguf::bfp_scale_words<fmt>());
+        } else {
+            dest_srca_mm_page_unpack(cb_page, 0);
+        }
         cb_pop_front(cb_page, 1);
         dest_srca_mm_page_wait(cb_page, out_of(set) + 1);
         if (beside && i + 1 < tiles) {
-            dest_srca_mm_page_post(out_of(set ^ 1) + 1);
+            post(set ^ 1);
         }
         MATH(({
             TTI_SEMWAIT(
@@ -95,7 +111,7 @@ ALWI void decode_block(const uint32_t nc, const uint32_t nca, const uint32_t gro
         }
         gguf_decode_tile<fmt, GgufDecodeThread::Math, true>(out_of(set), t);
         if (!beside && i + 1 < tiles) {
-            dest_srca_mm_page_post(out_of(set ^ 1) + 1);
+            post(set ^ 1);
         }
         MATH(({ t6_semaphore_post<p_stall::MATH | p_stall::WAIT_SFPU>(semaphore::FPU_SFPU); }));
         PACK(({
@@ -126,6 +142,7 @@ ALWI void decode_block(const uint32_t nc, const uint32_t nca, const uint32_t gro
 }
 
 }  // namespace
+#endif
 
 void kernel_main() {
     using namespace ckernel;
@@ -139,20 +156,20 @@ void kernel_main() {
     constexpr gguf::PageLayout L = gguf::page_layout<static_cast<gguf::Format>(fmt)>();
     constexpr bool group_step = gguf::group_scales<fmt>;
     constexpr uint32_t block_groups = kb / L.group_tiles;
-    // Decoded tile 0, its page in tile 1. Block-float codes: decoded tile 1, page 2, the codes in the 16-bit
-    // rows that tile 1's rows address (in tile 0, dest_srca_mm_page_unpack_codes).
-    constexpr bool bfp = gguf::bfp_codes<fmt>;
-    constexpr uint32_t out = bfp ? 1 : 0;
+    [[maybe_unused]] constexpr bool bfp = gguf::bfp_codes<fmt>;
+    // Without decode_block: decoded tile 0, its page in tile 1 (block-float codes always take decode_block).
+    constexpr uint32_t out = 0;
     // Without decode_block each page is copied before its decode starts, so no unpack to DEST runs beside one:
     // the faster decoders.
     constexpr auto thr = GgufDecodeThread::Math;
     constexpr bool beside_unpack = false;
-    // The pipelined decode (decode_block) where the plan chose it and the format's pages allow it.
-    // Where the plan is bound by the cores, not the input stream (GGUF_PF_PIPE): the pipelined decode (decode_block),
-    // but for Q5_0 / Q5_1, whose decoders beside a copy cost about what the copy did (measured), and the K split's sums
-    // added by the FPU. Where the input bounds, the extra waits of either cost more than they save.
-    constexpr bool pipe = GGUF_PF_PIPE && decode_block_fits<fmt>() && fmt != gguf::Q5_0 && fmt != gguf::Q5_1;
-    constexpr bool fpu_sums = GGUF_PF_PIPE;
+#if GGUF_PF_PIPE
+    // GGUF_PF_PIPE (the plan is bound by the cores, not the input stream, or the pages hold block-float codes): the
+    // pipelined decode (decode_block), but for Q5_0 / Q5_1, whose decoders beside a copy cost about what the copy did
+    // (measured), and the K split's sums added by the FPU. Otherwise the kernel is the one without either: where the
+    // input bounds, their extra waits cost more than they save.
+    constexpr bool pipe = decode_block_fits<fmt>() && (bfp || (fmt != gguf::Q5_0 && fmt != gguf::Q5_1));
+#endif
     constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_w = tt::CBIndex::c_4;
     constexpr uint32_t cb_out = tt::CBIndex::c_16, cb_acc = tt::CBIndex::c_24;
     constexpr uint32_t cb_send = tt::CBIndex::c_17, cb_recv = tt::CBIndex::c_18;
@@ -193,6 +210,7 @@ void kernel_main() {
         for (uint32_t blk = 0; blk < kblocks; blk++) {
             // Decode the K block's weight tiles, in record order (per group, per N tile, per tile of the group).
             srca_to(cb_page);
+#if GGUF_PF_PIPE
             if constexpr (pipe) {
                 gguf_decode_init<fmt, thr, true>();
                 dest_srca_mm_init<32>(cb_in0, cb_page);
@@ -200,7 +218,9 @@ void kernel_main() {
                 pack_reconfig_l1_acc(0);
                 cb_reserve_back(cb_w, w_tiles);
                 decode_block<fmt>(nc, nca, block_groups);
-            } else {
+            } else
+#endif
+            {
                 gguf_decode_init<fmt, thr, beside_unpack>();
                 dest_srca_mm_init<32>(cb_in0, cb_page);
                 pack_reconfig_data_format(cb_w);
@@ -217,19 +237,7 @@ void kernel_main() {
                                 cb_wait_front(cb_page, 1);
                             }
                             tile_regs_acquire();
-                            if constexpr (bfp) {
-                                dest_srca_mm_page_to_dest_codes(
-                                    cb_page,
-                                    0,
-                                    out + 1,
-                                    out,
-                                    gguf::BFP_CODES,
-                                    gguf::BFP_CODE_EXP,
-                                    L.scale_offset,
-                                    gguf::bfp_scale_words<fmt>());
-                            } else {
-                                dest_srca_mm_page_to_dest(cb_page, 0, out + 1);
-                            }
+                            dest_srca_mm_page_to_dest(cb_page, 0, out + 1);
                             if (group_step && t < 2) {
                                 gguf_decode_group<fmt>(out);
                             }
@@ -286,7 +294,8 @@ void kernel_main() {
                         pack_reconfig_data_format(to);
                         srca_to(cb_acc);
                         cb_wait_front(cb_acc, ur * nc);
-                        if (krole == 2 && fpu_sums) {
+#if GGUF_PF_PIPE
+                        if (krole == 2) {
                             // Own sums + the partner's, added by the FPU (both in fp32 L1), up to four tiles at a time;
                             // fewer where a group would cross the end of c_16.
                             cb_wait_front(cb_recv, ur * nca);
@@ -311,7 +320,9 @@ void kernel_main() {
                             }
                             reconfig_data_format_srcb(cb_recv, cb_in0);
                             cb_pop_front(cb_recv, ur * nca);
-                        } else if (krole == 2) {
+                        } else
+#endif
+                            if (krole == 2) {
                             // Own sums + the partner's, in fp32 on the SFPU, two tiles at a time; one where a pair
                             // would cross the end of c_16 (a unit of an odd number of tiles shifts the pairs).
                             cb_wait_front(cb_recv, ur * nca);

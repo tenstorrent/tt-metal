@@ -42,9 +42,19 @@ bool prefill_format_supported(DataType dtype) {
         case DataType::GGUF_Q3_K:
         case DataType::GGUF_Q4_K:
         case DataType::GGUF_Q5_K:
-        case DataType::GGUF_Q6_K: return true;
+        case DataType::GGUF_Q6_K:
+        case DataType::GGUF_MXFP4:
+        case DataType::GGUF_NVFP4:
+        case DataType::GGUF_IQ4_NL:
+        case DataType::GGUF_IQ4_XS: return true;
         default: return false;
     }
+}
+
+// Formats whose pages hold block-float codes: the compute kernel decodes them only in its pipelined decode blocks.
+bool block_float_codes(DataType dtype) {
+    return dtype == DataType::GGUF_MXFP4 || dtype == DataType::GGUF_NVFP4 || dtype == DataType::GGUF_IQ4_NL ||
+           dtype == DataType::GGUF_IQ4_XS;
 }
 
 // Bands of whole grid rows. Without a K split (ks = 1): mg bands of equal rows, each with its share of the M rows and
@@ -333,11 +343,12 @@ GgufMatmulPrefillProgramFactory::cached_program_t GgufMatmulPrefillProgramFactor
         std::string(kKernels) + "gguf_matmul_prefill_compute.cpp",
         all,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi2,
+            // A decoded MXFP4 weight has a 2-bit significand, which LoFi's SrcA bits hold (as in the decode program).
+            .math_fidelity = weight.dtype() == DataType::GGUF_MXFP4 ? MathFidelity::LoFi : MathFidelity::HiFi2,
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = false,
             .compile_args = {f.format_id, mc, kb, mchunks, ur, passes, kPrefillOutTiles},
-            .defines = {{"GGUF_PF_PIPE", p->pipe ? "1" : "0"}}});
+            .defines = {{"GGUF_PF_PIPE", p->pipe || block_float_codes(weight.dtype()) ? "1" : "0"}}});
 
     auto band_core = [&](uint32_t band, uint32_t j) { return CoreCoord(j % grid.x, bands[band].row0 + j / grid.x); };
     for (uint32_t band = 0; band < bands.size(); band++) {

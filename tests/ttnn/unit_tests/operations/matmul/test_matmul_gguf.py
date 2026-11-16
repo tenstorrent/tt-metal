@@ -102,6 +102,10 @@ PREFILL_DTYPES = [
     ttnn.gguf_q4_k,
     ttnn.gguf_q5_k,
     ttnn.gguf_q6_k,
+    ttnn.gguf_mxfp4,
+    ttnn.gguf_nvfp4,
+    ttnn.gguf_iq4_nl,
+    ttnn.gguf_iq4_xs,
 ]
 
 
