@@ -113,7 +113,9 @@ void kernel_main() {
     const uint32_t xscr_addr = get_semaphore(0), hscr_addr = get_semaphore(1);
     volatile tt_l1_ptr uint32_t* xscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xscr_addr);
     volatile tt_l1_ptr uint32_t* hscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hscr_addr);
-    auto word = [](uint32_t base, uint32_t i) { return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + i * 16); };
+    auto word = [](uint32_t base, uint32_t i) {
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + i * 16);
+    };
     volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(8));
     st[16] = wall();
     uint32_t t_xm = 0, t_hm = 0, t_cr = 0, t_ar = 0, last = wall();

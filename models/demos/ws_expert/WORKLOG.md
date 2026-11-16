@@ -800,3 +800,22 @@ the expert-id-ordered outputs (out_eord) are gone.
   - Output bfp8 TILE (PCC 0.99964 / 0.99944). It runs LoFi only and needs math_approx_mode False.
   - Its reader reads DRAM and multicasts on NoC 0, and its writer reads the up weights and writes the output on
     NoC 1, which breaks the layer's NoC rules.
+
+## Stage 13: the layer with every custom phase but the head (hold 215516)
+- Phases: head (ttnn ops) -> shared expert op (rows t S + K) -> stream (row-major result rows, posted, fenced) -> end
+  pass (y = sum of w rows + the shared row; NOC0 reads / NOC1 writes).
+- Results, 20 warm-up + 5 measured layers, 1350 MHz. Wall time is synchronize to synchronize (programs built before
+  their phase); device time is compute start to end over the cores (max over chips 0 / 31 on the Galaxy):
+| phase | one chip (proxy stream) wall / device ms | Galaxy torus wall / device ms |
+|---|---|---|
+| head (ttnn ops) | 19.00 / - | 19.11 / - |
+| shared expert | 5.68 / 4.97 | 7.93 / 4.97 |
+| routed stream | 39.48 / 36.74 | 57.23 / 49.25 |
+| end pass | 8.24 / 7.88 | 11.37 / 8.41 |
+| total | 72.40 | 95.64 |
+- Accuracy (sampled tokens; every token at T 2048: y 0.99988):
+  - Layer y PCC: 0.99989 on one chip; 0.99988 on the Galaxy, chips 0 and 31.
+  - Routed rows 0.99994, shared rows 0.99988 (bfp8 h).
+  - Head exact (counts, token lists, destination lists).
+  - One chip, every token: re-read identical, y against the rows as read worst 0.0039 relative.
+- The Galaxy's wall times run 2-8 ms over device time per program: the dispatch of a 32-chip mesh program.

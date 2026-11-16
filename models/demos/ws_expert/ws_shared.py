@@ -82,7 +82,8 @@ def clusters(mesh, cfg: SCfg):
 
 
 def shared_weights(mesh, cfg: SCfg, w1, w3, w2):
-    """Device weights (replicated): the gate/up matrix [H, 2 I] (32-column gate / up tiles interleaved) and W2 [I, H]."""
+    """Device weights (replicated): the gate/up matrix [H, 2 I] (32-column gate / up tiles interleaved) and W2
+    [I, H]."""
     t = lambda m: ttnn.from_torch(
         m, dtype=cfg.w_dt, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )

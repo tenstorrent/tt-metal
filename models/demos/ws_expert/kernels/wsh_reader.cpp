@@ -51,7 +51,9 @@ void kernel_main() {
     const auto rs = TensorAccessor(rargs, get_arg_val<uint32_t>(5), rowb);
     const uint32_t NF = get_arg_val<uint32_t>(7);
     const uint32_t hub = get_arg_val<uint32_t>(8), hx = hub & 0xFF, hy = hub >> 8;
-    auto word = [](uint32_t base, uint32_t i) { return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + i * 16); };
+    auto word = [](uint32_t base, uint32_t i) {
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + i * 16);
+    };
 
     // ---- QB
     uint32_t b_s = 0, x_credited = 0, x_popped = 0;

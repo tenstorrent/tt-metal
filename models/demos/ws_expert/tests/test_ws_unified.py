@@ -99,7 +99,8 @@ def test_ws_unified_shared(mesh_device, prec, nd):
     sol = 110 * 4096 * clk * 1e6 / (1 if fid == "LoFi" else 2)
     gx, gy = ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID.x, ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID.y
     logger.info(
-        f"WSU unified_routed_expert_moe as the shared expert, T {T}, {prec}, weights {'ND-sharded' if nd else 'interleaved'}"
+        f"WSU unified_routed_expert_moe as the shared expert, T {T}, {prec}, weights "
+        f"{'ND-sharded' if nd else 'interleaved'}"
         f", grid {gx} x {gy}, {WARM} warm-up + {MEAS} measured calls, aiclk {clk} MHz: wall ms median {wm:.3f} (min "
         f"{min(wall):.3f}); {fl / 1e12:.2f} TFLOP: util {100 * fl / sol / (wm / 1e3):.1f}% of the 110-core {fid} SOL "
         f"({fl / sol * 1e3:.2f} ms), {100 * fl * 110 / (gx * gy) / sol / (wm / 1e3):.1f}% of its {gx * gy} cores; "

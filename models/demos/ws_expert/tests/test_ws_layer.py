@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""The MoE layer around the lane stream (ws_layer.py): head, routed stream (row-major outputs into the result buffer)
-and end pass, every chip on its own tokens. Checks against torch on the device's routing: the head's counts, token
-lists and result-row lists exactly, the logits / gate weights / top-K choice, the result buffer's routed rows and the
-layer output (every token, or WSY_TOKENS sampled tokens on the WSY_CHIPS chips). The shared expert's rows are not
-written yet (zero), so the layer reference is the routed sum. Timing: WS_WARM warm-up + WS_MEAS measured layers, per
-phase wall time (synchronize to synchronize; programs built before their phase starts) and the custom programs'
-device spans (compute start to end stamps)."""
+"""The MoE layer around the lane stream (ws_layer.py): head, shared expert (ws_shared.py), routed stream (row-major
+outputs into the result buffer) and end pass, every chip on its own tokens. Checks against torch on the device's
+routing: the head's counts, token lists and result-row lists exactly, the logits / gate weights / top-K choice, the
+result buffer's routed and shared rows, and the layer output (every token, or WSY_TOKENS sampled tokens on the
+WSY_CHIPS chips). Timing: WS_WARM warm-up + WS_MEAS measured layers, per phase wall time (synchronize to
+synchronize; programs built before their phase starts) and the custom programs' device spans (compute start to end
+stamps)."""
 
 import os
 import statistics
@@ -26,6 +26,11 @@ from models.demos.ws_expert.ws_fab import slice_layout
 from models.demos.ws_expert.ws_lane import LCfg, build_lane, make_tables, tables_tensor
 from models.demos.ws_expert.ws_layer import LayerCfg, gcfg, head, head_consts, proxy_lcfg, result_buffer, router_weights
 from models.demos.ws_expert.ws_sf import torus_cycles
+from models.demos.ws_expert.ws_shared import SCfg, build_shared, shared_span_us, shared_weights
+
+HEAD = os.environ.get("WSY_HEAD", "ttnn")  # "custom": router matmul + the routing program (ws_head); "ttnn": ttnn ops
+if HEAD == "custom":
+    from models.demos.ws_expert.ws_head import build_route, head_outputs, router_logits, top_from_lists
 
 WARM = int(os.environ.get("WS_WARM", "20"))
 MEAS = int(os.environ.get("WS_MEAS", "5"))
@@ -49,6 +54,10 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
     wg = torch.randn(E, H, I, dtype=torch.bfloat16) / H**0.5
     wu = torch.randn(E, H, I, dtype=torch.bfloat16) / H**0.5
     wd = torch.randn(E, I, H, dtype=torch.bfloat16) / I**0.5
+    w1 = (torch.randn(H, lc.IS) / H**0.5).to(torch.bfloat16)
+    w3 = (torch.randn(H, lc.IS) / H**0.5).to(torch.bfloat16)
+    w2 = (torch.randn(lc.IS, H) / lc.IS**0.5).to(torch.bfloat16)
+    scfg = SCfg(T=lc.T, H=H, IS=lc.IS, S=lc.S, KSH=lc.K)
     x = torch.zeros(N, lc.TX, H, dtype=torch.bfloat16)
     for c in range(N):
         x[c, : lc.T] = torch.randn(lc.T, H).to(torch.bfloat16)
@@ -79,7 +88,14 @@ def make_layer(mesh, lc: LayerCfg, routed_lc: LCfg, seed=0):
         y_t=ttnn.empty([lc.T, H], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=dram),
     )
     del per_chip
-    return st, dict(x=x, wr=wr, wg=wg, wu=wu, wd=wd)
+    st["scfg"] = scfg
+    st["w13_t"], st["w2s_t"] = shared_weights(mesh, scfg, w1, w3, w2)
+    if HEAD == "custom":
+        st["hout"] = head_outputs(mesh, lc)
+        st["logits_t"] = ttnn.empty(
+            [lc.TX, E], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=dram
+        )
+    return st, dict(x=x, wr=wr, wg=wg, wu=wu, wd=wd, w1=w1, w3=w3, w2=w2)
 
 
 def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=False):
@@ -89,11 +105,25 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
     ph, dev = {}, {}
     sync()
     marks = [] if detail else None
+    if HEAD == "custom":
+        rmpd, rio, rst = build_route(mesh, lc, st["logits_t"], st["hout"])
+        sync()
     t0 = time.perf_counter()
     if trace:
         logger.info("WSY phase head: launch")
-    hd = head(mesh, lc, st["x_t"], st["wr_t"], st["hc"], marks)
+    if HEAD == "custom":
+        router_logits(mesh, st["x_t"], st["wr_t"], out=st["logits_t"])
+        x_rm = ttnn.to_layout(st["x_t"], ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.generic_op(rio, rmpd)
+        hd = dict(x_rm=x_rm, logits=st["logits_t"], **{k: st["hout"][k] for k in ("idx_t", "dest_t", "counts_t", "w")})
+    else:
+        hd = head(mesh, lc, st["x_t"], st["wr_t"], st["hc"], marks)
     sync()
+    if HEAD == "custom":
+        for t in rio:
+            if t.memory_config().buffer_type == ttnn.BufferType.L1:
+                ttnn.deallocate(t)
+        del rmpd, rio, rst
     if trace:
         logger.info("WSY phase head: done")
     ph["head"] = (time.perf_counter() - t0) * 1e3
@@ -101,6 +131,11 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
         for (_, a), (n, b) in zip(marks, marks[1:]):
             dev[f"head_{n}"] = [(b - a) * 1e3]
     progs = (
+        (
+            "shared",
+            lambda: build_shared(mesh, st["scfg"], hd["x_rm"], st["w13_t"], st["w2s_t"], st["res_t"])[:3],
+            shared_span_us,
+        ),
         (
             "stream",
             lambda: build_lane(
@@ -146,10 +181,18 @@ def layer_step(mesh, lc: LayerCfg, st, clk, span_chips=(), detail=False, trace=F
 
 class Ref:
     """torch reference on the device's routing, quantized as the device sees the operands (bfp4 weights, bfp8 x rows,
-    bf16 h)."""
+    the routed experts' bf16 h and the shared expert's h format)."""
 
-    def __init__(self, lc: LayerCfg, host, cfg):
-        self.lc, self.h, self.cfg, self.cache = lc, host, cfg, {}
+    def __init__(self, lc: LayerCfg, host, cfg, scfg):
+        self.lc, self.h, self.cfg, self.scfg, self.cache = lc, host, cfg, scfg, {}
+        q = lambda w: quantize(w.float(), scfg.w_dt)
+        self.shw = (q(host["w1"]), q(host["w3"]), q(host["w2"]))
+
+    def shared(self, c, toks):
+        """The shared expert's rows [n, H] of chip c's tokens toks."""
+        X = quantize(self.h["x"][c, toks].float(), self.scfg.x_dt)
+        a, b, d = self.shw
+        return quantize(torch.nn.functional.silu(X @ a) * (X @ b), self.scfg.h_dt) @ d
 
     def expert(self, e):
         if e not in self.cache:
@@ -179,11 +222,15 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
     the layer output on chip c."""
     T, E, K, S = lc.T, lc.nexp, lc.K, lc.S
     get = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[c])
-    top = get(hd["top"]).reshape(-1, K)[:T].long()
     w = get(hd["w"]).float().reshape(-1, 16)[:T, :K]
     counts = get(hd["counts_t"]).long().reshape(-1)
     idx = get(hd["idx_t"]).long().reshape(E, lc.RS)
     dest = get(hd["dest_t"]).long().reshape(E, lc.RS)
+    if "top" in hd:
+        top = get(hd["top"]).reshape(-1, K)[:T].long()
+    else:  # (the routing program's choice, recovered from its destination lists)
+        top = top_from_lists(lc, idx, dest, counts.clamp(max=lc.RS))
+        assert top is not None, "the destination lists do not hold every (token, slot) exactly once"
     cnt_ref = torch.bincount(top.flatten(), minlength=E)
     ok_cnt = bool((counts == cnt_ref).all())
     tk = torch.arange(T).repeat_interleave(K)
@@ -192,7 +239,8 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
     ok_idx = ok_dest = True
     for e in range(E):
         sel = order[off[e] : off[e] + cnt_ref[e]]
-        ok_idx &= bool((idx[e, : cnt_ref[e]] == tk[sel]).all()) and bool((idx[e, cnt_ref[e] :] == T).all())
+        mp = -(-int(cnt_ref[e]) // 32) * 32  # (the entries the stream reads: whole row tiles, padded with T)
+        ok_idx &= bool((idx[e, : cnt_ref[e]] == tk[sel]).all()) and bool((idx[e, cnt_ref[e] : mp] == T).all())
         ok_dest &= bool((dest[e, : cnt_ref[e]] == tk[sel] * S + sel % K).all())
     toks = torch.arange(T) if ntok <= 0 or ntok >= T else torch.linspace(0, T - 1, ntok).round().long()
     lg_dev = get(hd["logits"]).float().reshape(-1, E)[toks]
@@ -202,11 +250,14 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
     picked = sc_ref.gather(1, top[toks])
     same = int((torch.sort(top[toks], 1).values == torch.sort(sc_ref.topk(K, -1).indices, 1).values).all(1).sum())
     worst_pick = float((picked - kth).min() / kth.mean())  # < 0: a pick below torch's K-th score (near ties)
+    # the device's picks against a top-K of its own fp32 logits (exact compares: only exact ties may differ)
+    same_dev = int((torch.sort(top[toks], 1).values == torch.sort(lg_dev.topk(K, -1).indices, 1).values).all(1).sum())
     w_ref = picked / picked.sum(1, keepdim=True)
     eo = ref.routed(c, toks, top[toks])  # [n, K, H]
     res = get(st["res_t"]).float()[: T * S].reshape(T, S, lc.H)[toks]
     yd = get(st["y_t"]).float().reshape(T, lc.H)[toks]
-    yr = (w[toks].unsqueeze(2) * eo).sum(1) + res[:, K]
+    sh = ref.shared(c, toks)
+    yr = (w[toks].unsqueeze(2) * eo).sum(1) + sh
     full = {}
     if os.environ.get("WSY_FULLCHECK", "0") == "1":
         # every token: the result buffer read twice around a device sync (stable), and y against the end pass's sum
@@ -233,9 +284,10 @@ def check_chip(lc: LayerCfg, ref: Ref, c, hd, st, ntok, tag):
         logits_pcc=pcc(lg_dev, lg_ref),
         w_pcc=pcc(w[toks], w_ref),
         same_topk=f"{same}/{len(toks)}",
+        topk_of_device_logits=f"{same_dev}/{len(toks)}",
         worst_pick=round(worst_pick, 5),
         rows_pcc=pcc(res[:, :K], eo),
-        shared_rows_absmax=float(res[:, K].abs().max()),
+        shared_rows_pcc=pcc(res[:, K], sh),
         y_pcc=pcc(yd, yr),
         y_max_rel=float((yd - yr).abs().max() / yr.abs().max()),
         **full,
@@ -267,7 +319,7 @@ def run_layer(mesh, lc: LayerCfg, routed_lc: LCfg, tag, chips, ntok, warm, meas)
     if drows:
         hs = {k: round(statistics.median(r[k][0] for r in drows), 3) for k in drows[0]}
         logger.info(f"WSY {tag} SUMMARY head steps ms (synchronized apart, median of {nd}): {hs}")
-    ref = Ref(lc, host, st["rcfg"])
+    ref = Ref(lc, host, st["rcfg"], st["scfg"])
     res = [check_chip(lc, ref, c, hd, st, ntok, tag)[0] for c in chips]
     M = torch.stack([ttnn.to_torch(ttnn.get_device_tensors(hd["counts_t"])[c]).long().reshape(-1) for c in range(N)])
     logger.info(
@@ -311,6 +363,7 @@ def test_ws_layer_chip(mesh_device, nexp, T):
     res = run_layer(mesh_device, lc, rlc, f"chip e{nexp} T {T}", [0], ntok, warm, meas)
     assert all(r["counts"] and r["lists"] and r["dests"] for r in res)
     assert min(r["y_pcc"] for r in res) > 0.999 and min(r["rows_pcc"] for r in res) > 0.999
+    assert min(r["shared_rows_pcc"] for r in res) > 0.999
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
