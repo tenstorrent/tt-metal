@@ -23,6 +23,7 @@ enum class EdgeCapability : uint8_t {
     INTRAMESH_CARDINAL,  // ordinary same-mesh N/S/E/W edge
     INTRAMESH_EXPRESS,   // same-mesh express chord, command Z
     INTERMESH,           // crosses a mesh boundary, on any direction
+    INTERDOMAIN,         // leaves the fabric domain; the peer is bound at connect time
 };
 
 // What this chip's Z port is used for.

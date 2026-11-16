@@ -333,6 +333,9 @@ std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& f
     if (fabric_context.get_rtoptions().get_fabric_graph_builder()) {
         return std::make_unique<graph::GraphFabricBuildSession>(fabric_context);
     }
+    TT_FATAL(
+        !fabric_context.get_rtoptions().get_fabric_inter_domain(),
+        "inter-domain fabric needs the graph builder (TT_METAL_FABRIC_GRAPH_BUILDER=1)");
     return std::make_unique<FabricBuildSession>();
 }
 
