@@ -323,9 +323,10 @@ dataflow-buffer remapper and is not captured. The Quasar dispatch firmware is no
 ## 8. Semantics and traps
 
 - **Increment is an OR.** Several selected events count at most 1 per cycle.
-- **`mcountinhibit` on Blackhole.** Bit 4 does not gate counter 4: the shared event enable tests bit 3
-  for both counters, so writing bit 3 freezes both and writing bit 4 alone leaves counter 4 running.
-  Quasar uses bit 4 for counter 4. tt-metal never writes `mcountinhibit`; its reset value runs both.
+- **`mcountinhibit` on Blackhole.** The shared event enable tests bit 3 for both counters, so writing
+  bit 3 freezes both counters. Bit 4 gates counter 4 only. To stop counter 3 alone, select no event
+  (`mhpmevent3 = 0`). Quasar uses bit 4 for counter 4. tt-metal never writes `mcountinhibit`; its reset
+  value runs both.
 - **Counters are wide.** `mhpmcounter3/4` are 64 bits with a sticky overflow bit not visible from
   software. The low word of `mcycle` wraps after about 3 s at 1.35 GHz, far above a launch.
 - **Clear-on-read is per half-word** and a 64-bit read cannot be atomic. The capture takes deltas of the
