@@ -7,9 +7,9 @@
 """Blackhole Galaxy system diagnostic tool (DRAFT).
 
 Orchestrates: tt-smi snapshot validation, direct FW-telemetry-table reads,
-reset stability loop, tt-metal deployment-test gtest invocation, the kmd_triage
-first-step tools, and — where the host has the package — the QSFP tests and
-the sys-triage bundle.
+the ethchk eth link check, reset stability loop, tt-metal deployment-test gtest
+invocation, the kmd_triage first-step tools, and — where the host has the
+package — the QSFP tests and the sys-triage bundle.
  Emits a single JSON pass/fail report.
 
 This file holds the CLI and the order the phases run in. What each tier runs is
@@ -38,6 +38,7 @@ if _SUITE_DIR not in sys.path:
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
+from diag.eth_check import ETH_CHECK_SCRIPT, run_eth_check  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
@@ -60,6 +61,15 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="SYS-4365 diag tool")
     ap.add_argument("--tier", choices=list(TIERS), required=True)
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
+    ap.add_argument(
+        "--skip-eth-check",
+        action="store_true",
+        help="Skip the ethchk eth link check entirely.",
+    )
+    ap.add_argument(
+        "--eth-check-script",
+        help=f"The ethchk script. Default: {ETH_CHECK_SCRIPT.name} beside the suite.",
+    )
     ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
     ap.add_argument("--skip-tests", action="store_true", help="Skip phase 4 (gtest deployment binary) entirely.")
     ap.add_argument(
@@ -214,6 +224,8 @@ def run_diag(
     tier: str,
     *,
     dry_run: bool = False,
+    skip_eth_check: bool = False,
+    eth_check_script: str | None = None,
     skip_reset: bool = False,
     skip_tests: bool = False,
     skip_triage: bool = False,
@@ -234,7 +246,7 @@ def run_diag(
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → triage → QSFP tests → sys-triage).
+    """Run the full pipeline (snapshot → eth check → resets → gtests → triage → QSFP tests → sys-triage).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -290,7 +302,27 @@ def run_diag(
     output_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = output_dir / "logs"
 
-    # Phase 2: reset loop + per-reset snapshot revalidations
+    # Phase 2: the ethchk eth link check, when the tier asks for one. Before
+    # any reset: a reset clears the retrain and error counters it reads, and on
+    # a chip that dropped off PCIe it wipes the evidence the check is there to
+    # report. It reads the unit as found.
+    eth_phase = Phase(name="eth_check")
+    t0 = time.time()
+    if skip_eth_check:
+        eth_phase.add(Check(name="ethchk_run", status=SKIP, details="--skip-eth-check", ip="other"))
+    elif not plan.eth_check:
+        eth_phase.add(Check(name="ethchk_run", status=SKIP, details=f"no eth check for tier '{tier}'", ip="other"))
+    else:
+        # A crash in the phase is lost coverage, not a hardware finding.
+        _guarded(
+            eth_phase,
+            "ethchk_run",
+            WARN,
+            lambda: run_eth_check(eth_phase, dry_run, logs_dir, script_override=eth_check_script),
+        )
+    _finish(report, eth_phase, t0, summary=True, all_skip_stays_skip=True)
+
+    # Phase 3: reset loop + per-reset snapshot revalidations
     reset_phase = Phase(name="reset_loop")
     post_reset_phases: list = []
     # Only revalidate via fresh snapshots when running live (not --input-snapshot).
@@ -318,7 +350,7 @@ def run_diag(
     _finish(report, reset_phase, t0, summary=False)
     fold_post_reset_snapshots(report, post_reset_phases)
 
-    # Phase 3: gtest
+    # Phase 4: gtest
     test_phase = Phase(name="tests")
     t0 = time.time()
     if skip_tests:
@@ -330,7 +362,7 @@ def run_diag(
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
 
-    # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
+    # Phase 5: post-test reset. Its job is to hand phase 6 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,
     # never run concurrently with the tests.
     post_test_plan = () if (skip_triage or skip_reset) else plan.post_test_resets
@@ -340,7 +372,7 @@ def run_diag(
         run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run)
         _finish(report, post_reset_phase, t0, summary=False)
 
-    # Phase 5: triage tools, from tools/scaleout/kmd_triage in this repo.
+    # Phase 6: triage tools, from tools/scaleout/kmd_triage in this repo.
     triage_phase = Phase(name="triage")
     t0 = time.time()
     if skip_triage:
@@ -358,7 +390,7 @@ def run_diag(
         )
     _finish(report, triage_phase, t0, summary=True)
 
-    # Phase 6: the QSFP tests, when the host has the package. Last,
+    # Phase 7: the QSFP tests, when the host has the package. Last,
     # and after the post-test reset for the same two reasons the triage phase
     # sits there: it opens every chip, so it must not overlap the tests, and the
     # tool has no SIGBUS handler, so a concurrent reset would kill it outright
@@ -393,7 +425,7 @@ def run_diag(
         )
     _finish(report, qsfp_phase, t0, summary=True, all_skip_stays_skip=True)
 
-    # Phase 7: the sys-triage bundle, when the host has the package. After the
+    # Phase 8: the sys-triage bundle, when the host has the package. After the
     # QSFP tests for the same reason they follow triage: it opens every chip
     # (tt-smi -s, tt-fw-terminal, the reset-unit scratch reads), so nothing may
     # run beside it. Forensics for a person rather than findings, so it never
@@ -453,6 +485,8 @@ def main() -> int:
     rc, _report = run_diag(
         tier=args.tier,
         dry_run=args.dry_run,
+        skip_eth_check=args.skip_eth_check,
+        eth_check_script=args.eth_check_script,
         skip_reset=args.skip_reset,
         skip_tests=args.skip_tests,
         skip_triage=args.skip_triage,

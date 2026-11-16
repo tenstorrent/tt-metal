@@ -3,7 +3,8 @@
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
-in the first-step triage tools, the QSFP tests and the sys-triage bundle. Emits
+in the first-step triage tools, the QSFP tests and the sys-triage bundle. The
+`flash` tier runs the ethchk eth link check on the unit as found instead. Emits
 a single JSON report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
@@ -11,6 +12,9 @@ a single JSON report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 ```bash
 export TT_METAL_HOME=/path/to/tt-metal
 cd $TT_METAL_HOME
+
+# Eth link check on the unit as found (snapshot + ethchk, no resets, ~2 min; needs Docker)
+./tools/scaleout/exabox/health_check_test_suite/run_diag.sh flash
 
 # Full light tier (snapshot + tt-smi -r + eth_link_up gtest, ~75s)
 ./tools/scaleout/exabox/health_check_test_suite/run_diag.sh light
@@ -46,6 +50,9 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 
 - The tier defaults to `medium`; `--image` defaults to `exabox-tools:latest`,
   which is re-pulled on every run.
+- `flash` is not useful here: its eth check starts its own Docker container,
+  which it cannot do from inside this one, so it reports SKIP (the wrapper warns
+  up front). Run `run_diag.sh flash` on the host instead.
 - `--gh-token` (default `$GH_TOKEN`) installs `tt-syseng-diag` from its private
   release (`tenstorrent/tt-syseng-diag-packages`, `--diag-pkg-version`, default
   `0.0.4`). Without it the QSFP and sys-triage phases report SKIP; every other
@@ -66,27 +73,35 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 
 ## Tiers
 
-| Tier | Resets | Tests | Triage | QSFP tests | sys-triage | Duration | Use when |
-|---|---|---|---|---|---|---|---|
-| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | — | ~75 s   | Smoke check on every new unit |
-| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | — | ~5 min + triage + ~7 min | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Final deploy gate |
-| `pre_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
+| Tier | Eth check | Resets | Tests | Triage | QSFP tests | sys-triage | Duration | Use when |
+|---|---|---|---|---|---|---|---|---|
+| `flash`  | yes, if Docker on the host | none                                       | —                                                                          | — | — | — | ~2 min  | Quick eth link check on a unit as found |
+| `light`  | — | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | — | ~75 s   | Smoke check on every new unit |
+| `medium` | — | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | — | ~5 min + triage + ~7 min | Pre-deployment validation |
+| `deploy` | — | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Final deploy gate |
+| `pre_reboot` | — | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 
-The [sys-triage phase](#sys-triage-phase) runs last on `pre_reboot` only; it
-collects a bundle for the ticket and never gates the run.
+The [eth check phase](#eth-check-phase) runs on `flash` only, right after the
+snapshot. The [sys-triage phase](#sys-triage-phase) runs last on `pre_reboot`
+only; it collects a bundle for the ticket and never gates the run.
 
 What each tier runs is defined in one place, `TIERS` in
-[`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test
-reset, the triage tools, and whether the QSFP tests and sys-triage run. To add a
+[`tiers.py`](tiers.py): per tier, whether the eth check runs, the pre-test
+resets, the tests, the post-test reset, the triage tools, and whether the QSFP
+tests and sys-triage run. To add a
 step to a tier, or drop one, edit its entry there. The steps it can name are
 defined beside the phase that runs them: gtests in `TESTS` and pytests in
 `PYTESTS` (`diag/device_tests.py`), triage tools in `TRIAGE_TOOLS`
 (`diag/triage.py`). An unknown name fails at import. The phase order is fixed in
 `diag_runner.run_diag()` and is not a per-tier choice. A new tier also has to be
-added to the tier lists in `run_diag.sh` and `run_diag_docker.sh`, and to the
-table above; `tools/scaleout/exabox/tests/test_diag_tiers.py` fails until the
-scripts agree with `TIERS`.
+added to the tier lists in `run_diag.sh`, `run_diag_docker.sh` and
+`test_infrastructure/run_health_check.py`'s `--tier` choices, and to the table
+above; `tools/scaleout/exabox/tests/test_diag_tiers.py` fails until the scripts
+agree with `TIERS`.
+
+`flash` reads the eth links of a unit as found and changes nothing: no resets
+and no tests. The reset loop and test phases are recorded as SKIP with the
+reason, as on `pre_reboot`.
 
 `pre_reboot` collects data; it does not check the unit. It runs on a unit that is
 about to be power cycled through the BMC, so it records the state first and runs
@@ -123,6 +138,57 @@ or fabric mesh mapping fails.
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
+
+## Eth check phase
+
+`flash` runs [`ethchk-upstream-tests.sh`](../ethchk-upstream-tests.sh), a
+sibling of this suite that is just as useful run by hand on a host. It reads
+every eth link twice, 30 s apart, with tt-metal triage's `check_eth_status`,
+and judges link state, error counters rising between the two reads, links
+retraining during the check, the built-in links (board traces and linking
+boards) a Galaxy always has, cables with only part of their lanes linked, and
+what changed since the previous run on the host. The cabling itself is
+described, never judged. The script's own header lists every check.
+
+**It runs where Docker is.** The script runs triage inside tt-metal's public
+upstream-tests image with `docker run`, so it needs Docker on the host. The
+first run downloads the image once, about 9 GB. Inside a container
+(`run_diag_docker.sh`, the fleet image) there is no Docker, so the phase reports
+SKIP with that reason; run `run_diag.sh flash` on the host itself. A user who is
+not in the `docker` group gets a SKIP saying to run it with `sudo`.
+
+**It comes before any reset.** The phase sits right after the snapshot. A reset
+clears the retrain and error counters it reads, and a chip that dropped off PCIe
+is reported without running triage at all, leaving the chips as they were found
+so the evidence survives. A tier that adds the eth check later reads the unit
+before its own resets.
+
+**Its verdict gates the run.** The script's exit code is its verdict, and the
+phase records it as one check, `ethchk_verdict`:
+
+| Script | Exit code | `ethchk_verdict` |
+|---|---|---|
+| HEALTHY | 0 | **PASS** |
+| WARNING: probably wrong, not provable from here | 3 | **WARN** |
+| PROBLEM: wrong on any host | 2 | **FAIL** |
+| Stopped before triage: a chip dropped off PCIe | 4 | **FAIL** |
+
+The details are the verdict line, the findings printed under it and the LINKS
+line; the closing `SUMMARY` line's fields go in `data.summary`. When no verdict
+came back, `ethchk_run` records why and there is no `ethchk_verdict`: **SKIP**
+when Docker or the image is not usable (exit 5) or the script is missing, and
+**WARN** when it timed out (1200 s backstop) or triage itself failed, with the
+script's own ERROR line, the cause it quotes and its hint in `details`.
+
+The full report is in `<output_dir>/logs/ethchk.log`, and each run's raw triage
+output in `<output_dir>/logs/ethchk.<host>.<utc>/`, so `collect_run_artifacts()`
+attaches both to the JIRA ticket with no extra wiring. "Since the last run"
+compares against earlier runs in that same directory, so it has history when
+runs share an output directory (as with `run_diag.sh`'s default `./logs`). Set
+`ETHCHK_DIR` to keep the runs elsewhere, such as the script's own default
+`~/ethchk-runs`, and share history with runs made by hand. The script's other
+settings (`IMG`, `SAMPLE_SECS`, `ETHCHK_FORCE`, the error-rate thresholds) also
+reach it through the environment.
 
 ## Triage phase
 
@@ -436,8 +502,10 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--tier {light,medium,deploy,pre_reboot}` | required | Selects reset cadence + gtest matrix |
+| `--tier {flash,light,medium,deploy,pre_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
+| `--skip-eth-check` | off | Skip the ethchk eth link check entirely |
+| `--eth-check-script PATH` | `ethchk-upstream-tests.sh` beside the suite | Override the ethchk script, e.g. to run a working copy. A path that is not a file is reported as its own SKIP. |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |
 | `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
@@ -524,6 +592,15 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 
 ### Thermal (JSON-only)
 `asic_thermal_precheck` records the hottest chip / temp vs `thm_limit` for forensics.
+
+### Eth check (flash, when Docker is on the host)
+
+See [the phase section](#eth-check-phase) for how the script's verdict maps to these.
+
+| Check | Rule | On fail |
+|---|---|---|
+| `ethchk_run` | The script ran and gave a verdict. Carries the command, exit code, image, ethchk version, raw-output directory and log. | **SKIP** without Docker, with Docker or the image unusable, or with the script missing. **WARN** on a timeout or a triage failure. |
+| `ethchk_verdict` (`eth`) | ethchk's own verdict over every on-host eth link | **FAIL** on PROBLEM or a chip that dropped off PCIe, **WARN** on WARNING. The findings are in `details`. |
 
 ### QSFP tests (medium / deploy / pre_reboot, when the package is installed)
 
@@ -650,21 +727,22 @@ tools/scaleout/exabox/health_check_test_suite/
 ├── run_diag_docker.sh  # runs run_diag.sh inside the exabox-tools image; results land on the host
 ├── diag_runner.py      # CLI and the phase order. Also exposes run_diag() as a
 │                       #   programmatic entry point returning (exit_code, report_dict).
-├── tiers.py            # what each tier runs: resets, tests, triage, QSFP, sys-triage
+├── tiers.py            # what each tier runs: eth check, resets, tests, triage, QSFP, sys-triage
 ├── diag/               # the phases and what they share
 │   ├── model.py            # Check / Phase result model
 │   ├── common.py           # subprocess, console and path helpers
 │   ├── galaxy.py           # BH Galaxy topology: BDF <-> UBB/ASIC, ETH wiring, board revs
 │   ├── snapshot.py         # phase 1: tt-smi snapshot capture, BMC FRU inventory
 │   ├── snapshot_checks.py  # phase 1: the checks over a snapshot
-│   ├── resets.py           # phase 2: pre-test reset loop; phase 4: post-test reset
-│   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
+│   ├── eth_check.py        # phase 2: ethchk eth link check (../ethchk-upstream-tests.sh)
+│   ├── resets.py           # phase 3: pre-test reset loop; phase 5: post-test reset
+│   ├── device_tests.py     # phase 4: deployment gtests (TESTS) and pytests (PYTESTS)
 │   ├── external.py         # ingesting checks written by external tools
-│   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
-│   ├── qsfp.py             # phase 6: QSFP tests, collection
-│   ├── qsfp_ingest.py      # phase 6: cluster-debug JSONL dump -> checks. No hardware in it: a stored
+│   ├── triage.py           # phase 6: kmd_triage tools (TRIAGE_TOOLS)
+│   ├── qsfp.py             # phase 7: QSFP tests, collection
+│   ├── qsfp_ingest.py      # phase 7: cluster-debug JSONL dump -> checks. No hardware in it: a stored
 │   │                       #   dump is all it needs, so it is tested at a desk. Runnable standalone.
-│   └── sys_triage.py       # phase 7: sys-triage bundle
+│   └── sys_triage.py       # phase 8: sys-triage bundle
 ├── HEALTH_CHECK.md     # this file
 └── test_infrastructure/  # scheduled/CI harness around the diag suite
     ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP
@@ -684,7 +762,8 @@ tools/scaleout/exabox/health_check_test_suite/
 ```
 
 The unit tests for the parsers and the harness live outside this directory, in
-`tools/scaleout/exabox/tests/` (e.g. `test_diag_runner_parsers.py`, `test_diag_tiers.py`).
+`tools/scaleout/exabox/tests/` (e.g. `test_diag_runner_parsers.py`, `test_diag_tiers.py`,
+`test_diag_eth_check.py`).
 
 The `test_infrastructure/` harness previously lived in the `exabox-infra` repo and
 spun up a nested Docker container to run the diag suite. Now that the harness ships

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 3: the device tests — deployment gtests and pytest stress tests.
+"""Phase 4: the device tests — deployment gtests and pytest stress tests.
 
 TESTS and PYTESTS define the steps a tier can list under ``tests`` in tiers.py.
 """

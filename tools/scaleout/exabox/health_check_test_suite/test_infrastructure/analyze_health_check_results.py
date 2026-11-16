@@ -65,8 +65,10 @@ EXCLUDED_CHECKS = {"snapshot_capture"}
 # checks whose details list offending BDFs or ETH port paths - keep more text
 # for triage. The qsfp_* entries name the ports at fault ("ubb=2/asic=1/
 # eth=6 -> ..."), which is the whole value of the row: truncated to 140 they
-# say a link is down without saying which.
+# say a link is down without saying which. ethchk_verdict's findings name the
+# tray, port and channel the same way.
 DETAIL_RICH = {
+    "ethchk_verdict",
     "pcie_gen",
     "gddr_speed",
     "pcie_lane_width",

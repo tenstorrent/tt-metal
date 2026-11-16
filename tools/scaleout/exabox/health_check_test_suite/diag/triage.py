@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 5: the kmd_triage first-step tools.
+"""Phase 6: the kmd_triage first-step tools.
 
 TRIAGE_TOOLS defines the steps a tier can list under ``triage`` in tiers.py.
 """

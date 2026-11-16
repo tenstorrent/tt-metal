@@ -37,6 +37,7 @@ BMC_API_URL_VALUE="${TT_BMC_API_URL:-}"
 BMC_API_TOKEN_VALUE="${TT_BMC_API_TOKEN:-}"
 SKIP_QSFP=false
 SKIP_SYS_TRIAGE=false
+SKIP_ETH_CHECK=false
 NEED_LSPCI=true
 
 FORWARD=()
@@ -57,9 +58,12 @@ Every option has a default, so a bare \`$(basename "$0")\` runs the medium tier
 into ./test_output_<date>-<time>/.
 
 Wrapper options:
-  -t, --tier {light|medium|deploy|pre_reboot}
+  -t, --tier {flash|light|medium|deploy|pre_reboot}
                          Tier to run (default: ${TIER}). Also accepted
-                         positionally, like run_diag.sh itself.
+                         positionally, like run_diag.sh itself. flash's eth
+                         check starts its own Docker container, which it
+                         cannot do from inside this one, so here it reports
+                         SKIP: run run_diag.sh flash on the host instead.
   -o, --output-dir PATH  Host directory for the report, the per-step logs and
                          the console transcript. Created if absent and chmod
                          0777 so the image user can write to it.
@@ -109,6 +113,7 @@ TT_BMC_API_URL / TT_BMC_API_TOKEN via the same 0600 --env-file, on every tier:
 Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail):
       --dry-run              Print intended subprocess calls without executing
                              destructive steps
+      --skip-eth-check       Skip the ethchk eth link check
       --skip-reset           Skip the reset loop phase entirely
       --skip-tests           Skip the gtest phase entirely
       --skip-triage          Skip the post-test reset and the triage phase
@@ -171,12 +176,12 @@ while (( $# )); do
     case "$1" in
         -h|--help) show_help; exit 0 ;;
 
-        light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
+        flash|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
         -t|--tier)
             require_value "$1" "${2:-}"
             case "$2" in
-                light|medium|deploy|pre_reboot) ;;
-                *) die "unknown tier '$2'. Expected: light, medium, deploy, pre_reboot" ;;
+                flash|light|medium|deploy|pre_reboot) ;;
+                *) die "unknown tier '$2'. Expected: flash, light, medium, deploy, pre_reboot" ;;
             esac
             TIER="$2"; shift 2 ;;
 
@@ -205,6 +210,8 @@ while (( $# )); do
             SKIP_QSFP=true; FORWARD+=("$1"); shift ;;
         --skip-sys-triage)
             SKIP_SYS_TRIAGE=true; FORWARD+=("$1"); shift ;;
+        --skip-eth-check)
+            SKIP_ETH_CHECK=true; FORWARD+=("$1"); shift ;;
         --skip-tests|--skip-triage|--triage-gating|--qsfp-gating)
             FORWARD+=("$1"); shift ;;
 
@@ -620,8 +627,15 @@ if ${WANT_SYS_TRIAGE}; then
 fi
 if [[ -n ${BMC_API_URL_VALUE} && -n ${BMC_API_TOKEN_VALUE} ]]; then
     say "bmc api:    ${BMC_API_URL_VALUE} (token set)"
-elif ! ${SKIP_QSFP} && [[ ${TIER} != light ]]; then
+elif ! ${SKIP_QSFP} && [[ ${TIER} != light && ${TIER} != flash ]]; then
     say "bmc api:    (incomplete — the QSFP collector will not read the cages; see --bmc-api-*)"
+fi
+# ethchk runs triage in its own image with `docker run`, and this image has no
+# Docker, so flash's only check reports SKIP here.
+if [[ ${TIER} == flash ]] && ! ${SKIP_ETH_CHECK}; then
+    warn "flash's eth check starts its own Docker container, which it cannot do from inside" \
+         "this one, so it will report SKIP. Run health_check_test_suite/run_diag.sh flash" \
+         "on the host instead."
 fi
 say "forwarded:  ${FORWARD[*]:-(none)}"
 say ""

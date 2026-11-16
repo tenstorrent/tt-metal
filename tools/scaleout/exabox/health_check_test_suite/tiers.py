@@ -7,10 +7,11 @@ add, move or drop a step in one.
 
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
-    snapshot -> resets -> tests -> post_test_resets -> triage -> qsfp_tests -> sys_triage
+    snapshot -> eth_check -> resets -> tests -> post_test_resets -> triage -> qsfp_tests -> sys_triage
 
-The order is load-bearing (the triage probes, the QSFP collector and sys-triage
-all open every chip, so they must not overlap the tests, and must come after a
+The order is load-bearing (the eth check must come before any reset, which
+clears what it reads; the triage probes, the QSFP collector and sys-triage all
+open every chip, so they must not overlap the tests, and must come after a
 discrete reset; see the comments on each field below), so a tier does not
 reorder phases. It only picks what each one does. A phase a tier leaves empty is
 still in the report, as a SKIP that names the tier — except post_test_resets,
@@ -26,10 +27,11 @@ A name that isn't defined there fails at import, so a typo stops
 `diag_runner.py --help` (and the image's build-time smoke test) rather than a run.
 
 Adding or renaming a tier also means updating, by hand, the tier lists in
-run_diag.sh (its case statement and --help) and run_diag_docker.sh (both case
-statements and --help), plus the tier table in HEALTH_CHECK.md.
-tools/scaleout/exabox/tests/test_diag_tiers.py fails until the two scripts agree
-with TIERS.
+run_diag.sh (its case statement and --help), run_diag_docker.sh (both case
+statements and --help) and test_infrastructure/run_health_check.py (its --tier
+choices), plus the tier table in HEALTH_CHECK.md.
+tools/scaleout/exabox/tests/test_diag_tiers.py fails until the three scripts
+agree with TIERS.
 """
 from __future__ import annotations
 
@@ -42,6 +44,12 @@ from diag.triage import TRIAGE_TOOLS
 
 @dataclass(frozen=True)
 class Tier:
+    # Run ethchk-upstream-tests.sh: every eth link read twice with tt-metal
+    # triage, judged on link state, errors rising and what changed since the
+    # last run. Right after the snapshot and before any reset, because a reset
+    # clears the retrain and error counters it reads and the state it reports.
+    eth_check: bool = False
+
     # Pre-test reset loop, in order. Per SYS-4365 the first reset is -r, then
     # stick to -glx_reset. Each is followed by a fresh snapshot, revalidated.
     resets: tuple[str, ...] = ()
@@ -72,6 +80,10 @@ class Tier:
 
 
 TIERS: dict[str, Tier] = {
+    # Eth link check on the unit as found, in a couple of minutes. No resets:
+    # ethchk reports a chip that dropped off PCIe and asks for no reset before
+    # that is reported, since a reset wipes the evidence. No tests either.
+    "flash": Tier(eth_check=True),
     # Smoke check. No triage, QSFP or sys-triage: each costs minutes.
     "light": Tier(
         resets=("-r",),

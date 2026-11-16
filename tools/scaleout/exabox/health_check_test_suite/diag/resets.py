@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 2 (pre-test reset stability loop) and phase 4 (post-test reset)."""
+"""Phase 3 (pre-test reset stability loop) and phase 5 (post-test reset)."""
 from __future__ import annotations
 
 import re

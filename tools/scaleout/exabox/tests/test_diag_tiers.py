@@ -8,7 +8,8 @@
 The shell wrappers validate the tier name themselves, before any Python runs,
 so a tier added to tiers.py and not to them is a tier nobody can launch. The
 docker wrapper also hardcodes which tiers want the sys-triage mounts and the
-BMC API credentials. These tests fail until they agree.
+BMC API credentials, and which one runs the eth check it cannot host. These
+tests fail until they agree.
 """
 
 from __future__ import annotations
@@ -53,8 +54,13 @@ class TestShellWrappersAgree(unittest.TestCase):
 
     def test_docker_qsfp_tiers(self):
         # run_diag_docker.sh warns about missing BMC API credentials on every
-        # tier but `light`.
-        self.assertEqual({name for name, tier in TIERS.items() if not tier.qsfp_tests}, {"light"})
+        # tier but `light` and `flash`.
+        self.assertEqual({name for name, tier in TIERS.items() if not tier.qsfp_tests}, {"light", "flash"})
+
+    def test_docker_eth_check_tiers(self):
+        # run_diag_docker.sh warns that the eth check cannot run inside the
+        # container only for `flash`.
+        self.assertEqual({name for name, tier in TIERS.items() if tier.eth_check}, {"flash"})
 
 
 class TestDiagRunnerCli(unittest.TestCase):
@@ -63,6 +69,13 @@ class TestDiagRunnerCli(unittest.TestCase):
 
         action = next(a for a in build_diag_arg_parser()._actions if "--tier" in a.option_strings)
         self.assertEqual(list(action.choices), list(TIERS))
+
+    def test_health_check_harness_accepts_every_tier(self):
+        # run_health_check.py lists the tiers itself rather than importing them.
+        text = (SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text()
+        m = re.search(r'"--tier",[^)]*?choices=\[([^\]]*)\]', text)
+        self.assertIsNotNone(m, "no --tier choices list in run_health_check.py")
+        self.assertEqual(set(re.findall(r'"([a-z_]+)"', m.group(1))), set(TIERS))
 
     def test_docker_wrapper_feature_probe_still_matches(self):
         # run_diag_docker.sh greps diag_runner.py for this flag to tell an image
