@@ -99,7 +99,7 @@ constexpr std::uint32_t src_a_condition()
 // SrcB's condition is SrcA's one bit up, so the SRC_A / SRC_B bits times SrcA's condition give the condition for both
 static_assert(ckernel::p_stall::SRCB_CLR == ckernel::p_stall::SRCA_CLR << 1 && ckernel::p_stall::SRCB_VLD == ckernel::p_stall::SRCA_VLD << 1);
 // REPLAY_HANDSHAKES is two handshakes (STALLWAIT + flip) per replay buffer slot; fail on a buffer-size change
-static_assert(2 * REPLAY_HANDSHAKES == REPLAY_BUF_SIZE, "REPLAY_HANDSHAKES must be half the replay buffer depth");
+static_assert(2 * REPLAY_HANDSHAKES == ckernel::REPLAY_BUF_SIZE, "REPLAY_HANDSHAKES must be half the replay buffer depth");
 
 template <bool PRODUCE>
 constexpr std::uint32_t wait_op(const std::uint32_t srcs)
