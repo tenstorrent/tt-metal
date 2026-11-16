@@ -226,7 +226,8 @@ std::vector<uint32_t> get_line_reader_compile_args(
     const uint32_t slice_Wt,
     const bool fuse_op,
     const uint32_t sync_with_other_direction,
-    const uint32_t normalized_dim) {
+    const uint32_t normalized_dim,
+    const bool runtime_rows) {
     if (normalized_dim == 0) {
         return {
             ring_index,                // my_chip_id
@@ -264,6 +265,7 @@ std::vector<uint32_t> get_line_reader_compile_args(
         fuse_op,                    //         fuse_op
         sync_with_other_direction,  // sync_with_other_direction
         normalized_dim,             // dim
+        runtime_rows,               // runtime_rows
     };
 }
 
@@ -333,11 +335,21 @@ std::vector<uint32_t> get_line_reduce_compile_args(
     const uint32_t input_tensor_B,
     const uint32_t slice_B,
     const uint32_t slice_C,
-    const uint32_t normalized_dim) {
+    const uint32_t normalized_dim,
+    const uint32_t slice_Wt,
+    const bool runtime_rows) {
     if (normalized_dim == 0) {
         return {input_cb_index, intermediate_cb_index, compute_output_cb_index, tile_granularity, slice_B};
     }
-    return {input_cb_index, intermediate_cb_index, compute_output_cb_index, tile_granularity, input_tensor_B, slice_C};
+    return {
+        input_cb_index,
+        intermediate_cb_index,
+        compute_output_cb_index,
+        tile_granularity,
+        input_tensor_B,
+        slice_C,
+        slice_Wt,
+        runtime_rows};
 }
 
 }  // namespace operations::experimental::ccl::detail
@@ -451,7 +463,8 @@ std::array<uint32_t, 4> reduce_scatter_semaphore_args(
     using Args = ttnn::ccl::ReduceScatterCommonArgs;
     static_assert(
         Args::semaphore_0 == Args::barrier + 1 && Args::semaphore_1 == Args::barrier + 2 &&
-        Args::ack == Args::barrier + 3 && Args::count == Args::barrier + 4);
+        Args::ack == Args::barrier + 3 && Args::input_Ht == Args::ack + 1 &&
+        Args::intermediate_half_pages == Args::ack + 2 && Args::count == Args::barrier + 6);
     return {
         barrier_semaphore.has_value() ? static_cast<uint32_t>(barrier_semaphore->address()) : 0u,
         static_cast<uint32_t>(semaphore.at(0).address()),
@@ -460,8 +473,15 @@ std::array<uint32_t, 4> reduce_scatter_semaphore_args(
     };
 }
 
-// Common runtime args of the reduce-scatter reader and writer, in ReduceScatterCommonArgs order: input, intermediate,
-// output, penult (0 when absent), then the semaphore slots.
+// The input's rows in tiles.
+uint32_t input_Ht(const Tensor& input) {
+    const auto& shape = input.padded_shape();
+    const uint32_t rows = shape.rank() >= 2 ? shape[-2] : 1u;
+    return input.layout() == tt::tt_metal::Layout::TILE ? rows / tt::constants::TILE_HEIGHT : rows;
+}
+
+// Common runtime args of the reduce-scatter kernels, in ReduceScatterCommonArgs order: input, intermediate, output,
+// penult (0 when absent), the semaphore slots, then input_Ht and half the intermediate's pages (line kernels only).
 void append_reduce_scatter_common_args(
     tt::tt_metal::KernelDescriptor::RTArgList& common_args,
     bool is_ring,
@@ -488,6 +508,8 @@ void append_reduce_scatter_common_args(
         common_args.push_back(
             semaphore_arg);  // smuggled-rta-ok: GlobalSemaphore address, workload-scoped or re-applied
     }
+    common_args.push_back(input_Ht(input));
+    common_args.push_back(static_cast<uint32_t>(intermediate.mesh_buffer().num_pages() / 2));
 }
 
 // Cache-hit counterpart of append_reduce_scatter_common_args: re-writes every ReduceScatterCommonArgs slot of the
@@ -512,7 +534,13 @@ void apply_reduce_scatter_common_args(
     values[Args::penult] = penult.has_value() ? penult->mesh_buffer().address() : 0u;
     const auto semaphore_args = reduce_scatter_semaphore_args(is_ring, barrier, semaphores);
     std::copy(semaphore_args.begin(), semaphore_args.end(), values.begin() + Args::barrier);
-    for (const size_t kernel_index : {artifacts.reader_kernel_index, artifacts.writer_kernel_index}) {
+    values[Args::input_Ht] = input_Ht(input);
+    values[Args::intermediate_half_pages] = static_cast<uint32_t>(intermediate.mesh_buffer().num_pages() / 2);
+    for (const size_t kernel_index :
+         {artifacts.reader_kernel_index, artifacts.writer_kernel_index, artifacts.reduce_kernel_index}) {
+        if (kernel_index == ReduceScatterDescriptorArtifacts::no_kernel) {
+            continue;
+        }
         auto& common_args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_index);
         TT_FATAL(
             common_args.size() == Args::count,
@@ -1438,6 +1466,15 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
     bool input_is_sharded = input_tensor.is_sharded();
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
+    const bool runtime_rows = ttnn::experimental::ccl::reduce_scatter_line_runtime_rows(
+        topology,
+        normalized_dim,
+        input_tensor_B,
+        slice_C,
+        input_tensor.layout() == tt::tt_metal::Layout::TILE && !input_is_sharded && !intermediate_is_sharded &&
+            !output_is_sharded,
+        chunks_per_sync,
+        num_workers_per_direction_opt);
 
     std::map<std::string, std::string> reader_compute_defines;
     std::map<std::string, std::string> writer_compute_defines;
@@ -1512,7 +1549,8 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
             slice_Wt,
             fuse_op,
             sync_with_other_direction,
-            normalized_dim);
+            normalized_dim,
+            runtime_rows);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -1575,6 +1613,9 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
     sender_writer_compile_args.push_back(
         use_fabric_2d_neighbor_barrier ? static_cast<uint32_t>((num_targets_forward != 0) + (num_targets_backward != 0))
                                        : ring_size - 1);  // barrier_target_count
+    if (normalized_dim != 0) {
+        sender_writer_compile_args.push_back(runtime_rows);  // runtime_rows
+    }
 
     sender_writer_compile_args.insert(
         sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
@@ -1620,7 +1661,9 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
             input_tensor_B,
             slice_B,
             slice_C,
-            normalized_dim)};
+            normalized_dim,
+            slice_Wt,
+            runtime_rows)};
 
     std::string sender_reduce_kernel_path =
         normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -1719,6 +1762,10 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
                     start_pages_read_in_row,       // start_pages_read_in_row (unused by dim0 kernel)
                     start_row_offset,              // start_row_offset (unused by dim0 kernel)
                 };
+                if (normalized_dim != 0) {
+                    reader_rt_args.push_back(worker_id);
+                    reader_rt_args.push_back(num_workers);
+                }
 
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -1751,6 +1798,10 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
                     start_tiles_read,                                            // start_tiles_read
                     start_tiles_to_read,                                         // start_tiles_to_read
                 };
+                if (normalized_dim != 0) {
+                    writer_rt_args.push_back(worker_id);
+                    writer_rt_args.push_back(num_workers);
+                }
                 tt::tt_metal::KernelDescriptor::RTArgList writer_args;
                 writer_args.append(writer_rt_args);
                 append_fabric_mux_connection_rt_args(
@@ -1781,6 +1832,10 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
                     start_tiles_read,
                     start_tiles_to_read,
                 };
+                if (normalized_dim != 0) {
+                    reduce_rt_args.push_back(worker_id);
+                    reduce_rt_args.push_back(num_workers);
+                }
                 set_runtime_args(program, reduce_kernel_id, core, reduce_rt_args);
             }
         }
@@ -1798,9 +1853,11 @@ ReduceScatterDescriptorArtifacts build_line_reduce_scatter_minimal_async_program
         std::nullopt);
     program.kernels[reader_kernel_id].emplace_common_runtime_args(common_args);
     program.kernels[writer_kernel_id].emplace_common_runtime_args(common_args);
+    program.kernels[reduce_kernel_id].emplace_common_runtime_args(common_args);
     return ReduceScatterDescriptorArtifacts{
         .reader_kernel_index = reader_kernel_id,
         .writer_kernel_index = writer_kernel_id,
+        .reduce_kernel_index = reduce_kernel_id,
     };
 }
 
@@ -1926,13 +1983,14 @@ constexpr ReduceScatterDescriptorArtifacts kRingReduceScatterKernels{
     .reader_kernel_index = 0, .writer_kernel_index = 1};
 // The line builder adds the fabric mux kernel first.
 constexpr ReduceScatterDescriptorArtifacts kLineReduceScatterKernels{
-    .reader_kernel_index = 1, .writer_kernel_index = 2};
+    .reader_kernel_index = 1, .writer_kernel_index = 2, .reduce_kernel_index = 3};
 
 void check_reduce_scatter_kernels(
     const ReduceScatterDescriptorArtifacts& built, const ReduceScatterDescriptorArtifacts& expected) {
     TT_FATAL(
         built.reader_kernel_index == expected.reader_kernel_index &&
-            built.writer_kernel_index == expected.writer_kernel_index,
+            built.writer_kernel_index == expected.writer_kernel_index &&
+            built.reduce_kernel_index == expected.reduce_kernel_index,
         "reduce_scatter_minimal_async: expected reader/writer kernels {}/{} in the descriptor, got {}/{}; the "
         "cache-hit override depends on them",
         expected.reader_kernel_index,

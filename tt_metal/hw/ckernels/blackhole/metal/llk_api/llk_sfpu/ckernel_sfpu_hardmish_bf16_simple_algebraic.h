@@ -3,8 +3,9 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::hardmish {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
+using ::sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B;
+using ::sfpi::SFPSTOCHRND_RND_EVEN;
 template <uint32_t A, uint32_t B, uint32_t Hold, uint32_t Advance>
 inline void simple_finish_pair() {
     TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, A, A, SFPSTOCHRND_MOD1_FP32_TO_FP16B);

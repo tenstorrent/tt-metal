@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_conversions.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 
@@ -38,9 +39,9 @@ namespace sfpu {
 
 // Whether BF16 DEST runs the generated hardmish kernel as one call over the whole tile.
 inline constexpr bool hardmish_bf16_whole_tile = true;
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat DEST_16BIT_FORMAT, int ITERATIONS = 8>
 inline void hardmish() {
-    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+    if constexpr (!is_fp32_dest_acc_en && DEST_16BIT_FORMAT == DataFormat::Float16_b && ITERATIONS == 32) {
         if (bf16_dest_hardmish()) {
             calculate_hardmish_bf16<ITERATIONS>();
             return;
@@ -52,7 +53,7 @@ inline void hardmish() {
 
         scale = sfpi::clamp(scale, 0.0f, 1.0f);
 
-        sfpi::dst_reg[0] = x * scale;
+        sfpi::dst_reg[0] = round_to_dest<is_fp32_dest_acc_en, DEST_16BIT_FORMAT>(x * scale);
         sfpi::dst_reg++;
     }
 }

@@ -86,7 +86,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
     const uint32_t host_src_pcie_addr = static_cast<uint32_t>(pcie_base + kHostSrcOffset);
     const uint32_t host_dst_pcie_addr = static_cast<uint32_t>(pcie_base + kHostDstOffset);
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     const uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     const uint32_t l1_staging_addr = l1_base + l1_alignment * 8;
@@ -104,9 +104,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
     tt_driver_atomics::sfence();
 
     // Step 2-4: Kernel reads host src -> L1, then L1 -> host dst (via compile-time args).
-    const experimental::KernelSpecName DM_KERNEL{"device_pcie_loopback"};
+    const KernelSpecName DM_KERNEL{"device_pcie_loopback"};
 
-    experimental::KernelSpec dm_kernel_spec{
+    KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = OVERRIDE_KERNEL_PREFIX
         "tests/tt_metal/tt_metal/data_movement/device_pcie_loopback/kernels/device_pcie_loopback.cpp",
@@ -116,16 +116,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
              {"host_dst_pcie_addr", host_dst_pcie_addr},
              {"l1_staging_addr", l1_staging_addr},
              {"transfer_size_bytes", kTransferSizeBytes}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "device_pcie_loopback",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},

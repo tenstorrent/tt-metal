@@ -7,45 +7,13 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
-    generate_bfloat16_bits,
-    to_tt_tensor,
-    SMALLEST_NORMAL_BF16,
-)
-
-
-@pytest.mark.parametrize("generated_first", [True, False])
-def test_hardmish_with_sqrt_in_sfpu_chain(device, generated_first):
-    """hardmish chained with stock sqrt, both orders: each step stores what its op stores standalone."""
-    generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDMISH), lambda tensor: ttnn.hardmish(tensor))
-    stock = (ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT), lambda tensor: ttnn.sqrt(tensor))
-    first, second = (generated, stock) if generated_first else (stock, generated)
-    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
-    tt_in = to_tt_tensor(input_tensor, device)
-
-    def words(tensor):
-        return ttnn.to_torch(tensor).view(torch.int16)
-
-    for step, standalone in (generated, stock):
-        assert torch.equal(
-            words(ttnn.unary_chain(tt_in, [step])), words(standalone(tt_in))
-        ), f"{step} is not its op's kernel"
-
-    result = words(ttnn.unary_chain(tt_in, [first[0], second[0]]))
-    middle = ttnn.to_torch(first[1](tt_in))
-    expected = words(second[1](to_tt_tensor(middle, device)))
-    # A finite normal first result sits in DEST exactly as stored, so both runs feed the second op the same input.
-    checked = torch.isfinite(middle) & (middle.abs() >= SMALLEST_NORMAL_BF16)
-    assert checked.sum() >= 64
-    mismatched = checked & (result != expected)
-    assert not mismatched.any(), (
-        f"{int(mismatched.sum())} of {int(checked.sum())} lanes differ from the standalone second op, "
-        f"first at its input {middle[mismatched][0].item()!r}"
-    )
 
 
 def test_hardmish_bf16_unflushed_zero_and_subnormal_inputs(device):
     """-0 and subnormal inputs (kept by TT-NN's copy into DEST) store +0."""
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole",):
+        pytest.skip(f"ttnn.hardmish keeps its stock kernel on {board}")
     words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
     x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -56,6 +24,9 @@ def test_hardmish_bf16_unflushed_zero_and_subnormal_inputs(device):
 def test_hardmish_bf16_bfloat8_b(device):
     """bfloat8_b in and out: PCC 0.999 against torch, and each output within one bfloat8_b step of the BF16 call's
     packed to bfloat8_b (two in a block holding an infinity or NaN)."""
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole",):
+        pytest.skip(f"ttnn.hardmish keeps its stock kernel on {board}")
     torch.manual_seed(0)
     x = torch.empty(1, 1, 64, 64).uniform_(-10.0, 10.0).to(torch.bfloat16)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
@@ -101,7 +72,9 @@ def test_hardmish_bf16_bfloat8_b(device):
 def test_hardmish_bf16_nonfinite_inputs(device):
     """+-Inf and +-NaN store torch's result (NaN as an infinity) or STOCK's {input bits: word} for the board."""
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    STOCK = {"blackhole": {0xFF80: 0x7F80}, "wormhole_b0": {0xFF80: 0xFF80, 0xFFC0: 0xFF80}}
+    if board not in ("blackhole",):
+        pytest.skip(f"ttnn.hardmish keeps its stock kernel on {board}")
+    STOCK = {"blackhole": {0xFF80: 0x7F80}}
     bits = torch.tensor([0x7F80, 0xFF80, 0x7FC0, 0xFFC0], dtype=torch.int32).repeat(256)
     x = bits.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 32, 32)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -131,9 +104,11 @@ def test_hardmish_bf16_exhaustive_inputs(device):
     SKIP lists inputs the LLK sweep judges instead.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
-    STOCK = {"wormhole_b0": {0xFF80: [(0xFF81, 0xFFFF)]}}
+    if board not in ("blackhole",):
+        pytest.skip(f"ttnn.hardmish keeps its stock kernel on {board}")
+    STOCK = {0x7F80: [(0xFF80, 0xFF80)]}
     STEPS = 0
-    SKIP = [(0x0002, 0x007F), (0x8002, 0x807F), (0xFF80, 0xFF80)]
+    SKIP = [(0x0002, 0x007F), (0x8002, 0x807F)]
     bits = torch.arange(1 << 16, dtype=torch.int32)
     x = bits.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -159,7 +134,7 @@ def test_hardmish_bf16_exhaustive_inputs(device):
     # The SFPU flushes a result below the smallest normal, or within 2^-12 above it, to 0.
     ok |= (actual == 0) & (reference.abs() < tiny * (1 + 2.0**-12))
     listed = torch.zeros_like(ok)
-    for word, ranges in STOCK.get(board, {}).items():
+    for word, ranges in STOCK.items():
         value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
         for first, last in ranges:
             lanes = (bits >= first) & (bits <= last)

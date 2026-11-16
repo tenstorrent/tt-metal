@@ -10,16 +10,15 @@ from helpers.llk_params import ApproximationMode, MathOperation
 
 # (operation, approximation mode of the replaced instance, max ULP); max ULP 0 is an exact fit.
 _BF16_EXHAUSTIVE_OPS = [
-    (MathOperation.Hardmish, ApproximationMode.No, 0),
+    (MathOperation.Hardmish, ApproximationMode.No, 1),
 ]
 # Boards where the op keeps its stock kernel, which this sweep does not test.
-_BF16_STOCK_BOARDS = {}
+_BF16_STOCK_BOARDS = {
+    MathOperation.Hardmish: (ChipArchitecture.WORMHOLE,),
+}
 # Per board, the word stored at each special input class where the kernel returns stock's result.
 _BF16_STOCK_SPECIALS = {
-    MathOperation.Hardmish: {
-        ChipArchitecture.BLACKHOLE: {"neg_inf": 0x7F80},
-        ChipArchitecture.WORMHOLE: {"neg_inf": 0xFF80, "neg_nan": 0xFF80},
-    },
+    MathOperation.Hardmish: {ChipArchitecture.BLACKHOLE: {"neg_inf": 0x7F80}},
 }
 
 

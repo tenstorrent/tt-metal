@@ -470,8 +470,9 @@ def fast_device_to_host_yuv(
     if debug:
         print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
-    # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=True)
+    # 2. On-device YUV 4:2:0 -> 3 uint8 tensors. Wide rows take at most 32 frames and write the
+    #    same bytes, so a longer clip (LTX decodes all of its frames at once) uses narrow rows.
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=T <= 32)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
