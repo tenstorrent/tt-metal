@@ -44,7 +44,7 @@ from ._state_dict import (
     world_record,
 )
 from ._topology import chunk_boxes
-from ._train_state import TRAIN_STATE_KEY, check_train_state, missing_train_state, restore_train_state
+from ._train_state import check_train_state, missing_train_state, restore_train_state, train_state_of
 
 
 @dataclass
@@ -220,7 +220,7 @@ def load(
     index: Index = read_index(ckpt_dir)
     header = read_checked_header(ckpt_dir)
     world_rank = world_record()["ranks"][0]["world_rank"]
-    train_state = header[TRAIN_STATE_KEY]
+    train_state = train_state_of(header, ckpt_dir)
     missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
     if strict and missing_state:
         raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")

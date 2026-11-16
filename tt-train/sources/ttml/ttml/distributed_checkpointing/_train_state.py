@@ -24,6 +24,7 @@ when it refuses a state), then the dataloader, then the generators. A component 
 
 from __future__ import annotations
 
+import os
 import random
 import sys
 import warnings
@@ -34,8 +35,8 @@ import ttnn
 
 import ttml
 
-from ._errors import CheckpointError, VersionError
-from ._index import check_json, read_header_json
+from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
+from ._index import HEADER_NAME, check_json, read_checked_header
 
 TRAIN_STATE_KEY = "train_state"
 RNG_FORMAT = 1
@@ -292,6 +293,18 @@ def restore_train_state(
     return restored
 
 
+def train_state_of(header: dict, ckpt_dir: str) -> dict:
+    """The ``train_state`` block of a header read with ``read_checked_header``. Every save writes one, so a header
+    without it, or with something other than an object there, is refused as unreadable."""
+    state = header.get(TRAIN_STATE_KEY)
+    if not isinstance(state, dict):
+        raise IncompleteCheckpointError(
+            f"{os.path.join(ckpt_dir, HEADER_NAME)} has no {TRAIN_STATE_KEY} object (found {type(state).__name__}); "
+            "the checkpoint is corrupt or truncated"
+        )
+    return state
+
+
 def read_train_state(ckpt_dir: str) -> dict:
     """The ``train_state`` block ``save`` stored (scheduler, dataloader, rng), without touching any device."""
-    return read_header_json(ckpt_dir)[TRAIN_STATE_KEY]
+    return train_state_of(read_checked_header(ckpt_dir), ckpt_dir)
