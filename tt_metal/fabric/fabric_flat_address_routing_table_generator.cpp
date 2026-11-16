@@ -89,8 +89,8 @@ void FabricFlatAddressRoutingTableGenerator::generate_routing_table() {
                 continue;
             }
 
-            const size_t ap_idx = this->select_cross_chip_access_point_(src_phys, dst_phys, *dst_device);
-            this->fill_cross_chip_entries_(entry, dst_phys, *dst_device, ap_idx);
+            // GLOBAL reaches every access point's flat addresses from any tile, so the first one serves.
+            this->fill_cross_chip_entries_(entry, dst_phys, *dst_device, /*ap_idx=*/0);
         }
     }
 }
@@ -108,41 +108,6 @@ void FabricFlatAddressRoutingTableGenerator::fill_local_entries_(FlatAddrEntry& 
     }
 }
 
-size_t FabricFlatAddressRoutingTableGenerator::select_cross_chip_access_point_(
-    ChipId src_phys, ChipId dst_phys, tt::umd::TTDevice& dst_device) const {
-    const auto access_points = dst_device.get_access_points();
-    // Select the first Access Point whose flat address falls outside LOCAL and REMOTE windows.
-    // APs inside those windows loop back to the local chip rather than crossing the crossbar.
-    size_t selected_ap_idx = access_points.size();
-    const auto probe_cores = this->cluster_.get_soc_desc(dst_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0);
-    if (!probe_cores.empty()) {
-        const auto& probe_core = probe_cores[0];
-        for (size_t i = 0; i < access_points.size(); ++i) {
-            const auto probe_addr = dst_device.get_flat_address(
-                access_points[i], probe_core, tt::umd::WindowFlags::UnicastWrite, tt::umd::IoOrdering::Posted, 0);
-            if (!probe_addr.has_value()) {
-                continue;
-            }
-            const bool in_local = (*probe_addr >> HORIZON_LOCAL_WINDOW_MASK_BITS) ==
-                                  (HORIZON_LOCAL_WINDOW_COMPARE >> HORIZON_LOCAL_WINDOW_MASK_BITS);
-            const bool in_remote = (*probe_addr >> HORIZON_REMOTE_WINDOW_MASK_BITS) ==
-                                   (HORIZON_REMOTE_WINDOW_COMPARE >> HORIZON_REMOTE_WINDOW_MASK_BITS);
-            if (!in_local && !in_remote) {
-                selected_ap_idx = i;
-                break;
-            }
-        }
-    }
-    TT_FATAL(
-        selected_ap_idx < access_points.size(),
-        "Fabric-over-NoC routing table: no valid cross-chip AP for src={} dst={}: "
-        "all {} APs fall within LOCAL or REMOTE window",
-        src_phys,
-        dst_phys,
-        access_points.size());
-    return selected_ap_idx;
-}
-
 void FabricFlatAddressRoutingTableGenerator::fill_cross_chip_entries_(
     FlatAddrEntry& entry, ChipId dst_phys, tt::umd::TTDevice& dst_device, size_t ap_idx) const {
     const auto access_points = dst_device.get_access_points();
@@ -156,9 +121,19 @@ void FabricFlatAddressRoutingTableGenerator::fill_cross_chip_entries_(
             tt::umd::WindowFlags::UnicastWrite,
             tt::umd::IoOrdering::Posted,
             /*offset=*/0);
-        if (flat.has_value()) {
-            entry.flat_addr[core.x][core.y] = *flat;
+        if (!flat.has_value()) {
+            continue;
         }
+        TT_FATAL(
+            (*flat >> HORIZON_GLOBAL_EXIT_SHIFT) == 0,
+            "Flat address {:#x} of core ({}, {}) on chip {} overlaps the GLOBAL window's exit bit",
+            *flat,
+            core.x,
+            core.y,
+            dst_phys);
+        // Through GLOBAL with exit bit 0, so the write leaves the sender's device through NOC2AXI (0,2); a kernel
+        // can set the exit bit to leave through (1,2) instead.
+        entry.flat_addr[core.x][core.y] = HORIZON_GLOBAL_WINDOW_COMPARE | *flat;
     }
 }
 

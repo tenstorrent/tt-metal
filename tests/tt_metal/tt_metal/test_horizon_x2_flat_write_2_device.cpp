@@ -14,9 +14,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
+#include <hostdevcommon/fabric_common.h>
 
 #include <cstdint>
 #include <cstdlib>
+#include <optional>
+#include <string>
 #include <vector>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -70,13 +73,16 @@ namespace {
 
 // Sends FLAT_WRITE_2DEV_WORDS words from src_device (chip @p source) to tgt_device (chip @p target)
 // via flat address, then runs a checker kernel on the target to verify. Asserts checker result == 1u.
+// With @p global_exit, the kernel writes through the tile ATT's GLOBAL window, leaving its chip through
+// that exit, NOC2AXI (0,2) or (1,2).
 void expect_flat_write_2dev_with_checker(
     distributed::MeshDevice& src_device,
     distributed::MeshDevice& tgt_device,
     ChipId source,
     ChipId target,
     size_t access_point_index,
-    bool posted) {
+    bool posted,
+    std::optional<uint32_t> global_exit = std::nullopt) {
     auto& cluster = MetalContext::instance().get_cluster();
     distributed::MeshCommandQueue& src_cq = src_device.mesh_command_queue();
     distributed::MeshCommandQueue& tgt_cq = tgt_device.mesh_command_queue();
@@ -107,6 +113,10 @@ void expect_flat_write_2dev_with_checker(
         tt::umd::IoOrdering::Posted,
         recv_buf->address());
     ASSERT_TRUE(flat.has_value()) << "chip " << target << " has no flat address";
+    const uint64_t dst = global_exit.has_value() ? tt::tt_fabric::HORIZON_GLOBAL_WINDOW_COMPARE |
+                                                       (uint64_t{*global_exit} << tt::tt_fabric::HORIZON_GLOBAL_EXIT_SHIFT) |
+                                                       *flat
+                                                 : *flat;
 
     // Sender kernel on source chip.
     const NodeCoord src_node{0, 0};
@@ -130,8 +140,8 @@ void expect_flat_write_2dev_with_checker(
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             src_node,
             {{"src", src_buf->address()},
-             {"dst_lo", static_cast<uint32_t>(*flat)},
-             {"dst_hi", static_cast<uint32_t>(*flat >> 32)},
+             {"dst_lo", static_cast<uint32_t>(dst)},
+             {"dst_hi", static_cast<uint32_t>(dst >> 32)},
              {"size", FLAT_WRITE_2DEV_BYTES},
              {"posted", posted ? 1u : 0u}}),
     }};
@@ -200,3 +210,46 @@ TEST_F(FlatWrite2DevBothChipsFixture, HorizonX2FlatWrite2DevReversePosted) {
     }
     expect_flat_write_2dev_with_checker(*devices_[1], *devices_[0], 1, 0, 1, true);
 }
+
+// Writes through GLOBAL: any access point of the target, the own chip's included, through either exit.
+struct GlobalWriteCase {
+    ChipId source;
+    ChipId target;
+    size_t access_point;
+    uint32_t exit;
+};
+
+class FlatWrite2DevGlobalFixture : public FlatWrite2DevBothChipsFixture,
+                                   public ::testing::WithParamInterface<GlobalWriteCase> {};
+
+TEST_P(FlatWrite2DevGlobalFixture, HorizonX2GlobalWrite) {
+    if (!flat_write_2dev_two_chips()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    const GlobalWriteCase& c = GetParam();
+    if (MetalContext::instance().get_cluster().get_driver()->get_tt_device(c.target)->get_access_points().size() <=
+        c.access_point) {
+        GTEST_SKIP() << "chip " << c.target << " has no access point " << c.access_point;
+    }
+    expect_flat_write_2dev_with_checker(
+        *devices_[c.source], *devices_[c.target], c.source, c.target, c.access_point, /*posted=*/true, c.exit);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    HorizonX2GlobalWindow,
+    FlatWrite2DevGlobalFixture,
+    ::testing::Values(
+        GlobalWriteCase{0, 1, 0, 0},
+        GlobalWriteCase{0, 1, 0, 1},
+        GlobalWriteCase{0, 1, 1, 0},
+        GlobalWriteCase{0, 1, 1, 1},
+        GlobalWriteCase{1, 0, 0, 0},
+        GlobalWriteCase{1, 0, 0, 1},
+        GlobalWriteCase{1, 0, 1, 0},
+        GlobalWriteCase{1, 0, 1, 1},
+        GlobalWriteCase{0, 0, 0, 1},
+        GlobalWriteCase{0, 0, 1, 0}),
+    [](const ::testing::TestParamInfo<GlobalWriteCase>& info) {
+        return "Chip" + std::to_string(info.param.source) + "ToChip" + std::to_string(info.param.target) + "Ap" +
+               std::to_string(info.param.access_point) + "Exit" + std::to_string(info.param.exit);
+    });
