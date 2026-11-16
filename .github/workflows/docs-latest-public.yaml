@@ -36,6 +36,10 @@ on:
 
 jobs:
   build-docs:
+    # Read is enough: this job installs and builds PR code and only uploads an
+    # artifact. deploy-docs below gets the caller's grant to push gh-pages.
+    permissions:
+      contents: read
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
