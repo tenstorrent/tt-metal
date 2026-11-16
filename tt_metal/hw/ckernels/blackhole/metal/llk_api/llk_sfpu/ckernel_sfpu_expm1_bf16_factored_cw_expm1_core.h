@@ -3,7 +3,6 @@
 #pragma once
 #include "ckernel_sfpu_expm1_bf16_replay_window.h"
 namespace ckernel::sfpu::ttpoly::expm1 {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <class Config, unsigned Hold, unsigned Advance, class Enter>
 inline void factored_cw_bh(Enter enter) {
