@@ -366,10 +366,11 @@ def _run_window(mesh_device, state_dict, ids):
     return whole, split
 
 
-# This test builds three stacks in one process (undivided, then the two ranks), and L1_SMALL that a released
-# stack held is not all returned (tt_metal_tracker-8v1.23: sparse-MLA overlap resources), so K3.1's own
-# L1_SMALL_SIZE (2048 B) runs out building the split's first stack. Test-local; the runner's constant stays.
-# Measured with 8192 B: 3776 / 3904 / 4032 B still allocated after each of the three stacks is released.
+# This test builds three stacks in one process (undivided, then the two ranks), and a released stack does not
+# return all its L1_SMALL: about 3.7 KB/bank once, then +128 B/bank per further stack (3776 / 3904 / 4032 B
+# after each release at 8192 B), so K3.1's own L1_SMALL_SIZE (2048 B) runs out building the split's first
+# stack. The fix is PR #65843 (TT_CCL keeps the sparse-MLA overlap semaphores for the mesh's lifetime); this
+# test-local size goes away once it lands. The runner's constant stays.
 SPLIT_L1_SMALL_SIZE = 8192
 
 
