@@ -24,6 +24,7 @@ from models.common.sampling import (
 )
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import padded_prefill_len, prefill_extra_seqlens
 from models.tt_transformers.tt.common import (
     InterleavedTextMedia,
     copy_host_to_device,
@@ -40,6 +41,10 @@ DECODE_PAGE_TABLE_INPUT_IDX = 3
 # A chunked-prefill continuation arrives like a prefix-cache hit: start_pos is the
 # tokens computed by earlier chunks and prompt_lens is this chunk's end.
 CHUNKED_PREFILL = os.environ.get("LLAMA_GALAXY_CHUNKED_PREFILL", "0") == "1"
+
+# Non-power-of-two prefill lengths from LLAMA_GALAXY_PREFILL_PAD (empty when unset). TT_CCL reads the
+# same variable for its persistent buffers, so the padded lengths always have buffers and traces.
+PREFILL_EXTRA_SEQLENS = prefill_extra_seqlens()
 
 
 def _as_list(value):
@@ -78,9 +83,12 @@ def _fill_inactive_params_from_active(params, active_slots, max_batch):
 
 def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
     """
-    Returns powers of 2 from 128 up to max_seq_len (inclusive).
+    Returns powers of 2 from 128 up to max_seq_len (inclusive), plus any LLAMA_GALAXY_PREFILL_PAD lengths.
     """
-    return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+    lengths = [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+    if PREFILL_EXTRA_SEQLENS:
+        lengths = sorted(set(lengths) | {s for s in PREFILL_EXTRA_SEQLENS if s <= max_seq_len})
+    return lengths
 
 
 def _acknowledge_trace_io_corruptible(tensors):
@@ -98,15 +106,10 @@ def _acknowledge_trace_io_corruptible(tensors):
 def get_padded_prefill_len(seq_len: int) -> int:
     """
     Get the padded prefill length for a given sequence length.
-    This is used to pad the sequence length to the nearest power of 2.
+    This is used to pad the sequence length to the nearest power of 2, or to a
+    LLAMA_GALAXY_PREFILL_PAD length when that is smaller.
     """
-    if seq_len <= 128:
-        return 128
-    if seq_len <= 1024:
-        return 1024
-    else:
-        # return next power of 2 greater than seq_len
-        return 2 ** (seq_len - 1).bit_length()
+    return padded_prefill_len(seq_len, PREFILL_EXTRA_SEQLENS)
 
 
 def _should_skip_prefix_caching(

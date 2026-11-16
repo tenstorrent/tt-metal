@@ -1067,8 +1067,10 @@ class TtLlamaAttention(LightweightModule):
         ###
 
         # reshaping long sequence to matmul fit on device
+        # 3072/5120 (LLAMA_GALAXY_PREFILL_PAD) are not multiples of 2048, so they use 1024-row slabs.
         if seq_len > 2048:
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
+            qkv_slab = 2048 if seq_len % 2048 == 0 else 1024
+            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // qkv_slab, qkv_slab, -1])
 
         if self.use_prefetcher:
             xqkv = ttnn.linear(

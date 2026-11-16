@@ -49,6 +49,21 @@ from models.tt_transformers.tt.model_config import (
 # (That means some tokens, even full pages, can be recomputed.)
 SDPA_CHUNK_ALIGN = 128
 
+
+def ring_sdpa_q_chunk_size(seqlen):
+    """q_chunk_size for ring_distributed_sdpa at seqlen >= 2048 (ring_size 4: each device takes two
+    seqlen/8 slices). The op places a slice at slice_index * (seqlen/8) // q_chunk_size, so q_chunk_size
+    must divide seqlen/8: 256 for every power of two >= 2048, 128 for 3072 and 5120."""
+    return 256 if (seqlen // 8) % 256 == 0 else 128
+
+
+def is_1024_slab_prefill_len(seq_len):
+    """True for padded prefill lengths above 2048 that are not multiples of 2048 (3072, 5120 from
+    LLAMA_GALAXY_PREFILL_PAD). Their 2D prefill matmuls run on 1024-row slabs, unfused, with
+    per_core_M=4 (32 tile rows over 8 grid rows)."""
+    return seq_len > 2048 and seq_len % 2048 != 0
+
+
 PREFETCHER_NOC1_GRID = [
     (6, 6),
     (6, 7),
@@ -844,7 +859,7 @@ class TtModelArgs:
             self.model_config["SDPA_PROGCFG"] = lambda seqlen, chunk_start_idx=0: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(7, 10),
                 exp_approx_mode=True,
-                q_chunk_size=256
+                q_chunk_size=ring_sdpa_q_chunk_size(seqlen)
                 if seqlen >= 2048 and chunk_start_idx == 0
                 else 64
                 if seqlen < 2048 and chunk_start_idx == 0
@@ -933,8 +948,10 @@ class TtModelArgs:
                         in0_block_w=8,
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(
-                            1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                        per_core_M=(
+                            4
+                            if is_1024_slab_prefill_len(seq_len)
+                            else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                         per_core_N=math.ceil(28672 / 8 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
@@ -1061,7 +1078,11 @@ class TtModelArgs:
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_M=(
+                            4
+                            if is_1024_slab_prefill_len(seq_len)
+                            else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)
+                        ),  # 8~10 rows
                         per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
@@ -1231,8 +1252,10 @@ class TtModelArgs:
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(
-                            1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                        per_core_M=(
+                            4
+                            if is_1024_slab_prefill_len(seq_len)
+                            else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                         per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,

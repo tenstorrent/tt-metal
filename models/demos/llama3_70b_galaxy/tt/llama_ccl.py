@@ -7,6 +7,8 @@ import torch
 import os
 from loguru import logger
 
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_extra_seqlens
+
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
 LINE_AG = os.environ.get("LINE_AG", "0") == "1"
@@ -196,6 +198,12 @@ class TT_CCL:
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             self.support_seqlens = [4096, 2048, 1024, 128]
+            # LLAMA_GALAXY_PREFILL_PAD lengths (3072/5120/6144) pad, trace and buffer like the ones above.
+            max_seq_len = getattr(model_args, "max_seq_len", 0)
+            extra_seqlens = [s for s in prefill_extra_seqlens() if s <= max_seq_len]
+            self.pad_extra_seqlens = set(extra_seqlens)
+            if extra_seqlens:
+                self.support_seqlens = sorted(set(self.support_seqlens) | set(extra_seqlens), reverse=True)
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -779,6 +787,9 @@ class TT_CCL:
             for key, shape in buffers_dict.items():
                 if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2", "FF2_batched"):
                     continue
+                # Batched prefill only runs 32 x 128 = 4096 rows, never a LLAMA_GALAXY_PREFILL_PAD length.
+                if key.endswith("_batched") and seqlen in self.pad_extra_seqlens:
+                    continue
                 tt_intermediate_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
@@ -840,6 +851,10 @@ class TT_CCL:
             )
             for key, shape in buffers_dict.items():
                 if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2",):
+                    continue
+                # Attention uses WO_AG only up to 4096 (llama_attention.forward_prefill); above that the
+                # WO all-reduce takes buffer key "WO", so this (8, 1, seqlen, 2048) buffer would go unused.
+                if key == "WO_AG" and seqlen > 4096:
                     continue
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),

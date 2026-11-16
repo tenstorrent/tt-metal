@@ -357,7 +357,13 @@ class TtLlamaMLP(LightweightModule):
         # Wormhole keeps main's fixed prefill link count (3); Blackhole uses the mesh link budget.
         prefill_num_links = self.model_config["GALAXY_NUM_LINKS"] if self.args.is_blackhole else 3
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
-        short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+        # Only the ttnn.linear branches below read this. The interleaved config has no layout for
+        # 5120 (LLAMA_GALAXY_PREFILL_PAD), which takes the minimal_matmul branch, so skip building it there.
+        short_lens_pc_1_3 = (
+            self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+            if seq_len < 4096 or batch_size > 1
+            else None
+        )
         short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
 
         minimal_pc_1_3 = self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"](seq_len)
