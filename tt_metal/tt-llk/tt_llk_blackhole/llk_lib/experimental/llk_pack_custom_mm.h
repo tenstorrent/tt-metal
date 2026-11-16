@@ -7,6 +7,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cpack_common.h"
 #include "experimental/llk_custom_mm_common.h"
 
 // Writes the packer strides itself: the pack reconfigure keeps its stride write.
