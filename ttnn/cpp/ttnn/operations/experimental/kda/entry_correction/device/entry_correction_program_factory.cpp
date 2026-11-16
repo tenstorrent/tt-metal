@@ -66,7 +66,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     const m2::DFBSpecName ctl_writer_dfb{"ctl_writer"};
     const m2::DFBSpecName gate_dfb{"gate"};
     const m2::DFBSpecName weight_dfb{"weight"};
-    const m2::DFBSpecName gated_weight_dfb{"gated_weight"};
+    const m2::DFBSpecName weight_rows_dfb{"weight_rows"};
     const m2::DFBSpecName x_dfb{"x"};
     const m2::DFBSpecName square_dfb{"square"};
     const m2::DFBSpecName inv_rms_dfb{"inv_rms"};
@@ -125,7 +125,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         // The norm's buffers, a single entry each without it.
         make_dfb(gate_dfb, norm ? 2 * kt : 1, tt::DataFormat::Float16_b),
         make_dfb(weight_dfb, norm ? kt : 1, tt::DataFormat::Float16_b),
-        make_dfb(gated_weight_dfb, norm ? kt : 1, fp32),
+        make_dfb(weight_rows_dfb, norm ? kt : 1, tt::DataFormat::Float16_b),
         make_dfb(x_dfb, norm ? kt : 1, fp32),
         make_dfb(square_dfb, norm ? kt : 1, fp32),
         make_dfb(inv_rms_dfb, 1, fp32),
@@ -163,16 +163,18 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::TensorBinding{terms_name, "terms"},
             },
         .compile_time_args =
-            {{"kt", kt},
-             {"seed_receivers", cores_per_head - 1},
-             {"core_chunks", per_core},
-             {"final_stride", cores_per_head},
-             {"streamed", static_cast<uint32_t>(streamed)},
-             {"norm", static_cast<uint32_t>(norm)},
-             {"heads", heads},
-             {"gate_row_tiles",
-              norm ? static_cast<uint32_t>(in.output_gate->padded_shape()[-1]) / tt::constants::TILE_WIDTH : 0},
-             {"gate_offset_tiles", attrs.gate_column_offset / tt::constants::TILE_WIDTH}},
+            {
+                {"kt", kt},
+                {"seed_receivers", cores_per_head - 1},
+                {"core_chunks", per_core},
+                {"final_stride", cores_per_head},
+                {"streamed", static_cast<uint32_t>(streamed)},
+                {"norm", static_cast<uint32_t>(norm)},
+                {"heads", heads},
+                {"gate_row_tiles",
+                 norm ? static_cast<uint32_t>(in.output_gate->padded_shape()[-1]) / tt::constants::TILE_WIDTH : 0},
+                {"gate_offset_tiles", attrs.gate_column_offset / tt::constants::TILE_WIDTH},
+            },
         .runtime_arg_schema = {.runtime_arg_names = {"head", "first_chunk", "last_chunk", "final_row", "seed_sender"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -200,16 +202,7 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     };
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
     for (const auto& name :
-         {seed_dfb,
-          tail_dfb,
-          terms_dfb,
-          diff_dfb,
-          e_dfb,
-          gated_weight_dfb,
-          x_dfb,
-          square_dfb,
-          inv_rms_dfb,
-          scaler_dfb}) {
+         {seed_dfb, tail_dfb, terms_dfb, diff_dfb, e_dfb, x_dfb, square_dfb, inv_rms_dfb, scaler_dfb}) {
         compute_hw.unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     // The final state's B and seed are only copied into DST, exactly: only E @ seed passes through a source register.
@@ -238,8 +231,8 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ConsumerOf(ctl_dfb, "ctl"),
                 m2::ConsumerOf(gate_dfb, "gate"),
                 m2::ConsumerOf(weight_dfb, "weight"),
-                m2::ProducerOf(gated_weight_dfb, "gated_weight"),
-                m2::ConsumerOf(gated_weight_dfb, "gated_weight"),
+                m2::ProducerOf(weight_rows_dfb, "weight_rows"),
+                m2::ConsumerOf(weight_rows_dfb, "weight_rows"),
                 m2::ProducerOf(x_dfb, "x"),
                 m2::ConsumerOf(x_dfb, "x"),
                 m2::ProducerOf(square_dfb, "square"),
@@ -249,11 +242,13 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ConsumerOf(scaler_dfb, "scaler"),
             },
         .compile_time_args =
-            {{"kt", kt},
-             {"core_chunks", per_core},
-             {"streamed", static_cast<uint32_t>(streamed)},
-             {"norm", static_cast<uint32_t>(norm)},
-             {"epsilon_bits", std::bit_cast<uint32_t>(attrs.norm_epsilon)}},
+            {
+                {"kt", kt},
+                {"core_chunks", per_core},
+                {"streamed", static_cast<uint32_t>(streamed)},
+                {"norm", static_cast<uint32_t>(norm)},
+                {"epsilon_bits", std::bit_cast<uint32_t>(attrs.norm_epsilon)},
+            },
         .hw_config = std::move(compute_hw),
     };
 

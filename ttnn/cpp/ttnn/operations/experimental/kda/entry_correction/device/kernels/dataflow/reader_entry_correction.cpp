@@ -17,7 +17,7 @@
 // final_stride: a head's cores each form every final_stride-th tile row of the final state.
 // streamed: interleaved terms, read a chunk row of F(0) and F(I) at a time; otherwise they are in place in the shard.
 // seed_receivers: the head's other cores, which the head's first core writes the seeds to (varargs: NoC x | y << 16).
-// norm: also each chunk's output gate rows, the norm weight broadcast down its tiles' rows, and the mean's scaler.
+// norm: also each chunk's output gate rows, the norm weight and the mean's scaler.
 template <
     uint32_t kt,
     uint32_t seed_receivers,
@@ -115,17 +115,6 @@ TT_KERNEL void reader(
             noc.async_read(weights, weight, tile, {.page_id = j}, {.offset_bytes = j * tile});
         }
         noc.async_read_barrier();
-        // Row 0 of each BF16 tile into every row: face f's rows from row 0 of face f % 2 (16 values, 8 words).
-        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weight.get_write_ptr());
-        for (uint32_t j = 0; j < kt; ++j, words += tile / sizeof(uint32_t)) {
-            for (uint32_t face = 0; face < 4; ++face) {
-                for (uint32_t row = face < 2 ? 1 : 0; row < 16; ++row) {
-                    for (uint32_t w = 0; w < 8; ++w) {
-                        words[face * 128 + row * 8 + w] = words[(face % 2) * 128 + w];
-                    }
-                }
-            }
-        }
         weight.push_back(kt);
     }
 
