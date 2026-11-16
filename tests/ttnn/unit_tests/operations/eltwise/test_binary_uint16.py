@@ -974,3 +974,24 @@ def test_binary_uint16_preallocated_32bit_output(ttnn_op, output_dtype, device):
     ttnn_op(input_tensor_a, input_tensor_b, output_tensor=output_tensor)
 
     assert torch.equal(ttnn.to_torch(output_tensor).to(torch.int64), torch_output_tensor)
+
+
+@pytest.mark.parametrize("ttnn_op", [ttnn.multiply, ttnn.add])
+def test_binary_uint16_float32_output_near_max(ttnn_op, device):
+    torch.manual_seed(0)
+    torch_input_tensor_a = torch.randint(60000, 65536, (1, 2, 64, 96), dtype=torch.int32)
+    torch_input_tensor_b = torch.randint(60000, 65536, (1, 2, 64, 96), dtype=torch.int32)
+    torch_input_tensor_a.view(-1)[0] = 65535
+    torch_input_tensor_b.view(-1)[0] = 65535
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(
+        torch_input_tensor_a.to(torch.int64), torch_input_tensor_b.to(torch.int64), device=device
+    ).to(torch.float64)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.uint16, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
+
+    assert output_tensor.dtype == ttnn.float32
+    result = ttnn.to_torch(output_tensor).to(torch.float64)
+    assert torch.allclose(result, torch_output_tensor, rtol=2**-22, atol=0)

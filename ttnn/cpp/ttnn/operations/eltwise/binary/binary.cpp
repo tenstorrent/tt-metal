@@ -795,7 +795,11 @@ inline auto invoke_binary_ng_impl(
     }();
     if (widen_uint16 && a_dtype == DataType::UINT16 && b_dtype == DataType::UINT16 && requested_dtype.has_value() &&
         (is_32bit_int(*requested_dtype) || *requested_dtype == DataType::FLOAT32)) {
-        const auto wide = *requested_dtype == DataType::UINT32 ? DataType::UINT32 : DataType::INT32;
+        const bool unsigned_result =
+            *requested_dtype == DataType::UINT32 ||
+            (*requested_dtype == DataType::FLOAT32 && (binary_op_type == operations::binary::BinaryOpType::MUL ||
+                                                       binary_op_type == operations::binary::BinaryOpType::ADD));
+        const auto wide = unsigned_result ? DataType::UINT32 : DataType::INT32;
         lhs_promoted = ttnn::typecast(lhs, wide);
         if constexpr (requires { rhs.dtype(); }) {
             rhs_promoted = ttnn::typecast(rhs, wide);
