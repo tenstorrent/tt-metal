@@ -1,0 +1,13 @@
+diff --git a/src/vllm_tt_plugin/platform.py b/src/vllm_tt_plugin/platform.py
+index d5e9651..56b7253 100644
+--- a/src/vllm_tt_plugin/platform.py
++++ b/src/vllm_tt_plugin/platform.py
+@@ -74,7 +74,7 @@ _tt_request_vllm_config: ContextVar["VllmConfig | None"] = ContextVar(
+ )
+ 
+ _STANDARD_DP_DISCOVERY_RECV_TIMEOUT_S = 60.0
+-_STANDARD_DP_DISCOVERY_JOIN_TIMEOUT_S = 5.0
++_STANDARD_DP_DISCOVERY_JOIN_TIMEOUT_S = float(os.environ.get("TT_DP_DISCOVERY_JOIN_TIMEOUT_S", 5.0))
+ _STANDARD_DP_MESH_GRIDS_KEY = "_tt_standard_dp_mesh_grids"
+ _STANDARD_DP_VISIBLE_GROUPS_KEY = "_tt_standard_dp_visible_groups"
+ 
