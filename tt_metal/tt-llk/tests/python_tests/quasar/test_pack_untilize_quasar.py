@@ -4,6 +4,7 @@
 from typing import List
 
 import pytest
+from helpers.constraints import is_valid_quasar_dest_mode_conversion
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
@@ -101,6 +102,10 @@ def generate_pack_untilize_combinations(
             continue
 
         for dest_acc in get_dest_acc_modes(in_fmt):
+            # A 16-bit Dest cannot feed a 32-bit output: pack_in stays narrow and the packer has
+            # no narrow-to-32-bit conversion, so data_format_inference refuses the pair outright.
+            if not is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, dest_acc):
+                continue
             for dest_sync in dest_sync_modes:
                 tile_sizes = (
                     select_perf_tile_sizes(PACK_UNTILIZE_TILE_SIZES)
@@ -142,6 +147,7 @@ def generate_pack_untilize_combinations(
 PACK_UNTILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
+        DataFormat.Int8,
         DataFormat.Int16,
         DataFormat.Int32,
         DataFormat.MxFp4,
