@@ -83,10 +83,11 @@ def _single_call_checkpoint(self, delta_fn, call, qkvbg, init_state, checkpoint,
 
 
 class Rows:
-    """Qwen36ForCausalLM on a model of ``n_layers`` layers with GDN block state for ``n`` requests: request r owns
-    ``bpu`` attention pages, a destination and a checkpoint block per GDN group."""
+    """Qwen36ForCausalLM on a model of ``n_layers`` layers with GDN block state for ``n`` requests in KV cache blocks of
+    ``block_size`` tokens (the serving launch's 1024 by default): request r owns ``bpu`` attention pages, a destination
+    and a checkpoint block per GDN group."""
 
-    def __init__(self, mesh_device, monkeypatch, n_layers, n, bmax=BMAX):
+    def __init__(self, mesh_device, monkeypatch, n_layers, n, bmax=BMAX, block_size=1024):
         stub_vllm_if_missing(monkeypatch)
         from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM
 
@@ -100,11 +101,11 @@ class Rows:
             enable_mtp=False,
         )
         self.gen = Qwen36ForCausalLM([self.model], [self.model.args], mesh_device)
-        probe = PluginLayout.for_model(self.model, num_blocks=1)
+        probe = PluginLayout.for_model(self.model, num_blocks=1, block_size=block_size)
         self.bs, self.groups = probe.block_size, probe.num_groups
         self.bpu = -(-CTX // self.bs)
         per = self.bpu + 2 * self.groups
-        self.layout = PluginLayout.for_model(self.model, num_blocks=1 + n * per)
+        self.layout = PluginLayout.for_model(self.model, num_blocks=1 + n * per, block_size=block_size)
         self.kv = self.gen.allocate_kv_cache_per_layer(self.layout.per_layer_specs)
         first = [1 + r * per for r in range(n)]
         self.pages = torch.stack([torch.arange(f, f + self.bpu, dtype=torch.int32) for f in first])
