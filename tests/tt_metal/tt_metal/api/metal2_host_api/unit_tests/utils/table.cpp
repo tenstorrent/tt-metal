@@ -513,6 +513,7 @@ TEST_P(TableAtSizeTest, CPU_RangeConstructedFindsEveryKey) {
     // A Table built from a range of entries finds the value of every entry.
     const int entry_count = GetParam();
     std::vector<std::pair<int, int>> entries;
+    entries.reserve(static_cast<std::size_t>(entry_count));
     for (int key = 0; key < entry_count; ++key) {
         entries.emplace_back(key, key * 10);
     }
