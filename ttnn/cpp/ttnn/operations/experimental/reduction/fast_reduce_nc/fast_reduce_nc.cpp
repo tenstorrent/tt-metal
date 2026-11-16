@@ -37,9 +37,14 @@ ttnn::Tensor fast_reduce_nc(
     ttsl::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
     std::sort(sorted_dims.begin(), sorted_dims.end());
 
-    const std::optional<tt::tt_metal::DataType> intermediate_dtype =
-        fp32_intermediate_stages ? std::optional<tt::tt_metal::DataType>{tt::tt_metal::DataType::FLOAT32}
-                                 : std::nullopt;
+    std::optional<tt::tt_metal::DataType> intermediate_dtype = std::nullopt;
+    if (fp32_intermediate_stages) {
+        intermediate_dtype = tt::tt_metal::DataType::FLOAT32;
+    } else if (input.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+        // Carry BFLOAT8_B partial sums in BFLOAT16 between stages so multi-axis reductions
+        // do not round intermediate partial sums to a block-float shared exponent (#65910).
+        intermediate_dtype = tt::tt_metal::DataType::BFLOAT16;
+    }
     auto temp_input = input;
     for (uint32_t i = dims.size() - 1; i > 0; i--) {
         auto temp_output = ttnn::prim::fast_reduce_nc(
@@ -52,8 +57,12 @@ ttnn::Tensor fast_reduce_nc(
             intermediate_dtype);
         temp_input = temp_output;
     }
+    const std::optional<tt::tt_metal::DataType> final_output_dtype =
+        (!output.has_value() && !output_dtype.has_value() && temp_input.dtype() != input.dtype())
+            ? std::optional<tt::tt_metal::DataType>{input.dtype()}
+            : output_dtype;
     return ttnn::prim::fast_reduce_nc(
-        temp_input, sorted_dims.front(), output, memory_config, kernel_config_val, sub_core_grids, output_dtype);
+        temp_input, sorted_dims.front(), output, memory_config, kernel_config_val, sub_core_grids, final_output_dtype);
 }
 
 std::tuple<Tensor, Tensor> fast_reduce_nc_split(

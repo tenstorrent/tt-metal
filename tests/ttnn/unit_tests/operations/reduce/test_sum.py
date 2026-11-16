@@ -271,3 +271,26 @@ def test_sum_hw_bf16(device):
     output_tensor = ttnn.sum(input_tensor, dim=[2, 3], keepdim=True)
 
     assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
+
+
+def test_sum_mean_bfloat8_b_partial_sum_cancellation(device):
+    """Regression test for #65910: BFLOAT8_B multi-axis sum and mean preserve partial-sum precision across stages."""
+    x = (
+        torch.tensor([[64, 64, 64, 64, 74], [-64] * 5], dtype=torch.float32)[:, :, None, None]
+        .expand(2, 5, 32, 32)
+        .contiguous()
+    )
+    t = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    sum_nc = ttnn.sum(t, dim=[0, 1], keepdim=True)
+    assert sum_nc.dtype == ttnn.bfloat8_b
+    torch.testing.assert_close(ttnn.to_torch(sum_nc), torch.full((1, 1, 32, 32), 10.0), rtol=0, atol=0)
+
+    mean_nc = ttnn.mean(t, dim=[0, 1], keepdim=True)
+    assert mean_nc.dtype == ttnn.bfloat8_b
+    torch.testing.assert_close(ttnn.to_torch(mean_nc), torch.ones((1, 1, 32, 32)), rtol=0, atol=0)
+
+    ones_ch = ttnn.from_torch(torch.ones((1, 3, 9, 32), dtype=torch.float32), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    mean_ch = ttnn.mean(ones_ch, dim=[1, 2], keepdim=True)
+    assert mean_ch.dtype == ttnn.bfloat8_b
+    torch.testing.assert_close(ttnn.to_torch(mean_ch), torch.ones((1, 1, 1, 32)), rtol=0, atol=0)

@@ -241,3 +241,16 @@ def test_fast_reduce_nc_float32_default_config(input_shape, device):
     out = ttnn.to_torch(ttnn.experimental.fast_reduce_nc(x, dims=[1]))
     ref = torch.sum(torch_input.double(), dim=1, keepdim=True).float()
     torch.testing.assert_close(out, ref, rtol=1e-4, atol=1e-5)
+
+
+def test_fast_reduce_nc_bfloat8_b_partial_sum_cancellation(device):
+    """Regression test for #65910: multi-axis BFLOAT8_B partial sums must not lose cancellation between stages."""
+    x = (
+        torch.tensor([[64, 64, 64, 64, 74], [-64] * 5], dtype=torch.float32)[:, :, None, None]
+        .expand(2, 5, 32, 32)
+        .contiguous()
+    )
+    t = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.experimental.fast_reduce_nc(t, dims=[0, 1])
+    assert out.dtype == ttnn.bfloat8_b
+    torch.testing.assert_close(ttnn.to_torch(out), torch.full((1, 1, 32, 32), 10.0), rtol=0, atol=0)

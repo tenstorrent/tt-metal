@@ -10,8 +10,9 @@
 
 namespace ttnn::experimental::reduction {
 
-// `output_dtype` sets the dtype produced by the final prim::fast_reduce_nc stage;
-// `fp32_intermediate_stages` keeps non-final stages in FLOAT32 to avoid double-rounding.
+// `output_dtype` sets the dtype produced by the final prim::fast_reduce_nc stage (defaults to `input.dtype()`);
+// `fp32_intermediate_stages` keeps non-final stages in FLOAT32 to avoid double-rounding, while BFLOAT8_B
+// defaults non-final stages to BFLOAT16 so partial sums between axes do not lose cancellation.
 ttnn::Tensor fast_reduce_nc(
     const ttnn::Tensor& input,
     ttsl::Span<const int32_t> dims,

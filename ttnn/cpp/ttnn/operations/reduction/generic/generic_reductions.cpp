@@ -155,9 +155,9 @@ static Tensor reduce_impl(
     float scalar,
     const ttsl::SmallVector<int>& non_height_width_dims,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    // Sum/Mean precision chain: when active, intermediate stages stay FP32 and only
-    // the stage with is_last_in_chain=true packs the final bf16 result.
-    bool chain_active = false,
+    // Sum/Mean precision chain: when set, intermediate stages stay FP32 and only
+    // the stage with is_last_in_chain=true packs `*chain_final_dtype` (BFLOAT16 or BFLOAT8_B).
+    std::optional<DataType> chain_final_dtype = std::nullopt,
     bool is_last_in_chain = false,
     bool fast_and_approximate_mode = false,
     // Only forwarded to the single-step W/H/HW dispatch, where the device op can honor it natively.
@@ -213,7 +213,8 @@ static Tensor reduce_impl(
                         reduce_dim = rank - 2;
                     }
                     // Only the smallest-axis sub-step ends the chain; earlier sub-steps stay in fp32.
-                    const bool sub_is_last = chain_active && is_last_in_chain && (i_dim == min_reduce_axis);
+                    const bool sub_is_last =
+                        chain_final_dtype.has_value() && is_last_in_chain && (i_dim == min_reduce_axis);
                     if (use_reduce_type) {
                         output_tensor = reduce_impl<reduce_type>(
                             output_tensor,
@@ -224,7 +225,7 @@ static Tensor reduce_impl(
                             effective_scalar,
                             non_height_width_dims,
                             sub_core_grids,
-                            chain_active,
+                            chain_final_dtype,
                             sub_is_last,
                             /*fast_and_approximate_mode=*/fast_and_approximate_mode);
                     } else {
@@ -237,7 +238,7 @@ static Tensor reduce_impl(
                             effective_scalar,
                             non_height_width_dims,
                             sub_core_grids,
-                            chain_active,
+                            chain_final_dtype,
                             sub_is_last,
                             /*fast_and_approximate_mode=*/fast_and_approximate_mode);
                     }
@@ -286,11 +287,10 @@ static Tensor reduce_impl(
                                          : input_tensor_arg;
 
         if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
-            // In the chain, pack FP32 except on the last stage where we pack bf16.
+            // In the chain, pack FP32 except on the last stage where we pack the target dtype.
             std::optional<tt::tt_metal::DataType> sum_output_dtype;
-            if (chain_active) {
-                sum_output_dtype =
-                    is_last_in_chain ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::FLOAT32;
+            if (chain_final_dtype.has_value()) {
+                sum_output_dtype = is_last_in_chain ? *chain_final_dtype : tt::tt_metal::DataType::FLOAT32;
             }
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
@@ -305,13 +305,17 @@ static Tensor reduce_impl(
                 /*fast_and_approximate_mode=*/fast_and_approximate_mode,
                 output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
+            std::optional<tt::tt_metal::DataType> mean_output_dtype;
+            if (chain_final_dtype.has_value()) {
+                mean_output_dtype = is_last_in_chain ? *chain_final_dtype : tt::tt_metal::DataType::FLOAT32;
+            }
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::AVG,
                 reduce_op_dim,
                 scalar / reduced_volume,
                 memory_config,
-                std::nullopt,
+                mean_output_dtype,
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
@@ -646,14 +650,16 @@ Tensor reduce(
         input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value, std::nullopt, sub_core_grids);
     }
 
-    // bf16 multi-axis Sum/Mean precision chain: carry FP32 between stages and pack bf16
-    // only on the final stage.
+    // Multi-axis Sum/Mean precision chain for BFLOAT16 and BFLOAT8_B: carry wide partials
+    // between stages and pack the original input dtype only on the final stage (#65910).
+    const DataType orig_dtype = input_tensor.dtype();
     const auto& in_shape = input_tensor.logical_shape();
     const bool chain_active =
         (reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Mean) &&
-        dim.size() > 1 && input_tensor.dtype() == DataType::BFLOAT16 &&
+        dim.size() > 1 && (orig_dtype == DataType::BFLOAT16 || orig_dtype == DataType::BFLOAT8_B) &&
         (dim.size() < static_cast<size_t>(in_shape.rank()) ||
          input_tensor.logical_volume() > static_cast<uint64_t>(in_shape[-2]) * in_shape[-1]);
+    const std::optional<DataType> chain_final_dtype = chain_active ? std::optional<DataType>{orig_dtype} : std::nullopt;
 
     // fast_reduce_nc ignores `scalar` so it can't be used when scalar != 1.0f.
     if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {
@@ -676,13 +682,15 @@ Tensor reduce(
                 return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
             }
 
-            // Final fast_nc stage packs bf16 only when no H/W stage follows; inner
-            // stages stay FP32 (only relevant with multiple non-H/W axes).
+            // Final fast_nc stage packs `orig_dtype` when no H/W stage follows, else hands
+            // FP32 to the H/W stage. Pure N/C BFLOAT8_B uses fast_reduce_nc's BFLOAT16 inner
+            // stages, while BFLOAT16 or mixed N/C + H/W chains carry FP32 inner stages.
             std::optional<DataType> fast_nc_final_dtype;
             bool fast_nc_intermediate_fp32 = false;
             if (chain_active) {
-                fast_nc_final_dtype = height_width_dims.empty() ? DataType::BFLOAT16 : DataType::FLOAT32;
-                fast_nc_intermediate_fp32 = non_height_width_dims.size() > 1;
+                fast_nc_final_dtype = height_width_dims.empty() ? orig_dtype : DataType::FLOAT32;
+                fast_nc_intermediate_fp32 =
+                    non_height_width_dims.size() > 1 && (orig_dtype == DataType::BFLOAT16 || !height_width_dims.empty());
             }
             input_tensor = non_height_width_reduce(
                 input_tensor,
@@ -709,7 +717,7 @@ Tensor reduce(
         scalar,
         non_height_width_dims,
         sub_core_grids,
-        /*chain_active=*/chain_active,
+        /*chain_final_dtype=*/chain_final_dtype,
         /*is_last_in_chain=*/chain_active,
         /*fast_and_approximate_mode=*/fast_and_approximate_mode,
         output_layout);
@@ -732,7 +740,7 @@ Tensor pool_sum(
             scalar,
             /*non_height_width_dims=*/{},
             /*sub_core_grids=*/std::nullopt,
-            /*chain_active=*/false,
+            /*chain_final_dtype=*/std::nullopt,
             /*is_last_in_chain=*/false,
             /*fast_and_approximate_mode=*/false,
             output_layout),
