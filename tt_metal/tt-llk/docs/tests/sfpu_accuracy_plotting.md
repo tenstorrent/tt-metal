@@ -14,7 +14,7 @@ There are two files, one per device family. They share all plotting and statisti
 Run from the `tests/` directory.
 
 ```bash
-# Wormhole / Blackhole (architecture is read from the card; CHIP_ARCH overrides it)
+# Wormhole / Blackhole (architecture is read from the card)
 pytest python_tests/test_sfpu_plot.py -k Log -s      # one op
 pytest python_tests/test_sfpu_plot.py -s             # every configured op
 
@@ -25,7 +25,7 @@ pytest --run-simulator python_tests/quasar/test_sfpu_plot_quasar.py -s
 
 - `-k <Op>` selects cases by name, for example `Log`, `Sqrt`, or `Reciprocal`. It matches every case whose id contains the text, so `-k Exp` also runs `Exp-fp32-approx`.
 - `-s` lets the stats summary print to your terminal.
-- `CHIP_ARCH` (`blackhole`, `wormhole`, or `quasar`) overrides detection. Quasar needs it only when the simulator descriptor is missing, or when a card is present and `--run-simulator` is not passed.
+- `CHIP_ARCH` (`blackhole`, `wormhole`, or `quasar`) names the architecture when detection cannot; a run that disagrees with the card or simulator in front of it stops instead of plotting. Quasar needs it only when the simulator descriptor is missing, or when a card is present and `--run-simulator` is not passed.
 
 Each case writes its plot to `python_tests/_plot_output/<arch>/sfpu_<id>.png`, where `<arch>` is `wh`, `bh`, or `qsr`, and asserts that the hardware result matches golden. The folder is next to the test files regardless of where you launch pytest from, and it is git-ignored. Keeping one folder per arch means a Wormhole run and a Blackhole run of the same case do not overwrite each other.
 

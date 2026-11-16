@@ -77,8 +77,13 @@ import helpers.utils as utils_module
 import pytest
 import torch
 from helpers.chip_architecture import (
+    CHIP_ARCH_SOURCE_CARD,
+    CHIP_ARCH_SOURCE_ENV,
+    CHIP_ARCH_SOURCE_SIMULATOR,
     ChipArchitecture,
+    chip_architecture_source,
     get_chip_architecture,
+    pcie_architecture,
     simulator_architecture,
 )
 from helpers.device import LLKAssertException
@@ -427,6 +432,38 @@ _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
 
 
+def _verify_chip_architecture() -> None:
+    """Refuse a session whose architecture is not the one the hardware in front of it reports.
+
+    The architecture is resolved at import, from ``CHIP_ARCH`` or by probing, before pytest has
+    parsed ``--run-simulator`` (a flag that comes from the ini file's ``addopts`` is invisible
+    that early). Checking it here, against the target pytest settled on, is what keeps a stale
+    ``CHIP_ARCH`` or a missed flag from compiling for one architecture and running on another.
+    """
+    if TestConfig.TEST_TARGET.run_simulator:
+        present, where = simulator_architecture(), CHIP_ARCH_SOURCE_SIMULATOR
+    else:
+        present, where = pcie_architecture(), CHIP_ARCH_SOURCE_CARD
+    if present is None or present == TestConfig.CHIP_ARCH:
+        return
+
+    source = chip_architecture_source()
+    if source == CHIP_ARCH_SOURCE_ENV:
+        remedy = f"Unset CHIP_ARCH, or set it to {present.value}."
+    elif TestConfig.TEST_TARGET.run_simulator:
+        # --run-simulator reached pytest but not the import, so the card won there.
+        remedy = (
+            f"Set CHIP_ARCH={present.value}, or pass --run-simulator on the command line "
+            "or in PYTEST_ADDOPTS, where the architecture is resolved."
+        )
+    else:
+        remedy = f"Set CHIP_ARCH={present.value}."
+    raise pytest.UsageError(
+        f"{where} is {present.value}, but this session targets "
+        f"{TestConfig.CHIP_ARCH.value}, from {source}. {remedy}"
+    )
+
+
 def pytest_configure(config):
     _ensure_suite_pythonpath(config)
 
@@ -511,16 +548,16 @@ def pytest_configure(config):
 
     TestConfig.TEST_TARGET.update_from_pytest_config(config)
 
-    # The arch was resolved at import, before --run-simulator from the ini file's addopts was
-    # visible, so the build and skip markers may target the host card instead of the simulator.
-    if TestConfig.TEST_TARGET.run_simulator:
-        sim_arch = simulator_architecture()
-        if sim_arch is not None and sim_arch != TestConfig.CHIP_ARCH:
-            raise pytest.UsageError(
-                f"The simulator's soc_descriptor.yaml is {sim_arch.value}, but this session "
-                f"targets {TestConfig.CHIP_ARCH.value}. Set CHIP_ARCH={sim_arch.value}, or "
-                f"pass --run-simulator on the command line or in PYTEST_ADDOPTS."
-            )
+    # Nothing to check where nothing will run: a hardware-free session picks its architecture with
+    # CHIP_ARCH, a producer only compiles, and collection touches no device. Workers inherit the
+    # architecture the controller already checked.
+    if (
+        worker_id == "master"
+        and not _HARDWARE_FREE
+        and TestConfig.BUILD_MODE is not BuildMode.PRODUCE
+        and not config.option.collectonly
+    ):
+        _verify_chip_architecture()
 
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE
 

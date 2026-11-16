@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import os
 import shlex
 import sys
@@ -77,8 +78,14 @@ def is_4row_arch():
     return quasar_variant() == "trinity"
 
 
-# Cache for chip architecture
+# Cache for chip architecture, and what chose it. The source names the thing to change in the
+# mismatch error the plugin raises, so it reads as whatever the user actually set.
 _cached_chip_architecture = None
+_chip_architecture_source = None
+
+CHIP_ARCH_SOURCE_ENV = "the CHIP_ARCH environment variable"
+CHIP_ARCH_SOURCE_SIMULATOR = "the simulator's soc_descriptor.yaml"
+CHIP_ARCH_SOURCE_CARD = "the card this harness runs on"
 
 
 def cli_flag_given(flag):
@@ -124,12 +131,14 @@ def simulator_architecture():
         ) from exc
 
 
-def _pcie_architecture():
-    """Arch of UMD logical device 0, the card the harness runs on.
+@functools.cache
+def pcie_architecture():
+    """Arch of UMD logical device 0, the card the harness runs on, or None on a cardless host.
 
     ``enumerate_devices()`` is BDF order and honors ``TT_VISIBLE_DEVICES``, so index 0 is
     exalens device 0. That is not the lowest ``/dev/tenstorrent/N``. Reading the arch opens
     that device and issues GET_DEVICE_INFO; it does not initialize the chip or start tt-exalens.
+    Cached because the plugin asks again, to check the session against the card it will run on.
     """
     import tt_umd
 
@@ -141,25 +150,31 @@ def _pcie_architecture():
 
 
 def _detect_chip_architecture():
-    # ``--run-simulator`` on the command line or in PYTEST_ADDOPTS, including next to
-    # ``--compile-producer``, so a producer on a card host compiles for the simulator.
-    # The plugin's simulator gate is a different check: it drops ``--compile-producer``
-    # (that step never talks to a device) and treats xdist workers as simulator runs.
-    # Workers never get here; they inherit the CHIP_ARCH the controller writes back.
+    """The architecture of what is in front of us, and the phrase naming where that came from."""
+    # Unlike the plugin's simulator gate this keeps ``--compile-producer``, so a producer on a card
+    # host compiles for the simulator. Workers inherit the CHIP_ARCH the controller writes back.
     if cli_flag_given("--run-simulator") and (arch := simulator_architecture()):
-        return arch
+        return arch, CHIP_ARCH_SOURCE_SIMULATOR
     # Silicon first, so a stray simulator env var does not override the card in the machine.
-    arch = _pcie_architecture() or simulator_architecture()
-    if arch is None:
-        raise RuntimeError(
-            "Could not detect the chip architecture: no Tenstorrent PCIe device and no simulator "
-            "soc_descriptor.yaml. Set CHIP_ARCH (wormhole / blackhole / quasar)."
-        )
-    return arch
+    if arch := pcie_architecture():
+        return arch, CHIP_ARCH_SOURCE_CARD
+    if arch := simulator_architecture():
+        return arch, CHIP_ARCH_SOURCE_SIMULATOR
+    raise RuntimeError(
+        "Could not detect the chip architecture: no Tenstorrent PCIe device and no simulator "
+        "soc_descriptor.yaml. Set CHIP_ARCH (wormhole / blackhole / quasar)."
+    )
 
 
 def get_chip_architecture():
-    global _cached_chip_architecture
+    """The architecture this session targets.
+
+    ``CHIP_ARCH`` still wins, because the hardware-free suites and the cross-arch host tools pick
+    an architecture with it on a machine whose card says nothing about what they are judging. It
+    is not a way to retarget a run: where a card or a simulator is present to disagree with it,
+    ``pytest_configure`` checks the two against each other and refuses the session.
+    """
+    global _cached_chip_architecture, _chip_architecture_source
 
     if _cached_chip_architecture is not None:
         return _cached_chip_architecture
@@ -167,10 +182,19 @@ def get_chip_architecture():
     chip_architecture = os.getenv("CHIP_ARCH")
     if chip_architecture:
         _cached_chip_architecture = ChipArchitecture.from_string(chip_architecture)
+        _chip_architecture_source = CHIP_ARCH_SOURCE_ENV
     else:
-        _cached_chip_architecture = _detect_chip_architecture()
+        _cached_chip_architecture, _chip_architecture_source = (
+            _detect_chip_architecture()
+        )
     # Always write the LLK name back. Several CLIs take --arch $CHIP_ARCH and
     # only accept wormhole|blackhole|quasar; leaving wormhole_b0 in the
     # environment is what produces "invalid choice: 'wormhole_b0'".
     os.environ["CHIP_ARCH"] = _cached_chip_architecture.value
     return _cached_chip_architecture
+
+
+def chip_architecture_source():
+    """What chose the architecture :func:`get_chip_architecture` returns, as a phrase."""
+    get_chip_architecture()
+    return _chip_architecture_source
