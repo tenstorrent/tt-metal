@@ -120,14 +120,36 @@ def run_xmclat(md):
                 qg, c.kv_dev, idx8, 512, DM.SCALE, blk.kc, blk.G, blk.ckc, None, emit_stats=3, owner_s=S, compact=True
             )
 
-        def a1():
+        a27_links = int(os.environ.get("A27_LINKS", "2"))  # B27: a2a link count / output memory config probes
+        a27_mc = ttnn.L1_MEMORY_CONFIG if os.environ.get("A27_L1", "0") == "1" else None
+
+        def a2a():
             out = split()
-            x = ttnn.experimental.all_to_all_async_generic(
-                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+            return ttnn.experimental.all_to_all_async_generic(
+                out,
+                in_dim=1,
+                out_dim=0,
+                num_links=a27_links,
+                memory_config=a27_mc,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=1,
             )
+
+        def a1():
+            x = a2a()
             return hy4_merge.merge_fused(x, skd, TR, full=S > 2, hm_users=S)
 
         t0 = timed_traced(md, split)
+        ta = timed_traced(md, a2a)
+        emit(
+            {
+                "test": "xmc_lat_a2a",
+                "S": S,
+                "links": a27_links,
+                "l1": a27_mc is not None,
+                "a2a_stage_us": round(ta - t0, 1),
+            }
+        )
         t1 = timed_traced(md, a1)
         t2 = timed_traced(md, lambda: xmc(split(), skd))
         emit(

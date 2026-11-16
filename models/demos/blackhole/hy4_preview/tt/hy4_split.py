@@ -30,8 +30,8 @@ def _bits(f):
     return struct.unpack("<I", struct.pack("<f", float(f)))[0]
 
 
-def _core_set(n, gx):
-    rngs, r = [], 0
+def _core_set(n, gx, r0=0):
+    rngs, r = [], r0
     while n > 0:
         w = min(n, gx)
         rngs.append(ttnn.CoreRange(ttnn.CoreCoord(0, r), ttnn.CoreCoord(w - 1, r)))
@@ -188,8 +188,11 @@ def sparse_sdpa_split(
             if os.environ.get("DSV41_SDPAOUT_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
             else ttnn.DRAM_MEMORY_CONFIG,
         )
-    cores = [(i % grid.x, i // grid.x) for i in range(n_cores)]
-    core_set = _core_set(n_cores, grid.x)
+    # B27 (default 0): HY4_B27_SPLIT_ROFF = first grid row of the split cores (placement experiment for the per-chip split duration spread)
+    roff = int(os.environ.get("HY4_B27_SPLIT_ROFF", "0"))
+    assert roff + -(-n_cores // grid.x) <= grid.y
+    cores = [(i % grid.x, i // grid.x + roff) for i in range(n_cores)]
+    core_set = _core_set(n_cores, grid.x, roff)
 
     # CB ids (the stock SparseCB enum + the partial-state receive CBs)
     (
@@ -513,6 +516,7 @@ def sparse_sdpa_split(
                 int(fp32),
                 _bits(scale),
                 int(compact),
+                roff,
                 tuple(_acc(q)),
                 tuple(_acc(kv)),
                 tuple(_acc(idx)),
