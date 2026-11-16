@@ -150,9 +150,9 @@ template <
     DataFormat out_format>
 constexpr std::uint32_t llk_matmul_unpack_ttsync() {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
-    // LoFi: the ttsync unpack gains on one-row blocks (the poll binds) and loses where every call unpacks several rows; a block the
-    // front end cannot see keeps the poll
-    if constexpr (MATH_FIDELITY == MathFidelity::LoFi && block_rt != 1 && block_ct != 1) {
+    // LoFi: the ttsync unpack gains on one-tile blocks (the poll binds) and loses where a call unpacks two or more tiles of a row (its
+    // config writes then sit on the busy unpack thread); a block the front end cannot see keeps the poll
+    if constexpr (MATH_FIDELITY == MathFidelity::LoFi && !(block_rt == 1 && block_ct == 1)) {
         return 0;
     }
     if constexpr (
