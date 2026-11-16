@@ -37,6 +37,15 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install pyyaml
+      - name: Perf data integrity
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.date }}
+        run: |
+          python3 tt_metal/tt-llk/perf/nightly_data_integrity.py --repo "$GITHUB_REPOSITORY" \
+            ${DAY:+--date "${DAY:0:10}"}
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}
