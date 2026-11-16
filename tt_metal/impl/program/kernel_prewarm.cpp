@@ -134,6 +134,20 @@ bool need_link(const std::string& out_dir, const std::string& target_name) {
     return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
+// True when build_target() has nothing to compile or link: every object and the ELF are present and
+// their recorded dependency hashes still match.
+bool target_is_current(const std::string& out_dir, const jit_build::TargetRecipe& target) {
+    if (target.srcs.size() != target.objs.size()) {
+        return false;
+    }
+    for (const auto& obj : target.objs) {
+        if (need_compile(out_dir, obj)) {
+            return false;
+        }
+    }
+    return !need_link(out_dir, target.target_name);
+}
+
 void append_tokenized(std::vector<std::string>& args, const std::string& flags) {
     auto tokens = jit_build::utils::tokenize_flags(flags);
     args.insert(args.end(), std::make_move_iterator(tokens.begin()), std::make_move_iterator(tokens.end()));
@@ -918,8 +932,22 @@ std::size_t run_prewarm(
                         note_failure();
                         continue;
                     }
+                    const std::string failed_state = kernel_dir + ".prewarm-failed-" + resolved.target_name;
+                    // A target that is already built and has no recorded failure cannot fail: skip the
+                    // failure fingerprint, whose include scan costs one g++ -M per target (about 11 ms,
+                    // 27 s for 2342 built targets). build_target() still runs, to refresh .build_state.
+                    std::error_code state_ec;
+                    if (!fs::exists(failed_state, state_ec) && !state_ec && target_is_current(out_dir, resolved)) {
+                        try {
+                            build_target(req.gpp, resolved, out_dir);
+                            ++successful;
+                            continue;
+                        } catch (const std::exception&) {
+                            // fall through: the regular path records the failure
+                        }
+                    }
                     const auto result = failure::target(
-                        kernel_dir + ".prewarm-failed-" + resolved.target_name,
+                        failed_state,
                         retry_failed,
                         [&]() {
                             fs::create_directories(out_dir);

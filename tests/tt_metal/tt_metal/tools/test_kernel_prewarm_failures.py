@@ -195,6 +195,8 @@ std::string base_kernel_name(const std::string& s){return s;}
 bool is_device_init_kernel(const std::string&){return false;}
 void write_generated_files(const std::string& dir,const std::vector<jit_build::GeneratedFile>& files){fs::create_directories(dir);for(const auto& f:files)std::ofstream(dir+f.name).write(reinterpret_cast<const char*>(f.content.data()),f.content.size());}
 std::atomic<int> attempts{0};
+bool fast_current=false; std::atomic<int> current_checks{0};
+bool target_is_current(const std::string& dir,const jit_build::TargetRecipe&){++current_checks;return fast_current && fs::exists(dir+"complete");}
 void build_target(const std::string& gpp,const jit_build::TargetRecipe& t,const std::string& dir){
  ++attempts; fs::create_directories(dir);
  auto args=jit_build::utils::tokenize_flags(gpp); append_tokenized(args,t.cflags);append_tokenized(args,t.includes);
@@ -466,6 +468,21 @@ void stale_limit() {
 
 void write_file(const fs::path& p, const std::string& text) { fs::create_directories(p.parent_path()); std::ofstream(p) << text; }
 
+// An already-built target with no recorded failure takes the fast path (no failure fingerprint, so no
+// g++ -M include scan); one with a recorded failure still goes through the failure policy.
+void current_fast_path() {
+ clear_env(); setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", C.c_str(), 1);
+ g_manifest = {req(7, "k0", C), req(7, "k1", C), req(7, "k2", C)};
+ auto d = fresh("current");
+ assert(offline(d) == 3 && attempts == 3 && current_checks == 3);  // cold: checked, not current, built
+ fast_current = true; attempts = 0; current_checks = 0;
+ assert(offline(d) == 3 && current_checks == 3 && attempts == 3 && built(d, 7, "k1"));  // warm: fast path
+ fs::path kdir = d / "tt-metal-cache7" / "kernels" / "k1";
+ write_file(kdir.string() + "/.prewarm-failed-first", "prewarm-failure-v1 other\n");
+ current_checks = 0; assert(offline(d) == 3 && current_checks == 2);  // k1's recorded failure: regular path
+}
+
+
 void commit_sources() {
  const std::string A(40, 'a'), B(40, 'b'), E(40, 'e'), SHA256(64, '1');
  clear_env();
@@ -522,6 +539,7 @@ int main(int, char** argv) {
  root = argv[1]; fs::create_directories(root); std::string mode = argv[2];
  if (mode == "filters") filters();
  else if (mode == "stale") stale_limit();
+ else if (mode == "current") current_fast_path();
  else if (mode == "commit") commit_sources();
  else open_path(mode == "open-cold");
  std::cout << "offline filters: " << mode << " passed\n";
@@ -695,7 +713,7 @@ class PrewarmFailureTests(unittest.TestCase):
             env = os.environ.copy()
             for key in [k for k in env if k.startswith("TT_METAL_KERNEL_")]:
                 env.pop(key)
-            for mode in ("filters", "stale", "commit", "open", "open-cold"):
+            for mode in ("filters", "stale", "commit", "current", "open", "open-cold"):
                 with self.subTest(mode=mode):
                     subprocess.run([str(path / "test"), str(path / mode), mode], env=env, check=True, timeout=120)
 
