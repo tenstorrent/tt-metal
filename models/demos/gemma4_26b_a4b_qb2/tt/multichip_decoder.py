@@ -38,6 +38,8 @@ from models.demos.gpt_oss.tt.ccl import CCLManager
 WS2_HEADS = os.environ.get("GEMMA4_26B_WS2_HEADS", "1") != "0"
 WS2_NORMS = os.environ.get("GEMMA4_26B_WS2_NORMS", "1") != "0"
 WS2_GEGLU = os.environ.get("GEMMA4_26B_WS2_GEGLU", "1") != "0"
+# Fabric links per decode all-reduce (QB2 Linear 1x4). 2 measured ~35% faster than 1 at decode-row sizes.
+WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
 
 
 class DecodeRopeRows:
@@ -946,9 +948,11 @@ class MultichipDecoder(OptimizedDecoder):
         self.topology = topology
         self.optimized_decode = optimized_decode
         self.attention_precision = attention_precision
-        self.ccl_tuning = {"num_workers_per_link": 1 if sliding else 2} if optimized_decode else {}
+        workers = int(os.environ.get("GEMMA4_26B_WS2_CCL_WORKERS", "0")) or (1 if sliding else 2)
+        self.ccl_tuning = {"num_workers_per_link": workers} if optimized_decode else {}
         self.persistent_ccl = optimized_decode if persistent_ccl is None else persistent_ccl
         self.collective_memory = ttnn.L1_MEMORY_CONFIG if optimized_decode else ttnn.DRAM_MEMORY_CONFIG
+        self.ccl_links = WS2_CCL_LINKS if optimized_decode else 1
         if collective_buffer_pool is not None:
             if collective_buffer_pool.mesh_device is not mesh_device:
                 raise ValueError("Collective buffers belong to a different mesh")
@@ -1540,7 +1544,7 @@ class MultichipDecoder(OptimizedDecoder):
                 dim=3,
                 multi_device_global_semaphore=self.ccl.get_rs_ping_pong_semaphore(),
                 barrier_semaphore=self.ccl.get_barrier_semaphore(),
-                num_links=1,
+                num_links=getattr(self, "ccl_links", 1),
                 memory_config=memory,
                 topology=self.topology,
                 cluster_axis=1,
@@ -1560,7 +1564,7 @@ class MultichipDecoder(OptimizedDecoder):
                 topology=self.topology,
                 multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
                 barrier_semaphore=self.ccl.get_barrier_semaphore(),
-                num_links=1,
+                num_links=getattr(self, "ccl_links", 1),
                 memory_config=memory,
                 **getattr(self, "ccl_tuning", {}),
             )
