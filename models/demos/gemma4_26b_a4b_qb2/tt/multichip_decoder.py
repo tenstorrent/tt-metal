@@ -327,6 +327,10 @@ class _LocalAttention(OptimizedAttention):
         sdpa = self.decode_sdpa
         direct = self.output_program is not None and getattr(self, "decode_output_dram", None) is None
         direct = direct and not getattr(self, "output_input_bfp8", False)
+        if q.shape[1] > 1:
+            # The head op shards users row-major over the 11-wide grid; SDPA maps users onto its 8x8 grid, so a
+            # sharded q is misread from user 8 on. Interleaved q (SDPA takes it from DRAM) is read by user index.
+            q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             k_cache,
