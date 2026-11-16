@@ -180,6 +180,8 @@ class GemmaBoundary:
         out2_gamma=False,
         flat_outs=(),
         pregathered=False,
+        tokens=None,
+        table=None,
     ):
         """outs: written as row 0 of TILE tensors (half each by bnd_reader.cpp / bnd_sender.cpp); flat_outs: the next
         compute outputs, packed straight into flat tensors on the boundary core. pregathered: the producers wrote the
@@ -189,13 +191,13 @@ class GemmaBoundary:
             # 32 B face-row reads: a DRAM source would need 64 B aligned destinations (Blackhole).
             assert part.memory_config().buffer_type == ttnn.BufferType.L1, "boundary inputs must be in L1"
             assert part.dtype == ttnn.bfloat16 and part.layout == ttnn.TILE_LAYOUT and part.padded_shape[-2] == TILE
-        site = {0: None, 1: "attn", 2: "moe"}[mode]
+        site = {0: None, 1: "attn", 2: "moe", 3: None}[mode]
         slots = self.ring if site else 0
         npart = len(parts)
         recv, sem = self.sites[site] if site else (None, None)
         sem_addr = ttnn.get_global_semaphore_address(sem) if site else 0
         cbs = [
-            self._cb(self.CB_RES, T, tensor=res_out if mode == 0 else res_in),
+            self._cb(self.CB_RES, T, tensor=res_out if mode in (0, 3) else res_in),
             self._cb(self.CB_G, gcount * T),
             self._cb(self.CB_SCALER, 1),
             self._cb(self.CB_A, 2 * T, ttnn.float32),
@@ -205,7 +207,10 @@ class GemmaBoundary:
             self._cb(self.CB_NB, T, ttnn.bfloat16 if self.round_n else ttnn.float32),
             self._cb(self.CB_SYNC, 1),
         ]
-        if mode:
+        if mode == 3:
+            cbs.append(self._cb(self.CB_PART, T + 1))  # token entry: the aligned stage of the embedding row
+            cbs.append(self._cb(self.CB_RES_OUT, T, tensor=res_out))
+        if mode in (1, 2):
             cbs += [
                 self._cb(self.CB_PART, npart * T, tensor=self.part),
                 self._cb(self.CB_RECV, slots * npart * T, tensor=recv),
@@ -232,14 +237,19 @@ class GemmaBoundary:
         o = list(outs) + [outs[0] if outs else self.qkv_in] * (3 - len(outs))
         reader_ct += [self.CB_SYNC, 1 if pregathered else 0, len(outs), self.CB_O0, fp32_mask]
         reader_ct += acc(p0) + acc(p1) + acc(gamma) + acc(vft) + acc(o[0]) + acc(o[1]) + acc(o[2])
+        reader_ct += [1 if mode == 3 else 0] + acc(tokens if mode == 3 else gamma) + acc(table if mode == 3 else gamma)
         reader_rt = ttnn.RuntimeArgs()
-        reader_rt[self.core.x][self.core.y] = [
-            p0.buffer_address(),
-            p1.buffer_address(),
-            gamma.buffer_address(),
-            vft.buffer_address(),
-            sem_addr,
-        ] + [t.buffer_address() for t in o]
+        reader_rt[self.core.x][self.core.y] = (
+            [
+                p0.buffer_address(),
+                p1.buffer_address(),
+                gamma.buffer_address(),
+                vft.buffer_address(),
+                sem_addr,
+            ]
+            + [t.buffer_address() for t in o]
+            + ([tokens.buffer_address(), table.buffer_address()] if mode == 3 else [0, 0])
+        )
         compute_ct = [self.CB_RECV, self.CB_RES, self.CB_G, self.CB_SCALER, self.CB_VF, self.CB_A, self.CB_B]
         compute_ct += [self.CB_SS, self.CB_RS, self.CB_RES_OUT, self.CB_O0, T, slots, max(npart, 1), mode]
         compute_ct += [_f32_bits(1.0 / self.hidden), _f32_bits(self.eps), 1 if out2_gamma else 0, self.CB_NB]
@@ -322,6 +332,12 @@ class GemmaBoundary:
         ttnn.generic_op(io, mesh_program)
 
     # Boundaries --------------------------------------------------------------------------------------------------
+    def entry_token(self, tokens, table, gamma, scale):
+        """Token entry: the residual is row tokens[0] of the replicated row-major embedding `table` ([vocab, hidden]
+        BF16, DRAM, one row per page) times `scale`; returns qkv_in (the first layer's normed input)."""
+        self._run(3, [], gamma, 1, self.res[0], self.res[0], [self.qkv_in], scalar=scale, tokens=tokens, table=table)
+        return self.qkv_in
+
     def entry(self, hidden, gamma):
         """hidden: the embedded token, [1, 1, 32, hidden] BF16 TILE (row 0). gamma: gammas([input_norm]). Returns
         qkv_in (the first layer's normed input); the residual is res[0]."""

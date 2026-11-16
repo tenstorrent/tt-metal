@@ -8,6 +8,7 @@
 // norm(v, g) = v * g * rsqrt(sum(v^2) / hidden + eps), statistics in FP32.
 //
 // mode 0 (entry):  x = norm(res, g0)                                         -> out0 (BF16)
+// mode 3 (token entry): res = embedding row * scale (BF16), x = norm(res, g0)  -> cb_res_out, out0
 // mode 1 (attn):   a = sum of the slots (o_proj partials, slot order)
 //                  res' = res + norm(a, g0)                                  -> cb_res_out (BF16)
 //                  n = norm(res', 1): out0 = n * vf (FP32, router input), out1 = n * g1, out2 = n * g2 (BF16)
@@ -195,7 +196,37 @@ void kernel_main() {
 #ifdef FAST_RECONFIG
     compute_kernel_hw_startup(cb_res, cb_res, cb_res_out);
 #endif
-    static_assert(mode == 0 || slots >= 2, "the all-reduce sums at least two slots");
+    static_assert(mode == 0 || mode == 3 || slots >= 2, "the all-reduce sums at least two slots");
+    if constexpr (mode == 3) {
+        // token entry: res = embedding row * embed_scale (BF16, in place), x = norm(res, g0)
+        const uint32_t scale = get_arg_val<uint32_t>(0);
+        cb_wait_front(cb_g, T);
+        cb_wait_front(cb_res, T);
+        compute_kernel_hw_startup(cb_res, cb_res, cb_res_out);
+        tile_regs_acquire();
+        copy_init(cb_res);
+        for (uint32_t t = 0; t < T; ++t) {
+            copy_tile(cb_res, t, t);
+        }
+        binop_with_scalar_tile_init();
+        for (uint32_t t = 0; t < T; ++t) {
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binop_with_scalar,
+                (APPROX, MUL_UNARY, 8, DST_ACCUM_MODE),
+                t,
+                VectorMode::RC,
+                scale));
+        }
+        pack_vec(cb_res_out);  // the same memory as cb_res: every tile is in DST before the first pack
+        cb_pop_front(cb_res, T);
+        sumsq(cb_res_out);
+        rstat();
+        scaled(cb_res_out, 0);
+        pack_vec(cb_o0);
+        return;
+    }
     if constexpr (mode == 0) {
         // entry: x = norm(res, g0)
         cb_wait_front(cb_g, T);

@@ -13,7 +13,11 @@
 //    `expected`), resets the semaphore and publishes the slots (cb_recv) to the compute.
 // 4. Writes row 0 of tiles [htiles / 2, htiles) of each of the `outs` row outputs (bnd_sender.cpp the first half).
 //
-// runtime args: [part0_addr, part1_addr, gamma_addr, vf_addr, sem_addr, out0_addr, out1_addr, out2_addr]
+// token_entry (mode 3): instead of 1., the token id (element 0 of the [1, 1, 1, 32] UINT32 token tensor) selects a row
+// of the replicated row-major embedding table, read into an aligned stage and copied into the residual (cb_res).
+//
+// runtime args: [part0_addr, part1_addr, gamma_addr, vf_addr, sem_addr, out0_addr, out1_addr, out2_addr, tokens_addr,
+//                table_addr]
 
 #include <stdint.h>
 
@@ -55,6 +59,9 @@ void kernel_main() {
     constexpr auto o0_args = TensorAccessorArgs<vf_args.next_compile_time_args_offset()>();
     constexpr auto o1_args = TensorAccessorArgs<o0_args.next_compile_time_args_offset()>();
     constexpr auto o2_args = TensorAccessorArgs<o1_args.next_compile_time_args_offset()>();
+    constexpr uint32_t token_entry = get_compile_time_arg_val(o2_args.next_compile_time_args_offset());
+    constexpr auto t_args = TensorAccessorArgs<o2_args.next_compile_time_args_offset() + 1>();
+    constexpr auto e_args = TensorAccessorArgs<t_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t page = 2048;  // BF16 32x32 tile
     constexpr uint32_t half = htiles / 2;
@@ -77,7 +84,20 @@ void kernel_main() {
             cb_push_back(cb_sync, 1);
         }
     }
-    if constexpr (!entry) {
+    if constexpr (token_entry) {
+        const uint32_t row_bytes = htiles * 64;
+        const uint32_t stage = (get_write_ptr(cb_part) + 63) & ~63u;  // 64 B aligned (DRAM reads)
+        noc_async_read(TensorAccessor(t_args, get_arg_val<uint32_t>(8), 128).get_noc_addr(0), stage, 64);
+        noc_async_read_barrier();
+        const uint32_t token = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[0];
+        noc_async_read(
+            TensorAccessor(e_args, get_arg_val<uint32_t>(9), row_bytes).get_noc_addr(token), stage + 64, row_bytes);
+        noc_async_read_barrier();
+        cb_reserve_back(cb_res, tiles);
+        noc_async_read(get_noc_addr(stage + 64), get_write_ptr(cb_res), row_bytes);
+        noc_async_read_barrier();
+        cb_push_back(cb_res, tiles);
+    } else if constexpr (!entry) {
         cb_reserve_back(cb_res, tiles);
         cb_push_back(cb_res, tiles);
     }
