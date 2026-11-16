@@ -17,7 +17,7 @@ from models.demos.vision.segmentation.vanilla_unet.tt.common import (
 from models.demos.vision.segmentation.vanilla_unet.tt.config import create_unet_configs_from_parameters
 from models.demos.vision.segmentation.vanilla_unet.tt.model import create_unet_from_configs
 from models.experimental.functional_unet.tt.model_preprocessing import create_unet_input_tensors
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @run_for_wormhole_b0()

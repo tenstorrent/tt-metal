@@ -15,7 +15,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Everything about a PrefetcherPipeParameter is decidable from the spec alone (geometry and kernel
 // placement); the pipe object arrives later via ProgramRunArgs and is reconciled against this
@@ -23,7 +23,7 @@ namespace tt::tt_metal::experimental {
 //
 // Rule 1. Geometry: non-empty receivers, ring_size > 0, entry_size > 0, L1-aligned and <= ring_size.
 // (Rules 2-6 are structural: roles.cpp and lanes_and_relays.cpp.)
-void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, uint32_t l1_alignment) {
+void ValidatePrefetcherPipeParameter(const experimental::PrefetcherPipeParameter& pipe, uint32_t l1_alignment) {
     const NodeRangeSet receivers = to_node_range_set(pipe.receivers);
     TT_FATAL(receivers.num_cores() > 0, "PrefetcherPipeParameter '{}' has no receiver nodes", pipe.unique_id);
     TT_FATAL(pipe.ring_size > 0, "PrefetcherPipeParameter '{}' has ring_size = 0", pipe.unique_id);
@@ -68,7 +68,7 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx) {
     }
 
     // Derive each group's role once, then record the sender / receiver kernel of every pipe in it.
-    std::unordered_map<PrefetcherPipeParamName, const KernelSpec*> sender_kernel_of;
+    std::unordered_map<experimental::PrefetcherPipeParamName, const KernelSpec*> sender_kernel_of;
     auto& receiver_kernel_of = roles.receiver_kernel_of;
     for (const auto& kernel : spec.kernels) {
         if (kernel.advanced_options.prefetcher_pipe_bindings.empty()) {
@@ -88,11 +88,11 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx) {
             kernel.unique_id);
 
         for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
-            const PrefetcherPipeParameter* first =
+            const experimental::PrefetcherPipeParameter* first =
                 collected.prefetcher_pipe_by_name.at(binding.pipe_parameter_names[0]);
             NodeRangeSet group_receivers;
             for (const auto& pipe_name : binding.pipe_parameter_names) {
-                const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+                const experimental::PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
                 TT_FATAL(
                     pipe->ring_size == first->ring_size && pipe->entry_size == first->entry_size,
                     "Kernel '{}' accessor '{}' names PrefetcherPipeParameters '{}' (ring_size {}, entry_size {}) "
@@ -273,11 +273,11 @@ void ValidatePrefetcherPipeLanesAndRelays(
             continue;
         }
 
-        const PrefetcherPipeParameter* first =
+        const experimental::PrefetcherPipeParameter* first =
             collected.prefetcher_pipe_by_name.at(dfb.advanced_options.prefetcher_pipe_relays[0]);
         NodeRangeSet relayed_receivers;
         for (const auto& pipe_name : dfb.advanced_options.prefetcher_pipe_relays) {
-            const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
+            const experimental::PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
             TT_FATAL(
                 pipe->ring_size == first->ring_size && pipe->entry_size == first->entry_size,
                 "DFB '{}' relays PrefetcherPipeParameters '{}' (ring_size {}, entry_size {}) and '{}' (ring_size "
@@ -348,18 +348,18 @@ void ValidatePrefetcherPipeLanesAndRelays(
         // set under one accessor. (Binding implies data-movement by rule 2; the tiling rule then
         // puts the receiver union in its nodes.) Without the binding the producer could not drive
         // the pipe protocol the relay depends on.
-        const std::unordered_set<PrefetcherPipeParamName> relayed_set(
+        const std::unordered_set<experimental::PrefetcherPipeParamName> relayed_set(
             dfb.advanced_options.prefetcher_pipe_relays.begin(), dfb.advanced_options.prefetcher_pipe_relays.end());
         for (const auto& rec : collected.dfb_endpoints.at(dfb.unique_id).producers) {
             const bool binds_relayed_set = std::any_of(
                 rec.kernel->advanced_options.prefetcher_pipe_bindings.begin(),
                 rec.kernel->advanced_options.prefetcher_pipe_bindings.end(),
-                [&](const KernelAdvancedOptions::PrefetcherPipeBinding& binding) {
+                [&](const experimental::KernelAdvancedOptions::PrefetcherPipeBinding& binding) {
                     return binding.pipe_parameter_names.size() == relayed_set.size() &&
                            std::all_of(
                                binding.pipe_parameter_names.begin(),
                                binding.pipe_parameter_names.end(),
-                               [&](const PrefetcherPipeParamName& n) { return relayed_set.contains(n); });
+                               [&](const experimental::PrefetcherPipeParamName& n) { return relayed_set.contains(n); });
                 });
             TT_FATAL(
                 binds_relayed_set,
@@ -381,7 +381,7 @@ void ValidatePrefetcherPipeBindings(const KernelSpec& kernel) {
     // A kernel binds a given pipe at most once, within and across accessors: a second binding
     // would be a second device object over the same credit counters (two names for one pipe is a
     // handle alias, not a binding).
-    std::unordered_set<PrefetcherPipeParamName> bound_pipes;
+    std::unordered_set<experimental::PrefetcherPipeParamName> bound_pipes;
     for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
         auto [it, inserted] = accessor_names.insert(binding.accessor_name);
         TT_FATAL(
@@ -419,7 +419,7 @@ void ValidatePrefetcherPipesUsed(const ValidationContext& ctx) {
 
     // Every declared PrefetcherPipeParameter must be used by a kernel binding or a relay DFB.
     // (An unused pipe parameter would demand a run arg nothing reads.)
-    std::unordered_set<PrefetcherPipeParamName> used_pipes;
+    std::unordered_set<experimental::PrefetcherPipeParamName> used_pipes;
     for (const auto& kernel : spec.kernels) {
         for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
             used_pipes.insert(binding.pipe_parameter_names.begin(), binding.pipe_parameter_names.end());
@@ -436,4 +436,4 @@ void ValidatePrefetcherPipesUsed(const ValidationContext& ctx) {
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

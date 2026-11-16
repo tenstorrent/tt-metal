@@ -12,7 +12,7 @@ from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.mobileNetV3.tests.pcc.common import inverted_residual_setting, last_channel
 from models.experimental.mobileNetV3.tt.custom_preprocessor import create_custom_preprocessor
 from models.experimental.mobileNetV3.tt.ttnn_mobileNetV3 import ttnn_MobileNetV3
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from torchvision import models
 from torchvision.models import MobileNet_V3_Small_Weights
 

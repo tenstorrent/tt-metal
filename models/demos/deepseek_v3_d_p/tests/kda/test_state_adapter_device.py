@@ -18,6 +18,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import all_zero_bits, assert_bit_identical, decode_tail
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     kda_state_patterns,
     native_state_from_global,
@@ -41,11 +42,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     kda_segment_bytes,
     kda_window,
     populate_kv_chunk_address_table_kda,
-)
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    all_zero_bits,
-    assert_bit_identical,
-    decode_tail,
 )
 
 pytestmark = [

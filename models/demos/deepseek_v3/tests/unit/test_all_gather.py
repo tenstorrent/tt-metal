@@ -11,9 +11,9 @@ import torch
 import ttnn
 from models.common.utility_functions import skip_with_watcher
 from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
-from tests.sweep_framework.sweep_utils.ccl_common import get_mem_configs, get_serializable_shard_specs
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
-from tests.ttnn.utils_for_testing import maybe_trace
+from tt_py_test_utils_common.ccl_mem_configs import get_mem_configs, get_serializable_shard_specs
+from tt_py_test_utils_common.comparison_funcs import comp_equal
+from tt_py_test_utils_common.utils_for_testing import maybe_trace
 
 
 def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, buffer_type, dtype, layout, shard_specs, device):
