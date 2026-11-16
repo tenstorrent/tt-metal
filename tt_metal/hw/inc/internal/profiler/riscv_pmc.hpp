@@ -2,24 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RISC-V hardware performance monitor of the Tensix baby cores: BRISC, NCRISC and TRISC0/1/2 on
-// Blackhole, TRISC0-3 of each Neo on Quasar.
+// RISC-V performance monitor capture for the Tensix baby cores and the Quasar data-movement cores. The hardware
+// description (CSRs, select formats, event tables) is in tt-llk perf_counters/riscv_pmc_*.h; this header adds the
+// profiler marker format and emission.
 //
-// Each of these cores has a free-running mcycle and minstret plus two programmable counters,
-// mhpmcounter3 and mhpmcounter4, steered by mhpmevent3/4. This is unrelated to the Tensix MMIO
-// perf-counter banks in perf_counters.hpp; see tech_reports/PerfCounters/riscv-pmc.md for the CSR
-// map, the event catalog and the support matrix.
-//
-// An mhpmevent value is eight 4-bit nibbles, one per pipeline domain (BP, IF, DE, DE1, EX, LS,
-// TTCSR, MEM low-to-high). Each nibble selects one event index from that domain's 16-bit event bus.
-// Index 0 in every domain is a tie-off, so a zero nibble disables the domain. The selected events
-// are OR-ed before the increment, so a counter advances by at most 1 per cycle.
-//
-// Firmware brackets the kernel invocation with RiscvPmcBegin() / RiscvPmcEnd(). Counters are read
-// before and after and the deltas emitted as three profiler markers per core per launch.
-//
-// Enable with TT_METAL_PROFILE_RISCV_PMC=<mhpmevent3>[,<mhpmevent4>]. The selects are compile-time
-// constants and are part of the firmware build key, so changing them rebuilds the firmware.
+// Enable with TT_METAL_PROFILE_RISCV_PMC=<mhpmevent3>[,<mhpmevent4>] (Quasar DMs: TT_METAL_PROFILE_RISCV_PMC_DM).
+// The selects are compile-time constants and part of the firmware build key.
 
 #pragma once
 
@@ -66,33 +54,25 @@ constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) |
 #define RISCV_PMC_SEL4 ((uint32_t)PROFILE_RISCV_PMC_EV4)
 #endif
 
+#include "perf_counters/riscv_pmc_hw.h"
+
 namespace kernel_profiler {
 namespace riscv_pmc {
 
-constexpr uint32_t CSR_MCYCLE = 0xB00;
-constexpr uint32_t CSR_MINSTRET = 0xB02;
-constexpr uint32_t CSR_MHPMCOUNTER3 = 0xB03;
-constexpr uint32_t CSR_MHPMCOUNTER4 = 0xB04;
-constexpr uint32_t CSR_MHPMEVENT3 = 0x323;
-constexpr uint32_t CSR_MHPMEVENT4 = 0x324;
-
-// mcycle and minstret are never written, so they are read as deltas; the programmable counters are
-// zeroed at begin. One launch is in flight per core, so a plain global is enough (per thread on
-// Quasar, where cores share the image).
+// mcycle and minstret are never written, so they are read as deltas; the programmable counters are zeroed at
+// begin. One launch is in flight per core, so a plain global is enough (per thread on Quasar, where cores share
+// the image).
 #if defined(ARCH_QUASAR)
 static thread_local uint32_t cycle_begin, instret_begin;
 #else
 static uint32_t cycle_begin, instret_begin;
 #endif
 
-// mcountinhibit is never written: its reset value runs both counters.
 inline __attribute__((always_inline)) void begin() {
-    asm volatile("csrw %0, %1" ::"i"(CSR_MHPMEVENT3), "r"(RISCV_PMC_SEL3));
-    asm volatile("csrw %0, %1" ::"i"(CSR_MHPMEVENT4), "r"(RISCV_PMC_SEL4));
-    asm volatile("csrw %0, zero" ::"i"(CSR_MHPMCOUNTER3));
-    asm volatile("csrw %0, zero" ::"i"(CSR_MHPMCOUNTER4));
-    asm volatile("csrr %0, %1" : "=r"(cycle_begin) : "i"(CSR_MCYCLE) : "memory");
-    asm volatile("csrr %0, %1" : "=r"(instret_begin) : "i"(CSR_MINSTRET) : "memory");
+    llk::perf::riscv::select(RISCV_PMC_SEL3, RISCV_PMC_SEL4);
+    llk::perf::riscv::zero_counters();
+    cycle_begin = llk::perf::riscv::read_mcycle();
+    instret_begin = llk::perf::riscv::read_minstret();
 }
 
 // The three markers share one buffer-room check and one timestamp, which keeps the BRISC image
@@ -100,11 +80,10 @@ inline __attribute__((always_inline)) void begin() {
 // No flush_to_dram_if_full(): a full buffer drops the markers, and the flush would pull noc_index
 // into firmware images that do not define it.
 inline __attribute__((always_inline)) void end() {
-    uint32_t pmc3, pmc4, mcycle, minstret;
-    asm volatile("csrr %0, %1" : "=r"(pmc3) : "i"(CSR_MHPMCOUNTER3) : "memory");
-    asm volatile("csrr %0, %1" : "=r"(pmc4) : "i"(CSR_MHPMCOUNTER4) : "memory");
-    asm volatile("csrr %0, %1" : "=r"(mcycle) : "i"(CSR_MCYCLE) : "memory");
-    asm volatile("csrr %0, %1" : "=r"(minstret) : "i"(CSR_MINSTRET) : "memory");
+    const uint32_t pmc3 = llk::perf::riscv::read_counter3();
+    const uint32_t pmc4 = llk::perf::riscv::read_counter4();
+    const uint32_t mcycle = llk::perf::riscv::read_mcycle();
+    const uint32_t minstret = llk::perf::riscv::read_minstret();
 
     constexpr uint32_t marker_words = PROFILER_L1_MARKER_UINT32_SIZE + 2;
     if (!bufferHasRoom<DoingDispatch::DISPATCH>(3 * marker_words - 1)) {
