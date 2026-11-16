@@ -51,7 +51,6 @@ public:
     }
     static void TearDownTestSuite() {
         if (check_32_chips()) {
-            ttml::autograd::ctx().reset_parallelism_context();
             ttml::autograd::ctx().close_device();
         }
     }
