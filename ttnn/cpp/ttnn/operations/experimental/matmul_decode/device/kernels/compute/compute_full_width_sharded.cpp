@@ -224,7 +224,7 @@ void kernel_main() {
 
     out_cb.reserve_back(M_tiles * N_tiles_per_core);
     if constexpr (num_k_blocks == 1) {
-#ifdef IN1_PIPE
+#if defined(IN1_PIPE) || defined(IN1_STREAM)
         in1_cb.wait_front(in1_page_tiles);
 #endif
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
@@ -235,7 +235,7 @@ void kernel_main() {
             pack_block_contiguous(0, mm_out_cb_id, N_tiles_per_core);
             tile_regs_release();
         }
-#ifdef IN1_PIPE
+#if defined(IN1_PIPE) || defined(IN1_STREAM)
         in1_cb.pop_front(in1_page_tiles);
 #endif
     } else {
@@ -245,7 +245,7 @@ void kernel_main() {
         // reduction is whole. This is why streaming needs no packer L1 accumulation here.
         tile_regs_acquire();
         for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-#ifdef IN1_PIPE
+#if defined(IN1_PIPE) || defined(IN1_STREAM)
             in1_cb.wait_front(in1_page_tiles);
 #endif
             const uint32_t in0_tile = kb * k_block_tiles;
@@ -254,7 +254,7 @@ void kernel_main() {
             } else {
                 custom_mm_block<layout, false>(in0_cb_id, in1_cb_id, in0_tile, 0, 0, k_block_tiles, N_tiles_per_core);
             }
-#ifdef IN1_PIPE
+#if defined(IN1_PIPE) || defined(IN1_STREAM)
             // This page has been read in full; popping it lets the reader hand it back.
             in1_cb.pop_front(in1_page_tiles);
 #endif
@@ -271,7 +271,7 @@ void kernel_main() {
 
     out_cb.reserve_back(M_tiles * N_tiles_per_core);
     for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-#ifdef IN1_PIPE
+#if defined(IN1_PIPE) || defined(IN1_STREAM)
         in1_cb.wait_front(in1_page_tiles);
 #endif
         const uint32_t k_block_base = kb * k_block_tiles;
@@ -293,7 +293,7 @@ void kernel_main() {
             }
             tile_regs_release();
         }
-#ifdef IN1_PIPE
+#if defined(IN1_PIPE) || defined(IN1_STREAM)
         // This page has been read in full; popping it lets the reader hand it back.
         in1_cb.pop_front(in1_page_tiles);
 #endif

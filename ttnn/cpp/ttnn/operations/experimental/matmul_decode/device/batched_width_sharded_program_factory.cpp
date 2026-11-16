@@ -128,6 +128,11 @@ ttnn::device_operation::ProgramArtifacts create_batched_artifacts(
     const bool use_pipes = !prefetcher_pipes.empty();
     // The reader loads this core's slab of a DRAM ND-sharded weight itself.
     const bool in1_from_dram = operation_attributes.dram_weight_grid.has_value();
+    TT_FATAL(
+        !in1_from_dram || operation_attributes.prefetch_k_blocks == 1,
+        "batched matmul_decode reads a DRAM weight's slab whole: prefetch_k_blocks ({}) streams it only on the "
+        "full-width path",
+        operation_attributes.prefetch_k_blocks);
     // A packed weight is a region of a fused height-sharded tensor: its [Bc*K, Nc] slab shape
     // and its grid come from the spec, since the fused tensor's shard spec describes the whole
     // pack. A DRAM ND-sharded weight has no legacy shard spec, so both come from the ND shard

@@ -432,6 +432,14 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
     const uint32_t in1_page_num_tiles = in1_k_block_tiles * inB_N_tiles_per_core;
     const uint32_t in1_page_bytes = in1_page_num_tiles * in1_tile_size;
     const uint32_t in1_tile_offset = packed.has_value() ? packed->tile_offset : 0;
+    // A DRAM weight read as num_k_blocks pages through a two-page in1 (prefetch_k_blocks > 1 without pipes).
+    const bool in1_dram_stream = in1_from_dram && num_k_blocks > 1;
+    // The reader addresses page b of the DRAM slab at b * in1_page_bytes, so a DRAM page must be one tile.
+    TT_FATAL(
+        !in1_dram_stream || input_tensor_b.buffer()->aligned_page_size() == in1_tile_size,
+        "matmul_decode streaming a DRAM weight needs its page ({} B) to be one {} B tile",
+        input_tensor_b.buffer()->aligned_page_size(),
+        in1_tile_size);
 
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
@@ -527,11 +535,12 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
             .advanced_options = {.prefetcher_pipe_relays = pipe_names},
         });
     } else if (in1_from_dram) {
-        // The reader fills this with the core's whole DRAM slab before publishing full_in0.
+        // The reader fills this with the core's whole DRAM slab before publishing full_in0, or, streaming,
+        // with two pages at a time.
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN1_DFB,
             .entry_size = in1_tile_size,
-            .num_entries = in1_slab_num_tiles,
+            .num_entries = in1_dram_stream ? 2 * in1_page_num_tiles : in1_slab_num_tiles,
             .data_format_metadata = in1_data_format,
             .tile_format_metadata = inputB_tile,
         });
@@ -921,6 +930,11 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
             }
             if (in1_from_dram) {
                 defines.emplace("IN1_FROM_DRAM", "1");
+                if (in1_dram_stream) {
+                    defines.emplace("IN1_STREAM", "1");
+                    reader.compile_time_args.emplace("num_k_blocks", num_k_blocks);
+                    reader.compile_time_args.emplace("in1_page_bytes", in1_page_bytes);
+                }
                 reader.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = IN1, .accessor_name = "in1"});
                 reader.runtime_arg_schema.runtime_arg_names.push_back("in1_shard_id");
             }
@@ -999,6 +1013,9 @@ ttnn::device_operation::ProgramArtifacts create_two_hub_artifacts(
             defines.emplace("IN1_PIPE", "1");
         } else {
             compute.compile_time_args.emplace("in1_tile_offset", in1_tile_offset);
+        }
+        if (in1_dram_stream) {
+            defines.emplace("IN1_STREAM", "1");
         }
         KernelRunArgs compute_run_args{.kernel = name};
         if (rms_norm) {

@@ -32,6 +32,9 @@
 //   - IN1_FROM_DRAM: the weight is DRAM ND-sharded, one [K, N/num_weight_cores] slab per weight
 //     core. The reader issues the slab's read before the gather so the two overlap, and waits for it
 //     before publishing full_in0: compute takes in1 only after full_in0, so that gates it.
+//     IN1_STREAM: the slab is read as num_k_blocks pages of whole K-rows through a two-page in1, so
+//     its L1 is two pages rather than the slab; the first two are read before the gather, the rest
+//     as compute pops pages (compute waits on each page, as with IN1_PIPE).
 //   - IN1_PIPE: the tensor prefetcher streams this core's [K, N/num_weight_cores] slab over a
 //     PrefetcherPipe as num_k_blocks entries, each a whole number of K-rows, and in1 is a relay over
 //     the pipe's ring. An entry goes back to the prefetcher only once compute has popped its tiles.
@@ -99,8 +102,22 @@ void kernel_main() {
     publish_in1_block_from_pipe(pipe, in1_relay, noc, 0, in1_page_tiles);
 #elif defined(IN1_FROM_DRAM)
     const auto in1 = TensorAccessor(tensor::in1);
+#ifdef IN1_STREAM
+    constexpr uint32_t num_k_blocks = get_arg(args::num_k_blocks);
+    constexpr uint32_t in1_page_bytes = get_arg(args::in1_page_bytes);
+    constexpr uint32_t in1_first_blocks = num_k_blocks < 2 ? num_k_blocks : 2;
+    const uint32_t in1_shard_id = get_arg(args::in1_shard_id);
+    in1_cb.reserve_back(in1_first_blocks * in1_page_tiles);
+    for (uint32_t block = 0; block < in1_first_blocks; ++block) {
+        noc_async_read(
+            in1.get_shard_noc_addr(in1_shard_id, block * in1_page_bytes),
+            in1_cb.get_write_ptr() + block * in1_page_bytes,
+            in1_page_bytes);
+    }
+#else
     in1_cb.reserve_back(in1_page_tiles);
     noc_async_read_shard(get_arg(args::in1_shard_id), in1, in1_cb.get_write_ptr());
+#endif
 #else
     in1_cb.reserve_back(in1_tile_offset + in1_page_tiles);
     in1_cb.push_back(in1_tile_offset + in1_page_tiles);
@@ -131,7 +148,11 @@ void kernel_main() {
 #endif
 #if defined(IN1_RECEIVER) && defined(IN1_FROM_DRAM)
     noc.async_read_barrier();
+#ifdef IN1_STREAM
+    in1_cb.push_back(in1_first_blocks * in1_page_tiles);
+#else
     in1_cb.push_back(in1_page_tiles);
+#endif
 #endif
     full_in0_cb.push_back(full_num_tiles);
 #else
@@ -208,10 +229,25 @@ void kernel_main() {
 #endif
 #if defined(IN1_RECEIVER) && defined(IN1_FROM_DRAM)
     noc.async_read_barrier();
+#ifdef IN1_STREAM
+    in1_cb.push_back(in1_first_blocks * in1_page_tiles);
+#else
     in1_cb.push_back(in1_page_tiles);
+#endif
 #endif
     full_in0_cb.push_back(full_num_tiles);
 #endif  // IN0_REPLICATED
+
+#if defined(IN1_RECEIVER) && defined(IN1_FROM_DRAM) && defined(IN1_STREAM)
+    // The rest of the slab, a page at a time as compute frees one of the two.
+    for (uint32_t block = in1_first_blocks; block < num_k_blocks; ++block) {
+        in1_cb.reserve_back(in1_page_tiles);
+        noc_async_read(
+            in1.get_shard_noc_addr(in1_shard_id, block * in1_page_bytes), in1_cb.get_write_ptr(), in1_page_bytes);
+        noc.async_read_barrier();
+        in1_cb.push_back(in1_page_tiles);
+    }
+#endif
 
 #if defined(IN1_RECEIVER) && defined(IN1_PIPE)
     for (uint32_t block = 1; block < num_k_blocks; ++block) {
