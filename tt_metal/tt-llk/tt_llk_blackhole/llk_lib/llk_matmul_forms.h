@@ -84,6 +84,34 @@ constexpr bool matmul_format_is_32bit(const DataFormat f)
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
 }
 
+// lofi_wide of matmul_plain_row_form over the kernel's CB formats
+template <std::size_t N>
+constexpr bool matmul_kernel_lofi_wide(const std::uint8_t (&formats)[N])
+{
+    std::uint32_t f32 = 0;
+    bool tf32         = false;
+    for (const std::uint8_t f : formats)
+    {
+        f32 += f == static_cast<std::uint8_t>(DataFormat::Float32);
+        tf32 = tf32 || f == static_cast<std::uint8_t>(DataFormat::Tf32);
+    }
+    return tf32 || f32 >= 2;
+}
+
+// A LoFi kernel whose 32-bit format is an operand or the output (matmul_kernel_lofi_wide) beside a 16-bit or block float one: its plain
+// calls at half sync take the run-time direction (matmul_api_reuse_dir 3), which holds the wider operand
+template <std::size_t N>
+constexpr bool matmul_kernel_lofi_mix(const std::uint8_t (&formats)[N])
+{
+    bool fast = false;
+    for (const std::uint8_t f : formats)
+    {
+        const DataFormat d = static_cast<DataFormat>(f);
+        fast = fast || d == DataFormat::Float16 || d == DataFormat::Float16_b || d == DataFormat::Bfp8_b || d == DataFormat::Bfp4_b;
+    }
+    return fast && matmul_kernel_lofi_wide(formats);
+}
+
 // The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): LoFi at half sync, and above LoFi except the
 // classes where a production block measured slower under ttsync (G2 census, 660 keys): HiFi4 at full sync with a 32-bit DEST, half sync
 // without a 32-bit DEST in a kernel holding Bfp8_b, and with a 32-bit DEST and a 32-bit format HiFi2 at either sync and HiFi3 at full
@@ -93,9 +121,9 @@ constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full
 {
     if (fidelity == MathFidelity::LoFi)
     {
-        // small LoFi blocks are bound by the unpack's context poll; half sync only, where every plain call runs direction 0
-        // (matmul_api_reuse_dir: half_f32 for an unkeyed output, pack_bound for a keyed block)
-        return !full_sync;
+        // small LoFi blocks are bound by the unpack's context poll; half sync only, and not where the plain calls take the run-time
+        // direction (matmul_kernel_lofi_mix), which the ttsync unpack does not run
+        return !full_sync && !matmul_kernel_lofi_mix(formats);
     }
     if (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest)
     {
@@ -223,19 +251,6 @@ constexpr bool matmul_plain_row_form(const bool may_pack_32bit, const bool lofi_
            !(math_fidelity == MathFidelity::LoFi && dst_sync == DstSync::SyncHalf && fp32_dest && lofi_wide);
 }
 
-// lofi_wide of matmul_plain_row_form over the kernel's CB formats
-template <std::size_t N>
-constexpr bool matmul_kernel_lofi_wide(const std::uint8_t (&formats)[N])
-{
-    std::uint32_t f32 = 0;
-    bool tf32         = false;
-    for (const std::uint8_t f : formats)
-    {
-        f32 += f == static_cast<std::uint8_t>(DataFormat::Float32);
-        tf32 = tf32 || f == static_cast<std::uint8_t>(DataFormat::Tf32);
-    }
-    return tf32 || f32 >= 2;
-}
 
 // Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against
 // Float16_b in1 into Float32, both when the operand formats and the k steps of a section are given (main's form, unknown k, takes no fold); HiFi2 with a 16-bit

@@ -270,8 +270,12 @@ constexpr std::uint32_t matmul_api_reuse_dir() {
         } else if constexpr (in0 != DataFormat::Invalid && in1 != DataFormat::Invalid && block_rt != 0 && block_ct != 0) {
             constexpr bool two_row_off = MM_THROTTLE != 0 || !llk_matmul_kernel_full_tiles() || (half_f32 && kt_per_section <= 1);
             return matmul_reuse_dir(MATH_FIDELITY, in0, in1, block_ct, block_rt, half_f32, two_row_off, MM_THROTTLE != 0);
-        } else if constexpr (half_f32 || row_mop || unpack_auto_ttsync != 0 || stream_z != 0 || kt_per_section != 0) {
+        } else if constexpr (row_mop || unpack_auto_ttsync != 0 || stream_z != 0 || kt_per_section != 0) {
             return 0;
+        } else if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+            // half sync: the run-time direction where a 32-bit operand or output sits beside a fast format; a Float32 partials CB
+            // alone is not one (matmul_kernel_lofi_mix)
+            return out_format != DataFormat::Float32 && matmul_kernel_lofi_mix(unpack_src_format) ? 3 : 0;
         } else {
             return llk_matmul_kernel_mixes_32bit<MM_THROTTLE != 0>() ? 3 : 0;
         }

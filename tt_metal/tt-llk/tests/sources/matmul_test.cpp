@@ -43,6 +43,20 @@
 #undef MATMUL_TTSYNC_BLOCK
 #undef MATMUL_PROD_KEYS
 #define MATMUL_REUSE_DIR MATMUL_PROD_DIR
+#ifndef RUNTIME_FORMATS
+// matmul_api_reuse_dir's run-time direction (3) of a LoFi half-sync kernel with a 32-bit operand or output beside a fast format, as
+// matmul_api_runtime_dir resolves it for the key's operands (in1 is unpacker A, in0 unpacker B)
+#include "llk_matmul_forms.h"
+constexpr bool matmul_prod_runtime_dir = MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf &&
+                                         static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS);
+#undef MATMUL_REUSE_DIR
+#define MATMUL_REUSE_DIR                                                                                                                        \
+    (matmul_prod_runtime_dir ? ckernel::matmul_reuse_dir(ckernel::MathFidelity::LoFi, static_cast<DataFormat>(UNPACK_B_IN), static_cast<DataFormat>(UNPACK_A_IN), \
+                                                         MATMUL_PK_CT, MATMUL_PK_RT, false, true, THROTTLE_LEVEL != 0)                           \
+                             : MATMUL_PROD_DIR)
+#else
+constexpr bool matmul_prod_runtime_dir = false;
+#endif
 #endif
 
 // G2h: a production key of compile-time block keys whose class polls runs the ttsync unpack on its cell (llk_matmul_forms.h
@@ -428,8 +442,11 @@ constexpr bool matmul_prod_may_pack_32bit = matmul_prod_kernel_has_32bit_cb() ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
 constexpr bool matmul_prod_lofi_wide = ckernel::matmul_kernel_lofi_wide(MATMUL_KERNEL_FORMATS);
 #endif
-constexpr bool matmul_tile_mop = MATMUL_FE_FORM_KT == 0 ? !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit, matmul_prod_lofi_wide)
-                                                        : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
+// a run-time direction call runs the tile MOP whatever direction it resolves to (matmul_block: llk_dir 3)
+constexpr bool matmul_tile_mop =
+    MATMUL_FE_FORM_KT == 0
+        ? !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit, matmul_prod_lofi_wide) || matmul_prod_runtime_dir
+        : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #else
 constexpr bool matmul_tile_mop = false;
 #endif
