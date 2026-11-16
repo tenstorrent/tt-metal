@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import struct
+
 import pytest
 import torch
 import ttnn
@@ -988,3 +990,110 @@ def test_unary_chain_typecast_int8(tt_output_dtype, device):
 
     expected = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
     assert_equal(expected, ttnn.to_torch(chained))
+
+
+# float -> uint16 edge cases as (FP32 bits, expected): truncation toward zero, saturating at
+# 65535. A bfloat16 source takes the rows whose low 16 bits are zero (exact in bfloat16).
+_UINT16_EDGE_CASES = [
+    (0x00000000, 0),  # +0.0
+    (0x80000000, 0),  # -0.0
+    (0x00010000, 0),  # smallest bfloat16 denormal
+    (0x007F0000, 0),  # largest bfloat16 denormal
+    (0x00800000, 0),  # smallest normal
+    (0x80010000, 0),  # negative bfloat16 denormal
+    (0x80800000, 0),  # negative smallest normal
+    (0x00000001, 0),  # smallest FP32 denormal
+    (0x007FFFFF, 0),  # largest FP32 denormal
+    (0x33000000, 0),  # 2**-25
+    (0x30800000, 0),  # 2**-30
+    (0xB3000000, 0),  # -2**-25
+    (0xB0800000, 0),  # -2**-30
+    (0x3F000000, 0),  # 0.5
+    (0x3F400000, 0),  # 0.75
+    (0x3F800000, 1),  # 1.0
+    (0x3FC00000, 1),  # 1.5
+    (0x40200000, 2),  # 2.5
+    (0xBF000000, 0),  # -0.5
+    (0xBFC00000, 0),  # -1.5
+    (0x3F7FFFFE, 0),  # 1 - 2**-23
+    (0x3F7FFFFF, 0),  # 1 - 2**-24
+    (0x3FFFFFFF, 1),  # 2 - 2**-23
+    (0x3F800001, 1),  # 1 + 2**-23
+    (0x477F0000, 65280),  # 65280.0, largest bfloat16 below 2**16
+    (0x477FFE80, 65534),  # 65534.5
+    (0x477FFF00, 65535),  # 65535.0
+    (0x477FFF80, 65535),  # 65535.5
+    (0x47800000, 65535),  # 65536.0 saturates
+    (0x49800000, 65535),  # 2**20 saturates
+    (0x4F000000, 65535),  # 2**31 saturates
+]
+
+
+def _uint16_edge_cases(pt_input_dtype):
+    """Bit-exact edge-case inputs for pt_input_dtype and their expected uint16 results."""
+    cases = _UINT16_EDGE_CASES
+    if pt_input_dtype == torch.bfloat16:
+        cases = [(bits >> 16, expected) for bits, expected in cases if bits & 0xFFFF == 0]
+        fmt, int_dtype = "H", torch.int16
+    else:
+        fmt, int_dtype = "I", torch.int32
+    bits = [b for b, _ in cases]
+    signed_bits = struct.unpack(f"<{len(bits)}{fmt.lower()}", struct.pack(f"<{len(bits)}{fmt}", *bits))
+    values = torch.tensor(signed_bits, dtype=int_dtype).view(pt_input_dtype)
+    return values, torch.tensor([e for _, e in cases], dtype=torch.int64)
+
+
+def _fractional_typecast_stimulus(signed, pt_input_dtype, tt_output_dtype):
+    """Quarter steps below 64, exact in bfloat16, after the uint16 edge cases for a uint16
+    destination. Half-integers tell truncation from rounding. Returns (input, expected)."""
+    offsets = torch.tensor([0.25, 0.5, 0.75], dtype=torch.float32)
+    base = torch.arange(0, 63, dtype=torch.float32)
+    steps = (base[:, None] + offsets[None, :]).flatten()
+    if signed:
+        steps = torch.cat([steps, -steps])
+    steps = steps.to(pt_input_dtype)
+    if tt_output_dtype == ttnn.uint16:
+        values, expected = _uint16_edge_cases(pt_input_dtype)
+    else:
+        values, expected = steps[:0], torch.zeros(0, dtype=torch.int64)
+    fill = TILE_HEIGHT * TILE_WIDTH - values.numel()
+    steps = steps.repeat((fill + steps.numel() - 1) // steps.numel())[:fill]
+    values = torch.cat([values, steps])
+    expected = torch.cat([expected, torch.trunc(steps.float()).to(torch.int64)])
+    shape = (1, 1, TILE_HEIGHT, TILE_WIDTH)
+    return values.reshape(shape), expected.reshape(shape)
+
+
+@pytest.mark.parametrize(
+    "tt_output_dtype, signed",
+    [
+        (ttnn.uint8, False),
+        (ttnn.int8, True),
+        (ttnn.uint16, False),
+        (ttnn.uint32, False),
+        (ttnn.int32, True),
+    ],
+)
+@pytest.mark.parametrize(
+    "pt_input_dtype, tt_input_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("memory_config", mem_configs)
+def test_typecast_rounding_fractional(tt_output_dtype, signed, pt_input_dtype, tt_input_dtype, memory_config, device):
+    """float -> integer typecast truncates toward zero. The float32 source takes the 32-bit
+    Dest path of the uint16 kernel and the bfloat16 source the 16-bit one."""
+    torch_input, expected = _fractional_typecast_stimulus(signed, pt_input_dtype, tt_output_dtype)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=tt_input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    result = ttnn.to_torch(ttnn.typecast(input_tensor, tt_output_dtype))
+
+    assert_integer_typecast_equal(expected, result)
