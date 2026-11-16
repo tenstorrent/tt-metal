@@ -1485,6 +1485,7 @@ jobs:
                           "deepseek-v3-tg",
                           "deepseek-v3-b1",
                           "z-image-turbo",
+                          "ideogram-4",
                           "resnet50"
                         ],
                         "type": "string"
@@ -2014,7 +2015,7 @@ jobs:
                           "mobilenetv3",
                           "retinanet",
                           "ssd512",
-                          "vadv2",
+                          "vadv1",
                           "openpdn-mnist",
                           "yunet",
                           "xtts-v2",
