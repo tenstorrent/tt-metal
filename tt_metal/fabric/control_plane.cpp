@@ -1656,6 +1656,7 @@ void ControlPlane::configure_routing_tables_for_fabric_flat_address() {
 
     for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         auto routing_table = this->init_fabric_flat_address_routing_table_(src_node);
+        routing_table.atomic_window_offset = this->fabric_flat_address_routing_table_generator_->get_atomic_window_offset();
 
         for (const auto& [dst_node, dst_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
             // Index by physical chip ID — the kernel receives dst_dev_id as the physical chip ID.

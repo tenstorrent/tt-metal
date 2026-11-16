@@ -63,6 +63,7 @@ void FabricFlatAddressRoutingTableGenerator::generate_routing_table() {
         }
     }
 
+    this->atomic_window_offset_.reset();
     this->routing_table_.assign(
         MAX_HORIZON_MESHES,
         std::vector<std::vector<FlatAddrEntry>>(
@@ -109,7 +110,7 @@ void FabricFlatAddressRoutingTableGenerator::fill_local_entries_(FlatAddrEntry& 
 }
 
 void FabricFlatAddressRoutingTableGenerator::fill_cross_chip_entries_(
-    FlatAddrEntry& entry, ChipId dst_phys, tt::umd::TTDevice& dst_device, size_t ap_idx) const {
+    FlatAddrEntry& entry, ChipId dst_phys, tt::umd::TTDevice& dst_device, size_t ap_idx) {
     const auto access_points = dst_device.get_access_points();
     // The flat address to reach core (x, y) on a destination chip is the same regardless of which source chip is
     // computing it. The devices' NOC2AXI ATTs differ; it holds because a flat address is the destination NOC2AXI's
@@ -134,6 +135,24 @@ void FabricFlatAddressRoutingTableGenerator::fill_cross_chip_entries_(
         // Through GLOBAL with exit bit 0, so the write leaves the sender's device through NOC2AXI (0,2); a kernel
         // can set the exit bit to leave through (1,2) instead.
         entry.flat_addr[core.x][core.y] = HORIZON_GLOBAL_WINDOW_COMPARE | *flat;
+
+        const auto atomic = dst_device.get_flat_address(
+            access_points[ap_idx],
+            core,
+            tt::umd::WindowFlags::UnicastWrite | tt::umd::WindowFlags::Atomic,
+            tt::umd::IoOrdering::Posted,
+            /*offset=*/0);
+        const uint64_t atomic_offset = atomic.has_value() ? *atomic - *flat : 0;
+        // The kernel's routing table holds one offset for all destinations.
+        TT_FATAL(
+            this->atomic_window_offset_.value_or(atomic_offset) == atomic_offset,
+            "Core ({}, {}) on chip {} has its posted-atomic window at offset {:#x}, other cores at {:#x}",
+            core.x,
+            core.y,
+            dst_phys,
+            atomic_offset,
+            *this->atomic_window_offset_);
+        this->atomic_window_offset_ = atomic_offset;
     }
 }
 

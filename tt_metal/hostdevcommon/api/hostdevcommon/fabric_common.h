@@ -1152,7 +1152,9 @@ struct fabric_flat_address_routing_l1_info_t {
     uint8_t my_noc_x = 0;       // 1 B
     uint8_t my_noc_y = 0;       // 1 B
     uint16_t _pad0 = 0;         // 2 B (align to 8 bytes)
-    uint64_t _reserved = 0;     // 8 B (reserved for future offset/window field)
+    // 8 B: added to a cross-chip flat_addr entry, it gives the same L1 word's posted-atomic address, where a
+    // write increments the word by the written value. 0 when the devices have no atomic window.
+    uint64_t atomic_window_offset = 0;
     // ---- routing table: 2688 bytes ----
     uint64_t flat_addr[MAX_HORIZON_MESHES][MAX_HORIZON_DEVS_PER_MESH][MAX_HORIZON_NOC_X][MAX_HORIZON_NOC_Y] = {};
 };

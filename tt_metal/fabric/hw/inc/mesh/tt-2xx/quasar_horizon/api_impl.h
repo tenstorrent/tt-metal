@@ -35,6 +35,38 @@ static constexpr uint64_t HORIZON_ATT_OFFSET_MASK = (uint64_t(1) << HORIZON_ATT_
 
 // FABRIC_MAX_PACKET_SIZE is available via macro from addrgen_api.h
 
+// Where a fabric command's noc_address goes: the routing table's entry for the core it names on
+// (dst_mesh_id, dst_dev_id), and the offset within that core. The entry is a REMOTE address on the
+// sender's own device and a GLOBAL one on any other.
+struct HorizonRoute {
+    uint64_t base;
+    uint64_t local_offset;
+};
+
+FORCE_INLINE HorizonRoute horizon_route(uint64_t noc_addr, uint8_t dst_dev_id, uint16_t dst_mesh_id) {
+    // noc_addr is a flat ATT address: REMOTE_WINDOW.compare | (selector << HORIZON_ATT_ENDPOINT_SHIFT) | offset
+    const uint32_t selector = static_cast<uint32_t>((noc_addr >> HORIZON_ATT_ENDPOINT_SHIFT) & 0x3F);
+    const uint32_t tile_x = selector % HORIZON_ATT_WORKER_GRID_X;
+    const uint32_t tile_y = selector / HORIZON_ATT_WORKER_GRID_X;
+
+    ASSERT(dst_mesh_id < tt::tt_fabric::MAX_HORIZON_MESHES);
+    ASSERT(dst_dev_id < tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
+    ASSERT(tile_x < HORIZON_ATT_WORKER_GRID_X);
+    ASSERT(tile_y < tt::tt_fabric::MAX_HORIZON_NOC_Y);
+    const auto* routing_table =
+        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_flat_address_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    // flat_addr[mesh][dev_id][noc_x_within_dev][noc_y_within_dev]
+    const uint64_t base = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y];
+    // Zero base means an unfilled routing table slot.
+    ASSERT(base != 0);
+    return {base, noc_addr & HORIZON_ATT_OFFSET_MASK};
+}
+
+FORCE_INLINE bool horizon_is_global(uint64_t addr) {
+    return (addr >> tt::tt_fabric::HORIZON_GLOBAL_WINDOW_MASK_BITS) ==
+           (tt::tt_fabric::HORIZON_GLOBAL_WINDOW_COMPARE >> tt::tt_fabric::HORIZON_GLOBAL_WINDOW_MASK_BITS);
+}
+
 template <typename FabricSenderType, bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -48,27 +80,10 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     [[maybe_unused]] auto* _ci = client_interface;
     [[maybe_unused]] auto* _ph = packet_header;
 
-    const uint64_t noc_addr = noc_unicast_command_header.noc_address;
-    // noc_addr is a flat ATT address: REMOTE_WINDOW.compare | (selector << HORIZON_ATT_ENDPOINT_SHIFT) | offset
-    const uint64_t local_offset = noc_addr & HORIZON_ATT_OFFSET_MASK;
-    const uint32_t selector = static_cast<uint32_t>((noc_addr >> HORIZON_ATT_ENDPOINT_SHIFT) & 0x3F);
-    const uint32_t tile_x = selector % HORIZON_ATT_WORKER_GRID_X;
-    const uint32_t tile_y = selector / HORIZON_ATT_WORKER_GRID_X;
-
-    ASSERT(dst_mesh_id < tt::tt_fabric::MAX_HORIZON_MESHES);
-    ASSERT(dst_dev_id < tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
-    ASSERT(tile_x < HORIZON_ATT_WORKER_GRID_X);
-    ASSERT(tile_y < tt::tt_fabric::MAX_HORIZON_NOC_Y);
-    const auto* routing_table =
-        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_flat_address_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-    // flat_addr[mesh][dev_id][noc_x_within_dev][noc_y_within_dev]
-    const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y] + local_offset;
-
+    const HorizonRoute route = horizon_route(noc_unicast_command_header.noc_address, dst_dev_id, dst_mesh_id);
     // A cross-chip entry is a tile's 4 MB slot of flat addresses, its whole L1.
-    ASSERT(local_offset + size <= (1u << 22));
-    // Zero base means an unfilled routing table slot.
-    ASSERT(remote_addr - local_offset != 0);
-    noc_async_write(src_addr, remote_addr, size);
+    ASSERT(route.local_offset + size <= (1u << 22));
+    noc_async_write(src_addr, route.base + route.local_offset, size);
 }
 
 template <bool SetRoute>
@@ -132,8 +147,22 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
-    /* TODO: To be implemented (tracked in issue #63264) */
-    ASSERT(false);
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+    [[maybe_unused]] auto* _ci = client_interface;
+    [[maybe_unused]] auto* _ph = packet_header;
+    const HorizonRoute route = horizon_route(noc_unicast_atomic_inc_command_header.noc_address, dst_dev_id, dst_mesh_id);
+    const uint32_t val = noc_unicast_atomic_inc_command_header.val;
+    if (!horizon_is_global(route.base)) {
+        // On the sender's own device, the NoC increments the word itself.
+        noc_semaphore_inc(route.base + route.local_offset, val);
+        return;
+    }
+    // Another device's word: the NOC2AXI it is reached through turns a write to its posted-atomic window into an
+    // increment by the written value.
+    const auto* routing_table =
+        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_flat_address_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    ASSERT(routing_table->atomic_window_offset != 0);
+    noc_inline_dw_write(route.base + routing_table->atomic_window_offset + route.local_offset, val);
 }
 
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(

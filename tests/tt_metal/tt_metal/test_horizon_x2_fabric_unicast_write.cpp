@@ -185,6 +185,63 @@ void expect_fabric_unicast_write_with_checker(
     EXPECT_EQ(result[0], 1u) << "checker failed on chip " << target << ": 0x" << std::hex << result[0];
 }
 
+
+// Adds FABRIC_ATOMIC_INC_VALUE to a word of the target core's L1 FABRIC_ATOMIC_INC_COUNT times through
+// fabric_unicast_noc_unicast_atomic_inc(), then expects the word to hold their sum.
+constexpr uint32_t FABRIC_ATOMIC_INC_COUNT = 4;
+constexpr uint32_t FABRIC_ATOMIC_INC_VALUE = 3;
+
+void expect_fabric_atomic_inc(
+    distributed::MeshDevice& src_device,
+    distributed::MeshDevice& tgt_device,
+    ChipId source,
+    ChipId target,
+    const CoreCoord& src_logical_core = CoreCoord{0, 0},
+    const CoreCoord& tgt_logical_core = CoreCoord{0, 0}) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    auto counter_buf = fabric_unicast_2dev_l1_buffer(tgt_device, tgt_logical_core);
+    const CoreCoord tgt_core =
+        cluster.get_virtual_coordinate_from_logical_coordinates(target, tgt_logical_core, CoreType::WORKER);
+    std::vector<uint32_t> zeros(FABRIC_UNICAST_2DEV_WORDS, 0);
+    cluster.write_core(zeros.data(), FABRIC_UNICAST_2DEV_BYTES, tt_cxy_pair(target, tgt_core), counter_buf->address());
+
+    const NodeCoord src_node = src_logical_core;
+    const KernelSpecName SENDER{"fabric_unicast_atomic_inc_sender"};
+    ProgramSpec sender_spec{
+        .name = "horizon_fabric_unicast_atomic_inc_sender",
+        .kernels = {KernelSpec{
+            .unique_id = SENDER,
+            .source = OVERRIDE_KERNEL_PREFIX
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_fabric_unicast_atomic_inc_sender.cpp",
+            .num_threads = 1,
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"dst_l1_addr", "dst_noc_x", "dst_noc_y", "dst_dev_id", "count", "value"}},
+            .hw_config = DataMovementHardwareConfig{},
+        }},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {SENDER}, .target_nodes = src_node}},
+    };
+    Program sender_prog = experimental::MakeProgramFromSpec(src_device, sender_spec);
+    ProgramRunArgs sender_run_args;
+    sender_run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = SENDER,
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            src_node,
+            {{"dst_l1_addr", counter_buf->address()},
+             {"dst_noc_x", static_cast<uint32_t>(tgt_core.x)},
+             {"dst_noc_y", static_cast<uint32_t>(tgt_core.y)},
+             {"dst_dev_id", static_cast<uint32_t>(target)},
+             {"count", FABRIC_ATOMIC_INC_COUNT},
+             {"value", FABRIC_ATOMIC_INC_VALUE}}),
+    }};
+    experimental::SetProgramRunArgs(sender_prog, sender_run_args);
+    distributed::MeshWorkload sender_workload;
+    sender_workload.add_program(distributed::MeshCoordinateRange(src_device.shape()), std::move(sender_prog));
+    distributed::EnqueueMeshWorkload(src_device.mesh_command_queue(), sender_workload, true);
+
+    std::vector<uint32_t> counter(1, 0);
+    cluster.read_core(counter.data(), sizeof(uint32_t), tt_cxy_pair(target, tgt_core), counter_buf->address());
+    EXPECT_EQ(counter[0], 12u) << "on chip " << target;
+}
 }  // namespace
 
 TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWrite) {
@@ -237,4 +294,25 @@ TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteUpperL
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }
     expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[1], 0, 1, {0, 0}, {0, 0}, true);
+}
+
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricAtomicInc) {
+    if (!fabric_unicast_2dev_available()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    expect_fabric_atomic_inc(*devices_[0], *devices_[1], 0, 1);
+}
+
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricAtomicIncReverse) {
+    if (!fabric_unicast_2dev_available()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    expect_fabric_atomic_inc(*devices_[1], *devices_[0], 1, 0);
+}
+
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricAtomicIncOwnDevice) {
+    if (!fabric_unicast_2dev_available()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    expect_fabric_atomic_inc(*devices_[0], *devices_[0], 0, 0, {1, 0}, {0, 0});
 }
