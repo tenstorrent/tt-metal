@@ -10,8 +10,9 @@ namespace ttnn::experimental::deepseek {
 ttnn::Tensor all_gather_for_matmul(
     const ttnn::Tensor& input_tensor,
     const CoreRangeSet& output_core_range_set,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return ttnn::prim::all_gather_for_matmul(input_tensor, output_core_range_set, optional_output_tensor);
+    const std::optional<Tensor>& optional_output_tensor,
+    uint32_t num_groups) {
+    return ttnn::prim::all_gather_for_matmul(input_tensor, output_core_range_set, optional_output_tensor, num_groups);
 }
 
 }  // namespace ttnn::experimental::deepseek

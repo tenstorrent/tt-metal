@@ -14,6 +14,7 @@ namespace ttnn::experimental::deepseek {
 ttnn::Tensor all_gather_for_matmul(
     const ttnn::Tensor& input_tensor,
     const CoreRangeSet& output_core_range_set,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    uint32_t num_groups = 1);
 
 }  // namespace ttnn::experimental::deepseek

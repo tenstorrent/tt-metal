@@ -399,6 +399,38 @@ def test_batched_o_a_rows(device, rows, l1):
         assert p_ref > 0.99 and p_one > 0.9995
 
 
+def test_batched_o_a_from_gather(device):
+    """The model's chain: flash_mqa's (4, 32) block ``[4, batch * K]`` on core (0, 0) ->
+    ``all_gather_for_matmul(num_groups=batch)`` (labelled ``[1, batch, cores * 4, K]``, shard ``[batch * 4, K]``) ->
+    batched o_a, equal to the hand-built replica."""
+    rows = 4
+    w, x, weight, a_grid, kwargs = oa_tensors(device, rows, l1=True)
+    batch, K, N = OA["batch"], OA["K"], OA["N"]
+    core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    block = ttnn.from_torch(
+        x.reshape(1, 1, rows, batch * K),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((rows, 32)),
+        device=device,
+        memory_config=shard_cfg((rows, batch * K), core, ttnn.ShardStrategy.HEIGHT),
+    )
+    gathered = ttnn.experimental.deepseek.all_gather_for_matmul(block, a_grid, num_groups=batch)
+    ncores = a_grid.num_cores()
+    assert list(gathered.shape) == [1, batch, ncores * rows, K], gathered.shape
+    assert list(gathered.memory_config().shard_spec.shape) == [batch * rows, K]
+    out = ttnn.experimental.matmul_decode(gathered, weight, **kwargs)
+    got = out_rows(out, rows, batch * N)
+    ref_out = oa_block(device, x, weight, a_grid, kwargs)
+    ref_dev = out_rows(ref_out, rows, batch * N)
+    assert torch.equal(got, ref_dev), "gather-fed o_a differs from the hand-built replica"
+    ref = torch.einsum("rbk,bkn->rbn", x.float(), w.float()).reshape(rows, batch * N)
+    for j in range(rows):
+        p_ref = min(pcc(ref[j], g[j]) for g in got)
+        logger.info(f"o_a from gather row {j}: pcc vs torch {p_ref:.5f}")
+        assert p_ref > 0.99
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Profile: S = 1 (ROW_MAJOR) vs S = 4 ((4, 32) block) at the production configs.
 # ---------------------------------------------------------------------------------------------------------------------

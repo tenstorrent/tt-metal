@@ -37,6 +37,9 @@ void bind_all_gather_for_matmul(nb::module_& mod) {
             * :attr:`input_tensor` (ttnn.Tensor): L1 WIDTH_SHARDED or single-core HEIGHT_SHARDED
               input in TILE or ROW_MAJOR layout
             * :attr:`output_core_range_set` (CoreRangeSet): receiver cores for the output
+            * :attr:`num_groups` (int): row-tile (h x 32) input only. Label the replica of the block
+              ``[h, G * Kg]`` as ``[1, G, num_output_cores * h, Kg]`` with shard ``[G * h, Kg]``: the same
+              bytes, as batched matmul_decode takes its replicated A (e.g. grouped o_a). Default 1.
 
         Returns:
             ttnn.Tensor: row-major height-sharded tensor with one complete input replica per core
@@ -48,7 +51,8 @@ void bind_all_gather_for_matmul(nb::module_& mod) {
         &ttnn::experimental::deepseek::all_gather_for_matmul,
         nb::arg("input_tensor").noconvert(),
         nb::arg("output_core_range_set"),
-        nb::arg("output_tensor").noconvert() = nb::none());
+        nb::arg("output_tensor").noconvert() = nb::none(),
+        nb::arg("num_groups") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::all_gather_for_matmul::detail
