@@ -1285,9 +1285,9 @@ template std::pair<std::string, std::string> get_op_init_and_func<std::uint32_t>
 // uint32_t backed (EltwiseUnaryWithParam constructed with integers, also from Python); read the active
 // alternative. nullopt if the op has fewer than two parameters.
 std::optional<DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op) {
-    constexpr std::size_t kTargetDtypeParam = 1;
     return std::visit(
         [](auto params) -> std::optional<DataType> {
+            constexpr std::size_t kTargetDtypeParam = 1;
             if (params.size() <= kTargetDtypeParam) {
                 return std::nullopt;
             }
