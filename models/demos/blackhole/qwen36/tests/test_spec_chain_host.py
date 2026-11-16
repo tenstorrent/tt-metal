@@ -1084,3 +1084,215 @@ def test_the_chain_decides_with_the_withheld_slots_where_the_rows_move(chained):
     _chained_verify(eng, res0, upper, [K] * B, slot_remap=src)
     assert (eng.chained_steps, eng.materialized_steps) == (0, 1) and "chain" not in log["traces"]
     assert eng._no_draft == {3}, "B's withheld slot moved to row 3 with B"
+
+
+# ----------------------------------------------------------------------------------------- prefill behind a verify
+
+
+def _prefill_into(eng, log, slot, end, delta):
+    """The engine calls of Qwen36MTPContractForCausalLM.prefill_forward for a prompt of ``end`` tokens that ends in state
+    slot ``slot``, in its order: settle the verifies still to propose, the prefill's device work (logged as "prefill"),
+    the prompt's M-RoPE delta that prefill_hook keeps for the slot, finish_prefill."""
+    eng.prefill_over_pending([slot])
+    log["traces"].append("prefill")
+    eng._rope_deltas[slot] = delta
+    eng.finish_prefill(slot, end, True)
+
+
+def _join_run(eng, log, state, order, into, host_drafted=False):
+    """Verify v0 of the requests in rows 0 .. 3 (A, B, C, D; with ``into`` "free..." D is absent and slot 3 is free),
+    then J joins: B finishes and J is prefilled into B's released slot 1 ("released"), J takes the free slot 3
+    ("free"), or B finishes and J takes the free slot 3 ("free+release").
+    ``order``: "drained" (v0 read and proposed, then the release and J's prefill: today's release step) or "overlap"
+    (the release and J's prefill, then v0 read and proposed: supports_prefill_over_pending_spec). Then verify v1 of
+    the rows after the join, J's first, and its propose. ``host_drafted``: C's window leaves the paged KV at some counts,
+    so v0 runs no device drafter. Returns what both orders must give alike."""
+    B, T, K = eng.B, eng.T, eng.K
+    eng.no_draft_streak = 1
+    eng._no_draft = {0 if host_drafted else 2}  # the runner withholds A's or C's drafts
+    eng._rope_deltas = [0, -7, 3, 5]
+    eng._mtp_pt_rows = [f"pt_row{u}" for u in range(B)]
+    eng._warm_mtp_last = lambda *a: log.setdefault("warm", []).append(a)
+    live0 = [True, True, True, into == "released"]
+    released = None if into == "free" else 1
+    if not live0[3]:
+        eng._active = {0, 1, 2}
+    tokens0 = torch.tensor([[1, 7, 8, 9], [2, 11, 12, 13], [3, 21, 22, 23], [4, 31, 32, 4]])
+    starts0, nv0 = [100, 200, 300, 400 if live0[3] else -1], [3, 3, 3, 2 if live0[3] else 0]
+    if host_drafted:
+        starts0[2] = eng.nb * eng.block_size - 1 - K - 2
+    walk0 = torch.tensor([[7, 8, 50, 51], [11, 60, 61, 62], [5, 5, 5, 5], [31, 32, 70, 71]])
+    tokens0[~torch.tensor(live0)] = 0
+    walk0[~torch.tensor(live0)] = 0
+    state["ids"] = [walk0, torch.tensor([[int(state["drafts"][0][0]), 9, 9, 9], [6, 6, 6, 6], [5, 5, 5, 5], [8] * 4])]
+    slot, end, delta = (1, 77, 11) if into == "released" else (3, 55, -4)
+    gone = released is not None and released != slot
+    res0 = _host_verify(eng, tokens0, starts0, nv0)
+    assert (res0.argmax_ids.plan is None) == host_drafted
+    committed0, counts0 = _walk(res0, tokens0, nv0)
+    starts_p = [s if s >= 0 else -1 for s in starts0]
+    if order == "drained":
+        out0 = _propose(eng, starts_p, committed0, counts0)
+        if released is not None:
+            eng.release(released)
+        _prefill_into(eng, log, slot, end, delta)
+    else:
+        if released is not None:
+            eng.release(released)
+        _prefill_into(eng, log, slot, end, delta)
+        out0 = _propose(eng, starts_p, committed0, counts0)
+    joined = _slot_state(eng)
+    # v1: J's first verify (its first token, no drafts) beside the rows that continue from v0.
+    block1 = torch.zeros(B, T, dtype=torch.int64)
+    starts1, nv1, acc1 = [-1] * B, [0] * B, [1] * B
+    for u in range(B):
+        if u == slot:
+            block1[u], starts1[u] = 40, end
+        elif live0[u] and not (host_drafted and u == 2) and not (gone and u == released):
+            c, n = int(counts0[u]), int(out0.num_valid[u])
+            block1[u] = int(committed0[u, c - 1])
+            block1[u, 1 : n + 1] = out0.draft_token_ids[u, :n].to(torch.int64)
+            starts1[u], nv1[u], acc1[u] = starts0[u] + c, n, c
+    res1 = eng.decode_forward(
+        block1,
+        torch.tensor([[p + j if p >= 0 else -1 for j in range(T)] for p in starts1]),
+        num_valid_drafts=torch.tensor(nv1, dtype=torch.int32),
+        accepted_counts=torch.tensor(acc1, dtype=torch.int32),
+        page_table=torch.arange(1, B * eng.nb + 1, dtype=torch.int32).reshape(B, eng.nb),
+        spec_mode="argmax_ids",
+        mamba_state=_mamba(eng),
+        defer=True,
+    )
+    e = log["enqueue"][-1]
+    after_verify = _slot_state(eng)
+    committed1, counts1 = _walk(res1, block1, nv1)
+    out1 = _propose(eng, starts1, committed1, counts1)
+    assert not eng._pending
+    return dict(
+        drafts0=out0.draft_token_ids.tolist(),
+        offered0=out0.num_valid.tolist(),
+        host_packs0=[h.tolist() for b, h in log["staged"] if b == "pack"],
+        joined=joined,
+        warm=log["warm"][-1],
+        tokens1=e.tokens,
+        positions1=e.positions,
+        accept1=e.accept,
+        deltas1=e.kw["rope_deltas"],
+        step_words1=_host_step_words(e, B, T).tolist(),
+        after_verify=after_verify,
+        counts1=counts1.tolist(),
+        drafts1=out1.draft_token_ids.tolist(),
+        offered1=out1.num_valid.tolist(),
+        after_propose=_slot_state(eng),
+    )
+
+
+@pytest.mark.parametrize("into", ["released", "free", "free+release"])
+def test_a_prefill_behind_an_unread_verify_equals_the_drained_order(make_chained, into):
+    """J's prefill runs between a one-enqueue verify and its propose, into the slot of a request of that verify that
+    finished and was released, or into a free slot (while another request of the verify finished, or none). The
+    propose returns the device drafts, decided with the verify's own snapshots, and leaves J's slot and a released one
+    out of the offer: the drafts, the per-slot state (offered,
+    withheld, streaks, speculated, M-RoPE deltas, fresh and active slots), J's first verify (its drafter KV warm, the
+    staged block, positions and acceptance rows, every word of the step buffer) and its propose equal the drained
+    order's (the verify read and proposed before the release and the prefill)."""
+    results = {}
+    for order in ("drained", "overlap"):
+        eng, log, state = make_chained()
+        results[order] = _join_run(eng, log, state, order, into)
+        if order == "overlap":
+            assert eng.prefills_over_pending == 1 and eng.one_enqueue_host_proposes == 0
+            assert log["traces"].count("drafter") == 2, "no drafter replay besides the verifies' own"
+    want = results["drained"]
+    slot = 1 if into == "released" else 3
+    assert want["joined"]["fresh"] == {slot: 77 if into == "released" else 55} and slot not in want["joined"]["offered"]
+    assert want["warm"][-1] == (
+        11 if into == "released" else -4
+    ), "J's first verify warms its drafter KV with its delta"
+    for key in want:
+        assert results["overlap"][key] == want[key], f"{key}: overlap {results['overlap'][key]} != drained {want[key]}"
+
+
+def test_a_verify_without_a_device_drafter_proposes_before_the_prefill(make_chained):
+    """A verify that ran no device drafter would draft on the host from the verify trace's outputs, which a prefill
+    may overwrite: the engine reads, walks and proposes it before the prefill's device work (its drafter replay comes
+    before the prefill, one wait), in its rows with the withheld slots and M-RoPE deltas it ran with although B's slot
+    was released first, and the runner's later propose returns that result. The drafts, the drafter pack staged for the
+    host drafter and the state equal the drained order's."""
+    results = {}
+    for order in ("drained", "overlap"):
+        eng, log, state = make_chained()
+        results[order] = _join_run(eng, log, state, order, "released", host_drafted=True)
+        traces = log["traces"]
+        assert traces.index("drafter") < traces.index("prefill"), traces
+        if order == "overlap":
+            assert eng.prefills_over_pending == 1
+    want = results["drained"]
+    assert len(want["host_packs0"]) == 1 and want["offered0"][0] == 0 and want["offered0"][2] == 3
+    for key in want:
+        assert results["overlap"][key] == want[key], f"{key}: overlap {results['overlap'][key]} != drained {want[key]}"
+
+
+def test_a_propose_behind_a_prefill_that_needs_the_host_drafter_raises(chained, expect_error):
+    """After a prefill behind a verify only the device's drafts remain: a runner commit shorter than the device's walk
+    (which drafts again on the host otherwise), a propose that decides differently, a verify read on the host (a narrow
+    or logits verify) and a chained verify over that verify raise; so does a prefill into a slot whose request a verify
+    still to propose holds."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    tokens0 = torch.tensor([[1, 7, 8, 9]] * B)
+    starts0, nv0 = [100, 200, 300, 400], [3] * B
+    ids0 = torch.tensor([[7, 8, 9, 10]] * B)
+
+    state["ids"] = [ids0]
+    res0 = _host_verify(eng, tokens0, starts0, nv0)
+    with expect_error(ValueError, "hold requests of a verify still to propose"):
+        eng.prefill_over_pending([2])
+    assert not res0.argmax_ids.prefill_behind
+    eng.release(2)
+    _prefill_into(eng, log, 2, 50, 0)
+    committed, counts = _walk(res0, tokens0, nv0)
+    counts, committed = counts.clone(), committed.clone()
+    counts[1], committed[1, 1:] = 1, -1
+    with expect_error(ValueError, "a prefill ran behind the verify, and only the device's drafts remain"):
+        _propose(eng, starts0, committed, counts)
+
+    state["ids"] = [ids0]
+    eng._active, eng._fresh = set(range(B)), {}
+    res0 = _host_verify(eng, tokens0, starts0, nv0)
+    eng.release(3)
+    _prefill_into(eng, log, 3, 50, 0)
+    committed, counts = _walk(res0, tokens0, nv0)
+    positions = torch.tensor([[s + 1 + j for j in range(T)] for s in starts0])
+    other = torch.arange(2, B * eng.nb + 2, dtype=torch.int32).reshape(B, eng.nb)
+    with expect_error(ValueError, "the propose after a verify a prefill ran behind decides differently"):
+        eng.propose_draft_tokens(K, committed, positions, counts, page_table=other)
+
+    state["ids"] = [ids0]
+    eng._active, eng._fresh = set(range(B)), {}
+    res0 = _host_verify(eng, tokens0, starts0, nv0)
+    eng.release(0)
+    _prefill_into(eng, log, 0, 50, 0)
+    with expect_error(ValueError, "a prefill ran behind spec_predecessor"):
+        _chained_verify(eng, res0, [-1] + [s + T for s in starts0[1:]], [K] * B)
+
+    eng._active, eng._fresh = set(range(B)), {}
+    state["ids"] = [ids0]
+    host_read = eng.decode_forward(
+        tokens0,
+        torch.tensor([[s + j for j in range(T)] for s in starts0]),
+        num_valid_drafts=torch.tensor(nv0, dtype=torch.int32),
+        accepted_counts=torch.ones(B, dtype=torch.int32),
+        page_table=torch.arange(1, B * eng.nb + 1, dtype=torch.int32).reshape(B, eng.nb),
+        spec_mode="argmax_ids",
+        mamba_state=_mamba(eng),
+        one_enqueue=False,
+    )
+    assert isinstance(host_read.argmax_ids, torch.Tensor) and eng._pending[-1].reads is None
+    eng.release(1)
+    _prefill_into(eng, log, 1, 50, 0)
+    committed, counts = accept_greedy_drafts(
+        host_read.argmax_ids, tokens0[:, 1:].to(torch.int32), torch.tensor(nv0, dtype=torch.int32)
+    )
+    with expect_error(ValueError, "a prefill ran behind a verify read on the host"):
+        _propose(eng, starts0, committed, counts)
