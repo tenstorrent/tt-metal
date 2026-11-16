@@ -21,7 +21,9 @@ asynchronous scheduling, twice on the same blocks: once reading every verify bef
 verify over the unread one (supports_chained_spec_verify), across block boundaries; the committed tokens, counts and
 GDN states must be equal bit for bit. test_a_chained_run_across_row_moves_equals_a_drained_run does the same while
 requests leave middle rows (finished, or left out by vLLM with their slots held) and the runner moves the last row
-into theirs (slot_remap).
+into theirs (slot_remap). test_a_prefill_behind_an_unread_verify_equals_the_drained_order prefills joining requests
+while a verify is unread (supports_prefill_over_pending_spec), into a free slot and into the slot of a request that
+finished, against the drained order.
 
     MESH_DEVICE=P150x8 HF_MODEL=<Qwen3.8-27B dir> pytest models/demos/blackhole/qwen36/tests/test_mtp_gdn_blocks.py
 """
@@ -584,10 +586,16 @@ def _walk(drafts, ids):
     return j + 1
 
 
-def _condense(order, gone):
-    """vLLM's InputBatch.condense of the rows ``order`` (a request per row) less the requests ``gone``: each empty row,
-    lowest first, takes the request of the last occupied row behind it."""
+def _condense(order, gone, joining=()):
+    """vLLM's rows after a step that drops the requests ``gone`` from the rows ``order`` (a request per row) and adds
+    the requests ``joining``: each joining request takes the lowest empty row, else a new last row; then
+    InputBatch.condense moves the request of the last occupied row into each row still empty, lowest first."""
     rows = [q if q not in gone else None for q in order]
+    for q in joining:
+        if None in rows:
+            rows[rows.index(None)] = q
+        else:
+            rows.append(q)
     while None in rows:
         hole = rows.index(None)
         last = max((i for i, q in enumerate(rows) if q is not None), default=-1)
@@ -597,7 +605,7 @@ def _condense(order, gone):
     return [q for q in rows if q is not None]
 
 
-def _async_run(pair, prompts, chained, hint, steps, leave=None):
+def _async_run(pair, prompts, chained, hint, steps, leave=None, joins=None):
     """Run ``prompts`` {request: tokens} through Qwen36MTPContractForCausalLM as vllm-tt-plugin runs them under
     asynchronous scheduling in mode "align": a prefill per request into the row and state slot of its key, one ordinary
     [B, 1] decode of all rows, then ``steps`` verifies. vLLM schedules each verify after the first while the one before
@@ -615,6 +623,12 @@ def _async_run(pair, prompts, chained, hint, steps, leave=None):
     slots of no row (held or free) at its tail in slot order, as vllm-tt-plugin's _decode_state_slot_remap does; a
     chained verify then continues row i from the predecessor's row slot_remap[i].
 
+    ``joins`` {verify k: {request: prompt}}: requests that start before verify k: each is prefilled into the lowest free
+    state slot (its new state blocks zeroed first) and decodes from verify k in the row vLLM gives it. The chained run
+    prefills while verify k - 1 is unread and reads, walks and proposes verify k - 1 after the prefill
+    (supports_prefill_over_pending_spec); the drained run does so before the prefill. Either way verify k, the joining
+    request's first, is built from the host.
+
     Returns (per verify {request: (column-0 position, committed tokens)}, per request still in the batch the GDN state
     of its last committed count, {predecessor count: chained verifies whose window begins one column past the column of
     their last query token}, the number of chained verifies with a slot_remap that the chain program built)."""
@@ -622,19 +636,40 @@ def _async_run(pair, prompts, chained, hint, steps, leave=None):
     spec, kv = pair.spec, pair.kv_spec
     engine = spec._engine()
     blocks = SpecBlocks(pair.layout, K, "align", free=range(1 + B * pair.bpu, pair.layout.num_blocks))
-    leave = leave or {}
+    leave, joins = leave or {}, joins or {}
     order = sorted(prompts)  # the request in each row of the last verify submitted
     slot_of = {q: q for q in order}  # the state slot of each request that holds one
+    page_row = {q: q for q in order}  # each request's attention blocks: pair.pages(page_row[q])
 
     def table(order):
         pt = torch.zeros(B, pair.bpu, dtype=torch.int32)
         for row, q in enumerate(order):
-            pt[row] = pair.pages(q)
+            pt[row] = pair.pages(page_row[q])
         return pt
 
     def release(q):
         spec.release_request(slot_of.pop(q))
         blocks.release(q)
+        page_row.pop(q)
+
+    def join(q, prompt):
+        """Prefill request q into the lowest free state slot and attention blocks; returns its first token."""
+        slot = min(set(range(B)) - set(slot_of.values()))
+        slot_of[q], page_row[q] = slot, min(set(range(B)) - set(page_row.values()))
+        blocks.admit(q)
+        dest, starts = blocks.prefill(q, 0, len(prompt))
+        spec.zero_kv_cache_blocks(kv, dest)
+        state = blocks.state({slot: (dest, starts)}, B, intermediate=())
+        logits, _ = spec.prefill_forward(
+            torch.tensor([prompt], dtype=torch.int64),
+            pair.pages(page_row[q]).reshape(1, -1),
+            kv,
+            [len(prompt)],
+            start_pos=[0],
+            empty_slots=[slot],
+            mamba_state=SliceRows(state, slot),
+        )
+        return int(logits[0, 0, :vocab].argmax())
 
     def slot_remap(rows):
         """The slot_remap of a verify of requests ``rows``; moves slot_of as the plugin settles it after the decode."""
@@ -748,15 +783,21 @@ def _async_run(pair, prompts, chained, hint, steps, leave=None):
 
     sel = {q: blocks.decode(q, cur[q][0], T) for q in order}
     out = submit(cur, order, sel, {q: 1 for q in order})
-    record, moved, remapped, held = [], {}, 0, []
+    record, moved, remapped, held, joining = [], {}, 0, [], {}
     for step in range(steps):
         last = step == steps - 1
         if not last:
-            gone = leave.get(step + 1, {})
-            rows = _condense(order, set(gone))
+            gone, joining = leave.get(step + 1, {}), joins.get(step + 1, {})
+            rows = _condense(order, set(gone), list(joining))
             leaving = held + [q for q, kind in gone.items() if kind == "finish"]
             held = [q for q, kind in gone.items() if kind == "skip"]
-        if chained and not last:
+        chain_now = chained and not last and not joining
+        if chained and joining and not last:
+            # The runner prefills over the unread verify, then reads, commits and proposes it.
+            for q in leaving:
+                release(q)
+            first = {q: join(q, prompt) for q, prompt in joining.items()}
+        if chain_now:
             # The runner releases the finished requests while it builds the step (TTModelRunner._update_states).
             for q in leaving:
                 release(q)
@@ -773,24 +814,32 @@ def _async_run(pair, prompts, chained, hint, steps, leave=None):
         record.append({q: (cur[q][0], commits[q]) for q in order})
         if last:
             break
-        if not chained:
-            hints = {q: hint(q, cur[q][0]) for q in rows}
+        if not chain_now:
+            hints = {q: hint(q, cur[q][0]) for q in rows if q not in joining}
         following_cur = {}
         for q in rows:
+            if q in joining:
+                continue
             p0, c = cur[q][0], counts[q]
             n = min(hints[q], offered[q])
             following_cur[q] = (p0 + c, [commits[q][-1]] + drafts[q][:n])
             if chained and (p0 + T + K) // bs != (p0 + c + K) // bs:
                 moved[c] = moved.get(c, 0) + 1
-        if not chained:
-            for q in leaving:
-                release(q)
+        if not chain_now:
+            if not chained:
+                for q in leaving:
+                    release(q)
+                first = {q: join(q, prompt) for q, prompt in joining.items()}
             remap = slot_remap(rows)
             sel = {}
             for q in rows:
-                blocks.commit(q, counts[q])
-                sel[q] = blocks.decode(q, following_cur[q][0], T, scheduled=cur[q][0] + T)
-            following = submit(following_cur, rows, sel, counts, remap=remap)
+                if q in joining:
+                    following_cur[q] = (len(joining[q]), [first[q]])
+                    sel[q] = blocks.decode(q, len(joining[q]), T)
+                else:
+                    blocks.commit(q, counts[q])
+                    sel[q] = blocks.decode(q, following_cur[q][0], T, scheduled=cur[q][0] + T)
+            following = submit(following_cur, rows, sel, {**counts, **{q: 1 for q in joining}}, remap=remap)
         out, cur, order = following, following_cur, rows
     states = {q: pair.state(pair.spec_model, [w[counts[q] - 1] for w in blocks.last[q]]) for q in order}
     for q in list(slot_of):
@@ -887,3 +936,56 @@ def test_a_chained_run_across_row_moves_equals_a_drained_run(mesh_device, monkey
                     assert torch.equal(rec_a, rec_b) and torch.equal(
                         hist_a, hist_b
                     ), f"{kind}: request {q} layer {layer} device {d}"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize_pair
+def test_a_prefill_behind_an_unread_verify_equals_the_drained_order(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """K = 3, mode "align", 1024-token blocks as served, supports_prefill_over_pending_spec. Requests 0, 1 and 2 decode
+    with chained verifies; state slot 3 is free. Request 4 joins into the free slot 3 while verify 5 is unread; later
+    request 1 (a middle row) finishes, its slot is released, and request 5 joins into that slot and row while verify 15,
+    in which request 1 is live, is unread. Each join prefills before the runner reads, commits and proposes the unread
+    verify, then submits the joining request's first verify from the host. The run equals the drained run (each unread
+    verify read and proposed before the release and the prefill): the committed tokens and counts of every verify,
+    the joining requests' tokens among them, and the GDN state of the last committed count of every request left, bit
+    for bit; both prefills went behind an unread verify, and that run compiles no program. QWEN36_PAIR_LAYERS sets the
+    layer count; run with TT_METAL_TRACE_ALLOC_TRACKING=1."""
+    K, steps = 3, 30
+    pair = Pair(mesh_device, monkeypatch, K, "align", n_layers=PAIR_LAYERS, block_size=1024)
+    pool = _prompts(6, 700, seed=47)
+    lens = {0: 300, 1: 421, 2: 517, 4: 333, 5: 610}
+    prompts = {q: pool[q][: lens[q]].tolist() for q in (0, 1, 2)}
+    joins = {6: {4: pool[4][: lens[4]].tolist()}, 16: {5: pool[5][: lens[5]].tolist()}}
+    leave = {16: {1: "finish"}}
+
+    def hint(q, p0):
+        return K if p0 % 5 else 1
+
+    engine = pair.spec._engine()
+    drained, drained_states, _, _ = _async_run(pair, prompts, False, hint, steps, leave, joins)
+    programs = mesh_device.num_program_cache_entries()
+    built = engine.prefills_over_pending, engine.chained_steps, engine.materialized_steps
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        overlapped, overlapped_states, _, _ = _async_run(pair, prompts, True, hint, steps, leave, joins)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    logger.info(
+        f"prefill behind an unread verify: {engine.prefills_over_pending - built[0]} prefills behind a verify still to "
+        f"propose; chained verifies built on the device {engine.chained_steps - built[1]}, from a read predecessor "
+        f"{engine.materialized_steps - built[2]}"
+    )
+    assert engine.prefills_over_pending - built[0] == 2, "each join prefilled behind an unread verify"
+    assert mesh_device.num_program_cache_entries() == programs, "a program compiled in the overlapped run"
+    assert len(drained) == len(overlapped) == steps
+    for step, (a, b) in enumerate(zip(drained, overlapped)):
+        assert a == b, f"verify {step}: drained {a}, prefill behind the unread verify {b}"
+    assert {4, 5} <= set(drained[16]) and 1 not in drained[16] and 1 in drained[15]
+    assert set(drained_states) == set(overlapped_states) == {0, 2, 4, 5}
+    for q in drained_states:
+        for layer, devices in drained_states[q].items():
+            for d, ((rec_a, hist_a), (rec_b, hist_b)) in enumerate(zip(devices, overlapped_states[q][layer])):
+                assert torch.equal(rec_a, rec_b) and torch.equal(
+                    hist_a, hist_b
+                ), f"request {q} layer {layer} device {d}"

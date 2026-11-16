@@ -12,7 +12,8 @@
   (GdnBlockState.ctrl_candidates) and the window equal those of the drained verify of the same step.
 * The device tests' asynchronous runner (test_mtp_gdn_blocks._async_run) against a stand-in of the model class that
   checks the plugin contract on every call: the chained and the drained run of the same requests agree, also while
-  requests leave middle rows and the runner sends slot_remap.
+  requests leave middle rows and the runner sends slot_remap, and while requests join with a prefill behind the
+  unread verify.
 * GdnBlockState.set_verify_blocks: one ctrl page and one index per MambaSpec group, bound per group at allocation.
 * MTPBlockEngine's bookkeeping: the drafter starts only after a prompt's last chunk, a row's first verify writes the
   drafter KV of the prompt's last position before the verify, and a row move moves no GDN state.
@@ -575,14 +576,15 @@ class _ContractModel:
     permutation applied before the step; a drained verify's tokens, positions and counts continue the slot's last
     verify; a chained row continues a live row of the predecessor whose slot was not released, at the placeholder
     positions of a full acceptance; a propose names the committed tokens of the oldest verify still to propose, in its
-    rows."""
+    rows; a prefill takes a free slot, and no verify chains over a verify a prefill went behind."""
 
     def __init__(self, B, K, vocab):
         self.B, self.K, self.T, self.vocab = B, K, K + 1, vocab
-        self.slots = [None] * B  # per slot: (inputs consumed, its last verify's row or None)
-        self.to_propose = []  # per verify still to propose: its rows {row: (inputs before it, block, ids)}
-        self.engine = SimpleNamespace(chained_steps=0, materialized_steps=0)
+        self.slots = [None] * B  # per slot: (inputs consumed, its last verify's row)
+        self.to_propose = []  # per verify still to propose: its rows {row: (inputs before it, block, ids, drafts)}
+        self.engine = SimpleNamespace(chained_steps=0, materialized_steps=0, prefills_over_pending=0)
         self.last = None
+        self.prefill_behind_last = False
 
     def _engine(self):
         return self.engine
@@ -596,18 +598,20 @@ class _ContractModel:
 
     def prefill_forward(self, tokens, page_table, kv, prompt_lens, start_pos, empty_slots, mamba_state):
         (slot,) = empty_slots
+        assert self.slots[slot] is None, f"a prefill into slot {slot}, which holds a request"
+        if self.to_propose:
+            self.engine.prefills_over_pending += 1
+            self.prefill_behind_last = True
         prompt = tokens[0, : prompt_lens[0]].tolist()
-        self.slots[slot] = (prompt, None)
+        first = _next_token(prompt, self.vocab)
+        self.slots[slot] = (prompt, (prompt, [], [first], 0))  # the prompt consumed, its first token next
         logits = torch.zeros(1, 1, self.vocab)
-        logits[0, 0, _next_token(prompt, self.vocab)] = 1
+        logits[0, 0, first] = 1
         return logits, None
 
     def _consumed(self, slot):
         """The slot's inputs after its last verify's commit, and the next input (the token at the walk's count)."""
-        seq, row = self.slots[slot]
-        if row is None:
-            return seq, None
-        base, block, ids, nv = row
+        base, block, ids, nv = self.slots[slot][1]
         c = _accept(block[1 : nv + 1], ids)
         return base + block[:c], ids[c - 1]
 
@@ -623,9 +627,9 @@ class _ContractModel:
             for r in range(B):
                 if int(start_pos[r]) < 0:
                     continue
-                seq, row = self.slots[r]
-                assert row is None and int(start_pos[r]) == len(seq)
+                seq, x = self._consumed(r)
                 tok = int(tokens[r, 0])
+                assert tok == x and int(start_pos[r]) == len(seq), f"row {r}: the token after the prefill"
                 rows[r] = (seq, [tok], [_next_token(seq + [tok], self.vocab)], 0)
                 self.slots[r] = (seq, rows[r])
                 out[r, 0, rows[r][2][0]] = 1
@@ -635,6 +639,7 @@ class _ContractModel:
         rows = {}
         if spec_predecessor is not None:
             assert spec_predecessor is self.last, "the predecessor is the last verify"
+            assert not self.prefill_behind_last, "a chained verify over a verify a prefill went behind"
             pred_rows = self.to_propose[-1]
             self.engine.chained_steps += 1
         for r in range(B):
@@ -661,6 +666,7 @@ class _ContractModel:
             rows[r] = (seq, block, ids, n)
             self.slots[r] = (seq, rows[r])
         self.to_propose.append(rows)
+        self.prefill_behind_last = False
         ids = torch.full((B, T), -1, dtype=torch.int64)
         for r, (_, _, i, _) in rows.items():
             ids[r, : len(i)] = torch.tensor(i)
@@ -734,3 +740,31 @@ def test_the_async_runner_without_moves_keeps_its_rows():
     hint = lambda q, p0: K
     runs = [_async_run(_contract_pair(), prompts, chained, hint, 20) for chained in (False, True)]
     assert runs[0][0] == runs[1][0] and runs[1][3] == 0
+
+
+def test_the_async_runner_prefills_joining_requests_as_the_plugin_does():
+    """test_mtp_gdn_blocks._async_run with joins on the contract stand-in: a request joins into the free slot 3, and
+    later one into the slot and row of a middle-row request that finished; the chained run prefills while the verify
+    before the join is unread (each prefill behind it) and builds the joining request's first verify from the host. It
+    equals the drained run, and the drained run prefills behind nothing."""
+    from models.demos.blackhole.qwen36.tests.test_mtp_gdn_blocks import _async_run, _condense
+
+    assert _condense([0, 1, 2], {1}, [5]) == [0, 5, 2] and _condense([0, 1, 2], set(), [4]) == [0, 1, 2, 4]
+    assert _condense([0, 1, 2, 4], {0, 1}, [5]) == [5, 4, 2]
+    K = 3
+    prompts = {q: list(range(10 + q, 60 + 7 * q)) for q in range(3)}
+    joins = {6: {4: list(range(3, 40))}, 16: {5: list(range(8, 70))}}
+    leave = {16: {1: "finish"}}
+    hint = lambda q, p0: K if p0 % 5 else 1
+    runs = {}
+    for chained in (False, True):
+        pair = _contract_pair()
+        runs[chained] = _async_run(pair, prompts, chained, hint, 30, leave, joins)
+        assert pair.spec.engine.prefills_over_pending == (2 if chained else 0)
+        assert all(s is None for s in pair.spec.slots)
+    drained, chained = runs[False][0], runs[True][0]
+    assert drained == chained
+    assert set(drained[6]) == {0, 1, 2, 4} and set(drained[16]) == {0, 5, 2, 4} and 1 in drained[15]
+    assert set(runs[False][1]) == set(runs[True][1]) == {0, 2, 4, 5}
+    for q in runs[False][1]:
+        assert torch.equal(runs[False][1][q][0][0][0], runs[True][1][q][0][0][0])
