@@ -339,6 +339,115 @@ def build_moe_layers(config, loader, moe_mesh, cache, layer_ids: Sequence[int], 
     return _cold_build(config, loader, moe_mesh, cache, layer_ids, log, manifest_path)
 
 
+# The DSpark drafter's stages, served as extra layers after the target's 40: stage s is layer DSPARK_LAYER_BASE + s.
+DSPARK_LAYER_BASE = 40
+# A padded expert's bias: below any real one once the real biases are shifted by their max (<= 0), with scores < ~10.
+_PAD_BIAS = -1.0e4
+
+
+class _ServerGate:
+    """The router a server layer exposes: its ``[D, 32 * chips]`` gate and its bias row ``[1, 1, 1, 32 * chips]``."""
+
+    def __init__(self, fused_gate_weight, bias):
+        self.fused_gate_weight = fused_gate_weight
+        self._bias = bias
+
+    def ranking_bias(self):
+        return self._bias
+
+
+class DSparkServerMoE:
+    """DSpark drafter stage ``stage``'s FFN (``mtp.{stage}.ffn``: 128 routed experts, top-3, and the shared expert) as a
+    layer of the target's persistent MoE server, at TP12 on ``moe_mesh``.
+
+    The server's router is laid out for 32 experts per chip (384), so the gate is zero-padded to 384 columns and the
+    padded experts' bias is far below every real one (the real bias shifted by its max, as the target's router does
+    for bf16 ranking): they never reach a row's top-3, so they never run and never enter its weight normalization.
+    ``server_top_k`` tells the op to keep 3 of its 6 per row (persistent.h kFeHdrTopK). The routing weights are the
+    target's formula, ``route_scale * s / (sum + eps)`` over the row's top-3 unbiased ``sqrt(softplus)`` scores. The
+    experts and the shared expert use the target layers' TP12 layouts (the experts are built as for a top-6 layer,
+    whose 6-group layout the op runs; the top-k of 3 is the server's).
+    """
+
+    server_top_k = 3
+    fused_router = True
+
+    def __init__(self, config, loader, stage: int, moe_mesh, cache):
+        from types import SimpleNamespace
+
+        from models.experimental.deepseek_v4_flash.tt.decode.moe import FusedSharedExpert
+        from models.experimental.deepseek_v41_flash.tt.config import dspark_expert_provider, dspark_weights
+
+        num_experts = config.dspark_n_routed_experts
+        moe_config = SimpleNamespace(
+            **{**vars(config), "num_local_experts": num_experts, "n_routed_experts": num_experts}
+        )
+        weights = dspark_weights(loader, stage)
+        ffn_cache = cache.sub(f"mtp.{stage}.ffn")
+        self.hidden = config.hidden_size
+        self.experts = DeepSeekV41PreloadedExperts(
+            moe_config,
+            dspark_expert_provider(loader, stage),
+            moe_mesh,
+            dtype=ttnn.bfloat4_b,
+            cache=ffn_cache,
+            tp_size=TP_SIZE,
+            balance_dram_banks=True,
+        )
+        self.fused_shared = FusedSharedExpert(
+            {
+                "shared_experts.gate_proj.weight": weights["ffn.shared_experts.w1.weight"],
+                "shared_experts.up_proj.weight": weights["ffn.shared_experts.w3.weight"],
+                "shared_experts.down_proj.weight": weights["ffn.shared_experts.w2.weight"],
+            },
+            "shared_experts",
+            moe_mesh,
+            moe_config,
+            dram_banks=self.experts.system_config.moe.fused_dram_banks,
+            cache=ffn_cache,
+            weight_dtype=ttnn.bfloat8_b,
+            clamp_swiglu=True,
+            tp_size=TP_SIZE,
+        )
+        chips = moe_mesh.get_num_devices()
+        padded = 32 * chips
+        gate = weights["ffn.gate.weight"]().float() / getattr(config, "gate_temp", 1.0)  # [E, D]
+        gate_cols = torch.zeros(self.hidden, padded)
+        gate_cols[:, :num_experts] = gate.t()
+        bias = weights["ffn.gate.bias"]().float()
+        bias_row = torch.full((padded,), _PAD_BIAS)
+        bias_row[:num_experts] = bias - bias.max()
+        rep = ttnn.ReplicateTensorToMesh(moe_mesh)
+        self.gate = _ServerGate(
+            ttnn.from_torch(gate_cols, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=moe_mesh, mesh_mapper=rep),
+            ttnn.from_torch(
+                bias_row.reshape(1, 1, 1, padded),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=moe_mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=rep,
+            ),
+        )
+        # For a torch reference (tests): the gate and bias as the server ranks them, and the shared expert.
+        self.reference_weights = {
+            "gate.weight": gate,
+            "gate.e_score_correction_bias": bias,
+            "shared_experts.gate_proj.weight": weights["ffn.shared_experts.w1.weight"],
+            "shared_experts.up_proj.weight": weights["ffn.shared_experts.w3.weight"],
+            "shared_experts.down_proj.weight": weights["ffn.shared_experts.w2.weight"],
+        }
+        self.expert_provider = dspark_expert_provider(loader, stage)
+
+
+def build_dspark_server_layers(config, loader, moe_mesh, cache) -> dict:
+    """The drafter's stages as server layers: ``{DSPARK_LAYER_BASE + s: DSparkServerMoE}``."""
+    return {
+        DSPARK_LAYER_BASE + s: DSparkServerMoE(config, loader, s, moe_mesh, cache)
+        for s in range(config.num_nextn_predict_layers)
+    }
+
+
 def tile_rows(block: torch.Tensor) -> torch.Tensor:
     """``block`` ``[rows, D]`` laid out as the op's ``(rows x 32)`` tiles, flat: tile t is columns
     ``[32t, 32t + 32)``, face f its 16-column half, each face row-major (rows x 16). A several-row request's row is
@@ -395,9 +504,13 @@ class PersistentMoE:
         fuse_hc: bool | None = None,
         rows: int = 1,
         block_rows: int = 0,
+        on_demand: Sequence[int] = (),
     ):
         if not isinstance(moes, Mapping):
             moes = dict(enumerate(moes))
+        # Requesters served whenever they send rather than in turn (the DSpark drafter): see fe_ctrl.cpp. Each may send
+        # only while no other requester has a request outstanding.
+        self._on_demand_mask = sum(1 << k for k in on_demand)
         if not moes:
             raise ValueError("the persistent MoE needs at least one layer")
         self.moe_mesh = moe_mesh
@@ -529,15 +642,21 @@ class PersistentMoE:
                 moe.fused_shared.down.buffer_address(),
                 routers[row].buffer_address(),
                 moe.gate.ranking_bias().buffer_address(),
+                # kFeHdrTopK: a layer picking fewer than the op's top_k per row (the drafter's).
+                getattr(moe, "server_top_k", 0),
+                0,
+                # kFeHdrOnDemand
+                self._on_demand_mask,
             ]
             header += [0] * (HEADER_BYTES // 4 - len(header))
-            rows.append(
-                _as_int32(
-                    header
-                    + [w.buffer_address() for w in moe.experts.gate_up_weights]
-                    + [w.buffer_address() for w in moe.experts.down_weights]
-                )
-            )
+            # A layer with fewer experts than the op's (the drafter's 128 of 384) names expert 0 for the rest: its
+            # router never picks them (see DSparkServerMoE), so they are never read.
+            num_weights = len(self._moes[self.layer_ids[0]].experts.gate_up_weights)
+            gate_up = [w.buffer_address() for w in moe.experts.gate_up_weights]
+            down = [w.buffer_address() for w in moe.experts.down_weights]
+            gate_up += gate_up[:1] * (num_weights - len(gate_up))
+            down += down[:1] * (num_weights - len(down))
+            rows.append(_as_int32(header + gate_up + down))
         return ttnn.from_torch(
             torch.stack(rows),
             dtype=ttnn.uint32,
@@ -752,6 +871,17 @@ class PersistentMoE:
         ``post[h] * row + sum_g comb[g, h] * streams[g]`` (``mix_streams``), in ``streams``' spec. For a block of
         ``rows`` rows: ``streams`` ``[1, 1, hc * rows, D]`` in ``(rows x 32)`` tiles (row ``h * rows + j``),
         ``post`` ``[1, rows, hc, 1]``, ``comb`` ``[1, rows, hc, hc]``, each row j mixed with its own post and comb."""
+        moe = self._moes.get(layer)
+        if getattr(moe, "server_top_k", 0) and self.rows == 1:
+            # A drafter stage takes a block (its union of top-3 runs on the several-row grid); in one-row mode the
+            # server has no block socket listening, so refuse rather than send into it.
+            raise ValueError(
+                f"layer {layer} (a DSpark drafter stage) needs a block mode; the server is in one-row mode"
+            )
+        if tensor is not None and tensor.shape[-1] != self.hidden * self.rows:
+            raise ValueError(
+                f"a {self.rows}-row request takes [1, 1, 1, {self.hidden * self.rows}], got {list(tensor.shape)}"
+            )
         return self._send(requester, self.row_of_layer(layer), tensor, streams=streams, post=post, comb=comb)
 
     def _send(self, requester: int, row: int, tensor=None, streams=None, post=None, comb=None):
