@@ -417,10 +417,18 @@ namespace ckernel {
 #endif
 
 #ifdef TRISC_MATH
-// llk_math_matmul_tile_mop (the matmul_fe_hifi3_wide class keeps the row form: minimal_matmul 424/444/888 bf16 HiFi3 -2.5 to -3.2 %)
+// llk_math_matmul_tile_mop, and the row form at HiFi2 half sync with a 32-bit DEST in a kernel with a constant block (matmul_hifi2_half_wide);
+// the matmul_fe_hifi3_wide class keeps the row form (minimal_matmul 424/444/888 bf16 HiFi3 -2.5 to -3.2 %)
 template <bool row_mop_on, std::uint32_t kt_key, DataFormat form_out>
 constexpr bool matmul_fe_tile_mop() {
-    return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();
+    if constexpr (
+        !row_mop_on && kt_key == 0 &&
+        matmul_hifi2_half_wide(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncHalf, DST_ACCUM_MODE, llk_math_matmul_kernel_has_32bit_cb()) &&
+        matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, kt_key>>(0)) {
+        return false;
+    } else {
+        return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>();
+    }
 }
 #endif
 

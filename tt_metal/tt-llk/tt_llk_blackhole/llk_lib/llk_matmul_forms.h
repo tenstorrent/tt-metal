@@ -244,6 +244,14 @@ constexpr char matmul_default_form()
 // and calls agree: the row form, but at LoFi full sync, whose plain calls may take another reuse direction (at half sync they all run
 // direction 0), at HiFi2 half sync with a 32-bit DEST where a section may pack to Float32, and at LoFi half sync with a 32-bit DEST where
 // a 32-bit format is an operand or the output (lofi_wide: a Tf32 CB, or a Float32 CB besides the one Float32 partials CB).
+// The plain calls the kernel-wide row form keeps on the tile MOP at HiFi2 half sync with a 32-bit DEST: a kernel whose front end sees
+// a constant block (bmm) takes the row form there too (census 49 keys, all faster); one with run-time blocks (minimal_matmul) keeps the
+// tile MOP, whose one-tile kt=1 block the row form's per-call cost loses on
+constexpr bool matmul_hifi2_half_wide(const MathFidelity fidelity, const bool half_sync, const bool fp32_dest, const bool may_pack_32bit)
+{
+    return fidelity == MathFidelity::HiFi2 && half_sync && fp32_dest && may_pack_32bit;
+}
+
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest>
 constexpr bool matmul_plain_row_form(const bool may_pack_32bit, const bool lofi_wide)
 {

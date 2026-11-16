@@ -451,10 +451,19 @@ constexpr bool matmul_prod_may_pack_32bit = matmul_prod_kernel_has_32bit_cb() ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
 constexpr bool matmul_prod_lofi_wide = ckernel::matmul_kernel_lofi_wide(MATMUL_KERNEL_FORMATS, MATMUL_KERNEL_DST_FORMATS);
 #endif
+// minimal_matmul (MATMUL_PACK_TILES) passes run-time dims: the front end sees no constant block
+#ifdef MATMUL_PACK_TILES
+constexpr bool matmul_prod_dims_unseen = true;
+#else
+constexpr bool matmul_prod_dims_unseen = false;
+#endif
 // a run-time direction call runs the tile MOP whatever direction it resolves to (matmul_block: llk_dir 3)
 constexpr bool matmul_tile_mop =
     MATMUL_FE_FORM_KT == 0
-        ? !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit, matmul_prod_lofi_wide) || MATMUL_PROD_RUNTIME_DIR
+        ? (!matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit, matmul_prod_lofi_wide) &&
+           !(matmul_hifi2_half_wide(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, is_fp32_dest_acc_en, matmul_prod_may_pack_32bit) &&
+             !matmul_prod_dims_unseen)) ||
+              MATMUL_PROD_RUNTIME_DIR
         : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #else
 constexpr bool matmul_tile_mop = false;
