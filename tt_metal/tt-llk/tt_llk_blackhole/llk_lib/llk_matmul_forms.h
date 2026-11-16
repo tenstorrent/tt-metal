@@ -2871,8 +2871,13 @@ constexpr bool matmul_kernel_ttsync_block(
     {
         return false;
     }
-    // a polling LoFi call that pairs a 32-bit operand with a fast one at full sync holds its operand by run time (matmul_api_reuse_dir 3)
-    // on both threads; at half sync a plain call runs direction 0 either way
+    // a polling LoFi call that pairs a 32-bit operand with a fast one holds its operand by run time (matmul_api_reuse_dir 3) on both
+    // threads; at half sync the ttsync unpack (direction 0) keeps the cells whose run-time direction is 0
+    if (fidelity == MathFidelity::LoFi && !full_sync && matmul_kernel_lofi_mix(formats) &&
+        matmul_reuse_dir(fidelity, in0, in1, ct, rt, false, true, throttle != 0) != 0)
+    {
+        return false;
+    }
     if (fidelity == MathFidelity::LoFi && full_sync)
     {
         bool wide = false, fast = false;

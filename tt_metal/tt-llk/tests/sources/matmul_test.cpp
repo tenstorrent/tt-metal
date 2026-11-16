@@ -47,15 +47,18 @@
 // matmul_api_reuse_dir's run-time direction (3) of a LoFi half-sync kernel with a 32-bit operand beside a fast one, as
 // matmul_api_runtime_dir resolves it for the key's operands (in1 is unpacker A, in0 unpacker B)
 #include "llk_matmul_forms.h"
-constexpr bool matmul_prod_runtime_dir = MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf &&
-                                         static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS);
+// (a macro: a keyed form, MATMUL_FE_FORM_KT below, keeps direction 0)
+#define MATMUL_PROD_RUNTIME_DIR                                                                                                       \
+    (MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf &&                                       \
+     static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS) && \
+     MATMUL_FE_FORM_KT == 0)
 #undef MATMUL_REUSE_DIR
 #define MATMUL_REUSE_DIR                                                                                                                        \
-    (matmul_prod_runtime_dir ? ckernel::matmul_reuse_dir(ckernel::MathFidelity::LoFi, static_cast<DataFormat>(UNPACK_B_IN), static_cast<DataFormat>(UNPACK_A_IN), \
+    (MATMUL_PROD_RUNTIME_DIR ? ckernel::matmul_reuse_dir(ckernel::MathFidelity::LoFi, static_cast<DataFormat>(UNPACK_B_IN), static_cast<DataFormat>(UNPACK_A_IN), \
                                                          MATMUL_PK_CT, MATMUL_PK_RT, false, true, THROTTLE_LEVEL != 0)                           \
                              : MATMUL_PROD_DIR)
 #else
-constexpr bool matmul_prod_runtime_dir = false;
+#define MATMUL_PROD_RUNTIME_DIR false
 #endif
 #endif
 
@@ -200,11 +203,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
 #if defined(MATMUL_PRODUCTION)
+#ifdef MATMUL_PACK_TILES
+    // minimal_matmul passes run-time ct and rt: its front end sees no block, so the LoFi class rule polls (llk_matmul_unpack_ttsync)
+    constexpr bool matmul_fe_dims_unseen = true;
+#else
+    constexpr bool matmul_fe_dims_unseen = false;
+#endif
     // a plain call's kernel rule, the function llk_unpack_AB_matmul_kernel_ttsync calls, and on a polling class the block rule of a
     // call with constant keys (matmul_fe_ttsync_cell; in1 is the test's A operand, in0 its B)
     constexpr std::uint32_t unpack_auto_ttsync =
         matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) && matmul_reuse_dir_k == 0 &&
-                !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && !(MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1))
+                !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && (matmul_fe_dims_unseen || !(MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1)))
             ? 1
         : MATMUL_TTSYNC_BLOCK_PROD ? 3
                                    : 0;
@@ -445,7 +454,7 @@ constexpr bool matmul_prod_lofi_wide = ckernel::matmul_kernel_lofi_wide(MATMUL_K
 // a run-time direction call runs the tile MOP whatever direction it resolves to (matmul_block: llk_dir 3)
 constexpr bool matmul_tile_mop =
     MATMUL_FE_FORM_KT == 0
-        ? !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit, matmul_prod_lofi_wide) || matmul_prod_runtime_dir
+        ? !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit, matmul_prod_lofi_wide) || MATMUL_PROD_RUNTIME_DIR
         : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #else
 constexpr bool matmul_tile_mop = false;
