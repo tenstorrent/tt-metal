@@ -530,3 +530,34 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
   (even 4 x 1280 B reads in flight a core). Reads into the multicaster alone, and the reads without the multicast, run
   clean. Capping the reads or a barrier after each multicast does not help; the same reads on NOC1 do. Not run: stream
   (mux-like) and h traffic alone, own-expert reads alone, the NOC1 fix with own reads.
+
+## Stage 7: NoC split (hold 215516, bh-glx-110-c10u20)
+
+Rule from the repro: on a group's multicast NoC nothing may enter the group rectangle from outside.
+- v1 (3eb2f7e0646, LCfg.noc_split / WL_NOC_SPLIT): every DRAM read of a group core (counts, slot table, token-row
+  gather, own experts' weights) moves to its NCRISC on NOC1, the muxes to NOC1, and every group multicast to the BRISCs
+  on NOC0 (both columns, x in stream order). Tray correctness (ws_lane_n1): M 586 every expert PCC 0.99994, M 0, M 5,
+  dynamic M min 0.99992. Tray soak at the 640-expert lane load: hung before launch 50, two groups' BRISCs (device 1,
+  (2,3) and (5,5)) inside their NOC0 multicasts (2 writes not sent, 40 acks missing each). A multicast from a core that
+  is not at the rectangle's NOC0 start corner first travels east / south round the chip to that corner, through the
+  other groups' rectangles: the same class of fault, multicast on multicast.
+- v2 (52a5d8ba245, bcast + noc_split): core 0's BRISC, at NOC0's start corner, is the group's only multicaster, of the
+  x blocks and of the h rows (new queue QM); every producer sends its x blocks (funnel slots) and its h tiles (new
+  NCRISC queue Q2: one transaction id per tile, the slot's count raised at core 0 once acknowledged) to core 0 on NOC1.
+  NOC0 carries only core 0's multicasts, which never leave the rectangle; NOC1 carries only unicasts (DRAM reads, the
+  funnel, h tiles, credits, muxes, router landings, outputs).
+  - Tray (ws_lane_n4): M 586 every expert PCC 0.99994 (42.7% one cold launch), M 0, M 5, dynamic M min 0.99992. Soak:
+    12,393 launches in 900 s without a hang, util tile median 47.1%, PCC 0.99994.
+  - Whole Galaxy, 8x4 XY torus, G 4 (ws_lane_n5): 128 experts one launch PCC 0.99994 (34.4%); the real layer (640
+    experts, T 31250, M 586), 20 warm-up + 5 measured launches:
+
+| slots | util tile median (min-max) over chips and launches | per expert (chip 0 / chip 31) | weights in a chip | min PCC |
+|---|---|---|---|---|
+| 4 (d0, d1, d0d1, any; keep 2) | 33.8% (32.6-34.9) | 60.8 / 60.6 us | 68 GB/s | 0.99994 |
+| 3 (d0, d1, any; keep 1) | 29.2% (28.1-29.8) | 69.3 / 69.0 us | 60 GB/s | 0.99994 |
+
+    Dynamic M on all 32 chips: min PCC 0.99992. No hang and no reboot in any v2 run. Against the old 3-slot torus
+    result (36.2%, linked multicasts from every leader, which hung with 4 slots), the hang-free layout gives 33.8% with
+    4 slots. The cores wait mostly on x (x waits about 20M cycles a launch on chip 0, weight waits 1.3-4M with 4 slots):
+    core 0 multicasts every x block and h row of its group (about 3.3 MB an expert at M 586) and takes in the group's
+    funnel and h tiles on NOC1, so its two NoC ports pace the group.
