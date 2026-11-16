@@ -23,7 +23,7 @@ inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
 // All params are in FP16 format
     static_assert(ITERATIONS % 2 == 0);
     // Two rows per iteration share one dst_reg increment.
-#pragma GCC unroll 4
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat v0 = sfpi::dst_reg[0];
         sfpi::vFloat v1 = sfpi::dst_reg[1];
