@@ -12,6 +12,14 @@ Leave the smallest durable explanation that a future reader cannot recover
 from the code itself. Comments explain **why**, a non-obvious constraint, or
 the evidence behind a choice. They do not narrate syntax.
 
+## Scope
+
+This skill covers inline and block comments. Doxygen docstrings on LLK lib,
+LLK API and Compute API functions follow
+[doxygen-style.md](../../references/doxygen-style.md). The "Dead Code" rule in
+[CLAUDE.md](../../CLAUDE.md) still applies: commented-out code needs a reason,
+and a comment review must flag any that lacks one.
+
 ## Before adding a comment
 
 1. Read the surrounding function and nearby comments. Do not repeat them.

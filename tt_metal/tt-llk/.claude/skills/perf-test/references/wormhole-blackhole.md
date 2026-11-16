@@ -56,9 +56,11 @@ unpack and math for unary unpack paths. Multiply it by `LOOP_FACTOR`.
 
 ## Dest clearing in the measured loop
 
-`_llk_pack_dest_section_done_` defaults to clearing the packed Dest half
-before math receives it again. It also waits for pack and advances the Dest
-bank. Before adding an explicit section clear, `ZEROACC`, or a second
+In `SyncHalf`, `_llk_pack_dest_section_done_` waits for pack, clears the
+packed Dest half before math receives it again, and flips the packer's Dest
+bank. `SyncFull` clears all of Dest and does not flip. Wormhole always
+clears; Blackhole clears unless `clear_dest=false`, in which case math must
+clear after acquiring each section. Before adding an explicit section clear, `ZEROACC`, or a second
 `set_dst_write_addr` inside `TILE_LOOP`, trace that implicit release path for
 the active run type. An extra clear adds instructions and can add a stall to
 the published operation cost even when it does not change correctness.
