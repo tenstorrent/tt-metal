@@ -17,7 +17,6 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
