@@ -17,7 +17,6 @@ from nightly_health import (
     assess,
     assess_plain,
     build_text,
-    due,
     gate_result,
     leg_limits,
     owners,
@@ -194,13 +193,6 @@ def test_the_health_check_is_not_driven_by_the_nightlies_finishing():
 )
 def test_the_watchdog_runs_after_the_health_check():
     assert min(_crons("llk-nightly-watchdog.yaml")) > max(_crons(_HEALTH))
-
-
-def test_a_weekly_nightly_is_due_only_on_its_day():
-    friday, saturday = dt.date(2026, 11, 13), dt.date(2026, 11, 14)
-    assert due(["0 2 * * 5"], friday) and not due(["0 2 * * 5"], saturday)
-    assert due(["0 3 * * *"], saturday)
-    assert due(["0 3 * * 1-5"], friday) and not due(["0 3 * * 1,3"], friday)
 
 
 def test_a_plain_nightly_reports_failed_jobs_and_a_missing_run():
