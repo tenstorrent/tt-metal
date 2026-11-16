@@ -4,7 +4,6 @@
 #include <cstdint>
 
 namespace ckernel::sfpu::ttpoly::log1p {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <
     uint32_t Degree,
