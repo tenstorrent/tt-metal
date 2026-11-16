@@ -180,13 +180,19 @@ fp16 subnormals the pack does not reproduce.
   `--head` file's name says (`--arch` to name it).
 - **CI.** PR Gate's `llk-sfpu-ulp-pr-check` sweeps the cells a change can move (its
   kernel builds differently, or its row changed), on a Wormhole and a Blackhole card, and
-  fails one that measures worse than its row. It also fails a loosened budget unless the PR has the
-  `ulp-budget-raise-approved` label and changes only the tables and
-  `hardware_free/accuracy/test_sfpu_accuracy_budget.py` (its acknowledgement lists and
-  `ONLY_EVER_TOLERANCE`). A row for a new op is never a loosening; under an op already in
-  the table, a new variant's declared `atol`/`rtol` is, since it replaces the per-format
-  default. A change to the check itself sweeps every cell. Every cell, on both cards,
-  runs nightly (`llk-sfpu-ulp-sweep.yaml`).
+  fails one that measures worse than its row. The cells are the sweep's: the unary ops
+  with a block in the table. It runs for a change to an SFPU kernel (a file named
+  `*sfpu*`, or under a directory so named, in either architecture's `tt-llk` or
+  `hw/ckernels` tree) or to a table; a change to the harness, the golden, SFPI or any
+  other header is caught by the nightly. It also fails a loosened budget unless the PR
+  has the `ulp-budget-raise-approved` label and changes only the tables and, in
+  `hardware_free/accuracy/test_sfpu_accuracy_budget.py`, the acknowledgement lists
+  (`_UNMEASURABLE_CELLS_ACKNOWLEDGED*` and `ONLY_EVER_TOLERANCE`). A new row's recorded
+  figure is never a loosening; its declared `atol`/`rtol` is, for a new op too, since it
+  replaces the per-format default the functional drivers held the variant to. A change
+  to the check itself (its workflow, `ulp_affected.py` or `test_unary_sfpu_ulp.py`)
+  sweeps every cell. Every cell, on both cards, runs nightly
+  (`llk-sfpu-ulp-sweep.yaml`).
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and

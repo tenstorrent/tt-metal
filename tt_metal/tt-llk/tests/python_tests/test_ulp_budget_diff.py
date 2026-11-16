@@ -19,6 +19,7 @@ from helpers.ulp_budget_diff import (
     compare,
     judge,
     main,
+    only_acknowledgements_differ,
     read_cells,
     render_budget_diff,
 )
@@ -205,21 +206,13 @@ ADDED, GATED, WIDENED = Kind.ADDED, Kind.GATED, Kind.TOLERANCE_WIDENED
 
 
 @pytest.mark.parametrize(
-    "rows, under_an_enrolled_op, as_a_new_op",
+    "rows, kinds",
     [
-        (
-            (Row(input=F16, output=F16, metric=TOL, measured=393, nonfinite=3),),
-            {ADDED},
-            {ADDED},
-        ),
-        (
-            (Row(input=F16, output=F32, metric=TOL, atol=0.2, rtol=0.05),),
-            {WIDENED},
-            {ADDED},
-        ),
-        ((Row(input=F16, output=F32, measured=7),), {GATED}, {GATED}),
-        ((Row(input=F16, output=F32, domains=TANH_DOMAINS),), {GATED}, {GATED}),
-        ((_PAST_LIST, _DECLARED), {ADDED, GATED, WIDENED}, {ADDED, GATED}),
+        ((Row(input=F16, output=F16, metric=TOL, measured=393, nonfinite=3),), {ADDED}),
+        ((Row(input=F16, output=F32, metric=TOL, atol=0.2, rtol=0.05),), {WIDENED}),
+        ((Row(input=F16, output=F32, measured=7),), {GATED}),
+        ((Row(input=F16, output=F32, domains=TANH_DOMAINS),), {GATED}),
+        ((_PAST_LIST, _DECLARED), {ADDED, GATED, WIDENED}),
     ],
     ids=[
         "tolerance-with-nonfinite",
@@ -229,16 +222,15 @@ ADDED, GATED, WIDENED = Kind.ADDED, Kind.GATED, Kind.TOLERANCE_WIDENED
         "past-list-beside-bounds",
     ],
 )
-def test_a_cell_no_row_held_before_starts_from_its_row(
-    rows, under_an_enrolled_op, as_a_new_op
-):
-    """A new op holds what it never held before. A new variant of an enrolled op was
-    held to the per-format default, which a declared bound replaces: that may loosen.
-    A recorded figure or non-finite count is what the variant starts from either way."""
+def test_a_cell_no_row_held_before_starts_from_its_row(rows, kinds):
+    """A recorded figure or non-finite count is what a variant no row held starts from.
+    Its functional driver held it to the per-format default, though, which a declared
+    bound replaces: that may loosen, under an op the table already has and under a new
+    one alike."""
     enrolled = Row(input=F16B, output=F16B, measured=1)
-    kinds = {c.kind for c in compare(_table(enrolled), _table(enrolled, *rows))}
-    assert kinds == under_an_enrolled_op
-    assert {c.kind for c in compare({}, _table(*rows))} == as_a_new_op
+    under_an_enrolled_op = compare(_table(enrolled), _table(enrolled, *rows))
+    assert {c.kind for c in under_an_enrolled_op} == kinds
+    assert {c.kind for c in compare({}, _table(*rows))} == kinds
 
 
 # ── Where a budget binds ──────────────────────────────────────────────────────
@@ -780,3 +772,51 @@ def test_a_table_whose_name_names_no_architecture_needs_arch(tmp_path):
     argv = ["diff", "--base", str(base), "--head", str(head)]
     assert main(argv) == 2
     assert main([*argv, "--arch", MEASURED_ARCH.value]) == 0
+
+
+# ── What a budget raise may edit beside the tables ────────────────────────────
+
+_ACKNOWLEDGING = """
+import pytest
+
+# why
+ONLY_EVER_TOLERANCE = frozenset({1})
+_UNMEASURABLE_CELLS_ACKNOWLEDGED_ON = {}
+
+
+def test_it():
+    assert ONLY_EVER_TOLERANCE
+"""
+
+
+@pytest.mark.parametrize(
+    "old, new, only",
+    [
+        ("frozenset({1})", "frozenset({1, 2})", True),
+        ("_ON = {}", "_ON = {'wormhole': {}}", True),
+        ("# why", "# another reason", True),
+        ("    assert ONLY_EVER_TOLERANCE", "    pass", False),
+        ("import pytest", "import os", False),
+        ("def test_it", "def helper", False),
+        ("\n\ndef test_it", "\nOTHER = 1\n\n\ndef test_it", False),
+    ],
+    ids=["list", "per-arch-list", "comment", "test-body", "import", "rename", "new"],
+)
+def test_a_raise_may_edit_only_the_acknowledgements(tmp_path, old, new, only):
+    """`acknowledgements` exits 1 for a change to anything else in the file."""
+    assert old in _ACKNOWLEDGING
+    assert only_acknowledgements_differ(_ACKNOWLEDGING, _ACKNOWLEDGING)
+    base, head = tmp_path / "base.py", tmp_path / "head.py"
+    base.write_text(_ACKNOWLEDGING)
+    head.write_text(_ACKNOWLEDGING.replace(old, new))
+    argv = ["acknowledgements", "--base", str(base), "--head", str(head)]
+    assert main(argv) == (0 if only else 1)
+
+
+def test_acknowledgements_that_do_not_parse_cannot_load(tmp_path):
+    base, head = tmp_path / "base.py", tmp_path / "head.py"
+    base.write_text(_ACKNOWLEDGING)
+    head.write_text("def (")
+    argv = ["acknowledgements", "--base", str(base), "--head", str(head)]
+    assert main(argv) == 2
+    assert main([*argv[:-1], str(tmp_path / "absent.py")]) == 2
