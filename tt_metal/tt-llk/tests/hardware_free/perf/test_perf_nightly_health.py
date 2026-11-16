@@ -20,7 +20,6 @@ from nightly_health import (
     build_text,
     gate_result,
     leg_limits,
-    owners,
     payloads,
     read_extras,
 )
@@ -265,13 +264,7 @@ class _Conn:
         pass
 
 
-def test_the_channel_copy_tags_the_owners_only_when_something_is_wrong(tmp_path):
-    path = tmp_path / "t.yaml"
-    path.write_text(
-        "- name: a\n  owner_id: U2\n  skus: {x: {timeout: 1}}\n"
-        "- name: b\n  owner_id: U2\n  skus: {x: {timeout: 1}}\n"
-    )
-    assert owners(str(path)) == ["U2"]
+def test_the_channel_copy_tags_the_owners_only_when_something_is_wrong():
     assert payloads("ok", False, "U1", "C1", ["U2"]) == [
         {"channel": "U1", "text": "ok"},
         {"channel": "C1", "text": "ok"},
