@@ -256,6 +256,8 @@ class OptimizedExperts(PackedExperts):
         gu = ttnn.sparse_matmul(x, self.prefill_gate, program_config=gate_config, **common)
         gu = ttnn.reshape(gu, (1, self.config.num_experts, rows, 2 * self.width))
         gate, up = gu[..., : self.width], gu[..., self.width :]
+        if getattr(self, "up_first", False):
+            gate, up = up, gate
         hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)])
         # Private projection buffers are no longer needed when down allocates
         # its wider output. Weight that output in place before reducing experts.
@@ -974,6 +976,34 @@ class GeneralizedRouter:
             self.last_decode_indices = indices
         routing = ttnn.scatter(ttnn.zeros_like(rounded), dim=-1, index=indices, src=values)
         return ttnn.mul(routing, router.per_expert_scale)
+
+    def decode_rows_tables(self, normalized, base, local_experts):
+        """Batched decode (WS1, up to 32 rows): scale, the direct BF16 projection, then ``RouterTopk``
+        (models/demos/gemma4/custom_ops: softmax, top-8, normalize, per-expert scale) straight into this chip's
+        local expert weight table ``[1, 1, E_loc, 32]`` and union sparsity ``[1, 1, 1, E_loc]`` (3 programs)."""
+        from models.demos.gemma4.custom_ops.router_topk import RouterTopk
+
+        source = self.original.source
+        router = source.source
+        if getattr(self, "_topk_scale", None) is None:
+            self._topk_scale = ttnn.to_layout(
+                ttnn.reshape(ttnn.typecast(router.per_expert_scale, ttnn.bfloat16), (1, 1, 1, 128)),
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
+        scaled = ttnn.mul(
+            normalized,
+            source.scale,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, router.scalar_root_size)],
+        )
+        logits = ttnn.linear(
+            scaled,
+            self.projection_weight,
+            dtype=ttnn.bfloat16,
+            program_config=self.projection_program,
+            compute_kernel_config=self.projection_compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return RouterTopk.op(logits, self._topk_scale, base, local_experts, 8)
 
     def decode_indices(self):
         if self.last_decode_indices is None:

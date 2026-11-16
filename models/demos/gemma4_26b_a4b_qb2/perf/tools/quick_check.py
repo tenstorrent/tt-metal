@@ -188,6 +188,19 @@ def batched_vs_serial(model, refs, batch):
         serial = torch.cat(rows, dim=-2)
         out[f"L{index}_min_user_pcc"] = min(pcc(serial[..., s, :], batched[..., s, :]) for s in range(batch))
         out[f"L{index}_kv_equal"] = all(torch.equal(a, b) for a, b in zip(batched_kv, serial_kv))
+        # Slot 1 inactive (position -1): its cache pages stay bit-identical, the other users still match serial.
+        cache, table = prefilled()
+        before = per_device(cache)
+        idle = positions.clone()
+        idle[1] = -1
+        partial = host(run_decode(model, number, kind, cache, decode_args(model, hidden, idle, table))).squeeze(0)
+        pages = table[1].long()
+        out[f"L{index}_inactive_untouched"] = all(
+            torch.equal(a[pages], b[pages]) for a, b in zip(before, per_device(cache))
+        )
+        out[f"L{index}_inactive_others_pcc"] = min(
+            pcc(serial[..., s, :], partial[..., s, :]) for s in range(batch) if s != 1
+        )
     return out
 
 
@@ -241,7 +254,7 @@ def compare(result, baseline):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--batches", default="1,32", help="traced timing batch sizes")
-    p.add_argument("--check-batch", type=int, default=8, help="users in the batched-vs-serial check (0 skips it)")
+    p.add_argument("--check-batch", default="8", help="users in the batched-vs-serial check, comma list (0 skips it)")
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--refs", type=Path, default=Path.home() / "gemma26-eval" / "refs" / f"layers_0_5_{REVISION[:8]}.pt")
     p.add_argument("--baseline", type=Path)
@@ -257,8 +270,15 @@ def main():
         model = generator.model
         result = {"precision": model.precision_config["config_id"]}
         result.update(accuracy(model, refs))
-        if args.check_batch > 1:
-            result.update(batched_vs_serial(model, refs, args.check_batch))
+        checks = [int(b) for b in args.check_batch.split(",") if int(b) > 1]
+        for batch in checks:
+            # Keys of the largest batch stay unprefixed (baseline compatibility); every batch is also reported.
+            found = batched_vs_serial(model, refs, batch)
+            result.update({f"B{batch}_{k}": v for k, v in found.items()})
+        for key in {k.split("_", 1)[1] for k in result if k.startswith("B") and "_L" in k and not k.endswith("_us")}:
+            values = [result[f"B{b}_{key}"] for b in checks if f"B{b}_{key}" in result]
+            if values:
+                result[key] = min(values) if not isinstance(values[0], bool) else all(values)
         result.update(timing(model, [int(b) for b in args.batches.split(",")], args.steps))
         generator._release_trace()
     finally:
@@ -273,9 +293,12 @@ def main():
         args.baseline.write_text(json.dumps(result, indent=1))
     if args.output:
         args.output.write_text(json.dumps(result, indent=1))
-    acc = " ".join(f"{k}={v:.5f}" for k, v in result.items() if k.endswith(("_prefill", "_decode", "_pcc")))
+    acc = " ".join(
+        f"{k}={v:.5f}" for k, v in result.items() if k.endswith(("_prefill", "_decode", "_pcc")) and k[0] == "L"
+    )
     speed = " ".join(f"{k}={v:.2f}" for k, v in result.items() if k.endswith("_layers_ms"))
-    kv = " ".join(f"{k}={v}" for k, v in result.items() if k.endswith("_kv_equal"))
+    kv = " ".join(f"{k}={v}" for k, v in result.items() if k.endswith(("_kv_equal", "_untouched")) and k[0] == "L")
+    failures += [f"{k} is False" for k, v in result.items() if v is False]
     print(f"QUICK {'PASS' if not failures else 'FAIL'} {acc} {kv} {speed}", flush=True)
     for failure in failures:
         print(f"QUICK_FAIL {failure}", flush=True)

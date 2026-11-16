@@ -1,0 +1,152 @@
+{
+ "steps": 32,
+ "results": [
+  {
+   "batch": 1,
+   "prompt": 128,
+   "new_tokens": 128,
+   "metrics_warm": [
+    {
+     "ttft_ms": 92.63837400067132,
+     "trace_setup_ms": 0.10083400047733448,
+     "reused_request_trace": true,
+     "generation_wall_ms": 1571.121076000054,
+     "decode_tps": 85.89917012155692,
+     "input_tokens": 128,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    },
+    {
+     "ttft_ms": 95.36056799879589,
+     "trace_setup_ms": 0.11079300020355731,
+     "reused_request_trace": true,
+     "generation_wall_ms": 1573.8138959986827,
+     "decode_tps": 85.90081106391206,
+     "input_tokens": 128,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    }
+   ]
+  },
+  {
+   "batch": 1,
+   "prompt": 4096,
+   "new_tokens": 128,
+   "metrics_warm": [
+    {
+     "ttft_ms": 1715.6617629989341,
+     "trace_setup_ms": 0.14945600014470983,
+     "reused_request_trace": true,
+     "generation_wall_ms": 3257.0394849990407,
+     "decode_tps": 82.39408926548083,
+     "input_tokens": 4096,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    },
+    {
+     "ttft_ms": 1715.4008659999818,
+     "trace_setup_ms": 0.15123999946808908,
+     "reused_request_trace": true,
+     "generation_wall_ms": 3257.037424998998,
+     "decode_tps": 82.38029344856595,
+     "input_tokens": 4096,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    }
+   ]
+  },
+  {
+   "batch": 8,
+   "prompt": 127,
+   "step_ms_median": 18.482377499822178,
+   "step_ms_mean": 18.505032687528455,
+   "tok_s_user": 54.10559328796423,
+   "tok_s_total": 432.84474630371386
+  },
+  {
+   "batch": 16,
+   "prompt": 127,
+   "step_ms_median": 20.96941100080585,
+   "step_ms_mean": 20.987719124946125,
+   "tok_s_user": 47.688511611583664,
+   "tok_s_total": 763.0161857853386
+  },
+  {
+   "batch": 32,
+   "prompt": 127,
+   "step_ms_median": 23.329071000262047,
+   "step_ms_mean": 23.31233840624236,
+   "tok_s_user": 42.86497306252647,
+   "tok_s_total": 1371.679138000847
+  }
+ ],
+ "precision": "bfp8_release_selected"
+}

@@ -46,6 +46,8 @@ WS2_PACK_MOE = os.environ.get("GEMMA4_26B_WS2_PACK_MOE", "1") != "0"
 WS2_PACK_ATTN = os.environ.get("GEMMA4_26B_WS2_PACK_ATTN", "1") != "0"
 # Fabric links per decode all-reduce (QB2 Linear 1x4). 2 measured ~35% faster than 1 at decode-row sizes.
 WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
+# WS1: decode 2-32 users in one pass per layer (attention, router and experts batched; perf/WS1.md).
+WS1_BATCHED = os.environ.get("GEMMA4_26B_WS1_BATCHED", "1") != "0"
 
 
 class DecodeRopeRows:
@@ -184,12 +186,13 @@ class _Projection:
             weight, compute, mesh, block_w=8 if sliding else 16, block_h=4 if sliding else 2
         )
 
-    def __call__(self, x, *, dtype=ttnn.float32):
-        if x.shape[-2] > 1:
+    def __call__(self, x, *, dtype=ttnn.float32, decode_rows=False):
+        # decode_rows: 2-32 decode users on one row tile take the decode program (WS1), not the prefill one.
+        if x.shape[-2] > 1 and not (decode_rows and x.shape[-2] <= 32):
             return self.prefill(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if getattr(self, "input_bfp8", False):
             x = ttnn.typecast(x, ttnn.bfloat8_b)
-        if self.decode_dram is not None:
+        if self.decode_dram is not None and x.shape[-2] == 1:
             return self.decode_dram(x, compute=self.decode_compute, memory_config=ttnn.L1_MEMORY_CONFIG)
         return ttnn.linear(
             x if x.memory_config() == ttnn.L1_MEMORY_CONFIG else ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG),
@@ -267,16 +270,20 @@ class _LocalAttention(OptimizedAttention):
         height-sharded q / k / v that the cache update and SDPA take directly. Replaces the head split, the
         FP32 per-head norm chains, the per-layer RoPE table gather and tilize, and the typecast / reshard
         programs around RoPE and the cache update (51 programs -> 4 on a sliding layer)."""
-        if not self.fused_heads or hidden_states.shape[-2] != 1:
+        rows = hidden_states.shape[-2]
+        batched = WS1_BATCHED and type(self.source.weights.wqkv) is _Projection
+        if not self.fused_heads or rows > 32 or (rows > 1 and not batched):
             return super().decode(hidden_states, **kwargs)
         from models.demos.gemma4.custom_ops.qkv_heads_norm_rope import QkvHeadsNormRope
 
         cfg = self.source.config
-        qkv = self.source.weights.wqkv(hidden_states, dtype=ttnn.bfloat16)
+        qkv = self.source.weights.wqkv(
+            hidden_states, dtype=ttnn.bfloat16, **({"decode_rows": True} if rows > 1 else {})
+        )
         rope = DecodeRopeRows.gather(kwargs["rope_mats"], kwargs["position_idx"])
         cache_pos, page_table = kwargs["position_idx_cache"], kwargs["page_table"]
         k_cache, v_cache = kwargs["kv_cache"]
-        if WS2_FUSED_CACHE:
+        if WS2_FUSED_CACHE and rows == 1:
             # v on its own core, so one program writes both caches.
             q, k, v = qkv_heads_norm_rope_b1(
                 qkv,
@@ -320,6 +327,10 @@ class _LocalAttention(OptimizedAttention):
         sdpa = self.decode_sdpa
         direct = self.output_program is not None and getattr(self, "decode_output_dram", None) is None
         direct = direct and not getattr(self, "output_input_bfp8", False)
+        if q.shape[1] > 1:
+            # The head op shards users row-major over the 11-wide grid; SDPA maps users onto its 8x8 grid, so a
+            # sharded q is misread from user 8 on. Interleaved q (SDPA takes it from DRAM) is read by user index.
+            q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             k_cache,
@@ -348,10 +359,12 @@ class _LocalAttention(OptimizedAttention):
             compute_kernel_config=self.output_compute,
             memory_config=self.output_memory,
         )
-        if pack_memory is not None:
+        if pack_memory is not None and projected.shape[-2] == 1:
             # Row 0 only: all-reduce 4 dense bf16 tiles and unpack into the batch-1 norm layout.
             reduced = self.allreduce(pack_rows(projected), role="attention_packed")
             return unpack_rows(reduced, projected.shape[-1] // 32, projected.shape[-1], pack_memory, count=1)[0]
+        if projected.shape[-2] > 1:
+            return self.allreduce(projected, role="attention")
         return self.allreduce(projected, role="attention", output_memory=self.ws2_gather_memory)
 
     def rotary(self, value, cos, sin, *, decode=False):
@@ -675,7 +688,7 @@ class _DramSharedMLP(_SharedMLP):
 class _ExpertParallelExperts(OptimizedExperts):
     """Own 32 complete experts per rank and scan only their routing mask."""
 
-    def __init__(self, state_dict, config, mesh_device, sliding):
+    def __init__(self, state_dict, config, mesh_device, sliding, rows_dtypes=None):
         import torch
 
         if config.num_experts != 128 or config.moe_intermediate_size != 704:
@@ -694,9 +707,13 @@ class _ExpertParallelExperts(OptimizedExperts):
             )
 
         fused = state_dict["experts.gate_up_proj"]
+        gate, up = fused[:, :width, :], fused[:, width:, :]
+        # WS1: pack [up | gate] (GegluDecode's order) so batched decode needs no slices; prefill slices to match.
+        up_first = rows_dtypes is not None
+        first, second = (up, gate) if up_first else (gate, up)
         weights = SimpleNamespace(
-            gate_proj=weight(fused[:, :width, :].transpose(-2, -1).unsqueeze(0)),
-            up_proj=weight(fused[:, width:, :].transpose(-2, -1).unsqueeze(0)),
+            gate_proj=weight(first.transpose(-2, -1).unsqueeze(0)),
+            up_proj=weight(second.transpose(-2, -1).unsqueeze(0)),
             down_proj=weight(state_dict["experts.down_proj"].transpose(-2, -1).unsqueeze(0)),
             intermediate_size_per_device=width,
         )
@@ -724,6 +741,25 @@ class _ExpertParallelExperts(OptimizedExperts):
             activation_dtype=None if sliding else ttnn.bfloat8_b,
         )
 
+        self.up_first = up_first
+        # WS1: batched decode (2-32 users) reads these, in the decode precision policy (prefill keeps its own).
+        self.rows_gate, self.rows_down = self.prefill_gate, self.prefill_down
+        # Router tables: this chip's first global expert (chip c owns experts [32c, 32c + 32)).
+        first_expert = torch.arange(4, dtype=torch.int32).mul(32).reshape(1, 4, 1, 1).repeat(1, 1, 1, 16)
+        self.topk_base = ttnn.from_torch(
+            first_expert,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
+        if rows_dtypes is not None:
+            gate_dtype, down_dtype = rows_dtypes
+            if self.rows_gate.dtype != gate_dtype:
+                self.rows_gate = ttnn.typecast(packed.gate_up, gate_dtype)
+            if self.rows_down.dtype != down_dtype:
+                self.rows_down = ttnn.typecast(packed.down, down_dtype)
         self.short_prefill_batch_tokens = int(os.environ.get("GEMMA4_PREFILL_EXPERT_BATCH", "32"))
         if self.short_prefill_batch_tokens not in (32, 64, 128):
             raise ValueError("GEMMA4_PREFILL_EXPERT_BATCH must be 32, 64 or 128")
@@ -783,6 +819,32 @@ class _ExpertParallelExperts(OptimizedExperts):
             for rows in (1, *range(32, self.short_prefill_batch_tokens + 1, 32))
         }
 
+    def decode_rows(self, x, w, sparsity):
+        """Batched decode (2-32 users on one row tile) over the union of their selected local experts:
+        gate_up ``sparse_matmul``, ``GegluDecode``, down ``sparse_matmul``, ``MoeCombine`` (4 programs).
+        ``w`` / ``sparsity`` are this chip's ``RouterTopk`` tables."""
+        from models.demos.gemma4.custom_ops.geglu_decode import GegluDecode
+        from models.demos.gemma4.custom_ops.moe_combine import MoeCombine
+
+        rows = x.shape[-2]
+        gate_config, down_config = self.prefill_configs[32]
+        common = dict(
+            sparsity=sparsity,
+            nnz=None,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([32, 32]),
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.prefill_compute,
+        )
+        gu = ttnn.sparse_matmul(x, self.rows_gate, program_config=gate_config, **common)
+        hidden = GegluDecode.op(ttnn.reshape(gu, (1, 32, rows, 2 * self.width)))
+        ttnn.deallocate(gu)
+        down = ttnn.sparse_matmul(hidden, self.rows_down, program_config=down_config, is_input_a_sparse=True, **common)
+        ttnn.deallocate(hidden)
+        out = MoeCombine.op(ttnn.reshape(down, (1, 32, rows, self.config.hidden_size)), w)
+        ttnn.deallocate(down)
+        return out
+
     def __call__(self, x, routing):
         if x.shape[-2] == 1:
             return self._chunk(x, routing, True)
@@ -824,6 +886,8 @@ class _ExpertParallelExperts(OptimizedExperts):
         gu = ttnn.sparse_matmul(x, self.gate_up, program_config=self.gate_config, **common)
         gu = ttnn.reshape(gu, (1, 32, 1, 2 * self.width))
         gate, up = gu[..., : self.width], gu[..., self.width :]
+        if getattr(self, "up_first", False):
+            gate, up = up, gate
         hidden = ttnn.mul(gate, up, input_tensor_a_activations=self.decode_gelu_activations)
         down = ttnn.sparse_matmul(hidden, self.down, program_config=self.down_config, is_input_a_sparse=True, **common)
         down = ttnn.reshape(down, (1, 32, 1, self.config.hidden_size))
@@ -1316,7 +1380,14 @@ class MultichipDecoder(OptimizedDecoder):
             if expert_parallel:
                 raise ValueError("Select EP-only or hybrid experts, not both")
             self.layer.moe.experts = _HybridExperts(
-                _ExpertParallelExperts(state_dict, config, mesh_device, sliding), experts
+                _ExpertParallelExperts(
+                    state_dict,
+                    config,
+                    mesh_device,
+                    sliding,
+                    rows_dtypes=(experts.gate_up.dtype, experts.down.dtype) if WS1_BATCHED else None,
+                ),
+                experts,
             )
         self.hybrid_experts = hybrid_experts
         self.expert_parallel = expert_parallel
@@ -1762,6 +1833,22 @@ class MultichipDecoder(OptimizedDecoder):
     def decode_forward(self, hidden_states, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
         shared = self.layer.shared_mlp
         if (
+            WS1_BATCHED
+            and self.ws2_norm is not None
+            and 2 <= hidden_states.shape[-2] <= 32
+            and self.layer.self_attn.fused_heads
+            and isinstance(self.layer.moe.experts, _HybridExperts)
+        ):
+            return self._ws1_decode_batch(
+                hidden_states,
+                rope_mats=rope_mats,
+                position_idx=current_pos,
+                position_idx_cache=cache_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                is_decode=True,
+            )
+        if (
             getattr(self, "batched_shared_decode", False)
             and 8 <= hidden_states.shape[-2] <= 32
             and self.topology == ttnn.Topology.Linear
@@ -1872,6 +1959,58 @@ class MultichipDecoder(OptimizedDecoder):
         )
         combined = self.normalize(combined, eps, self.tail_weights[2])
         return ttnn.typecast(ttnn.mul(ttnn.add(residual, combined), self.layer.layer_scalar), ttnn.bfloat16)
+
+    def _ws1_decode_batch(self, x, **attention_kwargs):
+        """Decode 2-32 users in one pass: the batch-1 WS2 layer with every op taking all rows.
+
+        Attention runs the fused head split / norm / RoPE for all users, one paged cache update per tensor and
+        one paged SDPA; the router scores all rows with one projection; the experts run expert-parallel
+        (32 whole experts per chip) over the union of the rows' selected experts, padded to one row tile."""
+        self._validate_kv_cache(attention_kwargs["kv_cache"])
+        cfg = self.ws2_norm
+        eps, compute = self.config.rms_norm_eps, self.layer.self_attn.compute
+        rows = x.shape[-2]
+
+        def norm(value, gamma, residual=None):
+            return ttnn.rms_norm(
+                value,
+                residual_input_tensor=residual,
+                epsilon=eps,
+                weight=None if gamma is None else cfg.gamma[gamma],
+                program_config=cfg.program,
+                memory_config=cfg.memory,
+                compute_kernel_config=compute,
+            )
+
+        def shard(value):
+            return ttnn.interleaved_to_sharded(value, cfg.memory, output_dtype=ttnn.bfloat16)
+
+        x = x if x.is_sharded() else shard(x)
+        attention = self.layer.self_attn(self._ws2_input_norm(x), **attention_kwargs)
+        attention = attention if attention.is_sharded() else shard(attention)
+        residual = ttnn.add(x, norm(attention, "post_attention"), memory_config=cfg.memory)
+        normalized = ttnn.sharded_to_interleaved(norm(residual, None), ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.float32)
+        experts = self.layer.moe.experts.prefill
+        w, sparsity = self.layer.moe.router.decode_rows_tables(normalized, experts.topk_base, 32)
+        expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
+        routed = experts.decode_rows(expert_input, w, sparsity)
+        shared_mlp = self.layer.shared_mlp
+        if getattr(shared_mlp, "input_gamma_folded", False):
+            shared_input = ttnn.typecast(normalized, ttnn.bfloat16)  # gamma is in the decode weights
+        else:
+            shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
+        shared = shared_mlp.decode_batch(
+            ttnn.to_memory_config(shared_input, ttnn.DRAM_MEMORY_CONFIG), reduce_output=False
+        )
+        shared, routed = self._reduce_moe_pair(shared, routed)
+        combined = norm(norm(shard(shared), "ff1"), "ff", residual=norm(shard(routed), "ff2"))
+        return ttnn.add(
+            residual,
+            combined,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer.layer_scalar)],
+        )
 
     def _ws2_input_norm(self, x):
         """Input RMSNorm of one decode row: bf16, gamma inside the sharded norm, L1 interleaved for QKV."""

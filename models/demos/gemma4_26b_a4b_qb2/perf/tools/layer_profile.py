@@ -28,6 +28,7 @@ def main():
     p.add_argument("--iters", type=int, default=200)
     p.add_argument("--profile", action="store_true")
     p.add_argument("--layers", default="0,5")
+    p.add_argument("--batch", type=int, default=1, help="decode users (WS1 batched path for 2-32)")
     args = p.parse_args()
     torch.manual_seed(0)
     ttnn.set_fabric_config(**Gemma4ForCausalLM.model_capabilities["fabric_config"])
@@ -37,12 +38,13 @@ def main():
     try:
         gen = Gemma4Generator(mesh, max_seq_len=2048, layer_indices=tuple(int(x) for x in args.layers.split(",")))
         model = gen.model
-        caches, table = model.allocate_cache(slots=1, context=256)
+        b = args.batch
+        caches, table = model.allocate_cache(slots=b, context=256)
         device_table = model.upload(table, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        length = 100
-        position = model.upload(torch.tensor([[length]], dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        cache_position = model.upload(torch.tensor([length], dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        hidden = model.upload(torch.randn(1, 1, 1, model.config.hidden_size) * 2.0)
+        lengths = torch.tensor([100 - 7 * (s % 4) for s in range(b)], dtype=torch.int32)
+        position = model.upload(lengths[None], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        cache_position = model.upload(lengths, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        hidden = model.upload(torch.randn(1, 1, b, model.config.hidden_size) * 2.0)
         for n, index in enumerate(model.layer_indices):
             layer, kind = model.layers[n], model.config.layer_types[index]
             rope = model.rope_decode[kind]
@@ -87,7 +89,7 @@ def main():
                 samples.append((time.perf_counter() - t0) * 1e6 / args.iters)
             ttnn.release_trace(mesh, trace)
             print(
-                f"LAYER_US layer={index} kind={kind} us={statistics.median(samples):.1f} "
+                f"LAYER_US batch={b} layer={index} kind={kind} us={statistics.median(samples):.1f} "
                 f"samples={[round(s, 1) for s in samples]}",
                 flush=True,
             )
