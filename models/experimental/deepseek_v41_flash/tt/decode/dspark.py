@@ -59,6 +59,7 @@ next round verifies from the slot after the frontier and so rewrites every rejec
 """
 
 import math
+import os
 from types import SimpleNamespace
 
 import torch
@@ -67,9 +68,16 @@ import ttnn
 from models.experimental.deepseek_v41_flash.tt.config import dspark_expert_provider, dspark_weights
 from models.experimental.deepseek_v41_flash.tt.decode.attention import DECODE_LAYOUTS as ATTENTION_LAYOUTS
 from models.experimental.deepseek_v41_flash.tt.decode.attention import _rope_tail, _rows_on_one_core
+from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import _gain_block
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DECODE_LAYOUTS as MOE_LAYOUTS
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
-from models.experimental.deepseek_v4_flash.tt.common import _HIFI4, _MASK_NEG, CCL_TOPOLOGY, DeepSeekV4Module
+from models.experimental.deepseek_v4_flash.tt.common import (
+    _HIFI4,
+    _MASK_NEG,
+    CCL_TOPOLOGY,
+    DeepSeekV4Module,
+    width_sharded_l1_config,
+)
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     _decode_activation,
     _tp_cluster_axis,
@@ -78,13 +86,14 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
 )
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
     PrefetchRing,
+    check_decode_layout,
     ring_prefetch,
     tp_gate_up_layout,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import DeepSeekV4HyperConnection
 from models.experimental.deepseek_v4_flash.tt.decode.moe import _tp_all_reduce
 from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Embedding
-from models.experimental.deepseek_v4_flash.tt.layers import Linear, LinearDecode
+from models.experimental.deepseek_v4_flash.tt.layers import BatchedLinearDecode, Linear, LinearDecode
 from models.experimental.deepseek_v4_flash.tt.prefill.decoder_layer import (
     load_norm_gamma,
     mix_streams,
@@ -110,6 +119,10 @@ LOGIT_ROWS = 32
 MARKOV_GROUPS = ttnn.TILE_SIZE
 # DeepInfer's residual penalty: the residual keeps at least 1 - exp(-penalty) mass, so a rejection can draw.
 DRAFT_PROB_PENALTY = 5e-5
+# The greedy draft's block mode: the stages run on (BLOCK_ROWS, 32)-tiled row blocks (the block padded with zero rows)
+# through the block ops (fused_hyperconnection, matmul_decode, width_sharded_all_reduce) instead of per-row loops.
+BLOCK_ROWS = 8
+DSPARK_BLOCK = os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_OPS", "0") == "1"
 # The uniforms' clamp, so both logs of a Gumbel draw stay finite (and 0 * Gumbel is 0 when greedy).
 _UNIFORM_MIN, _UNIFORM_MAX = 2.0**-24, 1.0 - 2.0**-24
 
@@ -242,6 +255,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         shared_dtype=ttnn.bfloat8_b,
         use_prefetcher: bool = False,
         prefetch_buffers=None,
+        block_rows: int = 0,
     ):
         cache = _as_cache(cache)
         tp = experts.tp_size
@@ -438,16 +452,186 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             use_rm_hs=False,
             dram_sharded_weight=True,
         )
+        self.block_rows = block_rows
+        if block_rows:
+            self._init_block(config, weights, cache, tag, weight_dtype)
 
-    def _all_reduce(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Sum the TP partials of ``[1, 1, T, D]`` (any layout, DRAM or sharded) into DRAM TILE rows. The rows
-        go ROW_MAJOR first: the direct reduce-scatter stages its input over every core's L1, and a 32-row
+    # ------------------------------------------------------------------ block mode
+    def _init_block(self, config, weights, cache, tag, weight_dtype) -> None:
+        """What :meth:`forward_block` runs on besides the per-row path's layers: the block hyper-connections (fused
+        ``fn`` dot), the norms' gains as ``(rows, 32)`` blocks, the grouped ``wo_a`` as a batched ``matmul_decode``,
+        and the epilogues (fused norms, output multicasts) the block path swaps onto the shared projections."""
+        rows, device, tp = self.block_rows, self.device, self.tp_size
+
+        def hc(name, prefix):
+            return DeepSeekV4HyperConnection(
+                config,
+                {
+                    "fn": weights[f"hc_{prefix}_fn"],
+                    "base": weights[f"hc_{prefix}_base"],
+                    "scale": weights[f"hc_{prefix}_scale"],
+                },
+                device,
+                cache=cache.sub(name),
+                row_major_streams=True,
+                fused_fn=True,
+            )
+
+        self.attn_hc_blk = hc("hc_attn", "attn")
+        self.ffn_hc_blk = hc("hc_ffn", "ffn")
+        self.attn_norm_blk = _gain_block(self.attn_norm, rows, device)
+        self.ffn_norm_blk = _gain_block(self.ffn_norm, rows, device)
+        self.streams_config = width_sharded_l1_config(
+            config.hc_mult * rows, config.hidden_size, device, num_cores=8, tile_height=rows
+        )
+
+        def box(*layers):
+            grid = layers[0].b_core_grid()
+            for layer in layers[1:]:
+                grid = grid.merge(layer.b_core_grid())
+            return ttnn.CoreRangeSet({grid.bounding_box()})
+
+        # The collapsed rows' replicas: attention's input on a rectangle around wq_a's and wkv's B cores, the
+        # shared expert's around w1's and w3's.
+        self.attn_in_grid = box(self.wq_a, self.wkv)
+        self.ffn_in_grid = box(self.shared_w1, self.shared_w3)
+
+        o_lora = self.o_lora = config.o_lora_rank
+        in_per_group = config.num_attention_heads * self.head_dim // config.o_groups
+        layout = check_decode_layout("o_a_proj", in_per_group, o_lora, batch=config.o_groups)
+        b_blocks, n_blocks = layout["b_blocks"] // tp, layout["n_blocks"] * tp
+        wo_a = _memo(weights["attn.wo_a.weight"])
+        self.wo_a_blk = BatchedLinearDecode(
+            wo_a,
+            device,
+            cache.file(f"attn.wo_a.batched{tag}.b{b_blocks}n{n_blocks}"),
+            dtype=weight_dtype,
+            batch=self.local_groups,
+            global_batch=config.o_groups,
+            K=in_per_group,
+            N=o_lora,
+            b_blocks=b_blocks,
+            n_blocks=n_blocks,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=3) if tp > 1 else None,
+            preprocess=lambda w: w.reshape(config.o_groups, o_lora, in_per_group).transpose(1, 2).contiguous(),
+            dram_sharded_weight=True,
+        )
+        self.wo_a_blk.set_output_core_grid(box(self.wo_b))
+        self.o_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        self.o_block_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(self.o_core, [rows, self.local_heads * self.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        # Per-row norms of (rows, 32) blocks, which sharded_rmsnorm also un-tiles into ROW_MAJOR rows.
+        self.q_norm_blk = _gain_block(self.q_norm, rows, device)
+        self.kv_norm_blk = _gain_block(self.kv_norm, rows, device)
+
+    def _rows_normed(self, x: ttnn.Tensor, gain: ttnn.Tensor, n: int) -> ttnn.Tensor:
+        """The width-sharded ``(rows, 32)`` block ``x`` RMS-normed per row (``gain`` a block gain), as its first ``n``
+        rows ROW_MAJOR ``[1, 1, n, W]`` in DRAM: sharded_rmsnorm un-tiles as it writes."""
+        rows = ttnn.experimental.deepseek.sharded_rmsnorm(
+            x, gain, epsilon=self.eps, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        if n < rows.shape[2]:
+            rows = ttnn.slice(rows, [0, 0, 0, 0], [1, 1, n, rows.shape[-1]])
+        return rows
+
+    def to_block(self, x: ttnn.Tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
+        """ROW_MAJOR rows ``[1, 1, n, W]`` -> the ``(rows, 32)`` block ``[1, 1, rows, W]``, zero rows past ``n``."""
+        n, rows = x.shape[2], self.block_rows
+        if n < rows:
+            x = ttnn.pad(x, [(0, 0), (0, 0), (0, rows - n), (0, 0)], 0.0)
+        return ttnn.tilize(x, tile=ttnn.Tile((rows, ttnn.TILE_SIZE)), memory_config=memory_config)
+
+    def attention_block(self, replica, t, q_cos, q_sin, q_neg_sin, kv_cos, kv_sin, bias_row, ring_base=None):
+        """:meth:`attention` from the normed block's ``(rows, 32)`` replica on :attr:`attn_in_grid`: the all-reduced
+        ``(rows, 32)`` block ``[1, 1, rows, D]`` width-sharded over ``wo_b``'s cores (zero rows past ``t``).
+
+        ``wq_a``, ``wkv`` and the grouped ``wo_a`` / ``wo_b`` take the block (one in0 tile per K step for every row);
+        ``wq_b`` still takes the ``t`` normed q_a rows ROW_MAJOR, as the attention core reads ``q`` in 32x32 tiles."""
+        if self.sessions > 1:
+            ttnn.fill_cache(
+                self.ring_view, self.ring, 0, input_row_offset_tensor=ring_base, num_input_rows=self.ring_rows
+            )
+        q_a = self._rows_normed(self.wq_a(replica), self.q_norm_blk, t)
+        kv = self._rows_normed(self.wkv(replica), self.kv_norm_blk, t)
+        q = _rows(self.wq_b(_decode_activation(self.wq_b, q_a)))
+        q = ttnn.reshape(q, [1, 1, t * self.local_heads, self.head_dim])
+        q = _rope_tail(q, q_cos, q_sin, self.rot)
+        kv = _rope_tail(ttnn.to_layout(kv, ttnn.TILE_LAYOUT), kv_cos, kv_sin, self.rot)
+        kv = ttnn.pad(kv, [(0, 0), (0, 0), (0, self.kv_rows - self.ring_rows - t), (0, 0)], 0.0)
+        keys = ttnn.concat([self.ring_view, kv], dim=2)
+        scores = ttnn.matmul(q, keys, transpose_b=True, dtype=ttnn.float32, compute_kernel_config=_HIFI4)
+        scores = ttnn.add(ttnn.multiply(scores, self.scale), ttnn.add(self.sink_bias, bias_row))
+        probs = ttnn.typecast(ttnn.softmax(scores, dim=-1, compute_kernel_config=_HIFI4), ttnn.bfloat16)
+        o = ttnn.matmul(probs, keys, compute_kernel_config=_HIFI4)
+        o = _rope_tail(o, q_cos, q_neg_sin, self.rot)
+        # [t * H, Dh] row t * H + h is [t, H * Dh] row t: the (rows, 32) block o_a's gather reads on core (0, 0).
+        o = ttnn.reshape(ttnn.to_layout(o, ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, self.local_heads * self.head_dim])
+        o = self.to_block(o, self.o_block_config)
+        dest = ttnn.CoreRangeSet({self.wo_a_blk.b_core_grid().bounding_box()})
+        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(o, dest, num_groups=self.local_groups)
+        ttnn.deallocate(o)
+        y = self.wo_a_blk(gathered)
+        ttnn.deallocate(gathered)
+        y = ttnn.experimental.view(y, [1, 1, y.shape[-2], self.local_groups * self.o_lora])
+        out = self.wo_b(y)
+        ttnn.deallocate(y)
+        if self.tp_size == 1:
+            return out
+        reduced = ttnn.experimental.deepseek.width_sharded_all_reduce(
+            out, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
+        )
+        ttnn.deallocate(out)
+        return reduced
+
+    def _tap(self, name: str, x: ttnn.Tensor, n: int) -> None:
+        """With :attr:`debug` a dict (eager runs only), keep the first ``n`` rows of ``x`` on host under ``name``."""
+        if getattr(self, "debug", None) is not None:
+            host = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+            self.debug[name] = host.reshape(-1, host.shape[-1])[:n]
+
+    def forward_block(self, streams, pre_mix, mix, rope: dict, bias_row, t: int, ring_base=None, out_rows=None):
+        """:meth:`forward` on ``(rows, 32)`` blocks: ``streams`` ``[1, 1, hc * rows, D]`` stream-major in
+        :attr:`streams_config`, ``pre_mix`` ``[1, rows, 1, hc]``, ``t`` the block's real rows (the rest stay zero)
+        and ``mix`` the previous stage's FFN ``(post, comb, out)``, which this stage's attention HC folds in
+        (``None`` for the first). Returns ``(streams, ffn_pre, mix)``: this stage's FFN mix is left to the next HC
+        (or the head's). The MoE runs ROW_MAJOR on the first ``out_rows`` (default ``t``) rows."""
+        outs = self.attn_hc_blk(
+            streams,
+            pre_mix=pre_mix,
+            mix=mix,
+            norm=(self.attn_norm_blk, self.eps, True),
+            replica_grid=self.attn_in_grid,
+        )
+        if mix is None:
+            post, comb, collapsed, attn_pre, replica = outs
+        else:
+            post, comb, collapsed, attn_pre, streams, replica = outs
+        ttnn.deallocate(collapsed)
+        self._tap("attn_in", replica, t)
+        attn_out = self.attention_block(replica, t, *rope["q"], *rope["kv"], bias_row, ring_base)
+        self._tap("attn_out", attn_out, t)
+        ttnn.deallocate(replica)
+        post2, comb2, collapsed, ffn_pre, streams = self.ffn_hc_blk(
+            streams, pre_mix=attn_pre, mix=(post, comb, attn_out)
+        )
+        n = t if out_rows is None else min(out_rows, t)
+        normed = self._rows_normed(collapsed, self.ffn_norm_blk, n)
+        self._tap("moe_in", normed, n)
+        out = self.moe(ttnn.to_layout(normed, ttnn.TILE_LAYOUT), x_rows=normed, rows_out=True)
+        self._tap("moe_out", out, n)
+        return streams, ffn_pre, (post2, comb2, self.to_block(out))
+
+    def _all_reduce(self, x: ttnn.Tensor, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
+        """Sum the TP partials of ``[1, 1, T, D]`` (any layout, DRAM or sharded) into DRAM rows in ``layout``. The
+        rows go ROW_MAJOR first: the direct reduce-scatter stages its input over every core's L1, and a 32-row
         padded tile takes ~640 KB per core on the output stage."""
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        if self.tp_size == 1:
-            return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        summed = _tp_all_reduce(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), self.device)
-        return ttnn.to_layout(summed, ttnn.TILE_LAYOUT)
+        if self.tp_size > 1:
+            x = _tp_all_reduce(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), self.device)
+        return ttnn.to_layout(x, layout)
 
     def _kv(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """``[1, 1, R, D]`` -> the RoPE'd ``kv_norm(wkv(x))`` ``[1, 1, R, head_dim]``."""
@@ -494,7 +678,7 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         o = ttnn.reshape(ttnn.permute(o, (0, 2, 1, 3)), [1, 1, t, -1])
         return self._all_reduce(self.wo_b(_decode_activation(self.wo_b, o)))
 
-    def moe(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def moe(self, x: ttnn.Tensor, x_rows=None, rows_out: bool = False) -> ttnn.Tensor:
         """Routed experts plus the shared expert: ``[1, 1, T, D]`` -> ``[1, 1, T, D]`` (all-reduced).
 
         ``fused_experts`` takes the block's ``T`` rows ROW_MAJOR in one call: it computes them in one
@@ -509,8 +693,10 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         scores = ttnn.typecast(ttnn.sqrt(ttnn.softplus(logits)), ttnn.bfloat16)
         ranking = ttnn.add(scores, self.gate_bias)
         num_experts = min(t * experts.top_k, scores.shape[3])
+        # x_rows: x ROW_MAJOR when the caller has it already; rows_out returns ROW_MAJOR rows.
+        x_rows = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT) if x_rows is None else x_rows
         out = ttnn.experimental.deepseek.moe.fused_experts(
-            ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT),
+            x_rows,
             routing_scores=scores,
             ranking_scores=ranking,
             gate_up_weights=experts.gate_up_weights,
@@ -524,21 +710,35 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             experts_block_size=min(self.experts_block or experts.experts_block_size, num_experts),
         )
         routed = ttnn.to_layout(ttnn.reshape(out, [1, 1, t, d]), ttnn.TILE_LAYOUT)
-        x_rep = _decode_activation(self.shared_w1, x)
+        x_rep = _decode_activation(self.shared_w1, x_rows)
         gate = ttnn.clamp(self.shared_w1(x_rep), max=self.limit)
         up = ttnn.clamp(self.shared_w3(_decode_activation(self.shared_w3, x_rep)), min=-self.limit, max=self.limit)
         shared = _rows(self.shared_w2(ttnn.multiply(ttnn.silu(gate), up)))
-        return self._all_reduce(ttnn.add(routed, shared))
+        return self._all_reduce(ttnn.add(routed, shared), ttnn.ROW_MAJOR_LAYOUT if rows_out else ttnn.TILE_LAYOUT)
 
-    def forward(self, streams, pre_mix, rope: dict, bias_row, ring_base=None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``(streams [1, T, hc, D], pre_mix [1, T, 1, hc])`` -> the same pair for the next stage."""
+    def forward(
+        self, streams, pre_mix, rope: dict, bias_row, ring_base=None, out_rows=None
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``(streams [1, T, hc, D], pre_mix [1, T, 1, hc])`` -> the same pair for the next stage.
+
+        ``out_rows`` (the last stage of a greedy draft) keeps only the block's first ``out_rows`` rows after the
+        attention: the later rows' FFN feeds nothing the kept rows read, so it is skipped (fewer routed experts)."""
         post, comb, collapsed, attn_pre = self.attn_hc(streams, pre_mix)
         normed = _rms(rows_from_tokens(collapsed), self.attn_norm, self.eps)
+        self._tap("attn_in", normed, normed.shape[2])
         attn_out = self.attention(normed, *rope["q"], *rope["kv"], bias_row, ring_base)
+        self._tap("attn_out", attn_out, attn_out.shape[2])
         streams = mix_streams(post, comb, attn_out, streams)
+        _, t, hc, d = streams.shape
+        if out_rows is not None and out_rows < t:
+            streams = ttnn.slice(streams, [0, 0, 0, 0], [1, out_rows, hc, d])
+            attn_pre = ttnn.slice(attn_pre, [0, 0, 0, 0], [1, out_rows, 1, attn_pre.shape[-1]])
         post, comb, collapsed, ffn_pre = self.ffn_hc(streams, attn_pre)
         normed = _rms(rows_from_tokens(collapsed), self.ffn_norm, self.eps)
-        streams = mix_streams(post, comb, self.moe(normed), streams)
+        self._tap("moe_in", normed, normed.shape[2])
+        moe_out = self.moe(normed)
+        self._tap("moe_out", moe_out, moe_out.shape[2])
+        streams = mix_streams(post, comb, moe_out, streams)
         return streams, ffn_pre
 
 
@@ -593,6 +793,8 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         stash_device=None,
         link=None,
         sessions: int = 1,
+        greedy_drafts=None,
+        block_mode: bool = DSPARK_BLOCK,
     ):
         if sessions < 1:
             raise ValueError(f"sessions must be at least 1, got {sessions}")
@@ -614,11 +816,18 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         self.window = config.sliding_window
         self.block = config.dspark_block_size
         self.noise_id = config.dspark_noise_token_id
+        # How many proposals draft(greedy=True) computes (the rest of out["ids"] repeats the last): a verify of
+        # k + 1 rows reads k, and the Markov steps and the last stage's FFN past them feed nothing it reads.
+        self.greedy_drafts = self.block if greedy_drafts is None else int(greedy_drafts)
+        if not 0 < self.greedy_drafts <= self.block:
+            raise ValueError(f"greedy_drafts must be in [1, {self.block}], got {greedy_drafts}")
         self.targets = list(config.dspark_target_layer_ids)
         self.main_rows = main_rows
         self.stash_rows = stash_rows
         self.ring_rows = -(-(self.window + main_rows - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         self.sessions = sessions
+        # draft(greedy=True) runs the stages on (BLOCK_ROWS, 32) row blocks (forward_block).
+        self.block_mode = bool(block_mode) and self.block <= BLOCK_ROWS
         # What set_sampling last staged (the inputs start greedy).
         self.temperature = 0.0
         self.rope_dim = config.qk_rope_head_dim
@@ -657,6 +866,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
                     shared_dtype=shared_dtype,
                     use_prefetcher=use_prefetcher,
                     prefetch_buffers=prefetch_buffers,
+                    block_rows=BLOCK_ROWS if self.block_mode else 0,
                 )
             )
         first, last = weights[0], weights[-1]
@@ -849,6 +1059,13 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         self.pre_mix_init = ttnn.from_torch(
             one_hot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=replicate
         )
+        if self.block_mode:
+            one_hot = torch.zeros(1, BLOCK_ROWS, 1, self.hc)
+            one_hot[..., 0] = 1
+            self.pre_mix_block = ttnn.from_torch(
+                one_hot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=replicate
+            )
+            self.norm_blk = _gain_block(self.norm, BLOCK_ROWS, device)
         if use_prefetcher:
             # The DRISC senders read a weight straight from DRAM when its request arrives, off the command
             # queue; a session that is already open only fenced the uploads queued before it started.
@@ -952,7 +1169,13 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
 
     # ------------------------------------------------------------------ device side (traceable)
     def _block_inputs(
-        self, ids: ttnn.Tensor, pos: ttnn.Tensor, q_pos: ttnn.Tensor, frontier_slot: ttnn.Tensor, live: ttnn.Tensor
+        self,
+        ids: ttnn.Tensor,
+        pos: ttnn.Tensor,
+        q_pos: ttnn.Tensor,
+        frontier_slot: ttnn.Tensor,
+        live: ttnn.Tensor,
+        embed: bool = True,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, dict, ttnn.Tensor]:
         """A block's inputs from its fields (``ids`` / ``pos`` / ``q_pos`` uint32 ``[1, n]``, ``frontier_slot``
         and ``live`` fp32 TILE ``[1, 1, 1, 1]``): ``(x_embed [1, 1, T, D], token [1, 1] uint32, rope, bias_row
@@ -961,7 +1184,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         The rows' embeddings and RoPE rows are looked up by id and position. ``bias_row`` opens ring column
         ``c`` when ``(frontier - c) mod ring_rows`` is below the live count, the block and sink columns always.
         """
-        x_embed = _lookup_rows(ids, self.embed.embedding_weight)
+        x_embed = _lookup_rows(ids, self.embed.embedding_weight) if embed else None
         token = ttnn.slice(ids, [0, 0], [1, 1])
         kv_cos, kv_sin = (_lookup_rows(pos, table) for table in self.rope_tables)
         q_cos, q_sin = (_lookup_rows(q_pos, table) for table in self.rope_tables)
@@ -1127,6 +1350,8 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         greedy: bool = False,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         inp, t = self.inputs, self.block
+        if greedy and self.block_mode:
+            return self._draft_block(ids, pos, q_pos, frontier_slot, live, ring_base)
         x_embed, token, rope, bias_row = self._block_inputs(ids, pos, q_pos, frontier_slot, live)
         streams = ttnn.to_layout(
             ttnn.repeat(tokens_from_rows(x_embed), ttnn.Shape([1, 1, self.hc, 1])), ttnn.TILE_LAYOUT
@@ -1134,8 +1359,10 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         pre_mix = self.pre_mix_init
         # INT32 ROW_MAJOR [1]: fill_cache reads it on device, so the trace drafts whichever slot the packet names.
         ring_base = ttnn.reshape(ring_base, [1]) if self.sessions > 1 else None
-        for stage in self.stages:
-            streams, pre_mix = stage.forward(streams, pre_mix, rope, bias_row, ring_base)
+        last = len(self.stages) - 1
+        for s, stage in enumerate(self.stages):
+            out_rows = self.greedy_drafts if greedy and s == last else None
+            streams, pre_mix = stage.forward(streams, pre_mix, rope, bias_row, ring_base, out_rows=out_rows)
 
         # pre_mix [1, T, 1, hc] @ streams [1, T, hc, D] per token, over hc padded to a tile with real zeros:
         # the matmul reads the tiles' padding, which other ops leave unspecified.
@@ -1149,6 +1376,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         x = rows_from_tokens(collapsed)
         normed = _rms(x, self.norm, self.eps)
         if greedy:
+            self._debug_head(normed)
             ids, embeds = self._markov_greedy(normed, token)
             return self._finish_draft(x, ids, embeds, None)
         logits = self.lm_head(normed)
@@ -1181,17 +1409,54 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
 
     def _finish_draft(self, x, ids: list, embeds: list, rows) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """The confidence head over the block's rows ``x`` and Markov inputs ``embeds``, then :attr:`out` (``rows``
-        None keeps the last logits)."""
-        markov = ttnn.to_layout(ttnn.concat(embeds, dim=2), ttnn.TILE_LAYOUT)
-        conf = ttnn.add(
-            ttnn.linear(x, self.conf_hidden.weight, dtype=ttnn.float32, compute_kernel_config=_HIFI4),
-            ttnn.linear(markov, self.conf_markov.weight, dtype=ttnn.float32, compute_kernel_config=_HIFI4),
-        )
+        None keeps the last logits). Fewer ids than the block (a greedy draft of :attr:`greedy_drafts`) pad
+        :attr:`out` ``["ids"]`` with the last and leave the confidences as they were."""
+        conf = None
+        if len(ids) == self.block and x is not None:
+            markov = ttnn.to_layout(ttnn.concat(embeds, dim=2), ttnn.TILE_LAYOUT)
+            conf = ttnn.add(
+                ttnn.linear(x, self.conf_hidden.weight, dtype=ttnn.float32, compute_kernel_config=_HIFI4),
+                ttnn.linear(markov, self.conf_markov.weight, dtype=ttnn.float32, compute_kernel_config=_HIFI4),
+            )
+        else:
+            ids = ids + [ids[-1]] * (self.block - len(ids))
         out = self.out
         for name, value in (("ids", ttnn.concat(ids, dim=-1)), ("conf", conf), ("rows", rows)):
             if value is not None:
                 ttnn.copy(ttnn.to_memory_config(value, ttnn.DRAM_MEMORY_CONFIG), out[name])
         return out["ids"], out["conf"], out["rows"]
+
+    def _debug_head(self, normed: ttnn.Tensor) -> None:
+        """With :attr:`debug_rows` a list (eager runs only), append the head's normed input rows to it, on host."""
+        if getattr(self, "debug_rows", None) is not None:
+            self.debug_rows.append(ttnn.to_torch(ttnn.get_device_tensors(normed)[0]).float().reshape(-1, self.hidden))
+
+    def _draft_block(self, ids, pos, q_pos, frontier_slot, live, ring_base):
+        """The greedy draft on ``(BLOCK_ROWS, 32)`` row blocks (:meth:`DeepSeekV41DSparkStage.forward_block`): the
+        block's ``T`` rows padded with zero rows, which stay zero. Each stage's FFN mix is folded into the next
+        stage's attention HC, and the last one's into the head's collapse (one more block HC, its RMSNorm the head's
+        norm, which un-tiles the rows)."""
+        t, rows, hc, d = self.block, BLOCK_ROWS, self.hc, self.hidden
+        _, token, rope, bias_row = self._block_inputs(ids, pos, q_pos, frontier_slot, live, embed=False)
+        first, last = self.stages[0], self.stages[-1]
+        embedded = ttnn.reshape(
+            ttnn.embedding(ids, self.embed.embedding_weight, layout=ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, d]
+        )
+        embedded = ttnn.pad(embedded, [(0, 0), (0, 0), (0, rows - t), (0, 0)], 0.0)
+        stacked = ttnn.repeat(embedded, ttnn.Shape([1, 1, hc, 1]))
+        streams = ttnn.tilize(stacked, tile=ttnn.Tile((rows, ttnn.TILE_SIZE)), memory_config=first.streams_config)
+        ttnn.deallocate(stacked)
+        ring_base = ttnn.reshape(ring_base, [1]) if self.sessions > 1 else None
+        pre_mix, mix = self.pre_mix_block, None
+        k = self.greedy_drafts
+        for stage in self.stages:
+            out_rows = k if stage is last else None
+            streams, pre_mix, mix = stage.forward_block(streams, pre_mix, mix, rope, bias_row, t, ring_base, out_rows)
+        _, _, collapsed, _, _ = last.ffn_hc_blk(streams, pre_mix=pre_mix, mix=mix)
+        normed = ttnn.to_layout(last._rows_normed(collapsed, self.norm_blk, k), ttnn.TILE_LAYOUT)
+        self._debug_head(normed)
+        ids, embeds = self._markov_greedy(normed, token)
+        return self._finish_draft(None, ids, embeds, None)
 
     def _markov_greedy(self, normed: ttnn.Tensor, token: ttnn.Tensor) -> tuple[list, list]:
         """The greedy Markov steps from the head's input ``normed`` ``[1, 1, T, D]`` and the block's token: ``(ids,
@@ -1199,7 +1464,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
 
         With a TP ``lm_head`` each rank keeps its ``V / TP`` logits columns and biases them with its rows of the
         Markov head; the ranks' biased rows, gathered in rank order, are the full grouped row."""
-        t, rank = self.block, self.markov_embed.shape[-1]
+        t, rank = normed.shape[2], self.markov_embed.shape[-1]
         tp = self.head_tp
         if tp > 1:
             logits = self.lm_head.linear(normed)
@@ -1213,7 +1478,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             ttnn.reshape(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), [1, t, groups, wide]), ttnn.TILE_LAYOUT
         )
         ids, embeds = [], []
-        for i in range(t):
+        for i in range(self.greedy_drafts):
             embed = ttnn.reshape(ttnn.embedding(token, self.markov_embed), [1, 1, 1, rank])
             embeds.append(embed)
             blocks = ttnn.to_layout(ttnn.repeat(embed, ttnn.Shape([1, 1, 1, groups])), ttnn.TILE_LAYOUT)
