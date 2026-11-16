@@ -114,6 +114,10 @@ EXACT = os.environ.get("DEEPSEEK_V4_SPEC_EXACT", "1") != "0"
 # The DSpark run's sampling (DSparkSpeculator.temperature / top_p); temperature 0 is greedy.
 TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_SPEC_TEMPERATURE", "1"))
 TOP_P = float(os.environ.get("DEEPSEEK_V4_SPEC_TOP_P", "1"))
+# DEEPSEEK_V4_SPEC_DUMP=<file.pt> (block verify): after the greedy baseline, teacher-force the prompt + baseline through
+# eager verify blocks and save, per position, the tap rows the drafter receives, the target-layer stream means, the
+# block path's argmax, and the device drafter's greedy proposals at every frontier (see _dump_drafter_inputs).
+DUMP_PATH = os.environ.get("DEEPSEEK_V4_SPEC_DUMP", "")
 # test_parallel_verify_rows' decode rows; the eighth row is the drafter's.
 DECODE_STAGES = 7
 # Asked in order, one after each end of sentence, with the conversation so far as context.
@@ -479,6 +483,8 @@ def _block_spec_decode(mesh_device) -> None:
             # The stream's first token is the prefill's (the prompt's last row): one-row, not checked here.
             return [(got[0], 0.0, 0.0)] + res[: len(got) - 1]
 
+        block_ref: list[int] = []
+
         def check(run: str, got: list[int]) -> None:
             forced = teacher_forced(got)
             off = [(i, top - mine) for i, (arg, top, mine) in enumerate(forced) if arg != got[i]]
@@ -501,19 +507,26 @@ def _block_spec_decode(mesh_device) -> None:
             assert worst <= NEAR_TIE or not EXACT, message
             if worst > NEAR_TIE:
                 logger.warning(message)
-            if got == baseline[: len(got)]:
-                logger.info(f"{run}: equal to the greedy baseline over {len(got)} tokens")
-                return
-            diff = _first_diff(got, baseline)
-            if diff == 0:
-                logger.warning(f"{run} diverged from the greedy baseline at the prefill's token")
-                return
-            # The block path at the divergence, on the common prefix: its pick and the baseline's, and their gap.
-            arg, top, _ = teacher_forced(got[: diff + 1])[diff]
-            logger.warning(
-                f"{run} diverged from the greedy baseline at token {diff}: {got[diff]} vs greedy {baseline[diff]}; "
-                f"there the block path picks {arg} (top logit {top:.3f})"
-            )
+            for name, ref in (("one-row greedy baseline", baseline), ("block greedy stream", block_ref)):
+                if not ref:
+                    continue
+                if got == ref[: len(got)]:
+                    logger.info(f"{run}: equal to the {name} over {len(got)} tokens")
+                    continue
+                diff = _first_diff(got, ref)
+                if diff == 0:
+                    logger.warning(f"{run} diverged from the {name} at the prefill's token")
+                    continue
+                # The block path at the divergence, on the common prefix: its pick, and its logit gap to the
+                # reference's token there.
+                arg, top, _ = teacher_forced(got[: diff + 1])[diff]
+                _, _, theirs = teacher_forced(got[:diff] + [ref[diff]])[diff]
+                same_after = sum(a == b for a, b in zip(got[diff + 1 :], ref[diff + 1 :]))
+                logger.warning(
+                    f"{run} diverged from the {name} at token {diff}: {got[diff]} vs {ref[diff]}; there the block "
+                    f"path picks {arg}, top logit {top:.3f}, {top - theirs:.3f} above the reference's token; "
+                    f"{same_after}/{len(got) - diff - 1} later tokens equal position by position"
+                )
 
         def rollback_check() -> None:
             """A block whose rows past ``m`` are rejected: from the greedy prefix at ``p``, verify ``[s_p .. s_{p+m},
@@ -605,13 +618,31 @@ def _block_spec_decode(mesh_device) -> None:
                         f"where kept row j moves (and its first diffs): {first_bad}"
                     )
 
+        if DUMP_PATH:
+            _dump_drafter_inputs(model, prompt, baseline, rows, DUMP_PATH)
+
         results = {}
-        # 2. Corrupted oracle drafts: exactness under rejection.
+        # 2. Block greedy: block verify rounds whose drafts are all the noise id (never the target's pick), one token
+        # per round. The block path's own greedy stream, the exactness reference of the spec runs below: the block ops
+        # round differently from the one-row ops, so it parts from the one-row baseline at its first near-tie.
+        noise = config.dspark_noise_token_id
+        block_greedy = DSparkSpeculator(
+            model, drafts, propose=lambda token, frontier: [noise] * drafts, parallel_verify=True, temperature=0.0
+        )
+        block_stream = converse(block_greedy)
+        logger.info(f"block greedy (1 token per round): {block_greedy.stats.summary(drafts)}")
+        results["blockgr"] = (block_greedy.stats, block_stream)
+
+        # 3. Corrupted oracle drafts from the block greedy stream: exactness under rejection, and the verify / accept
+        # plumbing (it should accept ~2/3, 4/9, 8/27 of the drafts at depth 1, 2, 3).
         rng = random.Random(0)
+        oracle_stream = prompt + block_stream
 
         def propose(token, frontier):
             return [
-                stream[q] if q < len(stream) and rng.random() > CORRUPT else rng.randrange(config.vocab_size)
+                oracle_stream[q]
+                if q < len(oracle_stream) and rng.random() > CORRUPT
+                else rng.randrange(config.vocab_size)
                 for q in range(frontier + 2, frontier + 2 + drafts)
             ]
 
@@ -620,7 +651,7 @@ def _block_spec_decode(mesh_device) -> None:
         logger.info(f"oracle ({drafts} drafts, 1/3 corrupted), block verify: {oracle.stats.summary(drafts)}")
         results["oracle"] = (oracle.stats, got)
 
-        # 3. The DSpark drafter, greedy.
+        # 4. The DSpark drafter, greedy.
         spec = DSparkSpeculator(model, drafts, parallel_verify=True, temperature=0.0)
         got = converse(spec)
         logger.info(f"DSpark, block verify, {drafts} drafts, greedy: {spec.stats.summary(drafts)}")
@@ -642,8 +673,67 @@ def _block_spec_decode(mesh_device) -> None:
                 f"{tps / greedy_tps:>8.2f}x  {split}"
             )
         logger.info("\n".join(lines))
+        block_ref = results["blockgr"][1]
         for name, (_, got) in results.items():
             check(f"{name} spec (block verify)", got)
+
+
+def _dump_drafter_inputs(model, prompt: list[int], baseline: list[int], rows: int, path: str) -> None:
+    """Teacher-force ``prompt + baseline`` from position 0 through eager verify blocks (every row accepted) and save
+    to ``path``: ``tokens`` [N]; ``taps`` [N, targets * D], the rows the drafter receives; ``means`` [N, targets * D],
+    the target layers' input stream means from the block's streams; ``argmax`` [N], the block path's pick for the
+    next position; ``drafts`` {frontier: the device drafter's greedy proposals for frontier + 2 ..}, drafted right
+    after the block holding the frontier (its later rows are in the rings, masked)."""
+    stream = prompt + baseline
+    targets = [li - 1 for li in model.config.dspark_target_layer_ids]  # input of layer l = output of layer l - 1
+    model.dspark.set_sampling(0.0)
+    taps, means, argmax, drafts = [], [], [], {}
+    model._block_debug_tap_rows = []
+    t0 = time.perf_counter()
+    try:
+        for p in range(0, len(stream), rows):
+            block = stream[p : p + rows]
+            n = len(block)
+            block = block + [block[-1]] * (rows - n)
+            model._block_debug_streams = []
+            logits = model.debug_block_logits(block, p)
+            st = model.block_debug_taps  # [layers, hc * T, D]
+            hc = st.shape[1] // rows
+            m = st[targets].reshape(len(targets), hc, rows, -1).mean(dim=1)  # [targets, T, D]
+            means.append(m.permute(1, 0, 2).reshape(rows, -1)[:n])
+            taps.append(model._block_debug_tap_rows.pop()[:n])
+            argmax.append(logits[:n].argmax(dim=-1))
+            for f in range(max(p, len(prompt) - 1), p + n):
+                if f + 1 >= len(stream):
+                    break
+                model.spec_draft_async(stream[f + 1], f)
+                drafts[f] = model.spec_read_draft(conf=False)[0]
+    finally:
+        model._block_debug_streams = None
+        model._block_debug_tap_rows = None
+    torch.save(
+        {
+            "tokens": torch.tensor(stream),
+            "n_prompt": len(prompt),
+            "taps": torch.cat(taps),
+            "means": torch.cat(means),
+            "argmax": torch.cat(argmax),
+            "drafts": drafts,
+        },
+        path,
+    )
+    k = rows - 1
+    hits = [0] * k
+    for f, ids in drafts.items():
+        for j in range(k):
+            q = f + 2 + j
+            if q >= len(stream) or ids[j] != stream[q]:
+                break
+            hits[j] += 1
+    logger.info(
+        f"dump: {len(stream)} positions, {len(drafts)} drafts in {time.perf_counter() - t0:.0f}s to {path}; "
+        f"teacher-forced P(first j drafts right) {[round(h / max(len(drafts), 1), 3) for h in hits]}"
+    )
 
 
 # Both parities below the sliding window (masked), across the causal switch, and past the ring's wrap.

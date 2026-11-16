@@ -3926,6 +3926,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     )
                 if len(tapped) == len(taps):
                     rows = ttnn.concat([tapped[target] for target in taps], dim=-1)
+                    if getattr(self, "_block_debug_tap_rows", None) is not None:
+                        # Debug (eager blocks only): the target-layer means the drafter receives, [T, targets * D].
+                        self._block_debug_tap_rows.append(
+                            ttnn.to_torch(ttnn.get_device_tensors(rows)[0]).float().reshape(t, -1)
+                        )
                     ttnn.experimental.send_direct_async(rows, self.dspark.link[0])
                     ttnn.experimental.send_direct_async(pkt, self.dspark.link[0])
                     rows.deallocate(True)
