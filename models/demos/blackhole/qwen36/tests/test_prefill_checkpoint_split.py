@@ -169,7 +169,7 @@ def _report(diffs, what):
 @torch.no_grad()
 @pytest.mark.timeout(7200)
 @_parametrize
-@pytest.mark.parametrize("n_layers", [8, 64])
+@pytest.mark.parametrize("n_layers", [8, 64], ids=["layers8", "layers64"])
 def test_split_checkpoint_matches_the_single_call(mesh_device, n_layers, monkeypatch, reset_seeds, ensure_gc):
     """Three rows (2000, 2348 and 3100 tokens) in one prefill step, three times into the same blocks: eagerly with the
     single-call checkpoint (the reference), eagerly with the split delta rule, and from the captured traces after the
@@ -199,7 +199,7 @@ def test_split_checkpoint_matches_the_single_call(mesh_device, n_layers, monkeyp
 @torch.no_grad()
 @pytest.mark.timeout(7200)
 @_parametrize
-@pytest.mark.parametrize("n_layers", [8, 64])
+@pytest.mark.parametrize("n_layers", [8, 64], ids=["layers8", "layers64"])
 def test_traced_rows_dump(mesh_device, n_layers, monkeypatch, reset_seeds, ensure_gc):
     """The three rows from the captured traces after the plugin's two-phase warmup, saved to QWEN36_CKPT_DUMP
     (suffixed with the layer count) so that the snapshots of two builds can be compared with compare_dumps. Uses only
