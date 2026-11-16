@@ -47,7 +47,7 @@ pytest --disable-warnings models/demos/t3000/sentence_bert/demo/dataset_evaluati
 ```
 
 ##  Details
-- The entry point to the SentenceBERT model is located at:`models/demos/sentence_bert/ttnn/ttnn_sentence_bert.py`
+- The entry point to the SentenceBERT model is located at:`models/demos/sentence_bert/ttnn/ttnn_sentence_bert_model.py`
 -  Batch size: 8
 - Sequence Length: 384
 - End-to-end performance with mean-pooling post-processing is **3070 sentences per second**
