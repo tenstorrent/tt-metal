@@ -467,3 +467,55 @@ def test_a_run_type_preset_selects_its_run_types(tmp_path):
         iso[0] + l1[0], iso[1] + l1[1], run_types="ALL_ISOLATION_MODES"
     )
     assert {r["run_type"] for r in result["regressions"]} == {"PACK_ISOLATE"}
+
+
+def _report(result):
+    return render_report(
+        result, threshold=DEFAULT_THRESHOLD, test="t", baseline_sha="a", current_sha="b"
+    )
+
+
+def test_a_test_whose_key_changed_is_named_in_the_report(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, module="perf_y")]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, module="perf_y")]
+    pd.read_csv(current[0]).assign(face_r_dim=16).to_csv(current[0], index=False)
+
+    result = compare_runs(current, baseline)
+
+    assert result["missing_points"] == ["perf_y", "perf_y"]
+    assert (
+        "| perf_y | 0 | 2 | 2 | key changed: no point matches the baseline |"
+        in _report(result)
+    )
+
+
+def test_a_baseline_point_that_was_not_measured_is_counted(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP)]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP)]
+    pd.read_csv(current[0]).iloc[:1].to_csv(current[0], index=False)
+
+    text = _report(compare_runs(current, baseline))
+
+    assert (
+        "0 point(s) have no baseline, and 1 baseline point(s) were not measured" in text
+    )
+    assert "| perf_x | 1 | 0 | 1 |  |" in text
+
+
+def test_two_rows_with_one_key_in_a_file_are_noted(tmp_path):
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP)]
+    current = [_csv(tmp_path, "c.csv", _INIT, _TILE_LOOP)]
+    frame = pd.read_csv(current[0])
+    pd.concat([frame, frame.iloc[1:]]).to_csv(current[0], index=False)
+
+    result = compare_runs(current, baseline)
+
+    assert result["duplicates"] == {"perf_x": 1}
+    assert "**NOTE:** perf_x has 1 row(s) with the same key in one file." in _report(
+        result
+    )
+
+
+def test_a_full_compare_has_no_note(tmp_path):
+    current, baseline = _sides(tmp_path, (_INIT, _TILE_LOOP), (_INIT, _TILE_LOOP))
+    assert "NOTE" not in _report(compare_runs(current, baseline))
