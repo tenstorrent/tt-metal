@@ -60,6 +60,7 @@
   "perf_reduce": 7.8,
   "perf_reduce_block_max": 39.3,
   "perf_rmsnorm_bcast_scalar_dest_reuse": 199.1,
+  "perf_rmsnorm_clear_product_tile": 11.0,
   "perf_sfpu_binop_scalar": 8.5,
   "perf_sfpu_ema": 0.2,
   "perf_sfpu_reduce": 1.0,

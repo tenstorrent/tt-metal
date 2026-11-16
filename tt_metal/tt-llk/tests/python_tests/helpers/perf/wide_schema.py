@@ -178,8 +178,10 @@ DB_SCHEMA = [
     Column("reuse_kt", "int64", True, "configuration"),
     Column("reuse_nt", "int64", True, "configuration"),
     Column("compression_case", "string", True, "configuration"),
-    # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
+    Column("capacity", "int64", True, "configuration"),
     Column("chunk_size", "int64", True, "configuration"),
+    Column("dest_tiles", "int64", True, "configuration"),
+    # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
     Column("test_name", "string", False, "identity", origin="ci"),
