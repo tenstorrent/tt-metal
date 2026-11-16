@@ -246,6 +246,11 @@ template <typename Range>
 static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& core, const Range& args) {
     KernelDescriptor::CoreRuntimeArgs values;
     values.reserve(args.size());
+    const auto bind_tensor = [&](const tt::tt_metal::MeshTensor& tensor) {
+        Buffer* buf = tensor.mesh_buffer().get_reference_buffer();
+        kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), buf});
+        values.push_back(buf->address());
+    };
     for (const auto& arg : args) {
         std::visit(
             ttsl::overloaded{
@@ -261,10 +266,14 @@ static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& cor
                         values.push_back(buf->address());
                     }
                 },
-                [&](std::reference_wrapper<const tt::tt_metal::MeshTensor> ref) {
-                    Buffer* buf = ref.get().mesh_buffer().get_reference_buffer();
-                    kd.buffer_bindings.push_back({core, static_cast<uint32_t>(values.size()), buf});
-                    values.push_back(buf->address());
+                [&](std::reference_wrapper<const tt::tt_metal::MeshTensor> ref) { bind_tensor(ref.get()); },
+                [&](ttsl::optional_reference<const tt::tt_metal::MeshTensor> tensor) {
+                    // An empty reference is an absent optional tensor, embedded as 0 like a null Buffer*.
+                    if (tensor.has_value()) {
+                        bind_tensor(*tensor);
+                    } else {
+                        values.push_back(0u);
+                    }
                 },
             },
             arg);
@@ -275,6 +284,11 @@ static void emplace_runtime_args_impl(KernelDescriptor& kd, const CoreCoord& cor
 template <typename Range>
 static void emplace_common_runtime_args_impl(KernelDescriptor& kd, const Range& args) {
     kd.common_runtime_args.reserve(args.size());
+    const auto bind_tensor = [&](const tt::tt_metal::MeshTensor& tensor) {
+        Buffer* buf = tensor.mesh_buffer().get_reference_buffer();
+        kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), buf});
+        kd.common_runtime_args.push_back(buf->address());
+    };
     for (const auto& arg : args) {
         std::visit(
             ttsl::overloaded{
@@ -288,10 +302,13 @@ static void emplace_common_runtime_args_impl(KernelDescriptor& kd, const Range& 
                         kd.common_runtime_args.push_back(buf->address());
                     }
                 },
-                [&](std::reference_wrapper<const tt::tt_metal::MeshTensor> ref) {
-                    Buffer* buf = ref.get().mesh_buffer().get_reference_buffer();
-                    kd.common_buffer_bindings.push_back({static_cast<uint32_t>(kd.common_runtime_args.size()), buf});
-                    kd.common_runtime_args.push_back(buf->address());
+                [&](std::reference_wrapper<const tt::tt_metal::MeshTensor> ref) { bind_tensor(ref.get()); },
+                [&](ttsl::optional_reference<const tt::tt_metal::MeshTensor> tensor) {
+                    if (tensor.has_value()) {
+                        bind_tensor(*tensor);
+                    } else {
+                        kd.common_runtime_args.push_back(0u);
+                    }
                 },
             },
             arg);

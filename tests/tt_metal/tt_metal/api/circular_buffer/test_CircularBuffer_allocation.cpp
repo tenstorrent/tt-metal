@@ -50,6 +50,13 @@ using namespace tt::tt_metal;
 
 namespace basic_tests::circular_buffer {
 
+// An interleaved L1 BFLOAT16 tile tensor; the default shape is a single tile.
+MeshTensor MakeL1TileMeshTensor(distributed::MeshDevice& mesh_device, const Shape& shape = Shape{32, 32}) {
+    const auto tensor_layout = TensorLayout(
+        DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+    return MeshTensor::allocate_on_device(mesh_device, TensorSpec(shape, tensor_layout));
+}
+
 void validate_cb_address(
     distributed::MeshWorkload& workload,
     std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -393,12 +400,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
         CoreRange cr(core0, core0);
         CoreRangeSet cr_set({cr});
 
-        auto tensor_layout = TensorLayout(
-            DataType::BFLOAT16,
-            PageConfig(Layout::TILE),
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
-        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
+        auto tensor = MakeL1TileMeshTensor(*mesh_device);
         Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(tensor_buffer, nullptr);
 
@@ -435,12 +437,7 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMat
 
         // Single-tile BFLOAT16 tensor → exactly one L1 page of cb_config.page_size (2048 B) bytes in one bank,
         // matching the CB's total_size and satisfying the dynamic-CB bank-size validation.
-        auto tensor_layout = TensorLayout(
-            DataType::BFLOAT16,
-            PageConfig(Layout::TILE),
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
-        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
+        auto tensor = MakeL1TileMeshTensor(*mesh_device);
 
         Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(underlying_buffer, nullptr);
@@ -453,6 +450,12 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMat
                                                      .set_globally_allocated_address(tensor);
 
         EXPECT_EQ(config_via_buffer, config_via_tensor);
+
+        // The dynamic CircularBufferConfig constructor sets the same backing.
+        const CircularBufferConfig constructed_via_buffer(
+            cb_config.page_size, {{0, cb_config.data_format}}, *underlying_buffer);
+        const CircularBufferConfig constructed_via_tensor(cb_config.page_size, {{0, cb_config.data_format}}, tensor);
+        EXPECT_EQ(constructed_via_buffer, constructed_via_tensor);
     }
 }
 
@@ -460,12 +463,7 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromM
     for (auto& mesh_device : this->devices_) {
         CBConfig cb_config;
 
-        auto tensor_layout = TensorLayout(
-            DataType::BFLOAT16,
-            PageConfig(Layout::TILE),
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
-        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
-        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec);
+        auto tensor = MakeL1TileMeshTensor(*mesh_device);
 
         Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
         ASSERT_NE(underlying_buffer, nullptr);
@@ -486,6 +484,56 @@ TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromM
         EXPECT_EQ(config_via_tensor.total_size(), new_total_size);
         EXPECT_EQ(config_via_buffer.globally_allocated_address(), underlying_buffer->address());
         EXPECT_EQ(config_via_tensor.globally_allocated_address(), underlying_buffer->address());
+
+        // With an address offset: the smallest valid non-zero offset still leaves room for the half-page CB.
+        const uint32_t address_offset = underlying_buffer->alignment();
+        CircularBufferConfig offset_via_buffer =
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size)
+                .set_globally_allocated_address_and_total_size(*underlying_buffer, new_total_size, address_offset);
+        CircularBufferConfig offset_via_tensor =
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size)
+                .set_globally_allocated_address_and_total_size(tensor, new_total_size, address_offset);
+
+        EXPECT_EQ(offset_via_buffer, offset_via_tensor);
+        EXPECT_EQ(offset_via_tensor.address_offset(), address_offset);
+        EXPECT_EQ(offset_via_tensor.globally_allocated_address(), underlying_buffer->address() + address_offset);
+    }
+}
+
+TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressWithOffsetFromMeshTensor) {
+    for (auto& mesh_device : this->devices_) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = CreateProgram(*mesh_device);
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+        CBConfig cb_config;
+        CoreCoord core0(0, 0);
+        CoreRange cr(core0, core0);
+        CoreRangeSet cr_set({cr});
+
+        // Enough tiles that every L1 bank holds at least two pages, so a one-page offset still fits the CB.
+        auto tensor = MakeL1TileMeshTensor(*mesh_device, Shape{32, 32 * 512});
+        Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(tensor_buffer, nullptr);
+        const uint32_t address_offset = cb_config.page_size;
+        ASSERT_GE(tensor_buffer->aligned_size_per_bank(), address_offset + cb_config.page_size);
+
+        initialize_program(program_, cr_set);
+
+        std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
+        const CircularBufferConfig config = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                                .set_page_size(0, cb_config.page_size);
+        const CBHandle cb_id = CreateCircularBuffer(program_, core0, config);
+        golden_addresses_per_core[core0][0] = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        validate_cb_address(workload, mesh_device, cr_set, golden_addresses_per_core);
+
+        UpdateDynamicCircularBufferAddress(program_, cb_id, tensor, address_offset);
+        golden_addresses_per_core[core0][0] = tensor_buffer->address() + address_offset;
+        validate_cb_address(workload, mesh_device, cr_set, golden_addresses_per_core);
     }
 }
 

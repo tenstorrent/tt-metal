@@ -257,6 +257,8 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t address_offset);
 
 // clang-format off
 /**
