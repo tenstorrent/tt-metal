@@ -30,11 +30,30 @@ from loguru import logger
 import ttnn
 from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.demos.blackhole.qwen36.tests.gdn_block_helpers import PluginLayout
-from models.demos.blackhole.qwen36.tests.test_factory import model_path
-from models.demos.blackhole.qwen36.tests.test_gdn_block_state import BMAX, CTX, _device_tensors, _parametrize, _prompts
+from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape, model_path
+from models.demos.blackhole.qwen36.tests.test_gdn_block_state import BMAX, CTX, _device_tensors, _prompts
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
 LENS = (2000, 2348, 3100)
+
+
+def _parametrize(fn):
+    """The TP=8 mesh with the serving launch's 1 GiB trace region: the 64-layer model's prefill traces do not fit the
+    256 MiB of the truncated-model tests."""
+    shape = _resolve_mesh_shape(8)
+    fn = pytest.mark.parametrize(
+        "device_params",
+        [
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+                "trace_region_size": 1 << 30,
+            }
+        ],
+        indirect=True,
+    )(fn)
+    return pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(fn)
 
 
 def _single_call_checkpoint(self, delta_fn, call, qkvbg, init_state, checkpoint, valid_len, masks):
