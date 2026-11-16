@@ -348,19 +348,15 @@ def main(argv=None):
         reports.append(
             assess_plain(name, run, run_jobs(a.repo, run["id"]) if run else [])
         )
-    disabled = disabled_workflows(a.repo, a.workflows)
-    extras = read_extras(a.extra)
-    if disabled:
-        extras.insert(
-            0,
-            {
-                "name": "Disabled workflows",
-                "problems": [
-                    f"{len(disabled)} LLK workflow(s) disabled: {', '.join(disabled)}"
-                ],
-                "lines": [],
-            },
-        )
+    disabled = {
+        "name": "Disabled workflows",
+        "problems": [
+            f"{w} is disabled <https://github.com/{a.repo}/actions/workflows/{w}|enable>"
+            for w in disabled_workflows(a.repo, a.workflows)
+        ],
+        "lines": [],
+    }
+    extras = [disabled, *read_extras(a.extra)]
     text = build_text(a.date, reports, extras)
     with open(a.details, "w") as fh:
         fh.write(build_details(reports, extras))
