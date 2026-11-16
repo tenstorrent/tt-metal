@@ -55,11 +55,37 @@ inline void isposinf_init() { isinf_isnan_init(); }
 
 // 1.0 on the lanes the enclosing v_if enables; outside an MM_THROTTLE kernel the store also advances
 // Dest by one SFPU row (ADDR_MOD_2, see ISINF_ISNAN_STORE_INCR).
+template <int OFFSET>
 sfpi_inline void _isinf_isnan_store_true_() {
+    static_assert(!ISINF_ISNAN_STORE_INCR || OFFSET == 0, "the advancing store addresses the current row only");
     if constexpr (ISINF_ISNAN_STORE_INCR) {
-        sfpi::dst_reg[0].mode(ADDR_MOD_2) = 1.0f;
+        sfpi::dst_reg[OFFSET].mode(ADDR_MOD_2) = 1.0f;
     } else {
-        sfpi::dst_reg[0] = 1.0f;
+        sfpi::dst_reg[OFFSET] = 1.0f;
+    }
+}
+
+// One SFPU row, OFFSET SFPU rows past the current Dest address.
+template <SfpuType operation, int OFFSET>
+sfpi_inline void _isinf_isnan_row_(const sfpi::vInt bound_v) {
+    sfpi::vFloat in = sfpi::dst_reg[OFFSET];
+    sfpi::dst_reg[OFFSET] = 0.0f;
+
+    if constexpr (operation == SfpuType::isposinf || operation == SfpuType::isneginf) {
+        v_if(bound_v - sfpi::as<sfpi::vInt>(in) == 0) { _isinf_isnan_store_true_<OFFSET>(); }
+        v_endif;
+    } else {
+        sfpi::vInt mag = sfpi::as<sfpi::vInt>(sfpi::setsgn(in, 0 /*sgn*/));
+        if constexpr (operation == SfpuType::isinf) {
+            v_if(bound_v - mag == 0) { _isinf_isnan_store_true_<OFFSET>(); }
+            v_endif;
+        } else if constexpr (operation == SfpuType::isnan) {
+            v_if(bound_v < mag) { _isinf_isnan_store_true_<OFFSET>(); }
+            v_endif;
+        } else {
+            v_if(bound_v >= mag) { _isinf_isnan_store_true_<OFFSET>(); }
+            v_endif;
+        }
     }
 }
 
@@ -97,29 +123,22 @@ inline void _calculate_sfpu_isinf_isnan_() {
     const sfpi::vInt bound_v = bound;
 
     // SFPU microcode
+    if constexpr (ISINF_ISNAN_STORE_INCR) {
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = 0.0f;
-
-        if constexpr (operation == SfpuType::isposinf || operation == SfpuType::isneginf) {
-            v_if(bound_v - sfpi::as<sfpi::vInt>(in) == 0) { _isinf_isnan_store_true_(); }
-            v_endif;
-        } else {
-            sfpi::vInt mag = sfpi::as<sfpi::vInt>(sfpi::setsgn(in, 0 /*sgn*/));
-            if constexpr (operation == SfpuType::isinf) {
-                v_if(bound_v - mag == 0) { _isinf_isnan_store_true_(); }
-                v_endif;
-            } else if constexpr (operation == SfpuType::isnan) {
-                v_if(bound_v < mag) { _isinf_isnan_store_true_(); }
-                v_endif;
-            } else {
-                v_if(bound_v >= mag) { _isinf_isnan_store_true_(); }
-                v_endif;
-            }
+        for (int d = 0; d < ITERATIONS; d++) {
+            _isinf_isnan_row_<operation, 0>(bound_v);
         }
-
-        if constexpr (!ISINF_ISNAN_STORE_INCR) {
+    } else {
+        // Two SFPU rows per TTINCRWC. The pair (13 insns, isinf 15) is replayed from the SFPU half of the
+        // replay buffer, below math::replay_buf_offset where a throttled matmul keeps its MOP body.
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS / 2; d++) {
+            _isinf_isnan_row_<operation, 0>(bound_v);
+            _isinf_isnan_row_<operation, 1>(bound_v);
+            sfpi::dst_reg += 2;
+        }
+        if constexpr (ITERATIONS % 2 != 0) {
+            _isinf_isnan_row_<operation, 0>(bound_v);
             sfpi::dst_reg++;
         }
     }
