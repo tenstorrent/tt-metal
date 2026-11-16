@@ -4,7 +4,7 @@
 
 import ttnn
 import warnings
-from models.experimental.vadv1.tt.tt_utils import fused_msda, msda_operands
+from models.experimental.vadv1.tt.tt_utils import QueryCounts, fused_msda, msda_operands
 from models.experimental.vadv1.tt.matmul_helpers import linear_flatten_batch
 
 
@@ -55,6 +55,7 @@ class TtCustomMSDeformableAttention:
 
         assert len(spatial_shapes_hw) == num_levels, f"need {num_levels} (H, W) pairs, got {spatial_shapes_hw}"
         self.spatial_shapes_hw = [(int(h), int(w)) for h, w in spatial_shapes_hw]
+        self.query_counts = QueryCounts()
 
     def __call__(
         self,
@@ -102,7 +103,13 @@ class TtCustomMSDeformableAttention:
             )
         reference_points = ttnn.reshape(reference_points, (bs, num_query, self.num_levels, 2))
         output = fused_msda(
-            value, reference_points, sampling_offsets, attention_weights, self.spatial_shapes_hw, "level"
+            value,
+            reference_points,
+            sampling_offsets,
+            attention_weights,
+            self.spatial_shapes_hw,
+            "level",
+            self.query_counts(self.device, bs, num_query),
         )
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
         output = linear_flatten_batch(output, params.output_proj.weight, bias=params.output_proj.bias)
