@@ -165,18 +165,15 @@ def _write_plan(
                 budget.acquire(charged)
                 value = live_tensor.tensor.get_value(NATIVE)
                 t_read = time.perf_counter()
-                host = value.cpu(coords=[ttnn.MeshCoordinate(list(it.chunk.mesh_coord)) for it in items])
-                host_rm = host.to(ttnn.ROW_MAJOR_LAYOUT)
-                del host
+                # One read for the owned coordinates; each shard comes back as a single-device host tensor.
+                shards = value.cpu_shards([ttnn.MeshCoordinate(list(it.chunk.mesh_coord)) for it in items])
+                shards = [shard.to(ttnn.ROW_MAJOR_LAYOUT) for shard in shards]
                 readback_s += time.perf_counter() - t_read
                 check_label_unchanged(live_tensor, "during readback")
-                buffer = host_rm.host_buffer()
                 per_item = charged // len(items)
-                for it in items:
-                    shard = buffer.get_shard(ttnn.MeshCoordinate(list(it.chunk.mesh_coord)))
-                    if shard is None:
-                        raise CheckpointError(f"{key}: no shard came back for coordinate {it.chunk.mesh_coord}")
-                    view = _logical_bytes(np.from_dlpack(shard), it.chunk.box.sizes, info.itemsize)
+                for it, shard in zip(items, shards):
+                    data = shard.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
+                    view = _logical_bytes(np.from_dlpack(data), it.chunk.box.sizes, info.itemsize)
                     if view.nbytes != it.nbytes:
                         raise CheckpointError(
                             f"{key}: shard at {it.chunk.mesh_coord} is {view.nbytes} bytes, planned {it.nbytes}"
@@ -186,7 +183,7 @@ def _write_plan(
                     )
                     future.add_done_callback(record_failure)
                     futures.append((key, it.file, future))
-                del buffer, host_rm
+                del shards
             for key, file_index, future in futures:
                 crcs[(key, file_index)] = future.result()
         for fd in fds.values():
