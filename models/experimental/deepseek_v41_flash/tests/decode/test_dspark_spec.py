@@ -404,8 +404,8 @@ def _block_spec_decode(mesh_device) -> None:
 
     One model (``verify_rows=4``, device sampling) runs, from position 0 on the demo prompt:
 
-    1. plain greedy decode on the one-row traces, ``DEEPSEEK_V4_SPEC_TOKENS`` (default 300) tokens or to the end of
-       sentence: the baseline and its tok/s/u;
+    1. plain greedy decode on the one-row traces, ``DEEPSEEK_V4_SPEC_TOKENS`` (default 2000) tokens, with the next of
+       ``_FOLLOW_UPS`` as a new user turn after each end of sentence: the baseline and its tok/s/u;
     2. DSpark rounds fed the baseline's own tokens with a third corrupted (every round rejects somewhere);
     3. DSpark with its drafter, greedy: tok/s/u, tokens/round, ms/round and its split.
 
@@ -415,8 +415,10 @@ def _block_spec_decode(mesh_device) -> None:
     one-row prefill of the prompt): every emitted token must be that step's argmax, or within ``NEAR_TIE`` logits
     of it. A rollback that left a rejected row's trace (ring, compressor window, Engram or drafter state) breaks
     this by far more. The first divergence from the greedy baseline is logged with the block path's top1 - top2 gap
-    there. The block verify needs the dense select (prompt + tokens below 508 positions), so there are no
-    follow-up turns.
+    there. The block verify needs the dense select (prompt + tokens below 508 positions), so the spec runs cover the
+    first ``block_tokens`` generated tokens (to the first end of sentence); the DSpark run then carries on with plain
+    one-row greedy decode (and the follow-up turns) to ``DEEPSEEK_V4_SPEC_TOKENS``, and its whole conversation is
+    printed.
     """
     rows, drafts = BLOCK_ROWS, BLOCK_ROWS - 1
     if PROFILE_STEPS:
@@ -439,8 +441,13 @@ def _block_spec_decode(mesh_device) -> None:
     eos_id = tokenizer.convert_tokens_to_ids(eos_token)
     prompt = _tokenize_chat(tokenizer, _PROMPTS.get(PROMPT, PROMPT))
     dense_limit = config.index_topk - 2 * rows  # every compressed group in the dense select
-    n_tokens = min(int(os.environ.get("DEEPSEEK_V4_SPEC_TOKENS", "300")), dense_limit - len(prompt))
-    max_seq = _traced_max_seq(config, len(prompt) + n_tokens + 2 * rows, config.num_hidden_layers)
+    n_tokens = int(os.environ.get("DEEPSEEK_V4_SPEC_TOKENS", "2000"))
+    # The spec runs' share: the block verify stops at the dense select's end.
+    block_tokens = min(n_tokens, dense_limit - len(prompt))
+    turns = [_tokenize_turn(tokenizer, text) for text in _FOLLOW_UPS]
+    max_seq = _traced_max_seq(
+        config, len(prompt) + n_tokens + sum(len(t) + 1 for t in turns) + 2 * rows, config.num_hidden_layers
+    )
     rope = _build_rope(config, loader.snapshot_dir, max_seq)
 
     with contextlib.ExitStack() as stack:
@@ -460,20 +467,50 @@ def _block_spec_decode(mesh_device) -> None:
         def token_of(out) -> int:
             return int(out.reshape(-1)[0])
 
+        def decode_plain(conv: list[int], gen: list[int], timing: list[float]) -> None:
+            """Plain one-row greedy decode until ``gen`` (the generated tokens, follow-up turns excluded) holds
+            ``n_tokens``. ``conv`` is the conversation in the model (positions ``0 .. len(conv) - 1``); ``gen[-1]``
+            goes in next, at ``len(conv)``. After an end of sentence the next follow-up turn goes in as a prompt
+            (until they run out). ``timing`` accumulates [seconds, steps] of the one-row steps."""
+            while len(gen) < n_tokens:
+                asked = gen.count(eos_id)
+                if gen[-1] == eos_id:
+                    if asked > len(turns):
+                        logger.warning(f"the follow-up turns ran out after {len(gen)} tokens")
+                        break
+                    feed = [eos_id, *turns[asked - 1]]
+                    out = model.decode_prompt_traced(feed, len(conv))
+                    conv += feed
+                else:
+                    t0 = time.perf_counter()
+                    out = model.decode_traced(gen[-1], len(conv))
+                    timing[0] += time.perf_counter() - t0
+                    timing[1] += 1
+                    conv.append(gen[-1])
+                gen.append(token_of(out))
+                if _VERBOSE and len(gen) % 200 == 0:
+                    logger.info(f"[test] plain decode: {len(gen)}/{n_tokens} tokens, pos {len(conv)}")
+
+        def text_of(conv: list[int], gen: list[int]) -> str:
+            """The conversation after the prompt: generated tokens and follow-up turns."""
+            return tokenizer.decode(conv[len(prompt) :] + gen[-1:])
+
         # 1. Plain greedy decode on the one-row traces.
         out = model.decode_prompt_traced(prompt, 0)
-        baseline = [token_of(out)]
-        seconds, steps = 0.0, 0
-        while len(baseline) < n_tokens and baseline[-1] != eos_id:
-            t0 = time.perf_counter()
-            out = model.decode_traced(baseline[-1], len(prompt) + len(baseline) - 1)
-            seconds += time.perf_counter() - t0
-            steps += 1
-            baseline.append(token_of(out))
-        greedy_tps = steps / seconds
-        logger.info(f"greedy: {len(baseline)} tokens, {greedy_tps:.2f} tok/s/u ({1000 / greedy_tps:.2f} ms/token)")
-        if _VERBOSE:
-            logger.info(f"greedy output: {tokenizer.decode(baseline)!r}")
+        greedy_full, greedy_conv, timing = [token_of(out)], list(prompt), [0.0, 0]
+        decode_plain(greedy_conv, greedy_full, timing)
+        greedy_tps = timing[1] / timing[0]
+        logger.info(
+            f"greedy: {len(greedy_full)} tokens, {greedy_full.count(eos_id)} end(s) of sentence, "
+            f"{greedy_tps:.2f} tok/s/u ({1000 / greedy_tps:.2f} ms/token)"
+        )
+        print(
+            f"\n===== greedy output ({len(greedy_full)} tokens) =====\n{text_of(greedy_conv, greedy_full)}\n",
+            flush=True,
+        )
+        # The spec runs' reference: the block-verify share, to the first end of sentence.
+        first_eos = greedy_full.index(eos_id) + 1 if eos_id in greedy_full else len(greedy_full)
+        baseline = greedy_full[: min(block_tokens, first_eos)]
         stream = prompt + baseline
 
         def converse(spec: DSparkSpeculator) -> list[int]:
@@ -706,9 +743,25 @@ def _block_spec_decode(mesh_device) -> None:
             if REPLAY:
                 del model.decode_verify_block
         logger.info(f"DSpark, block verify, {drafts} drafts, greedy: {spec.stats.summary(drafts)}")
-        if _VERBOSE:
-            logger.info(f"DSpark output: {tokenizer.decode(got)!r}")
         results["dspark"] = (spec.stats, got)
+        # Past the dense select: plain one-row decode from where DSpark stopped, to n_tokens.
+        assert spec.position == len(prompt) + len(got) - 1, (spec.position, len(prompt), len(got))
+        dspark_full, dspark_conv, tail_timing = list(got), prompt + got[:-1], [0.0, 0]
+        decode_plain(dspark_conv, dspark_full, tail_timing)
+        tail = len(dspark_full) - len(got)
+        whole_s = spec.stats.seconds + tail_timing[0]
+        logger.info(
+            f"DSpark run: {len(got)} tokens with DSpark (block verify, {spec.stats.tokens / spec.stats.seconds:.2f} "
+            f"tok/s/u), then {tail} with plain decode past the dense select "
+            f"({tail_timing[1] / tail_timing[0] if tail_timing[1] else 0:.2f} tok/s/u); "
+            f"{len(dspark_full)} tokens in all, {(spec.stats.tokens + tail_timing[1]) / whole_s:.2f} tok/s/u overall; "
+            f"{'equal to' if dspark_full == greedy_full[: len(dspark_full)] else 'differs from'} the greedy output"
+        )
+        print(
+            f"\n===== DSpark output ({len(dspark_full)} tokens: {len(got)} DSpark, {tail} plain) =====\n"
+            f"{text_of(dspark_conv, dspark_full)}\n",
+            flush=True,
+        )
         if REPLAY:
             _replay_rounds(model, prompt, got, history, rows, noise)
 
