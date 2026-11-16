@@ -31,9 +31,10 @@ plugin samples such a row on the host (``max_device_top_k``).
 The chunks are stacked as rows of one [1, chunks, B*T, V / chunks] tensor and take their top-32 in one ``ttnn.topk``
 call: the routed top-k reduces every row on its own core in one sequential pass over the row, so one call over
 chunks x B*T rows takes about one chunk's time (two when the rows outnumber the worker cores) instead of one per chunk,
-and each row gets the values and ids, in the same order, that a call over that chunk alone gives it. The candidates' order is part of the draw:
-``ttnn.sampling`` ranks equal values by their position among the candidates, and the routed top-k orders equal values
-by its merge sequence, which depends on the row's width. So the chunk width and the chunk order stay fixed.
+and each row gets the values and ids, in the same order, that a call over that chunk alone gives it. The candidates'
+order is part of the draw: ``ttnn.sampling`` ranks equal values by their position among the candidates, and the routed
+top-k orders equal values by its merge sequence, which depends on the row's width. So the chunk width and the chunk
+order stay fixed.
 """
 
 import secrets
