@@ -94,8 +94,11 @@ VERIFY = os.environ.get("DEEPSEEK_V4_SPEC_VERIFY", "block")
 # The block verify's rows: 3 drafts + 1.
 BLOCK_ROWS = 4
 # Block-verify exactness: a token that is not the block path's argmax must be within this many logits of it (a
-# near-tie). The block path is deterministic, but a row's result depends at the bf16 / bfp8 rounding level on the
-# other rows of its block (the MoE's union of the rows' experts, the grouping of its partial sums): the same stream
+# near-tie). The block path is deterministic, but a row's result depends at the bf16 rounding level on the other
+# rows of its block. DEEPSEEK_V4_SPEC_CAUSAL_PROBE=1 localizes it: everything up to the MoE request input is
+# bit-identical per row whatever the other rows hold; the persistent MoE's output moves by 1-2 bf16 ulps, since the
+# union of the rows' experts decides which of its 6 groups runs which expert and the groups' partial sums are
+# reduced in bf16 (cb_acc / partials in out_df). 40 layers grow that to ~1-4 logits (max over the vocab). The same stream
 # teacher-forced at the four block alignments disagrees on ~3-4% of tokens by up to ~1.75 logits (measured with
 # DEEPSEEK_V4_SPEC_ALIGN_CONTROL=1), so a spec run, whose blocks start wherever the last round ended, does too.
 NEAR_TIE = float(os.environ.get("DEEPSEEK_V4_SPEC_NEAR_TIE", "2.5"))
@@ -489,6 +492,57 @@ def _block_spec_decode(mesh_device) -> None:
 
         if ROLLBACK_CHECK:
             rollback_check()
+
+        if os.environ.get("DEEPSEEK_V4_SPEC_CAUSAL_PROBE", "0") == "1":
+            # Same prefix, same rows 0..k, other tokens in rows k+1..: rows 0..k must not move. Per layer, the
+            # first layer where a kept row's streams differ between two tails.
+            junk_rng = random.Random(2)
+            p = len(prompt) + 8
+            for k in range(rows - 1):
+                taps, logits, subs = [], [], []
+                layer0 = model.layers[model.submeshes_io[0]["layers"][0]]
+                for variant in range(3):
+                    layer0._debug_taps = {}
+                    _, padded = model.prefill_blocks(stream[:p], 0)
+                    model.spec_fixup(padded)
+                    tail = stream[p + k + 1 : p + rows]
+                    if variant:
+                        tail = [junk_rng.randrange(config.vocab_size) for _ in tail]
+                    model._block_debug_streams = []
+                    logits.append(model.debug_block_logits(stream[p : p + k + 1] + tail, p))
+                    model._block_debug_streams = None
+                    taps.append(model.block_debug_taps)
+                    subs.append(layer0._debug_taps)
+                    layer0._debug_taps = None
+                for v in (1, 2):
+                    sub = {}
+                    for name, a in subs[0].items():
+                        b = subs[v][name]
+                        sub[name] = round(float((a - b).abs().max()), 5) if a.shape == b.shape else f"shape {a.shape}"
+                    logger.info(f"causal probe kept rows 0..{k}, tail {v}: layer 0 sublayer max diffs (all rows) {sub}")
+                    for name in ("tokens", "attn_out", "row"):
+                        a, b = subs[0][name], subs[v][name]
+                        logger.info(
+                            f"  {name}: per-row max diff {[round(float((a[j] - b[j]).abs().max()), 5) for j in range(a.shape[0])]}"
+                        )
+                    for name in ("mixed", "out"):
+                        a, b = subs[0][name], subs[v][name]
+                        logger.info(
+                            f"  {name}: per-row max diff {[round(float((a[:, j] - b[:, j]).abs().max()), 5) for j in range(a.shape[1])]}"
+                        )
+                hc = taps[0].shape[1] // rows
+                for v in (1, 2):
+                    a, b = taps[0].reshape(len(taps[0]), hc, rows, -1), taps[v].reshape(len(taps[v]), hc, rows, -1)
+                    first_bad = {}
+                    for j in range(k + 1):
+                        diffs = (a[:, :, j] - b[:, :, j]).abs().amax(dim=(1, 2))
+                        bad = (diffs > 0).nonzero()
+                        first_bad[j] = (int(bad[0]) if len(bad) else None, [round(float(x), 4) for x in diffs[:6]])
+                    lg = [round(float((logits[0][j] - logits[v][j]).abs().max()), 3) for j in range(rows)]
+                    logger.info(
+                        f"causal probe kept rows 0..{k}, tail {v}: logits diff by row {lg}; first layer "
+                        f"where kept row j moves (and its first diffs): {first_bad}"
+                    )
 
         results = {}
         # 2. Corrupted oracle drafts: exactness under rejection.

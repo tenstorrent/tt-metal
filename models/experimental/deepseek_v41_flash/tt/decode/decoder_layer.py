@@ -756,9 +756,19 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
                 streams, pre_mix=pre_mix, norm=norm, replica_grid=replica_grid
             )
         ttnn.deallocate(collapsed)
+        if getattr(self, "_debug_taps", None) is not None:
+            r0 = tokens.memory_config().shard_spec.shape[0]
+            self._debug_taps["tokens"] = (
+                ttnn.to_torch(ttnn.get_device_tensors(tokens)[0]).float().reshape(-1, tokens.shape[-1])[:r0]
+            )
+            self._debug_taps["attn_pre"] = ttnn.to_torch(ttnn.get_device_tensors(attn_pre)[0]).float()
         with _region("ATTENTION"):
             attn_out = attn.decode_block(tokens, scache, **attn_inputs)
         ttnn.deallocate(tokens)
+        if getattr(self, "_debug_taps", None) is not None:
+            self._debug_taps["attn_out"] = (
+                ttnn.to_torch(ttnn.get_device_tensors(attn_out)[0]).float().reshape(-1, attn_out.shape[-1])
+            )
         with _region("FFN_HC"):
             post2, comb2, row, ffn_pre, mixed = self.ffn_hc(
                 streams,
@@ -768,8 +778,21 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             )
         for t in (post, comb, attn_out, attn_pre, streams):
             ttnn.deallocate(t)
+        dbg = getattr(self, "_debug_taps", None)
+        if dbg is not None:
+
+            def host(x):
+                return ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+
+            r = mixed.shape[-2] // 4 if mixed.shape[-2] >= 4 else 1
+            d = mixed.shape[-1]
+            dbg["mixed"] = host(mixed).reshape(-1, r, d)
+            dbg["row"] = host(row).reshape(d // 32, 2, r, 16).permute(2, 0, 1, 3).reshape(r, d)
+            dbg["post2"], dbg["comb2"], dbg["ffn_pre"] = host(post2), host(comb2), host(ffn_pre)
         with _region("MOE"):
             out = self.moe_server.request(self.requester, self.layer_idx, row, streams=mixed, post=post2, comb=comb2)
+        if dbg is not None:
+            dbg["out"] = host(out).reshape(-1, r, d)
         for t in (row, mixed, post2, comb2):
             ttnn.deallocate(t)
         return out, ffn_pre
