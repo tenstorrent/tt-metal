@@ -288,6 +288,16 @@ class _LocalAttention(OptimizedAttention):
                 num_kv_heads=cfg.num_key_value_heads,
             )
         sdpa = self.decode_sdpa
+        direct = self.output_program is not None and getattr(self, "decode_output_dram", None) is None
+        direct = direct and not getattr(self, "output_input_bfp8", False)
+        heads_memory = ttnn.create_sharded_memory_config(
+            (32, cfg.head_dim),
+            ttnn.CoreGrid(x=1, y=1),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        # SDPA writes the concat-heads layout directly except for GQA (sharded GQA output is unsupported).
         attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             k_cache,
@@ -298,9 +308,26 @@ class _LocalAttention(OptimizedAttention):
             sliding_window_size=sdpa.config.sliding_window if sdpa.config.is_sliding else None,
             program_config=sdpa.program,
             compute_kernel_config=sdpa.compute,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=(heads_memory if direct and cfg.num_key_value_heads == 1 else ttnn.L1_MEMORY_CONFIG),
         )
-        return self.project(attention, True)
+        if not direct:
+            return self.project(attention, True)
+        if not attention.is_sharded():
+            attention = ttnn.to_memory_config(attention, heads_memory)
+        # SDPA wrote the concat-heads input layout; the projection emits the collective dtype directly.
+        combined = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=cfg.num_attention_heads)
+        width = cfg.num_attention_heads * cfg.head_dim
+        combined = ttnn.reshape(combined, (1, 1, 1, width), (1, 1, 32, width))
+        combined = ttnn.to_memory_config(combined, ttnn.L1_MEMORY_CONFIG)
+        projected = ttnn.linear(
+            combined,
+            self.source.weights.o_proj,
+            dtype=self.collective_dtype,
+            program_config=self.output_program,
+            compute_kernel_config=self.output_compute,
+            memory_config=self.output_memory,
+        )
+        return self.allreduce(projected, role="attention")
 
     def rotary(self, value, cos, sin, *, decode=False):
         if not decode or not getattr(self, "sharded_decode_rope", False):
@@ -1115,6 +1142,7 @@ class MultichipDecoder(OptimizedDecoder):
                 ttnn.typecast(weight, ttnn.bfloat16) for weight in (base.q_weight, base.k_weight)
             )
         attention.reduce = self._reduce_attention
+        attention.allreduce, attention.collective_dtype = self.allreduce, self.attention_ccl_dtype
         self.layer.self_attn = attention
         router = BroadcastRouter(Router(self.layer.moe.router, config.rms_norm_eps), self.normalize)
         self.layer.moe.router = GeneralizedRouter(
@@ -1451,7 +1479,7 @@ class MultichipDecoder(OptimizedDecoder):
         groups.clear()
         return result if result.shape[-2] == length else result[:, :, :length, :]
 
-    def _reduce_moe_pair(self, shared, routed):
+    def _reduce_moe_pair(self, shared, routed, *, keep_dtype=False):
         if shared.dtype != ttnn.bfloat16 or routed.dtype != ttnn.bfloat16:
             raise ValueError("Grouped MoE reduction requires BF16 local outputs")
         if tuple(shared.shape) != tuple(routed.shape) or tuple(shared.shape)[:2] != (1, 1):
@@ -1465,7 +1493,7 @@ class MultichipDecoder(OptimizedDecoder):
         if getattr(self, "moe_ccl_bfp8", False):
             paired = ttnn.typecast(paired, ttnn.bfloat8_b)
         reduced = self.allreduce(paired, role="moe_pair")
-        if reduced.dtype != ttnn.bfloat16:
+        if reduced.dtype != ttnn.bfloat16 and not keep_dtype:
             reduced = ttnn.typecast(reduced, ttnn.bfloat16)
         return reduced[:, :1, :, :], reduced[:, 1:2, :, :]
 
@@ -1795,7 +1823,8 @@ class MultichipDecoder(OptimizedDecoder):
         routed = self.layer.moe.experts(expert_input, routes)
         shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
         shared = self.layer.shared_mlp(shared_input, reduce_output=False)
-        shared, routed = self._reduce_moe_pair(shared, routed)
+        # The reshard into the norm layout also restores bf16 from the BFP8 collective.
+        shared, routed = self._reduce_moe_pair(shared, routed, keep_dtype=True)
         combined = norm(norm(shard(shared), "ff1"), "ff", residual=norm(shard(routed), "ff2"))
         return ttnn.add(
             residual,
