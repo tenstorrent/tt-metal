@@ -132,7 +132,7 @@ def test_the_capture_adds_a_gather_and_a_row_major_trace_after_a_verify_that_end
         ("capture", 1),
         ("untilize", "gathered"),
         ("capture", 2),
-        ("sampler", "gathered"),
+        ("sampler", "shard"),
         ("capture", 3),
     ]
     assert (model._vfy_trace_id, model._vfy_gather_trace_id, model._vfy_rm_trace_id, model._vfy_sample_trace_id) == (
@@ -154,7 +154,14 @@ def test_the_capture_keeps_one_trace_for_a_verify_that_gathers_itself(capture):
     assert model._vfy_logits_out == "logits" and model._vfy_logits_rm_out == "logits rm"
 
 
-def test_the_warm_pass_compiles_the_logits_traces_and_the_sampler_over_the_gathered_logits(monkeypatch):
+def test_the_sampler_of_a_verify_that_gathers_itself_reads_the_gathered_logits(capture):
+    make, log = capture
+    model = make(("logits", "rows", "argmax ids", "logits rm"))
+    model.record_verify_trace()
+    assert log == [("verify body", 2), ("capture", 0), ("sampler", "logits"), ("capture", 1)]
+
+
+def test_the_warm_pass_compiles_the_logits_traces_and_the_sampler_over_the_shard(monkeypatch):
     log = []
     monkeypatch.setattr(ttnn, "untilize", lambda t, **kw: log.append(("untilize", t)) or "rm")
     monkeypatch.setattr(ttnn, "deallocate", lambda t: log.append(("deallocate", t)))
@@ -168,7 +175,7 @@ def test_the_warm_pass_compiles_the_logits_traces_and_the_sampler_over_the_gathe
     assert log == [
         ("verify logits", "shard"),
         ("untilize", "gathered"),
-        ("sampler", "gathered"),
+        ("sampler", "shard"),
         ("deallocate", "shard"),
         ("deallocate", "rows"),
         ("deallocate", lanes),
@@ -214,15 +221,13 @@ def _plan():
     "sampled, read_logits, gather, expected",
     [
         (False, False, True, ["verify"]),
-        (True, False, True, ["verify", "gather", "sample"]),
+        (True, False, True, ["verify", "sample"]),
         (False, True, True, ["verify", "gather", "rm"]),
         (True, True, True, ["verify", "gather", "rm", "sample"]),
         (True, True, False, ["verify", "sample"]),
     ],
 )
-def test_only_a_step_that_samples_or_reads_logits_replays_the_logits_traces(
-    monkeypatch, sampled, read_logits, gather, expected
-):
+def test_only_a_step_that_reads_logits_replays_the_logits_traces(monkeypatch, sampled, read_logits, gather, expected):
     m, replays = _replay_model(monkeypatch, gather)
     plan = _plan() if sampled else None
     m.verify_enqueue([[1] * 4] * 2, [10, 20], [0, 0], sample_plan=plan, read_logits=read_logits)
