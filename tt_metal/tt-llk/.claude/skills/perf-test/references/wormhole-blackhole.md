@@ -54,6 +54,20 @@ unpack and math for unary unpack paths. Multiply it by `LOOP_FACTOR`.
     services the mailbox, the semaphore and the Blackhole SrcB, as
     `tests/sources/unpack_A_bcast_test.cpp` does.
 
+## Dest clearing in the measured loop
+
+`_llk_pack_dest_section_done_` defaults to clearing the packed Dest half
+before math receives it again. It also waits for pack and advances the Dest
+bank. Before adding an explicit section clear, `ZEROACC`, or a second
+`set_dst_write_addr` inside `TILE_LOOP`, trace that implicit release path for
+the active run type. An extra clear adds instructions and can add a stall to
+the published operation cost even when it does not change correctness.
+
+An operation that does not intrinsically clear Dest should normally initialize
+Dest once in `INIT` and rely on the functional pack-release behavior during
+`L1_TO_L1`. Isolates may omit that release by design; do not add compensating
+work unless the measured operation itself requires it.
+
 ## Sweep and build
 
 - The datacopy `tilize` argument exists only on Blackhole (a software

@@ -31,6 +31,11 @@ comparison.
   normal kind. A gate refuses to compare the two kinds ("CI" below). Normal
   builds also load the runtime-parameter struct, so they move more under
   layout changes.
+  Both kinds must still describe the same semantic sweep point: each runtime
+  parameter in the normal build maps to the same-valued generated constant in
+  the speed-of-light build. In particular, a non-default tile shape must not
+  compile as the default full tile. Inspect representative generated
+  `build.h` files when adding or changing this mapping.
 - **Asserts.** Wormhole and Blackhole CI build perf with
   `TT_LLK_DISABLE_ASSERTS=1`, which drops `-DENABLE_LLK_ASSERT`; Quasar perf
   CI keeps asserts. `run_test.sh --perf` matches that default per
@@ -59,6 +64,10 @@ comparison.
   passes. The per-module column set is in
   `helpers/perf/test_schemas.py`; the hardware-free header gate
   (`tests/hardware_free/perf/test_perf_header_gate.py`) fails on drift.
+- `helpers/perf/wide_schema.py` is the shared warehouse schema. Test-emitted
+  configuration columns belong above the timing comment and
+  `_TIMING_COLUMNS`; provenance stays below timing. Generic names must be
+  globally meaningful, otherwise qualify them with the operation.
 
 ## Accounting and comparability
 
@@ -76,6 +85,10 @@ comparison.
   section-done traffic.
 - Compare like with like: architecture, build kind, `loop_factor`, marker,
   schema version, and report kind.
+- A new schema or configuration column can leave zero matched historical
+  points even when the generated kernels are comparable. A green gate with
+  only "new points" is not evidence of no regression; preserve matched points
+  or explicitly re-pin the baseline after validating the code-cost change.
 
 ## Where reports land
 
@@ -119,6 +132,9 @@ comparison.
   `tests/perf_split_costs_sol.json`. A module missing from that table counts
   as 1 s. When a PR adds a perf module or changes its build count a lot,
   update its entries and say so in the PR.
+  These values schedule CI only; changing them does not establish a new
+  performance baseline and must not be used to explain away unmatched gate
+  points.
 - The perf gates and `perf_compare_commits.sh` share
   `perf/regression_compare.py`: a point regresses only when it is slower by
   both more than the threshold and more than the cycle floor. Thresholds
