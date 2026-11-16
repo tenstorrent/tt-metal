@@ -1,0 +1,135 @@
+== LAYER_0: 60 programs in the profile
+   ws2       26 programs    154.4 us device
+   router    25 programs     59.5 us device
+   experts    8 programs     77.3 us device
+   bench      1 programs      0.9 us device
+   WS2 scope in the model chain (no bench reshard): 26 programs
+  0 bench    InterleavedToShardedDeviceOperation       0.90 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 -> BFLOAT16
+  1 ws2      LayerNormDeviceOperation                  5.80 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+  2 ws2      ShardedToInterleavedDeviceOperation       0.75 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 -> BFLOAT16
+  3 ws2      MatmulDeviceOperation                    17.77 us  cores= 32  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+  4 ws2      GenericOpDeviceOperation                 13.25 us  cores=  3  in0=1[1]x1[1]x32[1]x2048[2048]  BFLOAT16 BFLOAT16 -> BFLOAT16
+  5 ws2      PagedFusedUpdateCacheDeviceOperation      4.19 us  cores=  2  in0=8[8]x2[2]x32[32]x256[256]  BFLOAT8_B BFLOAT16 -> BFLOAT8_B
+  6 ws2      SdpaDecodeDeviceOperation                10.52 us  cores= 64  in0=1[1]x1[1]x32[4]x256[256]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+  7 ws2      GenericOpDeviceOperation                  3.06 us  cores= 32  in0=1[1]x1[1]x32[4]x256[256]  BFLOAT16 BFLOAT16 -> BFLOAT16
+  8 ws2      MatmulDeviceOperation                     9.80 us  cores= 88  in0=1[1]x1[1]x32[1]x1024[1024]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+  9 ws2      ReduceScatterMinimalAsyncDeviceOperati    9.66 us  cores=  6  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 10 ws2      AllGatherAsyncDeviceOperation            10.15 us  cores=  4  in0=1[1]x1[1]x32[1]x704[704]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 11 ws2      LayerNormDeviceOperation                  5.88 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 12 ws2      BinaryNgDeviceOperation                   0.46 us  cores=110  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 13 ws2      LayerNormDeviceOperation                  5.50 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 -> BFLOAT16
+ 14 ws2      ShardedToInterleavedDeviceOperation       1.37 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 -> FLOAT32
+ 15 router   BinaryNgDeviceOperation                   2.77 us  cores=110  in0=1[1]x1[1]x32[1]x2816[2816]  FLOAT32 FLOAT32 -> FLOAT32
+ 16 router   MatmulDeviceOperation                    13.16 us  cores=  4  in0=1[1]x1[1]x32[1]x2816[2816]  FLOAT32 BFLOAT16 -> FLOAT32
+ 17 router   CloneOperation                            0.87 us  cores=  4  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 -> FLOAT32
+ 18 router   FillPadDeviceOperation                    4.14 us  cores=  4  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 -> FLOAT32
+ 19 router   ReduceDeviceOperation                     2.03 us  cores=  1  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 -> FLOAT32
+ 20 router   BinaryNgDeviceOperation                   4.23 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 FLOAT32 -> FLOAT32
+ 21 router   TypecastDeviceOperation                   1.20 us  cores=  4  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 -> BFLOAT16
+ 22 router   FillPadDeviceOperation                    3.96 us  cores=  4  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 23 router   PadCodegenDeviceOperation                 1.85 us  cores=  8  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 24 router   ReshapeCodegenDeviceOperation             2.45 us  cores=  1  in0=1[1]x1[1]x32[1]x256[256]  BFLOAT16 -> BFLOAT16
+ 25 router   InterleavedToShardedDeviceOperation       0.39 us  cores=  1  in0=1[1]x1[1]x32[16]x32[16]  BFLOAT16 -> BFLOAT16
+ 26 router   GeneralizedMoeGateDeviceOperation         1.38 us  cores=  1  in0=1[1]x1[1]x32[16]x32[16]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 27 router   ShardedToInterleavedDeviceOperation       1.53 us  cores=  1  in0=1[1]x1[1]x32[32]x32[32]  BFLOAT16 -> BFLOAT16
+ 28 router   ShardedToInterleavedDeviceOperation       1.57 us  cores=  1  in0=1[1]x1[1]x32[32]x32[32]  UINT16 -> UINT16
+ 29 router   SliceDeviceOperation                      0.60 us  cores=  1  in0=1[1]x1[1]x32[32]x32[32]  BFLOAT16 -> BFLOAT16
+ 30 router   SliceDeviceOperation                      0.61 us  cores=  1  in0=1[1]x1[1]x32[32]x32[32]  UINT16 -> UINT16
+ 31 router   UnaryDeviceOperation                      0.96 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 32 router   UntilizeWithUnpaddingDeviceOperation      1.72 us  cores=  1  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 33 router   ScatterDeviceOperation                    1.17 us  cores=  1  in0=1[1]x1[1]x1[1]x128[128]  BFLOAT16 UINT16 -> BFLOAT16
+ 34 router   TilizeWithValPaddingDeviceOperation       5.58 us  cores=  1  in0=1[1]x1[1]x1[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 35 router   BinaryNgDeviceOperation                   1.98 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 36 ws2      BinaryNgDeviceOperation                   2.58 us  cores=110  in0=1[1]x1[1]x32[1]x2816[2816]  FLOAT32 FLOAT32 -> BFLOAT8_B
+ 37 router   UntilizeWithUnpaddingDeviceOperation      1.77 us  cores=  1  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 38 router   GatherDeviceOperation                     0.63 us  cores=  1  in0=1[1]x1[1]x1[1]x128[128]  BFLOAT16 UINT16 -> BFLOAT16
+ 39 router   TilizeWithValPaddingDeviceOperation       1.78 us  cores=  1  in0=1[1]x1[1]x1[1]x8[8]  BFLOAT16 -> BFLOAT16
+ 40 router   UnaryDeviceOperation                      1.16 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 41 experts  SparseMatmulDeviceOperation              48.14 us  cores= 12  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT8_B BFLOAT8_B -> BFLOAT16
+ 42 experts  SliceDeviceOperation                      1.06 us  cores= 48  in0=1[1]x8[8]x32[1]x384[384]  BFLOAT16 -> BFLOAT16
+ 43 experts  SliceDeviceOperation                      0.95 us  cores= 48  in0=1[1]x8[8]x32[1]x384[384]  BFLOAT16 -> BFLOAT16
+ 44 experts  BinaryNgDeviceOperation                   3.85 us  cores=110  in0=1[1]x8[8]x32[1]x192[192]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 45 experts  UnaryDeviceOperation                      3.25 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 46 experts  SparseMatmulDeviceOperation              13.74 us  cores= 88  in0=1[1]x8[8]x32[1]x192[192]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+ 47 experts  TransposeDeviceOperation                  3.59 us  cores=110  in0=1[1]x8[8]x32[1]x2816[2816]  BFLOAT16 -> BFLOAT16
+ 48 experts  MatmulDeviceOperation                     2.69 us  cores= 88  in0=1[1]x1[1]x32[1]x32[8]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 49 ws2      MatmulDeviceOperation                    14.16 us  cores= 18  in0=1[1]x1[1]x32[1]x2816[2816]  FLOAT32 BFLOAT8_B -> BFLOAT16
+ 50 ws2      GenericOpDeviceOperation                  3.34 us  cores= 17  in0=1[1]x1[1]x32[1]x1088[1088]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 51 ws2      MatmulDeviceOperation                     5.59 us  cores= 44  in0=1[1]x1[1]x32[1]x544[544]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+ 52 ws2      GenericOpDeviceOperation                  1.93 us  cores=  8  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 53 ws2      ReduceScatterMinimalAsyncDeviceOperati    4.38 us  cores=  6  in0=1[1]x1[1]x32[32]x256[256]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 54 ws2      AllGatherAsyncDeviceOperation             3.03 us  cores=  4  in0=1[1]x1[1]x32[32]x64[64]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 55 ws2      GenericOpDeviceOperation                  1.21 us  cores= 44  in0=1[1]x1[1]x32[32]x256[256]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 56 ws2      LayerNormDeviceOperation                  5.86 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 57 ws2      LayerNormDeviceOperation                  5.85 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 58 ws2      LayerNormDeviceOperation                  6.08 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 59 ws2      BinaryNgDeviceOperation                   2.26 us  cores=110  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+
+== LAYER_5: 62 programs in the profile
+   ws2       28 programs    170.0 us device
+   router    25 programs     58.3 us device
+   experts    8 programs     77.1 us device
+   bench      1 programs      0.9 us device
+   WS2 scope in the model chain (no bench reshard): 28 programs
+  0 bench    InterleavedToShardedDeviceOperation       0.90 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 -> BFLOAT16
+  1 ws2      LayerNormDeviceOperation                  5.80 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+  2 ws2      ShardedToInterleavedDeviceOperation       0.76 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 -> BFLOAT16
+  3 ws2      MatmulDeviceOperation                    26.23 us  cores= 48  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+  4 ws2      GenericOpDeviceOperation                 23.23 us  cores=  3  in0=1[1]x1[1]x32[1]x3072[3072]  BFLOAT16 BFLOAT16 -> BFLOAT16
+  5 ws2      PagedFusedUpdateCacheDeviceOperation      4.17 us  cores=  2  in0=8[8]x1[1]x32[32]x512[512]  BFLOAT8_B BFLOAT16 -> BFLOAT8_B
+  6 ws2      SdpaDecodeDeviceOperation                10.99 us  cores= 64  in0=1[1]x1[1]x32[4]x512[512]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+  7 ws2      GenericOpDeviceOperation                  3.13 us  cores= 64  in0=1[1]x1[1]x32[4]x512[512]  BFLOAT16 BFLOAT16 -> BFLOAT16
+  8 ws2      MatmulDeviceOperation                    17.15 us  cores= 88  in0=1[1]x1[1]x32[1]x2048[2048]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+  9 ws2      GenericOpDeviceOperation                  2.15 us  cores=  4  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 10 ws2      ReduceScatterMinimalAsyncDeviceOperati    4.48 us  cores=  6  in0=1[1]x1[1]x32[32]x128[128]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 11 ws2      AllGatherAsyncDeviceOperation             2.82 us  cores=  4  in0=1[1]x1[1]x32[32]x32[32]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 12 ws2      GenericOpDeviceOperation                  0.98 us  cores= 44  in0=1[1]x1[1]x32[32]x128[128]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 13 ws2      LayerNormDeviceOperation                  5.86 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 14 ws2      BinaryNgDeviceOperation                   0.53 us  cores=110  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 15 ws2      LayerNormDeviceOperation                  5.49 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 -> BFLOAT16
+ 16 ws2      ShardedToInterleavedDeviceOperation       1.36 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 -> FLOAT32
+ 17 router   BinaryNgDeviceOperation                   2.68 us  cores=110  in0=1[1]x1[1]x32[1]x2816[2816]  FLOAT32 FLOAT32 -> FLOAT32
+ 18 router   MatmulDeviceOperation                    12.05 us  cores=  4  in0=1[1]x1[1]x32[1]x2816[2816]  FLOAT32 BFLOAT16 -> FLOAT32
+ 19 router   CloneOperation                            0.88 us  cores=  4  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 -> FLOAT32
+ 20 router   FillPadDeviceOperation                    4.14 us  cores=  4  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 -> FLOAT32
+ 21 router   ReduceDeviceOperation                     2.02 us  cores=  1  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 -> FLOAT32
+ 22 router   BinaryNgDeviceOperation                   4.22 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 FLOAT32 -> FLOAT32
+ 23 router   TypecastDeviceOperation                   1.21 us  cores=  4  in0=1[1]x1[1]x32[1]x128[128]  FLOAT32 -> BFLOAT16
+ 24 router   FillPadDeviceOperation                    3.95 us  cores=  4  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 25 router   PadCodegenDeviceOperation                 1.83 us  cores=  8  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 26 router   ReshapeCodegenDeviceOperation             2.44 us  cores=  1  in0=1[1]x1[1]x32[1]x256[256]  BFLOAT16 -> BFLOAT16
+ 27 router   InterleavedToShardedDeviceOperation       0.40 us  cores=  1  in0=1[1]x1[1]x32[16]x32[16]  BFLOAT16 -> BFLOAT16
+ 28 router   GeneralizedMoeGateDeviceOperation         1.38 us  cores=  1  in0=1[1]x1[1]x32[16]x32[16]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 29 router   ShardedToInterleavedDeviceOperation       1.56 us  cores=  1  in0=1[1]x1[1]x32[32]x32[32]  BFLOAT16 -> BFLOAT16
+ 30 router   ShardedToInterleavedDeviceOperation       1.56 us  cores=  1  in0=1[1]x1[1]x32[32]x32[32]  UINT16 -> UINT16
+ 31 router   SliceDeviceOperation                      0.60 us  cores=  1  in0=1[1]x1[1]x32[32]x32[32]  BFLOAT16 -> BFLOAT16
+ 32 router   SliceDeviceOperation                      0.60 us  cores=  1  in0=1[1]x1[1]x32[32]x32[32]  UINT16 -> UINT16
+ 33 router   UnaryDeviceOperation                      0.93 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 34 router   UntilizeWithUnpaddingDeviceOperation      1.67 us  cores=  1  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 35 router   ScatterDeviceOperation                    1.18 us  cores=  1  in0=1[1]x1[1]x1[1]x128[128]  BFLOAT16 UINT16 -> BFLOAT16
+ 36 router   TilizeWithValPaddingDeviceOperation       5.62 us  cores=  1  in0=1[1]x1[1]x1[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 37 router   BinaryNgDeviceOperation                   2.05 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 38 ws2      BinaryNgDeviceOperation                   2.60 us  cores=110  in0=1[1]x1[1]x32[1]x2816[2816]  FLOAT32 FLOAT32 -> BFLOAT8_B
+ 39 router   UntilizeWithUnpaddingDeviceOperation      1.71 us  cores=  1  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 40 router   GatherDeviceOperation                     0.65 us  cores=  1  in0=1[1]x1[1]x1[1]x128[128]  BFLOAT16 UINT16 -> BFLOAT16
+ 41 router   TilizeWithValPaddingDeviceOperation       1.78 us  cores=  1  in0=1[1]x1[1]x1[1]x8[8]  BFLOAT16 -> BFLOAT16
+ 42 router   UnaryDeviceOperation                      1.18 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 43 experts  SparseMatmulDeviceOperation              48.26 us  cores= 12  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT8_B BFLOAT8_B -> BFLOAT16
+ 44 experts  SliceDeviceOperation                      0.97 us  cores= 48  in0=1[1]x8[8]x32[1]x384[384]  BFLOAT16 -> BFLOAT16
+ 45 experts  SliceDeviceOperation                      0.98 us  cores= 48  in0=1[1]x8[8]x32[1]x384[384]  BFLOAT16 -> BFLOAT16
+ 46 experts  BinaryNgDeviceOperation                   3.81 us  cores=110  in0=1[1]x8[8]x32[1]x192[192]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 47 experts  UnaryDeviceOperation                      3.25 us  cores=110  in0=1[1]x1[1]x32[1]x128[128]  BFLOAT16 -> BFLOAT16
+ 48 experts  SparseMatmulDeviceOperation              13.70 us  cores= 88  in0=1[1]x8[8]x32[1]x192[192]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+ 49 experts  TransposeDeviceOperation                  3.52 us  cores=110  in0=1[1]x8[8]x32[1]x2816[2816]  BFLOAT16 -> BFLOAT16
+ 50 experts  MatmulDeviceOperation                     2.65 us  cores= 88  in0=1[1]x1[1]x32[1]x32[8]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 51 ws2      MatmulDeviceOperation                    13.36 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  FLOAT32 BFLOAT8_B -> BFLOAT16
+ 52 ws2      GenericOpDeviceOperation                  3.37 us  cores= 17  in0=1[1]x1[1]x32[1]x1088[1088]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 53 ws2      MatmulDeviceOperation                     5.55 us  cores= 44  in0=1[1]x1[1]x32[1]x544[544]  BFLOAT16 BFLOAT8_B -> BFLOAT16
+ 54 ws2      GenericOpDeviceOperation                  1.94 us  cores=  8  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 55 ws2      ReduceScatterMinimalAsyncDeviceOperati    4.38 us  cores=  6  in0=1[1]x1[1]x32[32]x256[256]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 56 ws2      AllGatherAsyncDeviceOperation             2.34 us  cores=  4  in0=1[1]x1[1]x32[32]x64[64]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 57 ws2      GenericOpDeviceOperation                  1.25 us  cores= 44  in0=1[1]x1[1]x32[32]x256[256]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 58 ws2      LayerNormDeviceOperation                  5.87 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 59 ws2      LayerNormDeviceOperation                  5.86 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 60 ws2      LayerNormDeviceOperation                  6.10 us  cores= 44  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
+ 61 ws2      BinaryNgDeviceOperation                   2.26 us  cores=110  in0=1[1]x1[1]x32[1]x2816[2816]  BFLOAT16 BFLOAT16 -> BFLOAT16
