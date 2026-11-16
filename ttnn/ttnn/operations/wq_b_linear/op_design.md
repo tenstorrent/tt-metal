@@ -90,6 +90,18 @@ The implementer re-tuned four design values on p100a (measured in `agent_logs/tt
 | `num_x_injectors` | 6 | `max(2, min(num_k_blocks, grid_x))` = 8 (row 9, x = 3..10) | follows `num_k_blocks` |
 | x multicast protocol | `McastConfig(handshake=False, data_ready=Counter)` | `McastConfig(handshake=True, data_ready=Flag)` (`X_MCAST_LINKED`) | Counter selects unlinked multicast writes; bare broadcast 26.3 → 19.1 µs with Flag |
 
+### As built (Refinement 1, supersedes Phase 0 where they differ)
+
+| Knob | Phase 0 | Refinement 1 | Evidence (p100a, full op, median of 9) |
+|------|---------|--------------|----------|
+| `K_BLOCK_TILES` | 6 (`num_k_blocks` = 8) | 3 (`num_k_blocks` = 16) | kb=6: 25.1 µs, kb=4: 24.0–24.4, kb=3: 23.6–23.9, kb=2: 24.5 µs. Finer K-blocks shorten the compute tail after the last W block on 2-column cores; Phase 0's kb result was taken with the round count tied to kb |
+| `X_ROUND_K_BLOCKS` (new) | rounds = K-blocks | 4 → `num_x_rounds` = 4 (raised so rounds ≤ `MAX_X_MCAST_CHANNELS` = 8) | rounds decouple the multicast quantum from the compute K-block; writer still pushes per K-block |
+| `X_MCAST_CHANNELS` (new) | one rotating channel, Flag + handshake (26.5 µs) | `per_round`: one fixed-sender Flag channel per round, no handshake (each fires once per launch, so the flag cell is never reused) | the rotating handshake costs ≈1.5 µs/round (109 ready atomics converge on the next injector) |
+| `X_ROUNDS_CONCURRENT` (new) | chained | chained (`False`) | all injectors at once: 39–88 µs, erratic (both Counter/unlinked and Flag/linked) |
+| `X_INJECTOR_PLACEMENT` (new) | last row | `diagonal` over the last `num_x_rounds` rows, distinct columns | x-only 17.7 → 16.6 µs at the same round size: last-row injectors share row links for their prefetch |
+| `num_x_injectors` | `max(2, min(num_k_blocks, grid_x))` | `num_x_rounds` (per_round) | one injector per round |
+| `W_READS_IN_FLIGHT` | 1 | 1 | 2: 27.7 µs, 3: 29.3 µs (kb=6); 2 at kb=3: 24.6 µs |
+
 `x_cb_k_blocks` / `w_cb_k_blocks` are not independent knobs in the code: the writer and reader reserve all `num_k_blocks` blocks up front (whole-K residency), so the CB capacities are written in `num_k_blocks` directly. A ring depth below `num_k_blocks` needs wrap-aware slot math in both kernels.
 
 Verifier ablation (p100a, device kernel ns, 3 calls each): full 26.6 µs; x broadcast + y store only (no W reads, no compute) 25.4 µs; sync-only (one-page multicast per round, no W reads, no compute) 14.7 µs; W-only (one-page x) 20.8 µs; compute-only (one-page x) 15.7 µs. The serialized 8-round x broadcast is the critical path, not the W DRAM stream. See `verification_report.md`.

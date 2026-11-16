@@ -3,8 +3,11 @@
 """Perf-only bench for wq_b_linear (run under `scripts/run_safe_pytest.sh --profile`).
 
 WQB_VARIANT selects an ablation: full | no_compute | no_w_read | no_compute_no_w_read | sync_only | w_only | compute_only
+| mcast_only (full-size x multicast of unread slots, no x prefetch, no W, no compute)
+| w_compute (W reads + compute; x multicast shrunk to 1 page/round, no x prefetch)
 (sync_only / w_only / compute_only shrink every x multicast to one page and drops the injector x prefetch).
 Ablated variants produce wrong output by design; no correctness check here.
+WQB_KNOBS overrides program-descriptor knobs, e.g. WQB_KNOBS="X_ROUND_K_BLOCKS=2,X_MCAST_PROTOCOL=chain_flag".
 """
 
 import os
@@ -22,6 +25,10 @@ from ttnn.operations.wq_b_linear import wq_b_linear
 VARIANT = os.environ.get("WQB_VARIANT", "full")
 ITERS = int(os.environ.get("WQB_ITERS", "3"))
 
+for _kv in filter(None, os.environ.get("WQB_KNOBS", "").split(",")):
+    _k, _v = _kv.split("=")
+    setattr(pd, _k, type(getattr(pd, _k))(_v) if not isinstance(getattr(pd, _k), bool) else _v == "True")
+
 _orig_create = pd.create_program_descriptor
 _tmp_dir = Path(tempfile.mkdtemp(prefix="wqb_bench_"))
 
@@ -36,14 +43,15 @@ def _gated_reader():
     return str(path)
 
 
-def _tiny_x_writer():
+def _tiny_x_writer(shrink_send=True):
     src = (pd.KERNEL_DIR / "wq_b_linear_writer.cpp").read_text()
-    send = "send_pipe->send(slot, slot, round_bytes);"
+    send = "send_pipe.send(slot, slot, round_bytes);"
     read = "noc.async_read(x, cb_x, x_page_bytes, {.page_id = row_page + kk}, {.offset_bytes = offset});"
     assert send in src and read in src
-    src = src.replace(send, "send_pipe->send(slot, slot, x_page_bytes);")
+    if shrink_send:
+        src = src.replace(send, "send_pipe.send(slot, slot, x_page_bytes);")
     src = src.replace(read, "if (x_addr == 0xFFFFFFFF) { " + read + " }")
-    path = _tmp_dir / "wq_b_linear_writer_tiny_x.cpp"
+    path = _tmp_dir / f"wq_b_linear_writer_tiny_x_{int(shrink_send)}.cpp"
     path.write_text(src)
     return str(path)
 
@@ -52,7 +60,10 @@ def _patched_create(*args, **kwargs):
     desc = _orig_create(*args, **kwargs)
     skip_compute = VARIANT in ("no_compute", "no_compute_no_w_read", "sync_only", "w_only")
     skip_w = VARIANT in ("no_w_read", "no_compute_no_w_read", "sync_only", "compute_only")
-    tiny_x = VARIANT in ("sync_only", "w_only", "compute_only")
+    tiny_x = VARIANT in ("sync_only", "w_only", "compute_only", "w_compute")
+    no_x_prefetch = VARIANT == "mcast_only"
+    if VARIANT == "mcast_only":
+        skip_compute = skip_w = True
     kernels = list(desc.kernels)
     for k in kernels:
         if skip_compute and k.kernel_source.endswith("wq_b_linear_compute.cpp"):
@@ -61,6 +72,8 @@ def _patched_create(*args, **kwargs):
             k.kernel_source = _gated_reader()
         if tiny_x and k.kernel_source.endswith("wq_b_linear_writer.cpp"):
             k.kernel_source = _tiny_x_writer()
+        if no_x_prefetch and k.kernel_source.endswith("wq_b_linear_writer.cpp"):
+            k.kernel_source = _tiny_x_writer(shrink_send=False)
     desc.kernels = kernels
     return desc
 

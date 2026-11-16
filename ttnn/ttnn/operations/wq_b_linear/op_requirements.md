@@ -32,7 +32,7 @@
 - **Compute config**: caller's `ComputeConfigDescriptor`, default HiFi2 / 16-bit DEST; packer L1 accumulation
 - **Golden baseline**: 2 / 2 registry cells passing (plus 1/1 regression), 0 loud categories; PCC 0.999967; 27.0 µs device
 
-### [ ] Refinement 1 — Take the x broadcast off the critical path
+### [x] Refinement 1 — Take the x broadcast off the critical path
 
 **Type**: perf
 
@@ -46,6 +46,8 @@ Re-tune `K_BLOCK_TILES` / `W_READS_IN_FLIGHT` after the decoupling, because thei
 **Verifier notes**: must run first; nothing downstream can be measured while x binds (no_w_read ≈ full). The success shape: full ≈ the W-only ablation (≈ 21 µs) and `no_compute_no_w_read` well below `w_only`. If the knob-turns cannot bring the x path below the W stream, ship `[~]` with the measured numbers and file **Refinement 1b**: an x-topology scheme-change. Two candidates: the design's R5 (`mn_2d_w_bcast_along_m`: two 1-D `ttnn.Mcast` channels at disjoint semaphore ids, W multicast along m), or concurrent banded x injectors, each multicasting to a sub-rectangle and paying one extra x DRAM read per band (+491,520 B ≈ +1.1 µs DRAM SOL each). The `l1_ledger.md` R5 deferral premise ("cross-core tier does not bind") is already falsified by the Phase 0 ablation.
 
 **Done when**: measured device-ns on the flagged case improves over the 26.6 µs Phase 0 baseline, with the x-only ablation (`no_compute_no_w_read`) recorded below `w_only` (or `[~]` + 1b as above). `pcc_threshold` 0.9998 holds, the golden suite and acceptance suite are green, and `test_regression.py` stays bit-identical.
+
+**Outcome**: full op 26.53 → 23.85 µs (median of 9, `_op_bench.py --profile`; 1.66× → 1.49× SOL). x-only (`no_compute_no_w_read`) 25.4 → 16.0 µs, now below `w_only` (21.0 µs). The full op sits 0.9 µs above the W + compute ablation with a trivial x (`w_compute`, 22.95 µs), so x is off the critical path. Levers: (1) round size decoupled from the compute K-block (`X_ROUND_K_BLOCKS`). (2) One fixed-sender Flag channel per round (`X_MCAST_CHANNELS="per_round"`): each fires once per launch, so there is no ready handshake. The rotating handshake cost ≈1.5 µs/round because 109 ready atomics converge on the next injector. (3) Injectors on a diagonal over the last rows (`X_INJECTOR_PLACEMENT`): the x path drops 17.7 → 16.6 µs because last-row injectors share row links for their prefetch. (4) `K_BLOCK_TILES` re-tuned 6 → 3 (16 K-blocks, 4 rounds): 25.1 → 23.8 µs; PCC improved 0.999968 → 0.999972. `W_READS_IN_FLIGHT` re-checked; 1 stays best. Measured and parked: concurrent injectors (`X_ROUNDS_CONCURRENT=True`) are correct but run 39–88 µs and erratic, with both unlinked Counter and linked Flag. Not built: x prefetch on NoC0. BRISC and NCRISC share read cmd buffer 1 in dedicated-NoC mode, so it needs a reader-side prefetch with a handoff; placement already removed most of the prefetch contention. Bottleneck now: the W stream on the 18 two-column cores (NCRISC end 21.4 µs) plus their compute tail (TRISC2 end 22.7 µs) — Refinement 2's scope. Remaining in the x path: 8.4 µs `sync_only` floor (launch + y store + 4 flag rounds); prefetch ≈2.4 µs over `mcast_only` (13.6 µs); multicast at ≈50 B/cycle.
 
 ### [ ] Refinement 2 — W DRAM stream co-tune toward the DRAM SOL
 
