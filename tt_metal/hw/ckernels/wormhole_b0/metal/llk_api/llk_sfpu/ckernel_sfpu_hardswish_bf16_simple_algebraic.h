@@ -5,7 +5,6 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::hardswish {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
 template <uint32_t Output, uint32_t Hold, uint32_t Advance>
 inline void simple_wh_gated_row_head() {
