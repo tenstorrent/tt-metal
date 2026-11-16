@@ -570,8 +570,8 @@ def test_a_sampled_bucket_verify_draws_what_the_full_width_verify_draws(
     mesh_device, monkeypatch, reset_seeds, ensure_gc
 ):
     """B = 8, K = 3, device sampling. Live rows {0}, {0, 1} and {0, 1, 2} (buckets 1, 2, 4), rows 0 and 1 seeded
-    sampled (top-k 32 and top-k 20 top-p 0.95), row 2 greedy, 4 steps each. Every step runs the same verify twice on
-    the same start blocks, first on the bucket's verify and sampler traces, then on the full-width ones
+    sampled (top-k 32 and top-k 20 top-p 0.95), row 2 greedy, 4 steps each. Every step runs the same verify twice from
+    the same start state, first on the bucket's verify and sampler traces, then on the full-width ones
     (Qwen36Model.verify_traced with and without ``bucket``): the live rows' ids (draws for the sampled rows), the
     sampled rows' raw draws, the live rows' vocab shard of the logits and drafter feed rows, and the GDN state after
     every verify column are equal bit for bit on every device. The step then commits one token."""
@@ -579,7 +579,9 @@ def test_a_sampled_bucket_verify_draws_what_the_full_width_verify_draws(
     T = K + 1
     pair = Pair(mesh_device, monkeypatch, K, "none", bmax=B, spec_sample=True)
     model = pair.spec_model
+    gb = model.gdn_blocks
     assert sorted(model._vfy_bucket_sample_traces) == [1, 2, 4], "the bucket sampler traces are captured"
+    spare = {}  # (row, group) -> a block outside the rows' windows that holds the step's start state
     prompts = _prompts(3, 800, seed=47)
     nxt = {}
     for r, n in zip(range(3), (650, 410, 530)):
@@ -609,8 +611,20 @@ def test_a_sampled_bucket_verify_draws_what_the_full_width_verify_draws(
             assert plan.any_sampled
             rows = torch.tensor([r * T + j for r in live for j in range(T)])
             drawn = torch.tensor([r for r in range(bucket * T) if plan.sampled[r]])
+            # In mode "none" a row's start block is one of its window blocks, which the first verify overwrites with
+            # a column state: each verify starts from a copy of the start blocks taken before the first one.
+            saved = []
+            for r in live:
+                for g, (layers, _) in enumerate(gb.groups(state)):
+                    if (r, g) not in spare:
+                        spare[(r, g)] = pair.spec_blocks.free.pop()
+                    saved += [(dn, int(sel[r][1][g]), spare[(r, g)]) for dn in layers]
+            for dn, start, copy in saved:
+                gb._copy_state(dn, start, copy)
             runs = []
             for b in (bucket, None):
+                for dn, start, copy in saved:
+                    gb._copy_state(dn, copy, start)
                 model.gdn_blocks.set_verify_blocks(state)
                 ids, feed, _ = model.verify_traced(
                     tokens, positions, [0] * B, page_tables=pt, inactive=inactive, rope_deltas=[0] * B,
