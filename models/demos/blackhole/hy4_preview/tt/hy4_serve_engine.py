@@ -175,7 +175,17 @@ class Hy4Engine:
         self.drain()
         rows = sorted(prompts_by_row)
         prompts = [prompts_by_row.get(r, [PAD]) for r in range(ROWS)]
-        chain = self.hybrid_cap > 0 and max(len(prompts_by_row[r]) for r in rows) <= self.hybrid_cap
+        cap = self.hybrid_cap
+        hf = os.environ.get(
+            "HY4_PF_HYBRID_FILE"
+        )  # live A/B switch: a file holding the cap (0 = pure pool prefill); read per prefill call, never above the boot value
+        if hf:
+            try:
+                with open(hf) as fh:
+                    cap = min(int(fh.read().strip()), self.hybrid_cap)
+            except (OSError, ValueError):
+                pass
+        chain = cap > 0 and max(len(prompts_by_row[r]) for r in rows) <= cap
         res = self.pp.prefill(
             prompts,
             keep_hidden=self.spec,
