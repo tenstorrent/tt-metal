@@ -1098,11 +1098,7 @@ void py_module(nb::module_& mod) {
             )doc");
     mod.def(
         "from_local_host_shards",
-        [](const std::map<MeshCoordinate, Tensor>& shards,
-           MeshDevice& mesh_device,
-           const tt::tt_metal::TensorTopology& topology) -> Tensor {
-            return from_local_host_shards(shards, mesh_device.get_view(), topology);
-        },
+        &from_local_host_shards,
         nb::arg("shards"),
         nb::arg("mesh_device"),
         nb::arg("topology"),
