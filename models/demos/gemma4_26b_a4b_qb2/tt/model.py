@@ -179,11 +179,23 @@ class Gemma4Model:
             layer.fused_setup(boundary, nxt)
         from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.greedy import GreedyB1
 
-        return SimpleNamespace(
+        fused = SimpleNamespace(
             boundary=boundary,
             g_entry=boundary.gammas([input_gamma(layers[0])]),
             greedy=GreedyB1(self.mesh, self.config.vocab_size // 4, softcap=self.softcap),
+            lmhead=None,
         )
+        if os.environ.get("GEMMA4_26B_WS5_LMHEAD", "1") != "0" and self.head.dtype == ttnn.bfloat8_b:
+            # WS5: the greedy batch-1 LM head streamed per DRAM bank with the argmax fused (fused_decode/lmhead.py)
+            from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.lmhead import LmHeadGreedyB1
+
+            weights = [
+                ttnn.to_torch(t).float().reshape(self.config.hidden_size, -1)
+                for t in ttnn.get_device_tensors(self.head)
+            ]
+            fused.lmhead = LmHeadGreedyB1(self.mesh, weights, fused.greedy)
+            del weights
+        return fused
 
     def precision_summary(self):
         """Validate requested precision against allocated weights and bound kernels."""
@@ -286,6 +298,9 @@ class Gemma4Model:
         if greedy_tokens is not None:
             # greedy: the argmax of the raw LM-head output (the softcap is monotonic) straight into the token input
             # L1: the greedy workers read row 0 of every logits tile
+            if self.fused_b1.lmhead is not None:
+                self.fused_b1.lmhead(x, greedy_tokens)
+                return self.fused_b1.greedy.local  # 32 rows: no sampler padding; the greedy trace ignores it
             logits = self.head_logits(x, softcap=False, memory_config=ttnn.L1_MEMORY_CONFIG)
             self.fused_b1.greedy(logits, greedy_tokens)
             return logits
