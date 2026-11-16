@@ -28,7 +28,7 @@ inline void calculate_elu(uint slope) {
     sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1, h_top0 = CW_EXPM1_H_TOP0;
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
 // partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
-#pragma GCC unroll 2
+#pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat result = alpha * expm1_cw_clamped_prgm(x, h_top1, h_top0);
