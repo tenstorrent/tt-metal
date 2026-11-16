@@ -227,7 +227,7 @@ class Hy4AttentionOpt(Hy4Attention):
         return self.indexer._rot_first(x, cos, sin)
 
     # ---------------------------------------------------------------- decode
-    def front(self, h, o, tabs, append_cache=True, qrm=False):
+    def front(self, h, o, tabs, append_cache=True, qrm=False, kvf=None):
         """h [1,1,S,6144] -> dict(qa, lat, k_pe, qfull, g, ik, iw). Everything of the decode layer before the sparse kernel (plus the gate of the o path)."""
         cfg, ix = self.cfg, self.indexer
         S = h.shape[2]
@@ -300,7 +300,21 @@ class Hy4AttentionOpt(Hy4Attention):
         ):  # HY4_ATTN_FUSE=1 (pool decode, S == 1): q_abs matmul + rope + concat + row-major layout in ONE program -> d["qfull"] RM [1,8,1,576]
             from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as FA
 
-            d["qfull"] = FA.fused_q(q, self.w_uk, cos, sin, self._tm)
+            kvargs = None
+            if (
+                kvf is not None
+                and FA.kv_in_q()
+                and S <= 4
+                and not lat.memory_config().is_sharded()
+                and not k_pe.memory_config().is_sharded()
+                and lat.layout == ttnn.TILE_LAYOUT
+                and k_pe.layout == ttnn.TILE_LAYOUT
+                and lat.dtype == ttnn.bfloat16
+                and k_pe.dtype == ttnn.bfloat16
+            ):  # HY4_KV_FUSE=2: KV append inside the fused_q program
+                kvargs = (lat, k_pe, kvf[0], kvf[1])
+                d["kv_done"] = True
+            d["qfull"] = FA.fused_q(q, self.w_uk, cos, sin, self._tm, kv=kvargs)
             d["qrm"] = True
             ttnn.deallocate(q)
             return d

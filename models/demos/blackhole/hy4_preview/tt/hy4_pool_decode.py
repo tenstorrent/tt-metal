@@ -338,6 +338,21 @@ class Hy4AttentionPool(Hy4AttentionOpt):
 
     # ------------------------------------------------------------------ pieces
     def pool_append_kv(self, lat, k_pe):
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as FA
+
+        S = int(lat.shape[2])
+        if (
+            FA.kv_enabled()
+            and S <= 8
+            and not lat.memory_config().is_sharded()
+            and not k_pe.memory_config().is_sharded()
+            and lat.layout == ttnn.TILE_LAYOUT
+            and k_pe.layout == ttnn.TILE_LAYOUT
+            and lat.dtype == ttnn.bfloat16
+            and k_pe.dtype == ttnn.bfloat16
+        ):  # HY4_KV_FUSE=1: quantise + pack + row write in ONE program
+            FA.fused_kv_append(lat, k_pe, self.ctx.wr, self.kv_pool, S)
+            return
         dp = ttnn.experimental.deepseek_prefill
         dram = (
             ttnn.DRAM_MEMORY_CONFIG
@@ -385,8 +400,9 @@ class Hy4AttentionPool(Hy4AttentionOpt):
             and self.w_uk.dtype == ttnn.bfloat16
             and tuple(self.w_uk.shape)[1:] == (8, 192, 512)
         )
-        d = self.front(h, o, tabs, qrm=qrm)
-        self.pool_append_kv(d["lat"], d["k_pe"])
+        d = self.front(h, o, tabs, qrm=qrm, kvf=(ctx.wr, self.kv_pool))
+        if not d.get("kv_done"):
+            self.pool_append_kv(d["lat"], d["k_pe"])
         for t in (d["lat"], d["k_pe"]):
             ttnn.deallocate(t)
         if self.has_indexer:
