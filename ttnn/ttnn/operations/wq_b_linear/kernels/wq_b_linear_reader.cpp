@@ -5,7 +5,8 @@
 // Up to w_reads_in_flight K-block batches are outstanding, each under its own read trid; compute is
 // released per K-block. The last w_noc1_k_blocks K-blocks are read by the writer (BRISC, NoC1) straight into
 // their slots; this kernel stays the CB's only producer and pushes them once the writer's handoff semaphore
-// says they landed.
+// says they landed. A core with a K-slice of a leftover column (regime R4) first reads that slice into
+// cb_w_slice under its own trid, so it is resident before compute reaches it.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -22,7 +23,10 @@ void kernel_main() {
     constexpr uint32_t w_reads_in_flight = get_compile_time_arg_val(4);
     constexpr uint32_t w_noc1_k_blocks = get_compile_time_arg_val(5);
     constexpr uint32_t w_handoff_sem_id = get_compile_time_arg_val(6);
-    constexpr auto w_args = TensorAccessorArgs<7>();
+    constexpr uint32_t cb_w_slice = get_compile_time_arg_val(7);
+    constexpr auto w_args = TensorAccessorArgs<8>();
+    constexpr uint32_t slice_trid = w_reads_in_flight + 1;
+    static_assert(slice_trid <= NOC_MAX_TRANSACTION_ID);
     constexpr uint32_t num_own_k_blocks = num_k_blocks - w_noc1_k_blocks;
     static_assert(w_reads_in_flight <= num_own_k_blocks);
 
@@ -30,6 +34,9 @@ void kernel_main() {
     const uint32_t n_start = get_arg_val<uint32_t>(1);
     const uint32_t core_n_tiles = get_arg_val<uint32_t>(2);
     const uint32_t n_stride = get_arg_val<uint32_t>(3);
+    const uint32_t slice_n = get_arg_val<uint32_t>(4);
+    const uint32_t slice_kb_start = get_arg_val<uint32_t>(5);
+    const uint32_t slice_k_blocks = get_arg_val<uint32_t>(6);
 
     const uint32_t w_page_bytes = get_tile_size(cb_w_stream);
     const auto w = TensorAccessor(w_args, w_addr, w_page_bytes);
@@ -58,8 +65,32 @@ void kernel_main() {
             n_stride);
     };
 
+    CircularBuffer cb_ws(cb_w_slice);
+    if (slice_k_blocks > 0) {
+        cb_ws.reserve_back(slice_k_blocks * k_block_tiles);
+        dataflow_kernel_lib::set_read_trid(noc, slice_trid);
+        for (uint32_t b = 0; b < slice_k_blocks; ++b) {
+            read_w_block(
+                noc,
+                w,
+                cb_ws,
+                w_page_bytes,
+                slice_kb_start + b,
+                b * k_block_tiles * w_page_bytes,
+                k_block_tiles,
+                tensor_n_tiles,
+                slice_n,
+                1,
+                1);
+        }
+    }
+
     for (uint32_t b = 0; b < w_reads_in_flight; ++b) {
         issue_block(b, 0);
+    }
+    if (slice_k_blocks > 0) {
+        dataflow_kernel_lib::async_read_barrier_with_trid(noc, slice_trid);
+        cb_ws.push_back(slice_k_blocks * k_block_tiles);
     }
     for (uint32_t b = 0; b < num_own_k_blocks; ++b) {
         dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid_for(b));

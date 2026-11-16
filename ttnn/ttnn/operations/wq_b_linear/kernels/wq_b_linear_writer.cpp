@@ -13,6 +13,10 @@
 // cb_w_stream slots (the reader owns the CB and pushes them) and raises the reader's handoff semaphore once
 // they landed; the x prefetch then waits on its own trid instead of every outstanding read. The reads go out
 // with the x prefetch, or after the core's x phase when w_noc1_after_x (keeping NoC1 to the broadcast).
+// Regime R4 (has_slices): x K-blocks are also released on cb_x_slice (an alias of cb_x_resident read by the
+// K-slice matmul). After the x phase a slice core s > 0 unicasts its partial into the owner's landing CB, tile t
+// at slot t * (num_slices - 1) + s - 1, and bumps the owner's landing semaphore; the owner waits for all
+// num_slices - 1 partials, releases them to compute, and stores the combined leftover column with its own.
 
 #include <cstdint>
 #include <optional>
@@ -70,7 +74,12 @@ void kernel_main() {
     constexpr uint32_t w_noc1_k_blocks = get_compile_time_arg_val(12);
     constexpr uint32_t w_handoff_sem_id = get_compile_time_arg_val(13);
     constexpr bool w_noc1_after_x = get_compile_time_arg_val(14) != 0;
-    constexpr auto x_args = TensorAccessorArgs<15>();
+    constexpr bool has_slices = get_compile_time_arg_val(15) != 0;
+    constexpr uint32_t cb_x_slice = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_partial = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_landing = get_compile_time_arg_val(18);
+    constexpr uint32_t landing_sem_id = get_compile_time_arg_val(19);
+    constexpr auto x_args = TensorAccessorArgs<20>();
     constexpr auto y_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr uint32_t x_prefetch_trid = 1;
@@ -84,6 +93,13 @@ void kernel_main() {
     const uint32_t core_n_tiles = get_arg_val<uint32_t>(3);
     const uint32_t n_stride = get_arg_val<uint32_t>(4);
     const uint32_t w_addr = get_arg_val<uint32_t>(5);
+    const uint32_t slice_n = get_arg_val<uint32_t>(6);
+    const uint32_t slice_k_blocks = get_arg_val<uint32_t>(8);
+    const uint32_t slice_idx = get_arg_val<uint32_t>(9);
+    const uint32_t num_slices = get_arg_val<uint32_t>(10);
+    const uint32_t owner_noc_x = get_arg_val<uint32_t>(11);
+    const uint32_t owner_noc_y = get_arg_val<uint32_t>(12);
+    const bool owns_leftover = slice_k_blocks > 0 && slice_idx == 0;
 
     const uint32_t x_page_bytes = get_tile_size(cb_x_resident);
     const uint32_t y_page_bytes = get_tile_size(cb_y_tiles);
@@ -98,6 +114,10 @@ void kernel_main() {
     CircularBuffer cb_x(cb_x_resident);
     cb_x.reserve_back(round_tiles * num_x_rounds);
     const uint32_t x_base = cb_x.get_write_ptr();
+    CircularBuffer cb_xs(cb_x_slice);
+    if constexpr (has_slices) {
+        cb_xs.reserve_back(round_tiles * num_x_rounds);
+    }
 
     const bool reads_w = w_noc1_k_blocks > 0 && core_n_tiles > 0;
     bool x_phase_done = false;
@@ -168,6 +188,9 @@ void kernel_main() {
     auto release_round = [&]() {
         for (uint32_t b = 0; b < x_round_k_blocks; ++b) {
             cb_x.push_back(k_block_x_tiles);
+            if constexpr (has_slices) {
+                cb_xs.push_back(k_block_x_tiles);
+            }
         }
     };
 
@@ -251,12 +274,42 @@ void kernel_main() {
     x_phase_done = true;
     issue_w_reads();
     hand_off_w();
+
+    if constexpr (has_slices) {
+        auto* landing_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(landing_sem_id));
+        const uint32_t num_landed = num_slices - 1;
+        CircularBuffer cb_land(cb_landing);
+        if (owns_leftover) {
+            noc_semaphore_wait(landing_sem, num_landed);
+            noc_semaphore_set(landing_sem, 0);
+            cb_land.reserve_back(num_landed * block_m_tiles);
+            cb_land.push_back(num_landed * block_m_tiles);
+        } else if (slice_k_blocks > 0) {
+            CircularBuffer cb_part(cb_partial);
+            cb_part.wait_front(block_m_tiles);
+            const uint32_t src = cb_part.get_read_ptr();
+            const uint32_t landing_base = cb_land.get_write_ptr();
+            for (uint32_t t = 0; t < block_m_tiles; ++t) {
+                const uint32_t slot = t * num_landed + slice_idx - 1;
+                noc_async_write(
+                    src + t * y_page_bytes,
+                    get_noc_addr(owner_noc_x, owner_noc_y, landing_base + slot * y_page_bytes),
+                    y_page_bytes);
+            }
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(owner_noc_x, owner_noc_y, get_semaphore(landing_sem_id)), 1);
+            noc_async_atomic_barrier();
+            cb_part.pop_front(block_m_tiles);
+        }
+    }
+
     if (core_n_tiles == 0) {
         return;
     }
     CircularBuffer cb_y(cb_y_tiles);
     const uint32_t y_block_tiles = block_m_tiles * core_n_tiles;
-    cb_y.wait_front(y_block_tiles);
+    const uint32_t y_tiles = y_block_tiles + (owns_leftover ? block_m_tiles : 0);
+    cb_y.wait_front(y_tiles);
     uint32_t offset = 0;
     for (uint32_t m = 0; m < block_m_tiles; ++m) {
         const uint32_t row_page = m * tensor_n_tiles + n_start;
@@ -265,6 +318,12 @@ void kernel_main() {
             offset += y_page_bytes;
         }
     }
+    if (owns_leftover) {
+        for (uint32_t m = 0; m < block_m_tiles; ++m) {
+            noc.async_write(cb_y, y, y_page_bytes, {.offset_bytes = offset}, {.page_id = m * tensor_n_tiles + slice_n});
+            offset += y_page_bytes;
+        }
+    }
     noc.async_write_barrier();
-    cb_y.pop_front(y_block_tiles);
+    cb_y.pop_front(y_tiles);
 }
