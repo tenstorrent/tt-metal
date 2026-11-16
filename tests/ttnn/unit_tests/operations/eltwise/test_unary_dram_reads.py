@@ -44,12 +44,12 @@ if is_blackhole():  # softcap is Blackhole only
     OPS["softcap"] = lambda t, **kw: ttnn.softcap(t, 10.0, **kw)
 
 # The read plan picks a flow from the op's cost class (unary_utils.cpp op_cost), not the op, so one op of each class
-# reaches every flow: light, mid, heavy, very heavy and unmeasured. logit's compute kernel cannot run the work queue,
-# so it checks the fallback from the queue to bursts or the default path.
-FLOW_OPS = ["relu", "silu", "elu", "gelu_accurate", "atan", "logit"]
+# reaches every flow: light, mid, heavy, very heavy and unmeasured. The fallback for kernels that cannot run the work
+# queue (logit, logsigmoid) needs 512+ pages per core, so it is run in nightly test_unary_dram_reads_large.py.
+FLOW_OPS = ["relu", "silu", "elu", "gelu_accurate", "atan"]
 
 # With 4 KB pages, ops up to heavy count as light and the rest as very heavy; silu checks a mid op is promoted.
-LARGE_PAGE_OPS = ["relu", "silu", "gelu_accurate", "logit"]
+LARGE_PAGE_OPS = ["relu", "silu", "gelu_accurate"]
 
 
 # DRAM sharded over num_shards banks. Height shards are whole rows; width shards are shard_width columns of every row,
