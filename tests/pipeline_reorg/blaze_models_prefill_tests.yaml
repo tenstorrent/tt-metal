@@ -647,7 +647,7 @@
     glm_sparse_kv_push() (
       export MESH_DEVICE=TG
       # ttnn.experimental.sparse_push_plan + sparse_kv_push on the 8x4 TorusXY mesh: op checks against a host
-      # reference and determinism (repeated runs, identical, compared on device), then the real GLM-5.3 1M top-k push
+      # reference and determinism (repeated runs, bit-exact, compared on device), then the real GLM-5.3 1M top-k push
       # (L14/L62) against the dense gather, with attention beside the prefix push on a sub-device.
       timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
