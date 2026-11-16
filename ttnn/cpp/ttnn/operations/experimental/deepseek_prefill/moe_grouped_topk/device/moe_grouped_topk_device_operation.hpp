@@ -39,6 +39,7 @@ struct MoeGroupedTopkDeviceOperation {
         const Tensor& bias;
         std::optional<Tensor> padding_config;
         std::optional<Tensor> biased_scores;
+        std::optional<Tensor> expert_id_map;
     };
 
     using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 2>;
@@ -83,6 +84,7 @@ moe_grouped_topk(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& padding_config = std::nullopt,
     const std::optional<Tensor>& biased_scores = std::nullopt,
-    tt::tt_metal::Layout weights_layout = tt::tt_metal::Layout::TILE);
+    tt::tt_metal::Layout weights_layout = tt::tt_metal::Layout::TILE,
+    const std::optional<Tensor>& expert_id_map = std::nullopt);
 
 }  // namespace ttnn::prim

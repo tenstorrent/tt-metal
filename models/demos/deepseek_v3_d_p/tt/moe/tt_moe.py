@@ -452,6 +452,35 @@ class TtMoe(LightweightModule):
             num_routed_experts, dispatch_group_size, num_dispatch_groups
         )
 
+        # A completion marker couples the ID translation to the corresponding cache.
+        # Ordinary caches allocate no lookup tensor and keep the original path.
+        from .expert_placement import load_placement
+
+        placement = load_placement(
+            weight_cache_path,
+            layer_idx,
+            mesh_device,
+            num_experts=num_routed_experts,
+            top_k=num_experts_per_tok,
+            experts_per_chip=experts_per_chip,
+            dispatch_group_size=dispatch_group_size,
+            num_dispatch_groups=num_dispatch_groups,
+            expert_dtype=routed_expert_weights_dtype,
+            cache_only=routed_expert_weights is None,
+        )
+        if placement is not None and (gate_fallback_mode != GateComputeMode.DEVICE_FP32 or gate_hash_table is not None):
+            raise ValueError("A placed cache requires DEVICE_FP32 top-k routing")
+        expert_id_map = None
+        if placement is not None:
+            expert_id_map = ttnn.from_torch(
+                torch.tensor(placement, dtype=torch.int32).reshape(1, -1),
+                device=mesh_device,
+                dtype=ttnn.uint16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
         # Build gate internally
         gate_config = TtMoEGateConfig(
             dim=emb_dim,
@@ -492,6 +521,7 @@ class TtMoe(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.gate",
             is_balanced=is_balanced,
             hash_table=gate_hash_table,
+            expert_id_map=expert_id_map,
         )
 
         self.routing_setup = TtMoERoutingSetup(

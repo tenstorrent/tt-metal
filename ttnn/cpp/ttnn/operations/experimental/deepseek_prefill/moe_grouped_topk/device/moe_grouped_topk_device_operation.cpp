@@ -76,6 +76,23 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     }
 
     const uint32_t experts = scores.logical_shape()[-1];
+    if (tensor_args.expert_id_map.has_value()) {
+        const auto& map = tensor_args.expert_id_map.value();
+        TT_FATAL(
+            map.storage_type() == ttnn::StorageType::DEVICE && map.is_allocated(),
+            "expert_id_map must be allocated on device");
+        TT_FATAL(map.device() == scores.device(), "expert_id_map must be on the scores device");
+        TT_FATAL(map.dtype() == tt::tt_metal::DataType::UINT16, "expert_id_map must be UINT16");
+        TT_FATAL(map.layout() == tt::tt_metal::Layout::ROW_MAJOR, "expert_id_map must be ROW_MAJOR");
+        TT_FATAL(!map.memory_config().is_sharded(), "expert_id_map must use interleaved memory");
+        TT_FATAL(
+            map.logical_shape().rank() == 2 && map.logical_shape()[0] == 1 && map.logical_shape()[1] == experts,
+            "expert_id_map must have shape [1, experts]");
+        TT_FATAL(map.buffer()->num_pages() == 1, "expert_id_map must occupy one row-major page");
+        TT_FATAL(attributes.n_activated_experts <= 32, "expert_id_map supports at most 32 activated experts");
+        const auto& tile = scores.tensor_spec().page_config().get_tile();
+        TT_FATAL(tile.get_width() == 32 && tile.get_height() == 32, "expert_id_map requires standard 32x32 tiles");
+    }
 
     if (attributes.n_groups == 1) {
         // Single expert group: grouped routing collapses to a plain top-k over all experts.
@@ -162,7 +179,8 @@ moe_grouped_topk(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& padding_config,
     const std::optional<Tensor>& biased_scores,
-    tt::tt_metal::Layout weights_layout) {
+    tt::tt_metal::Layout weights_layout,
+    const std::optional<Tensor>& expert_id_map) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::MoeGroupedTopkDeviceOperation;
 
@@ -177,7 +195,7 @@ moe_grouped_topk(
         score_func,
         output_mem_config.value_or(scores.memory_config()),
         weights_layout};
-    auto tensor_args = OperationType::tensor_args_t{scores, bias, padding_config, biased_scores};
+    auto tensor_args = OperationType::tensor_args_t{scores, bias, padding_config, biased_scores, expert_id_map};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
