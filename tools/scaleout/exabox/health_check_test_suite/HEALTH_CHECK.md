@@ -51,7 +51,7 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
   `0.0.4`). Without it the QSFP and sys-triage phases report SKIP; every other
   check still runs.
 - `--bmc-ip` / `--bmc-user` / `--bmc-password` (default `$BMC_*`) feed the
-  sys-triage phase, `full` and `pre_bmc_reboot` only.
+  sys-triage phase, `full`, `pre_bmc_reboot` and `post_bmc_reboot` only.
 - `--bmc-api-url` / `--bmc-api-token` (default `$TT_BMC_API_URL` /
   `$TT_BMC_API_TOKEN`) feed the QSFP collector on every tier; without them it
   reads the FRU with ipmitool and collects no QSFP cages.
@@ -72,10 +72,11 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | — | ~18 min + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly` | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
+| `post_bmc_reboot` | none | — | host_side + device_side | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
-The [sys-triage phase](#sys-triage-phase) runs last on `full` and
-`pre_bmc_reboot` only; it collects a bundle for the ticket and never gates the
-run.
+The [sys-triage phase](#sys-triage-phase) runs last on `full`, `pre_bmc_reboot`
+and `post_bmc_reboot` only; it collects a bundle for the ticket and never gates
+the run.
 
 `flash`, a quick machine status check, is commented out in `tiers.py` until its
 tests exist. The old names still run, with a deprecation warning: `light` and
@@ -103,6 +104,10 @@ gtests or pytests either: a stress run on a unit that is already going to be
 rebooted would change the state the later phases are meant to record. The reset
 loop and test phases are recorded as SKIP with the reason, not left out; there
 is no `post_test_reset` phase.
+
+`post_bmc_reboot` runs after the reboot. For now it runs the same steps as
+`pre_bmc_reboot`; it has its own entry in `tiers.py` so the two can change
+independently.
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -136,10 +141,10 @@ pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
 `daily`, `weekly` and `full` end with a post-test `tt-smi -glx_reset` followed by
 the first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
 sysfs) and `device_side.sh` (per-chip liveness, ARC scratch, telemetry and a NOC0
-node sweep). `pre_bmc_reboot` runs the same tools with no reset before them. They
-live in `tools/scaleout/kmd_triage/`. Which tiers run them, and the reset before
-them, is `post_test_resets` / `triage` in `tiers.py`; the tools themselves are
-`TRIAGE_TOOLS` in `diag/triage.py`.
+node sweep). `pre_bmc_reboot` and `post_bmc_reboot` run the same tools with no
+reset before them. They live in `tools/scaleout/kmd_triage/`. Which tiers run
+them, and the reset before them, is `post_test_resets` / `triage` in `tiers.py`;
+the tools themselves are `TRIAGE_TOOLS` in `diag/triage.py`.
 
 **What the two tools actually check, how to run them by hand, their exit codes
 and their known gaps are documented in
@@ -392,13 +397,13 @@ MB/PDB and per-tray CPLD DIAG, `tt-smi -s`, `ipmitool sdr elist`, `lspci -vvv`,
 `tt-fw-terminal` vuart. It is forensics for whoever picks up the ticket, not
 findings for this report to judge, so the phase **never gates** the run.
 
-It runs on `full` and `pre_bmc_reboot` only, as their last step. On
-`pre_bmc_reboot` the bundle is the record of the unit's state before the BMC
-power cycles it, and the vuart and scratch reads are worth most on a unit nothing
-has reset since it misbehaved; on `full` it rounds out the logs for a DIIM
-ticket. It follows the QSFP
-tests because it opens every chip, so nothing may run beside it. The other tiers
-record it as **SKIP** with the reason.
+It runs on `full`, `pre_bmc_reboot` and `post_bmc_reboot` only, as their last
+step. On `pre_bmc_reboot` the bundle is the record of the unit's state before the
+BMC power cycles it, and the vuart and scratch reads are worth most on a unit
+nothing has reset since it misbehaved; on `post_bmc_reboot` it records the state
+the reboot left; on `full` it rounds out the logs for a DIIM ticket. It follows
+the QSFP tests because it opens every chip, so nothing may run beside it. The
+other tiers record it as **SKIP** with the reason.
 
 **Where it comes from.** `sys-triage` ships in the same syseng `.deb` as
 `tt-bh-glx-cluster-debug` and is probed for on PATH the same way
@@ -423,7 +428,7 @@ variable over `--bmc-password`, which is visible in the process list.
 The bundle lands in `<output_dir>/logs/sys_triage/` beside `sys_triage.log`, so
 `collect_run_artifacts()` attaches it to the JIRA ticket with no extra wiring.
 
-**In a container** (`run_diag_docker.sh`), on `full` and `pre_bmc_reboot` only, a few host tools
+**In a container** (`run_diag_docker.sh`), on the three sys-triage tiers only, a few host tools
 and paths the image lacks are provided, each best-effort and after the packages
 every tier needs, since a missing one costs a section of the bundle and nothing
 else. Other tiers get the same container as before the phase existed. An image
@@ -445,7 +450,7 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--tier {daily,weekly,full,pre_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
+| `--tier {daily,weekly,full,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |

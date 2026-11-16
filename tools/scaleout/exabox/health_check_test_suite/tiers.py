@@ -107,6 +107,13 @@ TIERS: dict[str, Tier] = {
         qsfp_tests=True,
         sys_triage=True,
     ),
+    # Data collection after a BMC reboot. The same steps as pre_bmc_reboot for
+    # now, as its own entry so the two can change independently.
+    "post_bmc_reboot": Tier(
+        triage=("host_side", "device_side"),
+        qsfp_tests=True,
+        sys_triage=True,
+    ),
 }
 
 # Old names, accepted until the exabox-infra and tt-orchestration callers move

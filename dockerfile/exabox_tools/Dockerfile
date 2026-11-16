@@ -96,7 +96,8 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 #                              (tt-orchestration's health-check job)
 #   socat                      port and socket relays when the image runs as an
 #                              operations container on exabox hosts
-# journalctl (systemd) is left to the full and pre_bmc_reboot launchers, the only tiers that read it.
+# journalctl (systemd) is left to the launchers of the tiers that read it: full,
+# pre_bmc_reboot and post_bmc_reboot.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \

@@ -55,7 +55,9 @@ class TestShellWrappersAgree(unittest.TestCase):
     def test_docker_sys_triage_tiers(self):
         # run_diag_docker.sh adds the journal mounts and the BMC credentials
         # only for these (and pre_reboot, the old name of pre_bmc_reboot).
-        self.assertEqual({name for name, tier in TIERS.items() if tier.sys_triage}, {"full", "pre_bmc_reboot"})
+        self.assertEqual(
+            {name for name, tier in TIERS.items() if tier.sys_triage}, {"full", "pre_bmc_reboot", "post_bmc_reboot"}
+        )
 
     def test_run_health_check_tier_choices(self):
         # parse_args() builds and parses in one go, so read the call instead.

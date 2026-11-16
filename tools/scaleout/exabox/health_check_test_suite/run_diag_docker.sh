@@ -57,7 +57,7 @@ Every option has a default, so a bare \`$(basename "$0")\` runs the daily tier
 into ./test_output_<date>-<time>/.
 
 Wrapper options:
-  -t, --tier {daily|weekly|full|pre_bmc_reboot}
+  -t, --tier {daily|weekly|full|pre_bmc_reboot|post_bmc_reboot}
                          Tier to run (default: ${TIER}). Also accepted
                          positionally, like run_diag.sh itself. The old
                          names light, medium, deploy and pre_reboot are
@@ -89,10 +89,10 @@ sys-triage phases):
                          Release tag (default: ${DEFAULT_DIAG_PKG_VERSION});
                          empty string skips the install
 
-BMC credentials (needed by the sys-triage phase, which runs on full and
-pre_bmc_reboot only and reports SKIP without all three). Forwarded to the
-container as BMC_IP / BMC_USER / BMC_PASSWORD via the same 0600 --env-file as
-the token, never on a command line:
+BMC credentials (needed by the sys-triage phase, which runs on full,
+pre_bmc_reboot and post_bmc_reboot only and reports SKIP without all three).
+Forwarded to the container as BMC_IP / BMC_USER / BMC_PASSWORD via the same
+0600 --env-file as the token, never on a command line:
       --bmc-ip IP        BMC address (default: \$BMC_IP)
       --bmc-user USER    BMC user (default: \$BMC_USER)
       --bmc-password PASS
@@ -138,10 +138,10 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
 
 Host requirements checked before starting:
   /dev/tenstorrent (required), /dev/ipmi0, /dev/hugepages, /dev/hugepages-1G,
-  /etc/udev/rules.d, /lib/modules, /sys/kernel/debug, and on full and
-  pre_bmc_reboot /var/log/journal, /run/log/journal, /etc/machine-id. A missing
-  optional path is reported with what it costs rather than failing the container
-  outright.
+  /etc/udev/rules.d, /lib/modules, /sys/kernel/debug, and on full, pre_bmc_reboot
+  and post_bmc_reboot /var/log/journal, /run/log/journal, /etc/machine-id. A
+  missing optional path is reported with what it costs rather than failing the
+  container outright.
 
 Examples:
   # Daily tier into a timestamped directory
@@ -176,12 +176,12 @@ while (( $# )); do
 
         # Old names are passed on as given, not translated: this script is
         # fetched on its own and may drive an image that predates the rename.
-        daily|weekly|full|pre_bmc_reboot|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
+        daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
         -t|--tier)
             require_value "$1" "${2:-}"
             case "$2" in
-                daily|weekly|full|pre_bmc_reboot|light|medium|deploy|pre_reboot) ;;
-                *) die "unknown tier '$2'. Expected: daily, weekly, full, pre_bmc_reboot" ;;
+                daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
+                *) die "unknown tier '$2'. Expected: daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" ;;
             esac
             TIER="$2"; shift 2 ;;
 
@@ -233,12 +233,12 @@ while (( $# )); do
     esac
 done
 
-# The sys-triage phase runs on full and pre_bmc_reboot (old name pre_reboot)
-# only. Every other tier gets exactly the container it got before the phase
-# existed: no extra mounts or packages.
+# The sys-triage phase runs on full, pre_bmc_reboot (old name pre_reboot) and
+# post_bmc_reboot only. Every other tier gets exactly the container it got
+# before the phase existed: no extra mounts or packages.
 WANT_SYS_TRIAGE=false
 case "${TIER}" in
-    full|pre_bmc_reboot|pre_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
+    full|pre_bmc_reboot|pre_reboot|post_bmc_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
 esac
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -466,7 +466,7 @@ if [ -n "${_need}" ]; then
     fi
 fi
 
-# What sys-triage shells out to beyond the above, on full and pre_bmc_reboot
+# What sys-triage shells out to beyond the above, on the tiers that run it
 # only. Each is installed after the packages above and on its own, so that a
 # failure here costs one section of the bundle and nothing else:
 #   kmod (modinfo, lsmod)  the driver row of its FW table, where a missing

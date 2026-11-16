@@ -23,11 +23,12 @@
 #                   + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #                   + sys-triage bundle, if the host has the package and BMC credentials
+#   post_bmc_reboot the same as pre_bmc_reboot for now, run after the BMC reboot
 # The old names (light, medium, deploy, pre_reboot) still work; see DEPRECATED_TIER_ALIASES.
 #
 # Designed to match tt-metal's run_upstream_tests_vanilla.sh shape.
 # Can be used as the ENTRYPOINT of a docker image
-# (TEST_COMMAND=tools/scaleout/exabox/health_check_test_suite/run_diag.sh, CMD=daily|weekly|full|pre_bmc_reboot).
+# (TEST_COMMAND=tools/scaleout/exabox/health_check_test_suite/run_diag.sh, CMD=<tier>).
 
 set -euo pipefail
 
@@ -35,7 +36,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 show_help() {
     cat <<EOF
-Usage: $0 {daily|weekly|full|pre_bmc_reboot} [diag_runner.py options]
+Usage: $0 {daily|weekly|full|pre_bmc_reboot|post_bmc_reboot} [diag_runner.py options]
 
 Tiers:
   daily           2 resets + GDDR fast-pattern stress + eth link_up + eth bandwidth
@@ -45,6 +46,7 @@ Tiers:
   full            weekly + sys-triage: everything, for the logs on a DIIM ticket
   pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
                   + sys-triage. No resets, no tests.
+  post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.
 
 The old names still work and print a deprecation warning: light and medium run daily,
 deploy runs weekly, pre_reboot runs pre_bmc_reboot.
@@ -56,9 +58,9 @@ phase and says so. Nothing needs configuring to turn them on.
 
 sys-triage collects the syseng system and per-tray triage bundle (FW stack, FRU, CPLD
 DIAG, lspci, kernel logs, per-chip vuart) into <output dir>/logs/sys_triage/, as the last
-step of full and pre_bmc_reboot only. It runs when \`sys-triage\` is on PATH (same .deb) and
-the BMC credentials are set; otherwise the phase reports SKIP with the reason. It never
-gates the run.
+step of full, pre_bmc_reboot and post_bmc_reboot only. It runs when \`sys-triage\` is on
+PATH (same .deb) and the BMC credentials are set; otherwise the phase reports SKIP with
+the reason. It never gates the run.
 
 Forwarded options (see diag_runner.py --help for details):
   --dry-run              Print intended subprocess calls without executing destructive steps
@@ -91,13 +93,13 @@ EOF
 
 TIER="${1:-}"
 case "$TIER" in
-    daily|weekly|full|pre_bmc_reboot|light|medium|deploy|pre_reboot) ;;
+    daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
     -h|--help|"")
         show_help
         exit 0
         ;;
     *)
-        echo "Error: unknown tier '$TIER'. Expected: daily, weekly, full, pre_bmc_reboot" >&2
+        echo "Error: unknown tier '$TIER'. Expected: daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" >&2
         show_help
         exit 1
         ;;
