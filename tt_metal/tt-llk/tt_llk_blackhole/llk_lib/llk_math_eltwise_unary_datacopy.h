@@ -22,10 +22,38 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
 /**
+ * @brief Clear the DEST zero flags of one tile so its rows read back as the data just written.
+ *
+ * Workaround for budabackend#2730: a row written to DEST can keep its zero flag and read back as zero. Issuing
+ * ZEROACC with the clear-zero-flags bit after the write clears the flags without modifying the data.
+ * Applied where the failure has been reproduced: 32-bit unpack-to-dest and A2D datacopy (tt-metal#63295).
+ * The exact colliding event is not identified, and other DEST writers have not been shown to need it.
+ *
+ * @param dst_index: Tile index into the destination register.
+ * @param num_faces: Number of faces of the tile to clear (1, 2, or 4).
+ * @param is_dest_32b: True if DEST holds 32-bit data, false for 16-bit.
+ * @note Uses ADDR_MOD_3, which @ref eltwise_unary_configure_addrmod programs with zero increments.
+ * @note Call with the DEST counter at 0: CLR_16 takes it into its bank select, so a leftover count can send
+ *       the clear to the other DEST half (tt-metal#53693).
+ */
+inline void _llk_math_clear_dest_zero_flags_(const std::uint32_t dst_index, const std::uint32_t num_faces, const bool is_dest_32b)
+{
+    // CLR_16 addresses a face relative to the current DEST bank, so use the tile's index within the bank.
+    const std::uint32_t tiles_per_bank = is_dest_32b ? 4 : 8;
+    const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
+#pragma GCC unroll 0
+    for (std::uint32_t i = 0; i < num_faces; i++)
+    {
+        TT_ZEROACC(p_zeroacc::CLR_16, is_dest_32b ? 1 : 0, 1 /*clear_zero_flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+    }
+}
+
+/**
  * @brief Copy a tile into the destination register, optionally broadcasting source B.
  *
  * For the unpack-to-dest path with 32-bit data, applies the Blackhole hi16/lo16 broadcast workarounds
  * (Issue #449) and an extra zero-flag clear (budabackend#2730); otherwise runs the preconfigured datacopy MOP.
+ * A2D copies are also followed by the zero-flag clear (tt-metal#63295).
  *
  * @tparam type: Datacopy direction, values = <A2D/B2D>
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
@@ -35,9 +63,9 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
- * @param tensor_shape: Tile geometry. Only the total face count is used (must be 1, 2, or 4). On 32-bit unpack to dest it
- *        sets how many faces get their Dest zero flags re-cleared (budabackend#2730), so it must cover at least the
- *        faces unpacked to Dest. @ref ckernel::DEFAULT_TENSOR_SHAPE (4 faces) is always valid.
+ * @param tensor_shape: Tile geometry. Only the total face count is used (must be 1, 2, or 4). On 32-bit unpack to dest and
+ *        on A2D it sets how many faces get their Dest zero flags re-cleared (budabackend#2730), so it must cover at least
+ *        the faces written to Dest. @ref ckernel::DEFAULT_TENSOR_SHAPE (4 faces) is always valid.
  * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this
  *       function, and @ref _llk_math_eltwise_unary_datacopy_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).
@@ -79,17 +107,9 @@ inline void _llk_math_eltwise_unary_datacopy_(
         // RISC-to-dest event is not currently used.
 
         const std::uint32_t dst_format_masked = masked_data_format(dst_format);
-        const int clear_fp32                  = static_cast<int>(
-            dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
-            dst_format_masked == (std::uint32_t)DataFormat::UInt32);
-        const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
-        const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
-#pragma GCC unroll 0
-        for (std::uint32_t i = 0; i < num_faces; i++)
-        {
-            // Clears zero flags in DEST for one face.
-            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
-        }
+        const bool is_dest_32b = dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
+                                 dst_format_masked == (std::uint32_t)DataFormat::UInt32;
+        _llk_math_clear_dest_zero_flags_(dst_index, num_faces, is_dest_32b);
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
@@ -305,6 +325,11 @@ inline void _llk_math_eltwise_unary_datacopy_(
         if constexpr (type == DataCopyType::A2D)
         {
             ckernel_template::run();
+            // A2D datacopy can leave a written row flagged zero, so it packs back as 0 (budabackend#2730, tt-metal#63295).
+            // Reset the DEST counter first: the MOP leaves it at the end of the tile, and CLR_16 derives its bank
+            // select from the DEST address, so the last tile of a bank would be cleared in the other half (tt-metal#53693).
+            math::clear_dst_reg_addr();
+            _llk_math_clear_dest_zero_flags_(dst_index, num_faces, is_fp32_dest_acc_en);
         }
         else if constexpr (type == DataCopyType::B2D)
         {
