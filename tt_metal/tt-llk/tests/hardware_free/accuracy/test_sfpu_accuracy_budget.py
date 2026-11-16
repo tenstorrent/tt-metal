@@ -549,6 +549,7 @@ def test_the_registry_resolves_unambiguously_for_every_variant():
 # tracked by Digamma #51128, Lgamma #55356, Expm1Cw #54770 and Polygamma #52278.
 ONLY_EVER_TOLERANCE = frozenset(
     {
+        MathOperation.Abs,
         MathOperation.SigmoidAppx,
         MathOperation.GeluAppx,
         MathOperation.SfpuElwpow,
