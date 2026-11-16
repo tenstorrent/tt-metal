@@ -24,36 +24,6 @@ def _positions(chunk_start: int, sp: int, chunk_local: int) -> torch.Tensor:
     return (local_row // chunk_local) * chunk_global + chip * chunk_local + local_row % chunk_local
 
 
-def build_injection(
-    refs: list[MediaRef],
-    chunks: list[PrefillChunk],
-    rows_of: Callable[[MediaRef], np.ndarray],
-    sp: int,
-    chunk_local: int,
-) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
-    """(rows [sp, F * chunk_local, hidden] bf16, mask [sp, F * chunk_local]) in the forward's per-chip order
-    (pack_forward_tokens), or None without refs. rows_of(ref) is the ref's [num_tokens, hidden] embeddings as
-    bf16 bit patterns (uint16); only the rows inside each ref's chunk are written. Rows outside the mask are
-    uninitialised: inject_media_embeddings selects on the mask and never reads them."""
-    if not refs:
-        return None
-    positions = torch.cat([_positions(c.actual_start, sp, chunk_local) for c in chunks], dim=1)
-    chunk_of = torch.arange(len(chunks)).repeat_interleave(chunk_local).expand(sp, -1)
-    rows, mask = None, torch.zeros(positions.shape, dtype=torch.bool)
-    for ref in refs:
-        c = chunks[ref.chunk_index]
-        lo, hi = max(ref.start_pos, c.actual_start), min(ref.end_pos, c.actual_end)
-        sel = (chunk_of == ref.chunk_index) & (positions >= lo) & (positions < hi)
-        emb = rows_of(ref)
-        assert emb.shape[0] == ref.num_tokens, f"{emb.shape[0]} rows for {ref}"
-        if rows is None:
-            rows = torch.empty(*positions.shape, emb.shape[1], dtype=torch.bfloat16)
-        picked = np.ascontiguousarray(emb[(positions[sel] - ref.start_pos).numpy()])
-        rows[sel] = torch.from_numpy(picked).view(torch.bfloat16)
-        mask |= sel
-    return rows, mask
-
-
 TILE_HEIGHT = 32
 
 # Host staging for lookup and is_img, reused across forwards: s_total is fixed for a deployment.
@@ -83,12 +53,14 @@ def table_height(rows: int) -> int:
     return height
 
 
-def warm_media_refs(sp: int, chunk: int, n_chunks: int) -> list[tuple[int, list[MediaRef]]]:
+def warm_media_refs(sp: int, chunk: int, n_chunks: int, by_position: bool) -> list[tuple[int, list[MediaRef]]]:
     """(height, refs) for every table height a forward of n_chunks chunks can reach. Each height gets the
-    smallest image token count that lands in it, as stub-keyed refs filling chunks 0, 1, ... in turn."""
+    smallest image token count that lands in it, as stub-keyed refs filling chunks 0, 1, ... in turn. by_position
+    fills only the first chip's positions of each chunk, the most one SP row can be given."""
+    per_chunk = chunk // sp if by_position else chunk
     height, below, plan = TILE_HEIGHT, 0, []
-    while (n := max(1, sp * below)) <= n_chunks * chunk:
-        sizes = [min(chunk, n - k * chunk) for k in range(-(-n // chunk))]
+    while (n := max(1, below if by_position else sp * below)) <= n_chunks * per_chunk:
+        sizes = [min(per_chunk, n - k * per_chunk) for k in range(-(-n // per_chunk))]
         plan.append((height, [MediaRef(k, 0, m, stub_media_key(m, k)) for k, m in enumerate(sizes)]))
         height, below = next_table_height(height), height
     return plan
@@ -100,6 +72,7 @@ def build_media_partials(
     rows_of: Callable[[MediaRef], np.ndarray],
     sp: int,
     chunk_local: int,
+    by_position: bool = False,
 ) -> Optional[tuple[int, torch.Tensor, torch.Tensor, list]]:
     """(h, lookup [sp, s_total] uint32, is_img [s_total] bool, runs), or None without refs. h is
     table_height(k + 1), so a forward reuses one of a few table shapes. Each run (sp_row, slot, rows) puts
@@ -110,6 +83,9 @@ def build_media_partials(
     row, in contiguous blocks, so the reduce-scatter that already runs sums it into place: adding zeros
     is exact in bf16. Row 0 of every table is zeros and lookup 0 means "not this row's", so a row contributes
     nothing where it was not assigned.
+
+    by_position is for the 1D embedding, which has no reduce-scatter: each image row goes to the SP row whose
+    chips hold its position, and lookup is [sp, s_local], over that row's own positions.
 
     ``lookup`` and ``is_img`` are indexed by the all-gathered token order (chip-major, _positions), not
     by natural position: that is the order the lookup sees inside _forward_2d.
@@ -138,16 +114,25 @@ def build_media_partials(
     # zero, so a row that was not assigned a position contributes nothing to the reduce-scatter's sum.
     # The tallest row still holds per_row slots, so the table is the same height round-robin gave.
     order = torch.arange(flats.numel())
-    per_row = max(1, -(-flats.numel() // sp))
-    sp_row, slot = order // per_row, order % per_row + 1
-
     s_total = positions.numel()
+    if by_position:
+        sp_row, by_row = (flats // (s_total // sp)).sort(stable=True)
+        flats, ref_id, row_in_ref = flats[by_row], ref_id[by_row], row_in_ref[by_row]
+        counts = torch.bincount(sp_row, minlength=sp)
+        slot = order - (counts.cumsum(0) - counts)[sp_row] + 1
+    else:
+        per_row = max(1, -(-flats.numel() // sp))
+        sp_row, slot = order // per_row, order % per_row + 1
+
     height = table_height(int(slot.max()) + 1 if slot.numel() else 1)
-    lookup = _staged((sp, s_total), torch.int32)
+    lookup = _staged((sp, s_total // sp if by_position else s_total), torch.int32)
     is_img = _staged((s_total,), torch.bool)
     lookup.zero_()
     is_img.zero_()
-    lookup[sp_row, flats] = slot.to(torch.int32)
+    if by_position:
+        lookup.view(-1)[flats] = slot.to(torch.int32)
+    else:
+        lookup[sp_row, flats] = slot.to(torch.int32)
     is_img[flats] = True
 
     # A run breaks where the SP row or the ref changes, or the media rows stop being consecutive.

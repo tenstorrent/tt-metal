@@ -41,9 +41,9 @@ import ttnn
 from models.common.multimedia_store.reader import FetchRequest
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.media import build_injection, build_media_partials, warm_media_refs
+from models.demos.common.prefill.media import build_media_partials, warm_media_refs
 from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
-from models.demos.minimax_m3.tt.media_injection import MediaPartials, inject_media_embeddings
+from models.demos.minimax_m3.tt.media_injection import MediaPartials
 from models.demos.minimax_m3.tt.residual import activation_mapper
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 from models.demos.minimax_m3.vision import format as media_format
@@ -141,7 +141,6 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
         self.media_embedding_reader = media_embedding_reader
-        self.media_buffers = None
         self._media_partials_cache = None
 
         assert (
@@ -380,7 +379,8 @@ class TtPrefillRuntime:
         self.media_embedding_reader = StubEmbeddingReader(self.hf_config.hidden_size)
         try:
             warmed = []
-            for height, refs in warm_media_refs(self.config.sp_factor, chunk, n_chunks):
+            by_position = not self.model.embedding.shard_vocab_on_sp
+            for height, refs in warm_media_refs(self.config.sp_factor, chunk, n_chunks, by_position):
                 inp = self.make_forward_input([[0] * chunk] * n_chunks, [0] * n_chunks)
                 x = self._embed_tokens(inp, media_fn=lambda: self._media_partials(chunks, refs))
                 ttnn.deallocate(x)
@@ -391,14 +391,16 @@ class TtPrefillRuntime:
             self.media_embedding_reader = real_reader
 
     def _media_partials(self, chunks: list, media_refs: list):
-        """D: image rows as per-SP-row partials, refilled into buffers kept per table height."""
+        """The forward's image rows per SP row, refilled into buffers kept per table height."""
         cfg = self.config
+        by_position = not self.model.embedding.shard_vocab_on_sp
         packed = build_media_partials(
             media_refs,
             chunks,
             _media_rows_of(self.media_embedding_reader, self.hf_config.hidden_size, media_refs),
             cfg.sp_factor,
             cfg.chunk_size // cfg.sp_factor,
+            by_position,
         )
         if packed is None:
             return None
@@ -409,38 +411,14 @@ class TtPrefillRuntime:
                 self.mesh_device,
                 sp=cfg.sp_factor,
                 hidden=self.hf_config.hidden_size,
-                s_total=lookup.shape[1],
+                s_total=is_img.numel(),
                 mesh_shape=cfg.mesh_shape,
                 sp_axis=cfg.sp_axis,
                 tp_axis=cfg.tp_axis,
+                by_position=by_position,
             )
         buffers.refill(height, runs, lookup, is_img)
         return buffers
-
-    def _splice_media(self, x_embd: ttnn.Tensor, chunks: list, media_refs: list) -> ttnn.Tensor:
-        """x_embd with each ref's image positions overwritten by its stored embeddings. Consumes x_embd.
-
-        The 1D-embedding path: there is no reduce-scatter to carry the rows, so they are uploaded whole
-        and selected with ttnn.where. The 2D path splices inside the embedding instead (_media_partials)."""
-        cfg = self.config
-        rows, mask = build_injection(
-            media_refs,
-            chunks,
-            _media_rows_of(self.media_embedding_reader, self.hf_config.hidden_size, media_refs),
-            cfg.sp_factor,
-            cfg.chunk_size // cfg.sp_factor,
-        )
-        return inject_media_embeddings(
-            self.mesh_device,
-            x_embd,
-            rows,
-            mask,
-            cache=self,
-            mesh_shape=cfg.mesh_shape,
-            sp_axis=cfg.sp_axis,
-            tp_axis=cfg.tp_axis,
-            emb_tp_sharded=cfg.pipeline_activation_emb_tp_sharded,
-        )
 
     def compile(self, kv_cache) -> None:
         """Warm the program cache so no served forward pays a first-run JIT.
@@ -590,16 +568,11 @@ class TtPrefillRuntime:
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
         if cfg.is_first_rank:
-            # The 2D embedding carries the image rows on its reduce-scatter; the 1D path has no
-            # collective to ride and splices after the embedding instead.
-            on_partials = bool(media_refs) and self.model.embedding.shard_vocab_on_sp
-            # The embedding calls this after enqueuing the lookup, so the host's fetch and upload
+            # The embedding calls this after enqueuing the token lookup, so the host's fetch and upload
             # overlap that work rather than delaying it.
-            media_fn = (lambda: self._media_partials(chunks, media_refs)) if on_partials else None
+            media_fn = (lambda: self._media_partials(chunks, media_refs)) if media_refs else None
             x_embd = self._embed_tokens(input_tensor, media_fn=media_fn)
             ttnn.deallocate(input_tensor)
-            if media_refs and not on_partials:
-                x_embd = self._splice_media(x_embd, chunks, media_refs)
         else:
             assert not media_refs, "media is spliced on the first rank only"
             x_embd = input_tensor

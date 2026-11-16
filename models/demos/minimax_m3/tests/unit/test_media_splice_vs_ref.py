@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Post-splice embeddings on one chip and on a galaxy: TtParallelEmbedding over an expanded prompt with image rows spliced chunk by
-chunk through TtPrefillRuntime._splice_media, against a torch merge and against Hugging Face minimax_m3_vl's merge.
+chunk through TtPrefillRuntime._media_partials, against a torch merge and against Hugging Face minimax_m3_vl's merge.
 
 Run: pytest models/demos/minimax_m3/tests/unit/test_media_splice_vs_ref.py
 """
@@ -16,7 +16,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.multimedia_store.reader import FetchRequest
-from models.demos.common.prefill.media import build_injection, build_media_partials, table_height
+from models.demos.common.prefill.media import build_media_partials, table_height
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt import tt_prefill_runtime
@@ -69,7 +69,9 @@ class SharedBufferStore(Store):
         return views
 
 
-def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_sharded=True, hidden=HIDDEN):
+def runtime_with(
+    store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_sharded=True, hidden=HIDDEN, shard_vocab_on_sp=True
+):
     return SimpleNamespace(
         config=SimpleNamespace(
             sp_factor=sp,
@@ -82,7 +84,7 @@ def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_
         hf_config=SimpleNamespace(hidden_size=hidden),
         media_embedding_reader=store,
         mesh_device=mesh_device,
-        media_buffers=None,
+        model=SimpleNamespace(embedding=SimpleNamespace(shard_vocab_on_sp=shard_vocab_on_sp)),
         _media_partials_cache=None,
     )
 
@@ -91,10 +93,7 @@ def splice_chunks(
     mesh_device, table, tokens, images, store, first_chunk_start, emb_tp_sharded=True, shard_vocab_on_sp=False
 ):
     """Embeddings of tokens[first_chunk_start:] after splicing, prefilled CHUNK tokens at a time.
-    images: (start, num_tokens, key) per image.
-
-    shard_vocab_on_sp picks the splice the runtime would pick: the 2D embedding carries the image rows
-    on its reduce-scatter (MediaPartials), the 1D one splices after the embedding (MediaInjectionBuffers)."""
+    images: (start, num_tokens, key) per image."""
     mesh_shape = tuple(mesh_device.shape)
     emb = TtParallelEmbedding(
         mesh_device,
@@ -113,6 +112,7 @@ def splice_chunks(
         mesh_shape=mesh_shape,
         mesh_device=mesh_device,
         emb_tp_sharded=emb_tp_sharded,
+        shard_vocab_on_sp=shard_vocab_on_sp,
     )
     out = []
     for start in range(first_chunk_start, len(tokens), CHUNK):
@@ -121,7 +121,7 @@ def splice_chunks(
         chunk_tokens[: end - start] = tokens[start:end]
         refs = [MediaRef(0, s, s + n, key) for s, n, key in images if s < end and s + n > start]
         chunks = [PrefillChunk(0, start, end)]
-        partials = TtPrefillRuntime._media_partials(runtime, chunks, refs) if refs and shard_vocab_on_sp else None
+        partials = TtPrefillRuntime._media_partials(runtime, chunks, refs)
         x = emb.forward(
             ttnn.from_torch(
                 chunk_tokens.reshape(1, 1, CHUNK),
@@ -135,8 +135,6 @@ def splice_chunks(
         )
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
-        if refs and not shard_vocab_on_sp:
-            x = TtPrefillRuntime._splice_media(runtime, x, chunks, refs)
         # Inverts activation_mapper. A replicated residual repeats hidden once per TP rank, so keep the first.
         rows = ttnn.to_torch(
             x, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 3))
@@ -162,7 +160,7 @@ def check(got, want, images, first_chunk_start, seq_len):
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
 @pytest.mark.parametrize("sharded_residual", ["1", "0"], ids=["tp_sharded", "replicated"])
-@pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["partials_2d", "after_embed_1d"])
+@pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["partials_2d", "by_position_1d"])
 @pytest.mark.parametrize(
     "seq_len,layout,first_chunk_start",
     [
@@ -193,7 +191,8 @@ def test_post_splice_embeddings(
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
-def test_same_bucket_compiles_once(mesh_device, device_params):
+@pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["partials_2d", "by_position_1d"])
+def test_same_bucket_compiles_once(mesh_device, device_params, shard_vocab_on_sp):
     """Image counts that snap to the same table height reuse the program — what table_height is for.
 
     One 10-token image and two totalling 20 both snap to a 32-row table at sp 1, 2 and 8. Their exact
@@ -206,9 +205,9 @@ def test_same_bucket_compiles_once(mesh_device, device_params):
     two = [(10, 12, bytes([2]) * 32), (40, 8, bytes([3]) * 32)]
     embs = {key: torch.randn(n, HIDDEN).to(torch.bfloat16) for _, n, key in one + two}
 
-    splice_chunks(mesh_device, table, tokens, one, Store(embs), 0, shard_vocab_on_sp=True)
+    splice_chunks(mesh_device, table, tokens, one, Store(embs), 0, shard_vocab_on_sp=shard_vocab_on_sp)
     entries = mesh_device.num_program_cache_entries()
-    splice_chunks(mesh_device, table, tokens, two, Store(embs), 0, shard_vocab_on_sp=True)
+    splice_chunks(mesh_device, table, tokens, two, Store(embs), 0, shard_vocab_on_sp=shard_vocab_on_sp)
 
     assert mesh_device.num_program_cache_entries() == entries, "a same-bucket image count recompiled"
 
@@ -244,26 +243,26 @@ def test_full_size_tables_refill_in_place(mesh_device, device_params):
     assert shapes[0] == shapes[1], "the two forwards must share one table height to reuse its host table"
 
 
-def test_warm_media_reaches_packed_forwards(monkeypatch):
+@pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["partials_2d", "by_position_1d"])
+def test_warm_media_reaches_packed_forwards(monkeypatch, shard_vocab_on_sp):
     """compile() warms every table height a packed forward can reach: images can fill all its chunks, not just one."""
     monkeypatch.setattr(tt_prefill_runtime.ttnn, "deallocate", lambda t: None)
     sp, chunk, n_chunks = 2, CHUNK, 2
     zeros = lambda r: np.zeros((r.num_tokens, HIDDEN), np.uint16)
     heights = []
-    runtime = runtime_with(None, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
+    runtime = runtime_with(None, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1), shard_vocab_on_sp=shard_vocab_on_sp)
     runtime.make_forward_input = lambda tokens, starts: None
     runtime._embed_tokens = lambda inp, media_fn: media_fn()
     runtime._media_partials = lambda chunks, refs: heights.append(
-        build_media_partials(refs, chunks, zeros, sp, chunk // sp)[0]
+        build_media_partials(refs, chunks, zeros, sp, chunk // sp, not shard_vocab_on_sp)[0]
     )
     TtPrefillRuntime._warm_media(runtime, None, chunk, n_chunks)
     assert heights[-1] == table_height(n_chunks * chunk // sp + 1)
 
 
-def test_one_batched_fetch_per_forward(monkeypatch):
+def test_one_batched_fetch_per_forward():
     """A packed forward naming one image in two chunks reads every value in one fetch, before the next fetch could
     overwrite it."""
-    monkeypatch.setattr(tt_prefill_runtime, "inject_media_embeddings", lambda dev, x, rows, mask, **kw: (rows, mask))
     sp, chunk = 2, 128
     a, b = bytes([1]) * 32, bytes([2]) * 32
     embs = {a: torch.randn(100, HIDDEN).to(torch.bfloat16), b: torch.randn(20, HIDDEN).to(torch.bfloat16)}
@@ -271,15 +270,17 @@ def test_one_batched_fetch_per_forward(monkeypatch):
     refs = [MediaRef(0, 100, 200, a), MediaRef(1, 100, 200, a), MediaRef(1, 220, 240, b)]
     store = SharedBufferStore(embs)
     runtime = runtime_with(store, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
-
-    rows, mask = TtPrefillRuntime._splice_media(runtime, None, chunks, refs)
-
-    want_rows, want_mask = build_injection(
-        refs, chunks, lambda r: embs[r.media_key].view(torch.int16).numpy(), sp, chunk // sp
+    got = []
+    runtime._media_partials_cache = SimpleNamespace(
+        refill=lambda height, runs, lookup, is_img: got.extend(rows.copy() for _, _, rows in runs)
     )
+
+    TtPrefillRuntime._media_partials(runtime, chunks, refs)
+
+    u16 = lambda r: embs[r.media_key].view(torch.int16).numpy().view(np.uint16)
+    want = [rows for _, _, rows in build_media_partials(refs, chunks, u16, sp, chunk // sp)[3]]
     assert store.calls == 1
-    assert torch.equal(mask, want_mask)
-    assert torch.equal(rows[mask], want_rows[want_mask])
+    assert len(got) == len(want) and all(np.array_equal(g, w) for g, w in zip(got, want))
 
 
 def tiny_hf_model():

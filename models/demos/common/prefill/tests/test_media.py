@@ -1,19 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only: build_injection puts each media row where pack_forward_tokens puts that position's token."""
+"""Host-only: build_media_partials delivers each media row where pack_forward_tokens puts that position's token."""
 
 import pytest
 import torch
 
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
-from models.demos.common.prefill.media import (
-    _positions,
-    build_injection,
-    build_media_partials,
-    table_height,
-    warm_media_refs,
-)
+from models.demos.common.prefill.media import _positions, build_media_partials, table_height, warm_media_refs
 from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK, MediaRef, PrefillChunk
 
 SP, LOCAL, HIDDEN = 4, 32, 8
@@ -52,35 +46,6 @@ def expected(chunks, refs, embs):
     return rows.view(SP, -1, HIDDEN), mask.view(SP, -1)
 
 
-@pytest.mark.parametrize(
-    "chunks,refs",
-    [
-        pytest.param([PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)], id="inside_one_chunk"),
-        pytest.param([PrefillChunk(0, 0, C)], [ref(0, 3, 20, 1), ref(0, 40, 30, 2), ref(0, 100, 12, 3)], id="several"),
-        pytest.param([PrefillChunk(0, 0, C)], [ref(0, 100, 300, 1)], id="image_head"),
-        pytest.param([PrefillChunk(0, C, 2 * C)], [ref(0, 100, 300, 1)], id="image_middle"),
-        pytest.param([PrefillChunk(0, 2 * C, 2 * C + 50)], [ref(0, 2 * C + 20, 100, 1)], id="partial_chunk"),
-        pytest.param([PrefillChunk(0, 96, 96 + C)], [ref(0, 100, 50, 1)], id="resume_mid_slab"),
-        pytest.param(
-            [PrefillChunk(0, 0, C), PrefillChunk(1, C, 2 * C), EMPTY_CHUNK],
-            [ref(0, 100, 300, 1), ref(1, 100, 300, 2), ref(1, 2 * C - 10, 30, 3)],
-            id="packed_two_slots",
-        ),
-    ],
-)
-def test_rows_follow_the_token_layout(chunks, refs):
-    embs = {r.media_key: torch.randn(r.num_tokens, HIDDEN).to(torch.bfloat16) for r in refs}
-    rows, mask = build_injection(refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL)
-    want_rows, want_mask = expected(chunks, refs, embs)
-    assert want_mask.any()
-    assert torch.equal(mask, want_mask)
-    assert torch.equal(rows[mask], want_rows[want_mask])
-
-
-def test_text_only_forward():
-    assert build_injection([], [PrefillChunk(0, 0, C)], None, SP, LOCAL) is None
-
-
 @pytest.mark.parametrize("sp,chunk_local", [(1, 32), (2, 32), (4, 64), (8, 1)])
 def test_positions_match_the_chunk_layout(sp, chunk_local):
     for start in range(0, 3 * sp * chunk_local, max(1, chunk_local // 2)):
@@ -92,7 +57,9 @@ def test_positions_match_the_chunk_layout(sp, chunk_local):
     [
         pytest.param([PrefillChunk(0, 0, C)], [ref(0, 10, 40, 1)], id="inside_one_chunk"),
         pytest.param([PrefillChunk(0, 0, C)], [ref(0, 3, 20, 1), ref(0, 40, 30, 2)], id="several"),
+        pytest.param([PrefillChunk(0, 0, C)], [ref(0, 100, 300, 1)], id="image_head"),
         pytest.param([PrefillChunk(0, C, 2 * C)], [ref(0, 100, 300, 1)], id="image_middle"),
+        pytest.param([PrefillChunk(0, 2 * C, 2 * C + 50)], [ref(0, 2 * C + 20, 100, 1)], id="partial_chunk"),
         pytest.param([PrefillChunk(0, 96, 96 + C)], [ref(0, 100, 50, 1)], id="resume_mid_slab"),
         pytest.param(
             [PrefillChunk(0, 0, C), PrefillChunk(1, C, 2 * C), EMPTY_CHUNK],
@@ -101,21 +68,23 @@ def test_positions_match_the_chunk_layout(sp, chunk_local):
         ),
     ],
 )
-def test_partials_sum_to_the_image_rows(chunks, refs):
-    """D: summing every SP row's partial reproduces build_injection's rows at the image positions."""
+@pytest.mark.parametrize("by_position", [False, True], ids=["summed_2d", "by_position_1d"])
+def test_partials_deliver_the_image_rows(chunks, refs, by_position):
+    """2D: summing every SP row's lookup over all positions gives the image rows. 1D: each SP row's lookup over its own
+    positions does."""
     embs = {r.media_key: torch.randn(r.num_tokens, HIDDEN).to(torch.bfloat16) for r in refs}
-    rows_of = lambda r: u16(embs[r.media_key])
-    height, lookup, is_img, runs = build_media_partials(refs, chunks, rows_of, SP, LOCAL)
+    height, lookup, is_img, runs = build_media_partials(
+        refs, chunks, lambda r: u16(embs[r.media_key]), SP, LOCAL, by_position
+    )
     table = table_of(height, runs)
-    want_rows, want_mask = build_injection(refs, chunks, rows_of, SP, LOCAL)
+    want_rows, want_mask = expected(chunks, refs, embs)
 
-    summed = torch.zeros(lookup.shape[1], HIDDEN, dtype=torch.bfloat16)  # s_total, not one chunk
-    for r in range(SP):
-        summed += table[r][lookup[r].long()]
+    gathered = torch.stack([table[r][lookup[r].long()] for r in range(SP)])
+    got = gathered.reshape(-1, HIDDEN) if by_position else gathered.sum(0)
 
     assert torch.equal(is_img, want_mask.flatten())
-    assert torch.equal(summed[is_img], want_rows.reshape(-1, HIDDEN)[is_img])
-    assert not summed[~is_img].any(), "a row outside the mask got a contribution"
+    assert torch.equal(got[is_img], want_rows.reshape(-1, HIDDEN)[is_img])
+    assert not got[~is_img].any(), "a row outside the mask got a contribution"
     assert (lookup > 0).sum() == is_img.sum(), "every image position is assigned exactly once"
 
 
@@ -152,13 +121,14 @@ def test_table_is_bucketed_and_row_zero_is_never_written():
     assert min(slot for _, slot, _ in runs) == 1, "the sentinel row must not be written"
 
 
+@pytest.mark.parametrize("by_position", [False, True], ids=["2d", "1d"])
 @pytest.mark.parametrize("n_chunks", [1, 2, 3])
-def test_warm_plan_reaches_the_tallest_table(n_chunks):
+def test_warm_plan_reaches_the_tallest_table(n_chunks, by_position):
     """compile() warms the heights warm_media_refs names: each plan lands in its height, and the last is
     the tallest table images filling every chunk of a packed forward can need."""
     chunks = [PrefillChunk(k, 0, C) for k in range(n_chunks)]
     zeros = lambda r: u16(torch.zeros(r.num_tokens, HIDDEN, dtype=torch.bfloat16))
-    plan = warm_media_refs(SP, C, n_chunks)
+    plan = warm_media_refs(SP, C, n_chunks, by_position)
     for height, refs in plan:
-        assert build_media_partials(refs, chunks, zeros, SP, LOCAL)[0] == height
+        assert build_media_partials(refs, chunks, zeros, SP, LOCAL, by_position)[0] == height
     assert plan[-1][0] == table_height(n_chunks * C // SP + 1)
