@@ -122,7 +122,12 @@ DRAFT_PROB_PENALTY = 5e-5
 # The greedy draft's block mode: the stages run on (BLOCK_ROWS, 32)-tiled row blocks (the block padded with zero rows)
 # through the block ops (fused_hyperconnection, matmul_decode, width_sharded_all_reduce) instead of per-row loops.
 BLOCK_ROWS = 8
-DSPARK_BLOCK = os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_OPS", "0") == "1"
+DSPARK_BLOCK = os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_OPS", "1") == "1"
+# The routed experts' dtype (bfloat8_b by default; bfloat4_b halves the bytes fused_experts streams). Each dtype has
+# its own cache files (the dtype is in their name).
+DSPARK_EXPERT_DTYPE = {"bf8": ttnn.bfloat8_b, "bf4": ttnn.bfloat4_b}[
+    os.environ.get("DEEPSEEK_V4_DSPARK_EXPERTS", "bf8")
+]
 # The uniforms' clamp, so both logs of a Gumbel draw stay finite (and 0 * Gumbel is 0 when greedy).
 _UNIFORM_MIN, _UNIFORM_MAX = 2.0**-24, 1.0 - 2.0**-24
 
@@ -784,7 +789,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         rope_main,
         cache=None,
         weight_dtype=ttnn.bfloat8_b,
-        expert_dtype=ttnn.bfloat8_b,
+        expert_dtype=DSPARK_EXPERT_DTYPE,
         shared_dtype=ttnn.bfloat8_b,
         tp_size: int = 4,
         main_rows: int = 8,
