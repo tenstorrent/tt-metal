@@ -381,8 +381,9 @@ ALWI void matmul_block_math_dynamic_throttle(
 #endif
 
 #ifdef ARCH_BLACKHOLE
-// HiFi3 half sync with a 32-bit DEST and a 32-bit CB: in a kernel whose plain calls all have a run-time block (minimal_matmul) the
-// ttsync unpack and the row form read slower (224 2x1 bf16 +329 ns); with a constant block (bmm) both are 6-16 cy faster
+// HiFi3 half sync without a Bfp8_b CB, and with a 32-bit DEST also a 32-bit CB: in a kernel whose plain calls all have a run-time
+// block (minimal_matmul) the ttsync unpack and the row form read slower (224 2x1 bf16 +329 ns with a 32-bit DEST, +0.24 % with a
+// 16-bit one); with a constant block (bmm) both are 6-16 cy faster
 constexpr bool matmul_fe_hifi3_wide() {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
     bool wide = false, bfp8 = false;
@@ -390,7 +391,7 @@ constexpr bool matmul_fe_hifi3_wide() {
         wide = wide || f == to_underlying(DataFormat::Float32) || f == to_underlying(DataFormat::Tf32);
         bfp8 = bfp8 || f == to_underlying(DataFormat::Bfp8_b);
     }
-    return MATH_FIDELITY == MathFidelity::HiFi3 && DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE && wide && !bfp8;
+    return MATH_FIDELITY == MathFidelity::HiFi3 && DST_SYNC_MODE == DstSync::SyncHalf && (!DST_ACCUM_MODE || wide) && !bfp8;
 #else
     return false;
 #endif
