@@ -61,6 +61,10 @@ launch so each capture says which events it counted. If the per-core profiler bu
 markers are dropped rather than displacing zone markers. The Tensix counter multi-pass flow keeps the
 markers from pass 0 only, which is correct because the selects do not change between passes.
 
+Firmware cost with the option on: BRISC grows by about 250 B, NCRISC by about 200 B, the Blackhole
+TRISCs by about 215 B and the Quasar TRISCs by 256 to 276 B. The Blackhole BRISC region is 9472 B so
+that the hook still links next to the five Tensix counter groups (9336 B worst case).
+
 Only one event pair is captured per run; a sweep over several pairs needs one run per pair. Without
 the option the hooks compile to nothing and the firmware images are byte-identical to a build without
 this feature.
