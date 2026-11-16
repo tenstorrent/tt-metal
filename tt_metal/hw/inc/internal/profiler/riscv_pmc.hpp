@@ -32,7 +32,7 @@ constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) |
 // Cores that carry the counters and have a firmware hook.
 #if defined(ARCH_BLACKHOLE) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC))
 #define RISCV_PMC_CORE 1
-#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
+#elif defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
 #define RISCV_PMC_CORE 1
 #endif
 
@@ -50,6 +50,21 @@ constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) |
 #if !defined(PROFILE_RISCV_PMC_EV4)
 #define PROFILE_RISCV_PMC_EV4 0
 #endif
+#if !defined(PROFILE_RISCV_PMC_DM_EV3)
+#define PROFILE_RISCV_PMC_DM_EV3 0
+#endif
+#if !defined(PROFILE_RISCV_PMC_DM_EV4)
+#define PROFILE_RISCV_PMC_DM_EV4 0
+#endif
+
+// The Quasar data-movement cores take (event mask << 8) | event set; every other core takes eight nibbles.
+#if defined(COMPILE_FOR_DM)
+#define RISCV_PMC_SEL3 ((uint32_t)PROFILE_RISCV_PMC_DM_EV3)
+#define RISCV_PMC_SEL4 ((uint32_t)PROFILE_RISCV_PMC_DM_EV4)
+#else
+#define RISCV_PMC_SEL3 ((uint32_t)PROFILE_RISCV_PMC_EV3)
+#define RISCV_PMC_SEL4 ((uint32_t)PROFILE_RISCV_PMC_EV4)
+#endif
 
 namespace kernel_profiler {
 namespace riscv_pmc {
@@ -63,7 +78,7 @@ constexpr uint32_t CSR_MHPMEVENT4 = 0x324;
 
 // mcycle and minstret are never written, so they are read as deltas; the programmable counters are
 // zeroed at begin. One launch is in flight per core, so a plain global is enough (per thread on
-// Quasar, where the four TRISCs of a Neo share the image).
+// Quasar, where cores share the image).
 #if defined(ARCH_QUASAR)
 static thread_local uint32_t cycle_begin, instret_begin;
 #else
@@ -72,8 +87,8 @@ static uint32_t cycle_begin, instret_begin;
 
 // mcountinhibit is never written: its reset value runs both counters.
 inline __attribute__((always_inline)) void begin() {
-    asm volatile("csrw %0, %1" ::"i"(CSR_MHPMEVENT3), "r"((uint32_t)PROFILE_RISCV_PMC_EV3));
-    asm volatile("csrw %0, %1" ::"i"(CSR_MHPMEVENT4), "r"((uint32_t)PROFILE_RISCV_PMC_EV4));
+    asm volatile("csrw %0, %1" ::"i"(CSR_MHPMEVENT3), "r"(RISCV_PMC_SEL3));
+    asm volatile("csrw %0, %1" ::"i"(CSR_MHPMEVENT4), "r"(RISCV_PMC_SEL4));
     asm volatile("csrw %0, zero" ::"i"(CSR_MHPMCOUNTER3));
     asm volatile("csrw %0, zero" ::"i"(CSR_MHPMCOUNTER4));
     asm volatile("csrr %0, %1" : "=r"(cycle_begin) : "i"(CSR_MCYCLE) : "memory");
@@ -121,7 +136,7 @@ inline __attribute__((always_inline)) void end() {
     };
     put(RISCV_PMC_COUNTS_PROFILER_ID, pmc4, pmc3);
     put(RISCV_PMC_CYCLES_PROFILER_ID, minstret - instret_begin, mcycle - cycle_begin);
-    put(RISCV_PMC_EVENTS_PROFILER_ID, (uint32_t)PROFILE_RISCV_PMC_EV4, (uint32_t)PROFILE_RISCV_PMC_EV3);
+    put(RISCV_PMC_EVENTS_PROFILER_ID, RISCV_PMC_SEL4, RISCV_PMC_SEL3);
     wIndex = w;
 }
 

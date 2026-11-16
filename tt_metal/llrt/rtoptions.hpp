@@ -256,6 +256,8 @@ class RunTimeOptions {
     bool profiler_riscv_pmc_enabled = false;
     uint32_t profiler_riscv_pmc_event3 = 0;
     uint32_t profiler_riscv_pmc_event4 = 0;
+    uint32_t profiler_riscv_pmc_dm_event3 = 0;
+    uint32_t profiler_riscv_pmc_dm_event4 = 0;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
@@ -732,6 +734,10 @@ public:
         // existing JIT cache and pre-compiled bundle stays valid) for everyone not using it.
         if (profiler_riscv_pmc_enabled) {
             compile_hash_str += fmt::format("_pmc{:x}_{:x}", profiler_riscv_pmc_event3, profiler_riscv_pmc_event4);
+            if (profiler_riscv_pmc_dm_event3 != 0 || profiler_riscv_pmc_dm_event4 != 0) {
+                compile_hash_str +=
+                    fmt::format("_dm{:x}_{:x}", profiler_riscv_pmc_dm_event3, profiler_riscv_pmc_dm_event4);
+            }
         }
         return compile_hash_str;
     }
@@ -767,6 +773,8 @@ public:
     bool get_profiler_riscv_pmc_enabled() const { return profiler_riscv_pmc_enabled; }
     uint32_t get_profiler_riscv_pmc_event3() const { return profiler_riscv_pmc_event3; }
     uint32_t get_profiler_riscv_pmc_event4() const { return profiler_riscv_pmc_event4; }
+    uint32_t get_profiler_riscv_pmc_dm_event3() const { return profiler_riscv_pmc_dm_event3; }
+    uint32_t get_profiler_riscv_pmc_dm_event4() const { return profiler_riscv_pmc_dm_event4; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }

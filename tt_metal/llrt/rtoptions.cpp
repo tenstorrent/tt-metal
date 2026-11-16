@@ -151,6 +151,7 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
+    TT_METAL_PROFILE_RISCV_PMC_DM,                 // Event selects of the Quasar data-movement cores
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -1241,10 +1242,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_PROFILE_RISCV_PMC
         // RISC-V performance monitor of the Tensix baby cores: BRISC, NCRISC and TRISC0/1/2 on Blackhole,
-        // the TRISCs on Quasar. Value is the mhpmevent3 and optional mhpmevent4 select, comma separated, hex
-        // or decimal (eight 4-bit pipeline-domain nibbles each). See tech_reports/PerfCounters/riscv-pmc.md.
-        // Default: disabled
-        // Usage: export TT_METAL_PROFILE_RISCV_PMC=0x10110111,0xA0000000
+        // the TRISCs and data-movement cores on Quasar. Value is the mhpmevent3 and optional mhpmevent4 select, comma
+        // separated, hex or decimal (eight 4-bit pipeline-domain nibbles each). See
+        // tech_reports/PerfCounters/riscv-pmc.md. Default: disabled Usage: export
+        // TT_METAL_PROFILE_RISCV_PMC=0x10110111,0xA0000000
         case EnvVarID::TT_METAL_PROFILE_RISCV_PMC: {
             // strtoul with base 0 rather than sscanf: the selects routinely have bit 31 set (the MEM
             // nibble is the top one), which does not survive a signed parse.
@@ -1272,6 +1273,30 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->profiler_riscv_pmc_event4 = static_cast<uint32_t>(ev4);
             this->profiler_riscv_pmc_enabled = true;
             this->profiler_enabled = true;
+            break;
+        }
+
+        // TT_METAL_PROFILE_RISCV_PMC_DM
+        // Quasar data-movement cores only: their mhpmevent3/4 selects, (event mask << 8) | event set, comma
+        // separated. Only read together with TT_METAL_PROFILE_RISCV_PMC. Unset leaves both counters idle,
+        // so only mcycle and minstret are captured on those cores.
+        // Usage: export TT_METAL_PROFILE_RISCV_PMC_DM=0x201,0x801
+        case EnvVarID::TT_METAL_PROFILE_RISCV_PMC_DM: {
+            char* end = nullptr;
+            const unsigned long ev3 = std::strtoul(value, &end, 0);
+            unsigned long ev4 = 0;
+            if (end != nullptr && *end == ',') {
+                ev4 = std::strtoul(end + 1, &end, 0);
+            }
+            if (end == value || (end != nullptr && *end != '\0') || ev3 > std::numeric_limits<uint32_t>::max() ||
+                ev4 > std::numeric_limits<uint32_t>::max()) {
+                TT_THROW(
+                    "TT_METAL_PROFILE_RISCV_PMC_DM=\"{}\" could not be parsed. Expected one or two 32-bit "
+                    "integers (hex accepted), e.g. 0x201,0x801.",
+                    value);
+            }
+            this->profiler_riscv_pmc_dm_event3 = static_cast<uint32_t>(ev3);
+            this->profiler_riscv_pmc_dm_event4 = static_cast<uint32_t>(ev4);
             break;
         }
 
