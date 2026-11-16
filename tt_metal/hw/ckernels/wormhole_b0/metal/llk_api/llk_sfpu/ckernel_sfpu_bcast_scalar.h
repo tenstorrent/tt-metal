@@ -67,7 +67,9 @@ inline void _sfpu_bcast_scalar_load_(
     std::uint32_t dst_index_scalar,
     [[maybe_unused]] std::uint32_t unused_in1,
     [[maybe_unused]] std::uint32_t unused_out) {
-    sfpi::vFloat s = sfpi::dst_reg[dst_index_scalar * BCAST_SCALAR_VECS_PER_TILE];
+    // A raw (U32) load: the float load mode flushes denormals, the raw one keeps the scalar's bits (fp32 DEST only).
+    const sfpi::vUInt raw = sfpi::dst_reg[dst_index_scalar * BCAST_SCALAR_VECS_PER_TILE].mode<sfpi::DataLayout::U32>();
+    sfpi::vFloat s = sfpi::as<sfpi::vFloat>(raw);
     v_if(sfpi::vConstTileId != 0) { s = 0.0f; }  // tile id = 2 * lane: lane 0 only
     v_endif;
     sfpi::vFloat t = sfpi::subvec_shflror1(s);

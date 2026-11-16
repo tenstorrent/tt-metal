@@ -61,7 +61,7 @@ inline void _calculate_fill_bitcast_(const std::uint32_t value_bit_mask) {
 // per tile (VectorMode::None). The tile is 32 sfpi vectors: face f (rows 16 * (f / 2) .., columns 16 * (f % 2) ..) is
 // vectors 8f .. 8f + 7, and vector 2b + g of a face holds the face's rows 4b .. 4b + 3 at the columns of parity g,
 // lane 8j + k being (row 4b + j, column 2k + g). A band with all four rows in the range is stored whole; a band the
-// range cuts is masked by the lane's row, vConstTileId / 16 (the tile id is twice the lane index).
+// range cuts is stored under a lane predicate on the lane's row, vConstTileId / 16 (tile id = 2 * lane).
 template <bool APPROXIMATION_MODE>
 inline void _calculate_fill_rows_(const std::uint32_t row_begin, const std::uint32_t row_end, const float value) {
     const sfpi::vFloat fill_val = value;
@@ -81,12 +81,14 @@ inline void _calculate_fill_rows_(const std::uint32_t row_begin, const std::uint
         } else {
             const sfpi::vInt id_lo = static_cast<int>(16 * lo);
             const sfpi::vInt id_hi = static_cast<int>(16 * hi);
-            for (std::uint32_t v : vecs) {
-                sfpi::vFloat x = sfpi::dst_reg[v];
-                v_if(sfpi::vConstTileId >= id_lo && sfpi::vConstTileId < id_hi) { x = fill_val; }
-                v_endif;
-                sfpi::dst_reg[v] = x;
+            // Predicated stores: lanes outside the range are neither read nor written, so their bits (denormals
+            // included, which a float load / store round trip would flush) are kept.
+            v_if(sfpi::vConstTileId >= id_lo && sfpi::vConstTileId < id_hi) {
+                for (std::uint32_t v : vecs) {
+                    sfpi::dst_reg[v] = fill_val;
+                }
             }
+            v_endif;
         }
     }
 }
@@ -109,16 +111,14 @@ inline void _fill_rows_band_ct_(const sfpi::vFloat fill_val) {
             sfpi::dst_reg[vecs[2]] = fill_val;
             sfpi::dst_reg[vecs[3]] = fill_val;
         } else {
-#pragma GCC unroll 4
-            for (std::uint32_t i = 0; i < 4; i++) {
-                sfpi::vFloat x = sfpi::dst_reg[vecs[i]];
-                v_if(
-                    sfpi::vConstTileId >= static_cast<int>(16 * lo) && sfpi::vConstTileId < static_cast<int>(16 * hi)) {
-                    x = fill_val;
-                }
-                v_endif;
-                sfpi::dst_reg[vecs[i]] = x;
+            // Predicated stores, as in the run-time form: lanes outside the range are left untouched.
+            v_if(sfpi::vConstTileId >= static_cast<int>(16 * lo) && sfpi::vConstTileId < static_cast<int>(16 * hi)) {
+                sfpi::dst_reg[vecs[0]] = fill_val;
+                sfpi::dst_reg[vecs[1]] = fill_val;
+                sfpi::dst_reg[vecs[2]] = fill_val;
+                sfpi::dst_reg[vecs[3]] = fill_val;
             }
+            v_endif;
         }
     }
 }
