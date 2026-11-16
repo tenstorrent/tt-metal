@@ -84,14 +84,27 @@ constexpr bool matmul_format_is_32bit(const DataFormat f)
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
 }
 
-// The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): above LoFi, except the
+// The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): LoFi at half sync, and above LoFi except the
 // classes where a production block measured slower under ttsync (G2 census, 660 keys): HiFi4 at full sync with a 32-bit DEST, half sync
 // without a 32-bit DEST in a kernel holding Bfp8_b, and with a 32-bit DEST and a 32-bit format HiFi2 at either sync and HiFi3 at full
 // sync holding Bfp8_b.
 template <std::size_t N>
 constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest, const std::uint8_t (&formats)[N])
 {
-    if (fidelity == MathFidelity::LoFi || (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest))
+    if (fidelity == MathFidelity::LoFi)
+    {
+        // small LoFi blocks are bound by the unpack's context poll; half sync only, and not where a 32-bit CB beside a 16-bit or block
+        // float one gives a run-time direction
+        bool wide = false, fast = false;
+        for (const std::uint8_t f : formats)
+        {
+            const DataFormat d = static_cast<DataFormat>(f);
+            wide = wide || matmul_format_is_32bit(d);
+            fast = fast || d == DataFormat::Float16 || d == DataFormat::Float16_b || d == DataFormat::Bfp8_b || d == DataFormat::Bfp4_b;
+        }
+        return !full_sync && !(wide && fast);
+    }
+    if (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest)
     {
         return false;
     }
