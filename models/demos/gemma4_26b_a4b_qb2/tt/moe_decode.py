@@ -384,3 +384,42 @@ class MoeDecodeB1Fused(MoeDecodeB1):
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
         ttnn.generic_op([w_gu, w_down, x, route, out], program)
         return out
+
+
+def router_topk_b1(logits, pes, k, out=None, core=None):
+    """Batch-1 router tail on one core (kernels/router_topk_b1.cpp): FP32 logits ``[1, 1, 1, E]`` TILE ->
+    top-k, softmax over the picks, times ``pes`` (``[1, 1, 1, E]`` bf16 ROW_MAJOR per-expert scale) -> the packed
+    routing row ``[1, 1, 32, 2k]`` bf16 ROW_MAJOR (L1), row 0 = k weights then k global ids, as
+    ``RouterTopk.op_packed`` writes it."""
+    assert logits.dtype == ttnn.float32 and logits.layout == ttnn.TILE_LAYOUT
+    E = int(logits.shape[-1])
+    assert E % TILE == 0 and k <= 32
+    device = logits.device()
+    if out is None:
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, TILE, 2 * k]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+        )
+    if core is None:
+        g = device.compute_with_storage_grid_size()
+        core = ttnn.CoreCoord(int(g.x) - 1, int(g.y) - 1)
+    core_set = ttnn.CoreRangeSet({ttnn.CoreRange(core, core)})
+    scratch = E * 4 + E * 2 + 4 * k
+    cb = ttnn.CBDescriptor(
+        total_size=scratch,
+        core_ranges=core_set,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=scratch)],
+    )
+    ct = [0, E, k]
+    for t in (logits, pes, out):
+        ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+    rt = ttnn.RuntimeArgs()
+    rt[core.x][core.y] = [logits.buffer_address(), pes.buffer_address(), out.buffer_address()]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNELS / "router_topk_b1.cpp"),
+        core_ranges=core_set,
+        compile_time_args=ct,
+        runtime_args=rt,
+        config=ttnn.WriterConfigDescriptor(),  # BRISC: measured faster than NCRISC for this scalar code
+    )
+    ttnn.generic_op([logits, pes, out], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb]))
+    return out

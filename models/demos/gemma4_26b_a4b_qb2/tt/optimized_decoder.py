@@ -1006,27 +1006,21 @@ class GeneralizedRouter:
         return RouterTopk.op(logits, self._topk_scale, base, local_experts, 8)
 
     def decode_packed(self, normalized):
-        """Batch-1 decode for the moe_decode experts (WS4): the scaled projection in FP32, centered on its max and
-        rounded to bf16, then ``RouterTopk.op_packed``: one ``[1, 1, 32, 16]`` bf16 row-major tensor, row 0 = the 8
-        routing weights (normalized, times per_expert_scale) then the 8 global expert ids (5 programs)."""
-        from models.demos.gemma4.custom_ops.router_topk import RouterTopk
+        """Batch-1 decode for the moe_decode experts (WS4): the scaled projection in FP32 (L1), then the batch-1
+        router tail on one core (``moe_decode.router_topk_b1``: top-8 of the FP32 logits, softmax over the picks,
+        times per_expert_scale) into one ``[1, 1, 32, 16]`` bf16 row-major tensor, row 0 = the 8 routing weights then
+        the 8 global expert ids (the ``RouterTopk.op_packed`` format; 3 programs)."""
+        from models.demos.gemma4_26b_a4b_qb2.tt.moe_decode import router_topk_b1
 
         source = self.original.source
         router = source.source
-        if getattr(self, "_topk_scale", None) is None:
-            self._topk_scale = ttnn.to_layout(
-                ttnn.reshape(ttnn.typecast(router.per_expert_scale, ttnn.bfloat16), (1, 1, 1, 128)),
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-        if getattr(self, "_packed_base", None) is None:
-            import torch
-
-            self._packed_base = ttnn.from_torch(
-                torch.zeros(1, 1, 1, 16, dtype=torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=normalized.device(),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(normalized.device()),
+        if getattr(self, "_topk_scale_l1", None) is None:
+            self._topk_scale_l1 = ttnn.to_memory_config(
+                ttnn.to_layout(
+                    ttnn.reshape(ttnn.typecast(router.per_expert_scale, ttnn.bfloat16), (1, 1, 1, 128)),
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                ttnn.L1_MEMORY_CONFIG,
             )
         scaled = ttnn.mul(
             normalized,
@@ -1041,15 +1035,7 @@ class GeneralizedRouter:
             compute_kernel_config=self.projection_compute,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        # Center in FP32 before the bf16 handoff (as the batch-1 gate path does): near the top logits bf16 then
-        # resolves differences down to the FP32 projection's, so near-ties keep their order.
-        centered = ttnn.subtract(
-            logits,
-            ttnn.max(logits, dim=-1, keepdim=True),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return RouterTopk.op_packed(centered, self._topk_scale, self._packed_base, 8)
+        return router_topk_b1(logits, self._topk_scale_l1, 8)
 
     def decode_indices(self):
         if self.last_decode_indices is None:
