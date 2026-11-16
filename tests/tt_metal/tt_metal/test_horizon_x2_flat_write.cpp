@@ -86,25 +86,25 @@ void expect_flat_write_lands(
               << ", flat address 0x" << *flat << ", src 0x" << src->address() << std::dec
               << (posted ? ", posted" : ", non-posted") << std::endl;
 
-    const experimental::NodeCoord node{0, 0};
-    const experimental::KernelSpecName KERNEL{"flat_write"};
-    experimental::ProgramSpec spec{
+    const NodeCoord node{0, 0};
+    const KernelSpecName KERNEL{"flat_write"};
+    ProgramSpec spec{
         .name = "horizon_x2_flat_address_write",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = KERNEL,
             .source = OVERRIDE_KERNEL_PREFIX
             "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_x2_flat_address_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"src", "dst_lo", "dst_hi", "size", "posted"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         }},
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {KERNEL}, .target_nodes = node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {KERNEL}, .target_nodes = node}},
     };
     Program program = experimental::MakeProgramFromSpec(device, spec);
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node,
             {{"src", src->address()},
              {"dst_lo", static_cast<uint32_t>(*flat)},

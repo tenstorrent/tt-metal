@@ -106,25 +106,25 @@ void expect_flat_write_2dev_with_checker(
     ASSERT_TRUE(flat.has_value()) << "chip " << target << " has no flat address";
 
     // Sender kernel on source chip.
-    const experimental::NodeCoord src_node{0, 0};
-    const experimental::KernelSpecName SENDER{"flat_write_2dev"};
-    experimental::ProgramSpec sender_spec{
+    const NodeCoord src_node{0, 0};
+    const KernelSpecName SENDER{"flat_write_2dev"};
+    ProgramSpec sender_spec{
         .name = "horizon_x2_flat_address_write_2_device",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = SENDER,
             .source = OVERRIDE_KERNEL_PREFIX
             "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_x2_flat_address_write_2_device.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"src", "dst_lo", "dst_hi", "size", "posted"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         }},
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {SENDER}, .target_nodes = src_node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {SENDER}, .target_nodes = src_node}},
     };
     Program sender_prog = experimental::MakeProgramFromSpec(src_device, sender_spec);
-    experimental::ProgramRunArgs sender_run_args;
-    sender_run_args.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs sender_run_args;
+    sender_run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = SENDER,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             src_node,
             {{"src", src_buf->address()},
              {"dst_lo", static_cast<uint32_t>(*flat)},
@@ -138,25 +138,25 @@ void expect_flat_write_2dev_with_checker(
     distributed::EnqueueMeshWorkload(src_cq, sender_workload, true);
 
     // Checker kernel on target chip — spins until first word arrives, verifies all words, writes 1u/fail.
-    const experimental::NodeCoord tgt_node{0, 0};
-    const experimental::KernelSpecName CHECKER{"flat_write_2dev_checker"};
-    experimental::ProgramSpec checker_spec{
+    const NodeCoord tgt_node{0, 0};
+    const KernelSpecName CHECKER{"flat_write_2dev_checker"};
+    ProgramSpec checker_spec{
         .name = "horizon_x2_flat_address_write_2_device_checker",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = CHECKER,
             .source = OVERRIDE_KERNEL_PREFIX
             "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_x2_flat_address_write_2_device_checker.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"recv_l1_addr", "num_words", "base_value", "result_l1_addr"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         }},
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {CHECKER}, .target_nodes = tgt_node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {CHECKER}, .target_nodes = tgt_node}},
     };
     Program checker_prog = experimental::MakeProgramFromSpec(tgt_device, checker_spec);
-    experimental::ProgramRunArgs checker_run_args;
-    checker_run_args.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs checker_run_args;
+    checker_run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = CHECKER,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             tgt_node,
             {{"recv_l1_addr", recv_buf->address()},
              {"num_words", FLAT_WRITE_2DEV_WORDS},

@@ -108,26 +108,26 @@ void expect_fabric_unicast_write_with_checker(
     cluster.write_core(zeros.data(), FABRIC_UNICAST_2DEV_BYTES, tt_cxy_pair(target, tgt_core), result_buf->address());
 
     // Sender kernel on source chip.
-    const experimental::NodeCoord src_node = src_logical_core;
-    const experimental::KernelSpecName SENDER{"fabric_unicast_write_sender"};
-    experimental::ProgramSpec sender_spec{
+    const NodeCoord src_node = src_logical_core;
+    const KernelSpecName SENDER{"fabric_unicast_write_sender"};
+    ProgramSpec sender_spec{
         .name = "horizon_fabric_unicast_write_sender",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = SENDER,
             .source = OVERRIDE_KERNEL_PREFIX
             "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_fabric_unicast_write_sender.cpp",
             .num_threads = 1,
             .runtime_arg_schema =
                 {.runtime_arg_names = {"src_l1_addr", "dst_l1_addr", "dst_noc_x", "dst_noc_y", "dst_dev_id", "size"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         }},
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {SENDER}, .target_nodes = src_node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {SENDER}, .target_nodes = src_node}},
     };
     Program sender_prog = experimental::MakeProgramFromSpec(src_device, sender_spec);
-    experimental::ProgramRunArgs sender_run_args;
-    sender_run_args.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs sender_run_args;
+    sender_run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = SENDER,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             src_node,
             {{"src_l1_addr", src_buf->address()},
              {"dst_l1_addr", recv_buf->address()},
@@ -142,25 +142,25 @@ void expect_fabric_unicast_write_with_checker(
     distributed::EnqueueMeshWorkload(src_cq, sender_workload, true);
 
     // Checker kernel on target chip.
-    const experimental::NodeCoord tgt_node = tgt_logical_core;
-    const experimental::KernelSpecName CHECKER{"fabric_unicast_write_checker"};
-    experimental::ProgramSpec checker_spec{
+    const NodeCoord tgt_node = tgt_logical_core;
+    const KernelSpecName CHECKER{"fabric_unicast_write_checker"};
+    ProgramSpec checker_spec{
         .name = "horizon_fabric_unicast_write_checker",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = CHECKER,
             .source = OVERRIDE_KERNEL_PREFIX
             "tests/tt_metal/tt_metal/test_kernels/dataflow/horizon_fabric_unicast_write_checker.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"recv_l1_addr", "num_words", "base_value", "result_l1_addr"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         }},
-        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {CHECKER}, .target_nodes = tgt_node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {CHECKER}, .target_nodes = tgt_node}},
     };
     Program checker_prog = experimental::MakeProgramFromSpec(tgt_device, checker_spec);
-    experimental::ProgramRunArgs checker_run_args;
-    checker_run_args.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs checker_run_args;
+    checker_run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = CHECKER,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             tgt_node,
             {{"recv_l1_addr", recv_buf->address()},
              {"num_words", FABRIC_UNICAST_2DEV_WORDS},
