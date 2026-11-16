@@ -286,8 +286,8 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 | `python_tests/helpers/ulp.py` | the metric: `ulp_distance`, the elementwise verdict, the near-zero floor |
 | `python_tests/helpers/ulp_sweep.py` | what the sweep feeds, what it masks, and the emitter |
 | `python_tests/helpers/sfpu_accuracy_budget_wh.yaml`, `_bh.yaml` | the table, per architecture |
-| `python_tests/helpers/ulp_table.py` | the table as typed rows, its reader and writer, and the `--ulp-measure` records |
-| `python_tests/helpers/sfpu_accuracy_budget.py` | how a row is resolved |
+| `python_tests/helpers/ulp_table.py` | the table as typed rows, how a variant resolves to one (`resolve`), its reader and writer, and the `--ulp-measure` records |
+| `python_tests/helpers/sfpu_accuracy_budget.py` | the loaded table the drivers ask (`accuracy_contract`) |
 | `python_tests/helpers/ulp_domains.py` | the `domains` list and the rule that draws it; `Problem` and `TableError` |
 | `python_tests/helpers/ulp_budget_diff.py` | the PR guard and the headroom report |
 | `python_tests/helpers/ulp_affected.py` | the cells a change can move, for PR Gate's sweep |

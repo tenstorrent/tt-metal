@@ -56,11 +56,15 @@ class Built:
     build: str
 
     def describe(self) -> str:
-        k = self.key
-        return (
-            f"{self.op.name} {k.input_format.name}->{k.output_format.name} "
-            f"approx={k.approx_mode.name} dest_acc={k.dest_acc.name}"
-        )
+        return describe(self.op, self.key)
+
+
+def describe(op: MathOperation, key: BudgetKey) -> str:
+    """A sweep cell by name, as the check's summary and the sweep's failures print it."""
+    return (
+        f"{op.name} {key.input_format.name}->{key.output_format.name} "
+        f"approx={key.approx_mode.name} dest_acc={key.dest_acc.name}"
+    )
 
 
 def record_built(node: str, op: MathOperation, key: BudgetKey, build: str) -> None:
