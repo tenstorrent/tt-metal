@@ -515,8 +515,9 @@
   # vLLM trace -- rung L24 on the 10K trace (two chunks), then rung L24-128k on the 128K trace (26 chunks,
   # K3's long-context check), both in one test on one stage build (each rung from fresh caches), so the
   # stage's weights load once. Measured pytest time on one galaxy: 1249 s (2026-11-13) and 1451 s with a
-  # cold JIT (2026-11-16). In CI the K3 sections [1/4]-[3/4] took 30-33 min (5 runs, 2026-11-05..08) against
-  # ~22 min locally, so ~25-30 min is expected here; its 45 min bound covers that. The test is
+  # cold JIT (2026-11-16). In CI the K3 sections [1/4]-[3/4] ran 22-25 min (test step; 31-34 min job with
+  # runner setup, 5 runs 2026-11-05..08) against ~22 min locally, so ~25-30 min is expected here; its 45 min
+  # bound covers that. The test is
   # TorusXY-only and this row has no fabric_profile, so the section exports what the impl's TorusXY step
   # would set. Weights, TTNN cache and goldens are KimiK31Adapter's defaults on /mnt/weka; a missing cache
   # skips, so the section fails unless its one test passed.
