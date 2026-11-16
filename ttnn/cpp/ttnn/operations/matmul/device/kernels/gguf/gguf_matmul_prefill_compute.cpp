@@ -22,6 +22,7 @@
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/experimental/dest_srca_mm.h"
 #include "api/compute/experimental/gguf_decode.h"
 #include "api/compute/matmul.h"
@@ -147,7 +148,11 @@ void kernel_main() {
     constexpr auto thr = GgufDecodeThread::Math;
     constexpr bool beside_unpack = false;
     // The pipelined decode (decode_block) where the plan chose it and the format's pages allow it.
-    constexpr bool pipe = GGUF_PF_PIPE && decode_block_fits<fmt>();
+    // Where the plan is bound by the cores, not the input stream (GGUF_PF_PIPE): the pipelined decode (decode_block),
+    // but for Q5_0 / Q5_1, whose decoders beside a copy cost about what the copy did (measured), and the K split's sums
+    // added by the FPU. Where the input bounds, the extra waits of either cost more than they save.
+    constexpr bool pipe = GGUF_PF_PIPE && decode_block_fits<fmt>() && fmt != gguf::Q5_0 && fmt != gguf::Q5_1;
+    constexpr bool fpu_sums = GGUF_PF_PIPE;
     constexpr uint32_t cb_page = tt::CBIndex::c_0, cb_in0 = tt::CBIndex::c_1, cb_w = tt::CBIndex::c_4;
     constexpr uint32_t cb_out = tt::CBIndex::c_16, cb_acc = tt::CBIndex::c_24;
     constexpr uint32_t cb_send = tt::CBIndex::c_17, cb_recv = tt::CBIndex::c_18;
@@ -281,7 +286,7 @@ void kernel_main() {
                         pack_reconfig_data_format(to);
                         srca_to(cb_acc);
                         cb_wait_front(cb_acc, ur * nc);
-                        if (krole == 2) {
+                        if (krole == 2 && fpu_sums) {
                             // Own sums + the partner's, added by the FPU (both in fp32 L1), up to four tiles at a time;
                             // fewer where a group would cross the end of c_16.
                             cb_wait_front(cb_recv, ur * nca);
@@ -305,6 +310,33 @@ void kernel_main() {
                                 cb_push_back(cb_out, n4);
                             }
                             reconfig_data_format_srcb(cb_recv, cb_in0);
+                            cb_pop_front(cb_recv, ur * nca);
+                        } else if (krole == 2) {
+                            // Own sums + the partner's, in fp32 on the SFPU, two tiles at a time; one where a pair
+                            // would cross the end of c_16 (a unit of an odd number of tiles shifts the pairs).
+                            cb_wait_front(cb_recv, ur * nca);
+                            for (uint32_t i = 0, n2 = 0; i < ur * nc; i += n2) {
+                                n2 = ur * nc - i < 2 || out_page + 1 == out_pages ? 1 : 2;
+                                out_page = out_page + n2 == out_pages ? 0 : out_page + n2;
+                                tile_regs_acquire();
+                                copy_init(cb_acc);
+                                for (uint32_t t = 0; t < n2; t++) {
+                                    copy_tile(cb_acc, i + t, t);
+                                    copy_tile(cb_recv, i + t, 2 + t);
+                                }
+                                add_binary_tile_init();
+                                for (uint32_t t = 0; t < n2; t++) {
+                                    add_binary_tile(t, 2 + t, t);
+                                }
+                                tile_regs_commit();
+                                cb_reserve_back(cb_out, n2);
+                                tile_regs_wait();
+                                for (uint32_t t = 0; t < n2; t++) {
+                                    pack_tile(t, cb_out);
+                                }
+                                tile_regs_release();
+                                cb_push_back(cb_out, n2);
+                            }
                             cb_pop_front(cb_recv, ur * nca);
                         } else {
                             copy_init(cb_acc);
