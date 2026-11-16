@@ -83,7 +83,9 @@ Common to every stage (protects the other machine's work):
 2. Full-model timing: `python perf/tools/decode_timing.py --output <json>` (batch 1 at 128 and 4K, batches 8/16/32; ~10 min).
    **No regression:** batch-1 step and batch-32 step each at most 3% slower than the previous `integration`'s proof,
    unless the stage's own target is that metric.
-3. Agreement: greedy 128 tokens vs the previous `integration`, top-1 agreement ≥ 99%.
+3. Agreement: greedy 128 tokens vs the previous `integration`, top-1 agreement ≥ 99%. If it lands between 98% and 99%
+   (near-tie flips from summation order), the stage passes only when teacher-forced top-1 parity against HF (CPU
+   reference, same prompts and tokens) is no worse than the previous `integration`'s, and `perf/WSN.md` reports both.
 4. Serving and GPQA (CI is unavailable; run locally): `perf/tools/serve_bench.sh qb2port <out> perf,gpqa`.
    GPQA-10 ≥ 8/10; serving 128/128 at 1 and 16 users completes with no failed requests.
 
