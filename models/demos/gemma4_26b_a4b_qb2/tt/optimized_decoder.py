@@ -234,7 +234,7 @@ class OptimizedExperts(PackedExperts):
         return ttnn.matmul(
             mix_weights,
             ttnn.permute(down, (0, 2, 1, 3)),
-            dtype=ttnn.bfloat16,
+            dtype=getattr(self, "decode_output_dtype", ttnn.bfloat16),
             memory_config=self.mix_memory,
             program_config=self.mix_program,
             compute_kernel_config=self.mix_compute,
