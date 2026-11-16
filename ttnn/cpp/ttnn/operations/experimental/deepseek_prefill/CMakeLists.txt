@@ -31,6 +31,16 @@ add_subdirectory(unified_routed_expert_ffn)
 add_subdirectory(update_padded_kv_cache)
 add_subdirectory(zero_padded_kv_cache)
 
+# Kernel headers shared by more than one op here. The device JIT is all that compiles them, so they need no
+# target; they are installed at their source path, where the ops' kernels include them from.
+install(
+    FILES
+        fabric2d_common/kernels/fabric2d_launch_credit.hpp
+    DESTINATION
+        ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/fabric2d_common/kernels
+    COMPONENT ttnn-runtime
+)
+
 # Domain-level umbrella target: ttnncpp links this one target instead of
 # enumerating this team's individual op libraries. Add/remove entries here
 # when adding/removing a module — never in ttnn/CMakeLists.txt.
