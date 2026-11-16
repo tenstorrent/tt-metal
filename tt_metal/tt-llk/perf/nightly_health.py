@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check the LLK perf nightlies of one day and build a Slack health message.
+"""Check the LLK nightlies of one day and build a Slack health message.
 
 One run of this covers the whole day. It is scheduled after every nightly is
 expected to be done, rather than driven by their completions: the nightlies
@@ -12,6 +12,7 @@ does not exist yet and report it missing.
 import argparse
 import datetime as dt
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -22,6 +23,13 @@ NIGHTLIES = (
     ("SoL", "llk-perf.yaml"),
     ("non-SoL", "llk-perf-gate.yaml"),
 )
+OTHER_NIGHTLIES = (
+    ("bit-exact", "llk-bit-exact.yaml"),
+    ("e2e", "llk-e2e.yaml"),
+    ("ttsim weekly", "llk-ttsim-weekly.yaml"),
+)
+HEALTH = "llk-perf-nightly-health.yaml"
+WORKFLOWS = ".github/workflows"
 VERDICT = re.compile(r"verdict=(\w+) regressions=(\d+)")
 BASELINE = re.compile(r"(?:^|Z )baseline \S+ \(([0-9a-f]+), (\d{4}-\d{2}-\d{2})", re.M)
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -84,6 +92,47 @@ def scheduled_run(repo, workflow, day):
         )
     )
     return runs[0] if runs else None
+
+
+def crons(path):
+    with open(path) as fh:
+        doc = yaml.safe_load(fh) or {}
+    # A bare ``on:`` key parses as the boolean True, not as the string.
+    triggers = doc.get("on", doc.get(True)) or {}
+    return [str(c["cron"]) for c in triggers.get("schedule") or []]
+
+
+def due(cron_lines, day):
+    """True when one of the crons fires on ``day`` (only the weekday field is read)."""
+    weekday = str(day.isoweekday() % 7)
+    for line in cron_lines:
+        dow = line.split()[4]
+        if dow == "*" or weekday in re.split(r"[,-]", dow):
+            return True
+    return False
+
+
+def disabled_workflows(repo, workflows_dir):
+    """LLK workflows on this branch that GitHub will not run."""
+    ours = {
+        f"{WORKFLOWS}/{p.name}"
+        for p in pathlib.Path(workflows_dir).iterdir()
+        if p.name.startswith("llk-") or "quasar" in p.name
+    }
+    states = _json_lines(
+        _gh(
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/workflows?per_page=100",
+            "--jq",
+            ".workflows[] | {path, state} | @json",
+        )
+    )
+    return sorted(
+        w["path"].rsplit("/", 1)[1]
+        for w in states
+        if w["path"] in ours and w["state"] != "active"
+    )
 
 
 def run_jobs(repo, run_id):
@@ -202,6 +251,40 @@ def assess(name, run, jobs, logs, limits, day):
     return report
 
 
+def assess_plain(name, run, jobs):
+    report = {"name": name, "run": run, "legs": [], "upload": None, "gates": {}}
+    if run is None:
+        report["problems"] = [f"{name}: no scheduled run"]
+        return report
+    problems = [
+        f"{name}: {j['name']} {j['conclusion'] or 'not finished'}"
+        for j in jobs
+        if j["conclusion"] not in ("success", "skipped")
+        and not any(rollup in j["name"] for rollup in ROLLUP_JOBS)
+    ]
+    if run["status"] != "completed":
+        problems.append(f"{name}: run still {run['status']}")
+    elif run["conclusion"] != "success" and not problems:
+        problems.append(f"{name}: run {run['conclusion']}")
+    report["problems"] = problems
+    report["plain"] = True
+    return report
+
+
+def read_extras(paths):
+    """Reports of the other nightly checks: ``{"name", "problems", "lines"}`` each."""
+    out = []
+    for path in paths:
+        try:
+            with open(path) as fh:
+                out.append(json.load(fh))
+        except (OSError, ValueError) as e:
+            out.append(
+                {"name": path, "problems": [f"{path}: no report ({e})"], "lines": []}
+            )
+    return out
+
+
 def _legs_line(legs):
     parts = []
     for arch, short in (("blackhole", "BH"), ("wormhole", "WH")):
@@ -216,11 +299,11 @@ def _legs_line(legs):
     return " | ".join(parts) or "none"
 
 
-def build_text(day, reports):
-    problems = [p for r in reports for p in r["problems"]]
+def build_text(day, reports, extras=()):
+    problems = [p for r in [*reports, *extras] for p in r["problems"]]
     head = ":white_check_mark:" if not problems else ":red_circle:"
     lines = [
-        f"{head} *LLK perf nightly health, {day}*"
+        f"{head} *LLK nightly health, {day}*"
         + (f": {len(problems)} problem(s)" if problems else ": healthy")
     ]
     lines += [f"• {p}" for p in problems]
@@ -233,6 +316,8 @@ def build_text(day, reports):
         lines.append(
             f"*{r['name']}* <{run['html_url']}|run> · `{run['head_sha'][:SHORT_SHA]}` · {run['conclusion'] or run['status']}"
         )
+        if r.get("plain"):
+            continue
         lines.append(f"legs, % of limit used: {_legs_line(r['legs'])}")
         lines.append(f"upload: {r['upload'] or 'not run'}")
         for arch, g in sorted(r["gates"].items()):
@@ -245,7 +330,39 @@ def build_text(day, reports):
             lines.append(
                 f"gate {arch}: {g['verdict']}{count} · baseline `{g['baseline'] or '?'}`, {age}"
             )
+    for e in extras:
+        if e["lines"]:
+            lines += ["", f"*{e['name']}*", *e["lines"]]
     return "\n".join(lines)
+
+
+def watchdog(repo, day, workflows_dir, dm, out):
+    """Tell the owner when the health check itself did not report today."""
+    problems = [
+        f"{w} is disabled"
+        for w in disabled_workflows(repo, workflows_dir)
+        if w == HEALTH
+    ]
+    run = scheduled_run(repo, HEALTH, day)
+    if run is None:
+        problems.append("no health check ran today")
+    elif run["conclusion"] != "success":
+        problems.append(
+            f"the health check ended {run['conclusion'] or run['status']}: {run['html_url']}"
+        )
+    if problems:
+        with open(out, "w") as fh:
+            json.dump(
+                [
+                    {
+                        "channel": dm,
+                        "text": f":rotating_light: *LLK nightly watchdog, {day}*\n"
+                        + "\n".join(f"• {p}" for p in problems),
+                    }
+                ],
+                fh,
+            )
+    return problems
 
 
 def main(argv=None):
@@ -258,17 +375,46 @@ def main(argv=None):
         "--date", default=dt.datetime.now(dt.timezone.utc).date().isoformat()
     )
     ap.add_argument("--out", default="health_payloads.json")
+    ap.add_argument("--workflows", default=WORKFLOWS)
+    ap.add_argument("--extra", nargs="*", default=[], help="reports of other checks")
+    ap.add_argument(
+        "--watchdog", action="store_true", help="check only the health check"
+    )
     a = ap.parse_args(argv)
     day = dt.date.fromisoformat(a.date)
-    runs = [scheduled_run(a.repo, workflow, a.date) for _, workflow in NIGHTLIES]
+    if a.watchdog:
+        for p in watchdog(a.repo, a.date, a.workflows, a.dm, a.out):
+            print(p)
+        return 0
     limits = leg_limits(a.tests_yaml)
     reports = []
-    for (name, _), run in zip(NIGHTLIES, runs):
+    for name, workflow in NIGHTLIES:
+        run = scheduled_run(a.repo, workflow, a.date)
         jobs = run_jobs(a.repo, run["id"]) if run else []
         logs = {j["id"]: job_log(a.repo, j["id"]) for j in jobs if _is_gate(j)}
         reports.append(assess(name, run, jobs, logs, limits, day))
-    text = build_text(a.date, reports)
-    problems = any(r["problems"] for r in reports)
+    for name, workflow in OTHER_NIGHTLIES:
+        if not due(crons(f"{a.workflows}/{workflow}"), day):
+            continue
+        run = scheduled_run(a.repo, workflow, a.date)
+        reports.append(
+            assess_plain(name, run, run_jobs(a.repo, run["id"]) if run else [])
+        )
+    disabled = disabled_workflows(a.repo, a.workflows)
+    extras = read_extras(a.extra)
+    if disabled:
+        extras.insert(
+            0,
+            {
+                "name": "Disabled workflows",
+                "problems": [
+                    f"{len(disabled)} LLK workflow(s) disabled: {', '.join(disabled)}"
+                ],
+                "lines": [],
+            },
+        )
+    text = build_text(a.date, reports, extras)
+    problems = any(r["problems"] for r in [*reports, *extras])
     with open(a.out, "w") as fh:
         json.dump(payloads(text, problems, a.dm, a.channel, owners(a.tests_yaml)), fh)
     print(text)

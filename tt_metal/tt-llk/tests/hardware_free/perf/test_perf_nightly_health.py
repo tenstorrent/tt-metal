@@ -13,12 +13,16 @@ import pytest
 import yaml
 from nightly_health import (
     NIGHTLIES,
+    OTHER_NIGHTLIES,
     assess,
+    assess_plain,
     build_text,
+    due,
     gate_result,
     leg_limits,
     owners,
     payloads,
+    read_extras,
 )
 
 _WORKFLOWS = pathlib.Path(__file__).parents[5] / ".github" / "workflows"
@@ -166,7 +170,9 @@ def test_the_health_check_starts_after_every_nightly_is_due():
     """A check that runs before a nightly starts reports that nightly missing."""
     health = _crons(_HEALTH)
     assert health, "the health check needs its own schedule"
-    nightlies = [c for _, workflow in NIGHTLIES for c in _crons(workflow)]
+    nightlies = [
+        c for _, workflow in NIGHTLIES + OTHER_NIGHTLIES for c in _crons(workflow)
+    ]
     assert nightlies, "a nightly without a schedule cannot be checked for"
     assert min(health) > max(nightlies)
 
@@ -180,6 +186,51 @@ def test_the_health_check_is_not_driven_by_the_nightlies_finishing():
     doc = yaml.safe_load((_WORKFLOWS / _HEALTH).read_text()) or {}
     triggers = doc.get("on", doc.get(True)) or {}
     assert "workflow_run" not in triggers
+
+
+@pytest.mark.skipif(
+    not (_WORKFLOWS / _HEALTH).exists(),
+    reason="the workflow files are not in this checkout",
+)
+def test_the_watchdog_runs_after_the_health_check():
+    assert min(_crons("llk-nightly-watchdog.yaml")) > max(_crons(_HEALTH))
+
+
+def test_a_weekly_nightly_is_due_only_on_its_day():
+    friday, saturday = dt.date(2026, 11, 13), dt.date(2026, 11, 14)
+    assert due(["0 2 * * 5"], friday) and not due(["0 2 * * 5"], saturday)
+    assert due(["0 3 * * *"], saturday)
+    assert due(["0 3 * * 1-5"], friday) and not due(["0 3 * * 1,3"], friday)
+
+
+def test_a_plain_nightly_reports_failed_jobs_and_a_missing_run():
+    jobs = [
+        _job(1, "bit-exact / blackhole", "failure"),
+        _job(2, "bit-exact / wormhole"),
+        _job(3, "summary", "failure"),
+    ]
+    run = {**RUN, "conclusion": "failure"}
+    assert assess_plain("bit-exact", run, jobs)["problems"] == [
+        "bit-exact: bit-exact / blackhole failure"
+    ]
+    assert assess_plain("bit-exact", None, [])["problems"] == [
+        "bit-exact: no scheduled run"
+    ]
+    report = assess_plain("e2e", {**RUN, "conclusion": "cancelled"}, [])
+    assert report["problems"] == ["e2e: run cancelled"]
+    assert "legs" not in build_text(DAY.isoformat(), [report]).split("*e2e*")[1]
+
+
+def test_reports_of_other_checks_join_the_message(tmp_path):
+    good = tmp_path / "a.json"
+    good.write_text(
+        '{"name": "Drift", "problems": ["WH matmul +4 %"], "lines": ["7 modules"]}'
+    )
+    extras = read_extras([str(good), str(tmp_path / "missing.json")])
+    assert extras[0]["problems"] == ["WH matmul +4 %"]
+    assert "no report" in extras[1]["problems"][0]
+    text = build_text(DAY.isoformat(), [], extras)
+    assert ": 2 problem(s)" in text and "*Drift*\n7 modules" in text
 
 
 def test_gate_result_reads_the_lines_the_gate_really_prints(
