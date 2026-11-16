@@ -109,6 +109,16 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="galaxy-T10240",
         ),
+        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            0,
+            kda_device_params((4, 4)),
+            PREFILL_CHUNK_TOKENS,
+            None,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-x-4x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -221,7 +231,9 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             ttnn.deallocate(tensor)
 
 
-_REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.026, recurrent=0.021, convolution=0.0095)
+# Galaxy SP8xTP4, worst over the four lengths: output 2.041e-2, recurrent 1.579e-2 at HiFi3 (Kimi-K3's scan, affine
+# prefix and output projection); HiFi2 measures 2.271e-2 and 1.800e-2. The bars sit ~8% above HiFi3 and below HiFi2.
+_REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.022, recurrent=0.017, convolution=0.0095)
 
 
 @pytest.mark.parametrize(
@@ -237,6 +249,14 @@ _REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.026, recurrent=0.021, convol
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
+        ),
+        pytest.param(
+            (4, 4),
+            0,
+            kda_device_params((4, 4)),
+            512,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-x-4x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

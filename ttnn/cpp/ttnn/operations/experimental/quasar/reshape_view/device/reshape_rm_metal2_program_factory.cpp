@@ -52,10 +52,10 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
     const uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
     const uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool src_is_dram = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
 
     // Pages-per-core such that each core starts on a read AND write page boundary (logical volumes match,
     // so the last page is always aligned).

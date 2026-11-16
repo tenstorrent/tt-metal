@@ -281,8 +281,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         output.buffer()->buffer_type());
 
     // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
-    const uint32_t src_stride_bytes = input.buffer()->aligned_page_size();
-    const uint32_t dst_stride_bytes = output.buffer()->aligned_page_size();
+    const uint32_t src_stride_bytes = input.mesh_buffer().aligned_page_size();
+    const uint32_t dst_stride_bytes = output.mesh_buffer().aligned_page_size();
     const uint32_t begins_bytes = args.slice_start[-1] * input.element_size();
     TT_FATAL(
         begins_bytes % ::hal::get_l1_alignment() == 0,

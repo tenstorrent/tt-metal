@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
@@ -66,7 +67,8 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     uint32_t num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
-    const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
+    const auto& distribution_spec =
+        a.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
 
     uint32_t total_shards = distribution_spec.num_shards();
     uint32_t num_cores = grid.num_cores();

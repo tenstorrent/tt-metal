@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -55,12 +56,14 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
 
-    8x4 takes K3's TorusXY, a ring of chips the torus over its one axis (TorusY for Nx1, TorusX for 1xN), and 2x2,
-    2x4 and 4x2 an unwrapped Fabric2D.
+    8x4 takes K3's TorusXY, a 4x4 prefill stage (a Galaxy tray half) its TorusX, a ring of chips the torus over its
+    one axis (TorusY for Nx1, TorusX for 1xN), and 2x2, 2x4 and 4x2 an unwrapped Fabric2D.
     """
     rows, columns = mesh_shape
     if (rows, columns) == (8, 4):
         profile = torus_xy_device_params
+    elif (rows, columns) == (4, 4):
+        profile = torus_x_device_params
     elif columns == 1 and rows > 1:
         profile = torus_y_device_params
     elif rows == 1 and columns > 1:
@@ -137,9 +140,12 @@ def median_device_us(mesh_device: ttnn.MeshDevice, call: Callable, kernel: str, 
 
 def assert_device_time(median_us: float, reference_us: float, margin: float, label: str) -> None:
     lower, upper = reference_us * (1 - margin), reference_us * (1 + margin)
-    assert lower <= median_us <= upper, (
-        f"{label}: {median_us:.1f} us outside [{lower:.1f}, {upper:.1f}] "
-        f"(reference {reference_us} us, margin +/- {margin * 100:.0f}%)"
+    assert_perf_gate(
+        lower <= median_us <= upper,
+        (
+            f"{label}: {median_us:.1f} us outside [{lower:.1f}, {upper:.1f}] "
+            f"(reference {reference_us} us, margin +/- {margin * 100:.0f}%)"
+        ),
     )
 
 
@@ -526,14 +532,21 @@ def make_kimi_k3_device_case(
     program_config: KDAProgramConfig | None = None,
     weights: KDAWeights | None = None,
     cache_weights: bool = True,
+    shard_hidden_over_tp: bool = False,
 ) -> tuple[ttKDA, ttnn.Tensor]:
-    """Construct a production-dimension Kimi-K3 layer and sequence-parallel input."""
+    """Construct a production-dimension Kimi-K3 layer and sequence-parallel input.
+
+    ``shard_hidden_over_tp`` also splits the input's hidden dim over TP, the model's residual layout, so the layer
+    all-gathers it as in production; otherwise every TP rank holds the full hidden.
+    """
     sequence_parallel_axis = 1 - tensor_parallel_axis
     tensor_cache_path = (
         kimi_k3_tensor_cache_path(case.weights_identity, mesh_device, tensor_parallel_axis) if cache_weights else None
     )
     mesh_dims: list[int | None] = [None, None]
     mesh_dims[sequence_parallel_axis] = 1
+    if shard_hidden_over_tp:
+        mesh_dims[tensor_parallel_axis] = 2
     hidden = ttnn.from_torch(
         case.hidden,
         dtype=ttnn.bfloat16,

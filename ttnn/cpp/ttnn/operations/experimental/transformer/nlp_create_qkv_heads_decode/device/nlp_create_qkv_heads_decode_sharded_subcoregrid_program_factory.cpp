@@ -115,11 +115,7 @@ NLPCreateQKVHeadsDecodeShardedSubcoregridProgramFactory::create_program_artifact
         .borrowed_from = K_OUT_TENSOR,
     });
 
-    // NOTE (preserved legacy behavior): the V buffer size is computed from Q's shard spec
-    // (output[0]), while the backing memory is the V output tensor (output[2]). This is masked
-    // today because num_q_heads and num_kv_heads both pad to 32, making the Q and V shard shapes
-    // equal.
-    const auto v_shard_spec = output[0].shard_spec().value();
+    const auto v_shard_spec = output[2].shard_spec().value();
     const auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
 
     dataflow_buffers.push_back(DataflowBufferSpec{

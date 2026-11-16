@@ -238,7 +238,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
 
     uint32_t dfb_npages = 16;  // multibuffering for perf
     // uint32_t dfb_npages = 1; // multibuffering for perf
-    uint32_t dfb_page_alignment = std::max(tt::constants::TILE_WIDTH, a.buffer()->alignment());
+    uint32_t dfb_page_alignment = std::max(tt::constants::TILE_WIDTH, a.mesh_buffer().alignment());
     uint32_t dfb_pagesize =
         static_cast<uint32_t>(std::ceil((float)dst_nbytes_per_core_w / dfb_page_alignment)) * dfb_page_alignment;
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());

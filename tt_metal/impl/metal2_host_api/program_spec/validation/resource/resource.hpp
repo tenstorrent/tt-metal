@@ -11,13 +11,14 @@
 #include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
+#include "impl/metal2_host_api/sram_arena_support.hpp"
 
 namespace tt::tt_metal::experimental {
 
 // ----------------------------------------------------------------------------
 // Resource validation: declarations, bindings, and cross-kernel usage of every
 // resource a ProgramSpec declares (DFBs, prefetcher pipes, scratchpads,
-// semaphores, tensor parameters).
+// semaphores, tensor parameters, SRAM arena parameters).
 // ----------------------------------------------------------------------------
 //
 // Callers outside this folder use only the three phase drivers below
@@ -64,8 +65,20 @@ PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx);
 void ValidatePrefetcherPipeLanesAndRelays(
     const ValidationContext& ctx, const PrefetcherPipeRoles& roles, tt::ARCH arch);
 
+// sram_arena.cpp
+void ValidateSRAMArenaParameter(const SRAMArenaParameter& parameter);
+void ValidateSRAMArenaParametersUsed(const ValidationContext& ctx);
+void ValidateSRAMArenaAllocation(
+    const SRAMArenaSource& source,
+    const CollectedSpecData& collected,
+    std::string_view resource,
+    const NodeRangeSet& occupied_nodes,
+    uint64_t size_per_node,
+    uint32_t l1_alignment);
+
 // scratchpad.cpp
-void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch);
+void ValidateScratchpadSpec(
+    const ScratchpadSpec& scratchpad, const CollectedSpecData& collected, uint32_t l1_alignment, tt::ARCH arch);
 void ValidateScratchpadBindings(const KernelSpec& kernel);
 void ValidateScratchpadsUsed(const ValidationContext& ctx);
 

@@ -66,7 +66,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
-    Buffer* dst_buffer = output_tensor.buffer();
+    const auto* dst_buffer = &output_tensor.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // check if we need to allocate a scratch buffer

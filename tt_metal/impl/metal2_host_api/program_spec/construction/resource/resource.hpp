@@ -206,7 +206,7 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
 //  - the scratchpad section sits immediately after the TensorBinding section and before varargs, so
 //    each binding's absolute CRTA word index (and thus addr_crta_word) is fixed at codegen time
 //    (varargs are open-ended / runtime-counted, so a section placed after them would not be).
-// The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
+// The address stays 0 until local allocation or SRAMArena argument binding.
 struct ScratchpadBindingsForKernel {
     std::vector<ScratchpadBindingHandle> handles;
     uint32_t section_words = 0;  // == number of scratchpad bindings
@@ -221,6 +221,14 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 // Drivers (resource.cpp)
 // ----------------------------------------------------------------------------
 
+// Watcher: the nodes each DFB's and semaphore's address is reserved on, as rectangles in NoC coordinates, so kernels
+// can check multicasts into them. A borrowed-memory DFB gets its backing tensor's nodes. Filled only with Watcher NoC
+// sanitizing, so kernels are unchanged without it.
+struct WatcherNodeRanges {
+    std::unordered_map<DFBSpecName, std::vector<NodeRange>> dfbs;
+    std::unordered_map<SemaphoreSpecName, std::vector<NodeRange>> semaphores;
+};
+
 // Everything kernel lowering reads that resource registration creates.
 // Used by kernel lowering.
 struct ProgramResources {
@@ -228,6 +236,7 @@ struct ProgramResources {
     DataflowBufferHandles dfbs;
     PrefetcherPipeHandlesByKernel prefetcher_pipes;
     SemaphoreHandles semaphores;
+    WatcherNodeRanges watcher_node_ranges;
 };
 
 // Register every resource with the Program (resource.cpp fixes the order).

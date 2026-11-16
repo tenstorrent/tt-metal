@@ -381,7 +381,8 @@ public:
             shard_shape[1]);
 
         const auto [D, N, C, Ht, Wt] = get_shape_dims(tensor);
-        const auto unrolled_Ht = D * N * C * Ht;
+        const auto& padded_shape = tensor.padded_shape();
+        const uint32_t unrolled_Ht = padded_shape.volume() / (padded_shape[-2] * padded_shape[-1]) * Ht;
         last_shard_shape = {
             shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
@@ -1171,7 +1172,8 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
 
     // Each TensorParameter accepts a tensor whose logical shape and rank differ from the ones the
     // program was built for.  The program cache needs this.  compute_program_hash hashes only the
-    // logical height and width of each input, besides its dtype, memory config, alignment and tile.
+    // logical width of each input and whether its logical height is a single row, besides its dtype, memory
+    // config, alignment and tile.
     // One cached program therefore serves inputs that differ in their outer dims or in their rank,
     // for example [4,1,32,32] and [1,4,32,32], or [1,32,64] and [1,1,32,64].  The kernels tolerate
     // it.  They read every tensor tile by tile through its accessor, and every shape-dependent kernel

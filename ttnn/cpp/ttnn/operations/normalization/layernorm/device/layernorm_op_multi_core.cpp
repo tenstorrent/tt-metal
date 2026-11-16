@@ -576,7 +576,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (uses_reciprocal_lut) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
-        reciprocal_buffer_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        reciprocal_buffer_size_bytes = recip_tensor->mesh_buffer().aligned_size_per_bank();
     }
 
     const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;

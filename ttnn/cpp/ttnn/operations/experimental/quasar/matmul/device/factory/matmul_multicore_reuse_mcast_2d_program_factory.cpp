@@ -364,7 +364,7 @@ namespace reuse_mcast_optimized_helpers {
     uint32_t in1_mcast_sender_semaphore_id = 2;
     uint32_t in1_mcast_receiver_semaphore_id = 3;
 
-    bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -1874,7 +1874,7 @@ create_program_mcast_in0_in1(
     auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-    bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -3583,7 +3583,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;

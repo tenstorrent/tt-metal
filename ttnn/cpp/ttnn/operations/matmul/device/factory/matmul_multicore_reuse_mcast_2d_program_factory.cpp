@@ -571,7 +571,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
+    bool in1_is_dram = in1_tensor.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;

@@ -273,7 +273,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // op hyperparams
     uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
-    uint64_t input_data_size_bytes = input_tensor.buffer()->size();
+    uint64_t input_data_size_bytes = input_tensor.mesh_buffer().device_local_size();
     uint32_t num_workers_per_direction =
         num_workers_per_direction_opt.value_or(ttnn::experimental::ccl::reduce_scatter_default_workers(
             *mesh_device,
@@ -292,7 +292,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
     // Get OP Config, topology config
-    uint32_t page_size = static_cast<uint32_t>(input_tensor.buffer()->page_size());
+    uint32_t page_size = static_cast<uint32_t>(input_tensor.mesh_buffer().page_size());
     auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
         sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
@@ -601,7 +601,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 num_rs_readers,
                 credit_row_bytes);
             mm_fused_op_signaler->rs_credit_counters_buffer = credits.buffer();
-            rs_credit_counters_addr = static_cast<uint32_t>(credits.buffer()->address());
+            rs_credit_counters_addr = static_cast<uint32_t>(credits.mesh_buffer().address());
         } else {
             const auto credit_shard_spec = tt::tt_metal::ShardSpecBuffer(
                 mm_core_range_set,
@@ -1013,19 +1013,19 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
 
     auto& reader_args = GetCommonRuntimeArgs(program, artifacts.reader_kernel_id);
     reader_args[ReaderCrta::slice_Ht] = slice_Ht;
-    reader_args[ReaderCrta::input] = input.buffer()->address();
-    reader_args[ReaderCrta::intermediate] = intermed.buffer()->address();
+    reader_args[ReaderCrta::input] = input.mesh_buffer().address();
+    reader_args[ReaderCrta::intermediate] = intermed.mesh_buffer().address();
     reader_args[ReaderCrta::semaphore_0] = semaphore.at(0).address();
     reader_args[ReaderCrta::semaphore_1] = semaphore.at(1).address();
     if (addcmul_a.has_value() && addcmul_b.has_value()) {
-        reader_args[ReaderCrta::addcmul_a] = addcmul_a->buffer()->address();
-        reader_args[ReaderCrta::addcmul_b] = addcmul_b->buffer()->address();
+        reader_args[ReaderCrta::addcmul_a] = addcmul_a->mesh_buffer().address();
+        reader_args[ReaderCrta::addcmul_b] = addcmul_b->mesh_buffer().address();
     }
 
     auto& writer_args = GetCommonRuntimeArgs(program, artifacts.writer_kernel_id);
     writer_args[WriterCrta::slice_Ht] = slice_Ht;
-    writer_args[WriterCrta::intermediate] = intermed.buffer()->address();
-    writer_args[WriterCrta::output] = output.buffer()->address();
+    writer_args[WriterCrta::intermediate] = intermed.mesh_buffer().address();
+    writer_args[WriterCrta::output] = output.mesh_buffer().address();
     writer_args[WriterCrta::semaphore_0] = semaphore.at(0).address();
     writer_args[WriterCrta::semaphore_1] = semaphore.at(1).address();
     writer_args[WriterCrta::batch_ready] = semaphore.at(2).address();

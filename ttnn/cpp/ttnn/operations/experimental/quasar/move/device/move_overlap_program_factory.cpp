@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
@@ -96,7 +97,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const bool tilized = input.layout() == Layout::TILE;
-    const uint32_t page_size = input.buffer()->page_size();
+    const uint32_t page_size = input.mesh_buffer().page_size();
 
     const uint32_t num_pages =
         tilized ? (output.physical_volume() / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
@@ -108,7 +109,10 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     const uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, tt::tt_metal::hal::get_l1_alignment());
+        output.mesh_buffer().device_local_size(),
+        output.mesh_buffer().page_size(),
+        num_l1_banks,
+        tt::tt_metal::hal::get_l1_alignment());
 
     // Scratch CB is a temp L1 buffer to copy src data into before writing to dst.
     // Round like size_per_l1_bank, or a 16-mod-32 page size leaves no whole entry.
