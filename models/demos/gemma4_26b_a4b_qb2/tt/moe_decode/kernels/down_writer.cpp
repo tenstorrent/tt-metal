@@ -7,15 +7,20 @@
 // cb_sync page.
 // compile-time args: [cb_out, cb_w, cb_sync, cb_route, kts, k, cols, w_tile_bytes, route_page_bytes, banks]
 //                    + TensorAccessorArgs(out, route)
-// runtime args: [out_addr, col, w_addr, route_addr]
+// runtime args: [out_addr, col, w_addr, route_addr, bank, local column in the bank, cpb]
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ckernel.h"
+#include "ckernel_defs.h"
 
 void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t col = get_arg_val<uint32_t>(1);
     const uint32_t w_addr = get_arg_val<uint32_t>(2);
     const uint32_t route_addr = get_arg_val<uint32_t>(3);
+    const uint32_t bank = get_arg_val<uint32_t>(4);
+    const uint32_t local = get_arg_val<uint32_t>(5);
+    const uint32_t cpb = get_arg_val<uint32_t>(6);
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
     constexpr uint32_t cb_sync = get_compile_time_arg_val(2);
@@ -36,8 +41,6 @@ void kernel_main() {
     noc_async_read(s_r.get_noc_addr(0), scratch, route_page_bytes);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint16_t* row = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch);
-    constexpr uint32_t cpb = cols / banks;
-    const uint32_t bank = col / cpb;
     const uint32_t chunk_bytes = kts * w_tile_bytes;
     uint32_t l1 = get_write_ptr(cb_w) + (k / 2) * chunk_bytes;  // the reader's reservation: the CB base
     for (uint32_t s = k / 2; s < k; ++s) {
@@ -46,10 +49,8 @@ void kernel_main() {
             float f;
         } id_bits;
         id_bits.u = static_cast<uint32_t>(row[k + s]) << 16;
-        const uint32_t offset = (static_cast<uint32_t>(id_bits.f) * cpb + col % cpb) * chunk_bytes;
-#ifndef SKIP_WEIGHTS
+        const uint32_t offset = (static_cast<uint32_t>(id_bits.f) * cpb + local) * chunk_bytes;
         noc_async_read(get_noc_addr_from_bank_id<true>(bank, w_addr + offset), l1, chunk_bytes);
-#endif
         l1 += chunk_bytes;
     }
     noc_async_read_barrier();
