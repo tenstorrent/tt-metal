@@ -7,9 +7,12 @@ tell apart by the registry's own rules: a figure that goes up, a cell that stops
 gated, or a tolerance cell whose recorded measurement or declared bound loosens is a
 regression. ``headroom`` judges the ``--ulp-measure`` records against the table: the
 tolerance cells the sweep cannot fail, and the cells that now measure better than their
-row. Run from ``python_tests`` as ``python -m helpers.ulp_budget_diff <command>``."""
+row. ``acknowledgements`` tells whether two revisions of test_sfpu_accuracy_budget.py
+differ only in the lists a budget raise may edit. Run from ``python_tests`` as
+``python -m helpers.ulp_budget_diff <command>``."""
 
 import argparse
+import ast
 import itertools
 import sys
 from dataclasses import dataclass, field, fields
@@ -243,24 +246,23 @@ def _widened(was: Row | None, now: Row | None) -> bool:
     )
 
 
-def _bound_replaces_default(was: Held, now: Held, enrolled: bool) -> bool:
+def _bound_replaces_default(was: Held, now: Held) -> bool:
     """Whether the declared bounds a variant off a whole-cell gate is compared on may
-    have loosened. A variant nothing held before starts from its new row, unless its op
-    is *enrolled* in the base table: its functional driver then held it to the
-    per-format default, which a declared bound replaces and this tool cannot see."""
-    if was.gated or now.gated or (was.row is None and not enrolled):
+    have loosened. A variant no row held before counts too, its op new to the table or
+    not: its functional driver held it to the per-format default, which a declared bound
+    replaces and this tool cannot see."""
+    if was.gated or now.gated:
         return False
     return _widened(was.declared, now.declared)
 
 
-def _classify(was: Held, now: Held, enrolled: bool) -> Kind | None:
-    """How the gate a plain-row variant resolves to has changed, or ``None``.
-    *enrolled*: the base table has rows for the op."""
+def _classify(was: Held, now: Held) -> Kind | None:
+    """How the gate a plain-row variant resolves to has changed, or ``None``."""
     if was.gated and not now.gated:
         return Kind.REMOVED if now.row is None else Kind.UNGATED
     if not was.gated and now.gated:
         return Kind.GATED
-    if _bound_replaces_default(was, now, enrolled):
+    if _bound_replaces_default(was, now):
         return Kind.TOLERANCE_WIDENED
     if was.row is None:
         # Nothing held the variant before, so a new row holds it to more, never less:
@@ -369,7 +371,7 @@ class Change:
 
 
 def _segment_changes(
-    was: Held, now: Held, query: BudgetKey, arch: ChipArchitecture, enrolled: bool
+    was: Held, now: Held, query: BudgetKey, arch: ChipArchitecture
 ) -> list[tuple[Kind, tuple[float, float], str, str]]:
     """``(kind, segment, held_before, held_after)`` per run of the input over which the
     two rows' gates differ, over the union of both lists' edges, then the cell-wide
@@ -410,7 +412,7 @@ def _segment_changes(
         else:
             found.append([held, low, high])
     changes = [(kind, (low, high), t0, t1) for (kind, t0, t1), low, high in found]
-    if _bound_replaces_default(was, now, enrolled):
+    if _bound_replaces_default(was, now):
         # Off a whole-cell gate the functional drivers compare on the declared bounds.
         changes.append((Kind.TOLERANCE_WIDENED, None, was.describe(), now.describe()))
     if now.nonfinite > was.nonfinite:
@@ -428,7 +430,6 @@ def compare(
     arch = arch or measured_arch()
     grouped: dict[tuple, Change] = {}
     for op in sorted(set(base) | set(head), key=lambda o: o.name):
-        enrolled = bool(base.get(op))
         for query, full in _variants(base, head, op, arch):
             was = _held(base, op, query, full, arch)
             now = _held(head, op, query, full, arch)
@@ -438,9 +439,9 @@ def compare(
             if (was.row is not None and was.row.domains) or (
                 now.row is not None and now.row.domains
             ):
-                found = _segment_changes(was, now, query, arch, enrolled)
+                found = _segment_changes(was, now, query, arch)
             else:
-                kind = _classify(was, now, enrolled)
+                kind = _classify(was, now)
                 found = (
                     []
                     if kind is None
@@ -525,6 +526,34 @@ def render_budget_diff(changes: list[Change]) -> str:
         ),
     ]
     return "\n".join(out) + "\n"
+
+
+# ── What a budget raise may edit beside the tables ────────────────────────────
+
+
+def _acknowledges(node: ast.stmt) -> bool:
+    """Whether *node* assigns one of test_sfpu_accuracy_budget.py's acknowledgement
+    lists: ``ONLY_EVER_TOLERANCE`` or an ``_UNMEASURABLE_CELLS_ACKNOWLEDGED*``."""
+    if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+        return False
+    target = node.targets[0]
+    return isinstance(target, ast.Name) and (
+        target.id == "ONLY_EVER_TOLERANCE"
+        or target.id.startswith("_UNMEASURABLE_CELLS_ACKNOWLEDGED")
+    )
+
+
+def only_acknowledgements_differ(base: str, head: str) -> bool:
+    """Whether two revisions of test_sfpu_accuracy_budget.py's source hold the same
+    statements, in order, once the acknowledgement lists are left out: an import, a
+    test or any other definition that changed is not an acknowledgement."""
+
+    def rest(source: str) -> list[str]:
+        return [
+            ast.dump(node) for node in ast.parse(source).body if not _acknowledges(node)
+        ]
+
+    return rest(base) == rest(head)
 
 
 # ── What the hardware measured against what the table declares ────────────────
@@ -771,6 +800,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     headroom.add_argument("--table", type=Path, help="default: CHIP_ARCH's table")
     headroom.add_argument("--measured", type=Path, required=True)
+    acknowledgements = sub.add_parser(
+        "acknowledgements",
+        help="exit 1 if test_sfpu_accuracy_budget.py changed outside the lists a "
+        "budget raise may edit",
+    )
+    acknowledgements.add_argument("--base", type=Path, required=True)
+    acknowledgements.add_argument("--head", type=Path, required=True)
     for command in (diff, headroom):
         command.add_argument("--out", type=Path, help="also write the report here")
         command.add_argument(
@@ -780,6 +816,16 @@ def main(argv: list[str] | None = None) -> int:
             "file name, e.g. sfpu_accuracy_budget_bh.yaml)",
         )
     args = parser.parse_args(argv)
+    if args.command == "acknowledgements":
+        try:
+            same = only_acknowledgements_differ(
+                args.base.read_text(encoding="utf-8"),
+                args.head.read_text(encoding="utf-8"),
+            )
+        except (ValueError, OSError, SyntaxError) as refused:
+            print(f"cannot load: {refused}")
+            return 2
+        return 0 if same else 1
     try:
         if args.command == "diff":
             arch = _tables_arch(args.arch, args.head, args.base)

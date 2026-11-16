@@ -1,9 +1,10 @@
 name: "LLK SFPU ULP sweep"
 
-# Nightly (called from llk-e2e.yaml); dispatch it to sweep a branch. Every SFPU ULP sweep cell on
-# a Wormhole and a Blackhole card, each held to its own table
-# (tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml). PR Gate runs only the cells a change
-# can move (llk-sfpu-ulp-pr-check.yaml); this also covers changes to the golden or harness alone.
+# Nightly (called from llk-e2e.yaml); dispatch it to sweep a branch. Every SFPU ULP sweep cell
+# (the unary ops with a block in the table) on a Wormhole and a Blackhole card, each held to
+# its own table (tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml). PR Gate runs only the
+# cells a change can move (llk-sfpu-ulp-pr-check.yaml); this also covers changes to the
+# golden or harness alone.
 
 on:
   workflow_call:
@@ -11,12 +12,14 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build-images:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
+    permissions:
+      contents: read
+      packages: write
 
   load-test-matrix:
     runs-on: ubuntu-slim
@@ -30,11 +33,23 @@ jobs:
             tests/pipeline_reorg
       - run: pip3 install PyYAML
       - id: matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        # This run's own copy, at the commit checked out above, not a branch that moves.
+        uses: ./.github/actions/prepare-test-matrix
         with:
           tests-yaml: ./tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml
           enabled-skus: ALL_SKUS_IN_TESTS
           sku-config: ./.github/sku_config.yaml
+      - name: Require a card of each architecture
+        env:
+          MATRIX: ${{ steps.matrix.outputs.matrix }}
+        # A SKU dropped from llk_sfpu_accuracy_tests.yaml would leave its table unswept
+        # and the run green.
+        run: |
+          python3 -c '
+          import json, os, sys
+          missing = {"wh_", "bh_"} - {g["sku"][:3] for g in json.loads(os.environ["MATRIX"])}
+          if missing:
+              sys.exit(f"::error::No sweep job for {sorted(missing)}.")'
 
   ulp-sweep:
     needs: [load-test-matrix, build-images]
