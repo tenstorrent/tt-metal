@@ -211,9 +211,6 @@ class ttKDA:
         # A bounded gate is sigmoid(scale * (x @ W + bias)), applied by the decay projection; chunk preparation
         # applies the lower bound. The softplus gate applies its own activation after the projection.
         self._bounded_gate = config.gate_lower_bound is not None
-        if self._bounded_gate and mesh_device.arch() == ttnn.device.Arch.QUASAR:
-            # The projection keeps the FP32 offset exact only with the matmul's SFPU bias add, not built for Quasar.
-            raise ValueError("a bounded KDA gate is not supported on Quasar")
         uses_grouped_scan = (
             self.sequence_parallel_size > 1 or program_config.recurrence.local_scan_strategy == "grouped"
         )
