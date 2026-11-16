@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -317,6 +318,10 @@ std::mutex g_capture_mutex;
 // Seeded from the on-disk manifest at init so warm runs re-append only genuinely new kernels.
 std::unordered_set<std::string> g_captured_keys;
 
+// Full commit of the tree this process runs from, stamped on every captured entry (empty: unknown).
+// Set once at device init, before capture is enabled.
+std::string g_tree_commit;
+
 void fill_target_recipe(jit_server::rpc::TargetRecipe::Builder builder, const jit_build::TargetRecipe& t) {
     builder.setTargetName(t.target_name);
     builder.setCflags(t.cflags);
@@ -387,6 +392,7 @@ std::vector<jit_server::CompileRequest> read_manifest(const std::string& path) {
             req.build_key = r.getBuildKey();
             req.kernel_name = r.getKernelName().cStr();
             req.gpp = r.getGpp().cStr();
+            req.tree_commit = r.getTreeCommit().cStr();
             for (auto t : r.getTargets()) {
                 req.targets.push_back(read_target_recipe(t));
             }
@@ -658,6 +664,87 @@ std::optional<std::string> failure_context(
     return std::to_string(hash.digest());
 }
 
+// Full commit of the source tree at root_dir, or empty when it cannot be told. A tree path reused
+// across commits (a deploy slot rebuilt in place) keeps its build_key, so a manifest entry carries the
+// commit that captured it and run_prewarm replays only the current tree's own. Sources, in order:
+// TT_METAL_KERNEL_PREWARM_TREE_COMMIT, <root>/.git (HEAD, through a loose or packed ref, also for a
+// worktree's gitdir file), then the first word of <root>/.ltx-build-stamp (written after each deploy).
+bool is_commit_id(const std::string& s) {
+    return (s.size() == 40 || s.size() == 64) && std::all_of(s.begin(), s.end(), [](unsigned char c) {
+               return std::isxdigit(c) != 0;
+           });
+}
+
+std::string read_first_line(const fs::path& path) {
+    std::ifstream in(path);
+    std::string line;
+    std::getline(in, line);
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+        line.pop_back();
+    }
+    return line;
+}
+
+std::string resolve_git_ref(const fs::path& git_dir, const std::string& ref) {
+    std::error_code ec;
+    std::vector<fs::path> dirs{git_dir};
+    if (fs::exists(git_dir / "commondir", ec)) {  // linked worktree: refs live in the common dir
+        dirs.push_back((git_dir / read_first_line(git_dir / "commondir")).lexically_normal());
+    }
+    for (const auto& dir : dirs) {
+        if (std::string id = read_first_line(dir / ref); is_commit_id(id)) {
+            return id;
+        }
+        std::ifstream packed(dir / "packed-refs");
+        for (std::string line; std::getline(packed, line);) {
+            const auto sp = line.find(' ');
+            if (sp != std::string::npos && line.compare(sp + 1, std::string::npos, ref) == 0 &&
+                is_commit_id(line.substr(0, sp))) {
+                return line.substr(0, sp);
+            }
+        }
+    }
+    return {};
+}
+
+std::string current_tree_commit(const std::string& root_dir) {
+    if (const char* v = env_or_null("TT_METAL_KERNEL_PREWARM_TREE_COMMIT")) {
+        return is_commit_id(v) ? std::string(v) : std::string();
+    }
+    if (root_dir.empty()) {
+        return {};
+    }
+    const fs::path root(root_dir);
+    std::error_code ec;
+    fs::path git_dir = root / ".git";
+    if (fs::is_regular_file(git_dir, ec)) {  // "gitdir: <path>" of a linked worktree or submodule
+        const std::string line = read_first_line(git_dir);
+        git_dir = line.starts_with("gitdir: ") ? (root / line.substr(8)).lexically_normal() : fs::path();
+    }
+    if (!git_dir.empty() && fs::is_directory(git_dir, ec)) {
+        const std::string head = read_first_line(git_dir / "HEAD");
+        if (is_commit_id(head)) {
+            return head;
+        }
+        if (head.starts_with("ref: ")) {
+            if (std::string id = resolve_git_ref(git_dir, head.substr(5)); !id.empty()) {
+                return id;
+            }
+        }
+    }
+    std::ifstream stamp(root / ".ltx-build-stamp");
+    std::string id;
+    stamp >> id;
+    return is_commit_id(id) ? id : std::string();
+}
+
+// An entry captured by another commit of this tree path. Entries without a commit (manifests from
+// before the field) and an unknown current commit never match: those keep the path filter plus the
+// live-stamp and stale-limit logic.
+bool from_other_commit(const std::string& entry_commit, const std::string& tree_commit) {
+    return !entry_commit.empty() && !tree_commit.empty() && entry_commit != tree_commit;
+}
+
 std::size_t run_prewarm(
     const std::vector<jit_server::CompileRequest>& requests,
     const std::string& out_kernel_root,
@@ -691,6 +778,7 @@ std::size_t run_prewarm(
         stale_limit = std::strtoull(v, nullptr, 10);
     }
     std::atomic<bool> stale{false};
+    const std::string tree_commit = current_tree_commit(root_dir);
     std::atomic<size_t> abandoned{0};
     const auto note_failure = [&]() {
         const size_t fails = failed.load() + previously_failed.load();
@@ -709,6 +797,7 @@ std::size_t run_prewarm(
     size_t skipped_dup = 0;
     size_t skipped_device_init = 0;
     size_t skipped_foreign_tree = 0;
+    size_t skipped_foreign_commit = 0;
     // A kernel is captured once per program instance, so shared kernels (dispatch, fabric, reused
     // ops) appear many times with the SAME out_dir. FileRenamer temp names are per-process, so two
     // concurrent builds of one out_dir collide on the temp .o and destructively corrupt the final
@@ -740,6 +829,13 @@ std::size_t run_prewarm(
         // the filter is inert.
         if (!root_dir.empty() && req.gpp.find(root_dir) == std::string::npos) {
             ++skipped_foreign_tree;
+            continue;
+        }
+        // The path matches, but a slot path reused across commits (tt-metal-ltx-rt-b) matches every
+        // commit it ever held. Replaying an older commit's recipe against today's sources mostly
+        // fails (cs04, 09-29 key: 21409 of 26200), so skip entries another commit captured.
+        if (from_other_commit(req.tree_commit, tree_commit)) {
+            ++skipped_foreign_commit;
             continue;
         }
         // Device-init dispatch/fabric kernels are compiled concurrently by device init (disjoint
@@ -868,6 +964,16 @@ std::size_t run_prewarm(
         deferred.load(),
         genfiles_failed.load(),
         abandoned.load());
+    if (skipped_foreign_commit > 0) {
+        log_info(
+            tt::LogMetal,
+            "kernel prewarm: {} manifest entries for build_key {} were captured by another commit of this "
+            "tree ({}) and were skipped; the current commit is {}.",
+            skipped_foreign_commit,
+            build_key,
+            root_dir,
+            tree_commit);
+    }
     if (skipped_foreign_tree > 0) {
         log_warning(
             tt::LogMetal,
@@ -929,6 +1035,7 @@ void append_manifest_entry(const jit_server::CompileRequest& request) {
     root.setBuildKey(request.build_key);
     root.setKernelName(request.kernel_name);
     root.setGpp(request.gpp);
+    root.setTreeCommit(g_tree_commit);
     auto targets = root.initTargets(request.targets.size());
     for (std::size_t i = 0; i < request.targets.size(); ++i) {
         fill_target_recipe(targets[i], request.targets[i]);
@@ -970,6 +1077,11 @@ void maybe_launch_prewarm(
     std::call_once(g_launch_once, [&]() {
         // Best effort: an unwritable cache only costs the offline pass its live-key filter.
         touch_live_stamp(out_kernel_root);
+        const std::string tree_commit = current_tree_commit(root_dir);
+        {
+            std::lock_guard<std::mutex> lk(g_capture_mutex);
+            g_tree_commit = tree_commit;
+        }
         // Enable capture unconditionally (explicit override else cache-root default). On a cold cache
         // this run's op-by-op compiles populate the manifest; that reuse is what makes the *next* run
         // fast with no manual setup.
@@ -995,9 +1107,14 @@ void maybe_launch_prewarm(
         bool have_this_build_key = false;
         {
             // Seed the capture dedup set with everything already on disk so warm runs append only
-            // genuinely new kernels, keeping the manifest at the working-set size.
+            // genuinely new kernels, keeping the manifest at the working-set size. Entries another
+            // commit captured do not count: this commit has to record its own, or the commit filter
+            // in run_prewarm would find none of them on the next run.
             std::lock_guard<std::mutex> lk(g_capture_mutex);
             for (const auto& req : requests) {
+                if (from_other_commit(req.tree_commit, tree_commit)) {
+                    continue;
+                }
                 g_captured_keys.insert(std::to_string(req.build_key) + "/" + req.kernel_name);
                 if (req.build_key != build_key) {
                     continue;
@@ -1045,11 +1162,17 @@ std::size_t prewarm_manifest_offline(const std::string& out_root, const std::str
     // while "<X>/tt-metal-cache" makes it a suffix ("<X>/tt-metal-cache<bk>/") whose manifest dir is
     // "<X>". Do not "normalize" the trailing slash away: that breaks the former.
     const std::string manifest_path = (fs::path(out_root).parent_path() / "kernel_prewarm.manifest").string();
+    const auto read_start = std::chrono::steady_clock::now();
     std::vector<jit_server::CompileRequest> requests = read_manifest(manifest_path);
     if (requests.empty()) {
         log_warning(tt::LogMetal, "kernel prewarm (offline): no entries in {} (cold cache or empty)", manifest_path);
         return 0;
     }
+    log_info(
+        tt::LogMetal,
+        "kernel prewarm (offline): read {} manifest entries in {} ms",
+        requests.size(),
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - read_start).count());
 
     std::unordered_map<std::uint64_t, std::size_t> entries_per_key;
     for (const auto& req : requests) {

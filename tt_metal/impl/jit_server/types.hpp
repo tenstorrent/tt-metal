@@ -23,6 +23,7 @@ struct CompileRequest {
     std::string gpp;
     std::vector<TargetRecipe> targets;
     std::vector<GeneratedFile> generated_files;
+    std::string tree_commit;  // kernel_prewarm manifest entries only; empty when unknown
 };
 
 struct ElfBlob {

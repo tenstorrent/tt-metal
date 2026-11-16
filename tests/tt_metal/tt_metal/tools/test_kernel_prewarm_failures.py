@@ -166,15 +166,16 @@ struct StableHasher {
 }
 namespace jit_build=tt::jit_build;
 namespace jit_server { struct CompileRequest {
- uint64_t build_key=7; std::string kernel_name,gpp;
+ uint64_t build_key=7; std::string kernel_name,gpp,tree_commit;
  std::vector<jit_build::TargetRecipe> targets;
  std::vector<jit_build::GeneratedFile> generated_files;
 }; }
 std::vector<size_t> summary;
+template<class T> size_t to_size(const T& v) { if constexpr (std::is_arithmetic_v<std::decay_t<T>>) return static_cast<size_t>(v); else return 0; }
 template<class... Args> void log_warning(int,const char*,Args&&...) {}
 template<class... Args> void log_error(int,const char*,Args&&...) {}
 template<class... Args> void log_info(int,const char* text,Args&&... args) {
- if(std::string_view(text).starts_with("kernel prewarm: attempted=")) summary={static_cast<size_t>(args)...};
+ if(std::string_view(text).starts_with("kernel prewarm: attempted=")) summary={to_size(args)...};
 }
 namespace tt::jit_build {
 using ParsedDependencies=std::unordered_map<std::string,std::vector<std::string>>;
@@ -332,6 +333,202 @@ int main(int argc,char** argv) {
 """
 
 
+def review_prefix():
+    """INTEGRATION_PREFIX with one active worker and a build_target that locks, fails or completes."""
+    # One active worker makes dispatch-time descriptor retention deterministic.
+    prefix = INTEGRATION_PREFIX.replace("std::launch::async", "std::launch::deferred").replace(
+        "void write_generated_files(", "bool fail_generated=false;\nvoid write_generated_files("
+    )
+    prefix = prefix.replace(
+        " ++attempts; fs::create_directories(dir);",
+        r""" ++attempts; fs::create_directories(dir);
+ if(gpp.starts_with("batch")) {
+  failure::KernelLock competing(fs::path(dir).parent_path().parent_path()/".prewarm.lock");
+  assert(!competing.acquired());
+  int fd=::open((dir+"active").c_str(),O_CREAT|O_EXCL|O_WRONLY,0600);assert(fd>=0);
+  usleep(1000);assert(::close(fd)==0);assert(::unlink((dir+"active").c_str())==0);
+  if((gpp=="batch-fail" && t.target_name=="second") || gpp=="batch-stale")throw std::runtime_error("injected build failure");
+  std::ofstream(dir+"complete")<<"ok";return;
+ }""",
+    )
+    return prefix.replace(
+        "{fs::create_directories(dir);for(const auto& f:files)",
+        '{failure::KernelLock competing(dir+".prewarm.lock");assert(!competing.acquired());if(fail_generated)throw std::runtime_error("injected genfiles failure");fs::create_directories(dir);for(const auto& f:files)',
+    )
+
+
+OFFLINE_STUBS = r"""
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <thread>
+#include <sys/resource.h>
+std::vector<jit_server::CompileRequest> g_manifest;
+std::vector<jit_server::CompileRequest> read_manifest(const std::string&) { return g_manifest; }
+std::once_flag g_launch_once;
+std::mutex g_capture_mutex;
+std::string g_tree_commit, g_capture_path;
+std::unordered_set<std::string> g_captured_keys, g_prewarm_kernel_names;
+std::atomic<bool> g_prewarm_names_ready{false}, g_batch_launched{false};
+std::jthread g_prewarm_thread;
+bool prewarm_globally_disabled() { return !env_truthy("TT_METAL_KERNEL_PREWARM"); }
+void initialize_prewarm_shutdown_dependencies() {}
+void wait_for_prewarm() {}
+"""
+
+OFFLINE_MAIN = r"""
+const std::string C(40, 'c'), D(40, 'd'), TREE = "batch";  // gpp "batch" / "batch-stale" contain the tree path
+fs::path root;
+jit_server::CompileRequest req(uint64_t bk, const std::string& name, const std::string& commit, bool good = true) {
+ jit_server::CompileRequest r; r.build_key = bk; r.kernel_name = name; r.gpp = good ? "batch" : "batch-stale";
+ r.tree_commit = commit; jit_build::TargetRecipe t; t.target_name = "first"; r.targets = {t}; return r;
+}
+// key 7: the live key, captured by commit C, plus the same kernels as an older commit D left them (stale
+// recipes), plus one recipe of another source tree. key 8: an old key without commits. key 9: stamped, all D.
+std::vector<jit_server::CompileRequest> mixed_manifest() {
+ std::vector<jit_server::CompileRequest> m;
+ for (int i = 0; i < 3; ++i) m.push_back(req(7, "k" + std::to_string(i), C));
+ for (int i = 0; i < 3; ++i) m.push_back(req(7, "k" + std::to_string(i), D, false));
+ auto foreign = req(7, "f0", C); foreign.gpp = "/other/tree/g++"; m.push_back(foreign);
+ for (int i = 10; i < 12; ++i) m.push_back(req(8, "k" + std::to_string(i), ""));
+ for (int i = 20; i < 22; ++i) m.push_back(req(9, "k" + std::to_string(i), D, false));
+ return m;
+}
+fs::path fresh(const std::string& name) { fs::path d = root / name; fs::remove_all(d); fs::create_directories(d); attempts = 0; return d; }
+void stamp(const fs::path& d, uint64_t bk, int days_old) {
+ fs::path p = d / ("tt-metal-cache" + std::to_string(bk)); fs::create_directories(p);
+ std::ofstream(p / "kernel_prewarm.live") << "";
+ fs::last_write_time(p / "kernel_prewarm.live", fs::file_time_type::clock::now() - std::chrono::hours(24 * days_old));
+}
+size_t offline(const fs::path& d) { return prewarm_manifest_offline((d / "tt-metal-cache").string(), TREE); }
+bool built(const fs::path& d, uint64_t bk, const std::string& k) {
+ return fs::exists(d / ("tt-metal-cache" + std::to_string(bk)) / "kernels" / k / "first" / "complete");
+}
+void clear_env() {
+ for (const char* k : {"TT_METAL_KERNEL_PREWARM_LIVE_DAYS", "TT_METAL_KERNEL_PREWARM_ALL_KEYS",
+                       "TT_METAL_KERNEL_PREWARM_STALE_LIMIT", "TT_METAL_KERNEL_PREWARM_TREE_COMMIT"}) unsetenv(k);
+}
+
+void filters() {
+ g_manifest = mixed_manifest();
+ {  // live stamps on keys 7 and 9 and the current commit C: only key 7's own recipes build
+  clear_env(); setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", C.c_str(), 1);
+  auto d = fresh("live"); stamp(d, 7, 0); stamp(d, 9, 0);
+  assert(offline(d) == 3 && attempts == 3);
+  for (const char* k : {"k0", "k1", "k2"}) assert(built(d, 7, k));
+  assert(!built(d, 7, "f0") && !built(d, 8, "k10") && !built(d, 9, "k20"));
+ }
+ {  // ALL_KEYS builds the unstamped legacy key too; entries of another commit stay skipped
+  setenv("TT_METAL_KERNEL_PREWARM_ALL_KEYS", "1", 1);
+  auto d = fresh("allkeys"); stamp(d, 7, 0); stamp(d, 9, 0);
+  assert(offline(d) == 5 && attempts == 5 && built(d, 8, "k10") && built(d, 8, "k11") && !built(d, 9, "k20"));
+ }
+ {  // no stamp anywhere (cache from before the stamps): every key builds, still only its own commit
+  clear_env(); setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", C.c_str(), 1);
+  auto d = fresh("nostamp"); assert(offline(d) == 5 && attempts == 5);
+ }
+ {  // a stamp older than LIVE_DAYS (default 14) counts as no stamp
+  auto d = fresh("old"); stamp(d, 7, 0); stamp(d, 8, 20);
+  assert(offline(d) == 3 && attempts == 3 && !built(d, 8, "k10"));
+  setenv("TT_METAL_KERNEL_PREWARM_LIVE_DAYS", "30", 1);
+  d = fresh("old30"); stamp(d, 7, 0); stamp(d, 8, 20);
+  assert(offline(d) == 5 && attempts == 5 && built(d, 8, "k10"));
+ }
+ {  // current commit unknown: the commit filter is inert, the stale recipes of key 9 are attempted and fail
+  clear_env();
+  auto d = fresh("unknown"); stamp(d, 7, 0); stamp(d, 9, 0);
+  assert(offline(d) == 3 && attempts == 5 && !built(d, 9, "k20"));
+ }
+ {  // an entry without a commit never counts as another commit's, whatever the current one
+  g_manifest = {req(8, "k10", ""), req(8, "k11", "")};
+  setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", D.c_str(), 1);
+  auto d = fresh("legacy"); assert(offline(d) == 2 && attempts == 2);
+ }
+}
+
+void stale_limit() {
+ // Old-format manifest (no commits): 1 good + 400 stale recipes. The stale limit is the only cut.
+ auto stale_manifest = [&]() {
+  std::vector<jit_server::CompileRequest> m{req(7, "good", "")};
+  for (int i = 0; i < 400; ++i) m.push_back(req(7, "s" + std::to_string(i), "", false));
+  return m;
+ };
+ clear_env(); g_manifest = stale_manifest();
+ auto d = fresh("stale"); assert(offline(d) == 1 && attempts == 257);
+ setenv("TT_METAL_KERNEL_PREWARM_STALE_LIMIT", "0", 1);
+ d = fresh("nolimit"); assert(offline(d) == 1 && attempts == 401);
+ // The same manifest with commits: the current commit's recipes build and the other commit's are never tried.
+ clear_env(); setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", C.c_str(), 1);
+ g_manifest = {req(7, "good", C)};
+ for (int i = 0; i < 400; ++i) g_manifest.push_back(req(7, "s" + std::to_string(i), D, false));
+ d = fresh("stale-commit"); assert(offline(d) == 1 && attempts == 1);
+}
+
+void write_file(const fs::path& p, const std::string& text) { fs::create_directories(p.parent_path()); std::ofstream(p) << text; }
+
+void commit_sources() {
+ const std::string A(40, 'a'), B(40, 'b'), E(40, 'e'), SHA256(64, '1');
+ clear_env();
+ auto t = fresh("commit");
+ assert(current_tree_commit((t / "none").string() + "/").empty() && current_tree_commit("").empty());
+ write_file(t / "detached/.git/HEAD", A + "\n"); assert(current_tree_commit((t / "detached").string() + "/") == A);
+ write_file(t / "loose/.git/HEAD", "ref: refs/heads/main\n"); write_file(t / "loose/.git/refs/heads/main", B + "\n");
+ assert(current_tree_commit((t / "loose").string() + "/") == B);
+ write_file(t / "packed/.git/HEAD", "ref: refs/heads/ltx-rt\n");
+ write_file(t / "packed/.git/packed-refs", "# pack-refs\n" + std::string(40, '1') + " refs/heads/other\n" + E + " refs/heads/ltx-rt\n");
+ assert(current_tree_commit((t / "packed").string() + "/") == E);
+ write_file(t / "sha256/.git/HEAD", SHA256 + "\n"); assert(current_tree_commit((t / "sha256").string() + "/") == SHA256);
+ // A linked worktree: .git is a file and the branch lives in the common dir.
+ write_file(t / "wt/.git", "gitdir: " + (t / "main.git/worktrees/wt").string() + "\n");
+ write_file(t / "main.git/worktrees/wt/HEAD", "ref: refs/heads/wt\n"); write_file(t / "main.git/worktrees/wt/commondir", "../..\n");
+ write_file(t / "main.git/refs/heads/wt", A + "\n"); assert(current_tree_commit((t / "wt").string() + "/") == A);
+ // A deployed slot without .git: the stamp written after each deploy, first word.
+ write_file(t / "slot/.ltx-build-stamp", B + " 2026-11-16 deploy\n"); assert(current_tree_commit((t / "slot").string() + "/") == B);
+ write_file(t / "junk/.ltx-build-stamp", "not-a-commit\n"); assert(current_tree_commit((t / "junk").string() + "/").empty());
+ write_file(t / "unborn/.git/HEAD", "ref: refs/heads/none\n"); assert(current_tree_commit((t / "unborn").string() + "/").empty());
+ // The override wins, and an invalid one means unknown rather than falling back to another source.
+ setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", E.c_str(), 1); assert(current_tree_commit((t / "detached").string() + "/") == E);
+ setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", "xyz", 1); assert(current_tree_commit((t / "detached").string() + "/").empty());
+ assert(from_other_commit(A, B) && !from_other_commit(A, A) && !from_other_commit("", B) && !from_other_commit(A, ""));
+}
+
+// The device-open path itself (call_once, so one scenario per process): it writes the live stamp, records
+// the commit on captured entries and seeds the capture set from this commit's entries only.
+void open_path(bool cold) {
+ clear_env(); setenv("TT_METAL_KERNEL_PREWARM", "1", 1); setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT", C.c_str(), 1);
+ auto d = fresh(cold ? "open-cold" : "open");
+ const std::string kernels = (d / "tt-metal-cache7" / "kernels").string() + "/";
+ const fs::path live = d / "tt-metal-cache7" / "kernel_prewarm.live";
+ assert(!fs::exists(live));
+ if (!cold) {
+  write_file(d / "kernel_prewarm.manifest", "x");  // non-empty: read_manifest is the stub below
+  g_manifest = {req(9, "a0", C), req(9, "a1", C), req(9, "b0", D), req(9, "b1", D), req(9, "c0", "")};
+ }
+ maybe_launch_prewarm(kernels, "", 7, TREE);
+ assert(fs::exists(live));
+ assert(fs::file_time_type::clock::now() - fs::last_write_time(live) < std::chrono::seconds(60));
+ assert(g_tree_commit == C && g_capture_path == (d / "kernel_prewarm.manifest").string());
+ if (!cold) {
+  assert(g_captured_keys.count("9/a0") && g_captured_keys.count("9/a1") && g_captured_keys.count("9/c0"));
+  assert(!g_captured_keys.count("9/b0") && !g_captured_keys.count("9/b1"));
+  assert(!g_batch_launched);  // the manifest has nothing of build_key 7
+ }
+ // The offline pass reads exactly that stamp: key 7 (stamped by the open) builds, the unstamped key 8 does not.
+ g_manifest = mixed_manifest();
+ assert(offline(d) == 3 && attempts == 3 && built(d, 7, "k0") && !built(d, 8, "k10"));
+}
+
+int main(int, char** argv) {
+ root = argv[1]; fs::create_directories(root); std::string mode = argv[2];
+ if (mode == "filters") filters();
+ else if (mode == "stale") stale_limit();
+ else if (mode == "commit") commit_sources();
+ else open_path(mode == "open-cold");
+ std::cout << "offline filters: " << mode << " passed\n";
+}
+"""
+
+
 class PrewarmFailureTests(unittest.TestCase):
     def test_production_context_and_batch_loop(self):
         source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
@@ -376,26 +573,7 @@ class PrewarmFailureTests(unittest.TestCase):
         parser = dependencies[
             dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")
         ]
-        # One active worker makes dispatch-time descriptor retention deterministic.
-        prefix = INTEGRATION_PREFIX.replace("std::launch::async", "std::launch::deferred").replace(
-            "void write_generated_files(", "bool fail_generated=false;\nvoid write_generated_files("
-        )
-        prefix = prefix.replace(
-            " ++attempts; fs::create_directories(dir);",
-            r""" ++attempts; fs::create_directories(dir);
- if(gpp.starts_with("batch")) {
-  failure::KernelLock competing(fs::path(dir).parent_path().parent_path()/".prewarm.lock");
-  assert(!competing.acquired());
-  int fd=::open((dir+"active").c_str(),O_CREAT|O_EXCL|O_WRONLY,0600);assert(fd>=0);
-  usleep(1000);assert(::close(fd)==0);assert(::unlink((dir+"active").c_str())==0);
-  if((gpp=="batch-fail" && t.target_name=="second") || gpp=="batch-stale")throw std::runtime_error("injected build failure");
-  std::ofstream(dir+"complete")<<"ok";return;
- }""",
-        )
-        prefix = prefix.replace(
-            "{fs::create_directories(dir);for(const auto& f:files)",
-            '{failure::KernelLock competing(dir+".prewarm.lock");assert(!competing.acquired());if(fail_generated)throw std::runtime_error("injected genfiles failure");fs::create_directories(dir);for(const auto& f:files)',
-        )
+        prefix = review_prefix()
         with tempfile.TemporaryDirectory(prefix="prewarm-review-") as work:
             path = Path(work)
             (path / "test.cpp").write_text(
@@ -464,6 +642,62 @@ class PrewarmFailureTests(unittest.TestCase):
                 with self.subTest(relevant_environment=key):
                     subprocess.run(command + ["1"], env=env, check=True, timeout=30)
                     subprocess.run(command + ["0"], env=env, check=True, timeout=30)
+
+    def test_offline_filters_commit_and_live_stamp(self):
+        """Offline live-stamp filter, the per-entry commit filter and the real device-open path, host-only."""
+        source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
+        stamp_helpers = source[
+            source.index("std::string default_manifest_path(") : source.index("// Build one target from a portable recipe")
+        ]
+        production = source[
+            source.index("void hash_field(") : source.index("void initialize_prewarm_shutdown_dependencies()")
+        ]
+        open_path = source[source.index("void maybe_launch_prewarm(") : source.index("std::size_t prewarm_manifest_offline(")]
+        offline = source[source.index("std::size_t prewarm_manifest_offline(") : source.index("void wait_for_prewarm()")]
+        dependencies = (ROOT / "tt_metal/jit_build/depend.cpp").read_text()
+        parser = dependencies[
+            dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")
+        ]
+        harness = (
+            review_prefix()
+            + "namespace tt::jit_build {"
+            + parser
+            + "}\n"
+            + OFFLINE_STUBS.split("std::vector<jit_server::CompileRequest> g_manifest;")[0]
+            + stamp_helpers
+            + production
+            + "std::vector<jit_server::CompileRequest> g_manifest;"
+            + OFFLINE_STUBS.split("std::vector<jit_server::CompileRequest> g_manifest;")[1]
+            + open_path
+            + offline
+            + OFFLINE_MAIN
+        )
+        with tempfile.TemporaryDirectory(prefix="prewarm-offline-") as work:
+            path = Path(work)
+            (path / "test.cpp").write_text(harness)
+            subprocess.run(
+                [
+                    "c++",
+                    "-std=c++20",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-pthread",
+                    "-I",
+                    str(ROOT),
+                    str(path / "test.cpp"),
+                    "-o",
+                    str(path / "test"),
+                ],
+                check=True,
+                timeout=120,
+            )
+            env = os.environ.copy()
+            for key in [k for k in env if k.startswith("TT_METAL_KERNEL_")]:
+                env.pop(key)
+            for mode in ("filters", "stale", "commit", "open", "open-cold"):
+                with self.subTest(mode=mode):
+                    subprocess.run([str(path / "test"), str(path / mode), mode], env=env, check=True, timeout=120)
 
     def test_native_failure_policy(self):
         with tempfile.TemporaryDirectory(prefix="prewarm-policy-") as work:
