@@ -13,7 +13,10 @@ and checkpoint blocks.
     MESH_DEVICE=P150x8 HF_MODEL=<Qwen3.8-27B dir> pytest models/demos/blackhole/qwen36/tests/test_prefill_checkpoint_split.py
 
 QWEN36_CKPT_DUMP=<file> makes test_traced_rows_dump save what the traced rows leave, so that two builds can be compared
-byte for byte (compare_dumps).
+byte for byte:
+
+    python -c "import sys, torch; from models.demos.blackhole.qwen36.tests.test_prefill_checkpoint_split import \
+        compare_dumps; print(compare_dumps(torch.load(sys.argv[1]), torch.load(sys.argv[2])))" A.64 B.64
 """
 
 import os
@@ -171,9 +174,10 @@ def _report(diffs, what):
 @_parametrize
 @pytest.mark.parametrize("n_layers", [8, 64], ids=["layers8", "layers64"])
 def test_split_checkpoint_matches_the_single_call(mesh_device, n_layers, monkeypatch, reset_seeds, ensure_gc):
-    """Three rows (2000, 2348 and 3100 tokens) in one prefill step, three times into the same blocks: eagerly with the
-    single-call checkpoint (the reference), eagerly with the split delta rule, and from the captured traces after the
-    plugin's two-phase warmup with the split delta rule. The two split runs must leave the reference's bytes."""
+    """Three rows (2000, 2348 and 3100 tokens) in one eager prefill step, twice into the same blocks: with the
+    single-call checkpoint (the reference) and with the split delta rule. The split run must leave the reference's
+    bytes. The captured-trace path is compared across builds with test_traced_rows_dump: its chunk trace runs other
+    programs than the eager chunk path, so a traced run does not match an eager one byte for byte."""
     from models.demos.blackhole.qwen36.tt.gdn import tp as gdn_tp
 
     rows = list(range(len(LENS)))
@@ -184,16 +188,10 @@ def test_split_checkpoint_matches_the_single_call(mesh_device, n_layers, monkeyp
         m.setattr(gdn_tp.TPGatedDeltaNet, "_delta_rule_split", _single_call_checkpoint)
         want = t.snapshot(LENS, rows, t.prefill(LENS, rows, prompts))
     assert gdn_tp.TPGatedDeltaNet._delta_rule_split is split
-    eager = t.snapshot(LENS, rows, t.prefill(LENS, rows, prompts))
-    t.warmup()
-    traced = t.snapshot(LENS, rows, t.prefill(LENS, rows, prompts))
-    bad = _report(compare_dumps(eager, want), "eager split vs single call")
-    bad_traced = _report(compare_dumps(traced, want), "traced split vs single call")
-    logger.info(
-        f"CHECKPOINT SPLIT ({n_layers} layers): {len(want)} entries; eager split differs in {bad}, traced split in "
-        f"{bad_traced}"
-    )
-    assert bad == 0 and bad_traced == 0
+    got = t.snapshot(LENS, rows, t.prefill(LENS, rows, prompts))
+    bad = _report(compare_dumps(got, want), "split vs single call")
+    logger.info(f"CHECKPOINT SPLIT ({n_layers} layers): {len(want)} entries; the split differs in {bad}")
+    assert bad == 0
 
 
 @torch.no_grad()
