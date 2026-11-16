@@ -1750,6 +1750,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat im_df =
         tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
+    // The row max must keep the fp32 scores' peak exactly, or (score - max) * scale overflows exp.
+    tt::DataFormat max_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
@@ -1765,6 +1767,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    uint32_t max_tile_size = tt::tile_size(max_df);
     uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
     uint32_t sum_tile_size = tt::tile_size(sum_df);
 
@@ -1858,8 +1861,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.max_A = allocate_tile_cb(statistics_tiles, max_tile_size, max_df);
+    cb_ids.max_B = allocate_tile_cb(statistics_tiles, max_tile_size, max_df);
     cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
