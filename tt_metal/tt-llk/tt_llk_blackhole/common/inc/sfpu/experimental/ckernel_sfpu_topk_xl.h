@@ -2375,6 +2375,16 @@ inline bool local_sort_head(const std::uint32_t tile_offset, const bool ascendin
 //
 // Nothing else on the math thread touches the MOP Expander, so this
 // programming survives across every merge call.
+// Program the MOP Expander to issue one `REPLAY(0, body_len)` per iteration. The merge records its body into replay
+// slots [0, body_len) and then fires it with `ckernel_unpack_template::run`.
+template <int body_len>
+inline void topk_mop_program_replay()
+{
+    constexpr std::uint32_t replay_body = lltt::replay_insn(0, body_len);
+    ckernel_unpack_template tmpl        = ckernel_unpack_template::lA(replay_body, TT_OP_NOP);
+    tmpl.program();
+}
+
 template <bool fused>
 inline void topk_mop_config()
 {
@@ -2394,9 +2404,7 @@ inline void topk_mop_config()
 #else
     constexpr int body_len = fused ? 16 : 18;
 #endif
-    constexpr std::uint32_t replay_body = lltt::replay_insn(0, body_len);
-    ckernel_unpack_template tmpl        = ckernel_unpack_template::lA(replay_body, TT_OP_NOP);
-    tmpl.program();
+    topk_mop_program_replay<body_len>();
 }
 
 // _llk_math_topk_xl_copy_init_ rewrites ADDR_MOD_0 and ADDR_MOD_3 for datacopy, so ADDR_MOD_3 must be restored here.
@@ -2415,7 +2423,8 @@ inline void topk_reinit_unfused_rebuild_after_copy()
 // Programs the ADDR_MODs (see "Address-mod recipe" at the top of the file)
 // and the merge MOP Expander. Must be called once per query before the sort
 // phases (local sort, merge, rebuild). Every supported K uses the same
-// ADDR_MODs and MOP programming.
+// ADDR_MODs and MOP programming. The fused init also programs the fused step-group
+// SFPLOADMACRO setup for K >= 1024, which the fused merge and rebuild assume.
 //
 // In `fused` mode values and indices share a single 32-bit DST word, so
 // no separate index-tracking path needs to be programmed. The two
@@ -2458,6 +2467,17 @@ inline void _topk_xl_init_()
 
     // Configure the merge MOP; also configures the unfused macro sequences.
     topk_mop_config<fused>();
+
+#if TOPK_XL_FUSED_MACRO
+    // The fused step-group macros, once per init. The fused merge and rebuild (K >= 1024) rely on this setup and do not
+    // reprogram it; `_topk_xl_local_sort_` still programs it itself, so a fused chunk loop pays for it once per sort
+    // rather than once per call. Any unfused phase (an unfused init) overwrites it, so run this init again before the
+    // next fused merge or rebuild that no fused local sort precedes.
+    if constexpr (fused && K >= 1024)
+    {
+        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
+    }
+#endif
 }
 
 // =============================================================================
@@ -2589,8 +2609,16 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
     [[maybe_unused]] constexpr int indices_offset = 64 * num_tiles_per_sequence;
     const std::uint32_t tile_offset               = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
 
+    // The fused macro merge (K >= 1024) runs the software-pipelined step group: 12 issue slots instead of 15 plus a
+    // pad NOP, because the slots the scheduled stores occupy carry the next group's loads. It programs its own MOP
+    // body length (see below), so it does not depend on the 16 that `topk_mop_config` programs for the other bodies.
+#if TOPK_XL_FUSED_MACRO
+    [[maybe_unused]] constexpr bool pipelined = fused && K >= 1024;
+#else
+    [[maybe_unused]] constexpr bool pipelined = false;
+#endif
 #if TOPK_XL_UNFUSED_MACRO
-    constexpr int body_len = 16; // must match topk_mop_config's REPLAY length
+    constexpr int body_len = pipelined ? 12 : 16; // 16 must match topk_mop_config's REPLAY length
 #else
     constexpr int body_len = fused ? 16 : 18;
 #endif
@@ -2608,15 +2636,12 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
         // K = 512 runs four groups only, too few to repay the macro programming.
         if constexpr (K >= 1024)
         {
-            loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
-            load_replay_buf<Exec>(
-                0,
-                body_len,
-                []
-                {
-                    topk_xl_fused_macro::step_group<distance, 16, descending>();
-                    TTI_SFPNOP;
-                });
+            static_assert(body_len == topk_xl_fused_macro::pipelined_group_len, "the replay length must be the pipelined group's");
+            // The fused macro setup comes from `_topk_xl_init_<K, true>` or the fused local sort before this merge.
+            topk_mop_program_replay<body_len>();
+            // The pipelined group expects its first four loads to have been issued already.
+            topk_xl_fused_macro::prologue_loads<distance, descending>();
+            load_replay_buf<Exec>(0, body_len, [] { topk_xl_fused_macro::step_group_pipelined<distance, 16, descending>(); });
         }
         else
 #endif
@@ -2663,6 +2688,13 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
     set_dst_write_addr_offset(tile_offset + 2);
 
     // col=1: full n_iters worth of work, again as one MOP issue.
+#if TOPK_XL_FUSED_MACRO
+    if constexpr (pipelined)
+    {
+        // The last group of col=0 prefetched one group past the end (into LREGs that are dead); col=1 starts over.
+        topk_xl_fused_macro::prologue_loads<distance, descending>();
+    }
+#endif
     ckernel_unpack_template::run(n_iters);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     set_dst_write_addr_offset(tile_offset + 0);
@@ -2693,13 +2725,8 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
     const std::uint32_t tile_offset      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
     constexpr int row_scale_factor       = K == 512 ? 1 : K == 1024 ? 2 : 4;
     constexpr int n_iters_column_pairs   = row_scale_factor * 2;
-#if TOPK_XL_FUSED_MACRO
-    // The K = 512 rebuild has no step groups.
-    if constexpr (fused && K >= 1024)
-    {
-        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
-    }
-#endif
+    // The fused K >= 1024 rebuild runs step groups on the fused macro setup that `_topk_xl_init_<K, true>` or a fused local
+    // sort / merge before it programmed (the K = 512 rebuild has no step groups); it does not reprogram it.
 
     if constexpr (fused)
     {
