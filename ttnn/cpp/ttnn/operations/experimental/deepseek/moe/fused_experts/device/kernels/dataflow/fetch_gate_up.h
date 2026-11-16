@@ -894,12 +894,15 @@ inline void run_reader_loop(
             const bool routed_partner = kSplit > 1u && local_idx >= half && local_idx < half + num_producers;
             // Odd groups read their K-pieces in reverse: piece k of I-tile c sits on bank (6k + c) % 8, so in order
             // every group's first pieces load banks 0, 1, 4, 5 twice as hard as the rest; staggered, all 8 evenly.
-            // Several rows: by the expert's id parity instead (persistent.h kFeHdrPieceFlags), so an expert's K-piece
-            // order -- and so its activation, bit for bit -- does not depend on the group the union deals it to.
+            // Several rows: the readers tell the compute the order (persistent.h kFeHdrPieceFlags), which chains an
+            // expert's pieces in K order once all are in, so its activation does not depend on its group.
             const bool group_reverse = kSplit > 1u && (expert_group & 1u) != 0u;
 #if FE_GROUP_EXPERTS > 1
             CoreLocalMem<volatile uint32_t> hit_ids(CircularBuffer(cb_bcast_id).get_write_ptr());
-            auto reverse_of = [&](uint32_t j) { return kSplit > 1u && (hit_ids[hit_of(j)] & 1u) != 0u; };
+            // The read order no longer reaches the bits (the compute chains the pieces in K order once all are in),
+            // so the bank stagger goes by the group again: half the groups read in reverse, every round.
+            (void)hit_ids;
+            auto reverse_of = [&](uint32_t) { return group_reverse; };
             if (swiglu_core || routed_partner) {
                 uint32_t flags = 0;
                 for (uint32_t j = 0; j < my_experts; ++j) {
