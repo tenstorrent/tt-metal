@@ -523,6 +523,35 @@ PERF_TEST_SCHEMAS = {
             "perf_mul_reduce_scalar_chunked": "perf_mul_reduce_scalar_chunked"
         },
     },
+    "perf_rmsnorm_bcast_scalar_dest_reuse": {
+        "version": 1,
+        "columns": [
+            "clear_dest",
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_dst",
+            "formats.sfpu_src",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "mathop",
+            "rmsnorm_clobber_unpa_x_end",
+            "rmsnorm_num_faces",
+            "rmsnorm_num_tiles",
+            "rmsnorm_preserve_src_zero_flag",
+            "tile_cnt",
+            "unpack_full_transpose",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {
+            "perf_rmsnorm_bcast_scalar_dest_reuse": "perf_rmsnorm_bcast_scalar_dest_reuse"
+        },
+    },
     "perf_transpose_dest": {
         "version": 4,
         "columns": [
