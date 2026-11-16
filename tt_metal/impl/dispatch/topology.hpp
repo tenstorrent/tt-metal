@@ -30,6 +30,10 @@ namespace tt::tt_metal::detail {
 class ProgramCompileGroup;
 }
 
+namespace tt::tt_metal::experimental {
+class KernelConfigBufferImpl;
+}  // namespace tt::tt_metal::experimental
+
 namespace tt::tt_metal {
 
 class IDevice;
@@ -72,6 +76,11 @@ public:
     void create_cq_program(Device* device);
     void compile_cq_programs();
     std::unique_ptr<Program> get_compiled_cq_program(Device* device);
+    // The kernel config buffer the command queue programs run from, or null when they run from the KERNEL_CONFIG
+    // window. compile_cq_programs allocates it when a program's Tensix block does not fit the window.
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer() const { return kernel_config_buffer_.get(); }
+    // Frees that buffer and the dispatch kernels' L1 reserved for the session. Only once they have exited.
+    void release_dispatch_l1();
     void configure_dispatch_cores(Device* device);
 
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
@@ -93,6 +102,17 @@ private:
     GetReadsDispatchCoresFn get_reads_dispatch_cores_;
     std::vector<FDKernel*> node_id_to_kernel_;
     std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;
+    std::shared_ptr<experimental::KernelConfigBufferImpl> kernel_config_buffer_;
+    // The dispatch kernels' own L1, booked on each dispatch core's per-core allocator for the session.
+    struct DispatchL1Reservation {
+        IDevice* device;
+        CoreCoord core;
+        uint32_t address;
+    };
+    std::vector<DispatchL1Reservation> dispatch_l1_reservations_;
+    // Whether every dispatch core's L1 was reserved, which a kernel config buffer there needs.
+    bool dispatch_l1_fully_reserved_ = false;
+    void reserve_dispatch_l1(const std::vector<std::pair<IDevice*, Program*>>& programs);
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> dispatch_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> routing_cores_;
     std::unordered_map<ChipId, std::unordered_set<TerminationInfo>> dispatch_termination_info_;

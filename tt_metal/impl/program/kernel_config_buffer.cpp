@@ -29,6 +29,7 @@
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/buffers/buffer_impl.hpp"
+#include "impl/context/context_types.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
 #include "program_impl.hpp"
@@ -276,6 +277,27 @@ KernelConfigBuffer CreateKernelConfigBuffer(
     }
     TT_FATAL(!shards.empty(), "The workload has no Tensix kernels on this host's devices, so no kernel config block");
     return KernelConfigBuffer(std::make_shared<KernelConfigBufferImpl>(std::move(shards), lockstep_address, &device));
+}
+
+std::shared_ptr<KernelConfigBufferImpl> CreateKernelConfigBuffer(
+    const std::vector<std::pair<IDevice*, Program*>>& programs, bool lockstep_address) {
+    std::vector<KernelConfigBufferImpl::Shards> shards;
+    for (const auto& [device, program] : programs) {
+        auto device_shards = allocate_shards(*device, *program, lockstep_address);
+        std::move(device_shards.begin(), device_shards.end(), std::back_inserter(shards));
+    }
+    TT_FATAL(!shards.empty(), "The programs have no Tensix kernels, so no kernel config block");
+    return std::make_shared<KernelConfigBufferImpl>(std::move(shards), lockstep_address);
+}
+
+uint32_t LargestTensixKernelConfigBlock(Program& program) {
+    const uint32_t index = tensix_index(program);
+    const ProgramConfig& program_config = program.impl().get_program_config(index);
+    uint32_t largest = 0;
+    for (const auto& kernel_group : program.impl().get_kernel_groups(index)) {
+        largest = std::max(largest, kernel_config_footprint(*kernel_group, program_config));
+    }
+    return largest;
 }
 
 void EnqueueMeshWorkload(
