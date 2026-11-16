@@ -664,8 +664,12 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_async_decode": True,
         "supports_async_spec_decode": True,
         # A verify submitted over the unread one before it builds its rows on the device (spec_chain): greedy rows, and
-        # on a device-sampled step sampled rows, which draw with the seeds of the positions the device computes.
+        # on a device-sampled step sampled rows, which draw with the seeds of the positions the device computes. Row i
+        # continues the unread verify's row slot_remap[i], so a row the runner moved keeps chaining.
         "supports_chained_spec_verify": True,
+        # A prefill may run while one verify it returned unread awaits its read and propose: prefill_forward first
+        # settles what that propose needs from the device (MTPBlockEngine.prefill_over_pending).
+        "supports_prefill_over_pending_spec": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,
@@ -844,6 +848,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         eng = self._ensure_ready(kv_cache)
         N = tokens.shape[0]
         slots = [int(x) for x in kwargs.get("empty_slots") or range(N)]
+        eng.prefill_over_pending(slots)
         out = super().prefill_forward(tokens, page_table, kv_cache, prompt_lens, **kwargs)
         for u in range(N):
             end = int(prompt_lens[u]) if prompt_lens is not None else tokens.shape[1]

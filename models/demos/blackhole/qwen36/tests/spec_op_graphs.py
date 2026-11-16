@@ -6,7 +6,7 @@ inputs and compare every output word. Not used by the model.
 
   * OpGraphStepAccept.body: spec_accept.graph over ttnn ops (about 70 ops at B = 8, K = 3), the step trace of a
     one-enqueue step before the kernel;
-  * OpGraphChain.body: spec_chain.chain_graph over ttnn ops (about 110 ops), the chain program before the kernel.
+  * OpGraphChain.body: spec_chain.chain_graph over ttnn ops (about 160 ops), the chain program before the kernel.
 
 Both take the same input and output tensors as spec_accept.StepAccept and spec_chain.ChainInputs, plus their own
 float32 TILE constants and candidates, and compute in float32 tiles.
@@ -155,7 +155,8 @@ class _ChainDeviceOps(_DeviceOps):
 
     def __init__(self, chain):
         names = (
-            "ids", "pack", "overlay", "cand", "draws", "seed_cand", "iota_t", "iota_k", "user_rows", "one", "head", "tail"
+            "ids", "pack", "overlay", "cand", "draws", "seed_cand", "iota_t", "iota_k", "iota_b", "user_rows", "one",
+            "head", "tail",
         )  # fmt: skip
         self.__dict__.update({n: getattr(chain, n) for n in names})
         self.top = chain.c_top
@@ -186,6 +187,7 @@ class OpGraphChain:
         f32 = lambda t: _replicated(chain.mesh, torch.as_tensor(t, dtype=torch.float32), ttnn.float32, ttnn.TILE_LAYOUT)
         self.iota_t = f32(torch.arange(T).reshape(1, T))
         self.iota_k = f32(torch.arange(K).reshape(1, K))
+        self.iota_b = f32(torch.arange(B).reshape(1, B))
         self.user_rows = f32((torch.arange(B) * T).reshape(B, 1))
         self.c_top = f32([[int(table_rows) - 1]])
         self.one = f32([[1.0]])
@@ -194,7 +196,7 @@ class OpGraphChain:
         self.tail = f32(torch.zeros(1, rest)) if rest else None
         self.cand = f32(torch.zeros(T * B, 2 * self.nv_heads * self.groups))
         self.seed_cand = None if chain.seeds is None else f32(torch.zeros(T * B, T))
-        consts = [self.iota_t, self.iota_k, self.user_rows, self.c_top, self.one, self.head, self.tail]
+        consts = [self.iota_t, self.iota_k, self.iota_b, self.user_rows, self.c_top, self.one, self.head, self.tail]
         self.buffers = [t for t in (*consts, self.cand, self.seed_cand) if t is not None]
 
     def __getattr__(self, name):

@@ -590,6 +590,7 @@ def test_capabilities():
     assert tuple(caps["spec_hidden_handoff"]) == ("on_device",)
     assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
     assert caps["supports_chained_spec_verify"] is True
+    assert caps["supports_prefill_over_pending_spec"] is True
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is True and caps["supports_chunked_prefill"] is True
     assert issubclass(CLS, Qwen36ForCausalLM)
@@ -627,6 +628,9 @@ class FakeEngine:
 
     def finish_prefill(self, slot, end, final):
         self.calls.append(("finish_prefill", slot, end, final))
+
+    def prefill_over_pending(self, slots):
+        self.calls.append(("prefill_over_pending", list(slots)))
 
     def release(self, slot):
         self.calls.append(("release", slot))
@@ -997,12 +1001,16 @@ def _prefill(gen, n, ends, mask=None, slots=None, **kw):
 
 def test_prefill_forward(gen_eng):
     """Qwen36ForCausalLM's prefill runs with the engine's chunk hook; the row's end state goes to its block, and the
-    engine learns that the row ended its prompt."""
+    engine learns that the row ended its prompt. Before any prefill device work the engine settles a verify still to
+    propose for the prefill's slots (supports_prefill_over_pending_spec)."""
     gen, eng = gen_eng
-    logits, rope = _prefill(gen, 1, [7], slots=[0])
+    logits, rope = _prefill(gen, 1, [7], slots=[2])
     assert logits.dtype == torch.float32 and tuple(logits.shape) == (1, 1, eng.V) and rope is not None
     names = [c[0] for c in eng.calls]
-    assert names == ["prefill_hook", "model_prefill", "chunk", "write", "finish_prefill"]
+    assert names == ["prefill_over_pending", "prefill_hook", "model_prefill", "chunk", "write", "finish_prefill"]
+    assert eng.calls[0] == ("prefill_over_pending", [2])
+    eng.calls.clear()
+    _prefill(gen, 1, [7], slots=[0])
     _, slot, toks, table, final = _last(eng, "prefill_hook")
     assert slot == 0 and toks.tolist() == list(range(7)) and final is True
     assert table.shape == (1, spec_table_width(4096, 3, BLOCK))

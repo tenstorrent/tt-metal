@@ -126,6 +126,11 @@ class PendingVerify:
         self.tokens = self.p0 = None
         self.successor = None  # the chained verify submitted over this one, still to be filled by its propose
         self.materialized = None  # (committed, counts, DraftResult) the engine computed itself for a chained successor
+        self.src = list(range(self.B))  # a chained verify: the predecessor row each row continues (its slot_remap)
+        # A prefill ran behind this verify before its propose (MTPBlockEngine.prefill_over_pending), into the state
+        # slots ``prefilled``.
+        self.prefill_behind = False
+        self.prefilled = set()
         self._lock = threading.Lock()
 
     @property
@@ -1950,6 +1955,7 @@ class MTPBlockEngine(MTPSpecEngine):
         self._chain_trace = None  # the chain program's trace
         self.chained_steps = 0  # chained verifies whose inputs the chain program built
         self.materialized_steps = 0  # chained verifies the engine built from a read predecessor instead
+        self.prefills_over_pending = 0  # verifies a prefill ran behind before their propose
         self.verify_bucket_steps = {}  # users of the verify trace a step replayed -> verifies
 
     def prepare_prefill(self, page_table):
@@ -2082,6 +2088,7 @@ class MTPBlockEngine(MTPSpecEngine):
             f"[spec_engine] one-enqueue steps: {self.one_enqueue_steps} of {self.verify_steps} verifies; "
             f"{self.one_enqueue_host_proposes} of them drafted again on the host; chained verifies: "
             f"{self.chained_steps} built on the device, {self.materialized_steps} from a read predecessor; "
+            f"verifies a prefill ran behind: {self.prefills_over_pending}; "
             f"verifies per replayed user count: {dict(sorted(self.verify_bucket_steps.items()))}"
         )
 
@@ -2142,9 +2149,43 @@ class MTPBlockEngine(MTPSpecEngine):
 
         return on_chunk
 
+    def prefill_over_pending(self, slots):
+        """Settle every verify still to propose before a prefill into state slots ``slots`` runs any device work
+        (vllm-tt-plugin supports_prefill_over_pending_spec: the runner reads, commits and proposes a verify it got
+        unread after a prefill). A prefill trace replay may overwrite the verify trace's and the drafter trace's
+        outputs (capture_decode), and the prefill resets its slots' per-slot state, so:
+
+          * a verify that ran the device acceptance and drafter (a one-enqueue ``plan``) has its reads enqueued before
+            the prefill, which is all its propose needs; its propose decides with the verify's own snapshots and never
+            drafts on the host (propose_draft_tokens);
+          * a deferred verify without a plan, whose propose would draft on the host from the verify trace's outputs, is
+            read, walked and proposed now, in its rows (_propose_from_read: one device wait); its propose returns that
+            result once the runner's commit is the walk;
+          * a verify read on the host when it ran (a narrow or logits verify) can no longer be proposed.
+
+        A verify settled here cannot be the predecessor of a chained verify. A slot the prefill takes must not hold a
+        request of a verify still to propose: the runner releases a finished request first (release_request)."""
+        slots = [int(s) for s in slots]
+        for step in self._pending:
+            taken = [s for s in slots if bool(step.active[s]) and s in self._active]
+            if taken:
+                raise ValueError(
+                    f"a prefill into state slots {taken}, which hold requests of a verify still to propose"
+                )
+        for step in self._pending:
+            if step.prefill_behind:
+                continue
+            if step.plan is None and step.reads is not None and step.materialized is None:
+                self._propose_from_read(step)
+            step.prefill_behind = True
+            self.prefills_over_pending += 1
+
     def finish_prefill(self, slot, end, final):
         """Prefill row of state slot ``slot`` wrote its state after ``end`` tokens. Only a row that ends its prompt
         (``final``) decodes next."""
+        for step in self._pending:
+            if step.prefill_behind:
+                step.prefilled.add(int(slot))
         reset_draft_skip(self, slot)
         self._fresh.pop(slot, None)
         self._active.discard(slot)
@@ -2353,7 +2394,10 @@ class MTPBlockEngine(MTPSpecEngine):
 
         After a verify a chained verify continued (``successor``), the drafts already ran and the chained verify's
         inputs followed the device's count: every difference raises, and the propose fills the chained verify's
-        block and positions for its own propose."""
+        block and positions for its own propose. After a verify a prefill ran behind (prefill_over_pending) the
+        verify outputs the base propose would read are gone: every difference raises too, and the slots released or
+        prefilled since the verify leave the offer, as the release and the prefill after the propose leave them in
+        the drained order."""
         step = self._pending.popleft() if self._pending else None
         args = (num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, hidden)
         if step is not None and step.materialized is not None:
@@ -2361,20 +2405,28 @@ class MTPBlockEngine(MTPSpecEngine):
         if step is None or step.plan is None:
             if step is not None and step.successor is not None:
                 raise RuntimeError("a chained verify continued a verify that ran no device drafter")
+            if step is not None and step.prefill_behind:
+                raise ValueError(
+                    "a prefill ran behind a verify read on the host before its propose: the propose would draft from "
+                    "verify outputs the prefill overwrote"
+                )
             return super().propose_draft_tokens(*args)
         step.wait()
         chained = step.successor is not None
         # A verify continued by a chained one decides with its own rows and withheld slots: the chained verify ran
-        # after it and noted its own.
-        q = self._propose_request(*args, step=step if chained else None)
+        # after it and noted its own. A prefill behind the verify reset its slots' state, and released slots may lie
+        # among the verify's rows.
+        own = chained or step.prefill_behind
+        q = self._propose_request(*args, step=step if own else None)
         plan, B, K = step.plan, self.B, self.K
         moved = [u for u in range(B) if not q.pad[u] and int(q.cpos[u, 0]) != plan.p0[u] + 1]
         other_table = page_table is not None and not torch.equal(self._fit(page_table), step.pt)
         if other_table or moved or q.decline != plan.declined or q.keep != plan.keep:
-            if chained:
+            if own:
                 raise ValueError(
-                    f"the propose after a verify a chained verify continued decides differently (table changed "
-                    f"{other_table}, rows off their verify {moved}, declined {q.decline} vs {plan.declined})"
+                    f"the propose after a verify a {'chained verify continued' if chained else 'prefill ran behind'} "
+                    f"decides differently (table changed {other_table}, rows off their verify {moved}, declined "
+                    f"{q.decline} vs {plan.declined})"
                 )
             logger.warning(
                 f"[spec_engine] propose after a one-enqueue verify decides differently (table changed {other_table}, "
@@ -2387,22 +2439,23 @@ class MTPBlockEngine(MTPSpecEngine):
         live = [u for u in range(B) if not q.pad[u]]
         cut = [u for u in live if m[u] < m_dev[u]]
         prefix = all(m[u] <= m_dev[u] and torch.equal(q.ctok[u, : m[u] + 1], step.ids[u, : m[u] + 1]) for u in live)
-        if cut and prefix and not chained:
+        if cut and prefix and not own:
             self.one_enqueue_host_proposes += 1
             return super().propose_draft_tokens(*args)
         base = self._rope_base(plan.p0, step.rope_deltas)
         want = drafter_pack(q.ctok, m, plan.p0, plan.declined, plan.keep, base, K, self.model.rope_table_rows()).to(
             torch.int64
         )
-        if (cut and chained) or not torch.equal(want, step.pack[: want.shape[0], : want.shape[1]]):
+        if (cut and own) or not torch.equal(want, step.pack[: want.shape[0], : want.shape[1]]):
+            if chained:
+                why = "not the device's: the chained verify and the one-enqueue drafts continue the device's commit"
+            elif own:
+                why = "not the device's: a prefill ran behind the verify, and only the device's drafts remain"
+            else:
+                why = "not a prefix of the device's: the one-enqueue drafts continue a wrong commit"
             raise ValueError(
                 f"the runner committed {[mu + 1 for mu in m]} tokens per row, the device acceptance "
-                f"{[mu + 1 for mu in m_dev]}, and the runner's commit is "
-                + (
-                    "not the device's: the chained verify and the one-enqueue drafts continue the device's commit"
-                    if chained
-                    else "not a prefix of the device's: the one-enqueue drafts continue a wrong commit"
-                )
+                f"{[mu + 1 for mu in m_dev]}, and the runner's commit is {why}"
             )
         if any(m):
             self.mtp_extra_steps += 1
@@ -2410,22 +2463,26 @@ class MTPBlockEngine(MTPSpecEngine):
         drafts[torch.tensor(plan.declined)] = 0
         if chained:
             self._fill_successor(step.successor, q.ctok, m, plan.p0, drafts)
-        return self._draft_result(drafts, plan.declined, offer=not chained)
+        result = self._draft_result(drafts, plan.declined, offer=not chained)
+        if step.prefill_behind and not chained:
+            self._offered = {u for u in self._offered if u in self._active and u not in step.prefilled}
+        return result
 
     def _fill_successor(self, succ, ctok, m, p0, drafts):
-        """The block a chained verify ran, once its predecessor's count is known: each live row's last committed token,
-        then its valid drafts (a padded column repeats column 0, as sanitize_verify_block pads), at the column-0
-        position p0 + m + 1. Its own propose compares against these."""
+        """The block a chained verify ran, once its predecessor's count is known: each live row u continues the
+        predecessor's row s = succ.src[u] (``ctok``, ``m``, ``p0`` and ``drafts`` are the predecessor's rows): s's last
+        committed token, then s's valid drafts (a padded column repeats column 0, as sanitize_verify_block pads), at the
+        column-0 position p0[s] + m[s] + 1. Its own propose compares against these."""
         B, T = self.B, self.T
         tokens = torch.zeros(B, T, dtype=torch.int64)
         start = torch.zeros(B, dtype=torch.int64)
         for u in range(B):
             if not bool(succ.active[u]):
                 continue
-            n = int(succ.num_valid[u])
-            tokens[u] = int(ctok[u, m[u]])
-            tokens[u, 1 : n + 1] = drafts[u, :n].to(torch.int64)
-            start[u] = int(p0[u]) + m[u] + 1
+            s, n = succ.src[u], int(succ.num_valid[u])
+            tokens[u] = int(ctok[s, m[s]])
+            tokens[u, 1 : n + 1] = drafts[s, :n].to(torch.int64)
+            start[u] = int(p0[s]) + m[s] + 1
         succ.tokens, succ.p0 = tokens, start
         succ.plan.p0 = start.tolist()
 
@@ -2449,31 +2506,42 @@ class MTPBlockEngine(MTPSpecEngine):
     # Chained verify (vllm-tt-plugin supports_chained_spec_verify)
     # --------------------------------------------------------------------- #
     def _decode_chained(self, predecessor, start_pos, num_valid_drafts, page_table, slot_remap, mamba_state, sampling):
-        """A verify that continues the unread ``predecessor`` row for row: each live row of the block (placeholders
-        from the runner) is the predecessor's last committed token at the device's count, then up to
-        ``num_valid_drafts`` of the drafts its drafter made, from the start state of that count
-        (``mamba_state.groups[g].start_blocks_by_count``). On a device-sampled step (``sampling``) a sampled row draws
-        its columns as on an unchained verify, a seeded row with the seeds of the positions that count gives. Built on
-        the device by the chain program when the predecessor ran the device acceptance and drafter and this verify's
-        propose is decided for every count; else from the engine's own read and walk of the predecessor
-        (_materialize). Returns VerifyResult with a PendingVerify."""
+        """A verify that continues the unread ``predecessor``: each live row u of the block (placeholders from the
+        runner) continues the predecessor's row ``slot_remap[u]`` (row u without a slot_remap): that row's last
+        committed token at the device's count, then up to ``num_valid_drafts[u]`` of the drafts its drafter made, from
+        the start state of that count (``mamba_state.groups[g].start_blocks_by_count``, staged for row u). On a
+        device-sampled step (``sampling``) a sampled row draws its columns as on an unchained verify, a seeded row
+        with the seeds of the positions that count gives. Built on the device by the chain program when the
+        predecessor ran the device acceptance and drafter and this verify's propose is decided for every count; else
+        from the engine's own read and walk of the predecessor (_materialize). The slot_remap moves the per-slot state
+        once, after every check. Returns VerifyResult with a PendingVerify."""
         B, K, T = self.B, self.K, self.T
         if not self._pending or predecessor is not self._pending[-1] or predecessor.successor is not None:
             raise ValueError("spec_predecessor is not the engine's last verify still to propose")
+        if predecessor.prefill_behind:
+            raise ValueError(
+                "a prefill ran behind spec_predecessor: the chain program would read verify outputs the prefill "
+                "overwrote"
+            )
         if predecessor.p0 is None:
             raise ValueError("the predecessor's block is unknown: the verify before it was never proposed")
         start_pos = self._ints(start_pos, (B, T))
         hint = _int_vec(num_valid_drafts, B, "num_valid_drafts")
         active = start_pos[:, 0] >= 0
-        if bool((active & ~predecessor.active).any()):
+        src = list(range(B)) if slot_remap is None else [int(x) for x in slot_remap]
+        if sorted(src) != list(range(B)):
+            raise ValueError(f"slot_remap {src} is not a permutation of range({B})")
+        if bool((active & ~predecessor.active[torch.tensor(src)]).any()):
             raise ValueError(
-                f"chained rows {active.tolist()} are not rows of the predecessor {predecessor.active.tolist()}"
+                f"chained rows {active.tolist()} (continuing predecessor rows {src}) are not rows of the predecessor "
+                f"{predecessor.active.tolist()}"
             )
-        if slot_remap is not None and [int(x) for x in slot_remap] != list(range(B)):
-            raise ValueError(f"a chained verify moves no row, got slot_remap {list(slot_remap)}")
+        released = [u for u in range(B) if bool(active[u]) and src[u] not in self._active]
+        if released:
+            raise ValueError(f"chained rows {released} continue predecessor rows whose slots were released")
         plan = seed_cand = None
         if sampling is not None:
-            p0_prev = [int(predecessor.p0[u]) if bool(active[u]) else -1 for u in range(B)]
+            p0_prev = [int(predecessor.p0[src[u]]) if bool(active[u]) else -1 for u in range(B)]
             plan, seed_cand = chained_sampling_plan(sampling, p0_prev, T)
             plan = plan if plan.any_sampled else None
         if plan is not None and not self.sample_on_device:
@@ -2483,39 +2551,60 @@ class MTPBlockEngine(MTPSpecEngine):
             )
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
-        reason = self._chain_refusal(predecessor, active, hint, start_pos, page_table)
+        reason = self._chain_refusal(predecessor, src, active, hint, start_pos, page_table)
         if reason is None:
+            upper = torch.where(active, start_pos[:, 0], 0)
+            if int(upper.max()) + T > table_capacity(int(torch.as_tensor(page_table).shape[-1]), self.block_size):
+                raise ValueError(f"chained verify window from {upper.tolist()} past the paged KV capacity")
+            self.remap_slots(src)
             return VerifyResult(
                 "argmax_ids",
-                self._verify_chained(predecessor, active, hint, start_pos, page_table, mamba_state, plan, seed_cand),
+                self._verify_chained(
+                    predecessor, src, active, hint, start_pos, page_table, mamba_state, plan, seed_cand
+                ),
             )
         logger.debug(f"[spec_engine] chained verify built from a read predecessor: {reason}")
         self.materialized_steps += 1
-        return self._materialize(predecessor, active, hint, page_table, mamba_state, sampling)
+        return self._materialize(predecessor, src, active, hint, page_table, mamba_state, sampling)
 
-    def _chain_nv(self, predecessor, active, hint):
-        """Valid drafts of each chained row: the runner's cap, 0 where the predecessor's propose declines the row."""
+    def _chain_nv(self, predecessor, src, active, hint):
+        """Valid drafts of each chained row: the runner's cap, 0 where the predecessor's propose declines the row it
+        continues."""
         return [
-            0 if not bool(active[u]) or predecessor.plan.declined[u] else min(int(hint[u]), self.K)
+            0 if not bool(active[u]) or predecessor.plan.declined[src[u]] else min(int(hint[u]), self.K)
             for u in range(self.B)
         ]
 
-    def _chain_refusal(self, predecessor, active, hint, start_pos, page_table):
+    @staticmethod
+    def _chain_offered(predecessor, src, live):
+        """The rows the predecessor's propose offers drafts (_offered), in the chained verify's rows: row u when the
+        propose does not decline row src[u] and slot u holds a request (``live``: the engine's _active in the chained
+        verify's rows). In the drained order a request released after that propose leaves the offer
+        (reset_draft_skip); under chaining the release comes first, so its slot is left out here."""
+        return {u for u in range(len(src)) if not predecessor.plan.declined[src[u]] and u in live}
+
+    def _chain_refusal(self, predecessor, src, active, hint, start_pos, page_table):
         """Why the chain program cannot build this chained verify, or None. It needs its trace, a predecessor that ran
         the device acceptance and drafter (over its draws on a device-sampled step), no prompt to finish, a propose
         decided alike for every count the predecessor can accept, and a grouped KV write free of collisions at every
-        such count. Touches no engine state."""
+        such count. Touches no engine state: the per-slot state is read where remap_slots(``src``) would move it."""
         B, T = self.B, self.T
         if self._chain_trace is None or not self._one_enqueue_ready():
             return "no chain trace"
         if predecessor.plan is None:
             return "the predecessor ran no device acceptance and drafter"
-        if any(bool(active[u]) and u in self._fresh for u in range(B)):
+        if any(bool(active[u]) and src[u] in self._fresh for u in range(B)):
             return "a row's prompt is not finished"
-        offered = {u for u in range(B) if not predecessor.plan.declined[u]}
-        nv = self._chain_nv(predecessor, active, hint)
+        new_of = {old: new for new, old in enumerate(src)}
+        offered = self._chain_offered(predecessor, src, {new_of[s] for s in self._active})
+        nv = self._chain_nv(predecessor, src, active, hint)
         no_draft = note_withheld_drafts(
-            offered, self._no_draft, set(self._speculated), dict(self._withheld_streak), nv, self.no_draft_streak
+            offered,
+            {new_of[s] for s in self._no_draft},
+            {new_of[s] for s in self._speculated},
+            {new_of[s]: n for s, n in self._withheld_streak.items()},
+            nv,
+            self.no_draft_streak,
         )
         saved = self._last_cap_blocks, self._last_pt
         self._last_cap_blocks = int(torch.as_tensor(page_table).shape[-1])
@@ -2523,7 +2612,7 @@ class MTPBlockEngine(MTPSpecEngine):
         try:
             plans = []
             for c in range(1, T + 1):
-                p0 = torch.tensor([int(predecessor.p0[u]) + c if bool(active[u]) else 0 for u in range(B)])
+                p0 = torch.tensor([int(predecessor.p0[src[u]]) + c if bool(active[u]) else 0 for u in range(B)])
                 plans.append(self._one_enqueue_plan(p0, active, nv, None, no_draft=no_draft))
         finally:
             self._last_cap_blocks, self._last_pt = saved
@@ -2531,11 +2620,11 @@ class MTPBlockEngine(MTPSpecEngine):
             (p.declined, p.keep) != (plans[0].declined, plans[0].keep) for p in plans
         ):
             return "the propose depends on the count"
-        if not self._chain_kv_safe(self._fit(page_table), predecessor, active):
+        if not self._chain_kv_safe(self._fit(page_table), predecessor, src, active):
             return "the grouped KV write collides at some count"
         return None
 
-    def _chain_kv_safe(self, pt, predecessor, active):
+    def _chain_kv_safe(self, pt, predecessor, src, active):
         """Whether no two users write one (block, 32-row tile) in one grouped KV write call at any count each can take
         (spec_kv_write_conflicts over the union of the counts)."""
         if not getattr(self.model, "_vfy_kv_grouped", False):
@@ -2547,25 +2636,26 @@ class MTPBlockEngine(MTPSpecEngine):
                 if not bool(active[u]):
                     continue
                 for c in range(1, T + 1):
-                    pos = int(predecessor.p0[u]) + c + j
+                    pos = int(predecessor.p0[src[u]]) + c + j
                     blk = int(pt[u, pos // bs]) if pos // bs < pt.shape[1] else 0
                     if blk and owner.setdefault((blk, (pos % bs) // ttnn.TILE_SIZE), u) != u:
                         return False
         return True
 
     def _verify_chained(
-        self, predecessor, active, hint, start_pos, page_table, mamba_state, sample_plan=None, seed_cand=None
+        self, predecessor, src, active, hint, start_pos, page_table, mamba_state, sample_plan=None, seed_cand=None
     ):
         """Stage the host rows, the ctrl candidates and the seed candidates, replay the chain trace, then the verify,
-        [sampler,] step and drafter traces, and enqueue the reads. ``sample_plan`` (spec_sample.chained_sampling_plan,
-        or None): the drawing rows and their parameters; the chain program writes their seeds from ``seed_cand``. The
-        predecessor's propose fills the block's tokens and positions."""
+        [sampler,] step and drafter traces, and enqueue the reads. Runs after remap_slots(``src``): the per-slot state
+        is in this verify's rows, the predecessor's is read at row src[u]. ``sample_plan``
+        (spec_sample.chained_sampling_plan, or None): the drawing rows and their parameters; the chain program writes
+        their seeds from ``seed_cand``. The predecessor's propose fills the block's tokens and positions."""
         B, T, model = self.B, self.T, self.model
         if self.verify_steps % ONE_ENQUEUE_LOG_EVERY == 0:
             self._log_one_enqueue_counts()
         self.verify_steps += 1
-        nv = self._chain_nv(predecessor, active, hint)
-        self._offered = {u for u in range(B) if not predecessor.plan.declined[u]}
+        nv = self._chain_nv(predecessor, src, active, hint)
+        self._offered = self._chain_offered(predecessor, src, self._active)
         self._no_draft = note_withheld_drafts(
             self._offered, self._no_draft, self._speculated, self._withheld_streak, nv, self.no_draft_streak
         )
@@ -2573,16 +2663,14 @@ class MTPBlockEngine(MTPSpecEngine):
         pt = self._fit(page_table).clone()
         pt[~active] = 0
         self._row_active, self._last_pt = active.clone(), pt
-        upper = torch.where(active, start_pos[:, 0], 0)
-        vpt = verify_write_table(pt, upper, nv, self.block_size)
-        if int(upper.max()) + T > table_capacity(self._last_cap_blocks, self.block_size):
-            raise ValueError(f"chained verify window from {upper.tolist()} past the paged KV capacity")
-        p_any = torch.tensor([int(predecessor.p0[u]) + T if bool(active[u]) else 0 for u in range(B)])
+        vpt = verify_write_table(pt, torch.where(active, start_pos[:, 0], 0), nv, self.block_size)
+        p_any = torch.tensor([int(predecessor.p0[src[u]]) + T if bool(active[u]) else 0 for u in range(B)])
         plan = self._one_enqueue_plan(p_any, active, nv, None)
         plan = SimpleNamespace(rows=None, p0=None, declined=plan.declined, keep=plan.keep)
         blocks = model.gdn_blocks
         blocks.set_verify_blocks(mamba_state, stage_ctrl=False)
-        p0_prev = [int(predecessor.p0[u]) if bool(active[u]) else 0 for u in range(B)]
+        p0_prev = [int(predecessor.p0[src[u]]) if bool(active[u]) else 0 for u in range(B)]
+        drawn_prev = drawn_users(predecessor.sample_plan, B, T)
         overlay = chain_overlay(
             p0_prev,
             active.tolist(),
@@ -2590,8 +2678,9 @@ class MTPBlockEngine(MTPSpecEngine):
             nv,
             plan.declined,
             plan.keep,
-            drawn_users(predecessor.sample_plan, B, T),
+            [drawn_prev[s] for s in src],
             drawn_users(sample_plan, B, T),
+            src,
         )
         self._chain.stage(overlay, blocks.ctrl_candidates(mamba_state), seed_cand)
         self._stage_table(self._draft_table(pt, plan.declined), "_mtp_pt", "_mtp_pt_staged")
@@ -2628,21 +2717,24 @@ class MTPBlockEngine(MTPSpecEngine):
             sample_plan=sample_plan,
             rope_deltas=self._rope_deltas,
         )
+        step.src = list(src)
         predecessor.successor = step
         self._pending.append(step)
         self._enqueue_step_and_drafter(step)
         self.chained_steps += 1
         return step
 
-    def _materialize(self, predecessor, active, hint, page_table, mamba_state, sampling):
-        """Build a chained verify from the engine's own read of its predecessor: wait for it, walk its ids, take the
-        device drafts (checked against the drafter pack) or run the base propose, then verify the block on the host
-        path. The runner's propose of the predecessor returns those drafts once its commit is this walk."""
+    def _propose_from_read(self, pred):
+        """The propose of the verify ``pred`` from the engine's own read of it: wait for it, walk its ids, take the
+        device drafts (checked against the drafter pack) or run the base propose. As in the drained order, it runs in
+        pred's rows with the withheld slots and M-RoPE deltas pred ran with (a release before it changes the
+        engine's), and a slot released since pred leaves the offer. The runner's propose of pred returns the result
+        once its commit is this walk (_propose_materialized). Returns (accepted drafts m, counts, committed block,
+        DraftResult)."""
         B, K, T = self.B, self.K, self.T
-        pred = predecessor
         ids = pred.wait()
         if pred.tokens is None:
-            raise RuntimeError("the predecessor's block is unknown: its own predecessor never proposed")
+            raise RuntimeError("the verify's block is unknown: its own predecessor never proposed")
         m = greedy_counts(ids, pred.tokens, pred.num_valid)
         m[~pred.active] = 0
         acc = (m + 1).to(torch.int64)
@@ -2660,33 +2752,53 @@ class MTPBlockEngine(MTPSpecEngine):
                 self.model.rope_table_rows(),
             ).to(torch.int64)  # fmt: skip
             if not torch.equal(want, pred.pack[: want.shape[0], : want.shape[1]]):
-                raise ValueError("the device acceptance of a chained verify's predecessor differs from its ids' walk")
+                raise ValueError("the device acceptance of a verify the engine walked differs from its ids' walk")
             drafts = pred.drafts.clone()
             drafts[torch.tensor(plan.declined)] = 0
             result = self._draft_result(drafts, plan.declined)
         else:
-            result = MTPSpecEngine.propose_draft_tokens(self, K, ctok.to(torch.int32), cpos.to(torch.int32), acc)
+            saved = self._no_draft, self._rope_deltas
+            if pred.rope_deltas is not None:
+                self._rope_deltas = list(pred.rope_deltas)
+            self._no_draft = set(pred.no_draft)
+            try:
+                result = MTPSpecEngine.propose_draft_tokens(self, K, ctok.to(torch.int32), cpos.to(torch.int32), acc)
+            finally:
+                self._no_draft, self._rope_deltas = saved
         pred.materialized = (ctok, acc, result)
+        self._offered &= self._active  # a released slot leaves the offer, as the release after the propose does
+        return m, acc, ctok, result
+
+    def _materialize(self, predecessor, src, active, hint, page_table, mamba_state, sampling):
+        """Build a chained verify from the engine's own read of its predecessor (_propose_from_read), then verify the
+        block on the host path: remap_slots(``src``) moves the per-slot state after the predecessor's propose, as in
+        the drained order, and row u of the block continues the predecessor's row src[u]."""
+        B, T = self.B, self.T
+        pred = predecessor
+        _, acc, ctok, result = self._propose_from_read(pred)
+        self.remap_slots(src)
         tokens = torch.zeros(B, T, dtype=torch.int64)
         positions = torch.full((B, T), -1, dtype=torch.int64)
         nv = torch.zeros(B, dtype=torch.int32)
+        counts = torch.ones(B, dtype=torch.int64)
+        starts = torch.zeros(B, dtype=torch.int64)
         for u in range(B):
             if not bool(active[u]):
                 continue
-            c, n = int(acc[u]), min(int(hint[u]), int(result.num_valid[u]))
-            tokens[u, 0] = ctok[u, c - 1]
-            tokens[u, 1 : n + 1] = result.draft_token_ids[u, :n].to(torch.int64)
-            positions[u, : n + 1] = int(pred.p0[u]) + c + torch.arange(n + 1)
-            nv[u] = n
-        state = _with_start_blocks(mamba_state, torch.where(active, m, 0))
+            s = src[u]
+            c, n = int(acc[s]), min(int(hint[u]), int(result.num_valid[s]))
+            tokens[u, 0] = ctok[s, c - 1]
+            tokens[u, 1 : n + 1] = result.draft_token_ids[s, :n].to(torch.int64)
+            positions[u, : n + 1] = int(pred.p0[s]) + c + torch.arange(n + 1)
+            nv[u], counts[u], starts[u] = n, c, c - 1
         return self.decode_forward(
             tokens,
             positions,
             num_valid_drafts=nv,
-            accepted_counts=torch.where(active, acc, 1).to(torch.int32),
+            accepted_counts=counts.to(torch.int32),
             page_table=page_table,
             spec_mode="argmax_ids",
-            mamba_state=state,
+            mamba_state=_with_start_blocks(mamba_state, starts),
             sampling=sampling,
             defer=True,
             keep_pending=True,

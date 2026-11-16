@@ -9,8 +9,9 @@ spec_accept.StepAccept) and of the chain program (tt/kernels/chain_inputs.cpp, l
   shapes): greedy and drawn rows, padding, declined and kept rows, M-RoPE deltas, RoPE rows clamped at the table end;
   the chain's ctrl pages of every count, with start blocks that change at a block boundary and held rows
   (GdnBlockState.ctrl_candidates); the sampler seeds of seeded, unseeded and non-drawing users
-  (spec_sample.chained_sampling_plan). Over any small-integer words (flags outside {0, 1}, counts outside [0, K])
-  the words still equal the graphs' after the float32 -> uint32 typecast rule (a negative value is 0).
+  (spec_sample.chained_sampling_plan); rows that stay and rows that continue another predecessor row (a slot_remap).
+  Over any small-integer words (flags outside {0, 1}, counts outside [0, K], source rows outside [0, B)) the words
+  still equal the graphs' after the float32 -> uint32 typecast rule (a negative value is 0).
 * The kernels' L1 layouts equal the CB sizes the launchers reserve.
 * The launchers run one generic_op on one core over the engine's own buffers (no ttnn op of the replaced graphs),
   pass the shapes, constants and buffer addresses the kernels read, stage the chain candidates as int32 words only
@@ -46,6 +47,7 @@ from models.demos.blackhole.qwen36.tt.spec_chain import (
     CH_DELTA,
     CH_DRAWN,
     CH_P0_PREV,
+    CH_SRC,
     CHAIN_OVERLAY_ROWS,
     ChainInputs,
     ChainTorchOps,
@@ -279,16 +281,20 @@ def _case_line(case, B, K, groups, nv, ctrl_words, sampled, seed_cand=None, over
     )  # fmt: skip
 
 
+@pytest.mark.parametrize("moved", [False, True], ids=["rows-stay", "rows-move"])
 @pytest.mark.parametrize("sampled", [False, True], ids=["greedy", "sampled"])
 @pytest.mark.parametrize("B,K", [(1, 3), (8, 3), (2, 3), (4, 3), (4, 7), (2, 11)])
-def test_the_chain_kernel_writes_the_words_of_the_op_graph(words, B, K, sampled):
+def test_the_chain_kernel_writes_the_words_of_the_op_graph(words, B, K, sampled, moved):
     """chain_words == spec_chain.chain_graph (the replaced op graph in torch) == the block, ctrl pages and seeds the
     host stages for the chained verify, over every count 0 .. K of the predecessor; drawn predecessor users continue
-    from their draws, held rows keep SPEC_STEP_HOLD."""
+    from their draws, held rows keep SPEC_STEP_HOLD. With moved rows (a random slot_remap per case) each row continues
+    the predecessor row its overlay CH_SRC word names."""
     groups, nv = 3, 6
     words_c = _ctrl_words(B, nv)
-    rng = random.Random(B * 13 + K + 1000 * sampled)
-    cases = [_chain_case(rng, B, K, groups, nv, sampled) for _ in range(80)]
+    rng = random.Random(B * 13 + K + 1000 * sampled + 7 * moved)
+    cases = [_chain_case(rng, B, K, groups, nv, sampled, moved) for _ in range(80)]
+    if moved and B > 1:
+        assert any(c.src != list(range(B)) for c in cases), "a row that moves"
     if K <= 7:  # _chain_case reaches all K + 1 counts of K = 11 too rarely
         assert set().union(*(set(c.m) for c in cases)) == set(range(K + 1)), "every count of the predecessor"
     lines = [_case_line(c, B, K, groups, nv, words_c, sampled) for c in cases]
@@ -314,15 +320,16 @@ def test_the_chain_kernel_writes_the_words_of_the_op_graph(words, B, K, sampled)
 def test_the_chain_kernel_seeds_are_the_unchained_seeds_of_the_device_count(words, B):
     """With the seed candidates of spec_sample.chained_sampling_plan, the kernel gives a seeded user the seeds an
     unchained verify at the device count's column-0 position draws with, an unseeded user its fresh seeds at every
-    count, and a user that draws nothing seed 0 with the plan's user id NO_CORE."""
+    count, and a user that draws nothing seed 0 with the plan's user id NO_CORE; also on rows that continue another
+    predecessor row."""
     K, groups, nv = 3, 3, 6
     T, R = K + 1, B * (K + 1)
     words_c = _ctrl_words(B, nv)
     rng = random.Random(B + 5)
     counter = iter(range(1, 1 << 20))
     kinds_seen, counts = set(), set()
-    for _ in range(80):
-        case = _chain_case(rng, B, K, groups, nv, True)
+    for i in range(80):
+        case = _chain_case(rng, B, K, groups, nv, True, moved=i % 2 == 1)
         kinds = [rng.choice(["seeded", "unseeded", "greedy"]) for _ in range(B)]
         sampling = SimpleNamespace(
             temperature=[0.0 if k == "greedy" else 0.8 for k in kinds],
@@ -424,8 +431,9 @@ def test_the_chain_kernel_writes_the_ctrl_pages_of_the_start_blocks_of_each_coun
 @pytest.mark.parametrize("B,K", [(1, 3), (8, 3), (2, 7)])
 def test_the_chain_kernel_writes_the_op_graph_words_for_any_small_integer_words(words, B, K, sampled):
     """Out-of-contract words: anchors whose count falls outside [0, T) (the graph's one-hot picks nothing), flags
-    -2 .. 3, negative column-0 positions and M-RoPE deltas, valid drafts outside [0, K], negative candidates. The
-    kernel's words equal chain_graph's after the float32 typecast rules (uint32: a negative value is 0)."""
+    -2 .. 3, negative column-0 positions and M-RoPE deltas, valid drafts outside [0, K], negative candidates, source
+    rows outside [0, B) (the graph's one-hot gather reads 0) and repeated. The kernel's words equal chain_graph's after
+    the float32 typecast rules (uint32: a negative value is 0)."""
     groups, nv = 2, 3
     T, R, W = K + 1, B * (K + 1), pack_width(B * (K + 1))
     words_c = _ctrl_words(B, nv)
@@ -440,6 +448,7 @@ def test_the_chain_kernel_writes_the_op_graph_words_for_any_small_integer_words(
         overlay[:, :B] = torch.randint(-2, 4, (CHAIN_OVERLAY_ROWS, B), dtype=torch.int32)
         overlay[CH_P0_PREV, :B] = torch.randint(-100, 5000, (B,), dtype=torch.int32)
         overlay[CH_DELTA, :B] = torch.randint(-60, 60, (B,), dtype=torch.int32)
+        overlay[CH_SRC, :B] = torch.randint(-2, B + 2, (B,), dtype=torch.int32)
         drafts = [torch.randint(0, 1 << 20, (B,)) for _ in range(K)]
         cand = torch.randint(-1, 1 << 20, (R, 2 * nv * groups)).to(torch.float32)
         seed_cand = torch.randint(0, 1 << 24, (R, T)).to(torch.float32) if sampled else None
@@ -456,6 +465,14 @@ def test_the_chain_kernel_writes_the_op_graph_words_for_any_small_integer_words(
         assert (seeds is None) == (want_seeds is None)
         if seeds is not None:
             assert torch.equal(seeds, want_seeds.reshape(-1))
+
+
+def test_rows_continue_their_own_predecessor_row_unless_a_source_is_given():
+    """chain_overlay's CH_SRC row is range(B) without ``src``: the words of rows that stay."""
+    B = 5
+    rows = ([7] * B, [1] * B, [0] * B, [3] * B, [0] * B, [0] * B)
+    assert chain_overlay(*rows)[CH_SRC, :B].tolist() == list(range(B))
+    assert chain_overlay(*rows, src=[4, 0, 1, 2, 3])[CH_SRC, :B].tolist() == [4, 0, 1, 2, 3]
 
 
 # ----------------------------------------------------------------------------------------------- L1 layouts

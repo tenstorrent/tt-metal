@@ -6,7 +6,7 @@
 // writes one line of integers per case:
 //   accept B K pack_words top draws | ids[R] [draws[R]] tokens[R] user_rows[6 * B]
 //     -> pack[(2K + 5) * pack_words] real[R]
-//   chain B K nv groups step_words ctrl_words top sampler | ids[R] [draws[R]] anchor[B] overlay[8 * B]
+//   chain B K nv groups step_words ctrl_words top sampler | ids[R] [draws[R]] anchor[B] overlay[9 * B]
 //                                                          drafts[K * B] cand[R * 2 * nv * groups] [seed_cand[R * T]]
 //     -> step[9 * step_words] ctrl[groups * ctrl_words] [seeds[R]]
 //   accept_layout B K pack_words chunk -> bytes
