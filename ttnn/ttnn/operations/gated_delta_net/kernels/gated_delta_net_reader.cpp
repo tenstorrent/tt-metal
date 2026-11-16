@@ -691,6 +691,7 @@ void kernel_main() {
                         do {
                             grant_free_slots();
                         } while (*landed < i / INBOX_SLOTS + 1);
+                        GDN_MARK("m_rd_landed");
                         cb_reserve_back(cb_in_kq, 2 * Kt);
                         cb_reserve_back(cb_in_knt, Kt);
                         cb_reserve_back(cb_in_mat, GDN_IN_MAT_PAGES);

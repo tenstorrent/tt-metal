@@ -180,6 +180,14 @@ PREP_SCALE_FPU = 7
 # truncations on the way to the state (the vector, its product, the product as the state core's operand).
 # 1 + 1.5 * 2^-10; state_carry_one_call_f32 relative RMS 1.45e-3 (SFPU) / 1.90e-3 (factor 1) / 0.90e-3.
 PREP_FPU_UNBIAS_BITS = 0x3F803000
+# R-PREP head block: beta folded into M (the inverse is solved on diag(beta) instead of the identity), so a head needs
+# neither beta exp(c) (one exp tile and a broadcast product) nor beta (*) v (an SFPU window): the state core gets v as
+# it is and exp(c) (*) kn. Same operand count through the FPU; beta reaches U through M's truncation instead of rhs's.
+PREP_M_BETA = True
+# M's unit diagonal passed the FPU exactly; beta on it is truncated to 10 mantissa bits like rhs, the other operand of
+# U = M x rhs. The writer's diag(beta) page is scaled up by the mean loss of those two truncations (0.36 units in the
+# last place each), in quarter units: 3 is a factor of 1 + 0.75 * 2^-10.
+PREP_M_BETA_UNBIAS_Q = 3
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 # Per-unit inputs (S0, conv / gate / norm weights) in flight on a core that runs several units: the next unit's reads
 # overlap this unit's compute instead of waiting for its last pop (decode B=16: 2 units on most cores).
@@ -419,6 +427,7 @@ def _kernel_defines():
         "TOK_COEF_PAGES",
         "D_PAGES",
         "CHUNK_COEF_PAGES",
+        "TOK_COEF_DEPTH",
         "CHUNK_VEC_PAGES",
         "CHUNK_MAT_PAGES",
         "QK_OWN",
@@ -612,7 +621,8 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_
     prep[CB_V_PREP] = heads * Vt
     prep[CB_PREP_SEND] = (PREP_SEND_HEADS or heads) * _head_block_pages(Kt, Vt)
     prep[CB_O_IN] = norm_units * Vt if norm_units else O_IN_DEPTH * heads * Vt  # PREP_NORM_SPLIT: per norm unit
-    prep[CB_TOK_COEF] = (CHUNK_COEF_PAGES + int(STATE_FUSED_RHS)) * TOK_COEF_DEPTH  # STATE_FUSED_RHS: -beta too
+    # STATE_FUSED_RHS: -beta too; PREP_M_BETA: diag(beta) in its place
+    prep[CB_TOK_COEF] = (CHUNK_COEF_PAGES + int(STATE_FUSED_RHS or PREP_M_BETA)) * TOK_COEF_DEPTH
     prep[CB_NORM_W] = Vt
     prep[CB_RINV_O] = heads * TOKEN_TILE_ROWS_PER_BLOCK
     prep[CB_ZW] = 2 * heads * Vt  # row k's, made before row k - 1's RMS norm, which takes row k - 1's
@@ -1708,10 +1718,12 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
             ("GDN_PREP_SCALE_FPU", str(int(PREP_SCALE_FPU) if prep is not None else 0)),
             ("GDN_FPU_UNBIAS_BITS", f"{PREP_FPU_UNBIAS_BITS:#x}u"),
+            ("GDN_PREP_M_BETA", str(int(prep is not None and PREP_M_BETA))),
+            ("GDN_M_BETA_UNBIAS_Q", str(int(PREP_M_BETA_UNBIAS_Q))),
         ]
     )
     program_values = {}
-    if prep is not None and STATE_FUSED_RHS:
+    if prep is not None and (STATE_FUSED_RHS or PREP_M_BETA):
         program_values["GDN_CHUNK_COEF_PAGES"] = CHUNK_COEF_PAGES + 1
     defines = [(name, str(program_values.get(name, value))) for name, value in defines]
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).
