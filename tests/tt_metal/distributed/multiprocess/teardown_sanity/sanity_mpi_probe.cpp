@@ -24,32 +24,34 @@
 #if __has_include(<mpi-ext.h>)
 #include <mpi-ext.h>
 #endif
-#include <signal.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <unistd.h>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <chrono>
+#include <thread>
+#include <unistd.h>  // getpid / getppid / _exit: POSIX, no C++ header equivalent
 
 static int g_rank = -1;
 static double g_t0;
 
-static double now_s(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    return ts.tv_sec + ts.tv_nsec * 1e-9;
+static double now_s() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static void mark(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-static void mark(const char* fmt, ...) {
+// A printf-style marker line. A variadic template (not a C-style variadic function) keeps the type-safe call
+// while satisfying clang-tidy; the no-argument case copies the literal so a non-literal format with no args
+// never reaches snprintf (-Wformat-security).
+template <typename... Args>
+static void mark(const char* fmt, Args... args) {
     char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    printf("[probe r=%d pid=%d t=%.3f] %s\n", g_rank, (int)getpid(), now_s() - g_t0, buf);
-    fflush(stdout);
+    if constexpr (sizeof...(Args) == 0) {
+        std::snprintf(buf, sizeof buf, "%s", fmt);
+    } else {
+        std::snprintf(buf, sizeof buf, fmt, args...);
+    }
+    std::printf("[probe r=%d pid=%d t=%.3f] %s\n", g_rank, static_cast<int>(getpid()), now_s() - g_t0, buf);
+    std::fflush(stdout);
 }
 
 static const char* errstr(int rc) {
@@ -77,10 +79,7 @@ static void finalize_at_exit(void) {
     mark("finalize_done rc=%s dt=%.3f", errstr(rc), now_s() - t);
 }
 
-static void sleep_ms(long ms) {
-    struct timespec ts = {ms / 1000, (ms % 1000) * 1000000L};
-    nanosleep(&ts, NULL);
-}
+static void sleep_ms(long ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
 static const char* env_or(const char* k, const char* d) {
     const char* v = getenv(k);
