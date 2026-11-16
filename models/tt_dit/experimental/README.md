@@ -8,6 +8,7 @@ In-progress model variants built on top of the Wan2.2 I2V pipeline.
 - **[Wan2.2-Distill](models/Wan2_2_Distill.md)** — 4-step distilled I2V via lightx2v (7× speedup)
 - **[Wan2.2 LoRA](models/Wan2_2_LoRA.md)** — LoRA adapter pipeline (camera control, style transfer, multi-LoRA stacking)
 - **[Wan2.2 SVI 2.0 Pro](models/Wan2_2_SVI.md)** — Stable-Video-Infinity long-video generation by autoregressive clip chaining
+- **[Wan2.2-Animate-14B](models/Wan2_2_Animate.md)** — character animation / replacement from a driving video (POC, untested on hardware; [runbook](models/Wan2_2_Animate_RUNBOOK.md))
 
 ## Directory Structure
 
@@ -17,12 +18,16 @@ experimental/
 │   ├── AniSora.md
 │   ├── Wan2_2_Distill.md
 │   ├── Wan2_2_LoRA.md
-│   └── Wan2_2_SVI.md
+│   ├── Wan2_2_SVI.md
+│   ├── Wan2_2_Animate.md
+│   └── Wan2_2_Animate_RUNBOOK.md
 ├── pipelines/           # Pipeline implementations
 │   ├── pipeline_anisora.py
 │   ├── pipeline_wan_distill.py
 │   ├── pipeline_wan_lora.py
-│   └── pipeline_wan_svi.py
+│   ├── pipeline_wan_svi.py
+│   └── pipeline_wan_animate.py
+├── wan_animate/         # Wan2.2-Animate modules (transformer additions, torch reference math, CLI)
 ├── utils/               # Shared utilities
 │   ├── lightx2v_loader.py
 │   └── lora.py

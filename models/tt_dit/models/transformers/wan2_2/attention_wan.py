@@ -44,10 +44,20 @@ class WanAttention(Module):
         is_self: bool = True,
         sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
+        image_kv: bool = False,
+        per_head_qk_norm: bool = False,
     ) -> None:
+        """
+        image_kv: (cross-attention only) add the Wan I2V-style image branch (`add_k_proj`,
+            `add_v_proj`, `norm_added_k`): Q attends separately to the image context and the
+            outputs are summed before `to_out`. Used by Wan2.2-Animate (CLIP image context).
+        per_head_qk_norm: RMSNorm Q/K over each head's head_dim instead of over the full row
+            (the Wan2.2-Animate face adapter). The checkpoint's [head_dim] weight is tiled.
+        """
         super().__init__()
 
         assert dim % num_heads == 0
+        assert not (image_kv and is_self), "image_kv is a cross-attention option"
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
@@ -58,6 +68,8 @@ class WanAttention(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_self = is_self
+        self.image_kv = image_kv
+        self.per_head_qk_norm = per_head_qk_norm
 
         self.n_local_heads = self.num_heads // self.parallel_config.tensor_parallel.factor
 
@@ -103,6 +115,10 @@ class WanAttention(Module):
                 chunks=2,
                 **col_parallel_kwargs,
             )
+            if image_kv:
+                # Fused image KV, same head interleaving as to_kv.
+                self.to_added_kv = ColCls(dim, 2 * dim, chunks=2, **col_parallel_kwargs)
+                self.norm_added_k = DistributedRMSNorm(**rms_kwargs)
 
         self.to_out = ColCls(
             dim,
@@ -183,6 +199,11 @@ class WanAttention(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
 
+        if self.per_head_qk_norm:
+            for name in ("norm_q.weight", "norm_k.weight"):
+                if name in state and state[name].numel() == self.head_dim:
+                    state[name] = state[name].reshape(-1).repeat(self.num_heads)
+
         def _interleave_heads(tensors: list[torch.Tensor]):
             """Interleave weight/bias tensors so column-parallel fracturing assigns correct heads per device.
 
@@ -226,6 +247,15 @@ class WanAttention(Module):
             if "bias" in k_state:
                 bias = _interleave_heads([k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)])
                 state["to_kv.bias"] = bias.squeeze(-1)
+
+            if self.image_kv:
+                k_state = pop_substate(state, "add_k_proj")
+                v_state = pop_substate(state, "add_v_proj")
+                if "weight" in k_state and "weight" in v_state:
+                    state["to_added_kv.weight"] = _interleave_heads([k_state["weight"], v_state["weight"]])
+                if "bias" in k_state and "bias" in v_state:
+                    bias = _interleave_heads([k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)])
+                    state["to_added_kv.bias"] = bias.squeeze(-1)
 
     def _to_out_fused_addcmul(
         self,
@@ -308,6 +338,26 @@ class WanAttention(Module):
             )
         return output
 
+    # "sdpa" (default) or "matmul". The matmul path (QK^T + mask -> softmax -> @V) is a fallback for
+    # masked cross-attention with short key sequences, should the fused SDPA reject a mask shape.
+    cross_attn_impl = "sdpa"
+
+    def _cross_sdpa(self, q_BHNE, k_BHNE, v_BHNE, attn_mask):
+        if attn_mask is None or self.cross_attn_impl == "sdpa":
+            return ttnn.transformer.scaled_dot_product_attention(
+                q_BHNE,
+                k_BHNE,
+                v_BHNE,
+                is_causal=False,
+                attn_mask=attn_mask,
+                program_config=self.sdpa_program_config,
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+            )
+        scores = ttnn.matmul(q_BHNE, k_BHNE, transpose_b=True, compute_kernel_config=self.mm_compute_kernel_config)
+        scores = ttnn.add(ttnn.multiply(scores, self.head_dim**-0.5), attn_mask)
+        probs = ttnn.softmax(scores, dim=-1, numeric_stable=True)
+        return ttnn.matmul(probs, v_BHNE, compute_kernel_config=self.mm_compute_kernel_config)
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -319,6 +369,8 @@ class WanAttention(Module):
         trans_mat: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
+        image_prompt_1BLP: ttnn.Tensor | None = None,
+        image_attn_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
@@ -330,6 +382,8 @@ class WanAttention(Module):
         trans_mat: replicated
         addcmul_residual: (optional) residual tensor for fused matmul+addcmul (self-attn only)
         addcmul_gate: (optional) gate tensor for fused matmul+addcmul (self-attn only)
+        image_prompt_1BLP: (optional, image_kv only) image context, replicated like prompt_1BLP
+        image_attn_mask: (optional) additive mask for the image branch, shape [1, 1, Sq, Sk_img]
 
         If prompt_1BLP is not provided, run self-attention.
         Otherwise, run cross-attention on prompt.
@@ -387,6 +441,7 @@ class WanAttention(Module):
             rope_sin=rope_sin,
             trans_mat=trans_mat,
             dtype=norm_output_dtype,
+            per_head_norm=self.per_head_qk_norm,
         )
         k_BHNE = self.norm_k(
             k_1BNF,
@@ -395,6 +450,7 @@ class WanAttention(Module):
             rope_sin=rope_sin,
             trans_mat=trans_mat,
             dtype=norm_output_dtype,
+            per_head_norm=self.per_head_qk_norm,
         )
 
         def create_heads(inp):
@@ -491,15 +547,18 @@ class WanAttention(Module):
                 )
         else:
             # Cross attention
-            spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                is_causal=False,
-                attn_mask=cross_attn_mask,
-                program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-            )
+            spatial_BHNE = self._cross_sdpa(q_BHNE, k_BHNE, v_BHNE, cross_attn_mask)
+
+            if image_prompt_1BLP is not None:
+                # Wan I2V-style image branch: same Q, separate image K/V, outputs summed.
+                assert self.image_kv, "image_prompt_1BLP requires image_kv=True"
+                k_img_1BNF, v_img_1BNF = self.to_added_kv(
+                    image_prompt_1BLP, compute_kernel_config=self.mm_compute_kernel_config
+                )
+                k_img_BHNE = self.norm_added_k(k_img_1BNF, num_heads_per_device=self.n_local_heads)
+                v_img_BHNE = create_heads(v_img_1BNF)
+                img_BHNE = self._cross_sdpa(q_BHNE, k_img_BHNE, v_img_BHNE, image_attn_mask)
+                spatial_BHNE = ttnn.add(spatial_BHNE, img_BHNE)
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)

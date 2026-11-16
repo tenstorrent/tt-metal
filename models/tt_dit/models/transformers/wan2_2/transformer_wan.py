@@ -49,6 +49,7 @@ class WanTransformerBlock(Module):
         is_fsdp: bool = False,
         sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
+        image_kv: bool = False,
     ) -> None:
         super().__init__()
 
@@ -98,6 +99,7 @@ class WanTransformerBlock(Module):
             is_self=False,
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
+            image_kv=image_kv,
         )
 
         self.norm2 = (
@@ -170,10 +172,13 @@ class WanTransformerBlock(Module):
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
         cross_attn_mask: ttnn.Tensor | None = None,
+        image_prompt_1BLP: ttnn.Tensor | None = None,
+        image_attn_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLP: replicated on SP, replicated D on TP
+        image_prompt_1BLP: (optional, image_kv blocks) image context, replicated like prompt_1BLP
         temb_1BTD: replicated on SP, fractured D on TP
         N: logical sequence length of the spatial input, as an int or a uint32 device tensor
         rope_cos_BANH: fractured N on SP, A (num_heads) on TP
@@ -219,6 +224,8 @@ class WanTransformerBlock(Module):
             N=N,
             prompt_1BLP=prompt_1BLP,
             cross_attn_mask=cross_attn_mask,
+            image_prompt_1BLP=image_prompt_1BLP,
+            image_attn_mask=image_attn_mask,
         )
         spatial_1BND = spatial_1BND + attn_output_1BND
 
@@ -276,7 +283,9 @@ class WanTransformer3DModel(Module):
         model_type: str = "t2v",
         output_dtype: ttnn.DataType = ttnn.float32,
         lora_enabled: bool = False,
+        added_kv_proj_dim: int | None = None,
     ) -> None:
+        """added_kv_proj_dim: give every block the image cross-attention branch (Wan2.2-Animate)."""
         super().__init__()
 
         self.mesh_device = mesh_device
@@ -337,6 +346,7 @@ class WanTransformer3DModel(Module):
                 parallel_config=parallel_config,
                 is_fsdp=is_fsdp,
                 lora_enabled=lora_enabled,
+                image_kv=added_kv_proj_dim is not None,
             )
             for i in range(num_layers)
         )
