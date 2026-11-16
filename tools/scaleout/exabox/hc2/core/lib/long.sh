@@ -10,8 +10,11 @@
 # lists stay their own (goals 16, 19, 25). It stops early only when a leg could not bring the box healthy (rc 6), the
 # host became busy (rc 10) or a signal stopped it; the summary names that leg and why. The EXIT trap prints the summary
 # (fleet/long_summary.py): per leg mode, verdict, duration, dir; faults per tray and BDF with k/5; the HSC lines; one
-# 'VERDICT:' line for the whole long run; and last one combined 'Repair recommendation:' line. Exit: 6, 10 or 143 as
-# above, else 8 when a leg FAILs, 9 when a leg is INCOMPLETE, 0 only when all 5 legs pass.
+# 'VERDICT:' line for the whole long run; and last one combined 'Repair recommendation:' line. A drop also stops it
+# before the next leg's start reset: fewer chips on PCIe (lspci -d 1e52:) after a leg than before leg 1, or rc 6;
+# lib/drop_stop.sh then captures the state into <out>/drop-capture/ and writes one STOP line to <out>/STOP.
+# Exit: 6, 10 or 143 as above, 12 on a PCIe count drop, else 8 when a leg FAILs, 9 when a leg is INCOMPLETE, 0 only
+# when all 5 legs pass.
 #   bash lib/long.sh [run.sh options other than --mode]   (run.sh --mode=long execs it from its own dir)
 set -euo pipefail
 LG_DIR=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
@@ -49,6 +52,8 @@ lg_end() {
 }
 trap lg_end EXIT
 echo "run.sh --mode=long: legs plain, plain, plain, full, full back to back; results in $LG_OUT"
+LG_N0=0; LG_DROP=0
+[ -f "$LG_DIR/lib/drop_stop.sh" ] && . "$LG_DIR/lib/drop_stop.sh" && LG_N0=$(ds_count)   # 0: no count, no count check
 rc=0
 for i in 1 2 3 4 5; do
   m=${LG_MODES[$((i - 1))]}; d=$LG_OUT/leg$i-$m; log=$LG_OUT/leg$i-$m.log; : > "$log"
@@ -67,9 +72,17 @@ for i in 1 2 3 4 5; do
     10) why="leg $i: the host became busy (exit 10)" ;;
   esac
   [ -n "$LG_STOP" ] && why="leg $i $LG_STOP"
+  if [ -z "$LG_STOP" ] && [ "$LG_N0" -gt 0 ]; then
+    n=$(ds_count)
+    [ "$n" -lt "$LG_N0" ] && { LG_DROP=1; why="leg $i left $n/$LG_N0 chips on PCIe ($(ds_trays)); no further leg or reset"; }
+    if [ "$LG_DROP" = 1 ] || [ "$rc" = 6 ]; then
+      ds_capture "$LG_OUT/drop-capture" "$why" > /dev/null 2>&1 || true
+      ds_stop "$LG_OUT/STOP" "leg $i" "$why; capture $LG_OUT/drop-capture" || true; fi
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$m" "$rc" "$t0" "$(date +%s)" "$d" "$log" "$why" >> "$LG_TSV"
   [ -n "$why" ] && break
 done
 [ -n "$LG_STOP" ] && exit 143
+[ "$LG_DROP" = 1 ] && [ "$rc" != 6 ] && exit 12
 case $rc in 6|10) exit "$rc" ;; esac
 exit 0

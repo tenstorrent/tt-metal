@@ -43,6 +43,8 @@ QSFP_X = {
     14: ((7, 8), 9),
 }
 RESET = {"c2": "start (C2)", "c9": "end (C9)"}
+# fl_find's mark on a finding made after a no-reset fault (tray_why.untag)
+AFTER = re.compile(r" \[(after fault \(.*, no reset\))\]$")
 CAP = 12  # faults printed; the rest are counted
 
 
@@ -141,8 +143,10 @@ def resets(rest):
 class V:
     def __init__(self):
         self.faults, self.notes, self.seen, self.fw, self.down = [], [], set(), {}, {}
+        self.tag = ""  # the after-fault mark of the line being read, shown beside where
 
     def fault(self, key, what, where, do):  # a later line on the same part (the C9 recheck) replaces the earlier one
+        where += f" [{self.tag}]" if self.tag else ""
         if key in self.seen:
             self.faults = [(k, f) if k != key else (k, (what, where, do)) for k, f in self.faults]
             return
@@ -153,7 +157,7 @@ class V:
         if key in self.seen:
             return
         self.seen.add(key)
-        self.notes.append(text)
+        self.notes.append(text + (f" [{self.tag}]" if self.tag else ""))
 
 
 def eth(v, l):
@@ -487,6 +491,51 @@ def thermal(v, l):
     return True
 
 
+def hsc_peak(v, l):
+    """A tray 12 V feed whose bus-bar peak reached its own warn limit (lib/hsc_check.sh hsc_peak_judge): the tray (its BDFs as
+    a range), the feed, the peak against the limit and the run's TDP. At 160 W or lower (or an older line with no TDP) the bus
+    bar is blamed; above it, or with the TDP unread, the verdict asks for a rerun at the box's default TDP."""
+    m = re.match(
+        rf"^HSC FAIL tray ([1-4]) \(({BDF})-({BDF})\) HSC (0x[0-9a-fA-F]{{2}}): IOUT peak ([0-9.]+) A during (.*?), "
+        r"at or above its own IOUT_OC_WARN_LIMIT ([0-9.]+) A \(4Ah\)"
+        r"(?:, (?:at TDP (?P<low>[0-9]+) W per chip|feed at its limit at (?P<high>[0-9]+) W[^,]*|(?P<unread>TDP not read)[^,]*))?"
+        r"(?:, trip IOUT_OC_FAULT_LIMIT (?P<trip>[0-9.]+) A(?: \(46h\), (?:(?P<over>the peak is [0-9.]+ A over it)|(?P<at>the peak is at its trip limit)))?)?",
+        l,
+    )
+    if not m:
+        return False
+    u, b1, b2, a, pk, st, wl = m.group(1, 2, 3, 4, 5, 6, 7)
+    a = a.lower()
+    f = {"0x40": "A", "0x42": "B"}.get(a)
+    feed = f"feed {f} (HSC {a})" if f else f"feed (HSC {a})"
+    tdp = m.group("low") or m.group("high")
+    at = f"{tdp} W per chip" if tdp else "a TDP that was not read" if m.group("unread") else ""
+    # 'the peak is N A over it' / 'the peak is at its trip limit' (lib/hsc_check.sh): a peak above or at the trip limit must
+    # not read like one below it
+    trip = (
+        (
+            f", over its {m.group('trip')} A trip limit"
+            if m.group("over")
+            else f", at its {m.group('trip')} A trip limit"
+            if m.group("at")
+            else f", {m.group('trip')} A trip limit"
+        )
+        if m.group("trip")
+        else ""
+    )
+    what = (
+        f"12 V feed at its over-current warn limit: tray {u} {feed}, peak {pk} A against its {wl} A "
+        f"warn limit{trip}, during {st}" + (f", at {at}" if at else "")
+    )
+    if m.group("high") or m.group("unread"):
+        why = f"a healthy feed can reach its limit at {at}" if tdp else "the TDP was not read"
+        do = f"rerun run.sh at the box's default TDP before any bus-bar work ({why})"
+    else:
+        do = f"check the bus bar and 12 V feed {f or a} of tray {u}, then replace the bus bar if the peak stays at the limit; no tray board for a feed peak alone"
+    v.fault(("hscpeak", u, a), what, f"tray {u} (BDF range {b1}-{b2}, not two chips), HSC {a}", do)
+    return True
+
+
 def generic(v, l):
     m = re.match(r"^((?:[A-Z][A-Z0-9-]*\s)+?)(FAIL|HANG)\b:?\s*(.*)$", l)
     if not m:
@@ -522,11 +571,16 @@ def verdict(rc, vtext="", findings="", result="", commit="?", mode=""):
         l = l.strip()
         if not l:
             continue
-        for f in (eth, eth_more, preflight, chunk, numeric, aer, pcie, link, thermal):
+        # the after-fault mark names the fault's own chips and trays (chips lost: 01:00.0, hang): parsed with the line, a
+        # tray 3 finding was pinned to tray 1 or read as a hang. Parse without it, shown beside where (as tray_why.untag)
+        g = AFTER.search(l)
+        l, v.tag = (l[: g.start()], g.group(1)) if g else (l, "")
+        for f in (eth, eth_more, preflight, chunk, numeric, aer, pcie, link, thermal, hsc_peak):
             if f(v, l):
                 break
         else:
             generic(v, l)
+    v.tag = ""
     fold(v)
     vt = (vtext or "").strip()
     rerun = "run.sh" + (f" --mode={mode}" if mode and mode not in ("quick", "repro") else "")

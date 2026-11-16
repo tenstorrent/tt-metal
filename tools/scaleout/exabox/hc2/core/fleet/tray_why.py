@@ -7,6 +7,8 @@
 etc.). Reads only the FINDING and WARN lines run.sh already wrote; no device, no new check.
   tray_why.py <findings.txt> <tray 1-4> [--stages <finding_stage.tsv>] [--max N] [--drop-trays "3 4"]
   tray_why.py <findings.txt> --result [--also <numeric.txt>] [--stages ..] [--drop-trays ..] [--known-tray N]
+  tray_why.py <findings.txt> --box   the one "BOX cause: POWER: bus bar set of the box" line when 3 or more trays have a feed peak
+at their warn limit at 160 W per chip or less, else nothing
 --result: one phrase naming every failed check fl_report will print as a FAIL tray line, for the RESULT line.
 --drop-trays: the trays that lost chips (POWER/CHIP DROP); a chunk whose load died then lists every tray's chips in its CHUNK
 FAIL line, but it is listed only under those trays, as fl_report counts it.
@@ -49,6 +51,15 @@ POWER_NEXT = "1. Replace the bus bar -> 2. if the tray still drops, replace tray
 # unread bits are 'not graded'. HSC_ADD: the OFF/IOUT_OC bits hsc_judge appends to an under-voltage leg line.
 HSC_NEW = re.compile(
     r"^HSC FAIL tray ([1-4]) \([^)]*\) HSC (0x[0-9a-fA-F]{2}): ([A-Z_]+(?:\+[A-Z_]+)*) (?:latched|set) during "
+)
+# a feed whose bus-bar peak reached its own IOUT_OC_WARN_LIMIT (lib/hsc_check.sh hsc_peak_judge): limits in A, 1 A per count
+HSC_PEAK = re.compile(
+    r"^HSC FAIL tray ([1-4]) \([^)]*\) HSC (0x[0-9a-fA-F]{2}): IOUT peak ([0-9.]+) A during [^,]*, "
+    r"at or above its own IOUT_OC_WARN_LIMIT ([0-9.]+) A \(4Ah\)"
+    # the run's per-chip TDP (hsc_tdps): at or below 160 W the bus bar is blamed, above it or unread the line blames nothing;
+    # a line without it (an older run) blames as before
+    r"(?:, (?:at TDP (?P<low>[0-9]+) W per chip|feed at its limit at (?P<high>[0-9]+) W[^,]*|(?P<unread>TDP not read)[^,]*))?"
+    r"(?:, trip IOUT_OC_FAULT_LIMIT (?P<trip>[0-9.]+) A)?"
 )
 HSC_ADD = re.compile(r"; ([A-Z_]+(?:\+[A-Z_]+)*) set during ")
 HSC_POWER_BITS = ("VIN_UV_WARN", "VIN_UV_FAULT", "OFF", "IOUT_OC")  # CML is a comm fault, never power
@@ -293,6 +304,26 @@ def cause(l, kind, u, findings, stage="", lines=()):
             "(ENODEV): not this tray's board",
             f"fix {t} first (see its FAIL line), then reset and recheck this chip",
         )
+    hp = HSC_PEAK.match(l)  # a feed at its own over-current warn limit under the bus-bar load: a POWER cause
+    if hp and not warn:
+        a, f = hp.group(2).lower(), HSC_FEED.get(hp.group(2).lower(), f"at HSC {hp.group(2).lower()}")
+        trip = f", {hp.group('trip')} A trip" if hp.group("trip") else ""
+        u, pk, wl = hp.group(1), hp.group(3), hp.group(4)
+        # a TDP above 160 W (or not read): the feed at its limit is not the bus bar's fault
+        if hp.group("high") or hp.group("unread"):
+            at = f"at {hp.group('high')} W per chip" if hp.group("high") else "at a TDP that was not read"
+            return (
+                f"feed at its limit {at}: tray {u} 12 V feed {f} (HSC {a}) peak {pk} A at or above its {wl} A warn limit{trip}; "
+                "a healthy feed can reach this at this TDP, so it is not blamed on the bus bar",
+                "rerun at the box's default TDP before any bus-bar work",
+            )
+        at = f" at {hp.group('low')} W per chip" if hp.group("low") else ""
+        return (
+            f"POWER: tray {u} 12 V feed {f} / bus bar: HSC {a} peak {pk} A at or above its "
+            f"{wl} A warn limit{trip} under the bus-bar load{at} (the feed is at its over-current limit)",
+            f"1. Check the bus bar and 12 V feed {f} of tray {u} (HSC {a}) -> 2. replace the bus bar if the "
+            "peak stays at the limit",
+        )
     hf = HSC_NEW.match(l)  # a power latch newly set during this run is a POWER cause naming
     # its feed and HSC; it comes before the whole-tray rule, which stays the fallback for lines it does not parse
     if hf and not warn:
@@ -313,9 +344,11 @@ def cause(l, kind, u, findings, stage="", lines=()):
         and l.startswith("HSC FAIL")
         and re.search(r"\b(VIN_UV_WARN|VIN_UV_FAULT|OFF)\b", l)
         and re.search(r"latched during|set during", l)
-    ):  # a newly set HSC latch is the 12 V-lost evidence
+    ):  # a newly set HSC latch is the 12 V-lost evidence; the cause names its class and the feed
+        ha = re.search(r"\bHSC (0x[0-9a-fA-F]{2})\b", l)
         return (
-            "tray 12 V input lost or under-voltage: HSC OFF/under-voltage latch newly set during the run (12 V-lost evidence)",
+            f"POWER: 12 V feed of tray {u}{f' (HSC {ha.group(1)})' if ha else ''}: tray 12 V input lost or under-voltage: "
+            "HSC OFF/under-voltage latch newly set during the run (12 V-lost evidence)",
             POWER_NEXT.format(u=u),
         )
     if kind == "tray" and l.startswith("SEL WARN ") and "frb3" in s and "during the run" in s:  # SEL alone
@@ -760,20 +793,57 @@ def result(lines, stages=None, drop_trays=None, known=None):
     return "; ".join(num + ([f"{n} failed check{'s' * (n > 1)} on {', '.join(other)}"] if n else []))
 
 
-def why(lines, u, stages=None, cap=10, findings="findings.txt", drop_trays=None):
+def lost_of(u, lines):
+    """BDFs the cut root-cause lines name as lost, by repair_rec.py's own rules; [] if it cannot load."""
+    try:
+        import importlib.util
+
+        sp = importlib.util.spec_from_file_location(
+            "repair_rec", os.path.join(os.path.dirname(os.path.abspath(__file__)), "repair_rec.py")
+        )
+        rr = importlib.util.module_from_spec(sp)
+        sp.loader.exec_module(rr)
+        return list(dict.fromkeys(b for l in lines for b in rr.loss_bdfs(u, l)))
+    except Exception:
+        return []
+
+
+AFTER = re.compile(r" \[(after fault \(.*, no reset\))\]$")  # fl_find's mark on a finding made after a no-reset fault
+
+
+def untag(lines, stages):
+    """lines and finding_stage.tsv keys without fl_find's after-fault mark, and {line: mark}. The mark names the fault's own
+    chips ('chips lost: 01:00.0', 'vr_pg fell on tray 2', 'hang'): left in, a tray 3 finding was pinned to tray 1 or read as
+    a hang. why() shows it beside the stage."""
+    tags, out = {}, []
+    for l in lines:
+        m = AFTER.search(l)
+        if m:
+            l = l[: m.start()]
+            tags.setdefault(l, m.group(1))
+        out.append(l)
+    st = {}
+    for k, v in stages.items():
+        st.setdefault(AFTER.sub("", k), v)  # the first stage recorded wins, as main's own setdefault
+    return out, st, tags
+
+
+def why(lines, u, stages=None, cap=10, findings="findings.txt", drop_trays=None, tags=None):
     u = str(u)
-    stages = stages or {}
+    stages, tags = stages or {}, tags or {}
     fails, warns = tray_lines(lines, u, drop_trays, stages)
-    # the tray's power loss first, within the cap, then a load hang's pinpoint
-    fails.sort(key=lambda l: (not l.startswith("POWER "), not l.startswith("HANG PINPOINT")))
+    # the tray's power loss and HSC FAIL lines first, within the cap (repair_rec.py folds on HSC OFF), then a load hang's pinpoint
+    fails.sort(key=lambda l: (not l.startswith(("POWER ", "HSC FAIL ")), not l.startswith("HANG PINPOINT")))
     out = []
     for l in fails + warns:
+        tg = tags.get(l.rstrip("\n"))
         l = re.sub(
             r"UBB([0-3])", lambda m: f"tray {int(m.group(1)) + 1}", l.rstrip("\n")
         )  # old lines: tray numbers only
         kind, part = part_of(l, u)
         st = stage_of(l, stages)
         c, n = cause(l, kind, u, findings, st, lines)
+        st = f"{st}, {tg}" if tg else st
         o = ONECHIP.search(l)
         if o:  # its links one per line under it: both ends, eth channels
             ev = f"all {o.group(3)} failing {o.group(4)} pairs have this chip at one end ({o.group(5)})"
@@ -785,8 +855,28 @@ def why(lines, u, stages=None, cap=10, findings="findings.txt", drop_trays=None)
             continue
         out.append(f"    {part} | {st} | {evidence(l, u)} | cause: {c} -> next: {n}")
     if len(out) > cap:
-        out = out[:cap] + [f"    ... {len(out) - cap} more for tray {u} in {findings}"]
+        gone = lost_of(u, out[cap:])  # repair_rec.py's power fold counts these lost chips
+        out = out[:cap] + [
+            f"    ... {len(out) - cap} more for tray {u} in {findings}"
+            + (f"; lost chips: {' '.join(gone)}" if gone else "")
+        ]
     return out
+
+
+def box_line(lines):
+    """One box-level POWER cause line when 3 or more trays each have a feed at its warn limit in the bus-bar stage at a TDP
+    of 160 W or less (or from an older run with no TDP named): the bus bar set of the box, not one tray's. '' otherwise.
+    A tray counts by its peak line alone, whatever else it has (a latch FAIL, a whole-tray loss); repair_rec.recommend uses the
+    same rule for its 'bus bar set of the box' item. The peak FAIL exists only in the bus-bar stage.
+    """
+    trays = sorted({m.group(1) for m in map(HSC_PEAK.match, lines) if m and not (m.group("high") or m.group("unread"))})
+    if len(trays) < 3:
+        return ""
+    return (
+        f"BOX cause: POWER: bus bar set of the box: trays {', '.join(trays)} each have a 12 V feed at its over-current warn "
+        "limit under the bus-bar load (the load is at 160 W per chip or less) -> next: 1. Check the bus bar set of the box "
+        "-> 2. replace the bus bar set if the peaks stay at the limit (no tray board is named for a feed peak alone)"
+    )
 
 
 def main(a):
@@ -794,6 +884,14 @@ def main(a):
         print(__doc__, file=sys.stderr)
         return 2
     f, u = a[0], a[1]
+    if u == "--box":  # tray_why.py <findings.txt> --box: the one box-level line, if any
+        try:
+            r = box_line(open(f, errors="replace").read().splitlines())
+        except OSError:
+            return 0
+        if r:
+            print(r)
+        return 0
     if (
         u == "--result"
     ):  # tray_why.py <findings.txt> --result [--also <numeric.txt>] [--stages ..] [--drop-trays ..] [--known-tray N]
@@ -813,6 +911,7 @@ def main(a):
         lines = open(f, errors="replace").read().splitlines()
     except OSError:
         return 0
+    lines, stages, tags = untag(lines, stages)
     if u == "0":
         if "--also" in a:  # run.sh's numeric_report.py lines, as fl_report adds them
             try:
@@ -827,7 +926,7 @@ def main(a):
         if r:
             print(r)
         return 0
-    for o in why(lines, u, stages, cap, f, dt):
+    for o in why(lines, u, stages, cap, f, dt, tags):
         print(o)
     return 0
 

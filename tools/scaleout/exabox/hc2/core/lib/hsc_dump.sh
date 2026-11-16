@@ -46,7 +46,7 @@ hd_route() {  # sets HD_IP; rc 2 with the why in HD_WHY when there is no read ro
 }
 hd_rd() {  # <tray> <addr> <code> <bytes>: the raw bytes ("b0 b1", low byte first) on stdout; nothing when not read
   local o b t
-  case $3:$4 in 0x79:2|0x7A:1|0x7B:1|0x7C:1|0x7D:1|0x80:1|0x88:2|0x8B:2|0x8C:2|0xFA:2|0xFB:2|0xD[0-9A-F]:2) ;;
+  case $3:$4 in 0x79:2|0x7A:1|0x7B:1|0x7C:1|0x7D:1|0x80:1|0x88:2|0x8B:2|0x8C:2|0xFA:2|0xFB:2|0x55:2|0x57:2|0x58:2|0x59:2|0xD[0-9A-F]:2) ;;
     *) echo "hd_rd: refused $3/$4 (not a whitelisted read)" >&2; return 2 ;; esac
   t=$(hd_left); [ "$t" -gt "${TRAY_HSC_READ_S:-3}" ] && t=${TRAY_HSC_READ_S:-3}; [ "$t" -ge 1 ] || return 0
   local lk=(); declare -F hsc_i2c > /dev/null && lk=(hsc_i2c)   # one in-band I2C read at a time where lib/hsc_check.sh is loaded
@@ -65,10 +65,18 @@ hd_bits() {  # <register name> <value>: the set bits by name
     *) return 0 ;; esac
   for i in "${!n[@]}"; do [ $(( ($2 >> i) & 1 )) = 1 ] && printf '%s ' "${n[$i]}"; done | sed 's/ $//'
 }
+hd_limv() {  # <code> <raw>: a VIN limit, bits 6:0 x 125 mV; 59h at 0 is UV fault reporting disabled
+  if [ "$1" = 0x59 ] && [ $(( $2 % 128 )) = 0 ]; then echo "0 V (UV fault reporting disabled)"; else awk -v r="$2" 'BEGIN { printf "%.2f V", (r % 128) * 0.125 }'; fi
+}
+hd_uvtxt() {  # <tray> <addr>: the VIN_UV_WARN wording with 58h read now
+  local b r="(58h not read)"; [ "$(hd_left)" -ge 1 ] && b=$(hd_rd "$1" "$2" 0x58 2) && [ -n "$b" ] && r="$(hd_limv 0x58 $(( 16#${b%% *} ))) (58h)"
+  echo "VIN fell below the UV warn limit $r at least once, depth unknown"
+}
 hd_hsc() {  # <tray> <addr>: one line per register, "hsc <addr> <NAME> <value>" or "hsc <addr> <NAME> not read: <why>"
   local r nm c n b b0 b1 v s kv w
   for r in STATUS_WORD:0x79:2 STATUS_INPUT:0x7C:1 STATUS_IOUT:0x7B:1 STATUS_TEMPERATURE:0x7D:1 STATUS_VOUT:0x7A:1 \
-      STATUS_MFR_SPECIFIC:0x80:1 READ_VIN:0x88:2 READ_VOUT:0x8B:2 READ_IOUT:0x8C:2 FAULT_RECORD:0xFA:2 FAULT_RECORD_LAST:0xFB:2; do
+      STATUS_MFR_SPECIFIC:0x80:1 READ_VIN:0x88:2 READ_VOUT:0x8B:2 READ_IOUT:0x8C:2 FAULT_RECORD:0xFA:2 FAULT_RECORD_LAST:0xFB:2 \
+      VIN_OV_FAULT_LIMIT:0x55:2 VIN_OV_WARN_LIMIT:0x57:2 VIN_UV_WARN_LIMIT:0x58:2 VIN_UV_FAULT_LIMIT:0x59:2; do
     IFS=: read -r nm c n <<< "$r"
     if [ "$(hd_left)" -lt 1 ]; then echo "hsc $2 $nm not read: the ${TRAY_HSC_DUMP_S:-30} s dump budget is spent"; continue; fi
     b=$(hd_rd "$1" "$2" "$c" "$n")
@@ -81,6 +89,7 @@ hd_hsc() {  # <tray> <addr>: one line per register, "hsc <addr> <NAME> <value>" 
       READ_IOUT) echo "hsc $2 $nm $(printf '0x%04x' "$v") $(awk -v x="$v" 'BEGIN { printf "%.2f A", x * 0.0625 }')" ;;
       STATUS_WORD) s=$(hd_bits "$nm" "$v"); echo "hsc $2 $nm $(printf '0x%04x' "$v")${s:+ ($s)}" ;;
       FAULT_RECORD*) echo "hsc $2 $nm $(printf '0x%04x' "$v")" ;;
+      VIN_*_LIMIT) echo "hsc $2 $nm $(printf '0x%04x' "$v") $(hd_limv "$c" "$v")" ;;
       *) s=$(hd_bits "$nm" "$v"); echo "hsc $2 $nm $(printf '0x%02x' "$v")${s:+ ($s)}" ;; esac
   done
   if [ -z "${TRAY_HSC_PEAK_REGS:-}" ]; then echo "hsc $2 min/peak VIN, peak IOUT not read: the MP5990 has no such register (TRAY_HSC_PEAK_REGS unset)"; return 0; fi
@@ -176,7 +185,9 @@ hd_dump() {
       /^cpld tray / { c = $0; sub(/.*-> /, "", c); sub(/:.*/, "", c) }
       /^cpld not read/ { c = "not read" }
       /^hsc 0x4. STATUS_WORD 0x/ { h = h sprintf(" HSC %s STATUS_WORD %s", $2, $4) }
-      /^hsc 0x4. READ_VIN 0x/ { h = h sprintf(" VIN %s V", $5) }
+      /^hsc 0x4. STATUS_INPUT 0x.*VIN_UV_WARN/ { uw[$2] = 1 }
+      /^hsc 0x4. READ_VIN 0x/ { h = h sprintf(uw[$2] ? " VIN after latch %s V" : " VIN %s V", $5) }
+      /^hsc 0x4. VIN_UV_WARN_LIMIT / && uw[$2] { h = h " (VIN fell below the UV warn limit " ($4 == "not" ? "(58h not read)" : $5 " V (58h)") " at least once, depth unknown)" }
       /^hsc 0x4. READ_IOUT 0x/ { h = h sprintf(" IOUT %s A", $5) }
       /^hsc 0x4. STATUS_WORD not read/ { h = h sprintf(" HSC %s not read", $2) }
       /^hsc 0x40 0x42 not read/ { h = h " HSCs not read" }
@@ -191,19 +202,21 @@ hd_dump() {
 # present: one line per HSC appended to <file> and synced, and one say line. "latched" names the set bits among
 # VIN_UV_WARN, VIN_UV_FAULT (STATUS_INPUT bits 5, 4), OFF and IOUT_OC (STATUS_WORD bits 6, 4), or none; CML (bit 1) is
 # named apart, never read into them. Reads only through hd_rd (no CLEAR_FAULTS: run.sh's one clear per run stays in
-# lib/hsc_check.sh). Bounded by TRAY_HSC_LATCH_S (20 s) for all 16 reads; an HSC past it, silent, or with no route is
-# "not read: <why>". Never fails (rc 0), so the reset or re-power that follows always runs.
+# lib/hsc_check.sh). Then 55h/57h/58h/59h of every HSC, one "vin limit" line per field; a
+# VIN_UV_WARN latch states 58h (read at once) and "at least once, depth unknown". Bounded by TRAY_HSC_LATCH_S (40 s) for all
+# reads, the status first; an HSC past it, silent, or with no route is "not read: <why>". Never fails (rc 0), so the reset
+# or re-power that follows always runs.
 hd_latch() {
-  local f=$1 w=$2 t a b b0 b1 sw si k out cells bus
-  HD_END=$(( $(date +%s) + ${TRAY_HSC_LATCH_S:-20} ))
+  local f=$1 w=$2 t a b b0 b1 sw si k out cells bus r
+  HD_END=$(( $(date +%s) + ${TRAY_HSC_LATCH_S:-40} ))
   [ ${#HD_IP[@]} -gt 0 ] || hd_route || :
   out=$(
     echo "HSC latch read, read-only, before $w"
-    echo "start: $(date '+%F %T %Z') (epoch $(date +%s)); budget ${TRAY_HSC_LATCH_S:-20} s; route: ${HD_IP[*]:-none}${HD_WHY:+ ($HD_WHY)}"
+    echo "start: $(date '+%F %T %Z') (epoch $(date +%s)); budget ${TRAY_HSC_LATCH_S:-40} s; route: ${HD_IP[*]:-none}${HD_WHY:+ ($HD_WHY)}"
     for t in 1 2 3 4; do for a in 0x40 0x42; do
       printf 'tray %s (%s) hsc %s ' "$t" "$(hd_bdfs "$t")" "$a"
       if [ ${#HD_IP[@]} = 0 ]; then echo "not read: $HD_WHY"; continue; fi
-      if [ "$(hd_left)" -lt 1 ]; then echo "not read: the ${TRAY_HSC_LATCH_S:-20} s latch budget is spent"; continue; fi
+      if [ "$(hd_left)" -lt 1 ]; then echo "not read: the ${TRAY_HSC_LATCH_S:-40} s latch budget is spent"; continue; fi
       bus=$(hd_bus "$t"); b=$(hd_rd "$t" "$a" 0x79 2)
       [ -n "$b" ] || { echo "not read: no answer to ${HD_IP[*]} raw 0x06 0x52 $bus $a 0x02 0x79"; continue; }
       read -r b0 b1 <<< "$b"; sw=$(( 16#$b0 | 16#$b1 << 8 )); si=""
@@ -215,9 +228,17 @@ hd_latch() {
       [ $(( (sw >> 4) & 1 )) = 1 ] && k="$k IOUT_OC"
       b=$(hd_bits STATUS_WORD "$sw"); printf 'STATUS_WORD 0x%04x%s STATUS_INPUT ' "$sw" "${b:+ ($b)}"
       if [ -n "$si" ]; then b=$(hd_bits STATUS_INPUT "$si"); printf '0x%02x%s' "$si" "${b:+ ($b)}"; else printf 'not read'; fi
+      [[ $k == *VIN_UV_WARN* ]] && k="$k ($(hd_uvtxt "$t" "$a"))"
       echo " latched: ${k:- none}" | sed 's/:  */: /'
       [ $(( (sw >> 1) & 1 )) = 1 ] && echo "tray $t ($(hd_bdfs "$t")) hsc $a CML set (PMBus communication fault, not power)"
     done; done
+    if [ ${#HD_IP[@]} = 0 ]; then echo "vin limit not read: $HD_WHY"
+    else for t in 1 2 3 4; do for a in 0x40 0x42; do for r in VIN_OV_FAULT_LIMIT:0x55 VIN_OV_WARN_LIMIT:0x57 VIN_UV_WARN_LIMIT:0x58 VIN_UV_FAULT_LIMIT:0x59; do
+      printf 'vin limit tray %s (%s) hsc %s %s (%sh): ' "$t" "$(hd_bdfs "$t")" "$a" "${r%%:*}" "${r#*:0x}"
+      if [ "$(hd_left)" -lt 1 ]; then echo "not read: the ${TRAY_HSC_LATCH_S:-40} s latch budget is spent"; continue; fi
+      b=$(hd_rd "$t" "$a" "${r#*:}" 2)
+      if [ -n "$b" ]; then echo "$(hd_limv "${r#*:}" $(( 16#${b%% *} ))) (raw 0x${b%% *})"; else echo "not read: no answer"; fi
+    done; done; done; fi
     echo "end: epoch $(date +%s)")
   printf '%s\n' "$out" >> "$f"
   sync "$f" 2> /dev/null || sync

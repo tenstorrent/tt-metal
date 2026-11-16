@@ -202,6 +202,25 @@ def hwmon_power_w(cid):
     return hwmon(cid, "power1_input", 1e6)
 
 
+UNREAD_W = 1000.0  # a power1_input over 1e9 uW is an unreadable sample, never a chip's power
+UNREAD_C = 200.0  # a temp1_input at or over 200 C (all ones, 65535999 m-degC, while the ARC is not ready) is unreadable
+
+
+def count_unread(s, pci):
+    """One more unreadable sample on chip pci in telemetry bucket s (unreadable_lines prints them)."""
+    u = s.setdefault("unreadable", {})
+    u[pci] = u.get(pci, 0) + 1
+
+
+def unreadable_lines(stats):
+    """'N unreadable samples on <BDF>' per chip, summed over the telemetry buckets."""
+    n = {}
+    for s in (stats or {}).values():
+        for b, k in (s.get("unreadable") or {}).items():
+            n[b] = n.get(b, 0) + k
+    return [f"telemetry: {k} unreadable samples on {b}" for b, k in sorted(n.items())]
+
+
 TELEM_COLS = ["utc", "dev", "pci", "tray", "aiclk_mhz", "power_w", "phase"]
 TELEM_FULL_COLS = ["current_a", "vcore_mv", "temp_c"]  # --telem-full: appended, so readers of the first 7 still work
 LINK_COLS = [
@@ -220,9 +239,15 @@ LINK_COLS = [
 ]
 
 
-def telem_full(cid):
-    """--telem-full extras from the chip's hwmon: current (A), VCORE (mV), ASIC temperature (C); None if unreadable."""
-    return [hwmon(cid, "curr1_input", 1e3), hwmon(cid, "in0_input", 1), hwmon(cid, "temp1_input", 1e3)]
+def telem_full(cid, unread=None):
+    """--telem-full extras from the chip's hwmon: current (A), VCORE (mV), ASIC temperature (C); None if unreadable. A
+    temperature at or over UNREAD_C is unreadable: None, and unread() is called (the caller counts it per chip)."""
+    r = [hwmon(cid, "curr1_input", 1e3), hwmon(cid, "in0_input", 1), hwmon(cid, "temp1_input", 1e3)]
+    if r[2] is not None and r[2] >= UNREAD_C:
+        r[2] = None
+        if unread:
+            unread()
+    return r
 
 
 def heartbeat(cid):
@@ -670,8 +695,12 @@ def sample_into(stats, ids, clocks, phase, burst_started, writer, full=False):
     for c, pci in ids.items():
         clk = clocks.get(c)
         pw = hwmon_power_w(c)
+        if pw is not None and pw > UNREAD_W:  # all ones (4293967296 uW) while the ARC is not ready: not power
+            count_unread(s, pci)
+            pw = None
         if writer:
-            writer.writerow([now, c, pci, tray_of(pci), clk, pw, phase] + (telem_full(c) if full else []))
+            tf = telem_full(c, lambda: count_unread(s, pci)) if full else []
+            writer.writerow([now, c, pci, tray_of(pci), clk, pw, phase] + tf)
         if clk is not None and clk < LOST_AICLK:
             clk_ok.append(clk)
         if pw is not None:
@@ -1352,6 +1381,8 @@ class Run:
                     f"RESULT {word} verdict={verdict} exit={code}"
                     + (f" error={extra['error']}" if extra.get("error") else "")
                 )
+        for line in unreadable_lines(self.stats):
+            mark(line)
         mark(f"result json {self.a.result}")
         try:
             sys.stdout.flush()
@@ -1618,6 +1649,12 @@ def parse_args(argv=None):
     )
     ap.add_argument("--burst-steps", type=int, default=BURST_STEPS, help=f"heavy ops per burst (default {BURST_STEPS})")
     ap.add_argument(
+        "--heavy-cols",
+        type=int,
+        default=None,
+        help=f"the 16k heavy matmul's output tile columns (default {HEAVY_COLS}; chunk_load.py's --heavy-cols)",
+    )
+    ap.add_argument(
         "--sfpu-par",
         type=int,
         choices=(0, 1),
@@ -1795,6 +1832,10 @@ def parse_args(argv=None):
         help="wait after the first loss before counting all lost " "chips (default 2)",
     )
     a = ap.parse_args(argv)
+    try:
+        heavy_cols(a)
+    except ValueError as e:
+        ap.error(str(e))
     a.heavy_act = (a.sfpu_act or SFPU_ACT) if a.sfpu_par else None  # heavy_op's fused epilogue (as chunk_load.py)
     tp = a.topo
     for key, val in LOADS[a.load].items():
@@ -1984,26 +2025,32 @@ HEAVY = {
     "16k_bf8_lofi": ("LoFi", False, 2, 4, "bfloat8_b"),
     "lofi_all": ("LoFi", False, 2, 4, "bfloat8_b"),
     "16k_bfp4_lofi": ("LoFi", False, 2, 4, "bfloat4_b"),
+    "16k_bf8_hifi2": ("HiFi2", False, 2, 4, "bfloat8_b"),
+    "16k_bfp4_hifi3": ("HiFi3", False, 2, 4, "bfloat4_b"),
     "8k_fp32_hifi4": ("HiFi4", True, 2, 2, "float32"),
     "8k_int32_eltwise": ("HiFi4", False, 0, 0, "int32"),
 }
 # Number formats the bf16/bf8 matmuls leave out, run as chunk_load.py --heavy-x in
-# the heavy chunk's tail. 16k_bfp4_lofi: bfloat4_b inputs, bf16 output. 8k_fp32_hifi4: float32 in, fp32 dest acc, at 8192
+# the heavy chunk's tail. 16k_bfp4_lofi: bfloat4_b inputs, bf16 output. 16k_bf8_hifi2 and 16k_bfp4_hifi3: the same
+# formats at the fidelities tt-metal's tests/didt minimal matmul sweep also runs (bf8 HiFi2, bfp4 HiFi3; the coverage
+# map's R2), each fidelity phase another pass of the FPU over the same tiles. 8k_fp32_hifi4: float32 in, fp32 dest acc, at 8192
 # (a 16k float32 tensor is 1 GiB per chip). 8k_int32_eltwise: int32 A*B+C on the SFPU integer path, plus an int8 round trip
 # (int32 -> uint8 -> int32 typecast) added in; no matmul. Sizes other than 16384 are in HEAVY_SIZE.
 HEAVY_SIZE = {"8k_fp32_hifi4": 8192, "8k_int32_eltwise": 8192}
 HEAVY_XB = {"bfloat8_b": 1, "bfloat4_b": 0.5, "float32": 4, "int32": 4}  # bytes per input element; 2 = bf16
 
 
-def heavy_dram_bytes(h, int8=True):
-    """One --heavy op's DRAM bytes per chip. A matmul reads A and B and writes its output (bfloat4_b writes bf16).
+def heavy_dram_bytes(h, int8=True, cols=512):
+    """One --heavy op's DRAM bytes per chip. A matmul reads A (S x S) and B and writes its output, both S x heavy_out_n
+    (bfloat4_b writes bf16; cols: --heavy-cols).
     8k_int32_eltwise counts each op it runs, 4 bytes per int32 and 1 per uint8 element: multiply A*B
     (read 8, write 4), add p+C (8, 4), and with the int8 round trip (int8, its default) typecast A to uint8 (4, 1),
     back to int32 (1, 4) and add o+v (8, 4): 46 bytes per element, 24 without the round trip."""
     S, dt = HEAVY_SIZE.get(h, 16384), HEAVY[h][4]
     if h in HEAVY_ELTWISE:
         return S * S * (12 + 12 + (5 + 5 + 12 if int8 else 0))
-    return S * S * (2 * HEAVY_XB.get(dt, 2) + (2 if dt == "bfloat4_b" else HEAVY_XB.get(dt, 2)))
+    xb, N = HEAVY_XB.get(dt, 2), heavy_out_n(h, cols)
+    return S * S * xb + S * N * (xb + (2 if dt == "bfloat4_b" else xb))
 
 
 HEAVY_ELTWISE = {"8k_int32_eltwise"}
@@ -2012,7 +2059,7 @@ HEAVY_ELTWISE = {"8k_int32_eltwise"}
 # only load that went past the 130 W TDP), run in bursts of BURST_STEPS steps with a BURST_GAP_MS pause after each.
 HEAVY_EXTRAS = {"lofi_all": ("pcie", "all_gather", "dram")}
 # The default: the highest tray kW mean measured (9.31 kW, 328.8 TFLOP/s per chip). 16k_hifi4
-# throws in minimal_matmul on ttnn 0.80.0 and falls back to ttnn.matmul at 80.8 TFLOP/s.
+# overflowed L1 in minimal_matmul and fell back to ttnn.matmul at 80.8 TFLOP/s (FALLBACK_TFLOPS) until MM_BLOCKS.
 # The default: lofi_all with 50 ms gaps. On one box (the gap tuning) it
 # gave the highest chip and box peaks of the gap sweep: 288 W per chip (122% over TDP), 11.52 kW PSU peak, 297 TFLOP/s per chip.
 HEAVY_DEFAULT = "lofi_all"
@@ -2024,12 +2071,16 @@ SFPU_ACT = "gelu:1"
 HEAVY_TFLOPS = {
     "mm": 137.5,
     "16k_hifi2": 171.0,
-    "16k_hifi4": 80.8,
+    # minimal_matmul on the smaller blocks of MM_BLOCKS: heavy_x_rate rows of smoke Slurm 212167 (b03u02, 11-14)
+    "16k_hifi4": 122.0,
     "16k_bf8_lofi": 328.8,
     "lofi_all": 297.0,
     # measured: heavy_x_rate rows of a smoke run (median of 3 warm runs alone, per chip)
     "16k_bfp4_lofi": 509.08,
-    "8k_fp32_hifi4": 80.27,
+    # estimated from the LoFi rate of the same format over the fidelity phases (2 and 3) until a heavy_x_rate row is in
+    "16k_bf8_hifi2": 164.4,
+    "16k_bfp4_hifi3": 169.7,
+    "8k_fp32_hifi4": 113.2,  # smoke Slurm 212167, as 16k_hifi4
     "8k_int32_eltwise": 0.03,
 }
 # lofi_all's PCIe host -> device write per step, MB per chip: 16 in a C4 burst (--pcie-mb 16). The sustained part
@@ -2040,9 +2091,27 @@ HEAVY_PCIE_MB = 16
 SUSTAINED_PCIE_MB = 16
 BURST_STEPS = 8  # heavy ops per burst before a gap (bursts of 8 steps, then the gap)
 BURST_GAP_MS = 50.0  # pause after each burst (a gap, not a quiet: no clock check) (the best gap measured; env TRAY_BURST_GAP_MS, 0 = back to back)
-# A minimal_matmul fallback runs ttnn.matmul: its measured 16k rate (the 16k_hifi4 fallback, the slowest measured) bounds the
-# no-event op cap, so a fallback burst stops queuing within --burst-s of device time
-FALLBACK_TFLOPS = HEAVY_TFLOPS["16k_hifi4"]
+# A minimal_matmul fallback runs ttnn.matmul: its measured 16k rate (the 16k_hifi4 fallback on the ttnn of 11-14, the
+# slowest measured) bounds the no-event op cap, so a fallback burst stops queuing within --burst-s of device time
+FALLBACK_TFLOPS = 80.8
+# MinimalMatmulConfig (M, K, N) block sizes in tiles, tried in this order until one fits L1: the first is the one
+# HEAVY_TFLOPS was measured with. On the ttnn of 11-14 (job 211884) the fp32-accumulate ops overflow L1 with it:
+# 16k_hifi4 needs 1684480 B and 8k_fp32_hifi4 2995200 B of dataflow buffers against 1572864 B. The double-buffered
+# in0/in1 blocks are most of that, so a smaller K block comes next (K 8 fits 16k_hifi4, K 4 fits 8k_fp32_hifi4); the
+# subblocks stay HEAVY's. Only when the last one overflows too does the op fall back to ttnn.matmul.
+MM_BLOCKS = ((8, 16, 8), (8, 8, 8), (8, 4, 8), (4, 4, 4))
+# a minimal_matmul build refused for L1: tt-metal's dataflow_buffer.cpp TT_THROW ("Statically allocated dataflow
+# buffers ... grow to N B which is beyond max L1 size of M B") or the older circular-buffer wording
+MM_L1_FULL = re.compile(
+    r"beyond max L1|max L1 size|/dataflow_buffer/|circular buffers?.{0,80}L1|L1 .{0,40}(overflow|clash)", re.I
+)
+
+
+def mm_blocks(i):
+    """MM_BLOCKS[i] as the LOAD line names it."""
+    return "M%d K%d N%d" % MM_BLOCKS[i]
+
+
 RUN_AHEAD_OPS = 4  # heavy ops the host may queue ahead of the device
 NUMERIC_CHECKS = 16  # checked matmuls per burst, spaced by time, plus the first and the last
 MAX_PENDING_CHECKS = 20  # checked outputs (64 MiB each per chip, 1.25 GiB at most) held until the burst's synchronize
@@ -2083,11 +2152,24 @@ class RunAhead:
 class BurstGap:
     """--burst-gap-ms: after every --burst-steps heavy ops, wait for the device to finish them
     (one synchronize) and enqueue nothing for the gap, so each burst starts from idle chips: one di/dt step per burst.
-    No readback in it. 0 ms: back to back, no synchronize (the old load)."""
+    No readback in it. 0 ms: back to back, no synchronize (the old load).
+    Each burst's on-time and pause are measured from the load's own timestamps: on-time from
+    start() or the last pause's end to the burst's synchronize end, pause from there to the next burst; timing() has them.
+    """
 
     def __init__(self, ttnn, mesh, steps, gap_ms, ra=None):
         self.ttnn, self.mesh, self.steps, self.gap_ms, self.ra = ttnn, mesh, steps, gap_ms, ra
         self.n, self.s = 0, 0.0  # gaps taken, seconds spent in them
+        self.t_on, self.nh, self.ons, self.offs = (
+            None,
+            0,
+            [],
+            [],
+        )  # the running burst's start, heavy ops at the last gap, s
+
+    def start(self, t=None):
+        """The load (a burst, a chunk) starts: its first burst's on-time counts from here; earlier timings are dropped."""
+        self.t_on, self.ons, self.offs = (time.time() if t is None else t), [], []
 
     def on(self):
         return self.gap_ms > 0 and self.steps > 0
@@ -2100,10 +2182,41 @@ class BurstGap:
         if self.ra is not None:
             self.ra.evs = []  # every recorded op has finished
         t = time.time()
+        if self.t_on is not None:
+            self.ons.append(t - self.t_on)
         time.sleep(self.gap_ms / 1000.0)
-        self.s += time.time() - t
+        self.t_on = time.time()
+        self.s += self.t_on - t
+        self.offs.append(self.t_on - t)
+        self.nh = nh
         self.n += 1
         return True
+
+    def resume(self):
+        """Right after a pause, work that kept the chips idle (a read in the gap) ends now: it counts as pause."""
+        if self.offs and self.t_on is not None:
+            t = time.time()
+            self.offs[-1] += t - self.t_on
+            self.t_on = t
+
+    def end(self, nh, t=None):
+        """The load's last synchronize is done (at t): heavy ops queued since the last pause make one more burst."""
+        if self.t_on is not None and nh > self.nh:
+            self.ons.append((time.time() if t is None else t) - self.t_on)
+        self.t_on = None
+
+    def timing(self):
+        """The measured on-time and pause of the bursts since start(), in s: {"on": {n, mean, min, max}, "pause": ...}
+        (None for a side with none); None before any burst."""
+
+        def st(v):
+            return (
+                dict(n=len(v), mean=round(sum(v) / len(v), 3), min=round(min(v), 3), max=round(max(v), 3))
+                if v
+                else None
+            )
+
+        return dict(on=st(self.ons), pause=st(self.offs)) if self.ons or self.offs else None
 
     def desc(self):
         return (
@@ -2111,6 +2224,16 @@ class BurstGap:
             if self.on()
             else "no gap (back to back)"
         )
+
+
+def timing_text(t):
+    """BurstGap.timing() as the LOAD line's text (fleet/chunk_sched.timing_text)."""
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet")
+    if d not in sys.path:
+        sys.path.append(d)
+    import chunk_sched
+
+    return chunk_sched.timing_text(t)
 
 
 def op_cap(burst_s, heavy, flops, fallback=None):
@@ -2212,6 +2335,27 @@ def _int_eltwise_op(a, ttnn, torch, mesh):
     return op, 3 * S * S, f"int32 multiply+add {S}x{S} + int32->uint8->int32 typecast"
 
 
+HEAVY_COLS = 512  # the 16k heavy matmul's output width in tile columns
+
+
+def heavy_cols(a):
+    """The heavy matmul's output tile columns, a.heavy_cols (chunk_load.py --heavy-cols; default 512). A width
+    that is not a multiple of the 8 DRAM banks (511) decouples tile columns from the banks the interleaved output pages
+    go to, so a DRAM bank fault keeps to one bank while a compute fault spreads over all."""
+    n = getattr(a, "heavy_cols", None)
+    n = HEAVY_COLS if n is None else int(n)
+    if not 1 <= n <= HEAVY_COLS:
+        raise ValueError(f"heavy_cols takes 1-{HEAVY_COLS} tile columns (got {n})")
+    return n
+
+
+def heavy_out_n(h, cols=HEAVY_COLS):
+    """The --heavy op's output width in elements: 32 * cols for the 16k matmuls (--heavy-cols), the op's own size for
+    the 8k ones (HEAVY_SIZE), which --heavy-cols leaves alone."""
+    S = HEAVY_SIZE.get(h, 16384)
+    return 32 * cols if S == 16384 else S
+
+
 def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
     """(op, FLOPs per op, description) for --heavy; op.tensors are the inputs it uploaded (freed at the end); op.ran the
     op that runs, {"op": name, "fallback": None or why minimal_matmul is not used}. A load with
@@ -2228,10 +2372,10 @@ def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
     rep, dtype = ttnn.ReplicateTensorToMesh(mesh), getattr(ttnn, dt)
     tdt = torch.float32 if dt == "float32" else torch.bfloat16
 
-    def up(seed, scale):
+    def up(seed, scale, n=S):
         torch.manual_seed(seed)
         return ttnn.from_torch(
-            torch.randn(1, 1, S, S, dtype=tdt) * scale,
+            torch.randn(1, 1, S, n, dtype=tdt) * scale,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh,
@@ -2239,7 +2383,8 @@ def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
             mesh_mapper=rep,
         )
 
-    A, B = up(2, 1.0), up(3, 0.02)
+    N = heavy_out_n(a.heavy, heavy_cols(a))
+    A, B = up(2, 1.0), up(3, 0.02, N)
     if dt == "bfloat4_b":  # a bf16 output: bfloat4_b inputs, the check compares bf16 bits
         okw = {"dtype": ttnn.bfloat16}
     else:
@@ -2252,10 +2397,20 @@ def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
         packer_l1_acc=True,
     )
     g = mesh.compute_with_storage_grid_size()
-    cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=8, K_block_size=16, N_block_size=8, subblock_h=sh, subblock_w=sw, compute_with_storage_grid_size=g
-    )
-    st = {"mm": getattr(getattr(ttnn, "experimental", None), "minimal_matmul", None)}
+
+    def mk(i):
+        M, K, N_ = MM_BLOCKS[i]
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=M,
+            K_block_size=K,
+            N_block_size=N_,
+            subblock_h=sh,
+            subblock_w=sw,
+            compute_with_storage_grid_size=g,
+        )
+
+    cfg = [mk(0)]  # the block size in use: MM_BLOCKS[st["blk"]]
+    st = {"mm": getattr(getattr(ttnn, "experimental", None), "minimal_matmul", None), "blk": 0}
     ran = (
         dict(op="ttnn.experimental.minimal_matmul", fallback=None)
         if st["mm"] is not None
@@ -2271,9 +2426,21 @@ def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
     def op():
         if st["mm"] is not None:
             try:
-                return st["mm"](A, B, config=cfg, compute_kernel_config=ck, **kw, **okw)
+                return st["mm"](A, B, config=cfg[0], compute_kernel_config=ck, **kw, **okw)
             except Exception as e:  # refused on the host before anything is queued
-                why = f"minimal_matmul refused: {(str(e).splitlines() or [''])[0][:160] or type(e).__name__}"
+                first = (str(e).splitlines() or [""])[0][:160] or type(e).__name__
+                why = f"minimal_matmul refused: {first}"
+                if MM_L1_FULL.search(str(e)):  # these blocks do not fit L1: smaller ones before anything else
+                    need = re.search(r"grow to (\d+) B", str(e))
+                    over = f"{mm_blocks(st['blk'])} overflowed L1{f' ({need.group(1)} B)' if need else ''}"
+                    if st["blk"] + 1 < len(MM_BLOCKS):
+                        st["blk"] += 1
+                        cfg[0] = mk(st["blk"])
+                        ran["config"] = f"blocks {mm_blocks(st['blk'])} ({over})"
+                        print(f"heavy op: minimal_matmul {over}; {mm_blocks(st['blk'])} instead", flush=True)
+                        return op()
+                    ran.pop("config", None)
+                    why = f"minimal_matmul refused: no block size fits L1 (smallest, {over}: {first})"
                 if okw:  # no output dtype argument: the output keeps the input format
                     ran["out_dtype"] = f"{dt} output ({why})"
                     okw.clear()
@@ -2295,7 +2462,7 @@ def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
             return ttnn.matmul(A, B, compute_kernel_config=ck)
 
     desc = (
-        f"{dt} {fid}{' fp32-acc' if fp32 else ''} matmul {S}x{S} @ {S}x{S}"
+        f"{dt} {fid}{' fp32-acc' if fp32 else ''} matmul {S}x{S} @ {S}x{N}"
         f"{f' + fused {act[1]} SFPU epilogue' if act else ''}"
     )
     ex = HEAVY_EXTRAS.get(a.heavy, ())
@@ -2304,8 +2471,8 @@ def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
             (A, B),
             st,
             ran,
-        )  # op.state["mm"] None: minimal_matmul was refused (chunk_load.py's LOAD line)
-        return op, 2 * S**3, desc
+        )  # op.ran["fallback"]: why minimal_matmul is not used, op.ran["config"]: smaller blocks (chunk_load.py's LOAD line)
+        return op, 2 * S * S * N, desc
     W, DRAM = 2048, ttnn.DRAM_MEMORY_CONFIG
     ph = max(
         32, ((getattr(a, "heavy_pcie_mb", None) or HEAVY_PCIE_MB) << 20) // (2 * W) // 32 * 32
@@ -2361,7 +2528,7 @@ def heavy_op(a, ttnn, torch, mesh, x, w, cq1=None, fabric=True, cq_why=None):
     all_op.tensors, all_op.state, all_op.ran = (A, B, hdst, G, D1, D2), st, ran
     return (
         all_op,
-        2 * S**3,
+        2 * S * S * N,
         (
             f"{a.heavy} ({desc} + {ph * W * 2 >> 20} MB PCIe write"
             f"{' on cq 1' if cq1 is not None else ''} + all_gather [1, 1, 1024, 4096] cluster_axis {ax} + DRAM add per step)"
@@ -2661,6 +2828,7 @@ def body(run):
 
         ra = RunAhead(ttnn, mesh, RUN_AHEAD_OPS, op_cap(a.burst_s, a.heavy, hflops, hv.ran["fallback"]))
         gap = BurstGap(ttnn, mesh, a.burst_steps, a.burst_gap_ms, ra)
+        gap.start(t)
         n, nh = 1, 0  # n: the op count for the check schedule; nh: heavy ops
         if not checked(1):  # op 1, cold: the numeric check's start-up case
             ttnn.deallocate(mm())
@@ -2682,6 +2850,7 @@ def body(run):
         checked(n + 1, last=True)
         ttnn.synchronize_device(mesh)  # the burst's only synchronize
         el = time.time() - t
+        gap.end(nh, t + el)
         hs_n = hs.stop() if hs else 0
         ns = 1 + sum(1 for p in pend if p[0] != 1)  # the small matmuls: op 1 and the checked ones
         tflops = (nh * hflops + ns * 2 * a.m * a.k * a.n) / el / 1e12
@@ -2696,7 +2865,7 @@ def body(run):
         )
         mark(
             f"LOAD burst{cyc_tag(a, cyc)}: {nh} x {hdesc} ({ran}) back to back + {ns} checked {a.m}x{a.k} @ {a.k}x{a.n} matmuls; "
-            f"{el:.1f}s, {tflops:.0f} TFLOP/s per chip, {gap.desc()}"
+            f"{el:.1f}s, {tflops:.0f} TFLOP/s per chip, {gap.desc()}; {timing_text(gap.timing())}"
             + (f"; numeric readback after it {spent:.1f}s, {skipped} skipped" if nc else "")
             + (f"; variant {a.variant}: host stress {hs_n} workers (started in {hs.start_s}s)" if hs else "")
         )
@@ -2715,6 +2884,7 @@ def body(run):
             burst_steps=a.burst_steps,
             gaps=gap.n,
             gap_s=round(gap.s, 2),
+            timing=gap.timing(),
             tflops_per_chip=round(tflops, 1),
             numeric_s=round(spent, 2),
             numeric_skipped=skipped,

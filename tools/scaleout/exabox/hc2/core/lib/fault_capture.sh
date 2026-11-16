@@ -5,6 +5,7 @@
 
 declare -F pg_run > /dev/null || . "$(dirname "${BASH_SOURCE[0]}")/pgroups.sh"   # setsid children are recorded; pg_run
 declare -F rk_umd > /dev/null || . "$(dirname "${BASH_SOURCE[0]}")/umd_index.sh"   # open a chip by its UMD index
+declare -F fault_eth_noreset > /dev/null || . "$(dirname "${BASH_SOURCE[0]}")/eth_noreset.sh"   # the not-judged ETH core line
 # lib/fault_capture.sh: run.sh's capture on a fault, in every run: even without --heavy-logs, any
 # fault gathers data to pinpoint it, without the heavy redundant logs that would run all the time
 # when --heavy-logs is off. A healthy run runs none of this; it gets lib/heavy_logs.sh's light
@@ -47,11 +48,44 @@ fault_name() {  # <what> <chip...>
   while read -r l; do fault_note "$l"; done < "$OUT/.fault_new"
   rm -f "$OUT/.fault_new"
 }
-fault_eth() {  # <log>...
-  local m smi=/dev/null f l; FE_LINES=""; m=$OUT/.fe_map; echo "$RK_MAP" > "$m"
+fault_eth() {  # <log>...; FE_LINES the raw lines. With FE_NONE set (why no start reset ran; FE_STAGE the stage), each in-box
+  # 'ETH core ... not active again at mesh open' line is noted as ETH INCOMPLETE, not judged, and FE_NJ lists its chips
+  local m smi=/dev/null f l n; FE_LINES=""; FE_NJ=""; m=$OUT/.fe_map; echo "$RK_MAP" > "$m"
   for f in "${FL_OUT:-/nonexistent}/ttsmi_c2.json" "${FL_OUT:-/nonexistent}/ttsmi_pre.json"; do [ -s "$f" ] && { smi=$f; break; }; done
   FE_LINES=$(python3 -I "$FC_PY" ethcore "$m" "$smi" "$@" --host "$(hostname -s)" 2>/dev/null); rm -f "$m"
-  while read -r l; do [ -n "$l" ] && [ -z "${FE_NONOTE:-}" ] && fault_note "$l"; done <<< "$FE_LINES"
+  while read -r l; do [ -n "$l" ] || continue
+    if [ -n "${FE_NONE:-}" ]; then n=$(fault_eth_noreset "${FE_STAGE:-the try}" "$l" "$FE_NONE" "${FE_WHERE:-at the start}")
+      [[ $n == "ETH INCOMPLETE "* ]] && { l=$n; FE_NJ="$FE_NJ|${n#ETH INCOMPLETE }"; }; fi
+    [ -z "${FE_NONOTE:-}" ] && fault_note "$l"; done <<< "$FE_LINES"
+}
+fault_eth_nj() {  # after fault_attr and fault_eth: 0 when the try's own error names chips (FA_LINES) and each is a not-judged ETH core
+  # with that error (FE_NJ); FE_NJ_WHY the INCOMPLETE reason naming them by BDF and tray (as fl_bb_step pairs them)
+  local fc ferr t x=""; FE_NJ_WHY=""; [ -n "${FE_NJ:-}" ] && [ -n "${FA_LINES:-}" ] || return 1
+  while read -r fc _ ferr; do [ -n "$fc" ] || continue; t=$(fc_tag "$fc")
+    [[ $FE_NJ == *"|$t: "* ]] && [[ $ferr == *"active ethernet core"*"active again"* ]] || return 1
+    x="$x${x:+, }${t% tt-smi *}"; done <<< "$FA_LINES"
+  [ -n "$x" ] || return 1
+  FE_NJ_WHY="ETH core(s) not active again at mesh open (start reset skipped; ETH not-active-at-open not judged: $FE_NONE) on $x"
+}
+fe_none_start() {  # FE_NONE: why no start reset ran, from rk_start and rk_reset's state (non-fleet; fleet sets FL_C2_NONE). A gate-skipped
+  # start reset (RK_RESET_SKIP, RK_RESET_NONE 0) counts too, as fleet's 'SKIPPED-GATE: ...' does
+  FE_NONE=""; [ -z "${FLEET:-}" ] || return 0
+  if [ "${RK_START_RAN:-0}" != 1 ]; then FE_NONE="no start reset: every chip answered at the start"
+  elif [ "${RK_RESET_NONE:-0}" = 1 ]; then FE_NONE=${RK_RESET_WHY:-no glx_reset ran}
+  elif [ -n "${RK_RESET_SKIP:-}" ]; then FE_NONE="SKIPPED-GATE: $RK_RESET_SKIP"; fi
+}
+fe_try_fail() {  # <stage> <log> <json>: a failed try's attribution, ETH core lines and fault capture. FE_TRY_NJ 1 when its own error
+  # is only a not-judged ETH core line (no start reset ran)
+  FE_TRY_NJ=""; fault_attr "$1" 1 "$2" "$3" || :
+  FE_STAGE=$1 fault_eth "$2"
+  fault_eth_nj && FE_TRY_NJ=1
+  ! rs_step "fault capture ($1)" || fault_snapshot failed
+}
+fe_try_result() {  # <stage> <after the reset> [keep]: the RESULT line of a failed try. RK_RC 1, or 9 with VD_INC_WHY for a not-judged ETH core line.
+  # keep (rc 14, glx_reset FAILED): a not-judged ETH core line leaves RK_RC and leads with the reset failure
+  if [ -n "${FE_TRY_NJ:-}" ] && [ "${3:-}" = keep ]; then echo "RESULT: $2; $1: not judged: $FE_NJ_WHY"
+  elif [ -n "${FE_TRY_NJ:-}" ]; then echo "RESULT: INCOMPLETE: $1: start reset skipped; ETH not-active-at-open not judged; after the reset: $2"; RK_RC=9; VD_INC_WHY=$FE_NJ_WHY
+  else echo "RESULT: $1; after the reset: $2"; RK_RC=1; fi
 }
 fault_note() { declare -F fl_bb_dup > /dev/null && fl_bb_dup note "$*" && return 0   # a bus-bar part repeating the stage's recorded fault
   say "fault: $*"; echo "$(date '+%F %T %Z') $*" >> "$OUT/fault.txt"; }

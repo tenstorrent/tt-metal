@@ -60,7 +60,7 @@ lk_snap() {  # one row per Galaxy chip address: bdf rp bus vendor speed width rp
 lk_find() {  # one finding (once): fleet findings with --mode, else the log; FAIL lines also to fault.txt
   grep -qxF -- "$*" "$OUT/link/findings.txt" 2> /dev/null && return 0
   echo "$*" >> "$OUT/link/findings.txt"
-  if [ -n "${FL_OUT:-}" ]; then fl_find "$*"; else say "$*"; fi
+  if [ -n "${FL_OUT:-}" ]; then fl_find "$*"; [ -s "$FL_OUT/holder.txt" ] && fl_isfault "$*" && return 0; else say "$*"; fi   # not judged once the chips are taken
   case $* in *" FAIL "*) echo "$(date '+%F %T %Z') $*" >> "$OUT/fault.txt" ;; esac
 }
 lk_held() {  # $1 line, $2 pre snapshot: a FAIL line of a chip not answering config space at the start (held for lk_settle)

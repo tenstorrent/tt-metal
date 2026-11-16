@@ -14,6 +14,7 @@
 # In a tt-device-mcp broker job: the job's own processes never count, another broker job (a ttdev-job-*.scope
 #   that is not this one) is busy (10), and a workload matched by name only is CPU load (holds no device) printed to stderr
 #   as "host load: ..." and not counted. Outside a broker job the name check below still refuses (11).
+# env: FLEET_GATE_HOLDERS_ONLY=1 (only the device-holder check; lib/fleet.sh's mid-run holder lookup)
 # env: FLEET_GATE_DEVICE_ONLY=1 (opt-in, default unset: skips the host-wide workload-name check below, so only
 #   device holders and the tray-test run lock count; for hosts where a device broker serializes the device. Never set on quad hosts.)
 # env: TRAY_REPRO_SYS, FLEET_PROC (test hook, default /proc), FLEET_DEVD (default /dev/tenstorrent), FLEET_SHM (default /dev/shm), FLEET_PODLOG (default /var/log/pods),
@@ -80,6 +81,8 @@ while :; do
   sleep "$AI"
 done
 [ -z "$warn" ] || echo "$warn" >&2
+# FLEET_GATE_HOLDERS_ONLY=1 (lib/fleet.sh fl_holder): only the holder check above, then the verdict
+if [ "${FLEET_GATE_HOLDERS_ONLY:-0}" = 1 ]; then [ $rc = 0 ] && echo "gate ok" || echo "gate busy: ${why#; }"; exit $rc; fi
 # wl: the executable a process runs, matched by name: argv[0]'s basename, or for
 # an interpreter its script or -m module. Never a substring of the command line: a shell's -c text, ssh/quad-ssh to
 # another host, git, ttp sandbox or an editor that only mention a tray-test or H3 path do not touch the local chips.

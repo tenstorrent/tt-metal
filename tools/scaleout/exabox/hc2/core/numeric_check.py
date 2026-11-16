@@ -306,6 +306,44 @@ def sfpu_vote(torch, outs, gx):
     return bad
 
 
+def sfpu_flip(s, t, gx, ti=None):
+    """TRAY_INJECT (test-only): a copy of t with the spec's bit flipped in the first element of the target
+    core's shard (spec core= x,y, default 0,0; sfpu_core's layout), so the vote names that core."""
+    if ti is None:
+        ti = _tray_inject()
+    x, y = s["core"] or (0, 0)
+    return ti.flip_tensor(s, t, 32 * (y * gx + x) * (t.shape[-1] if t.dim() else 1))
+
+
+def _tray_inject():
+    import sys
+
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet")
+    if d not in sys.path:
+        sys.path.append(d)
+    import tray_inject
+
+    return tray_inject
+
+
+def sfpu_inject(outs, bdfs, gx, where=""):
+    """TRAY_INJECT (test-only, fleet/tray_inject.py): the per-chip read-back of one SFPU vote compare
+    (chunk_load's launch-0 vote and chunk-end counters) with the target chip's copy flipped in the target core's shard.
+    (outs, {chip index: spec}); with TRAY_INJECT unset outs is returned as is and the dict is empty."""
+    ti = _tray_inject()
+    hit = {}
+    for i in range(len(outs)):
+        s = ti.want("N4", bdfs[i]) if i < len(bdfs) and bdfs[i] else None
+        if s is None:
+            continue
+        if not hit:
+            outs = list(outs)
+        outs[i] = sfpu_flip(s, outs[i], gx, ti)
+        ti.applied(s, core=s["core"] or (0, 0), where=f"sfpu {where}".strip())
+        hit[i] = s
+    return outs, hit
+
+
 def sfpu_cores_text(sf):
     """', SFPU vote core x,y X,Y (op, k elems)...' for a chip's {'<op>': {'x,y': n}}; '' when none.
     Test helper (tests/test_numeric_sfpu.py): run.sh's report path uses fleet/chunk_sched.sfpu_text."""

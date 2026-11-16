@@ -192,10 +192,18 @@ hl_hung() {  # <snapshot dir>: "<bdf> <why>" per hung chip: rev ff in lspci_vvv_
 hl_holder_users() {  # the user of each process holding a /dev/tenstorrent node, one per line
   hl_scan | awk '{ print $3 }'
 }
-hl_alias() {  # the ttp machines alias of this host's quad
-  case $(hostname -s | tr '[:upper:]' '[:lower:]') in
-    *) echo "<alias>" ;;
-  esac
+hl_alias() {  # the ttp machines alias of this host's quad: site data host_alias (glob|glob=alias;...), else <alias>
+  local h m p q a IFS=';'
+  h=$(hostname -s | tr '[:upper:]' '[:lower:]')
+  ! type hc_site > /dev/null 2>&1 || m=$(hc_site host_alias)
+  for p in ${m:-}; do
+    a=${p##*=}
+    IFS='|'; for q in ${p%=*}; do
+      # shellcheck disable=SC2254  # q is a hostname glob from site data
+      case $h in $q) echo "$a"; return ;; esac
+    done; IFS=';'
+  done
+  echo "<alias>"
 }
 hl_hwmon_guard() {  # <snapshot dir>: only with HEAVY_HWMON_GUARD=1 (run.sh --hwmon-guard). chmod 000 the hwmon *_input and
   # *_max of each chip in hung_chips.txt, so non-root pollers (node_exporter, sensors) stop sending it ARC messages; root

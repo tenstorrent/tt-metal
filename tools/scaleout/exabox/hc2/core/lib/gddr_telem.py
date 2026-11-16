@@ -5,11 +5,13 @@
 
 # lib/gddr_telem.py: per-chip GDDR telemetry for run.sh (lib/gddr.sh; one chip's case
 # showed memory faults leave no trace in the run log). Read-only: it reads each chip's ARC telemetry table, never writes.
-#   gddr_telem.py read [<bdf> ...]   one line per chip, sorted by BDF (pyluwen; the same fields and packing as tt-smi's
-#                             tt_smi/utils.py decoders, firmware 19.x). The <bdf>s hung or were lost in this run: never
-#                             opened (an MMIO or ARC read of a hung chip can give a fatal MCE, lib/mce_guard.sh), and
-#                             neither is a chip whose config space reads ffffffff. Each chip's BDF comes from sysfs
-#                             before it is opened; with a skip list and no sysfs map, no chip is opened:
+#   gddr_telem.py read [<bdf> ...] [--nr <bdf> ...]   one line per chip in BDF order, each written as it is read
+#                             (pyluwen; the same fields and packing as tt-smi's tt_smi/utils.py decoders, firmware 19.x).
+#                             The <bdf>s hung or were lost in this run: never opened (an MMIO or ARC read of a hung chip
+#                             can give a fatal MCE, lib/mce_guard.sh); nor the --nr chips (firmware not ready, FW_NR) nor
+#                             a chip whose config space reads ffffffff. Each chip's BDF comes from sysfs before it is
+#                             opened; with a skip or --nr list and no sysfs map, no chip is opened. Each chip is read in
+#                             a child process cut at TRAY_GDDR_CHIP_S (10 s; 0: in this process, no limit):
 #     <bdf> max_temp=<C> temp=<c0>,..,<c7> corr_rd=<n0>,..,<n7> corr_wr=<n0>,..,<n7> uncorr=0x<mask>
 #       temp: per GDDR channel 0-7 the hotter of its two dies (GDDR_x_y_TEMP, a byte per die)
 #       corr_rd/corr_wr: corrected read/write EDC counts per channel (GDDR_x_y_CORR_ERRS, a byte each, saturates at 255)
@@ -23,7 +25,10 @@
 #     GDDR: <n> chips read at start and end; ...                                              one overall line, last
 #   A counter lower at the end than at the start was cleared by a reset in the run: the end value counts as the rise.
 import os
+import select
+import signal
 import sys
+import time
 
 N = 8  # Blackhole GDDR channels
 FIELDS = ["max_temp", "temp", "corr_rd", "corr_wr", "uncorr"]
@@ -94,18 +99,68 @@ def config_dead(bdf, sysfs=None):  # vendor id ffff: the chip fell off the bus (
         return False
 
 
-def read(skip=()):
+def chip_line(pyluwen, i, bdf):
+    """Open chip <i> and read its line; '<bdf> unavailable <why>' when it cannot be read."""
+    try:
+        c = pyluwen.PciChip(i)
+        bdf = short_bdf(c.get_pci_bdf())
+        return line(bdf, decode(c.get_telemetry()))
+    except Exception as e:
+        return f"{bdf} unavailable {str(e).splitlines()[0][:120] if str(e) else type(e).__name__}"
+
+
+def chip_line_timed(pyluwen, i, bdf, limit):
+    """chip_line in a child process cut at <limit> s: a chip that hangs in the open or the read costs its own
+    line, not the rest of the read. The child is killed and reaped without waiting (a child stuck in the kernel is left).
+    """
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # child: one line to the pipe, then out without the parent's exit handlers
+        os.close(r)
+        try:
+            os.write(w, (chip_line(pyluwen, i, bdf) + "\n").encode())
+        finally:
+            os._exit(0)
+    os.close(w)
+    buf, end, eof = b"", time.monotonic() + limit, False
+    with os.fdopen(r, "rb", buffering=0) as f:
+        while not buf.endswith(b"\n"):
+            left = end - time.monotonic()
+            if left <= 0 or not select.select([f], [], [], left)[0]:
+                break
+            b = f.read(4096)
+            if not b:
+                eof = True
+                break
+            buf += b
+    if buf.endswith(b"\n") or eof:
+        os.waitpid(pid, 0)
+        return buf.decode(errors="replace").rstrip("\n") or f"{bdf} unavailable the read process ended without a line"
+    try:
+        os.kill(pid, signal.SIGKILL)
+        for _ in range(10):  # at most 1 s: a child in uninterruptible sleep is not waited for
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                break
+            time.sleep(0.1)
+    except OSError:
+        pass
+    return f"{bdf} unavailable no answer in {limit:g} s (TRAY_GDDR_CHIP_S)"
+
+
+def read(skip=(), nr=()):
     skip = {short_bdf(b if b.count(":") == 2 else "0000:" + b) for b in skip if b}
+    nr = {short_bdf(b if b.count(":") == 2 else "0000:" + b) for b in nr if b}
     try:
         import pyluwen
     except Exception as e:  # bundle boxes without PyPI: no pyluwen
         print(f"unavailable no pyluwen: {e}", flush=True)
         return
     devs = devices()
-    if devs is None and skip:  # which index is a hung chip is unknown: open none
+    if devs is None and (skip or nr):  # which index is a hung or not-ready chip is unknown: open none
         print(
-            f"unavailable no sysfs map of /dev/tenstorrent to PCI addresses, and {', '.join(sorted(skip))} hung in this run: "
-            "no chip opened before the end reset",
+            f"unavailable no sysfs map of /dev/tenstorrent to PCI addresses, and "
+            f"{', '.join(sorted(skip | nr))} {'hung in this run' if skip else 'firmware not ready'}: no chip opened"
+            f"{' before the end reset' if skip else ''}",
             flush=True,
         )
         return
@@ -115,22 +170,23 @@ def read(skip=()):
         except Exception as e:
             print(f"unavailable pci_scan failed: {e}", flush=True)
             return
-    rows = []
-    for i, bdf in devs:  # one chip at a time: a chip that does not answer costs only its own line
+    try:
+        limit = float(os.environ.get("TRAY_GDDR_CHIP_S", "10"))
+    except ValueError:
+        limit = 10.0
+    # One chip at a time, in BDF order, each line written as it is read: a read cut by gd_read's
+    # TRAY_GDDR_S keeps every earlier chip's line, and a chip with no answer in TRAY_GDDR_CHIP_S loses only its own.
+    for i, bdf in sorted(devs, key=lambda d: (d[1] is None, d[1] or "", d[0])):
         if bdf in skip:
-            rows.append((bdf, f"{bdf} unavailable hung in this run: not opened before the end reset"))
-            continue
-        if bdf and config_dead(bdf):
-            rows.append((bdf, f"{bdf} unavailable config space reads ffffffff: not opened"))
-            continue
-        bdf = bdf or f"pci{i}"
-        try:
-            c = pyluwen.PciChip(i)
-            bdf = short_bdf(c.get_pci_bdf())
-            rows.append((bdf, line(bdf, decode(c.get_telemetry()))))
-        except Exception as e:
-            rows.append((bdf, f"{bdf} unavailable {str(e).splitlines()[0][:120] if str(e) else type(e).__name__}"))
-    for _, l in sorted(rows):
+            l = f"{bdf} unavailable hung in this run: not opened before the end reset"
+        elif bdf in nr:  # FW_NR (lib/fw_check.sh): UMD waits 300 s on such a chip; never opened
+            l = f"{bdf} unavailable firmware not ready: not opened"
+        elif bdf and config_dead(bdf):
+            l = f"{bdf} unavailable config space reads ffffffff: not opened"
+        elif limit > 0:
+            l = chip_line_timed(pyluwen, i, bdf or f"pci{i}", limit)
+        else:  # TRAY_GDDR_CHIP_S=0: in this process, no per-chip limit
+            l = chip_line(pyluwen, i, bdf or f"pci{i}")
         print(l, flush=True)
 
 
@@ -235,8 +291,9 @@ def diff(start_path, end_path):
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "read":
-        read(sys.argv[2:])
+        a = sys.argv[2:]
+        read(a[: a.index("--nr")] if "--nr" in a else a, a[a.index("--nr") + 1 :] if "--nr" in a else ())
     elif len(sys.argv) == 4 and sys.argv[1] == "diff":
         diff(sys.argv[2], sys.argv[3])
     else:
-        sys.exit("usage: gddr_telem.py read [<skip bdf> ...] | diff <start file> <end file>")
+        sys.exit("usage: gddr_telem.py read [<skip bdf> ...] [--nr <bdf> ...] | diff <start file> <end file>")

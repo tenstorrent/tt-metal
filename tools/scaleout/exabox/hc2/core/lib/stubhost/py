@@ -37,6 +37,7 @@ while [ $# -gt 0 ]; do case $1 in --beat) beat=$2; shift ;; --rows) a_rows=$2; s
   --out|--heavy-pcie-mb|--parts|--cqs|--heavy|--heavy-n|--burst-gap-ms|--pcie-every|--rw-after|--trays) shift ;; esac; shift; done
 rows=${a_rows:-/dev/null}
 case $s in
+  */fabric_open.py) echo "fabric_open" >> "$W_STATE/calls"; echo "launch 0" > "$beat"; echo close > "$beat"; echo '{"ok": true, "s": 1.0}' >> "$rows"; exit 0 ;;   # the open after C9
   */fabric_repro.py) echo "pair $TT_VISIBLE_DEVICES" >> "$W_STATE/calls"; echo open > "$beat"; echo "done 9" > "$beat"; echo close > "$beat"; exit 0 ;;
   */agloop.py) echo "agloop" >> "$W_STATE/calls"; echo "launch 1" > "$beat"
      echo '{"event": "end", "iters": 9, "ag_sp_total": 72, "verify_failures": 0}' >> "$rows"; echo close > "$beat"; exit 0 ;;

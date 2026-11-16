@@ -72,7 +72,8 @@ ready() { [ -f "$1/READY" ] && [ -x "$1/python_env/bin/python" ] && [ -f "$1/tt-
 why_not() { if [ ! -e "$1" ]; then echo "$1 does not exist"; elif [ ! -f "$1/READY" ]; then echo "$1 has no READY (build not finished)";
   elif [ ! -x "$1/python_env/bin/python" ]; then echo "$1 has no venv python"; else echo "$1 has no ttnn/_ttnn.so"; fi; }
 trap 'log "stopped by signal during setup"; exit 4' TERM INT HUP
-TT=""; for d in "$HERE/../.." "$HERE/.."; do [ -f "$d/setup.sh" ] && [ -f "$d/ttnn-wheel.env" ] && { TT=$(cd "$d" && pwd); break; }; done
+# the pinned-wheel route needs a tree with setup.sh and ttnn-wheel.env: local glue, named by HC_H3_TREE (tray-test's lib/hc_hooks.sh)
+TT=""; d=${HC_H3_TREE:-}; [ -n "$d" ] && [ -f "$d/setup.sh" ] && [ -f "$d/ttnn-wheel.env" ] && TT=$(cd "$d" && pwd)
 ROUTE=build
 # H3_PYTHON_ENV (a venv dir with bin/python) set: a plain tt-metal tree at TT_METAL_HOME with that env, no
 # pin, wheel, site build or archive. Unset: the routes below, as before
@@ -167,13 +168,18 @@ for m in sys.argv[1:]:
 }
 
 # The fallback after a failed wheel route: the site build ($H3_TT_METAL_BUILD, else the default SITE path for the pin),
-# else the pin's prebuilt archive unpacked by h3/dist/fetch.sh (H3_DIST=0: off). One try, never a wait and never a
+# else the pin's prebuilt archive unpacked by HC_H3_FETCH (H3_DIST=0: off). One try, never a wait and never a
 # compile: with neither, the step ends at once with an ERROR line.
+# The prebuilt-archive fetcher is local glue, not part of the core: HC_H3_FETCH names it (tray-test's lib/hc_hooks.sh sets its
+# h3/dist/fetch.sh). Unset or not executable: no prebuilt archive and no warm kernel cache, the other routes as before.
+H3_FETCH=${HC_H3_FETCH:-}; [ -x "$H3_FETCH" ] || H3_FETCH=""
 build_once() {
   if ready "$SITE"; then BUILD=$SITE; return 0; fi
   cause="site build: $(why_not "$SITE")"
-  if [ -z "${H3_TT_METAL_BUILD:-}" ] && [ "${H3_DIST:-1}" != 0 ]; then
-    if b=$(H3_DIST_BUILD=0 "$HERE/dist/fetch.sh" build "$PIN" 2> "$LOG/fetch.err") && ready "$b"; then BUILD=$b; log "build from the prebuilt archive: $b"; return 0; fi
+  if [ -z "${H3_TT_METAL_BUILD:-}" ] && [ "${H3_DIST:-1}" != 0 ] && [ -z "$H3_FETCH" ]; then
+    cause+="; archive: no prebuilt-archive fetcher (HC_H3_FETCH unset)"
+  elif [ -z "${H3_TT_METAL_BUILD:-}" ] && [ "${H3_DIST:-1}" != 0 ]; then
+    if b=$(H3_DIST_BUILD=0 "$H3_FETCH" build "$PIN" 2> "$LOG/fetch.err") && ready "$b"; then BUILD=$b; log "build from the prebuilt archive: $b"; return 0; fi
     cause+="; archive: $(grep -v '^\s*$' "$LOG/fetch.err" | tail -n 1 | cut -c1-300)"
   fi
   return 3
@@ -228,11 +234,15 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/h3synth.XXXXXX")
 # Under Slurm a node-local tree goes only through slurm-log-archive.sh: every log in WORK (H3
 # logs included) and in LOCAL to one shared-storage <jobid>-<node>-h3-<run>.tar.zst first, the tree kept with
 # an ERROR line when that write fails. Outside Slurm the trees are removed as before.
-SLA=$HERE/../reliability/slurm/slurm-log-archive.sh
+# The archive script is local glue (tray-test's reliability/slurm/slurm-log-archive.sh): HC_SLURM_ARCHIVE names it (tray-test's
+# lib/hc_hooks.sh sets it). Unset, the trees are removed as outside Slurm (the old reliability path one level above the core left
+# traytest/hc after the hc move, so every Slurm run kept its tree with an ERROR line).
+SLA=${HC_SLURM_ARCHIVE:-}
 gone() {   # <tree> <name>
-  if [ -n "${SLURM_JOB_ID:-}" ]; then
+  if [ -n "${SLURM_JOB_ID:-}" ] && [ -n "$SLA" ]; then
     if [ -s "$SLA" ] && . "$SLA"; then sla_archive "$1" "$2" >&2 || true; else log "ERROR: no slurm-log-archive.sh: node-local $1 kept"; fi
-  else rm -rf "${1:?}"; fi; }   # not a Slurm job: no slurm-log-archive.sh step
+  else [ -n "${SLURM_JOB_ID:-}" ] && log "node-local $1 removed, not archived (HC_SLURM_ARCHIVE unset: no slurm-log-archive.sh)"
+    rm -rf "${1:?}"; fi; }   # not a Slurm job, or no archive script named: no slurm-log-archive.sh step
 cleanup() { [ -z "${WPID:-}" ] || kill "$WPID" 2> /dev/null || true; [ -z "${MPID:-}" ] || kill "$MPID" 2> /dev/null || true
   rm -f "${TEST:?}" "${WMOD:?}" "${PMOD:?}"; rm -f "$TD"/__pycache__/*"_$TAG".*.pyc 2> /dev/null || true
   gone "$WORK" "h3-${TAG}-${WORK##*.}"; if [ -z "${SLURM_TMPDIR:-}" ] && [ -d "$LOCAL" ]; then gone "$LOCAL" "h3-${TAG}-local"; fi; }
@@ -254,8 +264,8 @@ aer() {   # snap <file> | diff: the 'H3 AER' lines go to gens.log and to stdout
 aer_after() { [ -z "${AER_DONE:-}" ] || return 0; AER_DONE=1; aer snap "$LOG/aer-after.tsv"; aer diff; }
 aer snap "$LOG/aer-before.tsv"
 # A warm kernel cache for this pin and chip arch, when the site has one (h3/dist/pack.sh kcache). H3_DIST_KCACHE=0: off.
-if [ -z "${TT_METAL_CACHE:-}" ] && [ -f "$BUILD/.h3dist" ] && [ "${H3_DIST_KCACHE:-1}" != 0 ] \
-  && kc=$("$HERE/dist/fetch.sh" kcache "$(cat "$HERE/tt-metal.sha")" "$BUILD"); then
+if [ -z "${TT_METAL_CACHE:-}" ] && [ -f "$BUILD/.h3dist" ] && [ "${H3_DIST_KCACHE:-1}" != 0 ] && [ -n "$H3_FETCH" ] \
+  && kc=$("$H3_FETCH" kcache "$(cat "$HERE/tt-metal.sha")" "$BUILD"); then
   export TT_METAL_CACHE=$kc; log "warm kernel cache $kc"
 fi
 if [ "$ROUTE" = wheel ]; then   # the wheel carries tt-metal's runtime; the model tree is on the import path, and

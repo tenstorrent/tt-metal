@@ -37,8 +37,8 @@ ttnn lacks is turned off at launch 0 (row "part_off"), the rest go on.
 Utilization rows: "calib" (each part alone, synchronized: its measured device seconds per launch) and per chunk
 launches/s, TFLOP/s per chip and DRAM/ETH/PCIe GB/s per chip derived from the measured launch rate and the parts'
 tensor sizes (not hardware counters). Beat protocol as h3shape_repro.py ("launch N", "done N", "verify K", "close").
-Each chunk row carries "load" (heavy op, run-ahead, checks queued, fallbacks); chunk_sched.report() makes one LOAD
-line per chunk from it and the tray power poll. Exit 0 clean, 4 numeric failure, 1 error (a chunk-end readback that raised too)."""
+Each chunk row carries "load" (heavy op, run-ahead, checks queued, smaller heavy blocks, fallbacks);
+chunk_sched.report() makes one LOAD line per chunk from it and the tray power poll. Exit 0 clean, 4 numeric failure, 1 error (a chunk-end readback that raised too)."""
 import argparse
 import glob
 import json
@@ -66,9 +66,9 @@ from ub0_repro import (  # noqa: E402
     SFPU_ACT,
     BurstGap,
     RunAhead,
-    heavy_dram_bytes,
-    heavy_op,
 )
+from ub0_repro import heavy_cols as ub_heavy_cols  # noqa: E402
+from ub0_repro import heavy_dram_bytes, heavy_op  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--rows-n", type=int, default=4)
@@ -121,7 +121,7 @@ ap.add_argument(
     "--heavy-x",
     type=heavy_x_list,
     default="",
-    help="extra number formats after --heavy's ops (16k_hifi4, bfloat4_b, float32, int32/"
+    help="extra number formats after --heavy's ops (16k_hifi4, bfloat4_b LoFi and HiFi3, bfloat8_b HiFi2, float32, int32/"
     "int8): each is built and tried on its own (a refused one is turned off alone, part_off heavy:<op>), runs "
     "--heavy-n times per launch on launch 0 and in each chunk's last --heavy-x-s seconds, and is checked and "
     "voted across chips like --heavy's ops",
@@ -167,6 +167,20 @@ ap.add_argument(
     help="1: each checked heavy output's first rows, height-sharded one 32-row shard per core, go through one SFPU op "
     "per launch (exp, reciprocal, sqrt, gelu in turn), each compared on the device with its launch-0 reference "
     "and voted across chips at launch 0; a mismatch names the chip and the core x,y",
+)
+ap.add_argument(
+    "--heavy-cols",
+    type=int,
+    default=None,
+    help="the 16k heavy matmul's output width in tile columns (default 512; 511 decouples tile "
+    "columns from the 8 DRAM banks, so loc_summary's per-bank count tells a bank fault from a compute one)",
+)
+ap.add_argument(
+    "--heavy-cols-rotate",
+    default=None,
+    help="the heavy matmul's output tile columns per chunk, a comma list (run.sh's mix chunks: "
+    "FLEET_HEAVY_COLS_ROTATE, default 512,511); chunk k runs entry k mod n, each width resident with its "
+    "own reference; one width (or unset: --heavy-cols) = no rotation",
 )
 ap.add_argument("--burst-steps", type=int, default=BURST_STEPS, help="heavy ops per burst")
 ap.add_argument(
@@ -255,8 +269,29 @@ ap.add_argument(
     "L1 patterns written one shard per Tensix core, copied L1 to L1 to the next core and read back on every chip, "
     "passes until this wall cap; 0 = off",
 )
-ap.add_argument("--l1-full", action="store_true", help="N1: add the inverse patterns (--mode=full)")
+ap.add_argument(
+    "--l1-full",
+    action="store_true",
+    help="N1: add the inverse patterns, cut the L1 margin; G3b: add the 1 GB DRAM window (--mode=full)",
+)
 ap.add_argument("--l1-kb", type=int, default=0, help="N1: per-core shard KB (0 = sized to the allocatable L1)")
+ap.add_argument(
+    "--noc-wall-s",
+    type=float,
+    default=0.0,
+    help="N2: right after N1, noc_a2a.a2a_check: "
+    "a tensor moved DRAM to height-sharded L1, height to width sharded (all-to-all), back, and "
+    "to DRAM over the whole grid, read back after each leg and compared on every chip; passes until this wall cap; 0 = off",
+)
+ap.add_argument(
+    "--rf-wall-s",
+    type=float,
+    default=0.0,
+    help="N7: right after N2, rf_walk.rf_check: "
+    "walking-1/walking-0 bf16 words copied unpack -> Src -> Dest -> pack (ttnn.clone with a dtype change: copy_tile) "
+    "with 16-bit and 32-bit Dest, one shard per Tensix core, compared bit for bit on every chip; passes until this "
+    "wall cap; 0 = off",
+)
 ap.add_argument(
     "--trays",
     default=None,
@@ -280,6 +315,10 @@ ap.add_argument(
 a = ap.parse_args()
 try:
     VAR = lv.parse(a.variant)
+    ROT = cs.cols_rotation(a.heavy_cols_rotate, ub_heavy_cols(a))  # heavy tile columns per chunk
+    a.heavy_cols = ROT[0]
+    if a.sfpu_vote and len(set(ROT)) > 1:  # the vote's references are built once, from the first width
+        raise ValueError("--sfpu-vote takes one heavy width: drop --heavy-cols-rotate or the vote")
 except ValueError as e:
     ap.error(str(e))
 lv.apply(a, VAR)
@@ -333,6 +372,29 @@ def check_count(ref, parts, pcie_every, n_launch=0, heavy_checks=1):
     pc = len(ref["pcie"]) if "pcie" in parts else 0
     per = str(base + pc) if pe == 1 or not pc else f"{base} + {pc} (pcie every {pe})"
     return per, base * n_launch + pc * (n_launch // pe)
+
+
+def heavy_fallbacks(names, ops):
+    """The LOAD line's fallbacks among the heavy ops: each --heavy or --heavy-x op that fell back to ttnn.matmul, and
+    why (its op.ran["fallback"]). An op with no minimal_matmul of its own (8k_int32_eltwise) is no fallback, and one
+    on smaller blocks (heavy_blocks) still runs minimal_matmul."""
+    fb = []
+    for h, op in zip(names, ops):
+        r = getattr(op, "ran", None) or {}
+        if r.get("fallback"):
+            fb.append(f"{h}: {r['fallback']}, {r.get('op') or 'ttnn.matmul'}")
+    return fb
+
+
+def heavy_blocks(names, ops):
+    """The LOAD line's 'heavy blocks:': each --heavy or --heavy-x op that runs minimal_matmul on smaller blocks than
+    MM_BLOCKS[0] (op.ran["config"]), never named a fallback."""
+    hb = []
+    for h, op in zip(names, ops):
+        r = getattr(op, "ran", None) or {}
+        if not r.get("fallback") and r.get("config"):
+            hb.append(f"{h}: minimal_matmul {r['config']}")
+    return hb
 
 
 def row(**kw):
@@ -774,7 +836,12 @@ try:
                     s=round(dt, 4),
                     tflops_chip=round(x[1] / dt / 1e12, 2),
                     dram_gbs_chip=round(
-                        heavy_dram_bytes(h, int8=(getattr(x[0], "state", None) or {}).get("int8", True)) / dt / 1e9, 1
+                        heavy_dram_bytes(
+                            h, int8=(getattr(x[0], "state", None) or {}).get("int8", True), cols=ub_heavy_cols(a)
+                        )
+                        / dt
+                        / 1e9,
+                        1,
                     ),
                 )
             except Exception as e:  # noqa: BLE001
@@ -938,6 +1005,7 @@ try:
                 tu.sync()  # the burst end: the top-up's ops too, beside gap.after's synchronize
             if gap.after(nhv[0]):  # the end of a burst: synchronize, then --burst-gap-ms of quiet
                 first_bad_probe()  # the device is synchronized and idle here: the heavy counters, at most every 30 s
+                gap.resume()  # that read kept the chips idle, so it counts as the pause
         return o
 
     fbp = cs.FirstBad(cs.FIRST_BAD_PROBE_S)  # when each chip's first wrong heavy output happened
@@ -1073,13 +1141,63 @@ try:
     beat("done 0")
     if not parts:
         raise RuntimeError("no load part could run")
+    # each other --heavy-cols-rotate width is built beside the first with its own reference and counters;
+    # step() swaps it in for the chunks that run it. One that fails here is dropped from the rotation, heavy stays on.
+    HVAR, COLS_OFF = {}, []
+    if "heavy" in parts and len(set(ROT)) > 1:
+        HVAR[ROT[0]] = [hv, HVS, ref["heavy"], acc["heavy"]]
+        for n in sorted(set(ROT) - {ROT[0]}):
+            hs = []
+            try:
+                for h in HEAVY_OPS:  # one by one: a failure part way still frees the ops built so far
+                    hs.append(
+                        heavy_op(
+                            argparse.Namespace(**{**vars(a), "heavy": h, "heavy_cols": n}),
+                            ttnn,
+                            torch,
+                            m,
+                            None,
+                            None,
+                            cq1=CQ1,
+                            cq_why=cq_why,
+                        )
+                    )
+                # hv laid out as above: FLOPs and the description lead with --heavy's ops, any --heavy-x ops after them
+                hv = (
+                    hs[0][0],
+                    sum(x[1] for x in hs[:NMAIN]),
+                    " then ".join(x[2] for x in hs[:NMAIN])
+                    + (
+                        f"; in each chunk's last {a.heavy_x_s:g} s also " + " then ".join(x[2] for x in hs[NMAIN:])
+                        if len(hs) > NMAIN
+                        else ""
+                    ),
+                    [x[0] for x in hs],
+                )
+                HVS = hs
+                acc_h = acc.pop("heavy")  # no --heavy-check-each check of this launch 0 against the other width
+                try:
+                    r_ = FN["heavy"]()
+                    ttnn.synchronize_device(m)
+                finally:
+                    acc["heavy"] = acc_h
+                HVAR[n] = [hv, HVS, r_, [zeros_like(t) for t in r_]]
+            except Exception as e:  # noqa: BLE001
+                ttnn.synchronize_device(m)
+                free(*[t for x in hs for t in getattr(x[0], "tensors", [])])
+                ROT = [x for x in ROT if x != n]
+                COLS_OFF.append(f"heavy {n} tile columns off: {type(e).__name__}")
+                row(event="heavy_cols_off", cols=n, error=f"{type(e).__name__}: {str(e)[:300]}")
+            hv, HVS = HVAR[ROT[0]][:2]
+        if len(set(ROT)) < 2:
+            HVAR = {}
 
     # the references, once: non-finite elements per chip, and for the replicated parts a cross-chip vote (a chip
     # wrong from launch 0 on would otherwise be its own reference). Written as verify row k = -1.
     v0 = time.time()
     res0 = {str(i): dict(c, launches=1, mismatched=0, nonfinite=0, bad_parts=[]) for i, c in enumerate(chipinfo)}
-    for p in parts:
-        for j, t in enumerate(ref[p]):
+    for p, rl in [(p, ref[p]) for p in parts] + [("heavy", v[2]) for n, v in sorted(HVAR.items()) if n != ROT[0]]:
+        for j, t in enumerate(rl):
             # heavy: a 16k x 16k output per chip is too big for the host; its first 64 rows (every column) are read
             sl = ttnn.slice(t, [0, 0, 0, 0], [1, 1, 64, t.shape[3]]) if p == "heavy" else None
             hs = to_host(sl if sl is not None else t)
@@ -1093,7 +1211,7 @@ try:
                 odd = p in REPL and keys[i] != top and keys.count(top) > len(keys) // 2
                 if (nf or odd) and f"{p}-ref" not in r["bad_parts"]:
                     r["bad_parts"].append(f"{p}-ref")
-                if (nf or odd) and p == "heavy" and len(ref[p]) > 1:
+                if (nf or odd) and p == "heavy" and len(rl) > 1:
                     r["bad_parts"].append(f"heavy-ref:{HEAVY_OPS[j]}")  # which --heavy op's reference
     # SFPU ops in the heavy vote: launch 0's heavy outputs through each SFPU op make that op's
     # on-device reference, voted across chips bit for bit here; later launches compare on the device (sv_check, verify)
@@ -1120,7 +1238,10 @@ try:
             free(d, s_)
             for j, svr in enumerate(SV["ref"]):
                 for s, t in enumerate(svr):
-                    bad = nck.sfpu_vote(torch, [ttnn.to_torch(x) for x in ttnn.get_device_tensors(t)], g.x)
+                    sv_outs = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(t)]
+                    # TRAY_INJECT (test-only): the target chip's read-back flipped in its core's shard; a no-op when unset
+                    sv_outs, _inj = nck.sfpu_inject(sv_outs, [c.get("pci") for c in chipinfo], g.x, sv_label(j, s))
+                    bad = nck.sfpu_vote(torch, sv_outs, g.x)
                     for i, b in bad.items():
                         r = res0[str(i)]
                         for bp in ("sfpu-vote-ref", f"sfpu-vote-ref:{sv_label(j, s)}"):
@@ -1150,6 +1271,8 @@ try:
         pcie_shape=[pcie_h, W],
         heavy=(hv[2] if hv and "heavy" in parts else None),
         heavy_n=a.heavy_n,
+        heavy_cols=ub_heavy_cols(a),
+        heavy_cols_rotate=(ROT if HVAR else None),
         heavy_ops=(HEAVY_OPS if hv and "heavy" in parts else None),
         heavy_checks=HEAVY_CHECKS,
         heavy_x=(HEAVY_OPS[NMAIN:] if hv and "heavy" in parts else None),
@@ -1272,11 +1395,15 @@ try:
     def hv_b(h):  # one op's DRAM bytes (ub0_repro.heavy_dram_bytes; the eltwise op's int8 round trip as it ran)
         i = HEAVY_OPS.index(h)
         st = (getattr(HVS[i][0], "state", None) if i < len(HVS) else None) or {}
-        return heavy_dram_bytes(h, int8=st.get("int8", True))
+        return heavy_dram_bytes(h, int8=st.get("int8", True), cols=ub_heavy_cols(a))
 
     # --heavy's ops only: the --heavy-x ops run in each chunk's last --heavy-x-s seconds, not in every launch
+
+    def heavy_dram_b():  # the current width's (--heavy-cols-rotate swaps it per chunk)
+        return sum(a.heavy_n * hv_b(h) for h in HEAVY_OPS[:NMAIN])
+
     dram_b = {
-        "heavy": sum(a.heavy_n * hv_b(h) for h in HEAVY_OPS[:NMAIN]),
+        "heavy": heavy_dram_b(),
         "h3": a.blocks
         * by
         * (
@@ -1357,6 +1484,63 @@ try:
         w = w[0] if isinstance(w, list) else w
         return w.x, w.y
 
+    INJ, INJ_K = {}, set()  # TRAY_INJECT (test only): (part, output j, chip) -> the spec verify flipped; (chip, chunk)
+
+    def inj_check(p, j):
+        """TRAY_INJECT's check name for output j of part p: N5 the --heavy-x extra formats, DIDT the heavy chunk's
+        --heavy ops (--parts heavy), mix every part of a CCL-mix chunk."""
+        if p == "heavy" and j >= NMAIN:
+            return "N5"
+        return "DIDT" if p == "heavy" and a.parts.split(",") == ["heavy"] else "mix"
+
+    def inj_rc(x, y, H, W, elt=False):
+        """TRAY_INJECT (test only): (row, col) of the first element of an H x W output that core (x, y) of GRID computes
+        (chunk_sched.core_of); (0, 0) when that core computes none."""
+        gx, gy = GRID
+        mt, nt = -(-H // 32), -(-W // 32)
+        if elt:
+            q, nb = divmod(mt * nt, gx * gy)
+            ci = y * gx + x
+            tr, tc = divmod(ci * (q + 1) if ci < nb else nb * (q + 1) + (ci - nb) * q, nt)
+        else:
+            tr, tc = y * -(-mt // gy), x * -(-nt // gx)
+        r, c = tr * 32, tc * 32
+        return (r, c) if r < H and c < W and cs.core_of(r, c, H, W, GRID, elt)["core"] == [x, y] else (0, 0)
+
+    def inj_read(p, j, i, v, k):
+        """TRAY_INJECT (test only, fleet/tray_inject.py): chip i's read-back counter v of output j of part p at chunk k's
+        verify, one bit flipped when a spec names this check and chip (the first part and output compared, per chunk);
+        v itself otherwise (always with TRAY_INJECT unset)."""
+        import tray_inject
+
+        if not tray_inject.active():
+            return v
+        name = inj_check(p, j)
+        s = tray_inject.want(name, chipinfo[i].get("pci") or "", n=k)
+        if s is None or (i, k) in INJ_K:
+            return v
+        INJ_K.add((i, k))
+        INJ[(p, j, i)] = s
+        core = (
+            (s["core"] or (0, 0)) if p == "heavy" else None
+        )  # heavy's counter names a core (loc_probe); the rest none
+        h = HEAVY_OPS[j] if p == "heavy" and j < len(HEAVY_OPS) else None
+        tray_inject.applied(s, core=core, where=f"chunk {k + 1} {p}" + (f":{h}" if h else ""))
+        return tray_inject.flip_tensor(s, v, 0)
+
+    def inj_loc(p, j, i, c):
+        """TRAY_INJECT (test only): chip i's 2-D counter c with verify's flip in the spec's core (default 0,0), so the
+        FAIL line names that core; c itself when verify flipped nothing here."""
+        s = INJ.pop((p, j, i), None)
+        if s is None:
+            return c
+        import tray_inject
+
+        x, y = s["core"] or (0, 0)
+        h = HEAVY_OPS[j] if p == "heavy" and j < len(HEAVY_OPS) else None
+        r, col = inj_rc(x, y, int(c.shape[0]), int(c.shape[1]), h in HEAVY_ELTWISE)
+        return tray_inject.flip_tensor(s, c, r * int(c.shape[1]) + col)
+
     def loc_probe(p, t, res, j=0):
         """at the chunk-end verify only, for each chip whose part p counter was non-zero, read that
         chip's 2-D mismatch counter (heavy: the 16k x 16k one, before it is zeroed) or re-read the probe's got/want, and
@@ -1367,6 +1551,7 @@ try:
         for i in [i for i, r in res.items() if p in r["bad_parts"] and not r.get("loc")][:6]:
             try:
                 c = ttnn.to_torch(ttnn.get_device_tensors(t)[int(i)]).reshape(-1, t.shape[-1])
+                c = inj_loc(p, j, int(i), c)  # TRAY_INJECT (test only): verify's flip, in the spec's core
                 nz = torch.nonzero(c)
                 h = HEAVY_OPS[j] if p == "heavy" and j < len(HEAVY_OPS) else None
                 res[i]["loc"] = cs.add_phys(
@@ -1399,6 +1584,7 @@ try:
                 for j, t in enumerate(acc[p]):
                     rt, red = reduce(t, p != "heavy")
                     for i, v in enumerate(to_host(rt)):
+                        v = inj_read(p, j, i, v, k)  # TRAY_INJECT (test only): v itself unless a spec names this chip
                         r = res[str(i)]
                         try:  # one chip's bad counter stays on that chip (an inf here failed all 32)
                             # heavy under --heavy-check-each: up to HEAVY_CHECKS mismatching outputs per launch
@@ -1459,7 +1645,9 @@ try:
                 try:
                     rt, red = reduce(t)
                     bad = []
-                    for i, v in enumerate(to_host(rt)):
+                    # TRAY_INJECT (test-only): the target chip's counter read-back flipped; a no-op when unset
+                    hs, inj = nck.sfpu_inject(to_host(rt), [c.get("pci") for c in chipinfo], SV["gx"], lab)
+                    for i, v in enumerate(hs):
                         r = res[str(i)]
                         n, sat = cs.mismatch_count(v.max().item(), SV["n"].get((j, s), 0)) if v.numel() else (0, False)
                         if n:
@@ -1471,9 +1659,10 @@ try:
                     if red:
                         free(rt)
                     for i in bad[:6]:
-                        res[str(i)].setdefault("sfpu", {})[lab] = nck.cores_from_counter(
-                            torch, ttnn.to_torch(ttnn.get_device_tensors(t)[i]), SV["gx"]
-                        )
+                        cnt = ttnn.to_torch(ttnn.get_device_tensors(t)[i])
+                        if i in inj:  # TRAY_INJECT: the same flip in the counter the cores are read from
+                            cnt = nck.sfpu_flip(inj[i], cnt, SV["gx"])
+                        res[str(i)].setdefault("sfpu", {})[lab] = nck.cores_from_counter(torch, cnt, SV["gx"])
                 except Exception as e:  # noqa: BLE001
                     if last:  # after the turn-off: say these counts were dropped, the heavy check stands
                         row(
@@ -1565,9 +1754,24 @@ try:
                 free(*CAP.pop().drop())
                 return
 
+    def use_cols(n):
+        """Swap in the heavy matmul built for n tile columns: its op, reference and counters. Called at a
+        chunk's launches, after the last chunk's verify, so nothing of the other width is in flight."""
+        global hv, HVS
+        if n == ub_heavy_cols(a) or n not in HVAR:
+            return
+        hv, HVS, ref["heavy"], acc["heavy"] = HVAR[n]
+        a.heavy_cols = n
+        fl["heavy"], dram_b["heavy"] = a.heavy_n * hv[1], heavy_dram_b()
+        if CAP:
+            free(*CAP[0].drop())  # the held captures are the other width's
+        cap_prev.clear()
+
     def step(k, i):
         """One launch, no synchronize: the heavy part's events bound the run-ahead; with no heavy part an event
         per launch does; with no ttnn events, a synchronize every RUN_AHEAD_OPS launches."""
+        if HVAR:
+            use_cols(cs.chunk_cols(ROT, k))
         nl[k] = nl.get(k, 0) + 1
         if fbp.k != k and nl[k] == 1:
             fbp.start(k, time.time())  # chunk k's first launch: its first-wrong-output windows count from here
@@ -1598,8 +1802,8 @@ try:
         fb = [lv.warning(VAR)] if VAR else []
         if "heavy" not in parts:
             fb.append("no heavy part (off: see part_off)")
-        elif any(x[0].state.get("mm") is None for x in HVS):
-            fb.append("minimal_matmul refused, ttnn.matmul")
+        else:
+            fb += heavy_fallbacks(HEAVY_OPS, [x[0] for x in HVS])
         if hv and "heavy" in parts and hv[0].ran.get("sfpu"):
             fb.append(f"--sfpu-par 1: {hv[0].ran['sfpu']}")
         if hv and "heavy" in parts and hv[0].ran.get("extras_fallback"):
@@ -1610,10 +1814,13 @@ try:
             fb.append(f"pcie in line on cq 0: {fell.get('pcie') or cq_why}")
         if tu is not None and tu.why is not None:
             fb.append(f"top-up off: {tu.why}")
-        fb += [f"part {p} off" for p in FN if p not in parts and p in a.parts.split(",") and p != "heavy"]
+        fb += [f"part {p} off" for p in FN if p not in parts and p in a.parts.split(",") and p != "heavy"] + COLS_OFF
+        gap.end(nhv[0])  # after the chunk's sync(): its last burst, if ops ran since the last pause
         return dict(
             heavy=(f"{hv[2]} x{a.heavy_n} per launch" if "heavy" in parts else None),
+            heavy_cols=(ub_heavy_cols(a) if "heavy" in parts else None),
             gap=(gap.desc() if "heavy" in parts else None),
+            timing=(gap.timing() if "heavy" in parts else None),
             first_bad=(fbp.desc() if "heavy" in parts and HEAVY_CHECKS > 1 else None),
             run_ahead=(
                 f"host at most {RUN_AHEAD_OPS} heavy ops ahead (ttnn events), no per-launch sync"
@@ -1625,6 +1832,7 @@ try:
             topup=(tu.desc(k) if tu is not None else None),
             checks_per_launch=check_count(ref, parts, a.pcie_every, 0, HEAVY_CHECKS)[0],
             checks=check_count(ref, parts, a.pcie_every, nl.get(k, 0), HEAVY_CHECKS)[1],
+            heavy_blocks=(heavy_blocks(HEAVY_OPS, [x[0] for x in HVS]) if "heavy" in parts else []),
             fallback=fb,
         )
 
@@ -1675,7 +1883,12 @@ try:
                 f"chip, {a.dbi_hops} copies on the device per pass, wall cap {a.dbi_wall_s:g} s, banks {nb}"
             )
             try:
-                gb = dd.dbi_check(ttnn, torch, m, chips, a.dbi_wall_s, nb, a.dbi_hops, beat=beat, say=sayb)
+                win = None
+                if a.l1_full:  # full: this run's 1 GB DRAM window, from the per-host run counter
+                    win, wn = dd.window_next(dd.window_file())
+                    if wn:
+                        sayb(wn)
+                gb = dd.dbi_check(ttnn, torch, m, chips, a.dbi_wall_s, nb, a.dbi_hops, beat=beat, say=sayb, window=win)
             except Exception as e:  # noqa: BLE001
                 gb = dict(error=f"{type(e).__name__}: {str(e)[:300]}", chips={})
                 sayb(f"error: {gb['error']}")
@@ -1705,6 +1918,42 @@ try:
                 smoke=os.environ.get("FL_SMOKE") == "1",
                 **gl,
             )
+        if a.noc_wall_s > 0:
+            import noc_a2a as na
+
+            t3 = time.time()
+            beat("noc pass 0")
+            sayn = lambda s: print(f"{time.strftime('%F %T')} N2 {s}", flush=True)  # noqa: E731
+            sayn(
+                f"network-on-chip all-to-all on {len(chipinfo)} chips after chunk {k + 1}: legs "
+                f"{', '.join(f'{L} ({v})' for L, v in na.NOCS.items() if L != na.MC)} (and L1mc, named in the N2 summary only if it ran), "
+                f"wall cap {a.noc_wall_s:g} s, banks {nb}"
+            )
+            try:
+                k0 = sum(r.get("mc_passes", 0) for r in rw_rows)  # N2's earlier L1mc steps
+                gn = na.a2a_check(ttnn, torch, m, chips, a.noc_wall_s, nb, beat=beat, say=sayn, k0=k0)
+            except Exception as e:  # noqa: BLE001
+                gn = dict(error=f"{type(e).__name__}: {str(e)[:300]}", chips={})
+                sayn(f"error: {gn['error']}")
+            rw_rows.append(gn)
+            row(event="noc", k=k, start=round(t3, 3), end=round(time.time(), 3), **gn)
+        if a.rf_wall_s > 0:
+            t4 = time.time()
+            beat("rf pass 0")
+            sayr = lambda s: print(f"{time.strftime('%F %T')} N7 {s}", flush=True)  # noqa: E731
+            try:
+                import rf_walk
+
+                sayr(
+                    f"register-file walk on {len(chipinfo)} chips after chunk {k + 1}: walking-1/0 words copied "
+                    f"unpack -> Src -> Dest -> pack, legs {', '.join(rf_walk.LEGS)}, wall cap {a.rf_wall_s:g} s"
+                )
+                gr = rf_walk.rf_check(ttnn, torch, m, chips, a.rf_wall_s, beat=beat, say=sayr)
+            except Exception as e:  # noqa: BLE001
+                gr = dict(error=f"{type(e).__name__}: {str(e)[:300]}", chips={})
+                sayr(f"error: {gr['error']}")
+            rw_rows.append(gr)
+            row(event="rf", k=k, start=round(t4, 3), end=round(time.time(), 3), **gr)
 
     rw_rows = []
     if SH is not None:
@@ -1718,6 +1967,15 @@ try:
             seed=a.shape_seed,
             parts=parts,
         )
+    FP = (
+        cs.FastPoll(
+            os.path.join(os.path.dirname(a.rows) or ".", "fastpoll.txt"),
+            window_s=a.fast_poll_s,
+            every=a.fast_poll_ms / 1000,
+        )
+        if a.fast_poll_s > 0
+        else None
+    )
     try:
         hs_row0 = HS.row(row)  # host-stress rows (a no-op wrapper when off)
 
@@ -1725,6 +1983,7 @@ try:
             ev = kw.get("event")
             if ev == "start":
                 XT["end"] = kw["start"] + kw["chunk_s"]
+                gap.start()  # chunk k's first burst's on-time counts from its start row (not the pre-ramp's)
             elif ev in ("preramp", "chunk"):
                 XT["end"] = None
             return hs_row0(**kw)
@@ -1746,15 +2005,7 @@ try:
             warm_s=a.pre_warm_s,
             pre_done=(tu.plan if tu is not None else None),
             after=(rw_after if a.rw_after > 0 else None),
-            fast=(
-                cs.FastPoll(
-                    os.path.join(os.path.dirname(a.rows) or ".", "fastpoll.txt"),
-                    window_s=a.fast_poll_s,
-                    every=a.fast_poll_ms / 1000,
-                )
-                if a.fast_poll_s > 0
-                else None
-            ),
+            fast=FP,
             hang_stop=os.environ.get("HOLD_ACTIVE", "0") != "1",
         )
     # no close: the device is hung; --hold never gets here (hang_stop off), the chip stays for triage
@@ -1768,13 +2019,17 @@ try:
         print("HANG EXIT " + str(h), flush=True)
         HS.stop()
         os._exit(3)
+    if FP is not None:  # goal 29: the fast window's unreadable samples, one line per chip
+        FP.join()
+        for x in FP.unread_lines():
+            print(f"{time.strftime('%F %T')} {x}", flush=True)
     nbad = nerr = 0
     for r in [json.loads(x) for x in open(a.rows) if '"event": "verify"' in x]:
         nbad += sum(1 for c in r["chips"].values() if c.get("mismatched") or c.get("bad_parts"))
         nerr += sum(1 for c in r["chips"].values() if c.get("error"))
     nrw = sum(
         1 for r in rw_rows for c in r["chips"].values() if c.get("bad_checks") or c.get("bad_passes")
-    )  # G3, G3b: exit 4 too
+    )  # G3, G3b, N1, N2, N7: exit 4 too
     bad = nbad + nrw + LD
     if SH is not None:
         row(
