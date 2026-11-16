@@ -948,7 +948,8 @@ class MultichipDecoder(OptimizedDecoder):
         self.topology = topology
         self.optimized_decode = optimized_decode
         self.attention_precision = attention_precision
-        workers = int(os.environ.get("GEMMA4_26B_WS2_CCL_WORKERS", "0")) or (1 if sliding else 2)
+        # One worker per link on both layer kinds once the all-reduce runs on two links (measured).
+        workers = int(os.environ.get("GEMMA4_26B_WS2_CCL_WORKERS", "0")) or (1 if sliding or WS2_CCL_LINKS > 1 else 2)
         self.ccl_tuning = {"num_workers_per_link": workers} if optimized_decode else {}
         self.persistent_ccl = optimized_decode if persistent_ccl is None else persistent_ccl
         self.collective_memory = ttnn.L1_MEMORY_CONFIG if optimized_decode else ttnn.DRAM_MEMORY_CONFIG
@@ -1838,8 +1839,10 @@ class MultichipDecoder(OptimizedDecoder):
         residual = ttnn.add(x, norm(shard(attention), "post_attention"), memory_config=cfg.memory)
         normalized = ttnn.sharded_to_interleaved(norm(residual, None), ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.float32)
         routes = self.layer.moe.router(residual, normalized=normalized)
-        expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=ttnn.bfloat16)
-        routed = self.layer.moe.experts(expert_input, routes)
+        experts = self.layer.moe.experts
+        expert_dtype = getattr(getattr(experts, "decode", experts), "decode_activation_dtype", None)
+        expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=expert_dtype or ttnn.bfloat16)
+        routed = experts(expert_input, routes)
         shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
         shared = self.layer.shared_mlp(shared_input, reduce_output=False)
         # The reshard into the norm layout also restores bf16 from the BFP8 collective.

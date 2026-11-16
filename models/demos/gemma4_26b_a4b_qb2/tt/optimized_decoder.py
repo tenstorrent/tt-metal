@@ -195,7 +195,7 @@ class OptimizedExperts(PackedExperts):
             if not self.active_prefill:
                 return self.prefill_source._chunk(x, routing, decode)
             return self._active_prefill(x, routing)
-        if self.decode_activation_dtype is not None:
+        if self.decode_activation_dtype is not None and x.dtype != self.decode_activation_dtype:
             x = ttnn.typecast(x, self.decode_activation_dtype)
         sparsity = ttnn.to_layout(routing, ttnn.ROW_MAJOR_LAYOUT)
         slots = self.config.num_experts
