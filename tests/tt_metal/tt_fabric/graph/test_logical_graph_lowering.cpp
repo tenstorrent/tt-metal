@@ -865,6 +865,56 @@ TEST(FabricGraphPerimeter, DeadLinkRecorded) {
     EXPECT_TRUE(p[1].link_trained);
 }
 
+// an FSD cable that never trained isn't in UMD's list; it comes back untrained so the side keeps the FSD count
+TEST(FabricGraphPerimeter, UntrainedFsdLinkKeepsTheCount) {
+    const auto links = with_missing_links(
+        {unused(0, 9, 7), unused(0, 11, 7)}, {unused(0, 10, 7, /*in_domain=*/false, /*trained=*/false)});
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
+    ASSERT_EQ(p.size(), 3u);
+    for (uint32_t i = 0; i < 3; ++i) {
+        EXPECT_EQ(p[i].direction, PortDirection{RoutingDirection::N});
+        EXPECT_EQ(p[i].plane, i);
+        EXPECT_EQ(p[i].eth_chan, 9 + i);
+        EXPECT_EQ(p[i].link_trained, i != 1);
+    }
+}
+
+// a peer chip whose cables are all down still takes its side, in channel order
+TEST(FabricGraphPerimeter, AllDownPeerTakesItsSide) {
+    const auto links =
+        with_missing_links({unused(0, 5, 8)}, {unused(0, 2, 7, false, false), unused(0, 3, 7, false, false)});
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
+    ASSERT_EQ(p.size(), 3u);
+    EXPECT_EQ(p[0].direction, PortDirection{RoutingDirection::N});
+    EXPECT_EQ(p[1].direction, PortDirection{RoutingDirection::N});
+    EXPECT_FALSE(p[0].link_trained);
+    EXPECT_FALSE(p[1].link_trained);
+    EXPECT_EQ(p[2].direction, PortDirection{RoutingDirection::E});
+    EXPECT_EQ(p[2].eth_chan, 5);
+    EXPECT_TRUE(p[2].link_trained);
+}
+
+// a chan UMD lists (miswired against the FSD) stays as listed; a missing link back into the domain is dropped
+TEST(FabricGraphPerimeter, MissingLinksMerge) {
+    const auto links = with_missing_links(
+        {unused(0, 4, 7)}, {unused(0, 4, 9, false, false), unused(0, 6, 31, /*in_domain=*/true, false)});
+    ASSERT_EQ(links.size(), 2u);
+    EXPECT_EQ(links[0].peer_asic, 7u);
+    EXPECT_TRUE(links[0].trained);
+    const auto p = perimeter("p150_mesh_graph_descriptor.textproto", kP150, links);
+    ASSERT_EQ(p.size(), 1u);
+    EXPECT_TRUE(p[0].link_trained);
+}
+
+// no FSD: nothing missing, the list is unchanged
+TEST(FabricGraphPerimeter, NoFsdNoChange) {
+    const std::vector<UnusedLink> live = {unused(0, 9, 7), unused(0, 8, 7)};
+    const auto links = with_missing_links(live, {});
+    ASSERT_EQ(links.size(), 2u);
+    EXPECT_EQ(links[0].chan, 8);
+    EXPECT_EQ(links[1].chan, 9);
+}
+
 TEST(FabricGraphPerimeter, TwoDimensionalOnly) {
     for (const auto topology : {Topology::NeighborExchange, Topology::Linear, Topology::Ring}) {
         EXPECT_ANY_THROW(perimeter("p150_mesh_graph_descriptor.textproto", kP150, {}, topology));
