@@ -9529,7 +9529,7 @@ def test_ring_joint_attention_dynamic_local_n_causal_flat_cache(topology, varian
     """Unbalanced causal attention, MHA and grouped GQA, on both compute paths and both fabrics: one cached program
     serves every per-chip length in either direction, with a pinned chunk pair wider than the short shards. A hang
     fails the test through its timeout. Causal is checked at the padded total only, which is the encoder's call.
-    bf16 accumulation with a K chunk wider than the Q chunk is refused."""
+    bf16 accumulation with a Q chunk that is not a multiple of the K chunk is refused."""
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
     (q_heads_per_chip, kv_heads_per_chip), qk_chunks = H3_CAUSAL_DYNAMIC_VARIANTS[variant]
@@ -9591,8 +9591,8 @@ def test_ring_joint_attention_dynamic_local_n_causal_flat_cache(topology, varian
                     assert pcc >= pcc_threshold, f"{tile_rows} tile rows, head {h}, chip {chip}: PCC {pcc}"
             logger.info(f"{variant} {tile_rows} tile rows: min PCC={worst:.6f}")
 
-        if not fp32_dest_acc_en and qk_chunks[1] > qk_chunks[0]:
-            with expect_error(RuntimeError, "requires k_chunk_size <= q_chunk_size"):
+        if not fp32_dest_acc_en and qk_chunks[0] % qk_chunks[1]:
+            with expect_error(RuntimeError, "requires q_chunk_size to be a multiple of k_chunk_size"):
                 run(H3_CAUSAL_DYNAMIC_CAPACITY_TILES)
             return
         assert_program_cache_flat(mesh, run, H3_CAUSAL_DYNAMIC_TILE_ROWS)
