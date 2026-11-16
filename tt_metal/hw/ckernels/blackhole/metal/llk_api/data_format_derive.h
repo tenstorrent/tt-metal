@@ -85,6 +85,8 @@ constexpr DataFormat infer_pack_src_format(DataFormat l1_format, bool fp32_dest_
     }
 
     if (fp32_dest_acc) {
+        // Bfp2 always packs from Dest, i.e. the bfp_pack_precise rule even when bfp8_pack_precise is off. Mirrors
+        // bfp_pack_precise in jit_build/data_format.cpp; keep in sync.
         if (df_is_bfp2_format(l1_format)) {
             return DataFormat::Float32;
         }
@@ -122,6 +124,7 @@ constexpr DataFormat infer_pack_src_format(DataFormat l1_format, bool fp32_dest_
         // fp32 buffer, no dest-acc: pack src is the conditional fp16a/b (here Float16_b).
         return cond;
     }
+    // Bfp2 always packs from Dest (bfp_pack_precise in jit_build/data_format.cpp; keep in sync).
     if (df_is_bfp2_format(l1_format)) {
         return df_is_exp_b_format(l1_format) ? DataFormat::Float16_b : DataFormat::Float16;
     }
