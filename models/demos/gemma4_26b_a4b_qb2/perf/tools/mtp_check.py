@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--mode", default="eager")
     parser.add_argument("--drafter-pos", default="hf")
     parser.add_argument("--max-seq-len", type=int, default=4096)
+    parser.add_argument("--drafter", default="lean", help="lean (tt/mtp/lean_drafter.py) or demo (gemma4 demo)")
     parser.add_argument("--ref-rows", action="store_true", help="also run plain greedy through the batched path")
     args = parser.parse_args()
     torch.set_num_threads(8)
@@ -38,17 +39,26 @@ def main():
     try:
         gen = build_generator(None, mesh, max_seq_len=args.max_seq_len)
         spec = None
+        plain_cache = {}
         for k in [int(v) for v in args.k.split(",")]:
+            if spec is not None:
+                spec.release()
             spec = SpeculativeDecoder(
-                gen, draft_len=k, drafter=None if spec is None else spec.drafter, drafter_cache_pos=args.drafter_pos
+                gen,
+                draft_len=k,
+                drafter=None if spec is None else spec.drafter,
+                drafter_cache_pos=args.drafter_pos,
+                lean=args.drafter == "lean",
             )
             for text in texts:
                 chat = tok.apply_chat_template(
                     [{"role": "user", "content": text}], add_generation_prompt=True, tokenize=False
                 )
                 ids = tok.encode(chat, add_special_tokens=False)
-                plain = [int(t) for t in gen.generate(list(ids), args.tokens, stop_on_eos=False)]
-                plain_tps = gen.metrics.get("decode_tps")
+                if text not in plain_cache:
+                    plain = [int(t) for t in gen.generate(list(ids), args.tokens, stop_on_eos=False)]
+                    plain_cache[text] = (plain, gen.metrics.get("decode_tps"))
+                plain, plain_tps = plain_cache[text]
                 if args.mode == "traced":
                     spec.generate_traced(list(ids), args.tokens)  # warm-up / capture
                     tokens = spec.generate_traced(list(ids), args.tokens)

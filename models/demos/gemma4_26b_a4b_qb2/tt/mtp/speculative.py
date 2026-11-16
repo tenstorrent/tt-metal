@@ -16,23 +16,31 @@ Rejected rows leave K/V at positions beyond the committed length; the next verif
 reads them (SDPA of row i reads positions <= p'+i, all written by this verify or committed earlier).
 """
 
+import os
 import time
+from types import SimpleNamespace
 
 import torch
 
 import ttnn
 from models.demos.gemma4_26b_a4b_qb2.tt.mtp.drafter import load_drafter, shared_layers
+from models.demos.gemma4_26b_a4b_qb2.tt.mtp.lean_drafter import LeanDrafter
 
 EOS = (1, 106)
+# Verify K/V writes: "op" = gemma4 PagedUpdateRows (one program per tensor), "loop" = one paged_update_cache per row.
+KV_WRITES = os.environ.get("GEMMA4_26B_MTP_KV_WRITES", "op")
 
 
 class SpeculativeDecoder:
-    def __init__(self, generator, *, draft_len=5, drafter=None, drafter_cache_pos="hf"):
+    def __init__(self, generator, *, draft_len=5, drafter=None, drafter_cache_pos="hf", lean=True):
         self.gen = generator
         self.model = generator.model
         self.mesh = generator.mesh
         self.K = draft_len
-        self.drafter = drafter if drafter is not None else load_drafter(self.model)
+        if drafter is None:
+            drafter = LeanDrafter(self.model) if lean else load_drafter(self.model)
+        self.drafter = drafter
+        self.lean = isinstance(drafter, LeanDrafter)
         layers = shared_layers(self.model)
         self.layer_by_type = layers
         # "hf": the drafter attends positions <= p when slot p holds K/V (a rejected draft's), else <= p - 1.
@@ -57,6 +65,10 @@ class SpeculativeDecoder:
             torch.tensor(positions, dtype=torch.int32), ttnn.int32
         )
 
+    @staticmethod
+    def _writes(rows, table):
+        return SimpleNamespace(positions=rows, page_table=table) if KV_WRITES == "op" else rows
+
     def _row_writes(self, positions):
         out = []
         for i, position in enumerate(positions):
@@ -64,6 +76,12 @@ class SpeculativeDecoder:
             value[i] = position
             out.append(self._replicated(value, ttnn.int32))
         return out
+
+    def _eager_writes(self, positions, table_rows):
+        if KV_WRITES == "op":
+            rows = [self._replicated(torch.tensor([p], dtype=torch.int32), ttnn.int32) for p in positions]
+            return self._writes(rows, ttnn.slice(table_rows, (0, 0), (1, table_rows.shape[1])))
+        return self._row_writes(positions)
 
     def _tokens(self, ids):
         value = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
@@ -84,15 +102,28 @@ class SpeculativeDecoder:
         pos_u[0, 0] = position
         pos_u = self._replicated(pos_u, ttnn.uint32)
         pos_i = self._replicated(torch.tensor([sdpa_pos], dtype=torch.int32), ttnn.int32)
-        shared = self._shared_kv(cache)
+        ctx = self._draft_context(cache, table_row, pos_u, pos_i)
         drafts, token, hidden = [], anchor, seed
         for _ in range(self.K):
             token_tt = self._replicated(torch.tensor([[token]], dtype=torch.int32), ttnn.uint32)
-            logits, hidden = self.drafter.step(token_tt, hidden, shared, table_row, pos_u, pos_i)
-            row = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float().reshape(-1, logits.shape[-1])[0]
+            logits, hidden = self._draft_step(token_tt, hidden, ctx)
+            row = self.gen._read_logits(logits)[..., :1, :].flatten()
             token = int(row.argmax())
             drafts.append(token)
         return drafts
+
+    def _draft_context(self, cache, table, pos_u, pos_i):
+        if self.lean:
+            return {"cache": cache, "table": table, "sdpa_pos": pos_i, "rope": self.drafter.rope_rows(pos_u)}
+        return {"shared": self._shared_kv(cache), "table": table, "pos_u": pos_u, "pos_i": pos_i}
+
+    def _draft_step(self, token, hidden, ctx):
+        """One drafter step; vocab-sharded logits (rows >= 1) and the next hidden."""
+        if self.lean:
+            return self.drafter.step(token, hidden, **ctx)
+        return self.drafter.step(
+            token, hidden, ctx["shared"], ctx["table"], ctx["pos_u"], ctx["pos_i"], gather_logits=False
+        )
 
     def _verify_eager(self, ids, position, cache, table_rows):
         positions = [position + i for i in range(len(ids))]
@@ -105,7 +136,7 @@ class SpeculativeDecoder:
             kv_cache=cache,
             batch=len(ids),
             return_hidden=True,
-            kv_write_rows=self._row_writes(positions),
+            kv_write_rows=self._eager_writes(positions, table_rows),
         )
         top = self.gen._read_logits(logits)[..., : len(ids), :].reshape(len(ids), -1).argmax(-1).tolist()
         return [int(t) for t in top], hidden
@@ -159,10 +190,9 @@ class SpeculativeDecoder:
         K = self.K
         tok, hidden = s["anchor"], s["seed"]
         drafts = []
+        ctx = self._draft_context(s["cache"], s["table"], s["d_pos_u"], s["d_pos_i"])
         for _ in range(K):
-            logits, hidden = self.drafter.step(
-                tok, hidden, s["shared"], s["table"], s["d_pos_u"], s["d_pos_i"], gather_logits=False
-            )
+            logits, hidden = self._draft_step(tok, hidden, ctx)
             ids = self._argmax(logits, 1)
             tok = ttnn.reshape(ttnn.slice(ids, (0, 0, 0, 0), (1, 1, 1, 1)), (1, 1))
             drafts.append(tok)
@@ -175,7 +205,7 @@ class SpeculativeDecoder:
             kv_cache=s["cache"],
             batch=K + 1,
             return_hidden=True,
-            kv_write_rows=s["row_writes"],
+            kv_write_rows=self._writes(s["row_writes"], s["table"]),
         )
         top = self._argmax(logits, K + 1)
         top = ttnn.reshape(ttnn.slice(top, (0, 0, 0, 0), (1, 1, 1, K + 1)), (1, K + 1))
@@ -198,6 +228,8 @@ class SpeculativeDecoder:
             value = torch.full((K + 1,), -1, dtype=torch.int32)
             value[i] = positions[i]
             rows.append(value)
+        if KV_WRITES == "op":
+            rows = [torch.tensor([p], dtype=torch.int32) for p in positions]
         return {
             "d_pos_u": d_u,
             "d_pos_i": torch.tensor([sdpa_pos], dtype=torch.int32),
@@ -250,7 +282,12 @@ class SpeculativeDecoder:
                 "v_pos_u": up(torch.zeros(1, 32, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
                 "v_pos_i": up(torch.zeros(K + 1, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
                 "row_writes": [
-                    up(torch.zeros(K + 1, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT) for _ in range(K + 1)
+                    up(
+                        torch.zeros(1 if KV_WRITES == "op" else K + 1, dtype=torch.int32),
+                        ttnn.int32,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                    for _ in range(K + 1)
                 ],
                 "trace": None,
             }
