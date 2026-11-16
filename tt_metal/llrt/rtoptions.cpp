@@ -1240,13 +1240,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         // TT_METAL_PROFILE_RISCV_PMC
-        // RISC-V hardware performance monitor on the Tensix baby cores (BRISC, NCRISC, TRISC0/1/2).
-        // Value is the mhpmevent3 and mhpmevent4 selects, comma separated, hex or decimal. Each is
-        // eight 4-bit nibbles, one per pipeline domain (BP, IF, DE, DE1, EX, LS, TTCSR, MEM from low
-        // to high). mhpmevent4 defaults to 0 (counter 4 idle) if only one value is given.
-        // See tech_reports/PerfCounters/riscv-pmc.md for the event catalog. Blackhole only.
+        // RISC-V performance monitor of the Tensix baby cores: BRISC, NCRISC and TRISC0/1/2 on Blackhole,
+        // the TRISCs on Quasar. Value is the mhpmevent3 and optional mhpmevent4 select, comma separated, hex
+        // or decimal (eight 4-bit pipeline-domain nibbles each). See tech_reports/PerfCounters/riscv-pmc.md.
         // Default: disabled
-        // Usage: export TT_METAL_PROFILE_RISCV_PMC=0x10110111,0x0A000000
+        // Usage: export TT_METAL_PROFILE_RISCV_PMC=0x10110111,0xA0000000
         case EnvVarID::TT_METAL_PROFILE_RISCV_PMC: {
             // strtoul with base 0 rather than sscanf: the selects routinely have bit 31 set (the MEM
             // nibble is the top one), which does not survive a signed parse.
@@ -1259,7 +1257,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             if (end == value || (end != nullptr && *end != '\0')) {
                 TT_THROW(
                     "TT_METAL_PROFILE_RISCV_PMC=\"{}\" could not be parsed. Expected one or two "
-                    "integers (hex accepted), e.g. 0x10110111,0x0A000000.",
+                    "integers (hex accepted), e.g. 0x10110111,0xA0000000.",
                     value);
             }
             if (ev3 > std::numeric_limits<uint32_t>::max() || ev4 > std::numeric_limits<uint32_t>::max()) {
