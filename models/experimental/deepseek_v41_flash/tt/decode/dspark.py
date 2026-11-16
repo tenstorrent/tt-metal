@@ -127,6 +127,12 @@ DSPARK_BLOCK = os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_OPS", "1") == "1"
 # 4-row verify reads accepts more per round than the trained 5-row block (TOK=300: 2.25 vs 2.15 tokens/round on the
 # default prompt, 3.25 vs 3.18 on gsm8k; 3 rows: 2.11), and fits the 4-row tiles and requests of the block ops.
 DSPARK_BLOCK_SIZE = int(os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_SIZE", "4"))
+# The greedy block draft's FFNs (router, routed experts and shared expert) on the target's persistent MoE server, as its
+# on-demand requester (the model builds that; see DeepSeekV41Model._launch_moe_server): DEEPSEEK_V4_DSPARK_SERVER_MOE=1.
+# 0, the default until the server side is validated, keeps them on the drafter's row (TP4 fused_experts, shared matmuls).
+DSPARK_SERVER_MOE = os.environ.get("DEEPSEEK_V4_DSPARK_SERVER_MOE", "0") not in ("0", "", "false", "False")
+# Layer id of drafter stage 0 on that server (persistent_moe.DSPARK_LAYER_BASE).
+DSPARK_SERVER_LAYER_BASE = 40
 # The routed experts' dtype: bfloat4_b by default (half the bytes fused_experts streams; the same tokens per round as
 # bfloat8_b at TOK=300 on both test prompts). Each dtype has
 # its own cache files (the dtype is in their name).
@@ -465,6 +471,10 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
             dram_sharded_weight=True,
         )
         self.block_rows = block_rows
+        # The target's persistent MoE server, when it runs this stage's block FFN (DeepSeekV41DSpark's moe_server).
+        self.moe_server = None
+        self.moe_requester = 1
+        self.server_layer = None
         if block_rows:
             self._init_block(config, weights, cache, tag, weight_dtype)
 
@@ -626,6 +636,20 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         attn_out = self.attention_block(replica, t, *rope["q"], *rope["kv"], bias_row, ring_base)
         self._tap("attn_out", attn_out, t)
         ttnn.deallocate(replica)
+        if self.moe_server is not None:
+            # The FFN HC folds the attention mix and the FFN norm and writes the request row (the block's (4 x 32)
+            # tiles, one DRAM page); the server answers routed + shared, all-reduced, in that same layout, which the
+            # next HC takes as its mix's sublayer output.
+            post2, comb2, row, ffn_pre, streams = self.ffn_hc_blk(
+                streams, pre_mix=attn_pre, mix=(post, comb, attn_out), norm=(self.ffn_norm_blk, self.eps)
+            )
+            for x in (post, comb, attn_out, attn_pre):
+                ttnn.deallocate(x)
+            self._tap("moe_in", row, 1)
+            out = self.moe_server.request(self.moe_requester, self.server_layer, row)
+            ttnn.deallocate(row)
+            self._tap("moe_out", out, 1)
+            return streams, ffn_pre, (post2, comb2, out)
         post2, comb2, collapsed, ffn_pre, streams = self.ffn_hc_blk(
             streams, pre_mix=attn_pre, mix=(post, comb, attn_out)
         )
@@ -807,6 +831,8 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         sessions: int = 1,
         greedy_drafts=None,
         block_mode: bool = DSPARK_BLOCK,
+        moe_server=None,
+        moe_requester: int = 1,
     ):
         if sessions < 1:
             raise ValueError(f"sessions must be at least 1, got {sessions}")
@@ -885,6 +911,15 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
                     block_rows=self.block_rows if self.block_mode else 0,
                 )
             )
+        # The block draft's FFNs on the target's persistent MoE server (see DSPARK_SERVER_MOE): 4-row requests.
+        self.moe_server = moe_server
+        if moe_server is not None:
+            if not self.block_mode or self.block_rows != 4:
+                raise ValueError("the persistent MoE serves the drafter 4-row blocks: a block of at most 4 rows")
+            for s, stage in enumerate(self.stages):
+                stage.moe_server = moe_server
+                stage.moe_requester = moe_requester
+                stage.server_layer = DSPARK_SERVER_LAYER_BASE + s
         first, last = weights[0], weights[-1]
         head_cache = cache.sub("mtp")
         self.main_proj = Linear(first["main_proj.weight"], device, head_cache.file("main_proj"), dtype=weight_dtype)
