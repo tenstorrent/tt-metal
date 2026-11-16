@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Host-only (no device): the captured GDN block writes of gdn_block_state.GdnBlockState (record_traces,
-_replay_write) and the order of a prefill row's logits read and block writes in Qwen36ForCausalLM.prefill_forward.
+_replay_write) and the order of the prefill rows' logits reads, block writes and wait in
+Qwen36ForCausalLM.prefill_forward.
 
 A recording stand-in for ttnn keeps every paged_fill_cache as (destination view, source, page table). An eager write
 resolves the page table to the page ids staged in it at that moment; a captured write keeps the device table and a
@@ -137,6 +138,8 @@ def _state(block_size=1024):
         for v in (False, True)
     }
     st._trace_staged = {}
+    st._hold_tables = False
+    st._held_tables = []
     st._write_traces = {}
     st._trace_sources = {}
     st._warmed_variants = ()
@@ -266,6 +269,30 @@ def test_unchanged_page_tables_are_not_staged_again(device):
     assert set(device.copies) == {t for tables in st._trace_tables[True] for t in tables}
 
 
+def test_tables_replaced_while_holding_stay_alive_until_released(device):
+    """While hold_replaced_tables holds, a write that restages a table keeps the host tensor of the table it replaces
+    until release_held_tables: the rows of a prefill step enqueue their writes without waiting for the device, so the
+    copy of the replaced table may not have run. An unchanged table is not restaged and keeps nothing; a table replaced
+    after the hold ends is dropped as before. Holding never waits for the device."""
+    st, plugin = _state()
+    _capture(st, device)
+    state = plugin.step_state([(11, 12, 13)], BMAX)
+    st.write_state(state, (11, 12, 13))
+    first = [host for key, (_, host) in st._trace_staged.items() if key[1] == 2]
+    syncs = device.syncs
+    st.hold_replaced_tables(True)
+    st.write_state(state, (11, 12, 13))
+    assert st._held_tables == []
+    st.write_state(state, (11, 12, 14))
+    assert len(first) == len(st.layout.write_tables(0))
+    assert len(st._held_tables) == len(first) and all(a is b for a, b in zip(st._held_tables, first))
+    st.hold_replaced_tables(False)
+    st.write_state(state, (11, 12, 15))
+    assert len(st._held_tables) == len(first), "a table replaced after the hold ends is not kept"
+    st.release_held_tables()
+    assert st._held_tables == [] and device.syncs == syncs
+
+
 def test_writes_without_a_serving_trace_run_eagerly(device, expect_error):
     """The eager path writes when no trace serves the write: before a capture, for a checkpoint that an eager forward
     computed (new tensors, freed after the write), with another GDN workspace bound, and for MambaSpec groups that do
@@ -360,8 +387,8 @@ def test_capture_needs_warmup_and_is_idempotent(device):
 
 @pytest.fixture
 def adapter(monkeypatch):
-    """Qwen36ForCausalLM.prefill_forward over a stand-in model that records the prefills, the logits read and free,
-    and the block writes."""
+    """Qwen36ForCausalLM.prefill_forward over a stand-in model that records the prefills, the logits reads and frees,
+    the block writes, the hold and release of the host inputs, the event and the wait."""
     from models.common.tests.vllm_stubs import stub_vllm_if_missing
 
     stub_vllm_if_missing(monkeypatch)
@@ -380,21 +407,39 @@ def adapter(monkeypatch):
         restore=lambda state, b: events.append(("restore", tuple(b))),
         write_state=lambda state, b: events.append(("write", tuple(b))),
         write_checkpoint=lambda state, b: events.append(("checkpoint", tuple(b))),
+        hold_replaced_tables=lambda hold: events.append(("hold tables", hold)),
+        release_held_tables=lambda: events.append(("release tables",)),
     )
     model = SimpleNamespace(
         args=SimpleNamespace(max_batch_size=4, vocab_size=vocab),
-        mesh_device=None,
+        mesh_device="mesh",
         gdn_blocks=blocks,
         prefill_traced_chunked=prefill,
         prefill_chunk_size=2048,
+        hold_masked_trace_inputs=lambda hold: events.append(("hold inputs", hold)),
+        release_masked_trace_inputs=lambda: events.append(("release inputs",)),
     )
 
-    def to_torch(t, **kw):
-        assert t is logits
+    def from_device(t, blocking=True):
+        assert t is logits and not blocking, "a row enqueues its logits read without waiting"
         events.append(("read logits",))
+        return "host logits"
+
+    def to_torch(t, **kw):
+        assert t == "host logits"
+        events.append(("logits to torch",))
         return torch.zeros(1, 1, vocab)
 
+    def record_event(mesh, cq_id):
+        assert mesh == "mesh" and cq_id == 0
+        events.append(("event",))
+        return "event"
+
+    monkeypatch.setattr(ttnn, "from_device", from_device)
     monkeypatch.setattr(ttnn, "to_torch", to_torch)
+    monkeypatch.setattr(ttnn, "record_event", record_event)
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: events.append(("wait", event)))
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: events.append(("sync",)))
     monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: [t])
     monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda *a, **kw: None)
     monkeypatch.setattr(ttnn, "deallocate", lambda t: events.append(("free logits",)) if t is logits else None)
@@ -403,40 +448,120 @@ def adapter(monkeypatch):
     wrapper.data_parallel = 1
     plugin = PluginLayout(ATTENTION, 1, 256, QWEN_27B_TP8, True, num_blocks=64, block_size=1024)
 
-    def run(start, end, dest, start_blocks=None, checkpoint=None):
+    def run_rows(rows):
+        """rows: (start, end, dest, start_blocks, checkpoint) per prefill row of one step."""
         events.clear()
-        state = plugin.step_state([dest], BMAX, start_blocks=[start_blocks], checkpoints=[checkpoint])
-        tokens, page_table = torch.zeros(1, end, dtype=torch.int64), torch.zeros(1, 4, dtype=torch.int32)
-        wrapper.prefill_forward(tokens, page_table, None, [end], start_pos=[start], mamba_state=state)
+        state = plugin.step_state(
+            [r[2] for r in rows], BMAX, start_blocks=[r[3] for r in rows], checkpoints=[r[4] for r in rows]
+        )
+        ends = [r[1] for r in rows]
+        tokens, page_table = torch.zeros(len(rows), max(ends), dtype=torch.int64), torch.zeros(len(rows), 4)
+        out, _ = wrapper.prefill_forward(
+            tokens, page_table.to(torch.int32), None, ends, start_pos=[r[0] for r in rows], mamba_state=state
+        )
+        assert tuple(out.shape) == (len(rows), 1, vocab)
         return list(events)
 
+    def run(start, end, dest, start_blocks=None, checkpoint=None):
+        return run_rows([(start, end, dest, start_blocks, checkpoint)])
+
+    run.rows = run_rows
+    run.events = events
     return run
+
+
+HOLD = [("hold inputs", True), ("hold tables", True)]
+UNHOLD = [("hold inputs", False), ("hold tables", False)]
+RELEASE = [("wait", "event"), ("release inputs",), ("release tables",)]
 
 
 def test_a_prefill_row_reads_and_frees_its_logits_before_its_block_writes(adapter):
     """The logits copy of a prefill trace replay is allocated after the captures, and a write trace's replay can
-    overwrite such a buffer: the row reads and frees its logits first, then writes its checkpoint and its end state.
-    Between the two parts of a two-part prefill the first part's logits are freed before the checkpoint write."""
-    assert adapter(0, 2000, (4, 5, 6), checkpoint=(1024, (1, 2, 3))) == [
+    overwrite such a buffer: the row enqueues the read of its logits and frees them first, then writes its checkpoint
+    and its end state. Between the two parts of a two-part prefill the first part's logits are freed before the
+    checkpoint write. The host waits once, after the row's writes are enqueued, for an event recorded right after the
+    read, then releases the held host inputs and converts the logits."""
+    assert adapter(0, 2000, (4, 5, 6), checkpoint=(1024, (1, 2, 3))) == HOLD + [
         ("prefill", 0, 2000, 1024),
         ("read logits",),
         ("free logits",),
+        ("event",),
         ("checkpoint", (1, 2, 3)),
         ("write", (4, 5, 6)),
+        *UNHOLD,
+        *RELEASE,
+        ("logits to torch",),
     ]
-    assert adapter(0, 2500, (4, 5, 6), checkpoint=(2048, (1, 2, 3))) == [
+    assert adapter(0, 2500, (4, 5, 6), checkpoint=(2048, (1, 2, 3))) == HOLD + [
         ("prefill", 0, 2048, 0),
         ("free logits",),
         ("write", (1, 2, 3)),
         ("prefill", 2048, 2500, 0),
         ("read logits",),
         ("free logits",),
+        ("event",),
         ("write", (4, 5, 6)),
+        *UNHOLD,
+        *RELEASE,
+        ("logits to torch",),
     ]
-    assert adapter(2048, 2500, (7, 8, 9), start_blocks=(1, 2, 3)) == [
+    assert adapter(2048, 2500, (7, 8, 9), start_blocks=(1, 2, 3)) == HOLD + [
         ("restore", (1, 2, 3)),
         ("prefill", 2048, 2500, 0),
         ("read logits",),
         ("free logits",),
+        ("event",),
         ("write", (7, 8, 9)),
+        *UNHOLD,
+        *RELEASE,
+        ("logits to torch",),
+    ]
+
+
+def test_the_rows_of_a_prefill_step_enqueue_back_to_back(adapter):
+    """Three rows in one step: each row's forward, logits read, free and block writes are enqueued in the order of a
+    step that waits per row, with no wait between rows. The one event follows the last row's read, so the host does not
+    wait for that row's block writes; the held host inputs are released only after the wait, and every row's logits
+    are converted after it."""
+    events = adapter.rows(
+        [
+            (0, 2000, (4, 5, 6), None, (1024, (1, 2, 3))),
+            (0, 700, (7, 8, 9), None, None),
+            (2048, 2500, (10, 11, 12), (13, 14, 15), None),
+        ]
+    )
+    assert events == HOLD + [
+        ("prefill", 0, 2000, 1024),
+        ("read logits",),
+        ("free logits",),
+        ("checkpoint", (1, 2, 3)),
+        ("write", (4, 5, 6)),
+        ("prefill", 0, 700, 0),
+        ("read logits",),
+        ("free logits",),
+        ("write", (7, 8, 9)),
+        ("restore", (13, 14, 15)),
+        ("prefill", 2048, 2500, 0),
+        ("read logits",),
+        ("free logits",),
+        ("event",),
+        ("write", (10, 11, 12)),
+        *UNHOLD,
+        *RELEASE,
+        *[("logits to torch",)] * 3,
+    ]
+
+
+def test_a_failed_row_waits_for_the_enqueued_reads_and_ends_the_hold(adapter, expect_error):
+    """A row that raises after earlier rows enqueued their reads: the host waits for the device before the read host
+    tensors go away, ends the hold and releases nothing (a later replay waits before it restages)."""
+    with expect_error(ValueError, "has the start blocks"):
+        adapter.rows([(0, 700, (7, 8, 9), None, None), (2048, 2500, (10, 11, 12), None, None)])
+    assert adapter.events == HOLD + [
+        ("prefill", 0, 700, 0),
+        ("read logits",),
+        ("free logits",),
+        ("write", (7, 8, 9)),
+        ("sync",),
+        *UNHOLD,
     ]

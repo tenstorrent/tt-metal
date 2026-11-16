@@ -393,43 +393,66 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         start_pos = kwargs.get("start_pos")
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         blocks = model.gdn_blocks
-        rows = []
-        for u in range(N):
-            T = int(prompt_lens[u]) if prompt_lens is not None else tokens.shape[1]
-            rb = row_blocks(mamba_state, u)
-            segments = self._prefill_segments(int(start_pos[u]) if start_pos is not None else 0, T, rb)
-            logger.info(f"Prefilling row {u}: tokens [{segments[0][0]}, {T})")
-            # Read to the host once, before any segment's trace replay can overwrite the device rows (vision_rows_host).
-            vision_tokens = self._row_vision_rows(model, kwargs, u, tokens[u, :T])
-            if segments[0][0] > 0:
-                blocks.restore(mamba_state, rb.start)
-            on_chunk = self._prefill_chunk_hook(u, tokens[u, :T], pt[u : u + 1], mamba_state, kwargs)
-            extra = {} if on_chunk is None else {"on_chunk": on_chunk}
-            if vision_tokens is not None:
-                # An image's M-RoPE positions need all of its tokens, and a checkpoint can split an image.
-                extra["rope_token_ids"] = tokens[u : u + 1, :T]
-            logits = None
-            for a, b, checkpoint_pos in segments:
-                if logits is not None:
-                    ttnn.deallocate(logits)
-                    blocks.write_state(mamba_state, rb.checkpoint)
-                # Short prompts run one masked-bucket forward; longer ones replay the chunk trace, then the masked tail.
-                logits = model.prefill_traced_chunked(
-                    tokens[u : u + 1, :b],
-                    pt[u : u + 1],
-                    actual_len=b,
-                    vision_tokens=vision_tokens,
-                    start_pos=a,
-                    **extra,
-                    **({"checkpoint_pos": checkpoint_pos} if checkpoint_pos else {}),
-                )
-            # The logits are read and freed before the block writes: a write can replay a captured trace, which may
-            # overwrite a buffer allocated after its capture, such as these logits.
-            rows.append(_replica_to_torch(logits).reshape(-1, model.args.vocab_size)[:1].float())
-            ttnn.deallocate(logits)
-            if segments[-1][2]:  # prefill_segments computes a checkpoint in a forward only in a one-part plan
-                blocks.write_checkpoint(mamba_state, rb.checkpoint)
-            blocks.write_state(mamba_state, rb.dest)
+        reads = []
+        done = None
+        # The rows enqueue back to back and their logits are read after the last row: the host builds row u + 1 while
+        # the device runs row u. The device runs the same commands in the same order as with a wait per row; the host
+        # tensors that a copy may still read are kept until the wait below.
+        model.hold_masked_trace_inputs(True)
+        blocks.hold_replaced_tables(True)
+        try:
+            for u in range(N):
+                T = int(prompt_lens[u]) if prompt_lens is not None else tokens.shape[1]
+                rb = row_blocks(mamba_state, u)
+                segments = self._prefill_segments(int(start_pos[u]) if start_pos is not None else 0, T, rb)
+                logger.info(f"Prefilling row {u}: tokens [{segments[0][0]}, {T})")
+                # Read to the host once, before any segment's trace replay can overwrite the device rows
+                # (vision_rows_host).
+                vision_tokens = self._row_vision_rows(model, kwargs, u, tokens[u, :T])
+                if segments[0][0] > 0:
+                    blocks.restore(mamba_state, rb.start)
+                on_chunk = self._prefill_chunk_hook(u, tokens[u, :T], pt[u : u + 1], mamba_state, kwargs)
+                extra = {} if on_chunk is None else {"on_chunk": on_chunk}
+                if vision_tokens is not None:
+                    # An image's M-RoPE positions need all of its tokens, and a checkpoint can split an image.
+                    extra["rope_token_ids"] = tokens[u : u + 1, :T]
+                logits = None
+                for a, b, checkpoint_pos in segments:
+                    if logits is not None:
+                        ttnn.deallocate(logits)
+                        blocks.write_state(mamba_state, rb.checkpoint)
+                    # Short prompts run one masked-bucket forward; longer ones replay the chunk trace, then the masked
+                    # tail.
+                    logits = model.prefill_traced_chunked(
+                        tokens[u : u + 1, :b],
+                        pt[u : u + 1],
+                        actual_len=b,
+                        vision_tokens=vision_tokens,
+                        start_pos=a,
+                        **extra,
+                        **({"checkpoint_pos": checkpoint_pos} if checkpoint_pos else {}),
+                    )
+                # The read is enqueued, and the logits freed, before the block writes: a write can replay a captured
+                # trace, which may overwrite a buffer allocated after its capture, such as these logits.
+                reads.append(_replica_read(logits))
+                ttnn.deallocate(logits)
+                if u == N - 1:
+                    done = ttnn.record_event(model.mesh_device, 0)
+                if segments[-1][2]:  # prefill_segments computes a checkpoint in a forward only in a one-part plan
+                    blocks.write_checkpoint(mamba_state, rb.checkpoint)
+                blocks.write_state(mamba_state, rb.dest)
+        except BaseException:
+            if reads:
+                ttnn.synchronize_device(model.mesh_device)  # the enqueued reads still write into their host tensors
+            raise
+        finally:
+            model.hold_masked_trace_inputs(False)
+            blocks.hold_replaced_tables(False)
+        # Every kept host tensor was staged before the event; the last row's two block writes after it may still run.
+        ttnn.event_synchronize(done)
+        model.release_masked_trace_inputs()
+        blocks.release_held_tables()
+        rows = [ttnn.to_torch(r).reshape(-1, model.args.vocab_size)[:1].float() for r in reads]
         # Zero rope deltas: the multimodal M-RoPE delta is applied model-side (rope.rope_delta).
         return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
 
@@ -561,11 +584,12 @@ class Qwen36ForCausalLM(_Qwen36Generator):
         return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
 
 
-def _replica_to_torch(logits):
-    """Host copy of device 0's replica of the prefill logits. Every device holds the same [1, 1, vocab] row (the LM head
-    all-gathers its vocabulary shards, or runs on a replicated weight), so one replica is the whole row and moves
-    1 / num_devices of the bytes of reading every replica."""
-    return ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
+def _replica_read(logits):
+    """Non-blocking read of device 0's replica of the prefill logits: a host tensor that holds the row once the device
+    has passed the read. Every device holds the same [1, 1, vocab] row (the LM head all-gathers its vocabulary shards,
+    or runs on a replicated weight), so one replica is the whole row and moves 1 / num_devices of the bytes of reading
+    every replica."""
+    return ttnn.from_device(ttnn.get_device_tensors(logits)[0], blocking=False)
 
 
 def _vision_warmup_patches(model):
