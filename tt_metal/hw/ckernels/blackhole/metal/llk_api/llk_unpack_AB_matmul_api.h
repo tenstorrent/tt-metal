@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_unpack_AB_matmul.h"
 #include "llk_unpack_common_api.h"
+#include "llk_size_mode.h"
 #include "sanitizer/api.h"
 
 /*************************************************************************
@@ -14,7 +15,9 @@
 
 // matmul_kernel_ttsync of the kernel's JIT inputs
 constexpr bool llk_unpack_AB_matmul_kernel_ttsync() {
-    return matmul_kernel_ttsync(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE, unpack_src_format);
+    // a kernel bound by the kernel config buffer keeps the polling unpack at LoFi (the ttsync unpack is larger)
+    return matmul_kernel_ttsync(MATH_FIDELITY, DST_SYNC_MODE == DstSync::SyncFull, DST_ACCUM_MODE, unpack_src_format) &&
+           !(MATH_FIDELITY == MathFidelity::LoFi && LLK_SIZE_MODE);
 }
 
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul unpack is
