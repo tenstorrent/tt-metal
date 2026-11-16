@@ -201,6 +201,8 @@ DB_SCHEMA = [
     Column("x_stride", "int64", True, "configuration"),
     Column("chunk_size", "int64", True, "configuration"),
     Column("dest_tiles", "int64", True, "configuration"),
+    Column("h16_tile_index", "int64", True, "configuration"),
+    Column("hadamard_normalize", "bool", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──

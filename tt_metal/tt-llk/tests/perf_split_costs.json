@@ -49,6 +49,7 @@
   "perf_fast_tilize_full": 6.1,
   "perf_fast_untilize": 413.2,
   "perf_fused": 0.0,
+  "perf_hadamard": 26.7,
   "perf_math_matmul": 484.4,
   "perf_matmul": 115.4,
   "perf_matmul_custom": 29.0,
