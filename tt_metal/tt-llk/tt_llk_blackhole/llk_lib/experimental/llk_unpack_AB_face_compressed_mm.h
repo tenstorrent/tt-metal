@@ -138,16 +138,16 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_()
         switch (code)
         {
             case '0':
-                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 0, 1, 1);
+                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(p_srcs::SrcA, 0b00'00'01'00, 0, 1, 1);
                 break; // Ch0Y += 1
             case '1':
-                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 1, 2, 1);
+                TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(p_srcs::SrcA, 0b00'00'01'00, 1, 2, 1);
                 break; // Ch0Y += 1
             case 'S':
-                TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
+                TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC);
                 break;
             case 'B':
-                TTI_UNPACR_COMMON(SrcB, 0b00'00'10'10, 1);
+                TTI_UNPACR_COMMON(p_srcs::SrcB, 0b00'00'10'10, 1);
                 break; // Ch0Y += 2 Ch0Z += 2
             default:
                 LLK_ASSERT(false, "Invalid code for unpack instruction");
@@ -351,7 +351,7 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
 
     if constexpr (clear_src)
     {
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
     }
     cfg[THCON_SEC0_REG3_Base_address_ADDR32]       = pre_meta_ptr[1] & meta_addr_base_mask;
     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = pre_meta_ptr[2] & meta_addr_base_mask;
@@ -432,8 +432,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     if constexpr (ct_dim == 1 && finalize)
     {
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-        TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);

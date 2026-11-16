@@ -15,7 +15,7 @@ namespace ckernel
 {
 
 // Firmware messages to ckernels
-enum firmware_msg_e
+enum class firmware_msg_e
 {
     FLIP_STATE_ID        = 1,
     RUN_INSTRUCTIONS     = 2,

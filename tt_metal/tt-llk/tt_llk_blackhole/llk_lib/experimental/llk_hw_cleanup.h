@@ -68,28 +68,28 @@ inline void start()
     // no Tensix-side wait can order.
     tensix_sync();
 
-    if constexpr (thread_id == UnpackThreadId)
+    if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
-        mailbox_write(MathThreadId, UNPACK_READY);
-        const std::uint32_t configure = mailbox_read(MathThreadId);
+        mailbox_write(ThreadId::MathThreadId, UNPACK_READY);
+        const std::uint32_t configure = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(configure == UNPACK_CONFIGURE, "Unexpected unpack cleanup configuration grant.");
     }
-    else if constexpr (thread_id == PackThreadId)
+    else if constexpr (thread_id == ThreadId::PackThreadId)
     {
-        mailbox_write(MathThreadId, PACK_READY);
-        const std::uint32_t configure = mailbox_read(MathThreadId);
+        mailbox_write(ThreadId::MathThreadId, PACK_READY);
+        const std::uint32_t configure = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(configure == PACK_CONFIGURE, "Unexpected pack cleanup configuration grant.");
     }
     else
     {
-        const std::uint32_t unpack_ready = mailbox_read(UnpackThreadId);
-        const std::uint32_t pack_ready   = mailbox_read(PackThreadId);
+        const std::uint32_t unpack_ready = mailbox_read(ThreadId::UnpackThreadId);
+        const std::uint32_t pack_ready   = mailbox_read(ThreadId::PackThreadId);
         LLK_ASSERT(unpack_ready == UNPACK_READY, "Unexpected cleanup message from unpack thread.");
         LLK_ASSERT(pack_ready == PACK_READY, "Unexpected cleanup message from pack thread.");
 
         // Unpack configures while Math blocks on CONFIGURED.
-        mailbox_write(UnpackThreadId, UNPACK_CONFIGURE);
-        const std::uint32_t configured = mailbox_read(UnpackThreadId);
+        mailbox_write(ThreadId::UnpackThreadId, UNPACK_CONFIGURE);
+        const std::uint32_t configured = mailbox_read(ThreadId::UnpackThreadId);
         LLK_ASSERT(configured == UNPACK_CONFIGURED, "Unexpected unpack cleanup configuration completion.");
     }
 }
@@ -113,27 +113,27 @@ inline void finish()
     // the thread to go idle, MOPs still being expanded included.
     tensix_sync();
 
-    if constexpr (thread_id == UnpackThreadId)
+    if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
-        mailbox_write(MathThreadId, UNPACK_CONFIGURED);
-        const std::uint32_t done = mailbox_read(MathThreadId);
+        mailbox_write(ThreadId::MathThreadId, UNPACK_CONFIGURED);
+        const std::uint32_t done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(done == CLEANUP_DONE, "Unexpected unpack cleanup completion.");
     }
-    else if constexpr (thread_id == PackThreadId)
+    else if constexpr (thread_id == ThreadId::PackThreadId)
     {
-        mailbox_write(MathThreadId, PACK_CONFIGURED);
-        const std::uint32_t done = mailbox_read(MathThreadId);
+        mailbox_write(ThreadId::MathThreadId, PACK_CONFIGURED);
+        const std::uint32_t done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(done == CLEANUP_DONE, "Unexpected pack cleanup completion.");
     }
     else
     {
         // Pack configures while Math blocks on CONFIGURED.
-        mailbox_write(PackThreadId, PACK_CONFIGURE);
-        const std::uint32_t configured = mailbox_read(PackThreadId);
+        mailbox_write(ThreadId::PackThreadId, PACK_CONFIGURE);
+        const std::uint32_t configured = mailbox_read(ThreadId::PackThreadId);
         LLK_ASSERT(configured == PACK_CONFIGURED, "Unexpected pack cleanup configuration completion.");
 
-        mailbox_write(UnpackThreadId, CLEANUP_DONE);
-        mailbox_write(PackThreadId, CLEANUP_DONE);
+        mailbox_write(ThreadId::UnpackThreadId, CLEANUP_DONE);
+        mailbox_write(ThreadId::PackThreadId, CLEANUP_DONE);
     }
 }
 

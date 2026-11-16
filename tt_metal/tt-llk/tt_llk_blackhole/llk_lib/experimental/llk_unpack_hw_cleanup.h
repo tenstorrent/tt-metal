@@ -39,7 +39,7 @@ inline void _llk_unpack_hw_cleanup_configure_current_bank_()
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_hw_cleanup_canonical_()
 {
-    hw_cleanup::start<UnpackThreadId>();
+    hw_cleanup::start<ThreadId::UnpackThreadId>();
 
     hw_cleanup::select_cfg_state(0);
     _llk_unpack_hw_cleanup_configure_current_bank_<is_fp32_dest_acc_en>();
@@ -52,5 +52,5 @@ inline void _llk_unpack_hw_cleanup_canonical_()
     // 1x1 NOP double-loop so accidental MOP runs (template or unpack-template) are inert.
     ckernel_template(1, 1).program();
 
-    hw_cleanup::finish<UnpackThreadId>();
+    hw_cleanup::finish<ThreadId::UnpackThreadId>();
 }

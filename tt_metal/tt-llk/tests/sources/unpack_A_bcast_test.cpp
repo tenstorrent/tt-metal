@@ -154,7 +154,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     if (ckernel::unpacker::is_32bit_input(formats.unpack_A_src, formats.unpack_A_dst))
                     {
                         // Blackhole's _llk_unpack_A_ also hands math one SrcB bank per such tile; the datacopy waits for it.
-                        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                        TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
                     }
                 }
 #endif

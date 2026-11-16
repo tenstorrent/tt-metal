@@ -601,7 +601,8 @@ template <ThreadId thread_id>
 inline void configure_dest_access(DataFormat fmt, bool enable_swizzle = true)
 {
     static_assert(
-        thread_id == UnpackThreadId || thread_id == MathThreadId || thread_id == PackThreadId, "configure_dest_access: thread must be Unpack, Math or Pack");
+        thread_id == ThreadId::UnpackThreadId || thread_id == ThreadId::MathThreadId || thread_id == ThreadId::PackThreadId,
+        "configure_dest_access: thread must be Unpack, Math or Pack");
     constexpr int t = static_cast<int>(thread_id);
     set_dest_fmt<t>(fmt);
     set_dest_enable_swizzling<t>(enable_swizzle);
@@ -613,12 +614,12 @@ inline void configure_dest_access(DataFormat fmt, bool enable_swizzle = true)
 template <>
 struct _type_to_datasz<ckernel::fp16a>
 {
-    static vdatasz const sz = E16;
+    static vdatasz const sz = vdatasz::E16;
 };
 
 template <>
 struct _type_to_datasz<ckernel::fp16b>
 {
-    static vdatasz const sz = E16;
+    static vdatasz const sz = vdatasz::E16;
 };
 #endif

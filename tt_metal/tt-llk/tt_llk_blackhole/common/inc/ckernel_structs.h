@@ -48,7 +48,7 @@ constexpr std::uint8_t MAX_CONFIG_STATES     = 2;
 constexpr std::uint8_t REPLAY_BUF_SIZE       = 32; // arch specific replay buffer depth per thread, in instructions
 
 // Firmware messages to ckernels
-enum firmware_msg_e
+enum class firmware_msg_e
 {
     FLIP_STATE_ID        = 1,
     RUN_INSTRUCTIONS     = 2,

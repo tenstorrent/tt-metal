@@ -79,10 +79,10 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
             "num_faces_c_dim has to be either 1 or 2 with transpose due to stride limitations in UNPACR instruction");
     }
 
-    static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(p_srcs::SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(p_srcs::SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     // Z += 2 moves down a column of faces (transpose allows at most two face columns).
-    static constexpr std::uint32_t unpack_srca_transpose = TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srca_transpose = TT_OP_UNPACR(p_srcs::SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     const std::uint32_t outerloop = transpose_of_faces ? num_faces_c_dim : num_faces_r_dim;
     const std::uint32_t innerloop = transpose_of_faces ? num_faces_r_dim : num_faces_c_dim;
@@ -124,7 +124,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
             // The FPU reads at least MAX_FPU_ROWS rows per face. Zero the unpacker's own bank of both sources
             // before each face, so ELWADD and ELWSUB also see zeros in the rows past the face.
             static constexpr std::uint32_t clear_srca = TT_OP_UNPACR_NOP(
-                SrcA,
+                p_srcs::SrcA,
                 0 /*Stream_Id*/,
                 0 /*Msg_Clr_Cnt*/,
                 0 /*Set_Dvalid*/,
@@ -134,7 +134,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
                 p_unpacr_nop::CLR_SRC_0,
                 p_unpacr_nop::CLR_SRC);
             static constexpr std::uint32_t clear_srcb = TT_OP_UNPACR_NOP(
-                SrcB,
+                p_srcs::SrcB,
                 0 /*Stream_Id*/,
                 0 /*Msg_Clr_Cnt*/,
                 0 /*Set_Dvalid*/,

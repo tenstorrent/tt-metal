@@ -43,7 +43,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Unpack's side of the debug rendezvous: idle until MATH's unhalt releases it.
-    ckernel::dbg_thread_halt<ckernel::UnpackThreadId>();
+    ckernel::dbg_thread_halt<ckernel::ThreadId::UnpackThreadId>();
 }
 
 #endif
@@ -66,15 +66,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
-    dbg_copy_dest_tile<DbgDestTileOp::Write, MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_A[0]));
+    dbg_copy_dest_tile<DbgDestTileOp::Write, ThreadId::MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_A[0]));
 
     // The call under test. Its return data is not what is being checked -- the dest tile is.
     std::uint32_t srca_row[8] = {0};
-    dbg_thread_halt<MathThreadId>();
+    dbg_thread_halt<ThreadId::MathThreadId>();
     dbg_get_array_row(dbg_array_id::SRCA, 0 /* row_addr */, srca_row);
-    dbg_thread_unhalt<MathThreadId>();
+    dbg_thread_unhalt<ThreadId::MathThreadId>();
 
-    dbg_copy_dest_tile<DbgDestTileOp::Read, MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_Res[0]));
+    dbg_copy_dest_tile<DbgDestTileOp::Read, ThreadId::MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_Res[0]));
 }
 
 #endif

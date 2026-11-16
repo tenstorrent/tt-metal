@@ -29,7 +29,7 @@ inline void _llk_unpack_mul_reduce_scalar_switch_to_reduce_()
     semaphore_post(semaphore::UNPACK_SYNC);
     // Stall_Clr_Cntrl=1: wait on Unpackers[i].SrcBank -- the bank actually cleared and published --
     // not MatrixUnit.Src?Bank, which is a different bank once double-buffering reaches steady state.
-    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 }

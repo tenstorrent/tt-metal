@@ -37,7 +37,7 @@ namespace ckernel {
 template <DataFormat fmt>
 ALWI void dbg_read_dest_tile(uint32_t tile_id, void* dst_buffer, bool enable_swizzle = true) {
     static_assert(dbg_dest_fmt_supported(fmt), "dbg_read_dest_tile: unsupported DataFormat");
-    MATH((dbg_copy_dest_tile<DbgDestTileOp::Read, MathThreadId>(fmt, tile_id, dst_buffer, enable_swizzle)));
+    MATH((dbg_copy_dest_tile<DbgDestTileOp::Read, ThreadId::MathThreadId>(fmt, tile_id, dst_buffer, enable_swizzle)));
 }
 
 // clang-format off
@@ -64,7 +64,7 @@ ALWI void dbg_read_dest_tile(uint32_t tile_id, void* dst_buffer, bool enable_swi
 template <DataFormat fmt>
 ALWI void dbg_write_dest_tile(uint32_t tile_id, const void* src_buffer, bool enable_swizzle = true) {
     static_assert(dbg_dest_fmt_supported(fmt), "dbg_write_dest_tile: unsupported DataFormat");
-    MATH((dbg_copy_dest_tile<DbgDestTileOp::Write, MathThreadId>(fmt, tile_id, src_buffer, enable_swizzle)));
+    MATH((dbg_copy_dest_tile<DbgDestTileOp::Write, ThreadId::MathThreadId>(fmt, tile_id, src_buffer, enable_swizzle)));
 }
 
 #endif  // ARCH_BLACKHOLE

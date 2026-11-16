@@ -65,11 +65,11 @@ inline void _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_mop_config_(const std:
         {
             for (std::uint32_t i = 0; i < SDPA_CUSTOM_MM_REUSE_NUM_BLOCK_INCREMENT_BLKS; i++)
             {
-                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
+                TTI_UNPACR_COMMON(p_srcs::SrcA, 0b00000000, 1);
                 TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
                 TTI_NOP;
             }
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);
+            TTI_UNPACR_COMMON(p_srcs::SrcA, 0b00000000, 1);
             TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
         });

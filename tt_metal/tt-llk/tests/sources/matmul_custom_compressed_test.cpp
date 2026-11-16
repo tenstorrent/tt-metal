@@ -96,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // clear value on unpacker 0: a both-bank SrcB clear only corrupts the SrcA writes it overlaps while unpacker
             // 0's last SrcA clear value is non-zero, and that value outlives kernels. Without this the race would pass
             // or fail depending on what last ran on the core.
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_1, p_unpacr_nop::CLR_SRC);
+            TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_1, p_unpacr_nop::CLR_SRC);
         }
 
         _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, true /* clear_src */>(in0_face_r_dim);
@@ -130,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // calls would. Each call ends on the end-of-call stall, a SrcA clear to 0, which would otherwise hide a
                         // both-bank clear in the execute at every boundary after the first. Like the end stall it waits for its
                         // bank, so it never clears a bank math still reads.
-                        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
+                        TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, 1 /* Stall_Clr_Cntrl */, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
                     }
                 }
             }

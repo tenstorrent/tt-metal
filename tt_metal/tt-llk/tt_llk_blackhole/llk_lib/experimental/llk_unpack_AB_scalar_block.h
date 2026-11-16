@@ -35,11 +35,11 @@ inline void _llk_unpack_AB_scalar_block_(const std::uint32_t address_a, const st
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     constexpr std::uint8_t kNoAddressIncrement = 0;
-    TTI_UNPACR(SrcB, kNoAddressIncrement, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    TTI_UNPACR(p_srcs::SrcB, kNoAddressIncrement, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     for (std::uint32_t i = 0; i < block_size; ++i)
     {
-        TTI_UNPACR(SrcA, kNoAddressIncrement, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(p_srcs::SrcA, kNoAddressIncrement, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 1, 0);
     }
 

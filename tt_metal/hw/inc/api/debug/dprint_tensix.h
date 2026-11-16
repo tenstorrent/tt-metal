@@ -325,8 +325,8 @@ inline void dprint_tensix_dest_row(DataFormat data_format, uint32_t row) {
 // window is what provides it: math owns DEST there and pack is still waiting on it. Called outside
 // that window, this races an in-flight pack.
 inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
-    UNPACK(ckernel::dbg_thread_halt<ckernel::UnpackThreadId>());
-    MATH(ckernel::dbg_thread_halt<ckernel::MathThreadId>());
+    UNPACK(ckernel::dbg_thread_halt<ckernel::ThreadId::UnpackThreadId>());
+    MATH(ckernel::dbg_thread_halt<ckernel::ThreadId::MathThreadId>());
     MATH({
         // Reading DEST at the wrong element width yields plausible-looking garbage rather than an
         // obvious failure, so refuse formats this path has not been validated against. Note the
@@ -355,7 +355,7 @@ inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
         } else {
             // Program Math's section for MMIO DEST reads. configure_dest_access issues RMWCIB config writes,
             // so wait for the config unit before the first read.
-            ckernel::configure_dest_access<ckernel::MathThreadId>(read_format, /*enable_swizzle=*/true);
+            ckernel::configure_dest_access<ckernel::ThreadId::MathThreadId>(read_format, /*enable_swizzle=*/true);
             ckernel::wait_cfg_idle();
 
             DPRINT("Tile ID = {}\n", tile_id);
@@ -364,7 +364,7 @@ inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
             }
         }
     })
-    MATH(ckernel::dbg_thread_unhalt<ckernel::MathThreadId>());
+    MATH(ckernel::dbg_thread_unhalt<ckernel::ThreadId::MathThreadId>());
 }
 #else
 // Print the contents of tile with index tile_id within the destination register

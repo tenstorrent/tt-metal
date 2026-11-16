@@ -24,13 +24,13 @@ inline void _llk_unpack_fast_tilize_mop_config_()
     constexpr std::uint8_t ADDRMOD = 0b00'01'00'01;
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        false,                                 // unpackB
-        false,                                 // unpackHalo
-        TT_OP_UNPACR_COMMON(SrcA, ADDRMOD, 0), // A0: read, no dvalid
+        false,                                         // unpackB
+        false,                                         // unpackHalo
+        TT_OP_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD, 0), // A0: read, no dvalid
         TT_OP_NOP,
         TT_OP_NOP,
         TT_OP_NOP,
-        TT_OP_UNPACR_COMMON(SrcA, ADDRMOD, 1), // skipA: read WITH dvalid
+        TT_OP_UNPACR_COMMON(p_srcs::SrcA, ADDRMOD, 1), // skipA: read WITH dvalid
         TT_OP_NOP,
         TT_OP_NOP);
     tmp.program();

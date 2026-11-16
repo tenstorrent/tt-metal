@@ -50,7 +50,7 @@ inline void _llk_math_hw_cleanup_poison_addr_mods_()
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_hw_cleanup_canonical_()
 {
-    hw_cleanup::start<MathThreadId>();
+    hw_cleanup::start<ThreadId::MathThreadId>();
 
     _llk_math_hw_cleanup_init_dest_sync_<Dst, is_fp32_dest_acc_en>();
 
@@ -68,5 +68,5 @@ inline void _llk_math_hw_cleanup_canonical_()
     ckernel::ckernel_template(1, 1).program();
     _llk_math_hw_cleanup_poison_addr_mods_();
 
-    hw_cleanup::finish<MathThreadId>();
+    hw_cleanup::finish<ThreadId::MathThreadId>();
 }

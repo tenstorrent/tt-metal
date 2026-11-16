@@ -387,7 +387,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_prep_(std::uint32_t dst_index)
 {
     constexpr std::uint32_t odd_col_offset = 2;
     constexpr bool decreasing              = false;
-    const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
 
     /// Step 1
     // Build len 32 bitonic sequences from the pre-sorted data
@@ -434,7 +434,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_combine_(std::uint32_t dst_inde
     constexpr std::uint32_t odd_col_offset = 2;
     constexpr bool decreasing              = false;
     constexpr bool increasing              = true;
-    const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
     _bitonic_top32_merge_<APPROXIMATION_MODE, is_fp32_dest_acc_en, decreasing>(/* across_tiles */ true);
     _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ decreasing, /* skip_second */ true);
     set_dst_write_addr_offset(tile_offset + odd_col_offset);
@@ -472,7 +472,7 @@ inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index)
 {
     constexpr bool decreasing              = false;
     constexpr std::uint32_t odd_col_offset = 2;
-    const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    const std::uint32_t tile_offset        = dst_index << DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)];
 
     /// Step 1
     // Merge even and odd cols and rebuild, then store to odd cols

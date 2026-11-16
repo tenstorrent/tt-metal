@@ -956,9 +956,9 @@ ALWI void sfpu_add_top_row_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(add_top_ro
  * Return value: None
  */
 ALWI void dbg_halt() {
-    PACK(dbg_thread_halt<PackThreadId>());
-    UNPACK(dbg_thread_halt<UnpackThreadId>());
-    MATH(dbg_thread_halt<MathThreadId>());
+    PACK(dbg_thread_halt<ThreadId::PackThreadId>());
+    UNPACK(dbg_thread_halt<ThreadId::UnpackThreadId>());
+    MATH(dbg_thread_halt<ThreadId::MathThreadId>());
 }
 
 /**
@@ -967,9 +967,9 @@ ALWI void dbg_halt() {
  * Return value: None
  */
 ALWI void dbg_unhalt() {
-    PACK(dbg_thread_unhalt<PackThreadId>());
-    UNPACK(dbg_thread_unhalt<UnpackThreadId>());
-    MATH(dbg_thread_unhalt<MathThreadId>());
+    PACK(dbg_thread_unhalt<ThreadId::PackThreadId>());
+    UNPACK(dbg_thread_unhalt<ThreadId::UnpackThreadId>());
+    MATH(dbg_thread_unhalt<ThreadId::MathThreadId>());
 }
 
 // clang-format off

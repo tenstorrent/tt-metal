@@ -85,7 +85,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
     constexpr bool is_scalar     = reduce_dim == ReduceDim::REDUCE_SCALAR;
     constexpr bool swap_operands = _llk_unpack_AB_reduce_swaps_operands_<pool_type, reduce_dim>();
 
-    constexpr std::uint32_t data_unpacker  = swap_operands ? Srcs::SrcB : Srcs::SrcA;
+    constexpr std::uint32_t data_unpacker  = swap_operands ? p_srcs::SrcB : p_srcs::SrcA;
     constexpr std::uint32_t scaler_adc     = swap_operands ? p_setadc::UNP_A : p_setadc::UNP_B;
     constexpr std::uint32_t data_clear_val = is_max ? p_unpacr_nop::CLR_SRC_NEGINF : p_unpacr_nop::CLR_SRC_0;
 
@@ -105,8 +105,8 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
                 whole_tile_replay_len,
                 []
                 {
-                    TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                    TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    TTI_UNPACR(p_srcs::SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    TTI_UNPACR(p_srcs::SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
                 });
             ckernel_template tmp(1, 1, lltt::replay_insn(0, whole_tile_replay_len));
             tmp.program();
@@ -120,11 +120,11 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
             {
                 if (clear_scaler)
                 {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                    TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
                 }
-                TTI_UNPACR(SrcA, 0b00010001 /*ch0_z+=1, ch1_z+=1*/, 0, 0, 0, 1, 0 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(p_srcs::SrcA, 0b00010001 /*ch0_z+=1, ch1_z+=1*/, 0, 0, 0, 1, 0 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(p_srcs::SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(p_srcs::SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
             });
 
         ckernel_template tmp(1, 1, lltt::replay_insn(0, replay_len));
@@ -154,10 +154,10 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
             }
             if (clear_scaler)
             {
-                TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
             }
-            TTI_UNPACR(SrcA, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            TTI_UNPACR(SrcB, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            TTI_UNPACR(p_srcs::SrcA, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            TTI_UNPACR(p_srcs::SrcB, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         });
 
     ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_len));

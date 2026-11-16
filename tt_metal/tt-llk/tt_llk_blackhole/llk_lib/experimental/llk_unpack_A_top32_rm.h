@@ -74,22 +74,22 @@ inline void _llk_unpack_A_top32_rm_(
     {
         for (std::uint32_t face_index = 0; face_index < num_faces; face_index++)
         {
-            TTI_UNPACR(SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            TTI_UNPACR(p_srcs::SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         }
     }
     else
     {
         // clear A to -infinity
-        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(p_srcs::SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
         // clear B to zero
-        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
 
         for (std::uint32_t face_index = 0; face_index < num_faces - 1; face_index++)
         {
-            TTI_UNPACR(SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 0);
+            TTI_UNPACR(p_srcs::SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 0);
         }
 
-        TTI_UNPACR(SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(p_srcs::SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     }
 
     // T6::SEMGET for context release

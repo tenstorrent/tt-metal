@@ -59,7 +59,7 @@ ALWI void max_util_unpack(
         // Lambda function to set up replay buffer
         [] {
             TTI_UNPACR(
-                SrcA,
+                p_srcs::SrcA,
                 0,
                 0,
                 0,
@@ -79,7 +79,7 @@ ALWI void max_util_unpack(
             // Added to ensure WRCFG instruction has finished, since it takes 2 cycles.
             TTI_NOP;
             TTI_UNPACR(
-                SrcA,
+                p_srcs::SrcA,
                 0,
                 0,
                 0,
@@ -144,7 +144,7 @@ ALWI void max_util_unpack(
             TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
             TTI_UNPACR(
-                SrcB,
+                p_srcs::SrcB,
                 0,
                 0,
                 0,

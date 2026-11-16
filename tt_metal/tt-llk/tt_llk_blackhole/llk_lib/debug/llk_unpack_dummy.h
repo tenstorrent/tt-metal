@@ -32,5 +32,5 @@
 inline void llk_unpack_dummy([[maybe_unused]] const std::uint32_t dfb_id)
 {
     TTI_STALLWAIT(ckernel::p_stall::STALL_UNPACK, ckernel::p_stall::SRCA_CLR);
-    TTI_UNPACR_NOP(ckernel::SrcA, 0, 0, 0, 0, 0, 0, ckernel::p_unpacr_nop::CLR_SRC_0, ckernel::p_unpacr_nop::CLR_SRC);
+    TTI_UNPACR_NOP(ckernel::p_srcs::SrcA, 0, 0, 0, 0, 0, 0, ckernel::p_unpacr_nop::CLR_SRC_0, ckernel::p_unpacr_nop::CLR_SRC);
 }

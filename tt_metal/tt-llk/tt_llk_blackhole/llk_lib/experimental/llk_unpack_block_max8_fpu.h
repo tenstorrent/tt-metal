@@ -27,7 +27,7 @@ inline void _llk_unpack_block_max8_fpu_()
 {
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
     TTI_UNPACR_NOP(
-        SrcA,
+        p_srcs::SrcA,
         0 /*Stream_Id*/,
         0 /*Msg_Clr_Cnt*/,
         p_unpacr_nop::SET_DVALID,
@@ -37,7 +37,7 @@ inline void _llk_unpack_block_max8_fpu_()
         p_unpacr_nop::CLR_SRC_NEGINF,
         p_unpacr_nop::CLR_SRC);
     TTI_UNPACR_NOP(
-        SrcB,
+        p_srcs::SrcB,
         0 /*Stream_Id*/,
         0 /*Msg_Clr_Cnt*/,
         p_unpacr_nop::SET_DVALID,

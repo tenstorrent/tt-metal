@@ -65,9 +65,9 @@ ALWI void slow_cos_unpack(uint32_t num_loops, uint32_t num_tiles, uint32_t l1_bu
             semaphore_post(semaphore::UNPACK_SYNC);
             TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-            TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+            TTI_UNPACR_NOP(p_srcs::SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
             TTI_UNPACR(
-                SrcA,
+                p_srcs::SrcA,
                 0,
                 0,
                 0,

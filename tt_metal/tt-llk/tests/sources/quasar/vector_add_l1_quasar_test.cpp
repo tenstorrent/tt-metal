@@ -24,11 +24,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::int32_t* src_b = reinterpret_cast<const std::int32_t*>(params.buffer_B[0]);
     std::int32_t* dst         = reinterpret_cast<std::int32_t*>(params.buffer_Res[0]);
 
-    (void)vsetvl<E32, M8, VECTOR_ELEMS>();
-    vector_load<V0>(src_a);
-    vector_load<V8>(src_b);
-    vector_add<V16, V0, V8>();
-    vector_store<V16>(dst);
+    (void)vsetvl<vdatasz::E32, vregmult::M8, VECTOR_ELEMS>();
+    vector_load<vreg::V0>(src_a);
+    vector_load<vreg::V8>(src_b);
+    vector_add<vreg::V16, vreg::V0, vreg::V8>();
+    vector_store<vreg::V16>(dst);
 #endif
 }
 

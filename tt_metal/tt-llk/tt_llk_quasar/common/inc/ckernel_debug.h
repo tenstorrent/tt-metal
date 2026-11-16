@@ -41,9 +41,10 @@ namespace ckernel
 template <ThreadId thread_id>
 inline void dbg_thread_halt()
 {
-    static_assert(thread_id == UnpackThreadId || thread_id == MathThreadId, "dbg_thread_halt: thread_id must be Unpack or Math (pack deferred)");
+    static_assert(
+        thread_id == ThreadId::UnpackThreadId || thread_id == ThreadId::MathThreadId, "dbg_thread_halt: thread_id must be Unpack or Math (pack deferred)");
 
-    if constexpr (thread_id == UnpackThreadId)
+    if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
         // Wait for this thread's in-flight unpacks (issued through the MOP/replay) to finish, signal idle
         // to math, then block until math releases us in dbg_thread_unhalt.
@@ -52,8 +53,8 @@ inline void dbg_thread_halt()
         busy.replay = 1;
         busy.unpack = 1;
         wait_bstatus_low(busy.val);
-        mailbox_write(MathThreadId, 1);
-        volatile std::uint32_t ack = mailbox_read(MathThreadId);
+        mailbox_write(ThreadId::MathThreadId, 1);
+        volatile std::uint32_t ack = mailbox_read(ThreadId::MathThreadId);
         (void)ack;
     }
     else // MathThreadId
@@ -65,7 +66,7 @@ inline void dbg_thread_halt()
         busy.fpu    = 1;
         busy._sfpu  = 1;
         wait_bstatus_low(busy.val);
-        volatile std::uint32_t idle = mailbox_read(UnpackThreadId);
+        volatile std::uint32_t idle = mailbox_read(ThreadId::UnpackThreadId);
         (void)idle;
     }
 }
@@ -73,14 +74,15 @@ inline void dbg_thread_halt()
 template <ThreadId thread_id>
 inline void dbg_thread_unhalt()
 {
-    static_assert(thread_id == UnpackThreadId || thread_id == MathThreadId, "dbg_thread_unhalt: thread_id must be Unpack or Math (pack deferred)");
+    static_assert(
+        thread_id == ThreadId::UnpackThreadId || thread_id == ThreadId::MathThreadId, "dbg_thread_unhalt: thread_id must be Unpack or Math (pack deferred)");
 
-    if constexpr (thread_id == MathThreadId)
+    if constexpr (thread_id == ThreadId::MathThreadId)
     {
         // Release the unpack thread. Math's only Tensix work since dbg_thread_halt, the configure_dest_access
         // config writes, was waited on before the DEST read, and the read itself is RISC loads through the
         // MMIO window, so there is nothing left to wait for.
-        mailbox_write(UnpackThreadId, 1);
+        mailbox_write(ThreadId::UnpackThreadId, 1);
     }
     // UnpackThreadId: nothing to do.
 }

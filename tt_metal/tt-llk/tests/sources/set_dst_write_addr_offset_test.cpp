@@ -31,7 +31,7 @@
 // effect is "the face starting at Dst row OFFSET_ROWS is negated".
 //
 // Units. The offset register counts Dst ROWS, and one 32x32 tile is 64 of them
-// (DstTileSizeLog2[DstTileShape::Tile32x32] == 6, and math::set_dst_write_addr computes
+// (DstTileSizeLog2[to_underlying(DstTileShape::Tile32x32)] == 6, and math::set_dst_write_addr computes
 // tile_index << 6). That is what makes the two real call patterns meaningful:
 //   64  whole-tile rebase   -- deepseek_top32_rm's `tile_offset` (dst_index << 6)
 //    2  column-group flip   -- topk_xl's `odd_col_offset`, and deepseek's too
