@@ -117,6 +117,8 @@ def test_gate_result_reads_the_verdict_and_the_baseline_date():
         "regressions": 0,
         "baseline": "6d88aa4fe5b",
         "baseline_age": 14,
+        "compared": None,
+        "new": 0,
     }
 
 
@@ -253,6 +255,8 @@ def test_gate_result_reads_the_lines_the_gate_really_prints(
         "regressions": 0,
         "baseline": "6d88aa4fe5b",
         "baseline_age": 14,
+        "compared": None,
+        "new": 0,
     }
 
 
@@ -271,3 +275,15 @@ def test_the_channel_copy_tags_the_owners_only_when_something_is_wrong():
     ]
     assert payloads("bad", True, "U1", "C1", ["U2"])[1]["text"] == "bad\n\ncc <@U2>"
     assert payloads("bad", True, "U1", "", ["U2"]) == [{"channel": "U1", "text": "bad"}]
+
+
+def test_a_gate_that_compared_part_of_the_points_is_a_problem():
+    log = (
+        LOG
+        + "2026-10-13T05:35:00Z - 378248 points compared, **41 regressed point(s) in 31 finding(s)**,"
+        " 1 improved point(s) in 1 finding(s), 79179 new point(s)\n"
+    )
+    report = assess("SoL", RUN, _jobs(), {4: log, 5: LOG}, LIMITS, DAY)
+    assert report["problems"] == [
+        "SoL blackhole: 79,179 of 457,427 measured points not compared"
+    ]
