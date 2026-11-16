@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -19,6 +20,18 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek::moe::fused_experts {
+
+// DEEPSEEK_V41_MOE_NATIVE_ONE_ROW (default 1): a persistent op built for several-row blocks runs a one-row request in
+// one-row form (the plain row in the page, 1x32 tiles in every kernel: persistent.h kFeOneRowCbOffset); 0 keeps the
+// padded form (the row in row 0 of a block). The op and its requests must agree, so both read it, once per process:
+// it is not part of either program's hash -- set it before the first op of the process.
+inline bool persistent_moe_native_one_row() {
+    static const bool native = [] {
+        const char* v = std::getenv("DEEPSEEK_V41_MOE_NATIVE_ONE_ROW");
+        return v == nullptr || std::string(v) != "0";
+    }();
+    return native;
+}
 
 // One request to the persistent fused_experts op (see FusedPersistentParams), from every chip that
 // holds a sender core of `request_socket`: the [64-byte header with `layer` in word 0 | input row]

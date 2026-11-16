@@ -6,8 +6,9 @@
 The MoE blocks of every layer it serves are loaded TP12 on ``moe_mesh`` (a 3x4 submesh), each the usual
 :class:`~.moe.DeepSeekV41SparseMoeBlock` with the router and shared expert fused into ``fused_experts``. The op
 is launched once, on the first layer's tensors (every layer shares their layouts), and loops on the device: it
-takes one ``[64-byte header | bf16 row]`` request page at a time from each requester in strict turn, the
-header's first word naming a row of the layer table, runs that layer's whole MoE in its three-stage pipeline,
+takes ``[64-byte header | bf16 row]`` request pages from its requesters in any order (each MoE chip routes whichever
+requester's page is in; chips may differ in order, see the kernels' persistent.h), the header's first word naming a
+row of the layer table, runs that layer's whole MoE in its three-stage pipeline,
 and every MoE chip sends its partial row straight to every chip of the requester, which sums the twelve partials
 itself (``persistent_moe_request``), so a request's output is replicated over the requester's mesh.
 
@@ -59,6 +60,12 @@ ROUTER_L1_WITH_BLOCKS = False
 # DEEPSEEK_V41_MOE_FUSE_HC=0: requests return the plain reduced row (2-part reduce next to the request core) and the
 # decoder layer mixes it into the streams itself (FFN_MIX), instead of the request running that post step.
 FUSE_HC = os.environ.get("DEEPSEEK_V41_MOE_FUSE_HC", "1") not in ("0", "", "false", "False")
+# A server with a block mode launched once for blocks, serving one-row requests too (see PersistentMoE).
+MIXED_ROWS = os.environ.get("DEEPSEEK_V41_MOE_MIXED_ROWS", "1") not in ("0", "", "false", "False")
+# On such a server a one-row request runs natively -- its plain row on the wire, 1x32 tiles through every kernel of the
+# op -- rather than padded into a block's row 0 (DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0). Read by the ops in C++, once per
+# process; mirrored here for logging.
+NATIVE_ONE_ROW = os.environ.get("DEEPSEEK_V41_MOE_NATIVE_ONE_ROW", "1") != "0"
 ROUTER_PART_CORES = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(ROUTER_PARTS - 1, 8))])
 
 
@@ -480,9 +487,10 @@ class PersistentMoE:
     all the MoE chips -- one multicast, for a requester mesh right above the MoE -- instead of each chip down its
     own column, so the MoE chips start each row together (see the sharded router).
 
-    The op takes requests in strict turn (requester 0, 1, ..., then 0 again), so with several requesters each
-    sends its next request only after the others have sent theirs. Use :meth:`request` (or :meth:`upload` and
-    :meth:`request` for a host row), and :meth:`stop` once to end the kernels.
+    The op takes requests in any order: each requester has one request in flight at a time and sends whenever it
+    likes, however many requests the others send (``TT_FE_FIXED_ORDER=1`` at launch restores the old strict turn,
+    requester 0, 1, ..., then 0 again, with ``on_demand``). Use :meth:`request` (or :meth:`upload` and :meth:`request`
+    for a host row), and :meth:`stop` once to end the kernels.
 
     ``rows`` (1, 2 or 4) makes every request a block of that many token rows -- DSpark's verify block -- each
     routed on its own, through one pass of the op: the union of the rows' top-k is fetched once and applied to every
@@ -491,6 +499,16 @@ class PersistentMoE:
     the HC post step fused, a block's streams are ``(rows x 32)``-tiled ``[1, 1, hc * rows, D]`` (row ``h * rows +
     j`` is stream h's block row j; see :meth:`streams_memory_config` and :meth:`block_streams`) and its post and comb
     carry a tile per row, ``[1, rows, hc, 1]`` and ``[1, rows, hc, hc]``.
+
+    With ``block_rows`` too, the server is launched once for blocks and takes either kind of request
+    (:data:`MIXED_ROWS`, on by default): a one-row request goes on the requester's block socket, the page's header
+    saying it is one row (``persistent_moe_request``), and its partial comes back as one row into the front of the
+    requester's block partials buffer. The op runs it natively (:data:`NATIVE_ONE_ROW`): the page carries the plain
+    row and every kernel takes 1x32 tiles for that request; with ``DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0`` the row rides
+    row 0 of a block's tiles instead (the other rows computed and dropped). :meth:`use_rows` then only picks the
+    requester-side request rows -- no relaunch -- so requesters may mix one-row and block requests freely, and no
+    one-row sockets or partials are built. ``DEEPSEEK_V41_MOE_MIXED_ROWS=0`` keeps one launch per mode instead (a
+    switch stops and relaunches the kernels).
     """
 
     def __init__(
@@ -508,8 +526,9 @@ class PersistentMoE:
     ):
         if not isinstance(moes, Mapping):
             moes = dict(enumerate(moes))
-        # Requesters served whenever they send rather than in turn (the DSpark drafter): see fe_ctrl.cpp. Each may send
-        # only while no other requester has a request outstanding.
+        # Under TT_FE_FIXED_ORDER=1 (strict turn), requesters served whenever they send rather than in turn (the DSpark
+        # drafter): see fe_ctrl.cpp. Each may send only while no other requester has a request outstanding. In any
+        # order (the default) every requester is served whenever it sends.
         self._on_demand_mask = sum(1 << k for k in on_demand)
         if not moes:
             raise ValueError("the persistent MoE needs at least one layer")
@@ -529,6 +548,10 @@ class PersistentMoE:
         # replica and launch change on a switch.
         self.modes = sorted({rows, block_rows} - {0})
         active_rows = rows
+        # One launch for blocks serving one-row requests too (see the class docstring).
+        self.mixed = MIXED_ROWS and len(self.modes) > 1
+        # The rows the kernels are launched for: the block's when mixed, else the active mode's (see _launch_rows).
+        self.server_rows = max(self.modes) if self.mixed else rows
         self.fuse_hc = FUSE_HC if fuse_hc is None else fuse_hc
         self.parts = _HC_COLLAPSE_CORES if self.fuse_hc else 2
         first = moes[self.layer_ids[0]]
@@ -567,14 +590,25 @@ class PersistentMoE:
         )
         self.layer_table = None
         self._single_senders = single_senders
-        self._mode_state = {r: self._build_mode(r) for r in self.modes}
+        # Mixed: only the block mode's sockets and partials; a one-row mode only its request rows.
+        self._mode_state = {
+            r: self._build_mode(r, inputs_only=self.mixed and r != self.server_rows) for r in self.modes
+        }
         self._set_mode(active_rows)
         self.scratch = self._launch()
         self.stopped = False
 
-    def _build_mode(self, rows: int) -> dict:
+    def _build_mode(self, rows: int, inputs_only: bool = False) -> dict:
         """One request mode's requester-side state: per requester its request socket (pages of ``rows`` rows), its
-        partials buffer and its default request row."""
+        partials buffer and its default request row; ``inputs_only``, the request rows alone (a mixed server's one-row
+        mode, which sends on the block mode's sockets into its partials)."""
+        if inputs_only:
+            return {
+                "tx": [],
+                "rx": [],
+                "partials": [],
+                "inputs": [self.request_input(j, rows=rows) for j in range(len(self.request_meshes))],
+            }
         moe_rows, moe_cols = tuple(self.moe_mesh.shape)
         row_bytes = self.hidden * 2 * rows
         state = {"tx": [], "rx": [], "partials": [], "inputs": []}
@@ -608,10 +642,14 @@ class PersistentMoE:
 
     def _set_mode(self, rows: int) -> None:
         state = self._mode_state[rows]
+        # Mixed: every request goes on the block mode's sockets, its partial into the block mode's buffers.
+        block = self._mode_state[self.server_rows] if self.mixed else state
         self.rows = rows
         self.row_bytes = self.hidden * 2 * rows
-        self.request_tx, self.request_rx = state["tx"], state["rx"]
-        self.partials, self.inputs = state["partials"], state["inputs"]
+        self.request_tx, self.request_rx = block["tx"], block["rx"]
+        self.partials, self.inputs = block["partials"], state["inputs"]
+        if not self.mixed:
+            self.server_rows = rows
 
     def _routers_for(self, rows: int) -> list:
         """The router columns a ``rows``-row launch reads: L1 for one-row requests when they fit, else DRAM (the L1
@@ -675,31 +713,31 @@ class PersistentMoE:
         if old is not None and old.is_allocated():
             ttnn.deallocate(old)
         self.replica = None
-        self.router_columns = self._routers_for(self.rows)
+        self.router_columns = self._routers_for(self.server_rows)
         if self.layer_table is not None:
             ttnn.deallocate(self.layer_table)
         self.layer_table = self._build_layer_table(self.router_columns)
         # The row lands here on every core of the grid, replacing the all_gather_for_matmul replica.
         self.replica = ttnn.from_torch(
-            torch.zeros(1, 1, REPLICA_GRID.num_cores() * self.rows, self.hidden),
+            torch.zeros(1, 1, REPLICA_GRID.num_cores() * self.server_rows, self.hidden),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.moe_mesh,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(REPLICA_GRID, [self.rows, self.hidden], ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(REPLICA_GRID, [self.server_rows, self.hidden], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.moe_mesh),
         )
         # A block's partial: its rows' tiles over the same output cores.
         output_memory_config = experts.output_memory_config
-        if self.rows > 1:
+        if self.server_rows > 1:
             spec = output_memory_config.shard_spec
             output_memory_config = ttnn.MemoryConfig(
                 output_memory_config.memory_layout,
                 output_memory_config.buffer_type,
-                ttnn.ShardSpec(spec.grid, [self.rows, spec.shape[1]], spec.orientation),
+                ttnn.ShardSpec(spec.grid, [self.server_rows, spec.shape[1]], spec.orientation),
             )
         return ttnn.experimental.deepseek.moe.fused_experts(
             self.replica,
@@ -708,7 +746,7 @@ class PersistentMoE:
             gate_up_weights=experts.gate_up_weights,
             down_weights=experts.down_weights,
             # The union of the block's selections is at most rows * top_k experts.
-            num_experts=experts.top_k * self.rows,
+            num_experts=experts.top_k * self.server_rows,
             intermediate_size=experts.intermediate,
             swiglu_limit=experts.limit,
             top_k=experts.top_k,
@@ -734,6 +772,10 @@ class PersistentMoE:
         it switched."""
         if rows not in self._mode_state:
             raise ValueError(f"the server was built for {self.modes}-row requests, not {rows}")
+        if self.mixed:
+            # One launch takes both: only the requester side's request rows change.
+            self._set_mode(rows)
+            return False
         if rows == self.rows and not self.stopped:
             return False
         if not self.stopped:
@@ -872,7 +914,7 @@ class PersistentMoE:
         ``rows`` rows: ``streams`` ``[1, 1, hc * rows, D]`` in ``(rows x 32)`` tiles (row ``h * rows + j``),
         ``post`` ``[1, rows, hc, 1]``, ``comb`` ``[1, rows, hc, hc]``, each row j mixed with its own post and comb."""
         moe = self._moes.get(layer)
-        if getattr(moe, "server_top_k", 0) and self.rows == 1:
+        if getattr(moe, "server_top_k", 0) and self.server_rows == 1:
             # A drafter stage takes a block (its union of top-3 runs on the several-row grid); in one-row mode the
             # server has no block socket listening, so refuse rather than send into it.
             raise ValueError(

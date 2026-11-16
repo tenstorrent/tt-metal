@@ -4,12 +4,15 @@
 
 #include "fused_experts_device_operation.hpp"
 #include "d2d_routes.hpp"
+#include "persistent_moe_request_device_operation.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <numeric>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -670,6 +673,24 @@ ProgramDescriptor build_program_descriptor(
                                   (input_tile_h == 1 || input_tile_h == 2 || input_tile_h == 4 || input_tile_h == 8);
     const tt::DataFormat act_df = expert_custom_mm ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b;
     const uint32_t act_tile_bytes = input_tile.get_tile_size(act_df);
+    // The persistent op built for several-row blocks runs one-row requests natively (in 1x32 tiles, through the
+    // tile-shaped CBs' one-row aliases) unless DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0 (the padded mode: a one-row request
+    // rides row 0 of a block). See kernels/persistent.h kFeOneRowCbOffset.
+    const bool native_one_row = persistent != nullptr && batch > 1u && persistent_moe_native_one_row();
+    constexpr uint32_t kOneRowCbOffset = 32;
+    TT_FATAL(
+        !native_one_row || (expert_custom_mm && act_df == tt::DataFormat::Float16_b && input_df == act_df),
+        "fused_experts: native one-row requests need the bf16 custom_mm path (DEEPSEEK_V41_MOE_NATIVE_ONE_ROW=0 runs "
+        "them padded)");
+    auto add_native_one_row_defines = [&](KernelDescriptor& kernel) {
+        const tt::tt_metal::Tile one_row({1u, tt::constants::TILE_WIDTH});
+        kernel.defines.emplace_back("FE_NATIVE_ONE_ROW", "1");
+        kernel.defines.emplace_back("FE_BLOCK_ROWS", std::to_string(batch) + "u");
+        kernel.defines.emplace_back("FE_ONE_ROW_ACT_TILE_BYTES", std::to_string(one_row.get_tile_size(act_df)) + "u");
+        kernel.defines.emplace_back("FE_ONE_ROW_OUT_TILE_BYTES", std::to_string(one_row.get_tile_size(out_df)) + "u");
+        kernel.defines.emplace_back(
+            "FE_ONE_ROW_SCALAR_TILE_BYTES", std::to_string(one_row.get_tile_size(tt::DataFormat::Float16_b)) + "u");
+    };
 
     // SwiGLU clamp limit, passed to the compute kernel as a bit-cast float (the kernel
     // derives -limit internally).
@@ -1035,13 +1056,17 @@ ProgramDescriptor build_program_descriptor(
     constexpr uint32_t sem_expert_go_id = 14;
     // And the reduce stage's (the senders') ready count, also on the control core.
     constexpr uint32_t sem_reduce_ready_id = 15;
+    // On the route merge, one bump per row the control core routes (its merge ring entry written).
+    constexpr uint32_t sem_merge_go_id = 15;
     if (persistent != nullptr) {
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = sem_expert_go_id,
-            .core_type = CoreType::WORKER,
-            .core_ranges = route_merge_set,
-            .initial_value = 0,
-        });
+        for (uint32_t id : {sem_expert_go_id, sem_merge_go_id}) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id,
+                .core_type = CoreType::WORKER,
+                .core_ranges = route_merge_set,
+                .initial_value = 0,
+            });
+        }
     }
 
     // CBs are allocated identically on all cores so the broadcast CBs land at the same
@@ -1628,6 +1653,7 @@ ProgramDescriptor build_program_descriptor(
     if (persistent != nullptr) {
         sender_desc.defines.emplace_back("FE_ROUTE_STAGE", "1");
         sender_desc.defines.emplace_back("FE_SEM_EXPERT_GO", std::to_string(sem_expert_go_id));
+        sender_desc.defines.emplace_back("FE_SEM_MERGE_GO", std::to_string(sem_merge_go_id));
     }
     // Pass the routing buffers as BufferBindings (not raw addresses) so the framework
     // patches the addresses on program-cache hits instead of rebuilding the descriptor.
@@ -2131,19 +2157,29 @@ ProgramDescriptor build_program_descriptor(
     make_writer(writer_noc0_cores, DataMovementProcessor::RISCV_0, NOC::NOC_0);
 
     // ---- In-op router on the router cores: bias reader + top-k (NoC 0) and the gate compute. ----
-    // The persistent op's candidate slots (two halves of one slot per chip), in the reduce scratch past a sender's
-    // staging and source ring, at the same address on every core: the route merge's, the reducer's own copy, and
-    // the exchange sender's (router_reduce.cpp, fe_reduce_sender.cpp).
+    // The persistent op's candidate slots (one slot per chip for each requester, whose one row in flight they hold),
+    // in the reduce scratch past a sender's staging and source ring, at the same address on every core: the route
+    // merge's, the reducer's own copy, and the exchange sender's (router_reduce.cpp, fe_reduce_sender.cpp). Then the
+    // route merge's ring of the routed rows' headers (persistent.h kFeMergeRingBytes).
+    const uint32_t cand_sets =
+        persistent != nullptr
+            ? static_cast<uint32_t>(operation_attributes.persistent->input_socket_config_addresses.size())
+            : 0u;
+    constexpr uint32_t kMergeRingBytes = 16u * 64u;
     auto cand_slots_addr = [&]() -> uint32_t {
         const uint32_t ar_core_bytes =
             (operation_attributes.output_memory_config.shard_spec()->shape[1] / TILE_DIM) * out_tile_bytes;
         const uint32_t offset = tt::align(2u * ar_cores_per_link * ar_core_bytes + kFeSourceRingBytes, 64u);
+        const uint32_t end = offset + cand_sets * num_router_cores * router_cand_slot_bytes + kMergeRingBytes;
         TT_FATAL(
-            offset + 2u * num_router_cores * router_cand_slot_bytes <= all_reduce->scratch->aligned_size_per_bank(),
-            "fused_experts: the sharded router's candidate slots end at {} B, past the {} B scratch",
-            offset + 2u * num_router_cores * router_cand_slot_bytes,
+            end <= all_reduce->scratch->aligned_size_per_bank(),
+            "fused_experts: the sharded router's candidate slots and merge ring end at {} B, past the {} B scratch",
+            end,
             all_reduce->scratch->aligned_size_per_bank());
         return static_cast<uint32_t>(all_reduce->scratch->address()) + offset;
+    };
+    auto merge_ring_addr = [&]() -> uint32_t {
+        return cand_slots_addr() + cand_sets * num_router_cores * router_cand_slot_bytes;
     };
     if (sharded_router) {
         TT_FATAL(fuse_ar && !ar_senders.empty(), "fused_experts: the sharded router exchanges through link 0's sender");
@@ -2264,6 +2300,8 @@ ProgramDescriptor build_program_descriptor(
                 kernel.core_ranges.contains(CoreRangeSet(CoreRange(route_merge, route_merge)))) {
                 kernel.defines.emplace_back("FE_ROUTER_SHARDED", "1");
                 kernel.defines.emplace_back("FE_CAND_ADDR", std::to_string(cand_slots_addr()) + "u");
+                kernel.defines.emplace_back("FE_NUM_REQUESTERS", std::to_string(cand_sets) + "u");
+                kernel.defines.emplace_back("FE_MERGE_RING_ADDR", std::to_string(merge_ring_addr()) + "u");
             }
         }
     } else if (run_router) {
@@ -2474,7 +2512,14 @@ ProgramDescriptor build_program_descriptor(
                 router_cand_slot_bytes,
                 sem_router_id,
                 params.sub_parts,
+                // The block rows: a one-row request's partial is row 0 of them (see persistent.h kFeHdrRows).
+                batch,
             };
+            TT_FATAL(
+                batch == 1u || (part_bytes / params.sub_parts) % (32u * batch) == 0u,
+                "fused_experts: a sum core's part of a {}-row block ({} B) is not whole (rows x 32) tile faces",
+                batch,
+                part_bytes / params.sub_parts);
         } else {
             ar_sender.kernel_source = std::string(kKernelDir) + "/dataflow/ar_sender.cpp";
             ar_sender.compile_time_args = {
@@ -2598,11 +2643,62 @@ ProgramDescriptor build_program_descriptor(
                 "fused_experts: the persistent op needs the router (sharded over its chips, each layer's gate column "
                 "from the layer table) and the one-row input replica");
 
-            uint32_t rewind_cbs = 0;
+            // Native one-row requests (persistent_moe_native_one_row, an op built for several-row blocks): every
+            // tile-shaped CB gets a 1x32 alias, buffer index + kOneRowCbOffset, over the same memory -- the compute
+            // LLKs take a CB's tile shape from its index, so a one-row request's iteration runs on the aliases
+            // (kernels/persistent.h kFeOneRowCbOffset).
+            if (native_one_row) {
+                const tt::tt_metal::Tile one_row_tile({1u, tt::constants::TILE_WIDTH});
+                const TileDescriptor one_row_tile_desc(one_row_tile);
+                const std::array<uint32_t, 14> tile_cbs = {
+                    cb_input,
+                    cb_out,
+                    cb_mm,
+                    cb_act,
+                    cb_rscalar,
+                    cb_down_out,
+                    cb_acc,
+                    cb_wtmp,
+                    cb_reduce,
+                    cb_rin,
+                    cb_rbias,
+                    cb_rout,
+                    cb_rpart,
+                    cb_rparts};
+                for (auto& cb : desc.cbs) {
+                    std::vector<CBFormatDescriptor> aliases;
+                    for (const auto& f : cb.format_descriptors) {
+                        if (std::find(tile_cbs.begin(), tile_cbs.end(), f.buffer_index) == tile_cbs.end()) {
+                            continue;
+                        }
+                        TT_FATAL(
+                            f.buffer_index < kOneRowCbOffset && f.buffer_index + kOneRowCbOffset < 64u,
+                            "fused_experts: CB {} has no one-row alias index",
+                            f.buffer_index);
+                        CBFormatDescriptor alias = f;
+                        alias.buffer_index = f.buffer_index + kOneRowCbOffset;
+                        alias.page_size = one_row_tile.get_tile_size(f.data_format);
+                        alias.tile = one_row_tile_desc;
+                        TT_FATAL(
+                            cb.total_size % alias.page_size == 0 && alias.page_size * batch == f.page_size,
+                            "fused_experts: CB {} ({} B, {} B pages) does not hold whole one-row {} B tiles, {} to a "
+                            "{}-row one",
+                            f.buffer_index,
+                            cb.total_size,
+                            f.page_size,
+                            alias.page_size,
+                            batch,
+                            batch);
+                        aliases.push_back(alias);
+                    }
+                    cb.format_descriptors.insert(cb.format_descriptors.end(), aliases.begin(), aliases.end());
+                }
+            }
+            uint64_t rewind_cbs = 0;
             for (const auto& cb : desc.cbs) {
                 for (const auto& f : cb.format_descriptors) {
                     if (f.buffer_index != cb_ar_scratch) {
-                        rewind_cbs |= 1u << f.buffer_index;
+                        rewind_cbs |= uint64_t{1} << f.buffer_index;
                     }
                 }
             }
@@ -2610,7 +2706,11 @@ ProgramDescriptor build_program_descriptor(
             for (auto& kernel : desc.kernels) {
                 kernel.defines.emplace_back("FE_PERSISTENT", "1");
                 kernel.defines.emplace_back("FE_HDR_ADDR", std::to_string(persistent->header->address()));
-                kernel.defines.emplace_back("FE_REWIND_CBS", std::to_string(rewind_cbs) + "u");
+                kernel.defines.emplace_back("FE_REWIND_CBS", std::to_string(rewind_cbs & 0xFFFFFFFFu) + "u");
+                kernel.defines.emplace_back("FE_REWIND_CBS_HI", std::to_string(rewind_cbs >> 32) + "u");
+                if (native_one_row) {
+                    add_native_one_row_defines(kernel);
+                }
                 kernel.defines.emplace_back("FE_SEM_WRITER_DONE", std::to_string(sem_writer_done_id));
                 // Each stage reports to its own count: the router row (router cores and route merge) runs a
                 // row ahead of the worker grid, the reduce senders a row behind it.
@@ -2671,13 +2771,21 @@ ProgramDescriptor build_program_descriptor(
                 route_rect[2],
                 route_rect[3],
                 route_rect[4] + 1u,
-                // The router stage's ready reports: every router core's, and the route merge's.
-                sharded_router ? kRouterParts + 2u : num_router_cores + 1u,
+                // The router stage's ready reports: the partial cores' and the reducer's (the route merge reports
+                // none: it runs on its own count, see fe_ctrl.cpp).
+                kRouterParts + 1u,
                 sem_route_ready_id,
                 static_cast<uint32_t>(route_merge_noc.x),
                 static_cast<uint32_t>(route_merge_noc.y),
                 sem_expert_go_id,
                 sem_reduce_ready_id,
+                merge_ring_addr(),
+                sem_merge_go_id,
+                // TT_FE_FIXED_ORDER=1: every chip takes the requesters in strict turn (with on-demand ones), as the
+                // op did before taking them in any order; for A/B checks.
+                std::getenv("TT_FE_FIXED_ORDER") != nullptr && std::string_view{std::getenv("TT_FE_FIXED_ORDER")} == "1"
+                    ? 0u
+                    : 1u,
             };
             TensorAccessorArgs(*layer_table_buffer).append_to(ctrl_ct_args);
             KernelDescriptor ctrl_desc;
@@ -2690,6 +2798,9 @@ ProgramDescriptor build_program_descriptor(
             ctrl_desc.defines = {
                 {"FE_HDR_ADDR", std::to_string(persistent->header->address())},
                 {"FE_SEM_READY", std::to_string(sem_ready_id)}};
+            if (native_one_row) {
+                add_native_one_row_defines(ctrl_desc);
+            }
             std::vector<std::variant<uint32_t, Buffer*>> ctrl_rt_args = {layer_table_buffer, input_buffer};
             for (const auto& s : ar_senders) {
                 ctrl_rt_args.push_back(static_cast<uint32_t>(device->worker_core_from_logical_core(s).x));
@@ -2748,8 +2859,19 @@ tt::tt_metal::WorkloadDescriptor FusedExpertsDeviceOperation::MultiCoreAllReduce
     const auto& persistent = operation_attributes.persistent;
     const auto& shard = output.shard_spec().value();
     const uint32_t halves = persistent.has_value() ? 2u : 1u;
-    const uint32_t scratch_slots =
+    uint32_t scratch_slots =
         halves * std::max(ar.ring_size, tt::div_up(static_cast<uint32_t>(shard.grid.num_cores()), ar.num_links));
+    if (persistent.has_value()) {
+        // Past the staging, the sharded router's candidate slots -- one per chip for each requester -- and the route
+        // merge's ring (see cand_slots_addr): whole slots more for them, and one for the source ring and alignment.
+        const uint32_t slot_bytes = static_cast<uint32_t>(shard.shape[0] * shard.shape[1] * output.element_size());
+        const uint32_t cand_slot_bytes =
+            tt::align(fused_experts_input_rows(input) * operation_attributes.top_k * 12u, 64u);
+        const uint32_t cand_bytes = static_cast<uint32_t>(persistent->input_socket_config_addresses.size()) *
+                                        persistent->num_chips * cand_slot_bytes +
+                                    16u * 64u;
+        scratch_slots += tt::div_up(cand_bytes, slot_bytes) + 1u;
+    }
     auto scratch_shape = output.logical_shape();
     scratch_shape[-2] *= scratch_slots;
     const ShardSpec scratch_shard{shard.grid, {shard.shape[0] * scratch_slots, shard.shape[1]}, shard.orientation};

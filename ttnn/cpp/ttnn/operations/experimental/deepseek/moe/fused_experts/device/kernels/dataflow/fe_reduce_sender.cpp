@@ -27,11 +27,13 @@
 // the staging half a row is sent from is refilled only after it has left.
 //
 // The link-0 sender also carries the sharded router's candidate exchange (router_reduce.cpp, num_exchange_routes >
-// 0): the reducer leaves this chip's candidates of each iteration in its slot of the candidate slots here and bumps
-// the ready count; whenever this kernel waits, it forwards every candidate slot it has not yet forwarded, in order,
-// along the whole-mesh branches to the same slot of every other chip's route merge core, each slot one fused
-// write + increment of that core's sem_router per branch, then bumps the reducer's forwarded count. The router stage
-// runs a row ahead of the grid and this stage a row behind it, so it is idle on its own work when candidates come.
+// 0): the reducer leaves this chip's candidates of each routed row in its slot of the row's requester's candidate
+// slots here and bumps the ready count; whenever this kernel waits, it forwards every candidate slot it has not yet
+// forwarded -- the slots of this chip tagged here (a nonzero first word), once as many are tagged as the ready count
+// says have landed -- along the whole-mesh branches to the same slot of every other chip's route merge core, each slot
+// one fused write + increment of that core's sem_router per branch, then untags it and bumps the reducer's forwarded
+// count. The router stage runs ahead of the grid and this stage a row behind it, so it is idle on its own work when
+// candidates come.
 //
 // Compile-time args:
 //   0: my_chip (this chip's slot in the requesters' partials buffers)   1: part_bytes (this link's part of a
@@ -39,7 +41,11 @@
 //   sem_ar_ready   3: sem_go   4: cb_scratch (the staging, at the scratch address)   5: num_requesters   6: max_payload
 //   (fabric packet bytes)   7: num_slots (chips, the slots of a partials buffer)   8: cand_slot_bytes   9: sem_router
 //   (on the route merge) 10: sub_parts (the requester's sum cores per link: this link's part of a row splits evenly
-//   over them)
+//   over them)   11: rows (the op's block rows: a one-row request's partial is row 0 of each sub-part's (rows x 32)
+//   tiles, compacted in place and sent as a one-row slot, its flag where a block's goes; see persistent.h kFeHdrRows)
+//
+// FE_NATIVE_ONE_ROW: a one-row request runs in one-row tiles, whose partial the writers stage compacted at the front
+// of the iteration's half (one_row_sub_bytes per sum core), so it goes out as it sits.
 //
 // Runtime args: num_cores (this link's output cores), the source ring's address, then per requester: the
 // connection its sends leave by, its partials buffer address, this link's sub_parts sum cores' NoC xs, then ys,
@@ -61,6 +67,10 @@ constexpr uint32_t cand_slot_bytes = get_compile_time_arg_val(8);
 constexpr uint32_t sem_router_id = get_compile_time_arg_val(9);
 constexpr uint32_t sub_parts = get_compile_time_arg_val(10);
 constexpr uint32_t sub_bytes = part_bytes / sub_parts;
+constexpr uint32_t block_rows = get_compile_time_arg_val(11);
+// A one-row request's sub-part: row 0 of each 32-column tile's two faces, 32 B each, every 32 * block_rows B.
+constexpr uint32_t row_chunk_bytes = 32;
+constexpr uint32_t one_row_sub_bytes = sub_bytes / block_rows;
 constexpr uint32_t kMaxExchangeRoutes = 4;
 // The partials' header ring: with the exchange's kMaxExchangeRoutes, within a RISC's 12 pool headers.
 constexpr uint32_t kSendHeaders = 6;
@@ -145,15 +155,41 @@ void kernel_main() {
             cand_slot_bytes);
     }
 
+    // This chip's slot of requester k's candidates, here as on the route merges.
+    auto own_slot = [&](uint32_t k) { return cand_addr + (k * num_slots + my_chip) * cand_slot_bytes; };
+    if (num_exchange_routes > 0u) {
+        // Untagged: the scratch comes uninitialized.
+        for (uint32_t k = 0; k < num_requesters; ++k) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_slot(k)) = 0u;
+        }
+    }
     // Forwards every candidate slot the reducer has left here and this kernel has not yet forwarded.
     uint32_t num_forwarded = 0;
     auto pump = [&]() {
         if (num_exchange_routes > 0u) {
             invalidate_l1_cache();
             const uint32_t ready = *cand_ready;
-            while (num_forwarded < ready) {
+            if (ready == num_forwarded) {
+                return;
+            }
+            // The tagged slots are the ones written or being written; once as many are tagged as have been counted
+            // past the forwarded ones, every tagged one has landed whole.
+            uint32_t tagged_mask = 0;
+            uint32_t tagged = 0;
+            for (uint32_t k = 0; k < num_requesters; ++k) {
+                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_slot(k)) != 0u) {
+                    tagged_mask |= 1u << k;
+                    ++tagged;
+                }
+            }
+            if (tagged != ready - num_forwarded) {
+                return;
+            }
+            while (tagged_mask != 0u) {
                 DeviceZoneScopedN("FE_RED_EXCHANGE");
-                const uint32_t slot = cand_addr + ((num_forwarded & 1u) * num_slots + my_chip) * cand_slot_bytes;
+                const uint32_t k = static_cast<uint32_t>(__builtin_ctz(tagged_mask));
+                tagged_mask &= tagged_mask - 1u;
+                const uint32_t slot = own_slot(k);
                 // The headers are rewritten in place, so the previous forward's (and the partials') must have left.
                 noc_async_writes_flushed();
                 for (uint32_t r = 0; r < num_exchange_routes; ++r) {
@@ -165,8 +201,9 @@ void kernel_main() {
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                             safe_get_noc_addr(merge_x, merge_y, slot, 0), 0, 0, false});
                 }
-                // The slot's bytes have left before the reducer may refill it (two forwards on).
+                // The slot's bytes have left; untagged here, it waits for the requester's next row.
                 noc_async_writes_flushed();
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot) = 0u;
                 ++num_forwarded;
                 noc_semaphore_inc(get_noc_addr(reducer_x, reducer_y, forwarded_addr), 1);
                 noc_async_atomic_barrier();
@@ -202,22 +239,60 @@ void kernel_main() {
                 }
             }
         }
-        DeviceZoneScopedN("FE_RED_SEND");
         invalidate_l1_cache();
-        const uint32_t k = source[iter % kFeSourceRing];
+        const uint32_t entry = source[iter % kFeSourceRing];
+        const uint32_t k = entry & 0xFFu;
+        const bool one_row = block_rows > 1u && (entry >> 8) == 1u;
         const uint32_t src = staging_addr + (iter & 1u) * part_bytes;
-        // Every sum core of the requester holds its own columns' slots, at the same address.
-        const uint32_t slot = partials_addr[k] + my_chip * sub_bytes;
-        const uint32_t flag = partials_addr[k] + num_slots * sub_bytes + my_chip * 4u;
-        auto* sender = &fabric_connection.get(connection[k]).sender;
-        size_t idx = route_args[k];
-        send_headers.reset();
-        for (uint32_t r = 0; r < num_routes[k]; ++r) {
-            const D2DRoute route = read_d2d_route(idx);
-            for (uint32_t p = 0; p < sub_parts; ++p) {
-                d2d_send_flagged<max_payload>(
-                    sender, send_headers, route, src + p * sub_bytes, sub_bytes, sum_x[k][p], sum_y[k][p], slot, flag);
+        auto send = [&](uint32_t sub_stride, uint32_t send_bytes) {
+            // Every sum core of the requester holds its own columns' slots, at the same address; the flags follow a
+            // block's slots whatever the request's rows.
+            const uint32_t slot = partials_addr[k] + my_chip * send_bytes;
+            const uint32_t flag = partials_addr[k] + num_slots * sub_bytes + my_chip * 4u;
+            auto* sender = &fabric_connection.get(connection[k]).sender;
+            size_t idx = route_args[k];
+            send_headers.reset();
+            for (uint32_t r = 0; r < num_routes[k]; ++r) {
+                const D2DRoute route = read_d2d_route(idx);
+                for (uint32_t p = 0; p < sub_parts; ++p) {
+                    d2d_send_flagged<max_payload>(
+                        sender,
+                        send_headers,
+                        route,
+                        src + p * sub_stride,
+                        send_bytes,
+                        sum_x[k][p],
+                        sum_y[k][p],
+                        slot,
+                        flag);
+                }
             }
+        };
+        DeviceZoneScopedN("FE_RED_SEND");
+        if (!one_row) {
+            send(sub_bytes, sub_bytes);
+        } else {
+#if defined(FE_NATIVE_ONE_ROW)
+            // Staged in one-row tiles: sum core p's columns at p * one_row_sub_bytes. (A marker zone in FE_RED_SEND.)
+            DeviceZoneScopedN("FE_RED_SEND_1R");
+            send(one_row_sub_bytes, one_row_sub_bytes);
+#else
+            // Each sub-part's row 0, compacted to the front of the sub-part (in place, front to back: chunk c moves
+            // from c * block_rows to c, never past one not yet moved).
+            {
+                DeviceZoneScopedN("FE_RED_COMPACT");
+                invalidate_l1_cache();
+                for (uint32_t p = 0; p < sub_parts; ++p) {
+                    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + p * sub_bytes);
+                    for (uint32_t c = 1; c < one_row_sub_bytes / row_chunk_bytes; ++c) {
+                        for (uint32_t w = 0; w < row_chunk_bytes / 4u; ++w) {
+                            words[c * (row_chunk_bytes / 4u) + w] = words[c * block_rows * (row_chunk_bytes / 4u) + w];
+                        }
+                    }
+                }
+            }
+            send(sub_bytes, one_row_sub_bytes);
+#endif
         }
         // The staging half is refilled two iterations on, so every packet has to have left it.
         noc_async_writes_flushed();

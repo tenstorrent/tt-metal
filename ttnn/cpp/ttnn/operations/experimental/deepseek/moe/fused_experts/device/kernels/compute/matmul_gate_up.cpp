@@ -124,17 +124,17 @@ void kernel_main() {
     constexpr uint32_t num_active = get_compile_time_arg_val(0);
     constexpr uint32_t k_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t i_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_input_id = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_input_id_ct = get_compile_time_arg_val(3);
     constexpr uint32_t cb_weights_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_mm_id = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_out_id = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_mm_id_ct = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_out_id_ct = get_compile_time_arg_val(6);
     constexpr uint32_t limit_bits = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_act_id = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_act_id_ct = get_compile_time_arg_val(8);
     constexpr uint32_t cb_down_w_id = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_down_out_id = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_rscalar_id = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_acc_id = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_wtmp_id = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_down_out_id_ct = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_rscalar_id_ct = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_acc_id_ct = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_wtmp_id_ct = get_compile_time_arg_val(13);
     constexpr uint32_t num_producers = get_compile_time_arg_val(14);
     constexpr uint32_t experts_block = get_compile_time_arg_val(15);
     constexpr uint32_t gate_up_reserve_tiles = get_compile_time_arg_val(16);
@@ -143,7 +143,7 @@ void kernel_main() {
     constexpr uint32_t shards_per_core = get_compile_time_arg_val(19);
     constexpr uint32_t i_shards_per_core = get_compile_time_arg_val(20);
     constexpr uint32_t num_expert_groups = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_reduce_id_ct = get_compile_time_arg_val(22);
     constexpr uint32_t shared_i_tiles = get_compile_time_arg_val(23);
     constexpr uint32_t shared_slots = get_compile_time_arg_val(24);
     constexpr uint32_t cb_shared_gate_up_id = get_compile_time_arg_val(25);
@@ -257,24 +257,46 @@ void kernel_main() {
     constexpr uint32_t kNegInfBits = 0xFF800000u;
     constexpr uint32_t neg_limit_bits = limit_bits ^ 0x80000000u;
 
-    CircularBuffer in_cb(cb_input_id);
     CircularBuffer w_cb(cb_weights_id);
-    CircularBuffer mm_cb(cb_mm_id);
-    CircularBuffer out_cb(cb_out_id);
-    CircularBuffer act_cb(cb_act_id);
     CircularBuffer down_w_cb(cb_down_w_id);
-    CircularBuffer down_out_cb(cb_down_out_id);
-    CircularBuffer rscalar_cb(cb_rscalar_id);
-    CircularBuffer acc_cb(cb_acc_id);
-    CircularBuffer wtmp_cb(cb_wtmp_id);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_input_id, cb_weights_id, cb_mm_id);
-    matmul_init(cb_input_id, cb_weights_id);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_input_id_ct, cb_weights_id, cb_mm_id_ct);
+    matmul_init(cb_input_id_ct, cb_weights_id);
 
     // The persistent op's iteration (the hit count's tag).
     uint32_t fe_iter = 0;
     (void)fe_iter;
+    // The tile shape the packer is set up for (FE_NATIVE_ONE_ROW): every CB packed in an iteration has the
+    // iteration's tile shape, so a pack init with the tile dims once the shape changes covers the iteration; the
+    // unpacker is reconfigured in full before each phase anyway.
+    bool pack_one_row = false;
+    (void)pack_one_row;
     auto iteration = [&]() {
+        // FE_NATIVE_ONE_ROW: a one-row request (persistent.h kFeHdrRows) runs on the tile-shaped CBs' 1x32 aliases.
+        const bool one_row = fe_one_row();
+        const uint32_t cb_input_id = fe_cb(cb_input_id_ct, one_row);
+        const uint32_t cb_mm_id = fe_cb(cb_mm_id_ct, one_row);
+        const uint32_t cb_out_id = fe_cb(cb_out_id_ct, one_row);
+        const uint32_t cb_act_id = fe_cb(cb_act_id_ct, one_row);
+        const uint32_t cb_down_out_id = fe_cb(cb_down_out_id_ct, one_row);
+        const uint32_t cb_rscalar_id = fe_cb(cb_rscalar_id_ct, one_row);
+        const uint32_t cb_acc_id = fe_cb(cb_acc_id_ct, one_row);
+        const uint32_t cb_wtmp_id = fe_cb(cb_wtmp_id_ct, one_row);
+        const uint32_t cb_reduce_id = fe_cb(cb_reduce_id_ct, one_row);
+#if defined(FE_NATIVE_ONE_ROW)
+        if (one_row != pack_one_row) {
+            pack_reconfig_data_format<true>(cb_mm_id);
+            pack_one_row = one_row;
+        }
+#endif
+        CircularBuffer in_cb(cb_input_id);
+        CircularBuffer mm_cb(cb_mm_id);
+        CircularBuffer out_cb(cb_out_id);
+        CircularBuffer act_cb(cb_act_id);
+        CircularBuffer down_out_cb(cb_down_out_id);
+        CircularBuffer rscalar_cb(cb_rscalar_id);
+        CircularBuffer acc_cb(cb_acc_id);
+        CircularBuffer wtmp_cb(cb_wtmp_id);
         // Activation x is broadcast once and reused for every expert's gate_up matmul, in every block.
         if (uses_input) {
             in_cb.wait_front(k_tiles);

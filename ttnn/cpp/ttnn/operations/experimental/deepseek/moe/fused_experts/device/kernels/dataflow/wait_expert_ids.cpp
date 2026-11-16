@@ -146,6 +146,10 @@ void kernel_main() {
         shared.gate_up_addr = fe_header(kFeHdrSharedGateUp);
         shared.down_addr = fe_header(kFeHdrSharedDown);
 #endif
+        // FE_NATIVE_ONE_ROW: a one-row request runs on the tile-shaped CBs' 1x32 aliases (persistent.h).
+        const bool one_row = fe_one_row();
+        const uint32_t cb_input = fe_cb(cb_input_id, one_row);
+        (void)cb_input;
         // Activation: publish it to the compute kernel.
 #if defined(INPUT_RM_ROWS)
         // Several ROW_MAJOR rows: this core's writer restripes them into cb_input and publishes it.
@@ -154,7 +158,7 @@ void kernel_main() {
 #elif defined(INPUT_REPLICATED)
         // Already in this core's L1 as a ROW_MAJOR HEIGHT_SHARDED replica, with cb_input aliased over
         // its shard -- nothing was broadcast, so there is nothing to wait for.
-        publish_input(cb_input_id, k_tiles);
+        publish_input(cb_input, k_tiles);
         (void)sem_input_id;
 #else
         // Arrived via the {1,0} input sender's multicast.
@@ -162,7 +166,7 @@ void kernel_main() {
             DeviceZoneScopedN("FE_WAIT_INPUT");
             Semaphore<>(sem_input_id).wait(1);
         }
-        publish_input(cb_input_id, k_tiles);
+        publish_input(cb_input, k_tiles);
 #endif
 
         // The reader loop waits for the expert ids itself, after any shared-expert gate_up.
@@ -175,12 +179,12 @@ void kernel_main() {
             gate_up_tile_bytes,
             down_slice_tiles,
             down_tile_bytes,
-            act_tile_bytes,
+            one_row ? FE_ONE_ROW_ACT_TILE_BYTES : act_tile_bytes,
             num_producers,
             cb_bcast_id,
             cb_weights_id,
             cb_down_w_id,
-            cb_act_id,
+            fe_cb(cb_act_id, one_row),
             sem_gather_id,
             sem_bcast_id,
             group_mcast_start_x,
@@ -192,24 +196,24 @@ void kernel_main() {
             kHitGateUpAddrs,
             down_args,
             kHitDownAddrs,
-            cb_rscalar_id,
+            fe_cb(cb_rscalar_id, one_row),
             num_weights,
             down_prefetch,
             batch,
             experts_block,
             gate_up_reserve_tiles,
             down_reserve_tiles,
-            rscalar_tile_h,
-            rscalar_face_r_dim,
-            rscalar_num_face_rows,
-            rscalar_tile_bytes,
+            one_row ? 1u : rscalar_tile_h,
+            one_row ? 1u : rscalar_face_r_dim,
+            one_row ? 1u : rscalar_num_face_rows,
+            one_row ? FE_ONE_ROW_SCALAR_TILE_BYTES : rscalar_tile_bytes,
             cores_per_expert,
             shards_per_core,
             i_shards_per_core,
             num_expert_groups,
             gather,
             sem_reduce_id,
-            cb_reduce_id,
+            fe_cb(cb_reduce_id, one_row),
             get_arg_val<uint32_t>(11),
             shared,
             shared_gate_up_args,

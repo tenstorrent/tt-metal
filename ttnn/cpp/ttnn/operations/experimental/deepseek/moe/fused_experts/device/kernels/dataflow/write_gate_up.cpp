@@ -125,8 +125,8 @@ void kernel_main() {
     constexpr uint32_t cb_out_id = get_compile_time_arg_val(2);
     constexpr uint32_t cb_down_out_id = get_compile_time_arg_val(3);
     constexpr uint32_t cb_act_id = get_compile_time_arg_val(4);
-    constexpr uint32_t act_tile_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t out_tile_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t act_tile_bytes_ct = get_compile_time_arg_val(5);
+    constexpr uint32_t out_tile_bytes_ct = get_compile_time_arg_val(6);
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(7);
     constexpr uint32_t num_producers = get_compile_time_arg_val(8);
     constexpr uint32_t experts_block = get_compile_time_arg_val(9);
@@ -162,7 +162,7 @@ void kernel_main() {
     constexpr uint32_t cb_ar_out_id = get_compile_time_arg_val(kArArg + 3);
     constexpr uint32_t ar_staging_slots = get_compile_time_arg_val(kArArg + 4);
 #endif
-    static_assert(out_tile_bytes % 64 == 0, "fused all-reduce slots are (rows x 32) bf16 tiles");
+    static_assert(out_tile_bytes_ct % 64 == 0, "fused all-reduce slots are (rows x 32) bf16 tiles");
     const uint32_t ar_scratch_addr = get_arg_val<uint32_t>(10);
     const uint32_t ar_slot = get_arg_val<uint32_t>(11);
     const uint32_t ar_sender_noc_x = get_arg_val<uint32_t>(12);
@@ -218,12 +218,20 @@ void kernel_main() {
 
     Noc noc;
     const auto out = TensorAccessor(out_args, out_addr);
-    CircularBuffer cb_out(cb_out_id);
-    CircularBuffer cb_down_out(cb_down_out_id);
-    CircularBuffer cb_act(cb_act_id);
-    CircularBuffer cb_reduce(cb_reduce_id);
-
     auto iteration = [&](uint32_t iter) {
+        // FE_NATIVE_ONE_ROW: a one-row request runs on the tile-shaped CBs' 1x32 aliases, in one-row tile bytes
+        // (persistent.h); its partial goes to the senders' staging in one-row tiles, at the front of the half.
+        const bool one_row = fe_one_row();
+        const uint32_t act_tile_bytes = one_row ? FE_ONE_ROW_ACT_TILE_BYTES : act_tile_bytes_ct;
+        const uint32_t out_tile_bytes = one_row ? FE_ONE_ROW_OUT_TILE_BYTES : out_tile_bytes_ct;
+        const uint32_t cb_wtmp_id = fe_cb(FE_CB_WTMP, one_row);
+        const uint32_t cb_acc_id = fe_cb(FE_CB_ACC, one_row);
+        (void)cb_wtmp_id;
+        (void)cb_acc_id;
+        CircularBuffer cb_out(fe_cb(cb_out_id, one_row));
+        CircularBuffer cb_down_out(fe_cb(cb_down_out_id, one_row));
+        CircularBuffer cb_act(fe_cb(cb_act_id, one_row));
+        CircularBuffer cb_reduce(fe_cb(cb_reduce_id, one_row));
 #ifdef INPUT_RM_ROWS
         {
             // Lays `num_tiles` 32-column chunks of the rows (row r at src + r * src_row_stride) out as
@@ -374,18 +382,19 @@ void kernel_main() {
                 const uint32_t n = fe_group_hits(fe_wait_hits(iter), expert_group, num_expert_groups);
                 noc_semaphore_wait_min(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_WEIGHTS)), iter + 1u);
+                // One row: a 1x32 tile each (the weights' stride in cb_bcast stays the op's rows).
                 for (uint32_t j = 0; j < n; ++j) {
                     build_routing_scalars(
                         get_compile_time_arg_val(rs),
-                        get_compile_time_arg_val(rs + 1),
+                        fe_cb(get_compile_time_arg_val(rs + 1), one_row),
                         expert_group + j * num_expert_groups,
                         1u,
                         get_compile_time_arg_val(rs + 2),
                         get_compile_time_arg_val(rs + 3),
-                        get_compile_time_arg_val(rs + 4),
-                        get_compile_time_arg_val(rs + 5),
-                        get_compile_time_arg_val(rs + 6),
-                        get_compile_time_arg_val(rs + 7));
+                        one_row ? 1u : get_compile_time_arg_val(rs + 4),
+                        one_row ? 1u : get_compile_time_arg_val(rs + 5),
+                        one_row ? 1u : get_compile_time_arg_val(rs + 6),
+                        one_row ? FE_ONE_ROW_SCALAR_TILE_BYTES : get_compile_time_arg_val(rs + 7));
                 }
             }
 #endif
@@ -406,7 +415,7 @@ void kernel_main() {
                 // the SwiGLU.
                 constexpr uint32_t kPartTiles = 2u * swiglu_tiles;
                 const uint32_t half = FE_PARTNER_BASE;
-                CircularBuffer cb_wtmp(FE_CB_WTMP);
+                CircularBuffer cb_wtmp(cb_wtmp_id);
                 if (swiglu_core) {
                     // One partial per expert, counted cumulatively over the iterations.
                     for (uint32_t j = 0; j < my_experts; ++j) {
@@ -419,7 +428,7 @@ void kernel_main() {
                     }
                 } else if (local_idx >= half && local_idx < half + num_producers) {
                     // Expert j's partial into the producer's j-th slot (the producer's cb_wtmp holds an iteration's).
-                    const auto& wtmp_if = get_local_cb_interface(FE_CB_WTMP);
+                    const auto& wtmp_if = get_local_cb_interface(cb_wtmp_id);
                     for (uint32_t j = 0; j < my_experts; ++j) {
                         cb_wtmp.wait_front(kPartTiles);
                         noc.async_write(
@@ -469,9 +478,9 @@ void kernel_main() {
             if (shared_tiles == 1u && local_idx >= shared_first_local &&
                 local_idx < shared_first_local + FE_SHARED_SPLIT) {
                 const uint32_t part = local_idx - shared_first_local;
-                CircularBuffer cb_wtmp(FE_CB_WTMP);
-                constexpr uint32_t kPartBytes = kOutTiles * out_tile_bytes;
-                const auto& wtmp_if = get_local_cb_interface(FE_CB_WTMP);
+                CircularBuffer cb_wtmp(cb_wtmp_id);
+                const uint32_t kPartBytes = kOutTiles * out_tile_bytes;
+                const auto& wtmp_if = get_local_cb_interface(cb_wtmp_id);
                 const uint32_t wtmp_base = wtmp_if.fifo_limit - wtmp_if.fifo_size;
                 if (part > 0u) {
                     cb_wtmp.wait_front(kOutTiles);
@@ -524,7 +533,7 @@ void kernel_main() {
                 // compute's per-expert terms -- goes to the slice's folder (group s's core of this down slot), at
                 // this group's place in its cb_reduce.
                 constexpr uint32_t kSliceBlock = (1u + FE_GROUP_EXPERTS) * kOutTiles;
-                constexpr uint32_t kSliceBytes = kSliceBlock * out_tile_bytes;
+                const uint32_t kSliceBytes = kSliceBlock * out_tile_bytes;
                 const uint32_t group_hits = fe_group_hits(fe_wait_hits(iter), expert_group, num_expert_groups);
                 const uint32_t send_bytes = (1u + group_hits) * kOutTiles * out_tile_bytes;
                 cb_down_out.wait_front(shards_per_core * kSliceBlock);
@@ -550,9 +559,11 @@ void kernel_main() {
             }
             if (expert_group < shards_per_core) {
                 // This core folds H-slice expert_group of its down slot: the sum goes to its columns of the slot's
-                // place in the link sender's staging.
-                constexpr uint32_t core_bytes = shards_per_core * kOutTiles * out_tile_bytes;
-                CircularBuffer cb_fold(FE_CB_ACC);
+                // place in the link sender's staging. The halves stay a block's apart; a one-row partial's slots are
+                // one-row ones from the half's start (what the senders send, fe_reduce_sender.cpp).
+                const uint32_t core_bytes = shards_per_core * kOutTiles * out_tile_bytes;
+                constexpr uint32_t half_bytes = ar_staging_slots * shards_per_core * kOutTiles * out_tile_bytes_ct;
+                CircularBuffer cb_fold(cb_acc_id);
                 cb_fold.wait_front(kOutTiles);
                 noc.async_write(
                     cb_fold,
@@ -561,7 +572,7 @@ void kernel_main() {
                     {.offset_bytes = 0},
                     {.noc_x = ar_sender_noc_x,
                      .noc_y = ar_sender_noc_y,
-                     .addr = ar_scratch_addr + ((iter & 1u) * ar_staging_slots + ar_staging_slot) * core_bytes +
+                     .addr = ar_scratch_addr + (iter & 1u) * half_bytes + ar_staging_slot * core_bytes +
                              expert_group * kOutTiles * out_tile_bytes});
                 noc.async_write_barrier();
                 Semaphore<>(sem_ar_ready_id).up(noc, ar_sender_noc_x, ar_sender_noc_y, 1);
@@ -575,7 +586,7 @@ void kernel_main() {
             cb_down_out.wait_front(kLocalTiles);
             if (expert_group == 0) {
 #if defined(FE_ALL_REDUCE) && defined(FE_PERSISTENT)
-                constexpr uint32_t core_bytes = kLocalTiles * out_tile_bytes;
+                const uint32_t core_bytes = kLocalTiles * out_tile_bytes;
 #if defined(FE_REDUCE_ROOT)
                 noc.async_write(
                     cb_down_out,
@@ -637,7 +648,7 @@ void kernel_main() {
             cb_down_out.pop_front(kLocalTiles);
 #if defined(FE_ALL_REDUCE) && defined(FE_PERSISTENT) && defined(FE_REDUCE_ROOT)
             if (expert_group == 0) {
-                constexpr uint32_t core_bytes = kLocalTiles * out_tile_bytes;
+                const uint32_t core_bytes = kLocalTiles * out_tile_bytes;
                 const uint32_t parity = iter & 1u;
                 // Every other chip's slot of this half bumps its out_ready once; ours was written above.
                 noc_semaphore_wait_min(
