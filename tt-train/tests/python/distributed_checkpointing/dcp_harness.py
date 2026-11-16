@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -30,9 +31,16 @@ NOISE = re.compile(
 )
 
 
-def tt_run_command(mgd: str, hosts: str, args: list[str], mpi_args: str = "--tag-output") -> list[str]:
-    """The driver with ``args`` under tt-run on ``hosts`` (comma-separated), with mesh graph descriptor ``mgd``."""
-    return [TT_RUN, "--mesh-graph-descriptor", mgd, "--hosts", hosts, "--mpi-args", mpi_args, *DRIVER, *args]
+def tt_run_command(mgd: str, hosts: str, command: list[str], mpi_args: str = "--tag-output") -> list[str]:
+    """``command`` under tt-run on ``hosts`` (comma-separated), with mesh graph descriptor ``mgd``. A world whose ranks
+    all run on this host goes ``--bare``: without tt-run's multi-host defaults (TCP only, on every interface but lo
+    and docker0) Open MPI connects the ranks through shared memory, while over TCP they can hang on a host that also
+    has a Kubernetes overlay network. As root, as in a CI container, Open MPI starts only with --allow-run-as-root."""
+    options = ["--bare"] if set(hosts.split(",")) == {socket.gethostname()} else []
+    if os.geteuid() == 0:
+        mpi_args += " --allow-run-as-root"
+    # "--" ends tt-run's own options: its -m would otherwise take a "python -m" module for a mesh graph descriptor.
+    return [TT_RUN, "--mesh-graph-descriptor", mgd, "--hosts", hosts, *options, "--mpi-args", mpi_args, "--", *command]
 
 
 def output_lines(proc: subprocess.CompletedProcess) -> list[str]:

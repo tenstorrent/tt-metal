@@ -7,7 +7,9 @@
 Launch on one Blackhole host with two chips per rank (the ttnn dual-rank descriptor):
 
     tt-run --mesh-graph-descriptor tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto \\
-        --hosts "$(hostname)" pytest tt-train/tests/python/distributed_checkpointing/test_dcp_multirank.py
+        --hosts "$(hostname)" --bare pytest tt-train/tests/python/distributed_checkpointing/test_dcp_multirank.py
+
+``--bare`` keeps the ranks on shared memory, as ``dcp_harness.tt_run_command`` explains.
 
 Every rank writes only the shards of the two coordinates it holds; rank 0 merges the parts into one index; a load
 on the same world restores every rank's shards bit for bit and each rank's own generators. Both ranks must see the

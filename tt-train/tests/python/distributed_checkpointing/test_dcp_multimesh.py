@@ -11,7 +11,9 @@ nothing missing or unexpected although no rank holds every key. No collective sp
 the same as a single-rank run's. Launch on one Blackhole host:
 
     tt-run --mesh-graph-descriptor tt-train/tests/python/distributed_checkpointing/bh_two_1x2_meshes_one_host.textproto \\
-        --hosts "$(hostname)" pytest tt-train/tests/python/distributed_checkpointing/test_dcp_multimesh.py
+        --hosts "$(hostname)" --bare pytest tt-train/tests/python/distributed_checkpointing/test_dcp_multimesh.py
+
+``--bare`` keeps the ranks on shared memory, as ``dcp_harness.tt_run_command`` explains.
 
 Both ranks must see the same checkpoint directory: ``DCP_SHARED_TMP`` names it, the system temporary directory
 otherwise. Without ``tt-run`` the module skips.
