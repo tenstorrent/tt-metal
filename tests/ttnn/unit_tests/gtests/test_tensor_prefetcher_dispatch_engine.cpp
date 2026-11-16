@@ -77,6 +77,7 @@ struct ReceiverContiguousCase {
         const CoreCoord grid = device->compute_with_storage_grid_size();
         TT_FATAL(grid.x * grid.y >= num_receivers, "The test needs {} worker receivers", num_receivers);
         std::vector<CoreCoord> receivers;
+        receivers.reserve(num_receivers);
         for (uint32_t i = 0; i < num_receivers; ++i) {
             receivers.emplace_back(i % grid.x, i / grid.x);
         }
