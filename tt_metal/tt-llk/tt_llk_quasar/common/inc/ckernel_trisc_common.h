@@ -92,7 +92,7 @@ typedef union
 } tile_counter_u;
 
 // Points to the tile counters
-tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)TILE_COUNTERS_BASE;
+tile_counter_u volatile* const tile_counters = reinterpret_cast<tile_counter_u volatile*>(TILE_COUNTERS_BASE);
 
 // Destination register offset, offset = 0 -> targets dest bank 0, offset = 512 for 16bit dest, 256 for 32bit dest -> targets dest bank 1
 #ifdef ENV_LLK_INFRA
