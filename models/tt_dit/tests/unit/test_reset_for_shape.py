@@ -39,6 +39,8 @@ def _name(node):
 
 
 class FakeTensor:
+    dtype = "DataType.UINT8"
+
     def __init__(self, nbytes, addr):
         self.nbytes, self.addr = nbytes, addr
 
@@ -47,6 +49,19 @@ class FakeTensor:
 
     def element_size(self):
         return 1
+
+
+class FakeBfpTensor:
+    """A block-float tensor: element_size() raises as ttnn's does (tt_backend_api_types.hpp datum_size)."""
+
+    def __init__(self, dtype, volume, addr):
+        self.dtype, self.n, self.addr = f"DataType.{dtype}", volume, addr
+
+    def volume(self):
+        return self.n
+
+    def element_size(self):
+        raise ValueError("datum for bfp2, bfp4, bfp8 is invalid")
 
 
 class FakeTTNN:
@@ -113,17 +128,26 @@ class CCLManagerSemaphoreReset(unittest.TestCase):
         self.assertEqual(every, expect)
 
 
+_METHODS = (
+    "_cached_buffer_entries",
+    "cached_buffer_bytes",
+    "release_shape_buffers",
+    "_reset_ping_pong_indices",
+    "ping_pong_buffer_report",
+)
+
+
+def _manager_namespace(ttnn):
+    ns = _lift("parallel/manager.py", ["_BFP_MANTISSA_BITS", "_tensor_nbytes"], {"ttnn": ttnn})
+    return _lift("parallel/manager.py", _METHODS, ns, cls="CCLManager")
+
+
 class CCLManagerRelease(unittest.TestCase):
     def manager(self, ttnn):
-        ns = _lift(
-            "parallel/manager.py",
-            ["_cached_buffer_entries", "cached_buffer_bytes", "release_shape_buffers", "_reset_ping_pong_indices"],
-            {"ttnn": ttnn},
-            cls="CCLManager",
-        )
+        ns = _manager_namespace(ttnn)
         resets = []
         m = SimpleNamespace(mesh_device="mesh", reset_global_semaphores=lambda **kw: resets.append(kw))
-        for k in ("_cached_buffer_entries", "cached_buffer_bytes", "release_shape_buffers", "_reset_ping_pong_indices"):
+        for k in _METHODS:
             setattr(m, k, ns[k].__get__(m))
         rs = [[FakeTensor(10, 1), FakeTensor(5, 2)], [FakeTensor(10, 3), None]]
         ag = [FakeTensor(7, 4), FakeTensor(7, 5)]
@@ -169,6 +193,35 @@ class CCLManagerRelease(unittest.TestCase):
         m._ping_pong_buffer_cache, m._fused_norm_stats_buffer_cache = {}, {}
         self.assertEqual(m.release_shape_buffers(), (0, 0))
         self.assertEqual((ttnn.log, resets), ([], []))
+
+    def test_block_float_buffers_count_their_tile_bytes(self):
+        # blx04 broker job 411 (11-15): release_shape_buffers raised on a bfp8 buffer, so reset_for_shape failed.
+        nbytes = _manager_namespace(FakeTTNN())["_tensor_nbytes"]
+        tile = 32 * 32
+        self.assertEqual(
+            [nbytes(FakeBfpTensor(d, tile, 0)) for d in ("BFLOAT8_B", "BFLOAT4_B", "BFLOAT2_B")], [1088, 576, 320]
+        )
+        self.assertEqual(nbytes(FakeBfpTensor("BFLOAT8_B", 3 * tile, 0)), 3 * 1088)
+        self.assertEqual(nbytes(FakeTensor(5, 0)), 5)
+
+    def test_releases_and_reports_block_float_buffers(self):
+        ttnn = FakeTTNN()
+        m, resets = self.manager(ttnn)
+        tile = 32 * 32
+        m._ping_pong_buffer_cache[("ag", (8,), 0, 1, "bfp8")] = [
+            FakeBfpTensor("BFLOAT8_B", 2 * tile, 8),
+            FakeBfpTensor("BFLOAT8_B", 2 * tile, 9),
+        ]
+        m._ping_pong_buffer_cache[((2, 4), 3, 0)] = [[FakeBfpTensor("BFLOAT4_B", tile, 10), None]]
+        m._fused_norm_stats_buffer_cache["b"] = {"bufs": [FakeBfpTensor("BFLOAT2_B", tile, 11)], "idx": 0}
+        total = 45 + 4 * 1088 + 576 + 320
+        report = m.ping_pong_buffer_report()
+        self.assertEqual(report[0], (4 * 1088, "ag x2 (8,)"))
+        self.assertIn((576, "rs x1 (2, 4)"), report)
+        self.assertEqual(m.cached_buffer_bytes(), total)
+        self.assertEqual(m.release_shape_buffers(), (11, total))
+        self.assertEqual(sorted(t.addr for op, *a in ttnn.log if op == "free" for t in a), list(range(1, 12)))
+        self.assertEqual(resets, [{"all_pools": True}])
 
 
 class FakeTracer:

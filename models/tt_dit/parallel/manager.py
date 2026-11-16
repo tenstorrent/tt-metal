@@ -11,6 +11,20 @@ import ttnn
 
 from ..utils.tensor import local_device_to_torch
 
+# ttnn's block-float dtypes have no element_size() (it raises "datum for bfp2, bfp4, bfp8 is invalid"): each
+# element is a 8-, 4- or 2-bit mantissa plus a 1-byte exponent shared by 16, so a 32x32 tile takes
+# 1088, 576 or 320 bytes.
+_BFP_MANTISSA_BITS = {"BFLOAT8_B": 8, "BFLOAT4_B": 4, "BFLOAT2_B": 2}
+
+
+def _tensor_nbytes(t) -> int:
+    """Bytes ``t`` takes on one chip: its padded volume times its element size, block-float dtypes included."""
+    bits = _BFP_MANTISSA_BITS.get(str(t.dtype).rsplit(".", 1)[-1])
+    if bits is None:
+        return t.volume() * t.element_size()
+    volume = t.volume()
+    return volume * bits // 8 + volume // 16
+
 
 class CCLManager:
     """
@@ -157,7 +171,7 @@ class CCLManager:
         for key, buffers in self._ping_pong_buffer_cache.items():
             # Reduce-scatter entries hold [intermediate, output-or-None] pairs; the rest hold tensors.
             tensors = [t for b in buffers for t in (b if isinstance(b, (list, tuple)) else [b]) if t is not None]
-            nbytes = sum(t.volume() * t.element_size() for t in tensors)
+            nbytes = sum(_tensor_nbytes(t) for t in tensors)
             # Reduce-scatter keys start with the shape; the others start with a kind label.
             kind, shape = (key[0], key[1]) if isinstance(key[0], str) else ("rs", key[0])
             rows.append((nbytes, f"{kind} x{len(buffers)} {tuple(shape)}"))
@@ -403,7 +417,7 @@ class CCLManager:
 
     def cached_buffer_bytes(self) -> int:
         """Bytes on one chip held by the shape-keyed buffer caches (see release_shape_buffers)."""
-        return sum(t.volume() * t.element_size() for t in self._cached_buffer_entries())
+        return sum(_tensor_nbytes(t) for t in self._cached_buffer_entries())
 
     def release_shape_buffers(self) -> tuple[int, int]:
         """Free every shape-keyed persistent buffer and empty the caches; return (tensors, bytes).
