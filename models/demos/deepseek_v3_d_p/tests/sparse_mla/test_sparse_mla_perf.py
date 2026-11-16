@@ -57,20 +57,20 @@ UNTRACED_WARMUP = 10
 UNTRACED_SAMPLES = 10
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
-# untraced, long traced), on the CI hosts (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest process per
-# model as the jobs run them). Traced is the mean of the runs; untraced is the fastest run. Galaxy untraced and Galaxy
-# 4x4 are measured on one Galaxy (3 runs) and scaled to the CI host per case, scenario and mode. Galaxy 4x4 subtorus has
-# no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
+# untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
+# process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox: CI hosts. Galaxy (3 runs) and
+# Galaxy 4x4 (2 runs): one local Galaxy, unscaled, as their CI leg has no recent run; recheck once it runs. Galaxy 4x4
+# subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (3.84, 3.10, 7.18, 6.71),
-        "glm_5_3": (3.54, 2.70, 6.81, 6.30),
-        "glm_5_3-no_indexer": (2.74, 2.19, 2.72, 2.25),
+        "kimi_k3_1": (4.08, 3.23, 7.50, 6.91),
+        "glm_5_3": (3.79, 2.82, 7.12, 6.43),
+        "glm_5_3-no_indexer": (2.80, 2.21, 2.88, 2.28),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.69, 3.45, 7.62, 7.36),
-        "glm_5_3": (3.19, 2.96, 7.04, 6.76),
-        "glm_5_3-no_indexer": (2.63, 2.54, 4.81, 4.85),
+        "kimi_k3_1": (3.87, 3.56, 7.98, 7.58),
+        "glm_5_3": (3.38, 3.07, 7.30, 6.93),
+        "glm_5_3-no_indexer": (2.69, 2.58, 5.10, 4.92),
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (3.48, 3.14, 7.32, 6.93),
