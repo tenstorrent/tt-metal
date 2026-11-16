@@ -227,7 +227,7 @@ class Hy4AttentionOpt(Hy4Attention):
         return self.indexer._rot_first(x, cos, sin)
 
     # ---------------------------------------------------------------- decode
-    def front(self, h, o, tabs, append_cache=True):
+    def front(self, h, o, tabs, append_cache=True, qrm=False):
         """h [1,1,S,6144] -> dict(qa, lat, k_pe, qfull, g, ik, iw). Everything of the decode layer before the sparse kernel (plus the gate of the o path)."""
         cfg, ix = self.cfg, self.indexer
         S = h.shape[2]
@@ -295,6 +295,15 @@ class Hy4AttentionOpt(Hy4Attention):
         d["lat"], d["k_pe"] = lat, k_pe
         # q path
         q = self._lin(o, qa, self.w_q_b, "q_b")
+        if (
+            qrm
+        ):  # HY4_ATTN_FUSE=1 (pool decode, S == 1): q_abs matmul + rope + concat + row-major layout in ONE program -> d["qfull"] RM [1,8,1,576]
+            from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as FA
+
+            d["qfull"] = FA.fused_q(q, self.w_uk, cos, sin, self._tm)
+            d["qrm"] = True
+            ttnn.deallocate(q)
+            return d
         q_nope, q_pe = ttnn.experimental.nlp_create_q_heads_split(
             q, num_heads=self.hc, split_head_dim=cfg.qk_nope_head_dim, memory_config=mc or ttnn.DRAM_MEMORY_CONFIG
         )
@@ -310,13 +319,24 @@ class Hy4AttentionOpt(Hy4Attention):
     def back(self, o, o_lat, g, gfold=False):
         """o_lat [1,8,S,512] -> value up-projection, gate, o_proj, all-reduce -> [1,1,S,6144]."""
         mc = ttnn.L1_MEMORY_CONFIG if o.l1 else None
-        x = ttnn.matmul(o_lat, self.w_uv_t, compute_kernel_config=self.ckc, memory_config=mc)
-        x = ttnn.experimental.nlp_concat_heads(x, memory_config=mc or ttnn.DRAM_MEMORY_CONFIG)
-        if gfold:
-            og = ttnn.multiply(x, g, input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)])
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as FA
+
+        if (
+            FA.enabled("back")
+            and int(o_lat.shape[2]) <= 4
+            and o_lat.layout == ttnn.TILE_LAYOUT
+            and self.w_uv_t.dtype == ttnn.bfloat16
+        ):  # HY4_ATTN_FUSE=1 (S <= 4, head-major o_lat): value up-projection + head concat + gate in ONE program
+            og = FA.fused_back(o_lat, self.w_uv_t, g, gfold)
             ttnn.deallocate(g)
         else:
-            og = ttnn.multiply(x, g)
+            x = ttnn.matmul(o_lat, self.w_uv_t, compute_kernel_config=self.ckc, memory_config=mc)
+            x = ttnn.experimental.nlp_concat_heads(x, memory_config=mc or ttnn.DRAM_MEMORY_CONFIG)
+            if gfold:
+                og = ttnn.multiply(x, g, input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)])
+                ttnn.deallocate(g)
+            else:
+                og = ttnn.multiply(x, g)
         sk = self._skinny_o(og)
         part = sk if sk is not None else self._lin(o, og, self.w_o, "o_proj")
         ttnn.deallocate(og)

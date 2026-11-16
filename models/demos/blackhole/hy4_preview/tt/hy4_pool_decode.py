@@ -214,10 +214,10 @@ class PoolCtx:
             ttnn.Shape([1, 1, NC * self.S, K]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.md, ttnn.DRAM_MEMORY_CONFIG
         )
 
-    def attend(self, qfull, kv_pool, idx8, sink):
-        """qfull [1,8,S,576] TILE bf16 (the column's 8 heads) -> o_lat [1,8,S,512] TILE bf16 (merged over the 8 columns, sink included)."""
+    def attend(self, qfull, kv_pool, idx8, sink, q_rm=False):
+        """qfull [1,8,S,576] TILE bf16 (the column's 8 heads; q_rm=True: already ROW_MAJOR, B17 fused q-prep) -> o_lat [1,8,S,512] TILE bf16 (merged over the 8 columns, sink included)."""
         S = self.S
-        q_rm = ttnn.to_layout(qfull, ttnn.ROW_MAJOR_LAYOUT)
+        q_rm = qfull if q_rm else ttnn.to_layout(qfull, ttnn.ROW_MAJOR_LAYOUT)
         qg = self.gather_q(q_rm)  # [1,8,8S,576]
         ttnn.deallocate(q_rm)
         out = self.mod.sparse_sdpa_split(
@@ -376,7 +376,16 @@ class Hy4AttentionPool(Hy4AttentionOpt):
     def decode_step_pool(self, h, o, tabs, dense_ids8=None):
         """h [1,1,S,6144] (post input norm). Returns out [1,1,S,6144]; the layer's idx8 is left in ctx.ids8[layer]."""
         ctx = self.ctx
-        d = self.front(h, o, tabs)
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as FA
+
+        qrm = (
+            FA.enabled("q")
+            and ctx.S <= 4
+            and o.rope1
+            and self.w_uk.dtype == ttnn.bfloat16
+            and tuple(self.w_uk.shape)[1:] == (8, 192, 512)
+        )
+        d = self.front(h, o, tabs, qrm=qrm)
         self.pool_append_kv(d["lat"], d["k_pe"])
         for t in (d["lat"], d["k_pe"]):
             ttnn.deallocate(t)
@@ -391,7 +400,7 @@ class Hy4AttentionPool(Hy4AttentionOpt):
             ctx.ids8[self.layer] = idx8
         else:
             idx8 = dense_ids8 if ctx.mode == "dense" else ctx.ids8[self.spec.indexer_source]
-        o_lat = ctx.attend(d["qfull"], self.kv_pool, idx8, self.sink_pool)
+        o_lat = ctx.attend(d["qfull"], self.kv_pool, idx8, self.sink_pool, q_rm=d.get("qrm", False))
         ttnn.deallocate(d["qfull"])
         out = self.back(o, o_lat, d["g"], d.get("gfold", False))
         if not (getattr(ctx.xm, "hm", False) or ctx.hm_compact):
