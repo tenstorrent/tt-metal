@@ -113,8 +113,8 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
     // - memory clobber
     //     - prevents the COMPILER from reordering memory accesses across this boundary
 
-    volatile char *dstc       = reinterpret_cast<volatile char *>(dst);
-    const volatile char *srcc = reinterpret_cast<const volatile char *>(src);
+    volatile char *dstc       = static_cast<volatile char *>(dst);
+    const volatile char *srcc = static_cast<const volatile char *>(src);
 
     for (std::size_t i = 0; i < len; i++)
     {
@@ -243,7 +243,7 @@ inline void sync_regfile_write(const std::uint32_t index);
 
 // Field value overflow check
 template <typename T>
-static constexpr bool is_valid(const T val, const std::uint8_t wid)
+constexpr bool is_valid(const T val, const std::uint8_t wid)
 {
     const T mask = (1 << wid) - 1;
     return (val & mask) == val;

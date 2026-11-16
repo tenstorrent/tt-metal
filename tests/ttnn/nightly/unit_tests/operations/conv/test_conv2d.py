@@ -3598,7 +3598,7 @@ def test_conv_yolov10x(
     (512, 512),
     (64,64)
     ])
-@pytest.mark.parametrize("kernel,", [
+@pytest.mark.parametrize("kernel", [
     (1, 1),
     (2, 2)]
     )
