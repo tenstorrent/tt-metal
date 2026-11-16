@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -19,6 +20,7 @@
 #include <bit>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <array>
@@ -1431,7 +1433,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 
     // Common runtime args (same for all cores). Buffer addresses, global-semaphore addresses, the row
     // count M_tiles and the fused-ternary scalar are re-applied in override_runtime_arguments.
-    // A repeated input Buffer* empties resolve_bindings; this workload path does not rebuild.
     // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, M_tiles,
     // [ternary_a, ternary_b, broadcast], output_addrs...]
     {
@@ -2101,34 +2102,40 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         linear_far_end_coord);
 }
 
-tt::tt_metal::WorkloadDescriptor AllGatherMinimalMatmulAsyncProgramFactory::create_workload_descriptor(
+AllGatherMinimalMatmulAsyncProgramFactory::cached_mesh_workload_t
+AllGatherMinimalMatmulAsyncProgramFactory::create_mesh_workload(
     const AllGatherMinimalMatmulAsyncParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const AllGatherMinimalMatmulAsyncInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    tt::tt_metal::WorkloadDescriptor workload_descriptor;
-    workload_descriptor.programs.reserve(tensor_coords.coords().size());
+    std::vector<ttnn::Tensor>& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& coord : tensor_coords.coords()) {
-        auto desc = build_program_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value);
-        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+        tt::tt_metal::Program program{
+            build_program_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value)};
+        shared_variables_t sv{
+            .in0_sender = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx),
+            .in0_receiver_no_fabric = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverNoFabricKernelIdx),
+            .in0_receiver_fabric = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverFabricKernelIdx),
+            .in1_sender = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1SenderKernelIdx),
+            .in1_receiver = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1ReceiverKernelIdx),
+            .compute = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx),
+        };
+        const ttnn::MeshCoordinateRange range(coord);
+        workload.add_program(range, std::move(program));
+        shared_variables.emplace(range, sv);
     }
-    return workload_descriptor;
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
 void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
+    cached_mesh_workload_t& cached_workload,
     const AllGatherMinimalMatmulAsyncParams& operation_attributes,
     const AllGatherMinimalMatmulAsyncInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
-    (void)mesh_coordinate;
-    // Derive has_fused_ternary from scalar presence, matching validate and create.
-    // validate guarantees that scalar and tensors are always provided together.
+    std::vector<ttnn::Tensor>& tensor_return_value) {
+    // The call's values are the same on every device: computed once, then written into each program's common args.
     const bool has_fused_ternary = operation_attributes.fused_ternary_scalar.has_value();
-    // Same gate as create: persistent_weight_buffer is passed iff fsdp_cluster_axis is set.
     const bool fsdp_fused = operation_attributes.fsdp_cluster_axis.has_value();
-
-    // Repeated input buffers empty resolve_bindings, and this workload path does not rebuild.
     auto required_address = [](const ttnn::Tensor& tensor) -> uint32_t {
         auto* buffer = tensor.buffer();
         TT_FATAL(buffer != nullptr, "all_gather_minimal_matmul_async cache hit requires an allocated buffer");
@@ -2140,18 +2147,43 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     const uint32_t input_addr = required_address(tensor_args.input_tensor);
     const uint32_t in1_addr =
         fsdp_fused ? required_address(tensor_return_value.at(1)) : required_address(tensor_args.weight_tensor);
-
     const uint32_t sem_backward = operation_attributes.semaphore.at(0).address();
     const uint32_t sem_forward = operation_attributes.semaphore.at(1).address();
     const uint32_t barrier_sem =
         operation_attributes.barrier_semaphore.has_value() ? operation_attributes.barrier_semaphore->address() : 0u;
-    const auto& act_tensor = tensor_args.input_tensor;
-    const uint32_t M_tiles = operations::common::folded_rows(act_tensor) / tt::constants::TILE_HEIGHT;
+    const uint32_t M_tiles = operations::common::folded_rows(tensor_args.input_tensor) / tt::constants::TILE_HEIGHT;
 
-    auto& in0_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx);
-    auto& in0_receiver_fabric_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverFabricKernelIdx);
-    auto& in0_receiver_no_fabric_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverNoFabricKernelIdx);
-    auto write_in0 = [&](auto& common) {
+    uint32_t ternary_a_addr = 0;
+    uint32_t ternary_b_addr = 0;
+    uint32_t broadcast_ternary_b = 0;
+    if (has_fused_ternary) {
+        ternary_a_addr = required_address(tensor_args.fused_ternary_input_a.value());
+        ternary_b_addr = required_address(tensor_args.fused_ternary_input_b.value());
+        broadcast_ternary_b = broadcast_ternary_b_flag(tensor_args.fused_ternary_input_b.value());
+    }
+    uint32_t local_weight_addr = 0;
+    uint32_t fsdp_sem_backward = 0;
+    uint32_t fsdp_sem_forward = 0;
+    if (fsdp_fused) {
+        local_weight_addr = required_address(tensor_args.weight_tensor);
+        fsdp_sem_backward = operation_attributes.fsdp_semaphore.at(0).address();
+        fsdp_sem_forward = operation_attributes.fsdp_semaphore.at(1).address();
+    }
+    const size_t mm_outputs_start = 1 + (fsdp_fused ? 1 : 0);
+    TT_FATAL(
+        tensor_return_value.size() > mm_outputs_start,
+        "all_gather_minimal_matmul_async cache hit is missing matmul outputs");
+    std::vector<uint32_t> output_addrs;
+    output_addrs.reserve(tensor_return_value.size() - mm_outputs_start);
+    for (size_t i = mm_outputs_start; i < tensor_return_value.size(); ++i) {
+        output_addrs.push_back(required_address(tensor_return_value[i]));
+    }
+    const uint32_t in0_out_slot = in0_output_start_slot(has_fused_ternary);
+    const uint32_t in1_out_slot = in1_output_start_slot(has_fused_ternary, fsdp_fused);
+    const uint32_t ternary_scalar =
+        has_fused_ternary ? std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value()) : 0u;
+
+    auto write_in0 = [&](tt::tt_metal::RuntimeArgsData& common) {
         common[kIn0BufferSlot] = ag_output_addr;
         common[kIn0BiasSlot] = bias_addr;
         common[kIn0InputSlot] = input_addr;
@@ -2159,79 +2191,49 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         common[kIn0SemForwardSlot] = sem_forward;
         common[kIn0BarrierSemSlot] = barrier_sem;
         common[kIn0LenSlot] = M_tiles;
+        if (has_fused_ternary) {
+            common[kIn0TernaryASlot] = ternary_a_addr;
+            common[kIn0TernaryASlot + 1] = ternary_b_addr;
+            common[kIn0TernaryASlot + 2] = broadcast_ternary_b;
+        }
+        for (size_t i = 0; i < output_addrs.size(); ++i) {
+            common[in0_out_slot + i] = output_addrs[i];
+        }
     };
-    write_in0(in0_sender_common);
-    write_in0(in0_receiver_fabric_common);
-    write_in0(in0_receiver_no_fabric_common);
-
-    auto& in1_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1SenderKernelIdx);
-    auto& in1_receiver_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1ReceiverKernelIdx);
-    auto write_in1_fixed = [&](auto& common) {
+    auto write_in1 = [&](tt::tt_metal::RuntimeArgsData& common) {
         common[kIn1BufferSlot] = in1_addr;
         common[kIn1BiasSlot] = bias_addr;
         common[kIn1LenSlot] = M_tiles;
+        if (has_fused_ternary) {
+            common[kIn1FixedArgCount] = ternary_a_addr;
+            common[kIn1FixedArgCount + 1] = ternary_b_addr;
+            common[kIn1FixedArgCount + 2] = broadcast_ternary_b;
+        }
+        if (fsdp_fused) {
+            common[in1_local_weight_slot(has_fused_ternary)] = local_weight_addr;
+            common[in1_fsdp_sem_backward_slot(has_fused_ternary)] = fsdp_sem_backward;
+            common[in1_fsdp_sem_forward_slot(has_fused_ternary)] = fsdp_sem_forward;
+        }
+        for (size_t i = 0; i < output_addrs.size(); ++i) {
+            common[in1_out_slot + i] = output_addrs[i];
+        }
     };
-    write_in1_fixed(in1_sender_common);
-    write_in1_fixed(in1_receiver_common);
-
-    if (has_fused_ternary) {
-        const uint32_t ternary_a_addr = required_address(tensor_args.fused_ternary_input_a.value());
-        const uint32_t ternary_b_addr = required_address(tensor_args.fused_ternary_input_b.value());
-        const uint32_t broadcast_ternary_b = broadcast_ternary_b_flag(tensor_args.fused_ternary_input_b.value());
-        auto write_ternary = [&](auto& common, uint32_t ternary_a_slot) {
-            common[ternary_a_slot] = ternary_a_addr;
-            common[ternary_a_slot + 1] = ternary_b_addr;
-            common[ternary_a_slot + 2] = broadcast_ternary_b;
-        };
-        write_ternary(in0_sender_common, kIn0TernaryASlot);
-        write_ternary(in0_receiver_fabric_common, kIn0TernaryASlot);
-        write_ternary(in0_receiver_no_fabric_common, kIn0TernaryASlot);
-        write_ternary(in1_sender_common, kIn1FixedArgCount);
-        write_ternary(in1_receiver_common, kIn1FixedArgCount);
-    }
-
-    if (fsdp_fused) {
-        const uint32_t local_weight_addr = required_address(tensor_args.weight_tensor);
-        const uint32_t local_weight_slot = in1_local_weight_slot(has_fused_ternary);
-        const uint32_t fsdp_sem_backward_slot = in1_fsdp_sem_backward_slot(has_fused_ternary);
-        const uint32_t fsdp_sem_forward_slot = in1_fsdp_sem_forward_slot(has_fused_ternary);
-        const uint32_t fsdp_sem_backward = operation_attributes.fsdp_semaphore.at(0).address();
-        const uint32_t fsdp_sem_forward = operation_attributes.fsdp_semaphore.at(1).address();
-        auto write_fsdp = [&](auto& common) {
-            common[local_weight_slot] = local_weight_addr;
-            common[fsdp_sem_backward_slot] = fsdp_sem_backward;
-            common[fsdp_sem_forward_slot] = fsdp_sem_forward;
-        };
-        write_fsdp(in1_sender_common);
-        write_fsdp(in1_receiver_common);
-    }
-
-    const size_t mm_outputs_start = 1 + (fsdp_fused ? 1 : 0);
-    TT_FATAL(
-        tensor_return_value.size() > mm_outputs_start,
-        "all_gather_minimal_matmul_async cache hit is missing matmul outputs");
-    const uint32_t in0_out_slot = in0_output_start_slot(has_fused_ternary);
-    const uint32_t in1_out_slot = in1_output_start_slot(has_fused_ternary, fsdp_fused);
-    const uint32_t last_offset = static_cast<uint32_t>(tensor_return_value.size() - mm_outputs_start - 1);
-    TT_FATAL(
-        in0_out_slot + last_offset < in0_sender_common.size() && in1_out_slot + last_offset < in1_sender_common.size(),
-        "all_gather_minimal_matmul_async output runtime-arg slots exceed common args");
-    for (size_t i = mm_outputs_start; i < tensor_return_value.size(); ++i) {
-        const uint32_t addr = required_address(tensor_return_value[i]);
-        const uint32_t offset = static_cast<uint32_t>(i - mm_outputs_start);
-        in0_sender_common[in0_out_slot + offset] = addr;
-        in0_receiver_fabric_common[in0_out_slot + offset] = addr;
-        in0_receiver_no_fabric_common[in0_out_slot + offset] = addr;
-        in1_sender_common[in1_out_slot + offset] = addr;
-        in1_receiver_common[in1_out_slot + offset] = addr;
-    }
-
-    auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx);
-    compute_common[kComputeLenSlot] = M_tiles;
-    // Same gate as create: the scalar slots exist only when the scalar is set.
-    if (has_fused_ternary) {
-        compute_common[kComputeScalarSlot] = std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value());
-        compute_common[kComputeBroadcastSlot] = broadcast_ternary_b_flag(tensor_args.fused_ternary_input_b.value());
+    for (auto& [range, sv] : cached_workload.shared_variables) {
+        TT_FATAL(
+            in0_out_slot + output_addrs.size() <= sv.in0_sender.get().size() &&
+                in1_out_slot + output_addrs.size() <= sv.in1_sender.get().size(),
+            "all_gather_minimal_matmul_async output runtime-arg slots exceed common args");
+        write_in0(sv.in0_sender.get());
+        write_in0(sv.in0_receiver_fabric.get());
+        write_in0(sv.in0_receiver_no_fabric.get());
+        write_in1(sv.in1_sender.get());
+        write_in1(sv.in1_receiver.get());
+        auto& compute = sv.compute.get();
+        compute[kComputeLenSlot] = M_tiles;
+        if (has_fused_ternary) {
+            compute[kComputeScalarSlot] = ternary_scalar;
+            compute[kComputeBroadcastSlot] = broadcast_ternary_b;
+        }
     }
 }
 

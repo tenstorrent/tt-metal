@@ -162,15 +162,16 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
                                       : std::optional<BlockSizes>(default_block_sizes(M, K, N, fp32_dest_acc_en));
     // With multicast (Fabric2D, not transposed) the factory sizes the output buffer to one row when each core has a
     // single M block (agmm_single_m_block); the row count is not in the hash.
-    const bool transposed = resolve_transpose_core_grid(attributes, M, N);
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool transposed = resolve_transpose_core_grid(attributes, M, N, fabric_2d);
     const auto grid = attributes.config.has_value() ? attributes.config->compute_with_storage_grid_size
                                                     : act_tensor.device()->compute_with_storage_grid_size();
     const uint32_t M_block_tiles =
         attributes.config.has_value() ? attributes.config->M_block_size : std::get<0>(*default_blocks);
     // Whether the factory may give the output buffer one row (agmm_single_m_block on its multicast path): a superset of
     // where it does, which only splits the cache further.
-    const bool one_row_output = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) && !transposed &&
-                                agmm_single_m_block(M / tt::constants::TILE_HEIGHT, M_block_tiles, grid.y);
+    const bool one_row_output =
+        fabric_2d && !transposed && agmm_single_m_block(M / tt::constants::TILE_HEIGHT, M_block_tiles, grid.y);
     return ttsl::hash::hash_objects_with_default_seed(
         attributes,
         transposed,
