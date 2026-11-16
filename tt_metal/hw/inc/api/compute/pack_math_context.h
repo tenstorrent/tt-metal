@@ -18,6 +18,12 @@ template <int api>
 struct llk_pack_sfpu_api;
 template <int api>
 struct llk_pack_norm_api;
+template <int api>
+struct llk_pack_lofi_api;
+template <>
+struct llk_pack_lofi_api<1> {
+    static constexpr bool value = MATH_FIDELITY == MathFidelity::LoFi;
+};
 }  // namespace ckernel::packer
 #define PACK_MATH_CONTEXT(matmul) ckernel::packer::llk_pack_math_context(matmul)
 #define PACK_SFPU_CONTEXT() ckernel::packer::llk_pack_sfpu_context()
