@@ -2,8 +2,31 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 namespace ckernel::sfpu::ttpoly::mish {
-using namespace ::sfpi;
+using ::sfpi::as;
+using ::sfpi::convert;
+using ::sfpi::copyman;
 using ::sfpi::DataLayout;
+using ::sfpi::dst_reg;
+using ::sfpi::exexp;
+using ::sfpi::exman;
+using ::sfpi::ExponentMode;
+using ::sfpi::l_reg;
+using ::sfpi::LRegs;
+using ::sfpi::MantissaMode;
+using ::sfpi::RoundMode;
+using ::sfpi::setexp;
+using ::sfpi::setman;
+using ::sfpi::SFPMAD_MOD1_OFFSET_NONE;
+using ::sfpi::shft;
+using ::sfpi::ShiftMode;
+using ::sfpi::vConstFloatPrgm0;
+using ::sfpi::vConstFloatPrgm1;
+using ::sfpi::vConstFloatPrgm2;
+using ::sfpi::vFloat;
+using ::sfpi::vFloat16b;
+using ::sfpi::vInt;
+using ::sfpi::vMag;
+using ::sfpi::vUInt;
 template <class Config, class Pin>
 __attribute__((always_inline)) inline vFloat product_bounded_wh_core(
     vFloat x, vFloat multiplier, vFloat c0, vFloat top, Pin pin_square) {
