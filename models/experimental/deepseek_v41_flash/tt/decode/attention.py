@@ -1826,6 +1826,15 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             ttnn.ShardSpec(core, [rows, self.local_num_heads * self.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
         )
 
+    def _commit_rows_config(self, rows: int) -> ttnn.MemoryConfig:
+        """The block's new kv rows as ``paged_update_cache`` takes them: ROW_MAJOR ``[R, Dh]`` on one core."""
+        grid = ttnn.num_cores_to_corerangeset(1, self.device.compute_with_storage_grid_size(), row_wise=True)
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, [rows, self.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
     def _project_out_block(self, attn):
         """:meth:`_project_out` of an ``(R, 32)`` block ``[1, 1, R, H_local * Dh]`` on core (0, 0) -> the all-reduced
         ``(R, 32)`` block ``[1, 1, R, D]``, width-sharded over o_b's cores."""
@@ -1978,7 +1987,14 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         )
         ttnn.deallocate(q)
         # The ring held positions <= p - 1 for the attention; now the block's rows go in at their slots.
-        new_rows = _rows_on_one_core(ttnn.slice(staging, [0, 0, 0, 0], [1, 1, rows, self.head_dim]))
+        # The staging tile's first R rows, un-tiled, then onto one core (paged_update_cache's input). A sharded
+        # untilize_with_unpadding output keeps a tile-high shard, which paged_update_cache rejects.
+        new_rows = ttnn.to_memory_config(
+            ttnn.untilize_with_unpadding(
+                staging, output_tensor_end=[0, 0, rows - 1, self.head_dim - 1], memory_config=ttnn.L1_MEMORY_CONFIG
+            ),
+            self._commit_rows_config(rows),
+        )
         ttnn.experimental.paged_update_cache(scache.kv, new_rows, update_idxs_tensor=ring_slots)
         ttnn.deallocate(new_rows)
         return self._project_out_block(attn)
