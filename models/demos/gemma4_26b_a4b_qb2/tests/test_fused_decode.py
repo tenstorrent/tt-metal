@@ -41,6 +41,9 @@ class Reference:
             {k: v.float() for k, v in Checkpoint().load("model.language_model.norm.").items()}, strict=False
         )
         self.rotary = Gemma4TextRotaryEmbedding(config)
+        self.routes = [None] * len(LAYERS)  # the last position's top-k expert ids per layer (router hooks)
+        for i, layer in enumerate(self.layers):
+            layer.router.register_forward_hook(lambda m, inp, out, i=i: self.routes.__setitem__(i, out[2][-1].tolist()))
 
     @torch.inference_mode()
     def logits(self, tokens):
@@ -100,8 +103,20 @@ def run_prompt(gen, ref, name, prompt):
         _, pcc = comp_pcc(expected, got, 0.995)
         pccs.append(pcc)
         top1 += int(got.argmax()) == int(expected.argmax())
+        k = ref.config.top_k_experts
+        flips = []
+        for li, layer in enumerate(gen.model.layers):
+            route = getattr(getattr(layer, "fused", None), "last_route", None)
+            if route is None:
+                continue
+            ids = ttnn.to_torch(ttnn.get_device_tensors(route)[0]).float()[0, 0, 0]
+            half = ids.numel() // 2
+            tt_ids, hf_ids = {int(v) for v in ids[half : half + k]}, set(ref.routes[li])
+            if tt_ids != hf_ids:
+                flips.append(f"L{LAYERS[li]} hf-only {sorted(hf_ids - tt_ids)} tt-only {sorted(tt_ids - hf_ids)}")
         print(
-            f"FUSED_DECODE {name} step={step} pcc={pcc:.6f} top1 hf={int(expected.argmax())} tt={int(got.argmax())}",
+            f"FUSED_DECODE {name} step={step} pcc={pcc:.6f} top1 hf={int(expected.argmax())} tt={int(got.argmax())}"
+            f" expert_flips={flips}",
             flush=True,
         )
         next_token = int(expected.argmax())

@@ -2314,6 +2314,7 @@ class MultichipDecoder(OptimizedDecoder):
             else self.layer.moe.router.decode_packed(router_in, prescaled=True)
         )
         moe = self.moe_b1
+        f.last_route = packed  # the routing row of this step (tests read it back after a replay)
         boundary = f.boundary
         flat = boundary.flat_moe
         if moe.merged is not None:
