@@ -470,15 +470,15 @@ std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) 
     if (!fabric_program) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+        return fabric_program;
     }
+    fabric_program->impl().finalize_offsets(dev);
     return fabric_program;
 }
 
 void FabricFirmwareInitializer::configure_fabric(Device* dev, Program& fabric_program) const {
     MetalEnvImpl& env_impl = descriptor_->env_impl();
     tt::tt_fabric::configure_fabric_cores(env_impl, dev);
-
-    fabric_program.impl().finalize_offsets(dev);
 
     const bool using_fast_dispatch = rtoptions_.get_fast_dispatch();
     slow_dispatch::WriteRuntimeArgsToDevice(*dev, fabric_program, /*force_slow_dispatch=*/using_fast_dispatch);
