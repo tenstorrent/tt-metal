@@ -268,16 +268,15 @@ void kernel_main() {
                 }
             }
         };
+        DeviceZoneScopedN("FE_RED_SEND");
         if (!one_row) {
-            DeviceZoneScopedN("FE_RED_SEND");
             send(sub_bytes, sub_bytes);
         } else {
 #if defined(FE_NATIVE_ONE_ROW)
-            // Staged in one-row tiles: sum core p's columns at p * one_row_sub_bytes.
+            // Staged in one-row tiles: sum core p's columns at p * one_row_sub_bytes. (A marker zone in FE_RED_SEND.)
             DeviceZoneScopedN("FE_RED_SEND_1R");
             send(one_row_sub_bytes, one_row_sub_bytes);
 #else
-            DeviceZoneScopedN("FE_RED_SEND");
             // Each sub-part's row 0, compacted to the front of the sub-part (in place, front to back: chunk c moves
             // from c * block_rows to c, never past one not yet moved).
             {
