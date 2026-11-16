@@ -444,7 +444,9 @@ def _block_spec_decode(mesh_device) -> None:
     n_tokens = int(os.environ.get("DEEPSEEK_V4_SPEC_TOKENS", "2000"))
     # The spec runs' share: the block verify stops at the dense select's end.
     block_tokens = min(n_tokens, dense_limit - len(prompt))
-    turns = [_tokenize_turn(tokenizer, text) for text in _FOLLOW_UPS]
+    # Past the block verify's range, plain decode carries on, with follow-up turns after each end of sentence. A run
+    # within the range stops at the end of sentence and sizes the traces to it (no one-row select variants).
+    turns = [_tokenize_turn(tokenizer, text) for text in _FOLLOW_UPS] if n_tokens > block_tokens else []
     max_seq = _traced_max_seq(
         config, len(prompt) + n_tokens + sum(len(t) + 1 for t in turns) + 2 * rows, config.num_hidden_layers
     )
@@ -476,7 +478,8 @@ def _block_spec_decode(mesh_device) -> None:
                 asked = gen.count(eos_id)
                 if gen[-1] == eos_id:
                     if asked > len(turns):
-                        logger.warning(f"the follow-up turns ran out after {len(gen)} tokens")
+                        if turns:
+                            logger.warning(f"the follow-up turns ran out after {len(gen)} tokens")
                         break
                     feed = [eos_id, *turns[asked - 1]]
                     out = model.decode_prompt_traced(feed, len(conv))
