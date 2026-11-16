@@ -61,57 +61,68 @@ constexpr uint32_t CSR_MHPMCOUNTER4 = 0xB04;
 constexpr uint32_t CSR_MHPMEVENT3 = 0x323;
 constexpr uint32_t CSR_MHPMEVENT4 = 0x324;
 
-struct Snapshot {
-    uint32_t pmc3;
-    uint32_t pmc4;
-    uint32_t mcycle;
-    uint32_t minstret;
-};
-
-// One launch in flight per core, so a plain global is enough. Per-thread on Quasar, where the four
-// TRISCs of a Neo share the image.
+// mcycle and minstret are never written, so they are read as deltas; the programmable counters are
+// zeroed at begin. One launch is in flight per core, so a plain global is enough (per thread on
+// Quasar, where the four TRISCs of a Neo share the image).
 #if defined(ARCH_QUASAR)
-static thread_local Snapshot snap_begin;
+static thread_local uint32_t cycle_begin, instret_begin;
 #else
-static Snapshot snap_begin;
+static uint32_t cycle_begin, instret_begin;
 #endif
 
-// mcountinhibit is never written: its reset value runs both counters. Deltas are used instead of
-// clear-on-read so the cfg CSR that firmware programs at boot is left alone.
-inline __attribute__((always_inline)) void arm() {
+// mcountinhibit is never written: its reset value runs both counters.
+inline __attribute__((always_inline)) void begin() {
     asm volatile("csrw %0, %1" ::"i"(CSR_MHPMEVENT3), "r"((uint32_t)PROFILE_RISCV_PMC_EV3));
     asm volatile("csrw %0, %1" ::"i"(CSR_MHPMEVENT4), "r"((uint32_t)PROFILE_RISCV_PMC_EV4));
+    asm volatile("csrw %0, zero" ::"i"(CSR_MHPMCOUNTER3));
+    asm volatile("csrw %0, zero" ::"i"(CSR_MHPMCOUNTER4));
+    asm volatile("csrr %0, %1" : "=r"(cycle_begin) : "i"(CSR_MCYCLE) : "memory");
+    asm volatile("csrr %0, %1" : "=r"(instret_begin) : "i"(CSR_MINSTRET) : "memory");
 }
 
-// The memory clobber keeps the reads from drifting across the kernel call.
-inline __attribute__((always_inline)) Snapshot read() {
-    Snapshot s;
-    asm volatile("csrr %0, %1" : "=r"(s.pmc3) : "i"(CSR_MHPMCOUNTER3) : "memory");
-    asm volatile("csrr %0, %1" : "=r"(s.pmc4) : "i"(CSR_MHPMCOUNTER4) : "memory");
-    asm volatile("csrr %0, %1" : "=r"(s.mcycle) : "i"(CSR_MCYCLE) : "memory");
-    asm volatile("csrr %0, %1" : "=r"(s.minstret) : "i"(CSR_MINSTRET) : "memory");
-    return s;
-}
-
-inline __attribute__((always_inline)) void begin() {
-    arm();
-    snap_begin = read();
-}
-
-// Re-emitting the selects every launch keeps each capture self-describing. 32-bit deltas cannot
-// overflow within a launch. No flush_to_dram_if_full(): timeStampedData drops the markers when the
-// buffer is full, and the flush would pull noc_index into firmware images that do not define it.
+// The three markers share one buffer-room check and one timestamp, which keeps the BRISC image
+// inside its region. Re-emitting the selects every launch keeps each capture self-describing.
+// No flush_to_dram_if_full(): a full buffer drops the markers, and the flush would pull noc_index
+// into firmware images that do not define it.
 inline __attribute__((always_inline)) void end() {
-    const Snapshot t1 = read();
-    const Snapshot t0 = snap_begin;
+    uint32_t pmc3, pmc4, mcycle, minstret;
+    asm volatile("csrr %0, %1" : "=r"(pmc3) : "i"(CSR_MHPMCOUNTER3) : "memory");
+    asm volatile("csrr %0, %1" : "=r"(pmc4) : "i"(CSR_MHPMCOUNTER4) : "memory");
+    asm volatile("csrr %0, %1" : "=r"(mcycle) : "i"(CSR_MCYCLE) : "memory");
+    asm volatile("csrr %0, %1" : "=r"(minstret) : "i"(CSR_MINSTRET) : "memory");
 
-    const uint64_t counts = ((uint64_t)(t1.pmc4 - t0.pmc4) << 32) | (t1.pmc3 - t0.pmc3);
-    const uint64_t timing = ((uint64_t)(t1.minstret - t0.minstret) << 32) | (t1.mcycle - t0.mcycle);
-    const uint64_t events = ((uint64_t)(uint32_t)PROFILE_RISCV_PMC_EV4 << 32) | (uint32_t)PROFILE_RISCV_PMC_EV3;
+    constexpr uint32_t marker_words = PROFILER_L1_MARKER_UINT32_SIZE + 2;
+    if (!bufferHasRoom<DoingDispatch::DISPATCH>(3 * marker_words - 1)) {
+        return;
+    }
 
-    timeStampedData<RISCV_PMC_COUNTS_PROFILER_ID, DoingDispatch::DISPATCH>(counts);
-    timeStampedData<RISCV_PMC_CYCLES_PROFILER_ID, DoingDispatch::DISPATCH>(timing);
-    timeStampedData<RISCV_PMC_EVENTS_PROFILER_ID, DoingDispatch::DISPATCH>(events);
+#if defined(ARCH_QUASAR)
+    const uint64_t now = quasar_read_wall_clock_64();
+    const uint32_t time_low = static_cast<uint32_t>(now);
+    const uint32_t time_high = static_cast<uint32_t>(now >> 32);
+#else
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    const uint32_t time_high = p_reg[WALL_CLOCK_HIGH_INDEX];
+    const uint32_t time_low = p_reg[WALL_CLOCK_LOW_INDEX];
+#endif
+
+    auto& data = profiler_data_buffer[myRiscID].data;
+    const uint32_t stamp_high = time_high & PROFILER_MARKER_TS_HIGH_MASK;
+    uint32_t w = wIndex;
+    auto put = [&](uint32_t id, uint32_t value_high, uint32_t value_low) __attribute__((always_inline)) {
+        data[w] = PROFILER_MARKER_VALID |
+                  ((get_const_id(id, PacketTypes::TS_DATA) & PROFILER_MARKER_TIMER_ID_MASK)
+                   << PROFILER_MARKER_TIMER_ID_SHIFT) |
+                  stamp_high;
+        data[w + 1] = time_low;
+        data[w + 2] = value_high;
+        data[w + 3] = value_low;
+        w += marker_words;
+    };
+    put(RISCV_PMC_COUNTS_PROFILER_ID, pmc4, pmc3);
+    put(RISCV_PMC_CYCLES_PROFILER_ID, minstret - instret_begin, mcycle - cycle_begin);
+    put(RISCV_PMC_EVENTS_PROFILER_ID, (uint32_t)PROFILE_RISCV_PMC_EV4, (uint32_t)PROFILE_RISCV_PMC_EV3);
+    wIndex = w;
 }
 
 }  // namespace riscv_pmc
