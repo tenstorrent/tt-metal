@@ -68,6 +68,10 @@ from models.experimental.deepseek_v41_flash.tt.decode.dspark import DRAFT_PROB_P
 _VERBOSE = os.environ.get("DEEPSEEK_V4_SPEC_VERBOSE", "1") not in ("0", "", "false", "False")
 # Seconds a single round phase may take before the watchdog dumps every thread's stack. 0 disables it.
 _STALL_SECONDS = float(os.environ.get("DEEPSEEK_V4_SPEC_STALL_SECONDS", "30"))
+# Perf what-if only: DEEPSEEK_V4_SPEC_FORCE_ACCEPT=<mean accepted drafts per round> makes the drafter's block rounds
+# accept that many drafts on average (deterministic error diffusion) whatever the verify says. The output is then
+# NOT the greedy stream; run with DEEPSEEK_V4_SPEC_EXACT=0.
+_FORCE_ACCEPT = os.environ.get("DEEPSEEK_V4_SPEC_FORCE_ACCEPT")
 
 
 @dataclass
@@ -701,6 +705,10 @@ class DSparkSpeculator:
         m = 0
         while m < k and inputs[m + 1] == tokens[m]:
             m += 1
+        if _FORCE_ACCEPT is not None and self._propose is None:
+            target = float(_FORCE_ACCEPT)
+            n = len(self.stats.accepted)
+            m = min(k, int(round(target * (n + 1))) - int(round(target * n)))
         token = tokens[m]
         self._rejected = list(range(p + m + 1, p + len(inputs)))
         self._next = token
