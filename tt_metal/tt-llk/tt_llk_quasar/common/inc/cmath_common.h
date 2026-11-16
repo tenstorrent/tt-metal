@@ -121,7 +121,7 @@ constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
 
-typedef struct
+struct alu_config_t
 {
     // word 0
     std::uint32_t ALU_FORMAT_SPEC_REG_SrcA_val        : 8;
@@ -146,15 +146,15 @@ typedef struct
     std::uint32_t ALU_ACC_CTRL_SFPU_Fp32_enabled : 1;
     std::uint32_t ALU_ACC_CTRL_INT8_math_enabled : 1;
     std::uint32_t UNUSED1                        : 21;
-} alu_config_t;
+};
 
 static_assert(sizeof(alu_config_t) == NUM_WORDS_ALU_FORMAT * sizeof(std::uint32_t));
 
-typedef union
+union alu_config_u
 {
     std::uint32_t val[NUM_WORDS_ALU_FORMAT];
     alu_config_t f;
-} alu_config_u;
+};
 
 // List of possible data format config states
 enum class DataFormatConfigSet : std::uint8_t

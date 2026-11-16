@@ -71,7 +71,7 @@ constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
 constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
-typedef struct
+struct tile_counter_t
 {
     std::uint32_t reserved0                    : 32;
     std::uint32_t reset                        : 32;
@@ -81,15 +81,15 @@ typedef struct
     std::uint32_t reserved1                    : 32;
     std::uint32_t tiles_avail_interrupt_thresh : 32;
     std::uint32_t space_avail_interrupt_thresh : 32;
-} tile_counter_t;
+};
 
 static_assert(sizeof(tile_counter_t) == NUM_WORDS_TILE_CNT * sizeof(std::uint32_t), "tile_counter_t must be 96b!");
 
-typedef union
+union tile_counter_u
 {
     std::uint32_t words[NUM_WORDS_TILE_CNT];
     tile_counter_t f;
-} tile_counter_u;
+};
 
 // Points to the tile counters
 tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)TILE_COUNTERS_BASE;
