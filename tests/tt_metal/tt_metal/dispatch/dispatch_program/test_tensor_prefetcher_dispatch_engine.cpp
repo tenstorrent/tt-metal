@@ -74,13 +74,16 @@ struct DispatchEngineRegion {
 
     uint32_t read(uint32_t offset) const { return read_word(mesh_device, core, base + offset); }
 
+    // Slots Tensor prefetcher kernel `k` has retired.
+    uint32_t slots_retired_by(uint32_t k) const { return read(fifo::fifo_rd_offset(k)); }
+
     // Slots every Tensor prefetcher kernel has retired. The counts are ordered as the host orders them. Fast
     // dispatch zeroes them at launch, so they cannot wrap here; the static_asserts on fifo::count_behind cover
     // the wrap.
     uint32_t slots_retired_by_every_kernel() const {
-        uint32_t retired = read(fifo::fifo_rd_offset(0));
+        uint32_t retired = slots_retired_by(0);
         for (uint32_t k = 1; k < tensor_prefetcher_kernels().size(); ++k) {
-            const uint32_t kernel_rd = read(fifo::fifo_rd_offset(k));
+            const uint32_t kernel_rd = slots_retired_by(k);
             if (fifo::count_behind(kernel_rd, retired)) {
                 retired = kernel_rd;
             }
@@ -164,7 +167,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineKernelsR
     }
     EXPECT_EQ(region.wait_for_retired(kNumSlots), kNumSlots);
     for (uint32_t k = 0; k < num_kernels; ++k) {
-        EXPECT_EQ(read_word(this->device(), core, base + fifo::fifo_rd_offset(k)), kNumSlots) << "kernel " << k;
+        EXPECT_EQ(region.slots_retired_by(k), kNumSlots) << "kernel " << k;
     }
 }
 
@@ -193,7 +196,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensorPrefetcherDispatchEngineWaitsOnS
     experimental::QueueTensorPrefetcherWaitForSignal(mesh_device, kSignalId, /*trace_capture_cq=*/nullptr);
     ASSERT_EQ(region.wait_for_written(written + 1), written + 1) << "the host never wrote the wait's slot";
     std::this_thread::sleep_for(kWaitHoldTime);
-    EXPECT_EQ(region.slots_retired_by_every_kernel(), written) << "a kernel passed a wait before its signal";
+    // Every kernel holds at the wait, not just the one furthest behind.
+    for (uint32_t k = 0; k < tensor_prefetcher_kernels().size(); ++k) {
+        EXPECT_EQ(region.slots_retired_by(k), written) << "kernel " << k << " passed a wait before its signal";
+    }
 
     raise_op_signal(mesh_device, CoreCoord{0, 0}, signal_addr, /*num_signals=*/1);
     EXPECT_EQ(region.read(fifo::signal_slot_offset(op_signal_slot_index(kSignalId))), num_banks)
