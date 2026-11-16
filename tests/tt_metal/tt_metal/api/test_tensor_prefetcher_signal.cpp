@@ -22,7 +22,7 @@
 
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -53,12 +53,12 @@ struct BankSlots {
 };
 
 std::vector<BankSlots> read_slot_on_prefetcher_cores(distributed::MeshDevice& mesh_device, uint32_t addr) {
-    const auto& ctx = MetalContext::instance(mesh_device.impl().get_context_id());
-    const uint64_t dram_l1_noc_offset = ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+    const auto& env = mesh_device.impl().metal_env();
+    const uint64_t dram_l1_noc_offset = env.get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
     const auto read = [&](IDevice* device, const CoreCoord& sender) {
         const CoreCoord virtual_core = device->virtual_core_from_logical_core(sender, CoreType::DRAM);
         uint32_t value = 0;
-        ctx.get_cluster().read_core(
+        env.get_cluster().read_core(
             &value, sizeof(value), tt_cxy_pair(device->id(), virtual_core), dram_l1_noc_offset + addr);
         return value;
     };

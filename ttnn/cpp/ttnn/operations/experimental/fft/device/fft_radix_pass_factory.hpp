@@ -28,7 +28,7 @@ struct FftRadixPassFactory {
         const FftRadixPassTensorArgs& tensor_args,
         std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value);
 
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const FftRadixPassParams& attrs,
         const FftRadixPassTensorArgs& tensor_args,
         std::tuple<ttnn::Tensor, ttnn::Tensor>& tensor_return_value,
