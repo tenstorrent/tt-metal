@@ -93,16 +93,9 @@ constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full
 {
     if (fidelity == MathFidelity::LoFi)
     {
-        // small LoFi blocks are bound by the unpack's context poll; half sync only, and not where a 32-bit CB beside a 16-bit or block
-        // float one gives a run-time direction
-        bool wide = false, fast = false;
-        for (const std::uint8_t f : formats)
-        {
-            const DataFormat d = static_cast<DataFormat>(f);
-            wide = wide || matmul_format_is_32bit(d);
-            fast = fast || d == DataFormat::Float16 || d == DataFormat::Float16_b || d == DataFormat::Bfp8_b || d == DataFormat::Bfp4_b;
-        }
-        return !full_sync && !(wide && fast);
+        // small LoFi blocks are bound by the unpack's context poll; half sync only, where every plain call runs direction 0
+        // (matmul_api_reuse_dir: half_f32 for an unkeyed output, pack_bound for a keyed block)
+        return !full_sync;
     }
     if (fidelity == MathFidelity::HiFi4 && full_sync && fp32_dest)
     {
