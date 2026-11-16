@@ -308,7 +308,7 @@ void kernel_main() {
     // it normalizes: offset, + stride, ...
     const uint32_t norm_offset = PREP ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t norm_stride = PREP ? get_arg_val<uint32_t>(arg++) : 1;
-    const uint32_t norm_mid = PREP ? get_arg_val<uint32_t>(arg++) : 0;  // units normalized before each later row's heads
+    const uint32_t norm_mid = PREP ? get_arg_val<uint32_t>(arg++) : 0;  // of them, ahead of each later row
     // R-PREP prep core under PREP_SHARE_QK (qk role receiver): NoC (x, y) of its position's q and k cores, then its
     // index among their destinations (its grant counter there).
     const bool kq_landing = PREP && qk_role == GDN_QK_RECEIVER;
