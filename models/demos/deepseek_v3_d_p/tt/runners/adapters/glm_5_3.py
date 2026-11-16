@@ -38,6 +38,12 @@ class GLM53Adapter(MLAPrefillAdapter):
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill"
     default_gate_mode = "DEVICE_FP32"
     passes_indexer_indices = True
+    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET > PREFILL_CHUNK_SIZE): TtPrefillRuntime.prefill_forward, traced
+    # or eager, with D2H layer acks, on any pipeline rank, carrying every chunk's indexer indices across a boundary.
+    supports_packed_forward = True
+    supports_packed_forward_trace = True
+    supports_packed_forward_d2h_acks = True
+    supports_packed_forward_indexer_indices = True
     prefill_trace_default = (
         "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
     )
@@ -103,7 +109,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers + mtp_levels,
-            num_users=params.num_users,
+            num_users=self.kv_cache_slots(params),
             tp_axis=kv_tp_axis,
             bank_aligned=True,
         )
@@ -118,7 +124,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=num_index_layers,
-            num_users=params.num_users,
+            num_users=self.kv_cache_slots(params),
             dtype=ttnn.bfloat8_b,
             tp_axis=kv_tp_axis,
             bank_aligned=True,
