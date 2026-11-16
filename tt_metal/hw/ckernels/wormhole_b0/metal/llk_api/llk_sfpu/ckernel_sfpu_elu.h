@@ -28,7 +28,7 @@ inline void calculate_elu(uint slope) {
     sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1, h_top0 = CW_EXPM1_H_TOP0;
 // Full unroll: measured fastest on WH (each of unroll 4, 2 and 1 is slower). sfpi replays the
 // repeated row body, so the code grows little.
-#pragma GCC unroll 8
+#pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat result = alpha * expm1_cw_clamped_prgm(x, h_top1, h_top0);
