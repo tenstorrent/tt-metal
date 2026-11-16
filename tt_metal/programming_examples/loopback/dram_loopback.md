@@ -9,7 +9,7 @@ We\'ll go through this code section by section. Note that we have this exact, fu
 To build and execute, you may use the following commands:
 ```bash
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/loopback
+    ./build/programming_examples/metal_example_loopback
 ```
 
 ## Mesh setup
