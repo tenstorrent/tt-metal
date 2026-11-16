@@ -24,6 +24,9 @@ inline constexpr uint32_t prepare_chunk_recurrence_batch_items = 2;
 uint64_t prepare_chunk_recurrence_l1_bytes(const PrepareChunkRecurrenceParams& attrs, uint32_t max_items);
 
 struct PrepareChunkRecurrenceProgramFactory {
+    // One program per tensor range; each device's sp_rank is a per-device run arg, set once at the cache miss.
+    static constexpr bool uses_per_device_run_args = true;
+
     static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const PrepareChunkRecurrenceParams&,
         const PrepareChunkRecurrenceInputs&,

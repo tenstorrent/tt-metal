@@ -86,7 +86,7 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
     const uint32_t outgoing = scalar_slot + read_alignment;
     const uint32_t carry = outgoing + history_rows * row_bytes;
     const auto offset_of = [&](uint32_t address) { return address - scratch_base; };
-    const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, scalar_slot);
+    const auto interval = read_chronology<has_actual_end, sp_size, local_rows>(noc, scalar_slot, sp_rank);
     const auto layer_carry =
         read_slab_carry<slab, slab_index_limit, slab_scale, slab_offset, entry_pages>(noc, scalar_slot);
     const auto read_rows = [&](uint32_t first_page, uint32_t destination) {

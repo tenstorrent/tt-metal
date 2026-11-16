@@ -604,7 +604,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         {reader_kernel_name, writer_kernel_name},
         // The history exchange gives each device its own fabric connections.
         exchange ? kda_factory_detail::ChronologyPrograms::per_device
-                 : kda_factory_detail::ChronologyPrograms::per_sp_rank);
+                 : kda_factory_detail::ChronologyPrograms::per_range);
     if (exchange) {
         add_history_exchange(workload, attrs, in, predecessor_name, outputs[3], dist.cores, exchange_core, Ct);
     }
