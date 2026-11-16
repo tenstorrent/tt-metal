@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include <tt-umd/types/core_coordinates.hpp>
@@ -121,7 +122,13 @@ public:
     uint32_t unused_l1_base() const;
     uint32_t unused_l1_size() const;
 
+    // The L1 the dispatch kernels use on a dispatch core, [begin, end): their queues, buffers and scratch for every
+    // CQ zone. Fixed addresses, outside the allocator.
+    std::pair<uint32_t, uint32_t> l1_footprint() const { return {l1_footprint_begin_, l1_footprint_end_}; }
+
 private:
+    uint32_t l1_footprint_begin_ = 0;
+    uint32_t l1_footprint_end_ = 0;
     uint32_t cmddat_q_base_ = 0;
     uint32_t scratch_db_base_ = 0;
     uint32_t dispatch_buffer_base_ = 0;

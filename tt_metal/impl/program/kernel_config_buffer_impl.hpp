@@ -19,6 +19,7 @@
 namespace tt::tt_metal {
 
 class Buffer;
+class IDevice;
 class Program;
 
 namespace experimental {
@@ -35,8 +36,9 @@ public:
         std::shared_ptr<Buffer> buffer;
     };
 
-    // `shards` on disjoint cores of each device of `mesh_device`. `lockstep_address`: on each device, every shard is at
-    // one address and one size, checked when allocated.
+    // `shards` on disjoint cores of each device. `mesh_device` is the MeshDevice the devices belong to, for addressing
+    // by MeshCoordinate; null for a buffer launched per device, outside a MeshWorkload. `lockstep_address`: on each
+    // device, every shard is at one address and one size, checked when allocated.
     KernelConfigBufferImpl(
         std::vector<Shards> shards, bool lockstep_address, const distributed::MeshDevice* mesh_device = nullptr);
 
@@ -75,6 +77,15 @@ private:
     uint32_t size_ = 0;
     bool lockstep_address_ = false;
 };
+
+// CreateKernelConfigBuffer for programs launched per device rather than as a MeshWorkload, such as the fast-dispatch
+// command queue programs, which may run before a MeshDevice exists: one program per device, already laid out. No
+// slow-dispatch check, since fast dispatch may be active.
+std::shared_ptr<KernelConfigBufferImpl> CreateKernelConfigBuffer(
+    const std::vector<std::pair<IDevice*, Program*>>& programs, bool lockstep_address);
+
+// The largest Tensix kernel-config block among `program`'s kernel groups. The program must be laid out.
+uint32_t LargestTensixKernelConfigBlock(Program& program);
 
 // Checks that `program`, laid out, can run from `buffer` on `device_id`: each kernel group's block fits in the shard on
 // each of its cores there, and the program has no Tensix program semaphores unless the buffer has a lockstep address.

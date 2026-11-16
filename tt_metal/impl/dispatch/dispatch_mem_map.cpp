@@ -255,6 +255,9 @@ DispatchMemMap::DispatchMemMap(
 
     unused_l1_base_ = align(last_cq_zone_end, 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
     unused_l1_size_ = unused_l1_base_ < l1_size ? l1_size - unused_l1_base_ : 0;
+
+    l1_footprint_begin_ = l1_base;
+    l1_footprint_end_ = last_cq_zone_end;
 }
 
 uint32_t DispatchMemMap::unused_l1_base() const { return unused_l1_base_; }

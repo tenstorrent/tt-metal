@@ -38,6 +38,7 @@
 #include "common/core_assignment.hpp"
 #include "program/program_impl.hpp"
 #include "program/slow_dispatch.hpp"
+#include "program/kernel_config_buffer_impl.hpp"
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
@@ -293,6 +294,17 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     return std::make_unique<L1BankingAllocator>(config);
 }
 
+namespace {
+
+// The topology's command-queue kernel config buffer if it has a shard on `device_id`, else null.
+const experimental::KernelConfigBufferImpl* command_queue_kernel_config_buffer(
+    const DispatchTopology& topology, ChipId device_id) {
+    const experimental::KernelConfigBufferImpl* buffer = topology.kernel_config_buffer();
+    return buffer != nullptr && buffer->has_shard_on(device_id) ? buffer : nullptr;
+}
+
+}  // namespace
+
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch
 // cores
 void Device::configure_command_queue_programs(DispatchTopology* dispatch_topology) {
@@ -372,9 +384,13 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
         "Dispatch topology required for configure_command_queue_programs (fast dispatch)");
     dispatch_topology->configure_dispatch_cores(this);
 
-    // Run the cq program
+    // Run the cq program, from the topology's kernel config buffer when its blocks outgrow the KERNEL_CONFIG window
     command_queue_program.impl().finalize_offsets(this);
-    slow_dispatch::ConfigureDeviceWithProgram(*this, command_queue_program, /*force_slow_dispatch=*/true);
+    slow_dispatch::ConfigureDeviceWithProgram(
+        *this,
+        command_queue_program,
+        /*force_slow_dispatch=*/true,
+        command_queue_kernel_config_buffer(*dispatch_topology, this->id()));
     MetalEnvAccessor(*env_).impl().get_cluster().l1_barrier(this->id());
 }
 
@@ -468,6 +484,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         watcher_lock.value().unlock();
     }
 
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer =
+        command_queue_kernel_config_buffer(*topo, this->id());
     std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.impl().logical_cores();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_dispatch_cores = logical_cores[index];
@@ -475,6 +493,10 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         for (const CoreCoord& logical_dispatch_core : logical_dispatch_cores) {
             const auto* kernel = command_queue_program.impl().kernels_on_core(logical_dispatch_core, index);
             dev_msgs::launch_msg_t msg = kernel->launch_msg;  // copy
+            if (kernel_config_buffer != nullptr) {
+                msg.view().kernel_config().kernel_config_base()[index] = slow_dispatch::KernelConfigBase(
+                    hal, index, this->id(), logical_dispatch_core, kernel_config_buffer);
+            }
             dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             slow_dispatch::WriteLaunchMsgToCore(
