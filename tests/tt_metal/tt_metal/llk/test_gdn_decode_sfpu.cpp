@@ -43,8 +43,7 @@
 
 #include "llk_device_fixture.hpp"
 
-namespace tt::tt_metal {
-namespace unit_tests::compute::gdn_decode_sfpu {
+namespace tt::tt_metal::unit_tests::compute::gdn_decode_sfpu {
 
 constexpr uint32_t VT = 4;
 constexpr uint32_t kNumIn = 5;
@@ -649,5 +648,4 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuExpExact) {
     }
 }
 
-}  // namespace unit_tests::compute::gdn_decode_sfpu
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::unit_tests::compute::gdn_decode_sfpu

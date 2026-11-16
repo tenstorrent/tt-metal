@@ -37,8 +37,7 @@
 
 #include "llk_device_fixture.hpp"
 
-namespace tt::tt_metal {
-namespace unit_tests::compute::gdn_decode_math {
+namespace tt::tt_metal::unit_tests::compute::gdn_decode_math {
 
 constexpr uint32_t KT = 4, VT = 4, KD = KT * 32, VD = VT * 32, KV = KT * VT;
 constexpr uint32_t kBank = 0;
@@ -47,10 +46,10 @@ constexpr uint32_t kRepsPass = 16;  // single-pass variants (the output CB holds
 constexpr uint32_t kRepsToken = 8;  // the token variant also keeps Kt*Vt state tiles per repetition in L1
 const float kNaN = std::numeric_limits<float>::quiet_NaN();
 
-// Circular buffer ids of the contract (section 3).
+// Circular buffer ids of the contract (section 3). c_12 (ccol32) and c_15 (s3) are not allocated by this test.
 namespace cbid {
 constexpr uint32_t qk16 = 0, kT16 = 1, qcol32 = 2, v16 = 3, gcol32 = 4, bcol16 = 5, S = 6, ones32 = 7, zero32 = 8;
-constexpr uint32_t ecol32 = 9, r16 = 10, craw16 = 11, ccol32 = 12, u16 = 13, s2 = 14, s3 = 15, out16 = 16;
+constexpr uint32_t ecol32 = 9, r16 = 10, craw16 = 11, u16 = 13, s2 = 14, out16 = 16;
 constexpr uint32_t state_out = 17;
 constexpr uint32_t ebc16 = 19, S_mm = 20, s2_mm = 21;  // section 8 and the op's fused_recurrent_gdn_cb.hpp
 }  // namespace cbid
@@ -912,5 +911,4 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathToken) {
         double(fused.stats[5]) / reps);
 }
 
-}  // namespace unit_tests::compute::gdn_decode_math
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::unit_tests::compute::gdn_decode_math
