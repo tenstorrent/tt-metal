@@ -363,6 +363,7 @@ def _bare_tt_ccl(mesh):
     ccl = object.__new__(TT_CCL)
     ccl.mesh_device = mesh
     ccl.sparse_mla_overlap_resources = None
+    ccl.sparse_mla_overlap_semaphores = {}
     return ccl
 
 
@@ -416,6 +417,15 @@ def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
         ("reset", "valid", 0),
         ("sync", mesh),
     ]
+
+    # The next model on the mesh registers a new manager over the same, reset pair: cached gather programs still hold
+    # the pair, so a new one would pin a second pair in L1_SMALL.
+    created = sum(event[0] == "create_sem" for event in events)
+    again = ccl.get_sparse_mla_overlap_resources("qb2_rows1")
+    assert again is not resources
+    assert (again.ready_semaphore, again.data_valid_semaphore) == ("ready", "valid")
+    assert sum(event[0] == "create_sem" for event in events) == created
+    assert sum(call[0] == "create" for call in mesh.calls if isinstance(call, tuple)) == 2
 
 
 @pytest.mark.parametrize(
