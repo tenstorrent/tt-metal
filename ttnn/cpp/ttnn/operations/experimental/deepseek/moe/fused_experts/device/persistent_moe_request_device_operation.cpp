@@ -62,10 +62,14 @@ std::optional<RequestEndpoints> request_endpoints(
 // block's) puts its row in row 0 of the block's (rows x 32) tiles -- 32 B, one face row, every 32 * block_rows B --
 // and says so in the header (persistent.h kFeHdrRows): the op's other rows are never used. Its partial comes back
 // compacted (the op's senders take row 0) into the front of the partials, its flags where a block's go.
+// With persistent_moe_native_one_row the op runs such a request in one-row tiles instead, so the page carries the
+// header and the plain row only (payload_bytes; the socket still counts its whole page).
 struct RequestPage {
     uint32_t page_bytes;      // the socket page
     uint32_t page_row_bytes;  // the op's row: page_bytes less the header
     uint32_t block_rows;      // the op's rows per input row: 1, or the block's for a one-row request
+    bool native;              // a one-row request to a block op, sent as its plain row
+    uint32_t payload_bytes;   // the bytes sent: the page, or a native request's header and row
 };
 
 RequestPage request_page(const PersistentMoeRequestParams& attributes, const Tensor& input) {
@@ -77,8 +81,14 @@ RequestPage request_page(const PersistentMoeRequestParams& attributes, const Ten
         page_bytes,
         row_bytes);
     const uint32_t page_row_bytes = page_bytes - kRequestHeaderBytes;
+    const uint32_t block_rows = page_row_bytes / row_bytes;
+    const bool native = block_rows > 1u && persistent_moe_native_one_row();
     return RequestPage{
-        .page_bytes = page_bytes, .page_row_bytes = page_row_bytes, .block_rows = page_row_bytes / row_bytes};
+        .page_bytes = page_bytes,
+        .page_row_bytes = page_row_bytes,
+        .block_rows = block_rows,
+        .native = native,
+        .payload_bytes = native ? kRequestHeaderBytes + row_bytes : page_bytes};
 }
 
 // The request's second sender, on fabric link 1: a core next to the socket's sender core, when the page spans
@@ -365,9 +375,10 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
         const auto& core = endpoints->core;
         const auto page = request_page(attributes, input);
         const uint32_t page_bytes = page.page_bytes;
-        // A one-row request to a block op scatters its row over the page, so the main core sends all of it.
-        const auto partner =
-            page.block_rows == 1u ? request_partner(*mesh, src, routes.front().next, core, page_bytes) : std::nullopt;
+        // A padded one-row request to a block op scatters its row over the page, so the main core sends all of it.
+        const auto partner = page.block_rows == 1u || page.native
+                                 ? request_partner(*mesh, src, routes.front().next, core, page.payload_bytes)
+                                 : std::nullopt;
         CoreRangeSet senders(CoreRange(core, core));
         if (partner.has_value()) {
             senders = senders.merge(CoreRangeSet(CoreRange(partner->core, partner->core)));
@@ -395,6 +406,7 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
             cb_page,
             page.page_row_bytes,
             page.block_rows,
+            page.native ? 1u : 0u,
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct_args);
         KernelDescriptor kernel;
@@ -444,9 +456,9 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
         };
         if (partner.has_value()) {
             sender_args(core, 0, partner->split, partner->link0, true);
-            sender_args(partner->core, partner->split, page_bytes - partner->split, partner->link1, false);
+            sender_args(partner->core, partner->split, page.payload_bytes - partner->split, partner->link1, false);
         } else {
-            sender_args(core, 0, page_bytes, 0u, true);
+            sender_args(core, 0, page.payload_bytes, 0u, true);
         }
     }
 
@@ -662,8 +674,8 @@ void PersistentMoeRequestDeviceOperation::MultiCore::override_runtime_arguments(
         const auto src = mesh->get_fabric_node_id(*mesh_dispatch_coordinate);
         const auto routes = d2d_routes(src, endpoints->receivers);
         const auto page = request_page(attributes, input);
-        const auto partner = page.block_rows == 1u
-                                 ? request_partner(*mesh, src, routes.front().next, endpoints->core, page.page_bytes)
+        const auto partner = page.block_rows == 1u || page.native
+                                 ? request_partner(*mesh, src, routes.front().next, endpoints->core, page.payload_bytes)
                                  : std::nullopt;
         std::vector<tt::tt_metal::CoreCoord> senders = {endpoints->core};
         if (partner.has_value()) {

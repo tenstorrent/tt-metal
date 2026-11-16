@@ -22,6 +22,9 @@
 //
 // Runtime args: 0: k_start   1: part (this core's slot)   2: reducer NoC x   3: reducer NoC y
 //   4: the reducer's parts count address
+//
+// FE_NATIVE_ONE_ROW: a one-row request's row and partial take the CBs' one-row aliases (persistent.h), its partial
+// FE_ONE_ROW_SCALAR_TILE_BYTES.
 
 void kernel_main() {
     constexpr uint32_t cb_rin_id = get_compile_time_arg_val(0);
@@ -41,8 +44,13 @@ void kernel_main() {
     const uint32_t parts_count_addr = get_arg_val<uint32_t>(4);
 
     for (uint32_t iter = 0; fe_begin_iteration(iter, cb_rin_id, k_tiles, /*has_writer=*/false); ++iter) {
-        cb_reserve_back(cb_rin_id, k_tiles);
-        cb_push_back(cb_rin_id, k_tiles);
+        const bool one_row = fe_one_row();
+        const uint32_t cb_rin = fe_cb(cb_rin_id, one_row);
+        const uint32_t cb_part = fe_cb(cb_part_id, one_row);
+        const uint32_t cb_parts = fe_cb(cb_parts_id, one_row);
+        const uint32_t part_bytes = one_row ? FE_ONE_ROW_SCALAR_TILE_BYTES : part_tile_bytes;
+        cb_reserve_back(cb_rin, k_tiles);
+        cb_push_back(cb_rin, k_tiles);
         {
             DeviceZoneScopedN("FE_R_PART_READ");
             const auto gate = TensorAccessor(gate_args, fe_header(kFeHdrRouterGate));
@@ -54,14 +62,14 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_rw_id, k_slice);
         }
-        cb_wait_front(cb_part_id, 1);
+        cb_wait_front(cb_part, 1);
         noc_async_write(
-            get_read_ptr(cb_part_id),
-            get_noc_addr(reducer_x, reducer_y, get_write_ptr(cb_parts_id) + part * part_tile_bytes),
-            part_tile_bytes);
+            get_read_ptr(cb_part),
+            get_noc_addr(reducer_x, reducer_y, get_write_ptr(cb_parts) + part * part_bytes),
+            part_bytes);
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(reducer_x, reducer_y, parts_count_addr), 1);
         noc_async_atomic_barrier();
-        cb_pop_front(cb_part_id, 1);
+        cb_pop_front(cb_part, 1);
     }
 }

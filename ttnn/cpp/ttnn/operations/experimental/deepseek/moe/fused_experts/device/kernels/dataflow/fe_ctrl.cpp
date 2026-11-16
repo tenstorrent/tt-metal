@@ -48,6 +48,10 @@
 //   29: any_order (0: strict turn, with on-demand requesters, the order every chip used to share)
 //   30+: TensorAccessorArgs(layer_table)
 //
+// FE_NATIVE_ONE_ROW (with FE_BLOCK_ROWS, the op's rows): a one-row request's page (kFeHdrRows 1) carries the plain row,
+// row_bytes / FE_BLOCK_ROWS bytes (k_tiles 1x32 tiles), which goes to the replicas' starts; the stages' kernels then
+// run the iteration on the CBs' one-row aliases (see persistent.h kFeOneRowCbOffset).
+//
 // Runtime args:
 //   0: layer_table address   1: input replica address   2+: the senders' NoC xs, then their NoC ys,
 //   then each requester's input socket config address, then the senders' source ring address (kFeSourceRing
@@ -86,6 +90,20 @@ void kernel_main() {
     constexpr bool any_order = get_compile_time_arg_val(29) != 0;
     constexpr auto layer_table_args = TensorAccessorArgs<30>();
     constexpr uint32_t kHdrBytes = kFeHdrWords * 4u;
+#if defined(FE_NATIVE_ONE_ROW)
+    constexpr uint32_t one_row_bytes = row_bytes / FE_BLOCK_ROWS;
+    static_assert(one_row_bytes * FE_BLOCK_ROWS == row_bytes, "a block's row is FE_BLOCK_ROWS one-row rows");
+#endif
+    // The row bytes a page carries: its plain row for a native one-row request, the op's row otherwise.
+    auto page_row_bytes = [&](uint32_t page) -> uint32_t {
+#if defined(FE_NATIVE_ONE_ROW)
+        if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrRows] == 1u) {
+            return one_row_bytes;
+        }
+#endif
+        (void)page;
+        return row_bytes;
+    };
 
     const auto layer_table = TensorAccessor(layer_table_args, get_arg_val<uint32_t>(0));
     const uint32_t replica_addr = get_arg_val<uint32_t>(1);
@@ -198,24 +216,36 @@ void kernel_main() {
         // senders with the one before that.
         if (e < r && (e == 0u || *ready >= num_ready * e) &&
             (e < 2u || (*reduce_ready >= num_senders * (e - 1u) && (!is_root || *out_done >= e - 1u)))) {
-            DeviceZoneScopedN("FE_CTRL_MCAST");
             const uint32_t k = routed_queue[e % kFeSourceRing];
             const uint32_t page = in[k].read_ptr;
-            const uint32_t layer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrLayer];
-            // The senders' entry: the requester, and in bits 8+ the request's rows (kFeHdrRows).
-            source[e % kFeSourceRing] = k | (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrRows] << 8);
-            for (uint32_t s = 0; s < num_senders; ++s) {
-                noc_async_write(
-                    reinterpret_cast<uint32_t>(&source[e % kFeSourceRing]),
-                    get_noc_addr(sender_x[s], sender_y[s], sender_ring_addr + (e % kFeSourceRing) * 4u),
-                    4u);
+            const uint32_t rows_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrRows];
+            auto expert_mcast = [&]() {
+                const uint32_t layer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrLayer];
+                // The senders' entry: the requester, and in bits 8+ the request's rows (kFeHdrRows).
+                source[e % kFeSourceRing] = k | (rows_word << 8);
+                for (uint32_t s = 0; s < num_senders; ++s) {
+                    noc_async_write(
+                        reinterpret_cast<uint32_t>(&source[e % kFeSourceRing]),
+                        get_noc_addr(sender_x[s], sender_y[s], sender_ring_addr + (e % kFeSourceRing) * 4u),
+                        4u);
+                }
+                // The grid's header takes this request's rows: the layer's row may have routed a later request since
+                // (and the grid's kernels pick the CBs' one-row aliases by it, FE_NATIVE_ONE_ROW).
+                headers[layer * kFeHdrWords + kFeHdrRows] = rows_word;
+                noc_async_write_multicast(headers_l1 + layer * kHdrBytes, hdr_mcast, kHdrBytes, mcast_cores);
+                noc_async_write_multicast(page + kHdrBytes, row_mcast, page_row_bytes(page), mcast_cores);
+                noc_async_write_barrier();
+                send_expert_go(e + 1u);
+                noc_semaphore_inc(get_noc_addr(merge_x, merge_y, get_semaphore(sem_expert_go_id)), 1);
+                noc_async_atomic_barrier();
+            };
+            if (page_row_bytes(page) != row_bytes) {
+                DeviceZoneScopedN("FE_CTRL_MCAST_1R");
+                expert_mcast();
+            } else {
+                DeviceZoneScopedN("FE_CTRL_MCAST");
+                expert_mcast();
             }
-            noc_async_write_multicast(headers_l1 + layer * kHdrBytes, hdr_mcast, kHdrBytes, mcast_cores);
-            noc_async_write_multicast(page + kHdrBytes, row_mcast, row_bytes, mcast_cores);
-            noc_async_write_barrier();
-            send_expert_go(e + 1u);
-            noc_semaphore_inc(get_noc_addr(merge_x, merge_y, get_semaphore(sem_expert_go_id)), 1);
-            noc_async_atomic_barrier();
             socket_pop_pages(in[k], 1);
             routed &= ~(1u << k);
             ++e;
@@ -235,19 +265,27 @@ void kernel_main() {
                     open &= ~(1u << k);
                     continue;
                 }
-                DeviceZoneScopedN("FE_CTRL_ROUTE_MCAST");
-                const uint32_t hdr_l1 = headers_l1 + layer * kHdrBytes;
-                headers[layer * kFeHdrWords + kFeHdrRequester] = k;
-                headers[layer * kFeHdrWords + kFeHdrRows] =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrRows];
-                const uint32_t entry = merge_ring_addr + (r % kFeSourceRing) * kHdrBytes;
-                noc_async_write(hdr_l1, get_noc_addr(merge_x, merge_y, entry), kHdrBytes);
-                noc_async_write_multicast(hdr_l1, route_hdr_mcast, kHdrBytes, route_cores);
-                noc_async_write_multicast(page + kHdrBytes, route_row_mcast, row_bytes, route_cores);
-                noc_async_write_barrier();
-                noc_semaphore_inc(merge_go_addr, 1);
-                send_route_go(r + 1u);
-                noc_async_atomic_barrier();
+                auto route_mcast = [&]() {
+                    const uint32_t hdr_l1 = headers_l1 + layer * kHdrBytes;
+                    headers[layer * kFeHdrWords + kFeHdrRequester] = k;
+                    headers[layer * kFeHdrWords + kFeHdrRows] =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrRows];
+                    const uint32_t entry = merge_ring_addr + (r % kFeSourceRing) * kHdrBytes;
+                    noc_async_write(hdr_l1, get_noc_addr(merge_x, merge_y, entry), kHdrBytes);
+                    noc_async_write_multicast(hdr_l1, route_hdr_mcast, kHdrBytes, route_cores);
+                    noc_async_write_multicast(page + kHdrBytes, route_row_mcast, page_row_bytes(page), route_cores);
+                    noc_async_write_barrier();
+                    noc_semaphore_inc(merge_go_addr, 1);
+                    send_route_go(r + 1u);
+                    noc_async_atomic_barrier();
+                };
+                if (page_row_bytes(page) != row_bytes) {
+                    DeviceZoneScopedN("FE_CTRL_ROUTE_MCAST_1R");
+                    route_mcast();
+                } else {
+                    DeviceZoneScopedN("FE_CTRL_ROUTE_MCAST");
+                    route_mcast();
+                }
                 routed_queue[r % kFeSourceRing] = k;
                 routed |= 1u << k;
                 ++r;

@@ -71,6 +71,14 @@ constexpr uint32_t kFeHdrRequester = 6;
 // request page's header by the requester and copied by the control core into the router row's header (the route
 // merge drops the other rows' selections) and the source ring (the senders send row 0's partial only).
 constexpr uint32_t kFeHdrRows = 9;
+// FE_NATIVE_ONE_ROW (an op built for several-row blocks, DEEPSEEK_V41_MOE_NATIVE_ONE_ROW != 0): a one-row request is
+// sent and run in plain one-row form instead -- the page's row is the plain row (k_tiles 1x32 tiles), and every
+// tile-shaped CB of the op has a 1x32 alias, buffer index + kFeOneRowCbOffset, over the same memory (the program
+// factory adds them), which every kernel uses for that iteration: the compute LLKs take the tile shape from the CB
+// index, and the dataflow kernels take the one-row tile bytes (FE_ONE_ROW_*_TILE_BYTES). A CB index has its own
+// pointers and page counts, so a CB's producer and consumer pick the same alias in an iteration (both read the
+// header), and fe_rewind_cbs rewinds both. Without it (the padded mode) a one-row request rides row 0 of a block.
+constexpr uint32_t kFeOneRowCbOffset = 32;
 // Bit k set when requester k is served on demand rather than in turn (the same in every row; the control core reads
 // row 0's): see fe_ctrl.cpp.
 constexpr uint32_t kFeHdrOnDemand = 7;
@@ -95,6 +103,33 @@ constexpr uint32_t kFeSourceRing = 16;
 constexpr uint32_t kFeMergeRingBytes = kFeSourceRing * kFeHdrWords * 4u;
 // A merge ring entry's layer word for the stop.
 constexpr uint32_t kFeStopLayerWord = 0xFFFFFFFFu;
+
+// Whether this iteration's request is a one-row one run natively (FE_NATIVE_ONE_ROW): its header's kFeHdrRows is 1.
+// The header of an iteration stays put until every core of the stage is done with it, so any RISC may read it any
+// time in the iteration.
+#if defined(FE_NATIVE_ONE_ROW)
+#ifndef FE_BLOCK_ROWS
+#error "FE_NATIVE_ONE_ROW needs FE_BLOCK_ROWS (the op's rows)"
+#endif
+FORCE_INLINE bool fe_one_row() {
+    invalidate_l1_cache();
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FE_HDR_ADDR)[kFeHdrRows] == 1u;
+}
+#else
+FORCE_INLINE constexpr bool fe_one_row() { return false; }
+#endif
+// A tile-shaped CB's index for the iteration: its one-row alias in a one-row iteration.
+FORCE_INLINE constexpr uint32_t fe_cb(uint32_t cb, bool one_row) { return one_row ? cb + kFeOneRowCbOffset : cb; }
+// The one-row tile bytes (a 1x32 tile of the format), defined with FE_NATIVE_ONE_ROW.
+#ifndef FE_ONE_ROW_ACT_TILE_BYTES
+#define FE_ONE_ROW_ACT_TILE_BYTES 0u
+#endif
+#ifndef FE_ONE_ROW_OUT_TILE_BYTES
+#define FE_ONE_ROW_OUT_TILE_BYTES 0u
+#endif
+#ifndef FE_ONE_ROW_SCALAR_TILE_BYTES
+#define FE_ONE_ROW_SCALAR_TILE_BYTES 0u
+#endif
 
 #if defined(FE_PERSISTENT)
 
@@ -143,16 +178,25 @@ FORCE_INLINE uint32_t fe_group_hits(uint32_t hits, uint32_t group, uint32_t grou
     return group < hits ? (hits - group + groups - 1u) / groups : 0u;
 }
 
-// Back to the start of every CB in FE_REWIND_CBS, as the firmware left them at launch. The math TRISC
-// has no CB interface (its firmware defines none) and never moves a CB pointer.
+#ifndef FE_REWIND_CBS_HI
+#define FE_REWIND_CBS_HI 0u
+#endif
+
+// Back to the start of every CB in FE_REWIND_CBS (indices 0-31) and FE_REWIND_CBS_HI (32-63: the one-row aliases), as
+// the firmware left them at launch. The math TRISC has no CB interface (its firmware defines none) and never moves a CB
+// pointer.
 FORCE_INLINE void fe_rewind_cbs() {
 #if !defined(UCK_CHLKC_MATH)
-    for (uint32_t cb = 0; cb < 32u; ++cb) {
-        if (((static_cast<uint32_t>(FE_REWIND_CBS) >> cb) & 1u) != 0u) {
-            LocalCBInterface& cb_if = get_local_cb_interface(cb);
-            cb_if.fifo_rd_ptr = cb_if.fifo_limit - cb_if.fifo_size;
-            cb_if.fifo_wr_ptr = cb_if.fifo_rd_ptr;
-            cb_if.fifo_wr_tile_ptr = 0;
+    for (uint32_t half = 0; half < 2u; ++half) {
+        const uint32_t mask =
+            half == 0u ? static_cast<uint32_t>(FE_REWIND_CBS) : static_cast<uint32_t>(FE_REWIND_CBS_HI);
+        for (uint32_t cb = 0; cb < 32u; ++cb) {
+            if (((mask >> cb) & 1u) != 0u) {
+                LocalCBInterface& cb_if = get_local_cb_interface(half * 32u + cb);
+                cb_if.fifo_rd_ptr = cb_if.fifo_limit - cb_if.fifo_size;
+                cb_if.fifo_wr_ptr = cb_if.fifo_rd_ptr;
+                cb_if.fifo_wr_tile_ptr = 0;
+            }
         }
     }
 #endif
@@ -161,9 +205,17 @@ FORCE_INLINE void fe_rewind_cbs() {
 // Start of iteration `iter` for a core's ready reporter; false on stop. `cb_input_id` is the CB the
 // local compute pops last (k_tiles pages), `has_writer` whether the core runs a writer.
 #if !defined(COMPILE_FOR_TRISC)
+// Whether the previous iteration was a one-row one (FE_NATIVE_ONE_ROW): its input went through the one-row alias.
+inline bool fe_prev_one_row = false;
 FORCE_INLINE bool fe_begin_iteration(uint32_t iter, uint32_t cb_input_id, uint32_t k_tiles, bool has_writer) {
     if (iter > 0u) {
+        // The whole CB, through whichever index the previous iteration used: free again once the compute popped it
+        // (the one-row alias holds FE_BLOCK_ROWS times the pages).
+#if defined(FE_NATIVE_ONE_ROW)
+        cb_reserve_back(fe_cb(cb_input_id, fe_prev_one_row), fe_prev_one_row ? k_tiles * FE_BLOCK_ROWS : k_tiles);
+#else
         cb_reserve_back(cb_input_id, k_tiles);
+#endif
         if (has_writer) {
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_WRITER_DONE)), iter);
@@ -175,6 +227,7 @@ FORCE_INLINE bool fe_begin_iteration(uint32_t iter, uint32_t cb_input_id, uint32
         return false;
     }
     fe_rewind_cbs();
+    fe_prev_one_row = fe_one_row();
     return true;
 }
 

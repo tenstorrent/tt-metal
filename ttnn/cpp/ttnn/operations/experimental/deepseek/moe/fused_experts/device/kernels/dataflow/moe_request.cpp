@@ -27,12 +27,14 @@
 // A one-row request to an op built for blocks of block_rows rows (the socket's page a block's): its row goes into
 // row 0 of the block's (rows x 32) tiles -- each 32 B face row of the input every 32 * block_rows B of the page,
 // read straight from DRAM -- with kFeHdrRows (header word 9) set to 1; the page's other rows are never used. The main
-// core sends the whole page (no partner).
+// core sends the whole page (no partner). With native (the op runs one-row requests in one-row tiles,
+// DEEPSEEK_V41_MOE_NATIVE_ONE_ROW) the page carries just the header and the plain row (64 + row_bytes of the socket's
+// page, which the push still counts whole), split over the partner like any page.
 //
 // Compile-time args:
 //   0: request socket config address   1: row_bytes (the input's)   2: max_payload (fabric packet bytes)   3: cb_page
 //   4: page_row_bytes (the socket page's row: row_bytes, or a block's)   5: block_rows (page_row_bytes / row_bytes)
-//   6+: TensorAccessorArgs(input)
+//   6: native (a one-row request to a block op sends its plain row)   7+: TensorAccessorArgs(input)
 //
 // Runtime args:
 //   0: layer   1: input address   2: send_start (0 on the main core)   3: send_bytes   4: the partner's NoC x
@@ -48,9 +50,12 @@ void kernel_main() {
     constexpr uint32_t cb_page = get_compile_time_arg_val(3);
     constexpr uint32_t page_row_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t block_rows = get_compile_time_arg_val(5);
-    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr bool native = get_compile_time_arg_val(6) != 0;
+    constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr uint32_t kHdrBytes = 64;
     constexpr uint32_t page_bytes = kHdrBytes + page_row_bytes;
+    // What the page carries: a native one-row request's header and plain row, else the whole page.
+    constexpr uint32_t payload_bytes = block_rows > 1u && native ? kHdrBytes + row_bytes : page_bytes;
     // persistent.h kFeHdrRows.
     constexpr uint32_t kHdrRowsWord = 9;
     constexpr uint32_t kFaceRowBytes = 32;
@@ -114,6 +119,8 @@ void kernel_main() {
     header[0] = layer;
     if constexpr (block_rows > 1u) {
         header[kHdrRowsWord] = 1u;
+    }
+    if constexpr (block_rows > 1u && !native) {
         const uint64_t src = input.get_noc_addr(0);
         for (uint32_t c = 0; c < row_bytes / kFaceRowBytes; ++c) {
             noc_async_read(
@@ -141,10 +148,10 @@ void kernel_main() {
         }
         const uint32_t sent_before = request.bytes_sent;
         socket_push_pages(request, 1);
-        // The receivers' bytes_sent goes up by what the push added, fused into each send's last packet: the
-        // partner's bytes from it, the rest (with any wrap padding) from here.
+        // The receivers' bytes_sent goes up by what the push added (the socket's whole page), fused into each send's
+        // last packet: the partner's bytes from it, the rest (with any wrap padding) from here.
         const uint32_t pushed = request.bytes_sent - sent_before;
-        const uint32_t mine = pushed - (page_bytes - send_bytes);
+        const uint32_t mine = pushed - (payload_bytes - send_bytes);
         headers.reset();
         for (uint32_t r = 0; r < num_routes; ++r) {
             d2d_send_flagged<max_payload>(
