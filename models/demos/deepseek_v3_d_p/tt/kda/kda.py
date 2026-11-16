@@ -417,6 +417,7 @@ class ttKDA:
                 scatter_dim=-1,
                 topology=ttnn.Topology.Ring if ring else ttnn.Topology.Linear,
                 num_links=min(self._tp_num_links, 2),
+                use_column_major_ccl=program_config.output_projection_column_major_ccl,
             )
 
     @property
