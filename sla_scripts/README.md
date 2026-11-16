@@ -12,7 +12,19 @@ HF token is read from `~/.cache/huggingface/token`.
 | `tis/` | tt-inference-server image: launch, SLA bench, full suite |
 | `eval/` | MMLU (lm-eval) and agentx runs |
 | `bh_vllm/` | TP8/DP4 vLLM server + bench, used on BH and WH |
-| `patches/` | TP8/DP4 tuning knobs (tt-metal), DP discovery timeout (vllm-tt-plugin) |
+| `patches/` | vllm-tt-plugin DP discovery timeout (TP8/DP4 vLLM server only) |
+
+TP8/DP4 tuning knobs (`ttt_compat`, all off unless set):
+
+| Env var | Best value | Effect |
+|---|---|---|
+| `RS_LINKS` | `4` | Reduce-scatter links; 102 -> 64 us per layer |
+| `RS_WORKERS` | `2` | Reduce-scatter workers per link |
+| `MM_CFG` | `'{"1024x8192":[1,4],"8192x3584":[16,0],"8192x1280":[32,0]}'` | Decode matmul configs, `KxN: [in0_block_w, cores_per_bank]` |
+| `RS_CHUNKS`, `RS_BUFFERS` | unset | No gain |
+| `ATTN_AG_LINKS`, `CCL_CFG_FROM`, `AGMM`, `SILU_FUSE` | unset | No gain or slower |
+
+Best values give 18.36 -> 19.64 tok/s/user at 128 users (accuracy gate pass). See `demo/run_4k_b128.sh`.
 
 Key commands:
 
