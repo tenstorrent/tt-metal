@@ -1,0 +1,139 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+"""Hy4-preview (tencent/Hy4-preview, ``hy_v4``) prefill adapter: GLM-5.3 plus the Hy4 deltas.
+
+Hy4's attention and MoE have GLM-5.3's dimensions, so this subclasses ``GLM53Adapter`` and inherits
+its KV layout unchanged: the scaled-FP8 MLA KVPE cache on every layer, plus the block-cyclic,
+TP-deduplicated index-key cache sized to the FULL-indexer layer count. Hy4 has 21 full layers, read
+from its explicit ``indexer_types`` by ``full_indexer_rank``. What it changes:
+
+  * config: ``Hy4Config`` / ``hy4_hf_config`` (``reference/hy4_config.py``), built by hand because
+    ``hy_v4`` is not AutoConfig-loadable on our transformers pin. When the checkpoint's config.json is
+    readable it is validated against the constants and supplies the per-layer maps.
+  * weights: ``TtHy4Runtime`` rebuilds a missing weight cache through the Hy4 checkpoint reader
+    (``tt/runners/hy4_checkpoint.py``: fused experts, MXFP8 scales, ``linear_gate`` -> ``g_proj``).
+  * mesh layout: SP x TP is an open decision (prefill 16 heads per chip vs decode's 8); see
+    ``tt/hy4/layout.py``. Default is GLM-5.3's SP 8 x TP 4.
+  * deltas the stack does not implement yet are refused unless a bring-up override is set (below).
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Callable
+
+from loguru import logger
+
+from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4Config, hy4_hf_config, load_hy4_config_json
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+
+# Bring-up override: run with the deltas below MISSING (GLM-5.3 numerics for those parts). For smoke runs
+# and for checks that do not depend on them; KV PCC past the first layer will not match HF hy_v4.
+ALLOW_PENDING_DELTAS_ENV = "PREFILL_HY4_ALLOW_PENDING_DELTAS"
+
+# Hy4 deltas the prefill stack does not implement yet: config attribute -> (what, owning issue). An issue
+# that implements one deletes its entry here.
+PENDING_DELTAS = {
+    "mla_learnable_sink": ("learnable per-head attention sink in sparse MLA", "#65921"),
+    "enable_ihc": ("iHC hyper-connection residual (hc_mult=4, fp32 streams)", "#65891"),
+}
+
+
+def pending_deltas(hf_config) -> list[str]:
+    """Descriptions of the Hy4 deltas ``hf_config`` turns on that the TT prefill stack cannot run yet."""
+    return [f"{what} ({issue})" for attr, (what, issue) in PENDING_DELTAS.items() if getattr(hf_config, attr, False)]
+
+
+class Hy4Adapter(GLM53Adapter):
+    # --- identity & runner defaults ---
+    name = "hy4_preview"
+    model_config = Hy4Config
+    # BF16 release. The MXFP8 release (tencent/Hy4-preview-FP8) reads through the same path.
+    hf_model_default = "/mnt/tt-data/Hy4-Preview"
+    ttnn_cache_default = "/mnt/tt-data/Hy4-Preview-Cache/prefill"
+    # Golden traces come from #65919 (HF hy_v4); PREFILL_TRACE_DIR points the producer at one.
+    prefill_trace_default = "/mnt/tt-data/Hy4-Preview-Cache/golden_traces/hy4-prefill"
+    # GLM-5.3's MTP predictor reads DeepSeek-layout model.layers.78; Hy4's MTP layer is model.mtp_layers.0 (#65925).
+    supports_mtp = False
+
+    # --- test metadata ---
+    hf_repo_id = "tencent/Hy4-preview"
+    env_var = "HY4_HF_MODEL"
+    mla_ref_cache_env = "HY4_MLA_REF_CACHE"
+    ref_cache_env = "TT_HY4_PREFILL_HOST_REF_CACHE"
+    ttnn_cache_env = "TT_HY4_PREFILL_TTNN_CACHE"
+    # No HF hy_v4 reference is wired into the pytest fixtures yet (#65919 / #65893).
+    supports_pretrained = False
+    pretrained_mla_layer = None
+    mla_trace_defaults = ()
+    test_prefill_trace_default = prefill_trace_default
+    # GLM-5.3's thresholds until the sibling issues measure Hy4's (#65921 MLA, #65923 MoE).
+    mla_pcc_threshold = 0.995
+    moe_pcc_threshold = 0.971
+
+    def _checkpoint_dir(self) -> str:
+        return os.environ.get("PREFILL_HF_MODEL") or os.environ.get(self.env_var, "") or self.hf_model_default
+
+    def load_hf_config(self):
+        """Hand-built ``hy_v4`` config. If the checkpoint's config.json is readable it is validated against
+        ``Hy4Config`` (a mismatch raises) and supplies ``indexer_types``; otherwise the constants do. The
+        runner overwrites ``max_seq_len`` afterwards; seed the builder with it so the rope config agrees."""
+        max_seq = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 8192))
+        cfg_json = Path(self._checkpoint_dir()) / "config.json"
+        if cfg_json.is_file():
+            logger.info(f"Hy4: building the hy_v4 config from {cfg_json} (validated against Hy4Config)")
+            return hy4_hf_config(max_seq=max_seq, config_dict=load_hy4_config_json(cfg_json))
+        logger.warning(f"Hy4: no config.json at {cfg_json}; using the Hy4Config constants")
+        return hy4_hf_config(max_seq=max_seq)
+
+    @property
+    def config_builder(self) -> Callable:
+        return hy4_hf_config
+
+    # --- mesh layout (open decision; tt/hy4/layout.py) ---
+    def _check_layout(self, params) -> None:
+        from models.demos.deepseek_v3_d_p.tt.hy4.layout import resolve_layout
+
+        layout = resolve_layout(params.sp_factor, params.tp_factor, params.sp_axis, Hy4Config.NUM_ATTENTION_HEADS)
+        heads = Hy4Config.NUM_ATTENTION_HEADS // params.tp_factor
+        if layout is None:
+            logger.info(
+                f"Hy4: mesh SP={params.sp_factor} x TP={params.tp_factor} ({heads} heads per chip), no named layout"
+            )
+        elif not layout.validated:
+            logger.warning(f"Hy4: layout {layout.name} ({layout.note}) has not run in prefill")
+        else:
+            logger.info(f"Hy4: layout {layout.name} ({layout.note})")
+
+    # --- pending deltas ---
+    def _check_pending_deltas(self, hf_config) -> None:
+        pending = pending_deltas(hf_config)
+        if not pending:
+            return
+        if os.environ.get(ALLOW_PENDING_DELTAS_ENV, "0") != "1":
+            raise NotImplementedError(
+                "Hy4-preview prefill cannot run these deltas yet: "
+                + "; ".join(pending)
+                + f". Set {ALLOW_PENDING_DELTAS_ENV}=1 to run without them (bring-up only: KV after the first layer "
+                "will not match HF hy_v4)."
+            )
+        logger.warning(
+            f"Hy4: {ALLOW_PENDING_DELTAS_ENV}=1, running WITHOUT: " + "; ".join(pending) + ". Outputs are not Hy4's."
+        )
+
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params):
+        self._check_layout(params)
+        self._check_pending_deltas(hf_config)  # before the cache takes DRAM, not after
+        return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+
+    def build_runtime(self, *, mesh_device, hf_config, params):
+        self._check_layout(params)
+        self._check_pending_deltas(hf_config)
+        return super().build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+
+    def _runtime_cls(self) -> type:
+        from models.demos.deepseek_v3_d_p.tt.hy4.runtime import TtHy4Runtime
+
+        return TtHy4Runtime

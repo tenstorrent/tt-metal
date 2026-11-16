@@ -372,7 +372,7 @@ class TtPrefillRuntime:
             f"TTNN weight cache at {cfg.weight_cache_path} is missing {weight_categories.format_missing(missing)}; "
             f"building it from the checkpoint at {cfg.hf_model_path}"
         )
-        return weight_categories.load_trunk_state_dict(
+        return self._load_trunk_state_dict(
             cfg.hf_model_path,
             self.hf_config,
             cfg.model_cfg,
@@ -380,6 +380,10 @@ class TtPrefillRuntime:
             first_layer_idx=cfg.first_layer_idx,
             num_layers=cfg.num_layers,
         )
+
+    # The checkpoint reader the weight-cache rebuild uses. DeepSeek-V3 HF key layout by default; a model whose
+    # checkpoint is laid out differently (Hy4-preview: fused experts, MXFP8 scales) overrides it.
+    _load_trunk_state_dict = staticmethod(weight_categories.load_trunk_state_dict)
 
     def _build_mtp_predictor(self) -> None:
         """Build this rank's ``TtMTPPredictor``. Last rank only.

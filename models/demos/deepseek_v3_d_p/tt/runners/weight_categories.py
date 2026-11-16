@@ -79,6 +79,18 @@ def _mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg
     return not owns_indexer or TtIndexer.check_cache_complete(cache_path, f"{prefix}.mla")
 
 
+def _kv_only_indexer_cache_complete(cache_path: Path, prefix: str, layer_idx: int, hf_config) -> bool:
+    """A kv-only last layer still writes its index keys when it is a ``full`` indexer layer (decode reads them), so
+    its TtIndexer loads the indexer cache. GLM-5.3's last layer is ``shared`` and never needs this; Hy4-preview's
+    last layer (77) is ``full``, and without this check a cache missing those files would report complete and the
+    indexer would load placeholders."""
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
+
+    if hf_config is None or not resolve_has_indexer(hf_config) or indexer_layer_is_reused(hf_config, layer_idx):
+        return True
+    return TtIndexer.check_cache_complete(cache_path, f"{prefix}.mla")
+
+
 def missing_trunk_categories(
     cache_path: Path,
     *,
@@ -130,8 +142,8 @@ def missing_trunk_categories(
     for layer_idx in range(first_layer_idx, first_layer_idx + num_layers):
         prefix = f"layer_{layer_idx}"
         if kv_only_last_layer and is_last_rank and layer_idx == last_layer_idx:
-            # Built kv-only: the model reads attn_norm and the KV projections of this layer and nothing else, so
-            # that is all a runner-built cache ever holds for it (no Q/indexer/output projections, FFN or MoE).
+            # Built kv-only: the model reads attn_norm, the KV projections and, on a `full` indexer layer, the indexer
+            # (it writes the index keys) of this layer and nothing else (no Q/output projections, FFN or MoE).
             if not (exists and TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm")):
                 miss(NORMS, layer_idx)
             if not (
@@ -140,6 +152,7 @@ def missing_trunk_categories(
                     pattern_exists(f"{prefix}.mla.{name}*.tensorbin", "MLA")
                     for name in ("kv_a_layernorm", "kv_a_proj_with_mqa")
                 )
+                and _kv_only_indexer_cache_complete(cache_path, prefix, layer_idx, hf_config)
             ):
                 miss(MLA, layer_idx)
             continue
@@ -272,8 +285,18 @@ class _LazyLayers(Sequence):
     ever resident: the previous layer is dropped when the next is requested.
     """
 
-    def __init__(self, ckpt, config, model_cfg, first_layer_idx: int, num_layers: int, wanted: dict[int, set[str]]):
+    def __init__(
+        self,
+        ckpt,
+        config,
+        model_cfg,
+        first_layer_idx: int,
+        num_layers: int,
+        wanted: dict[int, set[str]],
+        layer_state_dict_fn=None,
+    ):
         self._args = (ckpt, config, model_cfg)
+        self._layer_fn = layer_state_dict_fn or _layer_state_dict
         self._first = first_layer_idx
         self._n = num_layers
         self._wanted = wanted
@@ -295,7 +318,7 @@ class _LazyLayers(Sequence):
                 f"Weight-cache rebuild: reading layer {layer_idx} ({local_idx + 1}/{self._n} on this rank) from the "
                 f"checkpoint for categories {sorted(cats)}"
             )
-        sd = _layer_state_dict(*self._args, layer_idx, cats)
+        sd = self._layer_fn(*self._args, layer_idx, cats)
         self._held = (local_idx, sd)
         return sd
 
@@ -308,9 +331,15 @@ def load_trunk_state_dict(
     missing: dict[str, list[int]],
     first_layer_idx: int,
     num_layers: int,
+    checkpoint: _Checkpoint | None = None,
+    layer_state_dict_fn=None,
 ) -> dict:
-    """The partial ``TtPrefillTransformer`` state dict covering exactly what ``missing`` lists."""
-    ckpt = _Checkpoint(checkpoint_path)
+    """The partial ``TtPrefillTransformer`` state dict covering exactly what ``missing`` lists.
+
+    ``checkpoint`` / ``layer_state_dict_fn`` let a model whose checkpoint is not in the DeepSeek-V3 key layout
+    supply its own reader (``_Checkpoint`` subclass) and per-layer state-dict builder (``_layer_state_dict``'s
+    signature); Hy4-preview does (tt/runners/hy4_checkpoint.py). Defaults keep the DeepSeek-V3 layout."""
+    ckpt = checkpoint if checkpoint is not None else _Checkpoint(checkpoint_path)
     wanted: dict[int, set[str]] = {}
     for category, layers in missing.items():
         for layer in layers:
@@ -324,7 +353,7 @@ def load_trunk_state_dict(
         sd["norm_weight"] = ckpt.bf16("model.norm.weight")
         sd["lm_head_weight"] = ckpt.bf16("lm_head.weight")
     if wanted:
-        sd["layers"] = _LazyLayers(ckpt, config, model_cfg, first_layer_idx, num_layers, wanted)
+        sd["layers"] = _LazyLayers(ckpt, config, model_cfg, first_layer_idx, num_layers, wanted, layer_state_dict_fn)
     return sd
 
 
