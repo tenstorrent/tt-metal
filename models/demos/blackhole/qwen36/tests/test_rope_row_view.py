@@ -16,8 +16,8 @@ path it replaces (cos / sin [1, 1, R, 64], two transposes per tensor).
 * test_spec_generation_with_the_row_view_matches_the_transposed_rope: greedy SpeculativeDecoder generation that reads
   every verify's logits, once as built and once with the verify's cos / sin in the transposed path's layout
   (Qwen36Model.rope_lookup without row_view): per-user tokens, acceptance counters, every verify's ids and logits, and
-  the full-attention and drafter KV caches after the run equal byte for byte; B * T = 4 (1 user) and 32 (8 users),
-  K = 3.
+  the full-attention and drafter KV caches after the run equal byte for byte (the drafter cache without its scratch
+  block); B * T = 4 (1 user) and 32 (8 users), K = 3.
 * test_the_row_view_replays_faster: the RoPE of one verify (q and k of 16 attention layers, plus the row view's two
   cos / sin repeats) captured as a trace in each layout; mean replay time; R = 4 and 32.
 
@@ -245,6 +245,13 @@ def _digest(t):
     return hashlib.sha256(t.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()
 
 
+def _cache_digest(cache, blocks):
+    """SHA-256 of every device's copy of a paged KV cache, each cut to its first ``blocks`` blocks. The drafter's cache
+    has one more block, the scratch block that the reseed's padding rows all write: the order of those writes, and so
+    the block's bytes, change from run to run of the same layout."""
+    return _digest(torch.cat([ttnn.to_torch(d)[:blocks] for d in ttnn.get_device_tensors(cache)]))
+
+
 @run_for_blackhole()
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("batch", [1, 8], ids=["rows4", "rows32"])
@@ -284,7 +291,7 @@ def test_spec_generation_with_the_row_view_matches_the_transposed_rope(mesh_devi
             dec = SpeculativeDecoder(model, page_tables, draft_len=K)
             dec.read_verify_logits = True
             outs = dec.generate(prompts, MAX_NEW)
-            caches = [_digest(_mesh_host(c, mesh_device)) for a in attentions for c in (a.paged_k, a.paged_v)]
+            caches = [_cache_digest(c, kv_shape[0]) for a in attentions for c in (a.paged_k, a.paged_v)]
         counters = (dec.total_accepted, dec.iters, dec.total_drafted)
         logger.info(f"B={B} {layout}: {len(verifies)} verifies, (accepted, iters, drafted) {counters}")
         return outs, counters, verifies, caches
