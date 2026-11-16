@@ -1,4 +1,5 @@
 import os
+import json
 import shlex
 import asyncio
 import sqlite3
@@ -11,7 +12,9 @@ from pathlib import Path
 from time import time, sleep
 from threading import Thread
 from argparse import ArgumentParser
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from contextlib import contextmanager, closing
 from typing import Union, Optional, Iterator, TypeAlias, cast
 
 from pssh.config import HostConfig
@@ -105,6 +108,22 @@ WHERE a.GALAXY_ID = min(h.host1, h.host2)
     AND b.GALAXY_ID = max(h.host1, h.host2)
     AND a.GALAXY_ID <> b.GALAXY_ID
 ORDER BY ENDPOINT_A, ENDPOINT_B;
+"""
+
+# TODO types
+tableschema = """
+CREATE TABLE IF NOT EXISTS eth_test_results(
+    testrun_id,
+    snapshot_id,
+    testname,
+    timestamp_ms,
+    src_core_uid,
+    dst_core_uid,
+    proc,
+    bw,
+    errors,
+    passed
+)
 """
 
 
@@ -298,7 +317,9 @@ def test_dist(
     return test_pass
 
 
-def batch_worker(q: Queue):
+def batch_worker(db: sqlite3.Connection, snapid: str, runid: str, q: Queue[dict | str]) -> None:
+    db.execute(tableschema)
+
     done = False
     while not done:
         batch = []
@@ -311,11 +332,62 @@ def batch_worker(q: Queue):
 
         if batch:
             print(batch)
+            now = int(time() * 1000)
+            with db:
+                db.executemany(
+                    """
+INSERT INTO eth_test_results(
+    testrun_id,
+    snapshot_id,
+    testname,
+    timestamp_ms,
+    src_core_uid,
+    dst_core_uid,
+    proc,
+    bw,
+    errors,
+    passed
+) VALUES (
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?,
+    ?
+)
+""",
+                    (
+                        (
+                            runid,
+                            snapid,
+                            d["test"],
+                            now,
+                            d["src_core_uid"],
+                            d["dst_core_uid"],
+                            d["proc"],
+                            json.dumps(d["bw"]),
+                            json.dumps(d["errors"]),
+                            len(d["errors"]) == 0,
+                        )
+                        for d in batch
+                    ),
+                )
         else:
             sleep(0.1)
 
 
-def prepare_db_thread(rfd: int) -> tuple[Thread, Thread]:
+# Returns the write side of the pipe for the test output to be written to
+@contextmanager
+def prepare_test_runner(
+    dbpath: str, worker: Callable[[sqlite3.Connection, str, str, Queue[dict | str]], None], snapid: str, runid: str
+) -> Iterator[int]:
+    rfd, wfd = os.pipe()
+    make_nonblocking(wfd)
+
     q = Queue()
 
     async def runner():
@@ -328,32 +400,79 @@ def prepare_db_thread(rfd: int) -> tuple[Thread, Thread]:
 
         try:
             runs = await process_logs(reader, None, q)
-        finally:
-            pass
+        finally:  # TODO error handling
+            q.put("DONE")
+            transport.close()
 
-        q.put("DONE")
-        transport.close()
+    def dbcontext():
+        with closing(sqlite3.connect(f"file:{dbpath}?mode=rw")) as conn:
+            worker(conn, snapid, runid, q)
 
     threads = (
         Thread(target=lambda: asyncio.run(runner())),
-        Thread(target=batch_worker, args=[q]),
+        Thread(target=dbcontext),
     )
 
     for t in threads:
         t.start()
 
-    return threads
+    try:
+        yield wfd
+    finally:  # TODO Error handling
+        os.close(wfd)
+        for t in threads:
+            t.join(2)  # TODO
 
 
-def wait_for_threads(threads: tuple[Thread, Thread], wfd: int):
-    os.close(wfd)
+# Returns the write side of the pipe for the test output to be written to
+@contextmanager
+def prepare_dist_test_runner(
+    dbpath: str, worker: Callable[[sqlite3.Connection, str, str, Queue[dict | str]], None], snapid: str, runid: str
+) -> Iterator[int]:
+    rfd, wfd = os.pipe()
+    make_nonblocking(wfd)
+
+    q = Queue()
+
+    async def runner():
+        print("running in asyncio thread")
+        pipe = os.fdopen(rfd, "rb", buffering=0)
+
+        reader = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(reader)
+        transport, _ = await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, pipe)
+
+        try:
+            runs = await process_logs(reader, None, q)
+        finally:  # TODO error handling
+            q.put("DONE")
+            transport.close()
+
+    def dbcontext():
+        with closing(sqlite3.connect(f"file:{dbpath}?mode=rw")) as conn:
+            worker(conn, snapid, runid, q)
+
+    threads = (
+        Thread(target=lambda: asyncio.run(runner())),
+        Thread(target=dbcontext),
+    )
+
     for t in threads:
-        t.join()
+        t.start()
+
+    try:
+        yield wfd
+    finally:  # TODO Error handling
+        os.close(wfd)
+        for t in threads:
+            t.join(2)  # TODO
 
 
 def main() -> int:
     parser = ArgumentParser()
     parser.add_argument("-d", type=str, help="Path to the sqlite3 db with hardware info")
+    parser.add_argument("-r", type=str, help="Test run ID")
+    parser.add_argument("-s", type=str, help="Snapshot ID")
     parser.add_argument("-c", type=str, help="INI host config file")
     parser.add_argument("-l", type=str, help="List of links to test")
     parser.add_argument("-t", type=str, help="Test to run")
@@ -376,19 +495,17 @@ def main() -> int:
 
     links = opts.l
 
-    rfd, wfd = os.pipe()
-    make_nonblocking(wfd)
-
-    threads = prepare_db_thread(rfd)
+    snapid = opts.s if opts.s else "snapshot_id"
+    runid = opts.r if opts.r else "run_id"
 
     test_pass = True
     if opts.t in [t.value for t in TestCase]:
-        test_pass = test_pass and test_single(db, [TestCase(opts.t)], hs, links, wfd)
+        with prepare_test_runner(dbpath, batch_worker, snapid, runid) as wfd:
+            test_pass = test_pass and test_single(db, [TestCase(opts.t)], hs, links, wfd)
 
     if opts.t in [t.value for t in DistTestCase]:
-        test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links, wfd)
-
-    wait_for_threads(threads, wfd)
+        with prepare_dist_test_runner(dbpath, batch_worker, snapid, runid) as wfd:
+            test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links, wfd)
 
     return 0 if test_pass else 1
 

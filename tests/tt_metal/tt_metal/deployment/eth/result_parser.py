@@ -121,8 +121,7 @@ class Event:
         return {"typ": self.typ.name, "extra": self.extra}
 
 
-# NOTE this is unused for now, but might be useful
-def publish_link(test, link: TestedLink, srcsn, dstsn, q: Queue):
+def publish_link(test, link: TestedLink, srcsn: str, dstsn: str, q: Queue):
     payload = {
         "test": test,
         "src_chip": srcsn,
