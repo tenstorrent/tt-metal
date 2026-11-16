@@ -212,10 +212,10 @@ void kernel_main() {
     // The K-pieces each of a producer and its partner multiplies (all of them unsplit).
     constexpr uint32_t kMyPieces = kGateUpPieces / FE_ROUTED_SPLIT;
     static_assert(FE_ROUTED_SPLIT == 1u || kMyPieces * FE_ROUTED_SPLIT == kGateUpPieces, "whole K-pieces per part");
-    // The K-piece (of this core's half) that its p-th received piece is.
-    // Several rows: the group's j-th expert's order instead, by its id (persistent.h kFeHdrPieceFlags), so an expert's
-    // activation is the same bits whichever group runs it. Only the unpacker's K offsets read it, after the piece's
-    // wait_front, by which point the reader has written it.
+    // The K-piece (of this core's half) that its p-th received piece is (an involution: also the CB position of piece
+    // p among an expert's pieces). Several rows: from the reader's per-expert flags (persistent.h kFeHdrPieceFlags),
+    // read after the pieces' wait_front, by which point the reader has written them; there the pieces are chained in K
+    // order whatever the read order, so an expert's activation is the same bits whichever group runs it.
     auto piece_of = [&](uint32_t p, uint32_t j) -> uint32_t {
 #if FE_GROUP_EXPERTS > 1
         (void)reverse_pieces;
@@ -311,6 +311,22 @@ void kernel_main() {
                         cb_input_id, cb_weights_id, cb_mm_id, kShardTileCols);
                     mm_cb.reserve_back(kShardTileCols);
                     tile_regs_acquire();
+#if FE_GROUP_EXPERTS > 1
+                    // Several rows: every piece in, then chained in K order whatever order the reader delivered them
+                    // in (piece p sits at CB position piece_of(p, j)), so the bits do not depend on the read order.
+                    w_cb.wait_front(kMyPieces * gate_up_reserve_tiles);
+                    for (uint32_t p = 0; p < kMyPieces; ++p) {
+                        const uint32_t at = piece_of(p, j) * gate_up_reserve_tiles;
+                        if (p + 1 == kMyPieces) {
+                            custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                                cb_input_id, cb_weights_id, p * kPieceK, at, 0, kPieceK, kShardTileCols);
+                        } else {
+                            custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
+                                cb_input_id, cb_weights_id, p * kPieceK, at, 0, kPieceK, kShardTileCols);
+                        }
+                    }
+                    w_cb.pop_front(kMyPieces * gate_up_reserve_tiles);
+#else
                     for (uint32_t p = 0; p < kMyPieces; ++p) {
                         w_cb.wait_front(gate_up_reserve_tiles);
                         if (p + 1 == kMyPieces) {
@@ -322,6 +338,7 @@ void kernel_main() {
                         }
                         w_cb.pop_front(gate_up_reserve_tiles);
                     }
+#endif
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t n = 0; n < kShardTileCols; ++n) {
@@ -474,6 +491,22 @@ void kernel_main() {
                     cb_input_id, cb_weights_id, cb_wtmp_id, kShardTileCols);
                 part_cb.reserve_back(kShardTileCols);
                 tile_regs_acquire();
+#if FE_GROUP_EXPERTS > 1
+                // As the producer's: every piece in, chained in K order (piece p at CB position piece_of(p, j)).
+                w_cb.wait_front(kMyPieces * gate_up_reserve_tiles);
+                for (uint32_t p = 0; p < kMyPieces; ++p) {
+                    const uint32_t k0 = (kMyPieces + p) * kPieceK;
+                    const uint32_t at = piece_of(p, j) * gate_up_reserve_tiles;
+                    if (p + 1 == kMyPieces) {
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, true>(
+                            cb_input_id, cb_weights_id, k0, at, 0, kPieceK, kShardTileCols);
+                    } else {
+                        custom_mm_block<CustomMmDestLayout::DefaultSplitAcc, false>(
+                            cb_input_id, cb_weights_id, k0, at, 0, kPieceK, kShardTileCols);
+                    }
+                }
+                w_cb.pop_front(kMyPieces * gate_up_reserve_tiles);
+#else
                 for (uint32_t p = 0; p < kMyPieces; ++p) {
                     w_cb.wait_front(gate_up_reserve_tiles);
                     const uint32_t k0 = (kMyPieces + piece_of(p, j)) * kPieceK;
@@ -486,6 +519,7 @@ void kernel_main() {
                     }
                     w_cb.pop_front(gate_up_reserve_tiles);
                 }
+#endif
 #else
                 matmul_init(cb_input_id, cb_weights_id);
                 reconfig_full_operand(cb_weights_id, cb_input_id);
