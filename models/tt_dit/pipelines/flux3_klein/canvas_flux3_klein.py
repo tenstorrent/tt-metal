@@ -19,6 +19,7 @@ import ttnn
 from ...layers.module import Module, Parameter
 from ...models.vae.encoder_flux2 import Flux2VaeEncoder
 from ...models.vae.vae import VaeAttention, VaeResnetBlock, _all_gather_hw, _partition_hw
+from ...utils import tensor
 
 # 1:1, 16:9 and 9:16 canvases (width, height) at 1 MP and 4 MP; every legal reference (fitted <= 4 MP, sides <= 4096,
 # multiples of 16) fits one. Sides are multiples of 256: rows split evenly over 32 devices through the three
@@ -171,13 +172,7 @@ class CanvasMasks:
 
             def up(t, axes=None):
                 return [
-                    ttnn.from_torch(
-                        t,
-                        device=device,
-                        layout=ttnn.TILE_LAYOUT,
-                        dtype=dt,
-                        mesh_mapper=_mapper(device, axes),
-                    )
+                    tensor.from_torch(t, device=device, dtype=dt, mesh_axes=axes or [None] * 4)
                     for dt in (ttnn.float32, ttnn.bfloat16)
                 ]
 
@@ -192,13 +187,7 @@ class CanvasMasks:
                 self._full[(h, w)] = CanvasLevelMask(fr32, fc32, fr16, fc16, fn32)
                 # the attention keys' bias, built on device: 0 inside the image, KEY_MASK_BIAS outside, in 32 columns
                 # that a query extension of 1 / 32 per column sums back to the bias
-                cols32 = ttnn.from_torch(
-                    cols.expand(1, 1, w, 32).contiguous(),
-                    device=device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    mesh_mapper=_mapper(device, None),
-                )
+                cols32 = tensor.from_torch(cols.expand(1, 1, w, 32).contiguous(), device=device, mesh_axes=[None] * 4)
                 inside = ttnn.multiply(ttnn.repeat(fr16, ttnn.Shape((1, 1, w, 32))), cols32)
                 ttnn.deallocate(cols32)
                 bias = ttnn.add(ttnn.multiply(inside, -KEY_MASK_BIAS), KEY_MASK_BIAS)
@@ -215,16 +204,6 @@ class CanvasMasks:
         for m in (*self._shard.values(), *self._full.values()):
             m.deallocate()
         ttnn.deallocate(self.key_bias)
-
-
-def _mapper(device, axes):
-    if axes is None or all(a is None for a in axes):
-        return ttnn.ReplicateTensorToMesh(device)
-    dims = [None, None]
-    for dim, axis in enumerate(axes):
-        if axis is not None:
-            dims[axis] = dim
-    return ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=tuple(dims))
 
 
 class CanvasVaeEncoder(Flux2VaeEncoder):
@@ -249,12 +228,8 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
     def _constant(self, shape: tuple[int, ...], value: float) -> ttnn.Tensor:
         key = (shape, value)
         if key not in self._constants:
-            self._constants[key] = ttnn.from_torch(
-                torch.full(shape, value),
-                device=self._ctx.device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self._ctx.device),
+            self._constants[key] = tensor.from_torch(
+                torch.full(shape, value), device=self._ctx.device, mesh_axes=[None] * len(shape)
             )
         return self._constants[key]
 

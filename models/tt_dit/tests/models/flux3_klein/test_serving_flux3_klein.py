@@ -23,7 +23,7 @@ from PIL import Image
 import ttnn
 
 from ....pipelines.flux3_klein.packing import MAX_TEXT_LENGTH
-from ....pipelines.flux3_klein.pipeline_flux3_klein import REFERENCE_SIZES, Flux3KleinPipeline, Flux3KleinRequest
+from ....pipelines.flux3_klein.pipeline_flux3_klein import Flux3KleinPipeline, Flux3KleinRequest
 from ....utils.test import ring_params_8k
 
 FILLER = (
@@ -31,6 +31,17 @@ FILLER = (
     "stalls with fruit and flowers, children chasing a dog along the pier, clouds over distant hills,"
 ).split()
 TEXT_ROW_TARGETS = (160, 560, 1360, 2480, MAX_TEXT_LENGTH)
+# references of other shapes than warmup()'s bucket-filling squares: aspect kept, never cropped, every canvas
+REFERENCE_SHAPES = (
+    (0, 0),
+    (1024, 1024),
+    (2048, 2048),
+    (6000, 4000),
+    (1080, 1920),
+    (4096, 1024),
+    (1400, 1000),
+    (256, 256),
+)
 
 
 def _prompt_for(rows: int, attended) -> str:
@@ -77,21 +88,18 @@ def test_serving(*, mesh_device: ttnn.MeshDevice) -> None:
     pipeline.warmup(sizes=sizes)
     failures = []
     for width, height in sizes:
-        for side in (0, *REFERENCE_SIZES[(width, height)]):
-            images = (_reference(side, side),) if side else ()
+        for ref_w, ref_h in REFERENCE_SHAPES:
+            images = (_reference(ref_w, ref_h),) if ref_w else ()
             for name, prompt in prompts.items():
                 ttnn.synchronize_device(mesh_device)
                 programs = mesh_device.num_program_cache_entries()
-                result = pipeline.generate(
-                    Flux3KleinRequest(
-                        prompt, width=width, height=height, seed=0, images=images, reference_size=side or None
-                    )
-                )
+                result = pipeline.generate(Flux3KleinRequest(prompt, width=width, height=height, seed=0, images=images))
                 ttnn.synchronize_device(mesh_device)
                 new_programs = mesh_device.num_program_cache_entries() - programs
-                tag = f"{width}x{height} ref {side or 'none'} {name} prompt"
+                ref = f"{ref_w}x{ref_h}" if ref_w else "none"
+                tag = f"{width}x{height} ref {ref} {name} prompt"
                 logger.info(f"SERVE {tag}: new programs {new_programs}, {result.timings}")
-                result.image.save(out / f"{width}x{height}_ref{side or 'none'}_{name}.png")
+                result.image.save(out / f"{width}x{height}_ref{ref}_{name}.png")
                 if new_programs:
                     failures.append(f"{tag}: {new_programs} new programs")
                 if float(np.asarray(result.image, dtype=np.float32).std()) < 10:

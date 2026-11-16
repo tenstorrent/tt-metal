@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 from loguru import logger
 from PIL import Image, ImageOps
@@ -19,6 +21,7 @@ from PIL import Image, ImageOps
 import ttnn
 
 from ...encoders.qwen3vl.loader_flux3_klein import build_flux3_klein_text_encoder
+from ...models.transformers.flux3_klein.transformer_block_flux3_klein import PRECISION_BF16, Flux3KleinPrecision
 from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     EARLY_DEPTH,
     IN_CHANNELS,
@@ -29,13 +32,14 @@ from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     padded_length,
     timestep_inputs,
 )
-from ...models.transformers.flux3_klein.transformer_block_flux3_klein import PRECISION_BF16, Flux3KleinPrecision
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.dbcache import DBCacheConfig
+from .canvas_flux3_klein import reference_canvases
 from .dbcache_flux3_klein import Flux3KleinDBCache
 from .packing import (
+    DOWNSAMPLING_RATIO,
     MAX_TEXT_LENGTH,
     TEXT_BUCKETS,
     TEXT_BUCKETS_BY_LAYOUT,
@@ -55,13 +59,19 @@ from .weights_flux3_klein import checkpoint_id, resolve_weights_dir
 os.environ.setdefault("TT_DIT_RMSNORM_HEAD_SPLIT", "1")
 
 # The first release serves fixed shapes (width, height), all warmed up at startup, and at most one reference image,
-# center-cropped and resized to 1 MP as in BFL's multi-reference sizing, or to 4 MP at the 4096 shapes.
+# prepared as BFL's single reference: fitted (aspect kept, never cropped) to at most 4 MP and a 4096 side, rounded up to
+# 16 px and reflect-padded. Its tokens fill one of two buckets; the bucket's padding is masked.
 SIZES = (1024, 2048, 4096)
 SHAPES = (*((size, size) for size in SIZES), (4096, 2304), (2304, 4096))
 DEFAULT_SIZE = 2048
 MAX_REFERENCES = 1
-REFERENCE_SIZE = 1024
-REFERENCE_SIZES = {shape: (REFERENCE_SIZE, 2048) if 4096 in shape else (REFERENCE_SIZE,) for shape in SHAPES}
+MATCH_MAX_PIXELS = 4 * 1024 * 1024
+MIN_SIDE, MAX_SIDE = 64, 4096
+REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)
+PLAN_CACHE_SIZE = 64
+# The media server's 1 / 4 MP reference choice (reference_size) predates BFL's fit and is ignored: every shape takes
+# any reference; kept so its callers keep working.
+REFERENCE_SIZES = {shape: (1024, 2048) for shape in SHAPES}
 
 
 @dataclass(frozen=True)
@@ -74,7 +84,7 @@ class Flux3KleinRequest:
     steps: int | None = None
     guidance: float | None = None
     images: tuple = ()
-    reference_size: int | None = None  # the reference's square side, one of REFERENCE_SIZES; None: REFERENCE_SIZE
+    reference_size: int | None = None  # ignored (REFERENCE_SIZES)
     cache: DBCacheConfig | None = None
     return_final_tokens: bool = False
 
@@ -105,12 +115,37 @@ def caption_seed(caption: str) -> int:
     return int(hashlib.sha256(caption.encode()).hexdigest(), 16) % 2**32
 
 
-def prepare_reference(image: Image.Image, size: int) -> Image.Image:
+def reference_canvas(width: int, height: int) -> tuple[tuple[int, int], tuple[int, int]]:
+    """(fitted size, canvas) of a single reference as BFL's pipeline.reference_canvas: scaled down to fit 4 MP and a
+    4096 side, the canvas the fitted size rounded up to 16 (sides 64-4096) and at most 4 MP."""
+    scale = min(1.0, math.sqrt(MATCH_MAX_PIXELS / (width * height)), MAX_SIDE / max(width, height))
+    while True:
+        fit = (max(1, round(width * scale)), max(1, round(height * scale)))
+        canvas = tuple(min(MAX_SIDE, max(MIN_SIDE, ttnn.core.roundup(v, DOWNSAMPLING_RATIO))) for v in fit)
+        if canvas[0] * canvas[1] <= MATCH_MAX_PIXELS:
+            return fit, canvas
+        scale *= 0.995
+
+
+def prepare_reference(image: Image.Image) -> Image.Image:
+    """BFL's single reference (pipeline.prepare_reference): RGB, fitted by reference_canvas, reflect-padded to its
+    canvas, centred. The output size is the request's own, so the padding box is not needed."""
     image = ImageOps.exif_transpose(image).convert("RGB")
-    side = min(image.size)
-    left, top = (image.width - side) // 2, (image.height - side) // 2
-    image = image.crop((left, top, left + side, top + side))
-    return image if side == size else image.resize((size, size), Image.Resampling.LANCZOS)
+    fit, (w, h) = reference_canvas(image.width, image.height)
+    if fit != image.size:
+        image = image.resize(fit, Image.Resampling.LANCZOS)
+    if (w, h) == image.size:
+        return image
+    left, top = (w - image.width) // 2, (h - image.height) // 2
+    padding = ((top, h - image.height - top), (left, w - image.width - left), (0, 0))
+    mode = "reflect" if min(image.size) > DOWNSAMPLING_RATIO else "symmetric"
+    return Image.fromarray(np.pad(np.asarray(image), padding, mode=mode))
+
+
+def reference_bucket(tokens: int) -> int:
+    if tokens > REFERENCE_TOKEN_BUCKETS[-1]:
+        raise ValueError(f"{tokens} reference tokens exceed {REFERENCE_TOKEN_BUCKETS[-1]}")
+    return next(b for b in REFERENCE_TOKEN_BUCKETS if tokens <= b)
 
 
 # The guidance and Euler arithmetic round to bf16 where the reference does; every op runs in fp32 with explicit
@@ -248,11 +283,15 @@ class Flux3KleinPipeline:
         return cls(mesh_device, snapshots={model: resolve_weights_dir(model) for model in models}, **kwargs)
 
     def warmup(
-        self, sizes: tuple[int | tuple[int, int], ...] = SHAPES, reference_sizes: tuple[int, ...] | None = None
+        self, sizes: tuple[int | tuple[int, int], ...] = SHAPES, reference_buckets: tuple[int, ...] | None = None
     ) -> None:
-        """Compile every program of ``sizes`` (square sides or (width, height); every served shape by default): each
-        size without a reference and with one of each served reference size (or those of ``reference_sizes``), at
-        every text bucket that layout picks from (a long prompt reaches the larger buckets)."""
+        """Compile every program of ``sizes`` (square sides or (width, height); every served shape by default): the
+        VAE encoder on every reference canvas, then each size without a reference and with a square reference that
+        fills each token bucket (or those of ``reference_buckets``), at every text bucket that layout picks from (a
+        long prompt reaches the larger buckets). A reference of any other shape runs its canvas's and its bucket's
+        programs."""
+        for canvas in reference_canvases():
+            self._vae.encode_canvas(Image.new("RGB", canvas))
         buckets = set(self._text_buckets or (self._text_length,))
         if self._text_buckets is TEXT_BUCKETS:
             buckets.update(b for layout in TEXT_BUCKETS_BY_LAYOUT.values() for b in layout)
@@ -262,8 +301,8 @@ class Flux3KleinPipeline:
         try:
             for model in self._transformers:
                 for width, height in map(output_shape, sizes):
-                    served = REFERENCE_SIZES.get((width, height), ())
-                    for side in (0, *(s for s in served if reference_sizes is None or s in reference_sizes)):
+                    served = (b for b in REFERENCE_TOKEN_BUCKETS if reference_buckets is None or b in reference_buckets)
+                    for side in (0, *(math.isqrt(b) * DOWNSAMPLING_RATIO for b in served)):
                         for bucket in layout_buckets(saved, width, height, int(side > 0)) if saved else (None,):
                             self._text_buckets = (bucket,) if bucket else None
                             self.generate(
@@ -274,7 +313,6 @@ class Flux3KleinPipeline:
                                     height=height,
                                     seed=0,
                                     images=(Image.new("RGB", (side, side)),) if side else (),
-                                    reference_size=side or None,
                                 )
                             )
         finally:
@@ -288,11 +326,6 @@ class Flux3KleinPipeline:
             raise ValueError(f"{width}x{height} is not one of the served shapes {SHAPES} (width, height)")
         if len(request.images) > MAX_REFERENCES:
             raise ValueError(f"at most {MAX_REFERENCES} reference image")
-        reference_size = request.reference_size or REFERENCE_SIZE
-        if request.images and reference_size not in REFERENCE_SIZES[(width, height)]:
-            raise ValueError(
-                f"{width}x{height} takes references of {REFERENCE_SIZES[(width, height)]} px, not {reference_size}"
-            )
         steps = request.steps or STEPS[request.model]
         guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
         if request.model == "distilled" and guidance not in (None, 1.0):
@@ -303,7 +336,7 @@ class Flux3KleinPipeline:
             reference = request.images[0]
             if not isinstance(reference, Image.Image):
                 reference = Image.open(reference)
-            reference = prepare_reference(reference, reference_size)
+            reference = prepare_reference(reference)
         timings = {}
 
         prompt = request.prompt
@@ -326,7 +359,7 @@ class Flux3KleinPipeline:
         if reference is not None:
             # the reference's own latent shape: h, w stay the generated image's (the pre-step helper's noise uses them)
             rh, rw = latent_shape(*reference.size)
-            image_cond = (self._vae.encode(reference), reference_ids(rh, rw, 0))
+            image_cond = (self._vae.encode_canvas(reference), reference_ids(rh, rw, 0))
         timings["encode_reference"] = time.time() - t0
 
         t0 = time.time()
@@ -429,26 +462,32 @@ class Flux3KleinPipeline:
     ) -> tuple[ttnn.Tensor, int]:
         transformer = self._transformers[model]
         sp = transformer.sp_factor
-        cond_rows = 0 if image_cond is None else image_cond[0].shape[0]
+        # the reference's tokens pad to their bucket: every reference size of a bucket runs the same programs
+        cond_valid = 0 if image_cond is None else image_cond[0].shape[0]
+        cond_rows = 0 if image_cond is None else reference_bucket(cond_valid)
         cond_embedded = None
         if image_cond is not None:
+            image_cond = tuple(pad_rows(t, cond_rows) for t in image_cond)
             tokens = self._upload_rows(image_cond[0], sp)
             cond_embedded = transformer.embed_image_cond(tokens)
             ttnn.deallocate(tokens)
 
         def sample(text_rows: ttnn.Tensor, text_ids: torch.Tensor, text_valid: int):
             lengths = {"image": noise.shape[0], "image_cond": cond_rows, "text": text_rows.shape[-2]}
-            layout = Flux3KleinSequenceLayout(sp, lengths, text_valid)
+            layout = Flux3KleinSequenceLayout(sp, lengths, text_valid, cond_valid)
             sample_ids = {"image": ids, "text": text_ids}
             if image_cond is not None:
                 sample_ids["image_cond"] = image_cond[1]
             tokens = self._upload_rows(text_rows, sp)
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
-            key = (model, sp, tuple(sorted(lengths.items())), text_valid, _ids_digest(sample_ids))
+            key = (model, sp, tuple(sorted(lengths.items())), text_valid, cond_valid, _ids_digest(sample_ids))
             plan = self._plan_cache.get(key)
             if plan is None:
                 plan = self._plan_cache[key] = transformer.prepare_plan(layout, sample_ids)
+                # every reference shape has its own ids: keep the newest plans only (a request uses at most two)
+                while len(self._plan_cache) > PLAN_CACHE_SIZE:
+                    self._plan_cache.pop(next(iter(self._plan_cache))).deallocate()
             return plan, embedded
 
         samples = [sample(*text)]
