@@ -35,6 +35,9 @@ def _gdn_fused_env():
 
 
 _GDN_FUSED = _gdn_fused_env()
+# QWEN36_GDN_PACKED (default 1, read only with QWEN36_GDN=fused): the fused op takes the projection output as it is,
+# packed [qkv | z | a | b] rows in L1; 0 slices it into qkv / z / a / b in DRAM first.
+_GDN_PACKED = _GDN_FUSED and os.environ.get("QWEN36_GDN_PACKED", "1") != "0"
 # (call, path) -> number of forward calls (a traced call counts once, at capture).
 GDN_PATH_CALLS = collections.Counter()
 
@@ -470,6 +473,7 @@ class TPGatedDeltaNet:
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
         # QWEN36_GDN=fused: forward_prefill / forward_decode run the fused op on the calls it can serve.
         self._gdn_fused = "gdn_fused" in tw
+        self._gdn_packed = self._gdn_fused and _GDN_PACKED and self._fuse_ab
 
     def _release_spec_bufs(self):
         """Free the batched spec-verify buffers and forget their shape (prepare_spec_verify reallocs)."""
@@ -707,67 +711,73 @@ class TPGatedDeltaNet:
             self.args.gdn_value_dim_tp,
         )
 
+    def _project_rows(self, x, S, out_mc=None):
+        """The one [qkv | z | a | b] matmul of the fused weight (_fuse_ab): rows (1, S, qkvz_dim_tp + 2 * Nv), a
+        BEFORE b. out_mc as in _project_qkvzab."""
+        _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
+        # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
+        if self._fuse_agmm and S > tpc.TILE_SIZE:
+            if tpc.use_small_m(self.args, S) and getattr(self.args, "proj_1d_decode", False):
+                # Short S (args.prefill_small_m_max): the fused AGMM has a ~100 us floor, a separate all-gather +
+                # 1D-mcast matmul (as the decode in-proj; needs the interleaved weight = proj_1d_decode) is faster.
+                # x stays the caller's (as in the AGMM helper): only the bf8 cast and the gather are freed here.
+                x4 = ttnn.reshape(x, (1, 1, S, x.shape[-1]))
+                x8 = x4
+                if getattr(self.args, "prefill_agmm_bf8", False) and x4.dtype != ttnn.bfloat8_b:
+                    x8 = ttnn.typecast(x4, ttnn.bfloat8_b, memory_config=x4.memory_config())
+                xg = tpc.tp_all_gather(
+                    x8,
+                    self.tt_ccl,
+                    dim=3,
+                    memory_config=tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG),
+                    topology=self.args.ccl_topology(),
+                )
+                if x8 is not x4:
+                    ttnn.deallocate(x8)
+                qkvzab = tpc.small_m_matmul(
+                    xg,
+                    self.tw["qkvz"],
+                    S,
+                    self.args.dim,
+                    self.tw["qkvz"].shape[-1],
+                    num_cores=44,
+                    compute_cfg=self.cfg,
+                    grid_w=getattr(self.args, "decode_grid_w", 8),
+                    memory_config=_proj_mc,
+                )
+                ttnn.deallocate(xg)
+            else:
+                qkvzab = tpc.all_gather_matmul_prefill(
+                    x,
+                    self.tw["qkvz"],
+                    self.tt_ccl,
+                    self.cfg,
+                    self.args.ccl_topology(),
+                    out_memory_config=_proj_mc,
+                    act_bf8=getattr(self.args, "prefill_agmm_bf8", False),
+                    config_override=tpc.agmm_config_override(self.args, x.shape[-2], "gdn_in"),
+                )
+            qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
+        elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
+            # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
+            qkvzab = tpc.matmul_1d_decode(
+                x,
+                self.tw["qkvz"],
+                self.args.gdn_qkvz_decode_1d_progcfg,
+                self.cfg,
+                out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_proj_mc)
+        return qkvzab
+
     def _project_qkvzab(self, x, S, out_mc=None):
         """Project x → (qkv, z, a, b). Fused path: one [qkv|z|a|b] matmul then slice.
         out_mc: placement of the qkvzab matmul + slices. None → DRAM; prefill+decode now pass L1 to
         keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting)."""
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
-        _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
         if self._fuse_ab:
-            # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
-            if self._fuse_agmm and S > tpc.TILE_SIZE:
-                if tpc.use_small_m(self.args, S) and getattr(self.args, "proj_1d_decode", False):
-                    # Short S (args.prefill_small_m_max): the fused AGMM has a ~100 us floor, a separate all-gather +
-                    # 1D-mcast matmul (as the decode in-proj; needs the interleaved weight = proj_1d_decode) is faster.
-                    # x stays the caller's (as in the AGMM helper): only the bf8 cast and the gather are freed here.
-                    x4 = ttnn.reshape(x, (1, 1, S, x.shape[-1]))
-                    x8 = x4
-                    if getattr(self.args, "prefill_agmm_bf8", False) and x4.dtype != ttnn.bfloat8_b:
-                        x8 = ttnn.typecast(x4, ttnn.bfloat8_b, memory_config=x4.memory_config())
-                    xg = tpc.tp_all_gather(
-                        x8,
-                        self.tt_ccl,
-                        dim=3,
-                        memory_config=tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG),
-                        topology=self.args.ccl_topology(),
-                    )
-                    if x8 is not x4:
-                        ttnn.deallocate(x8)
-                    qkvzab = tpc.small_m_matmul(
-                        xg,
-                        self.tw["qkvz"],
-                        S,
-                        self.args.dim,
-                        self.tw["qkvz"].shape[-1],
-                        num_cores=44,
-                        compute_cfg=self.cfg,
-                        grid_w=getattr(self.args, "decode_grid_w", 8),
-                        memory_config=_proj_mc,
-                    )
-                    ttnn.deallocate(xg)
-                else:
-                    qkvzab = tpc.all_gather_matmul_prefill(
-                        x,
-                        self.tw["qkvz"],
-                        self.tt_ccl,
-                        self.cfg,
-                        self.args.ccl_topology(),
-                        out_memory_config=_proj_mc,
-                        act_bf8=getattr(self.args, "prefill_agmm_bf8", False),
-                        config_override=tpc.agmm_config_override(self.args, x.shape[-2], "gdn_in"),
-                    )
-                qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
-            elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
-                # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
-                qkvzab = tpc.matmul_1d_decode(
-                    x,
-                    self.tw["qkvz"],
-                    self.args.gdn_qkvz_decode_1d_progcfg,
-                    self.cfg,
-                    out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
-                )
-            else:
-                qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_proj_mc)
+            qkvzab = self._project_rows(x, S, out_mc)
             qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
             # z (output gate) lives across the chunk kernel (gated = out_f * silu(z)); L1 z (6MB@S=2048)
             # clashes with the scan kernel CBs -> keep DRAM in chunk-prefill; decode (small S) keeps out_mc.
@@ -1083,10 +1093,12 @@ class TPGatedDeltaNet:
 
     def _gdn_fused_op(self, qkv, z, a, b, conv_state):
         """ttnn gated_delta_net: conv + SiLU, gates, delta rule, gated RMS norm * silu(z) in one program.
-        qkv/z/a/b: [1, B*T, .] bf16 TILE DRAM (consumed). conv_state [1, 3*B, C] and self.rec_state are updated
-        in place. Returns the gated output [1, B*T, value_dim_tp] bf16 DRAM."""
+        qkv/z/a/b: [1, B*T, .] bf16 TILE DRAM (consumed), or qkv the packed projection rows [qkv | z | a | b] (DRAM or
+        L1) with z, a, b None. conv_state [1, 3*B, C] and self.rec_state are updated in place. Returns the gated
+        output [1, B*T, value_dim_tp] bf16 DRAM."""
         from ttnn.operations.gated_delta_net import gated_delta_net
 
+        packed = {"memory_config": ttnn.DRAM_MEMORY_CONFIG} if z is None else {}
         out, _, _ = gated_delta_net(
             qkv,
             z,
@@ -1098,18 +1110,26 @@ class TPGatedDeltaNet:
             epsilon=1e-6,
             conv_state_out=conv_state,
             recurrent_state_out=self.rec_state,
+            **packed,
         )
         for t in (qkv, z, a, b):
-            ttnn.deallocate(t)
+            if t is not None:
+                ttnn.deallocate(t)
         return out
 
     def _forward_prefill_fused(self, x, T, capture_state):
         """forward_prefill on the fused op: a full chunk continuing from (and writing) the persistent state.
         conv_carry [1, K-1, C] is the op's conv state at one slot."""
         tw, D = self.tw, self.qkv_dim_tp
-        # The op takes its inputs from DRAM (the chain keeps the projection outputs in L1).
-        qkv, z, a, b = self._project_qkvzab(x, T)
-        gated = self._gdn_fused_op(qkv, z, a, b, self.conv_carry)
+        GDN_PATH_CALLS["prefill_rows", "packed" if self._gdn_packed else "split"] += 1
+        if self._gdn_packed:
+            # The op reads the projection rows where the chain keeps them (L1 up to PREFILL_L1_MAX_SEQ rows).
+            rows = self._project_rows(x, T, tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG))
+            gated = self._gdn_fused_op(rows, None, None, None, self.conv_carry)
+        else:
+            # Split inputs from DRAM.
+            qkv, z, a, b = self._project_qkvzab(x, T)
+            gated = self._gdn_fused_op(qkv, z, a, b, self.conv_carry)
         if capture_state:
             # Decode conv window, as the chain: taps 1..K-1 = the last K-1 conv inputs, tap 0 = zero.
             ttnn.copy(self._zero_conv0, self.conv_states[0])
@@ -1154,8 +1174,14 @@ class TPGatedDeltaNet:
         shifted as in the chain."""
         C = self.qkv_dim_tp
         _dram = ttnn.DRAM_MEMORY_CONFIG
-        # The op takes its inputs from DRAM (the chain keeps the projection outputs in L1).
-        qkv, z, a, b = self._project_qkvzab(x, B)
+        GDN_PATH_CALLS["decode_rows", "packed" if self._gdn_packed else "split"] += 1
+        if self._gdn_packed:
+            # Packed rows in L1 for the op; only the conv tap copy needs the qkv columns on their own.
+            rows = self._project_rows(x, B, ttnn.L1_MEMORY_CONFIG)
+            qkv = ttnn.slice(rows, (0, 0, 0), (1, B, C), memory_config=ttnn.L1_MEMORY_CONFIG)
+        else:
+            # Split inputs from DRAM.
+            qkv, z, a, b = self._project_qkvzab(x, B)
         self.sync_conv_taps()
         st = self.conv_states
         if B == 1:
@@ -1170,7 +1196,11 @@ class TPGatedDeltaNet:
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
         self._conv_win_stale = True
-        gated = self._gdn_fused_op(qkv, z, a, b, hist)
+        if self._gdn_packed:
+            ttnn.deallocate(qkv)
+            gated = self._gdn_fused_op(rows, None, None, None, hist)
+        else:
+            gated = self._gdn_fused_op(qkv, z, a, b, hist)
         ttnn.deallocate(hist)
         partial = self._row_proj(gated, self.tw["out"])
         ttnn.deallocate(gated)
