@@ -866,17 +866,20 @@ def test_tilize_with_val_padding_width_sharded_int32_lossless(device):
     assert torch.equal(input_tensor, output_tensor[:, :height_in, :])
 
 
+@pytest.mark.parametrize("input_tile, output_tile", [(None, [16, 32]), ([16, 32], [32, 32]), ([32, 32], [16, 32])])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32])
-def test_tilize_32bit_tiny_tile_rejected_on_quasar(device, dtype, expect_error):
-    """Quasar tilizes FLOAT32 and INT32 through DEST, which handles 32x32 tiles only."""
+def test_tilize_32bit_tiny_tile_rejected_on_quasar(device, dtype, input_tile, output_tile, expect_error):
+    """Quasar tilizes FLOAT32 and INT32 through DEST, which handles 32x32 tiles only (input_tile = retile)."""
     if device.arch() != ttnn.device.Arch.QUASAR:
         pytest.skip("Quasar-only validation")
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.int32
+    layout = ttnn.ROW_MAJOR_LAYOUT if input_tile is None else ttnn.TILE_LAYOUT
+    tile = None if input_tile is None else ttnn.Tile(input_tile)
     tt_input = ttnn.from_torch(
-        torch.zeros((32, 32), dtype=torch_dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        torch.zeros((32, 32), dtype=torch_dtype), dtype=dtype, layout=layout, tile=tile, device=device
     )
-    with expect_error(RuntimeError, "tilize into tiny tiles"):
-        ttnn.tilize(tt_input, tile=ttnn.Tile([16, 32]))
+    with expect_error(RuntimeError, "is not supported on Quasar"):
+        ttnn.tilize(tt_input, tile=ttnn.Tile(output_tile))
 
 
 @pytest.mark.parametrize(
