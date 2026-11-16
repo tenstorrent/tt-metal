@@ -53,6 +53,7 @@
   "perf_matmul_custom_compressed": 397.7,
   "perf_matmul_face_compressed": 332.0,
   "perf_matmul_in1_column_stride": 9.1,
+  "perf_mul_reduce_scalar": 838.8,
   "perf_mul_reduce_scalar_chunked": 89.1,
   "perf_pack": 543.9,
   "perf_pack_dest_bank": 4.4,
