@@ -264,7 +264,8 @@ class MATMUL_PRODUCTION(TemplateParameter):
     @staticmethod
     def kernel_formats_of(formats, math_fidelity, dest_sync, dest_acc, dims) -> tuple:
         """The format of every CB of the key's production kernel, one entry per CB as unpack_src_format holds them (the LoFi rules count
-        Float32 CBs): unpack_cb_formats of LLK_MATMUL_KERNEL_FORMATS_MAP (a TSV as mm-census census_prod/keys_cbfmt.tsv), else in0, in1, the
+        Float32 CBs): unpack_cb_formats of LLK_MATMUL_KERNEL_FORMATS_MAP (a TSV as mm-census census_prod/keys_cbfmt.tsv; its first variant
+        where a key has several), else in0, in1, the
         output and a partials CB (Float32 with a 32-bit DEST); plus LLK_MATMUL_KERNEL_FORMATS (DataFormat names joined by +).
         """
         own = (
@@ -308,7 +309,7 @@ class MATMUL_PRODUCTION(TemplateParameter):
             ) == key:
                 cbs = tuple(
                     c.split(":", 1)[1]
-                    for c in r["unpack_cb_formats"].replace("|", " ").split()
+                    for c in r["unpack_cb_formats"].split("|")[0].split()
                     if ":" in c and c.split(":", 1)[1] in DataFormat.__members__
                 )
                 return (cbs or own + (partials,)) + extra
