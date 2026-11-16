@@ -218,6 +218,7 @@ static void check_ab_then_b()
 {
     CHECK(plan_ab_then_b_pattern(1, 1) == 0x2, "COL: AB then B");
     CHECK(plan_ab_then_b_pattern(4, 0) == 0, "no SrcB only handshakes");
+    CHECK(plan_ab_then_b_pattern(32, 0) == 0, "a whole zmask of AB, no SrcB only handshakes");
     CHECK(plan_ab_then_b_pattern(0, 4) == 0xF, "ROW: B only");
     CHECK(plan_ab_then_b_pattern(2, 2) == 0xC, "two and two");
     CHECK(plan_ab_then_b_pattern(0, 32) == 0xFFFFFFFFu, "a whole zmask of SrcB");

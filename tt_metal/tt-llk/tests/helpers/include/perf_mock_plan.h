@@ -133,7 +133,7 @@ constexpr MatmulPlan plan_matmul(
 // the stream's pattern, bit j of the period set for a SrcB handshake (the period is at most the zmask)
 constexpr std::uint32_t plan_ab_then_b_pattern(const std::uint32_t paired, const std::uint32_t b_only)
 {
-    return b_only >= ZMASK_BITS ? ~0u : ((1u << b_only) - 1) << paired;
+    return b_only == 0 ? 0u : (b_only >= ZMASK_BITS ? ~0u : ((1u << b_only) - 1) << paired); // no shift by 32 for (32, 0)
 }
 
 // periods x (one SrcB handshake and a_count SrcA ones): the producer gives B first, the consumer takes it back last. pattern
