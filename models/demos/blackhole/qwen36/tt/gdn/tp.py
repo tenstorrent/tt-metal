@@ -38,6 +38,10 @@ _GDN_FUSED = _gdn_fused_env()
 # QWEN36_GDN_PACKED (default 1, read only with QWEN36_GDN=fused): the fused op takes the projection output as it is,
 # packed [qkv | z | a | b] rows in L1; 0 slices it into qkv / z / a / b in DRAM first.
 _GDN_PACKED = _GDN_FUSED and os.environ.get("QWEN36_GDN_PACKED", "1") != "0"
+# QWEN36_GDN_ROWS_L1_MAX (default 1024): packed prefill keeps the projection rows in L1 up to this many tokens, in
+# DRAM above. At T=2048 the L1 rows sit below the op's CB bound (address 1140480 in the model) and the op's prep plan
+# loses its norm split to fit under them: 491 us against 401 from DRAM. 2048 keeps them in L1.
+_GDN_ROWS_L1_MAX = int(os.environ.get("QWEN36_GDN_ROWS_L1_MAX", "1024"))
 # (call, path) -> number of forward calls (a traced call counts once, at capture).
 GDN_PATH_CALLS = collections.Counter()
 
@@ -1123,8 +1127,9 @@ class TPGatedDeltaNet:
         tw, D = self.tw, self.qkv_dim_tp
         GDN_PATH_CALLS["prefill_rows", "packed" if self._gdn_packed else "split"] += 1
         if self._gdn_packed:
-            # The op reads the projection rows where the chain keeps them (L1 up to PREFILL_L1_MAX_SEQ rows).
-            rows = self._project_rows(x, T, tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG))
+            # The op reads the projection rows where the chain keeps them, up to _GDN_ROWS_L1_MAX rows.
+            l1 = T <= min(_GDN_ROWS_L1_MAX, tpc.PREFILL_L1_MAX_SEQ)
+            rows = self._project_rows(x, T, ttnn.L1_MEMORY_CONFIG if l1 else None)
             gated = self._gdn_fused_op(rows, None, None, None, self.conv_carry)
         else:
             # Split inputs from DRAM.
