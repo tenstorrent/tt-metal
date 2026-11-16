@@ -47,13 +47,15 @@ namespace {
 std::vector<std::string> GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
     using tt::tt_metal::test::dprint::GenerateExpectedData;
     std::string data = GenerateExpectedData(data_format, input_tile);
+    // The kernels print "...:\n{}\n". The slice (or the warning that replaces it) ends with a newline, so the format's
+    // final \n leaves an empty line.
     std::vector<std::string> expected;
-    expected.push_back(fmt::format("Print tile from Data0:{}", data));
-    expected.push_back(fmt::format("Print tile from Data1:{}", data));
-    expected.push_back(fmt::format("Print tile from Unpack:{}", data));
+    expected.push_back(fmt::format("Print tile from Data0:{}\n\n", data));
+    expected.push_back(fmt::format("Print tile from Data1:{}\n\n", data));
+    expected.push_back(fmt::format("Print tile from Unpack:{}\n\n", data));
     expected.push_back(fmt::format(
-        "Print tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print..."));
-    expected.push_back(fmt::format("Print tile from Pack:{}", data));
+        "Print tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print...\n\n"));
+    expected.push_back(fmt::format("Print tile from Pack:{}\n\n", data));
     return expected;
 }
 
@@ -121,11 +123,13 @@ void RunTest(
     distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord);
 
     // Run the program
+    const ChipId device_id = mesh_device->get_device_ids()[0];
+    DevicePrintSeparateFilesFixture::remove_output_files(device_id);
     fixture->RunProgram(mesh_device, workload);
 
     // Check against expected prints
     auto expected = GenerateGoldenOutput(data_format, u32_vec);
-    DevicePrintSeparateFilesFixture::check_output(expected);
+    DevicePrintSeparateFilesFixture::check_output(device_id, expected);
 }
 
 struct TestParams {

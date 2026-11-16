@@ -560,7 +560,25 @@ private:
 class DevicePrintSeparateFilesFixture : public DevicePrintFixture {
 public:
     static constexpr std::array<std::string_view, 5> suffixes = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
-    static void check_output(std::span<const std::string> expected) {
+
+    // The file that one-file-per-RISC mode writes for `risc` (BRISC, NCRISC, TRISC0, ...) of worker core (0,0).
+    static std::string output_file_name(ChipId device_id, std::string_view risc) {
+        return fmt::format(
+            "{}generated/dprint/device-{}_worker-core-0-0_{}.txt",
+            tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
+            device_id,
+            risc);
+    }
+
+    // Deletes the files check_output reads. A RISC's file is rewritten only when the RISC prints, so without this a
+    // RISC that prints nothing would be checked against a file left over from an earlier run.
+    static void remove_output_files(ChipId device_id) {
+        for (const auto& suffix : suffixes) {
+            std::filesystem::remove(output_file_name(device_id, suffix));
+        }
+    }
+
+    static void check_output(ChipId device_id, std::span<const std::string> expected) {
         const auto& enabled_processors = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
             tt::llrt::RunTimeDebugFeatureDprint);
         ASSERT_EQ(expected.size(), suffixes.size());
@@ -568,11 +586,7 @@ public:
             if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
                 continue;
             }
-            auto filename = fmt::format(
-                "{}generated/dprint/device-0_worker-core-0-0_{}.txt",
-                tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
-                suffixes[i]);
-            EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
+            EXPECT_TRUE(FilesMatchesString(output_file_name(device_id, suffixes[i]), expected[i]));
         }
     }
 

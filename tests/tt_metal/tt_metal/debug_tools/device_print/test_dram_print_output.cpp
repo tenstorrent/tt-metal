@@ -60,13 +60,16 @@ public:
         MetalContext::instance().dprint_server()->await();
     }
 
+    // Runs the kernel on each device in turn and checks that the device printed exactly `expected_lines`, in order.
     void TestDramOutput(
         const std::string& kernel_path,
-        const std::vector<std::string>& expected_messages,
+        const std::vector<std::string>& expected_lines,
         ttsl::Span<const uint32_t> runtime_args = {}) {
         for (auto& mesh_device : this->devices_) {
+            MetalContext::instance().dprint_server()->clear_log_file();
             RunDramProgram(mesh_device, kernel_path, runtime_args);
-            EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, expected_messages));
+            EXPECT_TRUE(FileMatchesLines(dprint_file_name, expected_lines))
+                << "device " << mesh_device->get_device_ids()[0];
         }
     }
 };

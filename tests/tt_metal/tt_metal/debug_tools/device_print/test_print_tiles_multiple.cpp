@@ -108,10 +108,11 @@ void RunTest(
     }
 
     distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord, true);
+    const ChipId device_id = mesh_device->get_device_ids()[0];
+    DevicePrintSeparateFilesFixture::remove_output_files(device_id);
     fixture->RunProgram(mesh_device, workload);
 
-    auto filename = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() +
-                    "generated/dprint/device-0_worker-core-0-0_BRISC.txt";
+    auto filename = DevicePrintSeparateFilesFixture::output_file_name(device_id, "BRISC");
     auto expected_output = expected_output_write + expected_output_read;
 
     EXPECT_TRUE(FilesMatchesString(filename, expected_output));

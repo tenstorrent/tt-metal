@@ -51,7 +51,7 @@ void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::Mes
             expected_output.push_back(fmt::format("({},{}) After wait...", x, y));
         }
     }
-    EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, expected_output));
+    EXPECT_TRUE(FileMatchesLines(fixture->dprint_file_name, expected_output));
 }
 
 TEST_F(DevicePrintFixture, TensixTestPrintFinish) {

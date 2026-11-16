@@ -5,6 +5,8 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 
+#include <gmock/gmock.h>
+
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -134,13 +136,16 @@ experimental::ProgramRunArgs MakeIterationArgs(const experimental::ProgramSpec& 
 
 class DevicePrintOutputFixture : public DevicePrintFixture {
 public:
+    // Runs the kernel on each device in turn and checks that the device printed exactly `expected_lines`, in order.
     void TestOutput(
         const std::string& kernel_path,
-        const std::vector<std::string>& expected_messages,
+        const std::vector<std::string>& expected_lines,
         ttsl::Span<const uint32_t> runtime_args = {}) {
         for (auto& mesh_device : this->devices_) {
+            MetalContext::instance().dprint_server()->clear_log_file();
             RunProgram(mesh_device, kernel_path, runtime_args);
-            EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, expected_messages));
+            EXPECT_TRUE(FileMatchesLines(dprint_file_name, expected_lines))
+                << "device " << mesh_device->get_device_ids()[0];
         }
     }
 
@@ -151,6 +156,7 @@ public:
         const std::vector<std::string>& present,
         const std::vector<std::string>& absent = {}) {
         for (auto& mesh_device : this->devices_) {
+            MetalContext::instance().dprint_server()->clear_log_file();
             RunProgram(mesh_device, kernel_path);
             EXPECT_TRUE(FileContainsAllStringsInOrder(dprint_file_name, present));
             EXPECT_TRUE(FileContainsNoneOfStrings(dprint_file_name, absent));
@@ -600,8 +606,8 @@ TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
 
 TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
     std::vector<std::string> messages = {
-        // Runtime const char* prints as hex address (we just check the prefix)
-        "Sample string: 0x",
+        // Runtime const char* prints as hex address, which changes between builds
+        "Sample string: 0x*",
         // Compile-time CTSTR resolves to the actual string content from the ELF
         "Compile time string: Hello world!",
     };
@@ -633,11 +639,14 @@ TEST_F(DevicePrintOutputFixture, PrintReorder) {
 }
 
 // Verify the DPRINT(format, ...) alias defined in dprint.h produces output identical to
-// DEVICE_PRINT(format, ...).
+// DEVICE_PRINT(format, ...). The kernel prints each line once with each macro.
 TEST_F(DevicePrintOutputFixture, DprintAliasMatchesDevicePrint) {
     std::vector<std::string> messages = {
         "no args",
+        "no args",
         "one arg: 42",
+        "one arg: 42",
+        "three args: 1 2 3",
         "three args: 1 2 3",
     };
 
@@ -645,13 +654,24 @@ TEST_F(DevicePrintOutputFixture, DprintAliasMatchesDevicePrint) {
 }
 
 TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
-    std::vector<std::string> messages = {
+    const std::vector<std::string> messages = {
         "BEFORE!!!",
         "INLINE!!!",
         "AFTER!!!",
     };
 
+    // The kernel runs on every TRISC of one Tensix engine, whose lines interleave in no defined order, so each
+    // TRISC's lines are checked on their own, told apart by the prefix.
+    MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
+        tt::llrt::RunTimeDebugFeatureDprint, true);
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t num_triscs = hal.get_processor_class_num_fw_binaries(
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX),
+        static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
+
     for (auto& mesh_device : this->devices_) {
+        MetalContext::instance().dprint_server()->clear_log_file();
+
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -660,9 +680,14 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
         workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
 
         RunProgram(mesh_device, workload);
-        MetalContext::instance().dprint_server()->await();
 
-        EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, messages));
+        const std::string core = fmt::format("{}:{}", mesh_device->get_device_ids()[0], kDefaultPrintNode.str());
+        const auto lines_per_risc = ReadLinesPerRisc(dprint_file_name);
+        EXPECT_EQ(lines_per_risc.size(), num_triscs);
+        for (const auto& [prefix, lines] : lines_per_risc) {
+            EXPECT_EQ(DevicePrintPrefixCore(prefix), core) << "unexpected prefix \"" << prefix << "\"";
+            EXPECT_THAT(lines, ::testing::ElementsAreArray(messages)) << prefix;
+        }
     }
 }
 
