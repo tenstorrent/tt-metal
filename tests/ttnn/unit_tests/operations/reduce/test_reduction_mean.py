@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 pytestmark = pytest.mark.use_module_device
@@ -277,3 +279,18 @@ def test_mean_full_tensor_bf16(device, dim, shape, layout):
     output_tensor = ttnn.mean(input_tensor, dim=dim)
 
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())
+
+
+# A mean over several dims counted its elements in an int, which overflows at 2^31 and flipped the mean's sign.
+@pytest.mark.skipif(
+    bool(os.environ.get("TT_METAL_SIMULATOR")), reason="a 4 GiB tensor is too slow on the ttsim simulator"
+)
+def test_mean_multi_dim_2_31_elements(device):
+    input_tensor = ttnn.full(
+        [1, 512, 2048, 2048], fill_value=1.0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    output_tensor = ttnn.mean(input_tensor, dim=[1, 2, 3], keepdim=True)
+    input_tensor.deallocate()
+
+    assert ttnn.to_torch(output_tensor).flatten().tolist() == [1.0]

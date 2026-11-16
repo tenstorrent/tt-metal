@@ -34,7 +34,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     auto mesh_device = devices_[0];
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -65,35 +65,34 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     }
     distributed::EnqueueWriteMeshBuffer(cq, dram_src_buf, initial_data);
 
-    const experimental::KernelSpecName DM_READER{"dm_reader"};
-    const experimental::KernelSpecName DM_TRANSFORM{"dm_transform"};
-    const experimental::KernelSpecName DM_WRITER{"dm_writer"};
+    const KernelSpecName DM_READER{"dm_reader"};
+    const KernelSpecName DM_TRANSFORM{"dm_transform"};
+    const KernelSpecName DM_WRITER{"dm_writer"};
 
-    experimental::SemaphoreSpec sem0_spec{
-        .unique_id = experimental::SemaphoreSpecName{"sem0"},
+    SemaphoreSpec sem0_spec{
+        .unique_id = SemaphoreSpecName{"sem0"},
         .target_nodes = node,
     };
-    experimental::SemaphoreSpec sem1_spec{
-        .unique_id = experimental::SemaphoreSpecName{"sem1"},
+    SemaphoreSpec sem1_spec{
+        .unique_id = SemaphoreSpecName{"sem1"},
         .target_nodes = node,
     };
 
-    experimental::KernelSpec dm_reader_spec{
+    KernelSpec dm_reader_spec{
         .unique_id = DM_READER,
         .source =
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
         .num_threads = 1,
-        .semaphore_bindings =
-            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0"}, .accessor_name = "sem"}},
+        .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"sem0"}, .accessor_name = "sem"}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec dm_transform_spec{
+    KernelSpec dm_transform_spec{
         .unique_id = DM_TRANSFORM,
         .source =
 
@@ -102,8 +101,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
         .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}, {"INCOMING_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0"}, .accessor_name = "sem_in"},
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"}, .accessor_name = "sem_out"},
+                {.semaphore_spec_name = SemaphoreSpecName{"sem0"}, .accessor_name = "sem_in"},
+                {.semaphore_spec_name = SemaphoreSpecName{"sem1"}, .accessor_name = "sem_out"},
             },
         .compile_time_args =
             {
@@ -111,53 +110,52 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec dm_writer_spec{
+    KernelSpec dm_writer_spec{
         .unique_id = DM_WRITER,
         .source =
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
-        .semaphore_bindings =
-            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1"}, .accessor_name = "sem"}},
+        .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"sem1"}, .accessor_name = "sem"}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DM_READER, DM_TRANSFORM, DM_WRITER},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "multi_semaphore_pipeline",
         .kernels = {dm_reader_spec, dm_transform_spec, dm_writer_spec},
         .semaphores = {sem0_spec, sem1_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = DM_READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dram_addr", dram_src_addr},
                  {"l1_addr", buf_a_addr},
                  {"num_elements", num_elements},
                  {"dram_bank_id", 0u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM},
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM},
+        ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dram_addr", dram_dst_addr},
                  {"l1_addr", buf_b_addr},
@@ -165,7 +163,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                  {"dram_bank_id", 0u}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -192,8 +190,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";
     }
 
-    const experimental::NodeCoord node_0{0, 0};
-    const experimental::NodeCoord node_1{1, 0};
+    const NodeCoord node_0{0, 0};
+    const NodeCoord node_1{1, 0};
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
@@ -215,48 +213,47 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     const CoreCoord core_1_virtual = mesh_device->worker_core_from_logical_core(node_1);
 
-    experimental::SemaphoreSpec sem_core_0_spec{
-        .unique_id = experimental::SemaphoreSpecName{"sem_core_0"},
+    SemaphoreSpec sem_core_0_spec{
+        .unique_id = SemaphoreSpecName{"sem_core_0"},
         .target_nodes = node_0,
     };
-    experimental::SemaphoreSpec sem_cross_spec{
-        .unique_id = experimental::SemaphoreSpecName{"sem_cross"},
-        .target_nodes = experimental::NodeRange{node_0, node_1},
+    SemaphoreSpec sem_cross_spec{
+        .unique_id = SemaphoreSpecName{"sem_cross"},
+        .target_nodes = NodeRange{node_0, node_1},
     };
-    experimental::SemaphoreSpec sem0_core_1_spec{
-        .unique_id = experimental::SemaphoreSpecName{"sem0_core_1"},
+    SemaphoreSpec sem0_core_1_spec{
+        .unique_id = SemaphoreSpecName{"sem0_core_1"},
         .target_nodes = node_1,
     };
-    experimental::SemaphoreSpec sem1_core_1_spec{
-        .unique_id = experimental::SemaphoreSpecName{"sem1_core_1"},
+    SemaphoreSpec sem1_core_1_spec{
+        .unique_id = SemaphoreSpecName{"sem1_core_1"},
         .target_nodes = node_1,
     };
 
-    const experimental::KernelSpecName DM_TRANSFORM_0{"dm_transform_0"};
-    const experimental::KernelSpecName DM_WRITER_0{"dm_writer_0"};
-    const experimental::KernelSpecName DM_READER_1{"dm_reader_1"};
-    const experimental::KernelSpecName DM_TRANSFORM_1{"dm_transform_1"};
-    const experimental::KernelSpecName DM_WRITER_1{"dm_writer_1"};
+    const KernelSpecName DM_TRANSFORM_0{"dm_transform_0"};
+    const KernelSpecName DM_WRITER_0{"dm_writer_0"};
+    const KernelSpecName DM_READER_1{"dm_reader_1"};
+    const KernelSpecName DM_TRANSFORM_1{"dm_transform_1"};
+    const KernelSpecName DM_WRITER_1{"dm_writer_1"};
 
-    experimental::KernelSpec dm_transform_0_spec{
+    KernelSpec dm_transform_0_spec{
         .unique_id = DM_TRANSFORM_0,
         .source =
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/transform_pipeline.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = {{"OUTGOING_SEM", "1"}}},
-        .semaphore_bindings =
-            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem_out"}},
+        .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem_out"}},
         .compile_time_args =
             {
                 {"num_elements", num_elements},
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec dm_writer_0_spec{
+    KernelSpec dm_writer_0_spec{
         .unique_id = DM_WRITER_0,
         .source =
 
@@ -265,18 +262,18 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .compiler_options = {.defines = {{"INCREMENT_REMOTE_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem"},
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
+                {.semaphore_spec_name = SemaphoreSpecName{"sem_core_0"}, .accessor_name = "sem"},
+                {.semaphore_spec_name = SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
             },
         .runtime_arg_schema =
             {
                 .runtime_arg_names =
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec dm_reader_1_spec{
+    KernelSpec dm_reader_1_spec{
         .unique_id = DM_READER_1,
         .source =
 
@@ -285,17 +282,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .compiler_options = {.defines = {{"WAIT_FOR_REMOTE_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem"},
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
+                {.semaphore_spec_name = SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem"},
+                {.semaphore_spec_name = SemaphoreSpecName{"sem_cross"}, .accessor_name = "remote_sem"},
             },
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec dm_transform_1_spec{
+    KernelSpec dm_transform_1_spec{
         .unique_id = DM_TRANSFORM_1,
         .source =
 
@@ -304,8 +301,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         .compiler_options = {.defines = {{"INCOMING_SEM", "1"}, {"OUTGOING_SEM", "1"}}},
         .semaphore_bindings =
             {
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem_in"},
-                {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem_out"},
+                {.semaphore_spec_name = SemaphoreSpecName{"sem0_core_1"}, .accessor_name = "sem_in"},
+                {.semaphore_spec_name = SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem_out"},
             },
         .compile_time_args =
             {
@@ -313,50 +310,49 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::KernelSpec dm_writer_1_spec{
+    KernelSpec dm_writer_1_spec{
         .unique_id = DM_WRITER_1,
         .source =
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
-        .semaphore_bindings =
-            {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem"}},
+        .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"sem1_core_1"}, .accessor_name = "sem"}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu_core_0{
+    WorkUnitSpec wu_core_0{
         .name = "wu_core_0",
         .kernels = {DM_TRANSFORM_0, DM_WRITER_0},
         .target_nodes = node_0,
     };
-    experimental::WorkUnitSpec wu_core_1{
+    WorkUnitSpec wu_core_1{
         .name = "wu_core_1",
         .kernels = {DM_READER_1, DM_TRANSFORM_1, DM_WRITER_1},
         .target_nodes = node_1,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "multi_cluster_multi_semaphore_pipeline",
         .kernels = {dm_transform_0_spec, dm_writer_0_spec, dm_reader_1_spec, dm_transform_1_spec, dm_writer_1_spec},
         .semaphores = {sem_core_0_spec, sem_cross_spec, sem0_core_1_spec, sem1_core_1_spec},
         .work_units = {wu_core_0, wu_core_1},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_0},
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_1},
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_0},
+        ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_1},
+        ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER_0,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node_0,
                 {{"dram_addr", dram_mid_addr},
                  {"l1_addr", buf_b_addr},
@@ -365,18 +361,18 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                  {"remote_noc_x", static_cast<uint32_t>(core_1_virtual.x)},
                  {"remote_noc_y", static_cast<uint32_t>(core_1_virtual.y)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = DM_READER_1,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node_1,
                 {{"dram_addr", dram_mid_addr},
                  {"l1_addr", buf_a_addr},
                  {"num_elements", num_elements},
                  {"dram_bank_id", 0u}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER_1,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node_1,
                 {{"dram_addr", dram_dst_addr},
                  {"l1_addr", buf_b_addr},
@@ -384,7 +380,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                  {"dram_bank_id", 0u}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -405,14 +401,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 // and send to the next, the 2-node cross-node pipeline generalized to N nodes.
 static void run_snake_chain(
     distributed::MeshDevice& mesh_device,
-    const std::vector<experimental::NodeCoord>& nodes,
+    const std::vector<NodeCoord>& nodes,
     bool ring = false,
     uint32_t num_elements = 10) {
-    using experimental::KernelSpec;
-    using experimental::KernelSpecName;
-    using experimental::SemaphoreSpec;
-    using experimental::SemaphoreSpecName;
-    using experimental::WorkUnitSpec;
     const uint32_t N = static_cast<uint32_t>(nodes.size());
     ASSERT_GE(N, 2u);
 
@@ -443,8 +434,8 @@ static void run_snake_chain(
         slow_dispatch::WriteToL1(mesh_device, nodes[0], buf_wrap, out_sentinel);
     }
 
-    experimental::ProgramSpec spec{.name = "snake_chain"};
-    experimental::ProgramRunArgs params;
+    ProgramSpec spec{.name = "snake_chain"};
+    ProgramRunArgs params;
 
     for (uint32_t i = 0; i < N; ++i) {
         const bool is_src = (i == 0);
@@ -465,17 +456,15 @@ static void run_snake_chain(
         if (!is_sink) {
             const auto a = nodes[i];
             const auto b = nodes[i + 1];
-            const experimental::NodeCoord lo{std::min(a.x, b.x), std::min(a.y, b.y)};
-            const experimental::NodeCoord hi{std::max(a.x, b.x), std::max(a.y, b.y)};
-            spec.semaphores.push_back(
-                SemaphoreSpec{.unique_id = CROSS_OUT, .target_nodes = experimental::NodeRange{lo, hi}});
+            const NodeCoord lo{std::min(a.x, b.x), std::min(a.y, b.y)};
+            const NodeCoord hi{std::max(a.x, b.x), std::max(a.y, b.y)};
+            spec.semaphores.push_back(SemaphoreSpec{.unique_id = CROSS_OUT, .target_nodes = NodeRange{lo, hi}});
         } else if (ring) {
             const auto a = nodes[i];
             const auto b = nodes[0];
-            const experimental::NodeCoord lo{std::min(a.x, b.x), std::min(a.y, b.y)};
-            const experimental::NodeCoord hi{std::max(a.x, b.x), std::max(a.y, b.y)};
-            spec.semaphores.push_back(
-                SemaphoreSpec{.unique_id = WRAP, .target_nodes = experimental::NodeRange{lo, hi}});
+            const NodeCoord lo{std::min(a.x, b.x), std::min(a.y, b.y)};
+            const NodeCoord hi{std::max(a.x, b.x), std::max(a.y, b.y)};
+            spec.semaphores.push_back(SemaphoreSpec{.unique_id = WRAP, .target_nodes = NodeRange{lo, hi}});
         }
 
         // Reader: source reads without waiting; others wait on the incoming cross sem.
@@ -484,7 +473,7 @@ static void run_snake_chain(
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-            .hw_config = experimental::DataMovementHardwareConfig{}};
+            .hw_config = DataMovementHardwareConfig{}};
         if (is_src) {
             reader.semaphore_bindings = {{.semaphore_spec_name = L0, .accessor_name = "sem"}};
         } else {
@@ -505,14 +494,14 @@ static void run_snake_chain(
                 {{.semaphore_spec_name = L0, .accessor_name = "sem_in"},
                  {.semaphore_spec_name = L1, .accessor_name = "sem_out"}},
             .compile_time_args = {{"num_elements", num_elements}, {"buf_a", buf_a}, {"buf_b", buf_b}},
-            .hw_config = experimental::DataMovementHardwareConfig{}});
+            .hw_config = DataMovementHardwareConfig{}});
 
         // Writer: sink writes final; others also increment the next node's cross sem.
         KernelSpec writer{
             .unique_id = WRITER,
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
             .num_threads = 1,
-            .hw_config = experimental::DataMovementHardwareConfig{}};
+            .hw_config = DataMovementHardwareConfig{}};
         const bool writer_relays = (!is_sink) || ring;  // ring: last node relays back to node[0]
         if (!writer_relays) {
             writer.runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}};
@@ -545,11 +534,11 @@ static void run_snake_chain(
                     {{.semaphore_spec_name = WRAP_L0, .accessor_name = "sem"},
                      {.semaphore_spec_name = WRAP, .accessor_name = "remote_sem"}},
                 .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-                .hw_config = experimental::DataMovementHardwareConfig{}});
+                .hw_config = DataMovementHardwareConfig{}});
             wu_kernels.push_back(WRAP_READER);
-            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
                 .kernel = WRAP_READER,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     nodes[0],
                     {{"dram_addr", stage_addr(N)},
                      {"l1_addr", buf_wrap},
@@ -559,19 +548,19 @@ static void run_snake_chain(
         spec.work_units.push_back(WorkUnitSpec{.name = "wu_" + si, .kernels = wu_kernels, .target_nodes = nodes[i]});
 
         // Runtime args.
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 nodes[i],
                 {{"dram_addr", stage_addr(i)},
                  {"l1_addr", buf_a},
                  {"num_elements", num_elements},
                  {"dram_bank_id", 0u}})});
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = XFORM});
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = XFORM});
         if (!writer_relays) {
-            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
                 .kernel = WRITER,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     nodes[i],
                     {{"dram_addr", stage_addr(i + 1)},
                      {"l1_addr", buf_b},
@@ -579,9 +568,9 @@ static void run_snake_chain(
                      {"dram_bank_id", 0u}})});
         } else {
             const CoreCoord nxt = mesh_device.worker_core_from_logical_core(is_sink ? nodes[0] : nodes[i + 1]);
-            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
                 .kernel = WRITER,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     nodes[i],
                     {{"dram_addr", stage_addr(i + 1)},
                      {"l1_addr", buf_b},
@@ -595,8 +584,8 @@ static void run_snake_chain(
     distributed::MeshCommandQueue& cq = mesh_device.mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-    experimental::SetProgramRunArgs(program, params);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -627,15 +616,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, RingChainFull) {
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
-    std::vector<experimental::NodeCoord> nodes;
+    std::vector<NodeCoord> nodes;
     for (uint32_t y = 0; y < g.y; ++y) {
         if (y % 2 == 0) {
             for (uint32_t x = 0; x < g.x; ++x) {
-                nodes.push_back(experimental::NodeCoord{x, y});
+                nodes.push_back(NodeCoord{x, y});
             }
         } else {
             for (int x = static_cast<int>(g.x) - 1; x >= 0; --x) {
-                nodes.push_back(experimental::NodeCoord{static_cast<uint32_t>(x), y});
+                nodes.push_back(NodeCoord{static_cast<uint32_t>(x), y});
             }
         }
     }
@@ -651,7 +640,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeCornerToCorner) {
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
-    run_snake_chain(this->device(), {experimental::NodeCoord{0, 0}, experimental::NodeCoord{7, 3}});
+    run_snake_chain(this->device(), {NodeCoord{0, 0}, NodeCoord{7, 3}});
 }
 
 // Sweep a few payload sizes across the full 32-node snake.
@@ -663,15 +652,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakePayloadSweep) {
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
-    std::vector<experimental::NodeCoord> nodes;
+    std::vector<NodeCoord> nodes;
     for (uint32_t y = 0; y < g.y; ++y) {
         if (y % 2 == 0) {
             for (uint32_t x = 0; x < g.x; ++x) {
-                nodes.push_back(experimental::NodeCoord{x, y});
+                nodes.push_back(NodeCoord{x, y});
             }
         } else {
             for (int x = static_cast<int>(g.x) - 1; x >= 0; --x) {
-                nodes.push_back(experimental::NodeCoord{static_cast<uint32_t>(x), y});
+                nodes.push_back(NodeCoord{static_cast<uint32_t>(x), y});
             }
         }
     }
@@ -702,38 +691,38 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
             std::vector<uint32_t> sentinel(ne, 0xffffffffu);
-            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, buf_a, sentinel);
+            slow_dispatch::WriteToL1(this->device(), NodeCoord{x, y}, buf_a, sentinel);
         }
     }
 
-    const experimental::SemaphoreSpecName SEM{"sem"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::NodeRange all_nodes(experimental::NodeCoord{0, 0}, experimental::NodeCoord{g.x - 1, g.y - 1});
-    experimental::ProgramSpec spec{.name = "fanout"};
-    spec.semaphores.push_back(experimental::SemaphoreSpec{.unique_id = SEM, .target_nodes = all_nodes});
-    spec.kernels.push_back(experimental::KernelSpec{
+    const SemaphoreSpecName SEM{"sem"};
+    const KernelSpecName READER{"reader"};
+    const NodeRange all_nodes(NodeCoord{0, 0}, NodeCoord{g.x - 1, g.y - 1});
+    ProgramSpec spec{.name = "fanout"};
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM, .target_nodes = all_nodes});
+    spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = std::string(OVERRIDE_KERNEL_PREFIX) +
                   "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SEM, .accessor_name = "sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-        .hw_config = experimental::DataMovementHardwareConfig{}});
-    spec.work_units.push_back(experimental::WorkUnitSpec{.name = "wu", .kernels = {READER}, .target_nodes = all_nodes});
-    experimental::ProgramRunArgs params;
-    experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = READER};
+        .hw_config = DataMovementHardwareConfig{}});
+    spec.work_units.push_back(WorkUnitSpec{.name = "wu", .kernels = {READER}, .target_nodes = all_nodes});
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs kra{.kernel = READER};
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
-            experimental::AddRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 kra.runtime_arg_values,
-                experimental::NodeCoord{x, y},
+                NodeCoord{x, y},
                 {{"dram_addr", dram_bcast}, {"l1_addr", buf_a}, {"num_elements", ne}, {"dram_bank_id", 0u}});
         }
     }
     params.kernel_run_args = {kra};
     distributed::MeshWorkload workload;
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
-    experimental::SetProgramRunArgs(program, params);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, true);
 
@@ -741,7 +730,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
             std::vector<uint32_t> r(ne, 0);
-            slow_dispatch::ReadFromL1(this->device(), experimental::NodeCoord{x, y}, buf_a, ne * sizeof(uint32_t), r);
+            slow_dispatch::ReadFromL1(this->device(), NodeCoord{x, y}, buf_a, ne * sizeof(uint32_t), r);
             (r == seed) ? ++ok : ++fail;
         }
     }
@@ -781,45 +770,44 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
         }
     }
 
-    const experimental::SemaphoreSpecName SEM{"sem"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::NodeRange all_nodes(experimental::NodeCoord{0, 0}, experimental::NodeCoord{g.x - 1, g.y - 1});
-    experimental::ProgramSpec spec{.name = "fanin"};
-    spec.semaphores.push_back(experimental::SemaphoreSpec{.unique_id = SEM, .target_nodes = all_nodes});
-    spec.kernels.push_back(experimental::KernelSpec{
+    const SemaphoreSpecName SEM{"sem"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const NodeRange all_nodes(NodeCoord{0, 0}, NodeCoord{g.x - 1, g.y - 1});
+    ProgramSpec spec{.name = "fanin"};
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = SEM, .target_nodes = all_nodes});
+    spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SEM, .accessor_name = "sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-        .hw_config = experimental::DataMovementHardwareConfig{}});
-    spec.kernels.push_back(experimental::KernelSpec{
+        .hw_config = DataMovementHardwareConfig{}});
+    spec.kernels.push_back(KernelSpec{
         .unique_id = WRITER,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram_pipeline.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SEM, .accessor_name = "sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"}},
-        .hw_config = experimental::DataMovementHardwareConfig{}});
-    spec.work_units.push_back(
-        experimental::WorkUnitSpec{.name = "wu", .kernels = {READER, WRITER}, .target_nodes = all_nodes});
+        .hw_config = DataMovementHardwareConfig{}});
+    spec.work_units.push_back(WorkUnitSpec{.name = "wu", .kernels = {READER, WRITER}, .target_nodes = all_nodes});
 
-    experimental::ProgramRunArgs params;
-    experimental::ProgramRunArgs::KernelRunArgs kr{.kernel = READER};
-    experimental::ProgramRunArgs::KernelRunArgs kw{.kernel = WRITER};
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs kr{.kernel = READER};
+    ProgramRunArgs::KernelRunArgs kw{.kernel = WRITER};
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
             const uint32_t idx = x + y * g.x;
-            experimental::AddRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 kr.runtime_arg_values,
-                experimental::NodeCoord{x, y},
+                NodeCoord{x, y},
                 {{"dram_addr", dram_src + idx * stride},
                  {"l1_addr", buf_a},
                  {"num_elements", ne},
                  {"dram_bank_id", 0u}});
-            experimental::AddRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 kw.runtime_arg_values,
-                experimental::NodeCoord{x, y},
+                NodeCoord{x, y},
                 {{"dram_addr", dram_gather + idx * stride},
                  {"l1_addr", buf_a},
                  {"num_elements", ne},
@@ -828,8 +816,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
     }
     params.kernel_run_args = {kr, kw};
     distributed::MeshWorkload workload;
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
-    experimental::SetProgramRunArgs(program, params);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
     workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, true);
 
@@ -856,10 +844,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerRowChains) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
     for (uint32_t y = 0; y < g.y; ++y) {
-        std::vector<experimental::NodeCoord> row;
+        std::vector<NodeCoord> row;
         row.reserve(g.x);
         for (uint32_t x = 0; x < g.x; ++x) {
-            row.push_back(experimental::NodeCoord{x, y});
+            row.push_back(NodeCoord{x, y});
         }
         std::cout << "[L6] per-row chain y=" << y << std::endl;
         run_snake_chain(this->device(), row);
@@ -878,10 +866,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerColumnChains) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
     for (uint32_t x = 0; x < g.x; ++x) {
-        std::vector<experimental::NodeCoord> col;
+        std::vector<NodeCoord> col;
         col.reserve(g.y);
         for (uint32_t y = 0; y < g.y; ++y) {
-            col.push_back(experimental::NodeCoord{x, y});
+            col.push_back(NodeCoord{x, y});
         }
         std::cout << "[L6] per-column chain x=" << x << std::endl;
         run_snake_chain(this->device(), col);
@@ -899,7 +887,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     if (g.x != 8 || g.y != 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
-    const experimental::NodeCoord target{0, 0};
+    const NodeCoord target{0, 0};
     const uint32_t num_signalers = g.x * g.y - 1;  // everyone except the target
     // The target's result slot is a single-core L1 MeshBuffer on the target node, result_addr is
     // threaded into the kernel and host I/O (seed + read-back) goes through the mesh command queue.
@@ -924,36 +912,36 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     std::vector<uint32_t> seed{0xffffffffu};
     distributed::EnqueueWriteMeshBuffer(cq, result_buf, seed);
 
-    const experimental::SemaphoreSpecName BARRIER{"barrier_sem"};
-    const experimental::KernelSpecName BK{"barrier_kernel"};
+    const SemaphoreSpecName BARRIER{"barrier_sem"};
+    const KernelSpecName BK{"barrier_kernel"};
     const CoreCoord tgt_phys = this->device().worker_core_from_logical_core(target);
-    const experimental::NodeRange all_nodes{experimental::NodeCoord{0, 0}, experimental::NodeCoord{g.x - 1, g.y - 1}};
+    const NodeRange all_nodes{NodeCoord{0, 0}, NodeCoord{g.x - 1, g.y - 1}};
 
-    experimental::ProgramSpec spec{.name = "grid_barrier"};
+    ProgramSpec spec{.name = "grid_barrier"};
     // One barrier semaphore at the same L1 address on all 32 nodes, so the remote increments and
     // the target's local read all land on the same location.
-    spec.semaphores.push_back(experimental::SemaphoreSpec{.unique_id = BARRIER, .target_nodes = all_nodes});
-    experimental::KernelSpec bk{
+    spec.semaphores.push_back(SemaphoreSpec{.unique_id = BARRIER, .target_nodes = all_nodes});
+    KernelSpec bk{
         .unique_id = BK,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/grid_barrier.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = BARRIER, .accessor_name = "barrier_sem"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"remote_noc_x", "remote_noc_y", "is_target", "num_elements", "result_addr"}},
-        .hw_config = experimental::DataMovementHardwareConfig{}};
+        .hw_config = DataMovementHardwareConfig{}};
     spec.kernels.push_back(bk);
-    spec.work_units.push_back(experimental::WorkUnitSpec{.name = "wu", .kernels = {BK}, .target_nodes = all_nodes});
+    spec.work_units.push_back(WorkUnitSpec{.name = "wu", .kernels = {BK}, .target_nodes = all_nodes});
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
 
-    experimental::ProgramRunArgs params;
-    experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = BK};
+    ProgramRunArgs params;
+    ProgramRunArgs::KernelRunArgs kra{.kernel = BK};
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
             const bool is_tgt = (x == 0 && y == 0);
-            experimental::AddRuntimeArgsForNode(
+            AddRuntimeArgsForNode(
                 kra.runtime_arg_values,
-                experimental::NodeCoord{x, y},
+                NodeCoord{x, y},
                 {{"remote_noc_x", static_cast<uint32_t>(tgt_phys.x)},
                  {"remote_noc_y", static_cast<uint32_t>(tgt_phys.y)},
                  {"is_target", is_tgt ? 1u : 0u},
@@ -962,7 +950,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
         }
     }
     params.kernel_run_args = {kra};
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(this->device().shape());
@@ -996,10 +984,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainRow) {
     if (this->device().compute_with_storage_grid_size().x < 8) {
         GTEST_SKIP() << "need an 8-wide grid";
     }
-    std::vector<experimental::NodeCoord> nodes;  // full row 0, left->right (8 hops)
+    std::vector<NodeCoord> nodes;  // full row 0, left->right (8 hops)
     nodes.reserve(8);
     for (uint32_t x = 0; x < 8; ++x) {
-        nodes.push_back(experimental::NodeCoord{x, 0});
+        nodes.push_back(NodeCoord{x, 0});
     }
     run_snake_chain(this->device(), nodes);
 }
@@ -1013,15 +1001,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainFull) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
     // Snake order: row0 left->right, row1 right->left, ... so every hop is to a neighbor.
-    std::vector<experimental::NodeCoord> nodes;
+    std::vector<NodeCoord> nodes;
     for (uint32_t y = 0; y < g.y; ++y) {
         if (y % 2 == 0) {
             for (uint32_t x = 0; x < g.x; ++x) {
-                nodes.push_back(experimental::NodeCoord{x, y});
+                nodes.push_back(NodeCoord{x, y});
             }
         } else {
             for (int x = static_cast<int>(g.x) - 1; x >= 0; --x) {
-                nodes.push_back(experimental::NodeCoord{static_cast<uint32_t>(x), y});
+                nodes.push_back(NodeCoord{static_cast<uint32_t>(x), y});
             }
         }
     }

@@ -12,7 +12,7 @@ from loguru import logger
 import ttnn
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name, is_galaxy
 from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
-from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_allclose, assert_with_pcc
 
 
 def _get_lora_impacted_weights(sd):
