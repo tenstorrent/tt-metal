@@ -308,6 +308,7 @@ void kernel_main() {
     // it normalizes: offset, + stride, ...
     const uint32_t norm_offset = PREP ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t norm_stride = PREP ? get_arg_val<uint32_t>(arg++) : 1;
+    const uint32_t norm_mid = PREP ? get_arg_val<uint32_t>(arg++) : 0;  // units normalized before each later row's heads
     // R-PREP prep core under PREP_SHARE_QK (qk role receiver): NoC (x, y) of its position's q and k cores, then its
     // index among their destinations (its grant counter there).
     const bool kq_landing = PREP && qk_role == GDN_QK_RECEIVER;
@@ -652,6 +653,8 @@ void kernel_main() {
                     cb_push_back(cb_z, count);
                     GDN_MARK("m_rd_z");
                 };
+                const uint32_t norm_units = (last_tr - first_tr + 1) * PREP_HEADS;
+                uint32_t z_unit = norm_offset;  // NORM_SPLIT: next norm unit whose z is read
                 for (uint32_t tr = first_tr + tr_offset; tr <= last_tr; tr += tr_stride) {
                     const uint32_t base_row = tr * TILE_ROWS;
                     const uint32_t lo = seq_lo > base_row ? seq_lo : base_row;
@@ -974,11 +977,17 @@ void kernel_main() {
                         Semaphore<>(KN_LANDED_SEM_ID).wait_min(kq_rows_landed);
                         cb_push_back(cb_kq_rows, 2 * Kt);
                     }
+                    if constexpr (NORM_SPLIT) {
+                        // norm_mid: z of the units compute normalizes before this row's heads, in compute's order.
+                        for (uint32_t m = 0; m < norm_mid && tr != first_tr + tr_offset && z_unit < norm_units; ++m) {
+                            read_z(first_tr + z_unit / PREP_HEADS, (z_unit % PREP_HEADS) * Vt, Vt);
+                            z_unit += norm_stride;
+                        }
+                    }
                 }
                 if constexpr (NORM_SPLIT) {
-                    const uint32_t units = (last_tr - first_tr + 1) * PREP_HEADS;
-                    for (uint32_t u = norm_offset; u < units; u += norm_stride) {
-                        read_z(first_tr + u / PREP_HEADS, (u % PREP_HEADS) * Vt, Vt);
+                    for (; z_unit < norm_units; z_unit += norm_stride) {
+                        read_z(first_tr + z_unit / PREP_HEADS, (z_unit % PREP_HEADS) * Vt, Vt);
                     }
                 }
 

@@ -167,6 +167,10 @@ PREP_SEND_HEADS = None  # R-PREP: head blocks a prep core holds for its writer; 
 # and PREP_NORM_MAX_ROWS tile rows' worth.
 PREP_NORM_SPLIT = True
 PREP_NORM_MAX_ROWS = 4
+# PREP_NORM_SPLIT: a prep core whose stride position is past the inbox depth sends a row only when the state cores
+# have freed its slot, and its next row's head blocks wait for that send. It normalizes this many of its norm units
+# between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
+PREP_NORM_MID = 1
 # R-PREP state step: the prep core sends -(beta exp(c)) (*) kn, so the state core accumulates the k read onto beta V in
 # DEST (the rhs of M in one window: no packed reads, no subtraction window) and starts the output's window with the q
 # read. Same operands and fp32 accumulation as the separate read.
@@ -1638,6 +1642,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             extra = seq_rows % stride if norm_split else 0
             norm = [q - extra if q >= extra else seq_rows * heads, stride - extra]
             norm_rows = len(range(norm[0], seq_rows * heads, norm[1]))
+            # PREP_NORM_MID: unit m (before row m // mid + 1's heads) must not wait for a row this core still holds.
+            mid = PREP_NORM_MID if norm_split and q >= inbox else 0
+            mid_rows = [((norm[0] + m * norm[1]) // heads, q + (m // mid) * stride) for m in range(mid * (my_rows - 1))]
+            if any(m >= norm_rows or unit_row >= held_row for m, (unit_row, held_row) in enumerate(mid_rows)):
+                mid = 0
             consumers = [c for u in range(heads * pieces) for c in unit_noc[group_first + u]]
             # A head block goes to the head's pieces: one multicast per row run.
             for j in range(heads):
@@ -1645,11 +1654,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 consumers += _mcast_rects(device, unit_cores[first : first + pieces])
             qk_src = prep_qk_src.get((core.x, core.y), [])
             rts[0][core.x, core.y] = (
-                [group_first, 1, tokens, prep_qk_role, zero_slots] + rows + norm + qk_src + cs_args(core)
+                [group_first, 1, tokens, prep_qk_role, zero_slots] + rows + norm + [mid] + qk_src + cs_args(core)
             )
             rts[1][core.x, core.y] = [group_first, 1, tokens, prep_qk_role, zero_slots, zero_slot_bytes] + rows + norm
             rts[1][core.x, core.y] += consumers
-            rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, prep_qk_role] + rows + [norm_rows]
+            rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, prep_qk_role] + rows + [norm_rows, mid]
             dsts = [unit_noc[group_first + u] for u in range(heads * pieces)]
             prep_send_noc0[core.x, core.y] = send_noc0(core, dsts)
         roles[ROLE_PREP] = (prep_cores, *rts)

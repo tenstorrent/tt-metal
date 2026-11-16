@@ -297,9 +297,11 @@ void prep_writer(
     };
     auto wait_send = [&](uint32_t pages) {
         if constexpr (NORM_SPLIT) {
-            while (!cb_pages_available_at_front(cb_prep_send, pages)) {
+            // At least once per part: a row's sends take long where many rows land at once, and compute may be
+            // waiting for an o (norm_mid).
+            do {
                 serve_norms();
-            }
+            } while (!cb_pages_available_at_front(cb_prep_send, pages));
         }
         cb_wait_front(cb_prep_send, pages);
     };
@@ -310,9 +312,20 @@ void prep_writer(
         const uint32_t base_row = tr * TILE_ROWS;
         const uint32_t lo = row_lo(tr);
         const uint32_t hi = row_hi(tr);
+        // NORM_SPLIT: compute may be in a norm unit ahead of this row's heads (norm_mid), which needs its o landed.
+        if constexpr (NORM_SPLIT) {
+            while (!cb_pages_available_at_front(cb_gates, 2)) {
+                serve_norms();
+            }
+        }
         cb_wait_front(cb_gates, 2);
         volatile tt_l1_ptr uint32_t* gates = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_gates));
         for (uint32_t j = 0; j < RATIO; ++j) {
+            if constexpr (NORM_SPLIT) {
+                while (!cb_pages_reservable_at_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES)) {
+                    serve_norms();
+                }
+            }
             push_chunk_coefs(gates, (head0 + j) % TILE_ROWS, base_row, lo, hi);
         }
         cb_pop_front(cb_gates, 2);
