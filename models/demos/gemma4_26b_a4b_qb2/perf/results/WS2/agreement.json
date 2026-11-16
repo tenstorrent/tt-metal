@@ -1,0 +1,26 @@
+{
+ "method": "greedy 128 tokens on integration 7360b71a63 (reference); ws2-glue teacher-forced on the reference tokens, top-1 vs next reference token",
+ "prompts": [
+  {
+   "prompt": "Explain, step by step, why the sky appears blue during the day and red at sunset.",
+   "tokens": 128,
+   "agree": 128,
+   "agreement": 1.0,
+   "free_running_first_divergence": null,
+   "step_ms_integration": 18.561166085992156,
+   "step_ms_ws2": 11.366502574358986
+  },
+  {
+   "prompt": "Write a short Python function that returns the n-th Fibonacci number iteratively, then explain it.",
+   "tokens": 128,
+   "agree": 127,
+   "agreement": 0.9921875,
+   "free_running_first_divergence": 27,
+   "step_ms_integration": 18.561581369694764,
+   "step_ms_ws2": 11.36540639485548
+  }
+ ],
+ "agreement": 0.99609375,
+ "agree": 255,
+ "tokens": 256
+}

@@ -1,0 +1,55 @@
+{
+  "model": "google/gemma-4-26B-A4B-it",
+  "server_capacity": 16,
+  "checkpoint_revision": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+  "dataset_revision": "633f5ee89ab8ad4522a9f850766b73f62147ffdd",
+  "harness_revision": "321e3bb68cb750a58c76606ab57832533302be73",
+  "selection": "first 10 Diamond rows, choice shuffle seed 42",
+  "scope": "10/198 CI subset; 32768-token output budget bounds weekly runtime",
+  "gpqa": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 42,
+    "thinking": false,
+    "max_output_tokens": 32768,
+    "concurrency": 1,
+    "accuracy_threshold": 0.8
+  },
+  "performance": {
+    "shapes": [
+      [
+        128,
+        128,
+        16
+      ],
+      [
+        1024,
+        128,
+        16
+      ]
+    ],
+    "warmup": "one burst per shape",
+    "repeats": 2,
+    "temperature": 0,
+    "ignore_eos": true
+  },
+  "input_sha256": "4da6ba52535a6536a026d0226056ec916c881cea8895907919398dbe8affe51c",
+  "run_start": "2026-11-16T17:14:17.668840+00:00",
+  "gpqa_result": {
+    "measurement_start": "2026-11-16T17:14:17.671634+00:00",
+    "measurement_end": "2026-11-16T17:17:11.672539+00:00",
+    "measured_s": 174.0008948300965,
+    "requests": 10,
+    "mean_ttft_ms": null,
+    "mean_decode_tokens_per_s": null,
+    "aggregate_output_tokens_per_s": 49.75261770034656,
+    "accuracy": 0.9,
+    "correct": 9,
+    "completed_samples": 10,
+    "dataset_samples": 198,
+    "concurrency": 1,
+    "max_output_tokens": 32768,
+    "passed": true
+  }
+}

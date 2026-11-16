@@ -1,0 +1,5 @@
+DECODER_NUMERICS layer=0 length=65 precision=bfp8_release_selected phase=prefill pcc=0.9988224867257034
+DECODER_NUMERICS layer=0 length=65 precision=bfp8_release_selected phase=traced_decode pcc=0.9998362440390801
+DECODER_NUMERICS layer=5 length=65 precision=bfp8_release_selected phase=prefill pcc=0.9990573595126261
+DECODER_NUMERICS layer=5 length=65 precision=bfp8_release_selected phase=traced_decode pcc=0.9999098255676059
+=================== 4 passed, 3 warnings in 61.89s (0:01:01) ===================
