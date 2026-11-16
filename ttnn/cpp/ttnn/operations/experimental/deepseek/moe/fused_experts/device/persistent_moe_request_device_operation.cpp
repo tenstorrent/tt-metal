@@ -4,6 +4,8 @@
 
 #include "persistent_moe_request_device_operation.hpp"
 
+#include <variant>
+
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -55,6 +57,30 @@ std::optional<RequestEndpoints> request_endpoints(
     return RequestEndpoints{.core = *core, .receivers = std::move(receivers)};
 }
 
+// The request page on the socket: [64-byte header | the op's row]. The socket's page (its FIFO) is the op's: a
+// several-row block's when the op serves blocks. A one-row request to such an op (the input one row, the page a
+// block's) puts its row in row 0 of the block's (rows x 32) tiles -- 32 B, one face row, every 32 * block_rows B --
+// and says so in the header (persistent.h kFeHdrRows): the op's other rows are never used. Its partial comes back
+// compacted (the op's senders take row 0) into the front of the partials, its flags where a block's go.
+struct RequestPage {
+    uint32_t page_bytes;      // the socket page
+    uint32_t page_row_bytes;  // the op's row: page_bytes less the header
+    uint32_t block_rows;      // the op's rows per input row: 1, or the block's for a one-row request
+};
+
+RequestPage request_page(const PersistentMoeRequestParams& attributes, const Tensor& input) {
+    const uint32_t row_bytes = input.buffer()->page_size();
+    const uint32_t page_bytes = attributes.request_socket.get_config().socket_mem_config.fifo_size;
+    TT_FATAL(
+        page_bytes > kRequestHeaderBytes && (page_bytes - kRequestHeaderBytes) % row_bytes == 0,
+        "persistent_moe_request: the socket's {} B page is not the header and a whole number of {} B input rows",
+        page_bytes,
+        row_bytes);
+    const uint32_t page_row_bytes = page_bytes - kRequestHeaderBytes;
+    return RequestPage{
+        .page_bytes = page_bytes, .page_row_bytes = page_row_bytes, .block_rows = page_row_bytes / row_bytes};
+}
+
 // The request's second sender, on fabric link 1: a core next to the socket's sender core, when the page spans
 // kMinPartnerPackets packets or more and the route's first hop has a second link. It sends the page's back part.
 // A link carries about a packet per 0.84 us; the partner starts about 0.7 us behind the main core (it waits for
@@ -91,6 +117,8 @@ struct PartialsLayout {
     std::vector<tt::tt_metal::CoreCoord> sum_cores;
     uint32_t part_bytes;
     uint32_t num_slots;
+    // How far past this request's slots the flags sit (a one-row request to a block op: the block's slots' end).
+    uint32_t flags_shift = 0;
 };
 
 // The sum views a part as tiles of this shape; the sum is elementwise, so any whole-tile view does. 4 rows: a
@@ -149,7 +177,8 @@ uint32_t hc_streams(const PersistentMoeRequestInputs& tensors) {
     return rows == 0 ? 0u : static_cast<uint32_t>(tensors.streams->logical_shape()[2]) / rows;
 }
 
-PartialsLayout partials_layout(const PersistentMoeRequestParams& attributes, uint32_t row_bytes) {
+PartialsLayout partials_layout(
+    const PersistentMoeRequestParams& attributes, uint32_t row_bytes, uint32_t block_rows = 1) {
     const auto& partials = attributes.partials;
     const auto& shard = partials.shard_spec().value();
     PartialsLayout layout{
@@ -162,8 +191,11 @@ PartialsLayout partials_layout(const PersistentMoeRequestParams& attributes, uin
         parts,
         kSumTileBytes);
     layout.part_bytes = row_bytes / parts;
-    // num_slots slots of a part, then a flag word per slot.
-    layout.num_slots = static_cast<uint32_t>(partials.buffer()->aligned_size_per_bank()) / (layout.part_bytes + 4u);
+    // num_slots slots of the op's part (a block's: block_rows of this request's), then a flag word per slot; a one-row
+    // request's slots are compacted at the front, its flags where the block's go.
+    layout.num_slots =
+        static_cast<uint32_t>(partials.buffer()->aligned_size_per_bank()) / (layout.part_bytes * block_rows + 4u);
+    layout.flags_shift = layout.num_slots * layout.part_bytes * (block_rows - 1u);
     TT_FATAL(
         layout.num_slots > 0,
         "persistent_moe_request: the partials shards hold no slot of a {} B part",
@@ -279,7 +311,7 @@ void PersistentMoeRequestDeviceOperation::validate_on_program_cache_miss(
             partials.memory_config().buffer_type() == BufferType::L1 &&
             partials.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "persistent_moe_request: partials must be an L1 HEIGHT_SHARDED tensor on the input's mesh");
-    partials_layout(attributes, input.buffer()->page_size());
+    partials_layout(attributes, input.buffer()->page_size(), request_page(attributes, input).block_rows);
     if (hc_post(tensors)) {
         validate_hc_post(attributes, tensors);
     } else {
@@ -331,9 +363,11 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
         const auto src = mesh->get_fabric_node_id(coord);
         const auto routes = d2d_routes(src, endpoints->receivers);
         const auto& core = endpoints->core;
-        const uint32_t page_bytes = kRequestHeaderBytes + row_bytes;
-
-        const auto partner = request_partner(*mesh, src, routes.front().next, core, page_bytes);
+        const auto page = request_page(attributes, input);
+        const uint32_t page_bytes = page.page_bytes;
+        // A one-row request to a block op scatters its row over the page, so the main core sends all of it.
+        const auto partner =
+            page.block_rows == 1u ? request_partner(*mesh, src, routes.front().next, core, page_bytes) : std::nullopt;
         CoreRangeSet senders(CoreRange(core, core));
         if (partner.has_value()) {
             senders = senders.merge(CoreRangeSet(CoreRange(partner->core, partner->core)));
@@ -359,6 +393,8 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
             row_bytes,
             static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()),
             cb_page,
+            page.page_row_bytes,
+            page.block_rows,
         };
         TensorAccessorArgs(*input.buffer()).append_to(ct_args);
         KernelDescriptor kernel;
@@ -416,7 +452,12 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
 
     // The sum of each part of the row, on its sum core: the slots are a CB over the partials shard, which the
     // persistent op's chips fill.
-    const auto layout = partials_layout(attributes, row_bytes);
+    const auto layout = partials_layout(attributes, row_bytes, request_page(attributes, input).block_rows);
+    // A one-row request to a block op: the sums' flags past the block's slots (the kernels find them past their own).
+    const std::variant<uint32_t, Buffer*> partials_arg =
+        layout.flags_shift == 0u ? std::variant<uint32_t, Buffer*>(attributes.partials.buffer())
+                                 : std::variant<uint32_t, Buffer*>(static_cast<uint32_t>(
+                                       attributes.partials.buffer()->address() + layout.flags_shift));
     // The plain sum's view: the tallest tile (up to 32x32) that a part is a whole number of -- per-tile overhead is
     // what the sum costs, so a several-row block's part (20 KB) goes in 32x32 tiles rather than 80 4x32 ones.
     uint32_t sum_tile_h = kSumTileH;
@@ -573,7 +614,7 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
             sum_reader.emplace_runtime_args(
                 c,
                 {skip,
-                 attributes.partials.buffer(),
+                 partials_arg,
                  tensors.post->buffer(),
                  tensors.comb->buffer(),
                  tensors.streams->buffer(),
@@ -595,7 +636,7 @@ tt::tt_metal::ProgramDescriptor PersistentMoeRequestDeviceOperation::MultiCore::
         sum_compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false};
         for (uint32_t part = 0; part < layout.sum_cores.size(); ++part) {
             const auto& c = layout.sum_cores[part];
-            sum_reader.emplace_runtime_args(c, {skip, attributes.partials.buffer(), output.buffer(), part});
+            sum_reader.emplace_runtime_args(c, {skip, partials_arg, output.buffer(), part});
             sum_compute.emplace_runtime_args(c, {skip});
         }
     }
@@ -620,8 +661,10 @@ void PersistentMoeRequestDeviceOperation::MultiCore::override_runtime_arguments(
         auto* mesh = input.device();
         const auto src = mesh->get_fabric_node_id(*mesh_dispatch_coordinate);
         const auto routes = d2d_routes(src, endpoints->receivers);
-        const auto partner = request_partner(
-            *mesh, src, routes.front().next, endpoints->core, kRequestHeaderBytes + input.buffer()->page_size());
+        const auto page = request_page(attributes, input);
+        const auto partner = page.block_rows == 1u
+                                 ? request_partner(*mesh, src, routes.front().next, endpoints->core, page.page_bytes)
+                                 : std::nullopt;
         std::vector<tt::tt_metal::CoreCoord> senders = {endpoints->core};
         if (partner.has_value()) {
             senders.push_back(partner->core);
@@ -633,7 +676,8 @@ void PersistentMoeRequestDeviceOperation::MultiCore::override_runtime_arguments(
         }
         sum_kernel = 1;
     }
-    const auto layout = partials_layout(attributes, input.buffer()->page_size());
+    const auto layout =
+        partials_layout(attributes, input.buffer()->page_size(), request_page(attributes, input).block_rows);
     for (const auto& c : layout.sum_cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, sum_kernel, c);
         reader_args[0] = skip;

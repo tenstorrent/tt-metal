@@ -66,6 +66,11 @@ constexpr uint32_t kFeHdrRouterBias = 4;
 constexpr uint32_t kFeHdrTopK = 5;
 // The row's requester, in the router row's header (the reducer's candidate slot) and the merge ring's.
 constexpr uint32_t kFeHdrRequester = 6;
+// The request's rows when fewer than the op's (0: the op's): a one-row request to an op built for several-row
+// blocks, its row in row 0 of the block's (rows x 32) tiles (the other rows' contents are never used). Set in the
+// request page's header by the requester and copied by the control core into the router row's header (the route
+// merge drops the other rows' selections) and the source ring (the senders send row 0's partial only).
+constexpr uint32_t kFeHdrRows = 9;
 // Bit k set when requester k is served on demand rather than in turn (the same in every row; the control core reads
 // row 0's): see fe_ctrl.cpp.
 constexpr uint32_t kFeHdrOnDemand = 7;

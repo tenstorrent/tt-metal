@@ -165,3 +165,73 @@ def test_moe_persistent_any_order(mesh_device, rows):
     ), f"a request's output depends on the other requesters' (alone vs together) or is below PCC {PCC}:\n" + "\n".join(
         report
     )
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash config not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@torch.no_grad()
+def test_moe_persistent_mixed_rows(mesh_device):
+    """One launch serving one-row and 4-row requests together (``PersistentMoE(rows=1, block_rows=4)``, mixed): every
+    requester sends an uneven, shuffled run of requests, each one row or a 4-row block at random. Each output must
+    match the same request run alone bit for bit, and torch. A one-row request rides the block's row 0 (its other rows
+    unused), so it also checks that no other row leaks into it."""
+    if os.environ.get("TT_FE_FIXED_ORDER") == "1":
+        pytest.skip("TT_FE_FIXED_ORDER=1 takes the requesters in strict turn, which this test's uneven counts hang")
+    moe_mesh, request_meshes, config, socket_core, single_senders = _setup(mesh_device)
+    layers, moes = _load_layers(moe_mesh, config)
+    num_requesters = len(request_meshes)
+    block = 4
+    requests, order = _plan(num_requesters, len(layers), block, config.hidden_size)
+    rng = random.Random(1)
+    # Each request one row (its block's row 0) or the whole block.
+    rows_of = {(j, i): rng.choice((1, block)) for j, mine in enumerate(requests) for i in range(len(mine))}
+    logger.info(f"{num_requesters} requesters, rows per request {rows_of}")
+
+    moe_op = PersistentMoE(
+        moe_mesh, request_meshes, moes, socket_core, socket_core, single_senders, rows=1, block_rows=block
+    )
+    assert moe_op.mixed, "the mixed-rows server is off (DEEPSEEK_V41_MOE_MIXED_ROWS=0?)"
+
+    def send(j, i):
+        rows = rows_of[j, i]
+        layer, data = requests[j][i]
+        moe_op.use_rows(rows)
+        tensor = moe_op.request_input(j)
+        moe_op.upload(j, data[:rows], tensor)
+        return tensor, moe_op.request(j, layer, tensor)
+
+    solo, together = {}, {}
+    try:
+        for j, mine in enumerate(requests):
+            for i in range(len(mine)):
+                tensor, out = send(j, i)
+                solo[j, i] = _output(out, rows_of[j, i])
+                ttnn.deallocate(out)
+                ttnn.deallocate(tensor)
+        pending = {key: send(*key) for key in order}
+        for key, (tensor, out) in pending.items():
+            together[key] = _output(out, rows_of[key])
+            ttnn.deallocate(out)
+            ttnn.deallocate(tensor)
+    finally:
+        moe_op.stop()
+
+    report = []
+    failed = False
+    for j, mine in enumerate(requests):
+        for i, (layer, data) in enumerate(mine):
+            rows = rows_of[j, i]
+            same = torch.equal(solo[j, i], together[j, i])
+            pccs = []
+            for r in range(rows):
+                candidates, _ = _reference(data[r], *layers[layer], config, moes[layer].experts)
+                pccs.append(max(_pcc(c, together[j, i][r]) for c in candidates))
+            failed |= not same or min(pccs) < PCC
+            report.append(
+                f"requester {j} request {i} layer {layer} rows {rows}: {'bit-identical' if same else 'DIFFERS'} alone "
+                f"vs together, per-row PCC vs torch " + " ".join(f"{p:.5f}" for p in pccs)
+            )
+    logger.info("\n" + "\n".join(report))
+    assert not failed, "a mixed-rows request differs alone vs together, or is below PCC:\n" + "\n".join(report)

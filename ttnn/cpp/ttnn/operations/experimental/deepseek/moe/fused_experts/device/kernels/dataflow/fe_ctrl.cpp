@@ -202,7 +202,8 @@ void kernel_main() {
             const uint32_t k = routed_queue[e % kFeSourceRing];
             const uint32_t page = in[k].read_ptr;
             const uint32_t layer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrLayer];
-            source[e % kFeSourceRing] = k;
+            // The senders' entry: the requester, and in bits 8+ the request's rows (kFeHdrRows).
+            source[e % kFeSourceRing] = k | (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrRows] << 8);
             for (uint32_t s = 0; s < num_senders; ++s) {
                 noc_async_write(
                     reinterpret_cast<uint32_t>(&source[e % kFeSourceRing]),
@@ -237,6 +238,8 @@ void kernel_main() {
                 DeviceZoneScopedN("FE_CTRL_ROUTE_MCAST");
                 const uint32_t hdr_l1 = headers_l1 + layer * kHdrBytes;
                 headers[layer * kFeHdrWords + kFeHdrRequester] = k;
+                headers[layer * kFeHdrWords + kFeHdrRows] =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page)[kFeHdrRows];
                 const uint32_t entry = merge_ring_addr + (r % kFeSourceRing) * kHdrBytes;
                 noc_async_write(hdr_l1, get_noc_addr(merge_x, merge_y, entry), kHdrBytes);
                 noc_async_write_multicast(hdr_l1, route_hdr_mcast, kHdrBytes, route_cores);
