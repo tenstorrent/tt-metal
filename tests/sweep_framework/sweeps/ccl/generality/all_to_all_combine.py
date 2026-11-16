@@ -158,7 +158,4 @@ def run(
         except Exception as e:
             raise RuntimeError(f"Execution failed: {e}")
 
-        except AssertionError as e:
-            return False, e
-
         return True, None

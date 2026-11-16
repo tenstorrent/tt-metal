@@ -358,7 +358,7 @@ def partial_layernorm(
     )
 
     if seq_len > slice_size:
-        assert seq_len % slice_size == 0, "Sequence length must be divisible by layernorm slice size {slice_size}"
+        assert seq_len % slice_size == 0, f"Sequence length must be divisible by layernorm slice size {slice_size}"
         num_slices = seq_len // slice_size  # we do 128 per iteration (slice), then we concat the result.
 
         xs_output_cat = ln_output_tensors_dict[seq_len]
@@ -476,7 +476,7 @@ def fused_partial_layernorm(
     interleaved_l1_memcfg = ttnn.L1_MEMORY_CONFIG
 
     if seq_len > slice_size:
-        assert seq_len % slice_size == 0, "Sequence length must be divisible by layernorm slice size {slice_size}"
+        assert seq_len % slice_size == 0, f"Sequence length must be divisible by layernorm slice size {slice_size}"
         num_slices = seq_len // slice_size  # we do 128 per iteration (slice), then we concat the result.
 
         out_tensor_1 = out_tensor_dict_1[seq_len]

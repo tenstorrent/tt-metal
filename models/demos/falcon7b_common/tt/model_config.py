@@ -159,7 +159,7 @@ def pretty_print_model_config(model_config):
             print_str.append(f"{key}: {val}")
 
         else:
-            raise NotImplementedError("Unknown key: {key}!")
+            raise NotImplementedError(f"Unknown key: {key}!")
 
     return "\n".join(print_str)
 
