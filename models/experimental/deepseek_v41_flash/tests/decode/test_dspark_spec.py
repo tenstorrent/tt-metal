@@ -648,22 +648,37 @@ def _block_spec_decode(mesh_device) -> None:
         logger.info(f"block greedy (1 token per round): {block_greedy.stats.summary(drafts)}")
         results["blockgr"] = (block_greedy.stats, block_stream)
 
-        # 3. Corrupted oracle drafts from the block greedy stream: exactness under rejection, and the verify / accept
-        # plumbing (it should accept ~2/3, 4/9, 8/27 of the drafts at depth 1, 2, 3).
+        # 3. Corrupted oracle drafts: exactness under rejection, and the verify / accept / rollback plumbing. No fixed
+        # stream is an oracle for the block path: a block's logits depend on where it starts at the bf16-ulp level, so
+        # a stream parts from any reference at its first near-tie. So the oracle probes the block path itself: before
+        # each round at p it runs verify blocks [next, t_1 .. t_j, noise ..] at p (rolled back each time) to get the
+        # block path's own t_1 .. t_k from these rows, then corrupts each with probability CORRUPT. Rows are causal and
+        # bit-exact whatever the later rows hold, so the round must accept exactly the drafts before the first
+        # corrupted one; any other count is a verify, accept or rollback bug.
         rng = random.Random(0)
-        oracle_stream = prompt + block_stream
+        expected: list[int] = []
 
         def propose(token, frontier):
-            return [
-                oracle_stream[q]
-                if q < len(oracle_stream) and rng.random() > CORRUPT
-                else rng.randrange(config.vocab_size)
-                for q in range(frontier + 2, frontier + 2 + drafts)
-            ]
+            p, seq = frontier + 1, [token]
+            for j in range(drafts):
+                out = model.decode_verify_block(seq + [noise] * (rows - len(seq)), p)
+                model.spec_fixup(list(range(p, p + rows)))
+                seq.append(out[j])
+            corrupt = [rng.random() < CORRUPT for _ in range(drafts)]
+            expected.append(next((j for j, c in enumerate(corrupt) if c), drafts))
+            return [rng.randrange(config.vocab_size) if c else t for t, c in zip(seq[1:], corrupt)]
 
         oracle = DSparkSpeculator(model, drafts, propose=propose, parallel_verify=True, temperature=0.0)
         got = converse(oracle)
-        logger.info(f"oracle ({drafts} drafts, 1/3 corrupted), block verify: {oracle.stats.summary(drafts)}")
+        accepted = oracle.stats.accepted
+        # The last round may be cut at the token budget.
+        wrong = [(i, a, e) for i, (a, e) in enumerate(zip(accepted[:-1], expected)) if a != e]
+        logger.info(
+            f"oracle ({drafts} drafts, 1/3 corrupted, probed; its draft time is the probes'), block verify: "
+            f"{oracle.stats.summary(drafts)}; rounds accepting other than the uncorrupted prefix: {len(wrong)} of "
+            f"{len(accepted)} {wrong[:10]}"
+        )
+        assert not wrong or not EXACT, f"oracle rounds (round, accepted, expected) {wrong[:10]}"
         results["oracle"] = (oracle.stats, got)
 
         # 4. The DSpark drafter, greedy.
