@@ -31,6 +31,8 @@ namespace ttnn::experimental::prim::per_token_cast_back {
 
 namespace fp8 = ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8;
 
+static_assert(fp8::BLOCK_W == 128, "per_token_cast_back kernels hard-code a 128-wide block (width >> 7)");
+
 namespace {
 
 std::pair<uint32_t, uint32_t> fold_M_H(const ttnn::Shape& shape) {
@@ -407,10 +409,6 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
                 rows_for_core_from_split(core, core_range_set_1, core_range_set_2, rows_per_core_g1, rows_per_core_g2);
             const uint32_t total_scale_blocks = rows_for_core * scale_blocks_per_row;
             const uint32_t num_blocks = tt::div_up(total_scale_blocks, tile_h);  // last block may be partial
-
-            TT_FATAL(
-                num_blocks == tt::div_up(rows_for_core * scale_blocks_per_row, tile_h),
-                "per_token_cast_back: num_blocks invariant violated on a core");
 
             // Pass num_blocks to the (unchanged) compute as (num_tile_rows = num_blocks, num_col_blocks
             // = 1) so its for-tr/for-c loop runs exactly num_blocks times.

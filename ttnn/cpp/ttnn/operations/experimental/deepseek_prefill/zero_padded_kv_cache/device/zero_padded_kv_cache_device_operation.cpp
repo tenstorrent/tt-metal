@@ -176,6 +176,14 @@ void validate_runtime_args(
         "chunk_local ({}) must be tile-aligned (multiple of {})",
         chunk_local,
         TILE_HEIGHT);
+    // The TILE kernels count whole tiles up to the window end, so a pad end inside a tile is dropped.
+    if (cache.layout() == Layout::TILE) {
+        TT_FATAL(
+            args.pad_align % TILE_HEIGHT == 0,
+            "pad_align ({}) must be a multiple of {} for a TILE cache",
+            args.pad_align,
+            TILE_HEIGHT);
+    }
     const uint32_t global_capacity = sp_factor * cache.padded_shape()[-2];
     // A pad_align-aligned capacity guarantees ceil_pad_align(valid_global) <= capacity whenever
     // valid_global <= capacity, so the window never rounds past the cache (well-formed block-cyclic

@@ -36,6 +36,13 @@ void DeepseekMoEPostCombineTilizeDeviceOperation::validate_on_program_cache_miss
     // rank 2+
     TT_FATAL(input_rank >= 2, "DeepseekMoEPostCombineTilize requires rank >= 2, but has {}", input_rank);
 
+    // The output is tile-padded per dim[-2], while the shards are counted over the flat upper dims.
+    TT_FATAL(
+        input_shape[-2] % tt::constants::TILE_HEIGHT == 0,
+        "DeepseekMoEPostCombineTilize requires dim[-2] ({}) to be a multiple of {}",
+        input_shape[-2],
+        tt::constants::TILE_HEIGHT);
+
     // input must be bfloat16
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16,

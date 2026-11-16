@@ -660,3 +660,30 @@ def test_zero_padded_kv_cache_tp_deduped(mesh_device, sp_axis, chunk_size_global
     # layer_idx is hashed, slot and valid_global are not.
     num_layers_used = len({layer_idx for _slot, layer_idx in windows})
     assert mesh_device.num_program_cache_entries() == cache_entries_before + num_layers_used
+
+
+@pytest.mark.parametrize("pad_align", [16, 32])
+def test_zero_padded_kv_cache_tile_pad_align(device, expect_error, pad_align):
+    """On a TILE cache the kernels count whole tiles up to the window end, so a pad_align that is not
+    a tile multiple would put the end inside a tile and drop the window (here rows 170..175)."""
+    seq_len, head_dim, valid_global = 256, 64, 170
+    cache = ttnn.from_torch(
+        torch.ones(1, 1, seq_len, head_dim, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+    )
+    zero = lambda: ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        cache, 0, 0, 1, valid_global, seq_len, 0, pad_align
+    )
+    if pad_align % ttnn.TILE_SIZE != 0:
+        with expect_error(RuntimeError, f"pad_align \\({pad_align}\\) must be a multiple of 32"):
+            zero()
+        return
+    zero()
+    out = ttnn.to_torch(cache)[0, 0]
+    pad_end = math.ceil(valid_global / pad_align) * pad_align
+    assert (out[:valid_global] == 1).all()
+    assert (out[valid_global:pad_end] == 0).all()
+    assert (out[pad_end:] == 1).all()
