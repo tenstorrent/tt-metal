@@ -17,10 +17,8 @@ hand-off of PrefillStreamHangWatcher on a middle rank with one device:
        {"uid": 81985529, "r": 0, "c": 0,
         "inputs": [{"name": "activation",
                     "arrived": {"x": 1, "y": 9, "addr": 1024, "unit": 2, "raw": 0, "wraps": 0},
-                    "consumed": {"x": 1, "y": 9, "addr": 1088, "unit": 64, "raw": 0, "wraps": 0}},
-                   {"name": "indices", "arrived": {...}, "consumed": {...}}],
-        "outputs": [{"name": "activation", "produced": {...}, "pushed": {...}, "forwarded": {...}},
-                    {"name": "indices", "produced": {...}, "pushed": {...}, "forwarded": {...}}],
+                    "consumed": {"x": 1, "y": 9, "addr": 1088, "unit": 64, "raw": 0, "wraps": 0}}],
+        "outputs": [{"name": "activation", "produced": {...}, "pushed": {...}, "forwarded": {...}}],
         "acks": {"x": 3, "y": 9, "addr": 2048, "unit": 1, "raw": 0, "wraps": 0}},
        ...],
      "stage_idx": 1, "layers": "20-39", "warmup_out": 1, "warmup_in": 1}

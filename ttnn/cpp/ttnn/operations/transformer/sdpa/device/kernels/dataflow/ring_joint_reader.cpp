@@ -1373,7 +1373,7 @@ void kernel_main() {
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if constexpr (!has_sliding_window) {
                     if (k_chain.should_forward(k_chain_head, q_iter_local)) {
-                        k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
+                        k_chain.forward(noc, cb_k, k_chunk_tiles, k_tile_bytes);
                     }
                 }
 
@@ -1521,7 +1521,7 @@ void kernel_main() {
                     // popping the buffer while the mcast is still reading from it.
                     if constexpr (!has_sliding_window) {
                         if (v_chain.should_forward(nv, q_iter_local)) {
-                            v_chain.forward(noc, cb_v_start_address);
+                            v_chain.forward(noc, cb_v);
                         }
                     }
 

@@ -33,8 +33,6 @@ def arm_hang_detector(
     d2d_in: ttnn.D2DStreamServiceReceiver | None,
     d2d_out: ttnn.D2DStreamServiceSender | None,
     d2h: ttnn.D2HStreamService | None,
-    idx_in: ttnn.D2DStreamServiceReceiver | None,
-    idx_out: ttnn.D2DStreamServiceSender | None,
     acks_per_chunk: int,
     sends_warmup: bool,
     warmup_acks: int,
@@ -48,12 +46,11 @@ def arm_hang_detector(
     """
     if os.environ.get(ENABLED_ENV, "0") != "1":
         return None
-    inputs = (("h2d", h2d), ("activation", d2d_in), ("indices", idx_in))
-    outputs = (("activation", d2d_out), ("indices", idx_out))
+    inputs = (("h2d", h2d), ("activation", d2d_in))
     devices = describe_devices(
         mesh_device,
         inputs=[Stream(name, service) for name, service in inputs if service is not None],
-        outputs=[Stream(name, service) for name, service in outputs if service is not None],
+        outputs=[] if d2d_out is None else [Stream("activation", d2d_out)],
         acks=None if d2h is None else AckStream("layer acks", d2h, acks_per_chunk),
     )
     if devices is None:

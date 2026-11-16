@@ -40,10 +40,19 @@ def combine_overlap_payload_size(routed_emb_dim: int) -> int:
 
 
 def dispatch_fabric2d_packet_bytes(routed_emb_dim: int) -> int:
-    """The fabric payload dispatch_fabric2d needs: it sends a whole bfloat16 token, padded to the 64 B DRAM
+    """The fabric payload dispatch_fabric2d needs to send a whole bfloat16 token, padded to the 64 B DRAM
     alignment, with its routing tail in one packet."""
     token_page_bytes = -(-routed_emb_dim * 2 // 64) * 64
     return token_page_bytes + CMB_FABRIC2D_ROUTING_INFO_BYTES
+
+
+def dispatch_fabric2d_min_payload_bytes(routed_emb_dim: int) -> int:
+    """The smallest fabric payload dispatch_fabric2d runs with. Below dispatch_fabric2d_packet_bytes it sends each
+    token as two packets, split at the 64 B-aligned half (first_packet_bytes in the kernel interface), the routing
+    tail riding on the second."""
+    token_page_bytes = -(-routed_emb_dim * 2 // 64) * 64
+    first_packet = (token_page_bytes // 2) & ~63
+    return max(first_packet, token_page_bytes - first_packet + CMB_FABRIC2D_ROUTING_INFO_BYTES)
 
 
 def routed_expert_combine_overlap_enabled(model_cfg) -> bool:
@@ -65,6 +74,17 @@ def moe_fabric2d_transport_enabled(model_cfg) -> bool:
     return getattr(model_cfg, "MOE_FABRIC2D_TRANSPORT", False)
 
 
+def moe_fabric2d_split_tokens(model_cfg) -> bool:
+    """Whether a model on the fabric2d transport opens its mesh with only the payload a split token needs, so
+    dispatch_fabric2d sends each token as two half-size packets. Off unless the config names
+    MOE_FABRIC2D_SPLIT_TOKENS = True; no config does today.
+
+    Meant as a mitigation for the Blackhole fabric router hangs in #64573 (hangs #1 and #3), where routers writing
+    a whole ~12 KB GLM 5.3 token into DRAM on NOC1 wedged the DRAM endpoint. Splitting costs dispatch_fabric2d
+    ~2.5% at the GLM width and the GLM 5.3 prefill ~0-0.5% end to end."""
+    return getattr(model_cfg, "MOE_FABRIC2D_SPLIT_TOKENS", False)
+
+
 def moe_transport_arg(model_cfg):
     """TtMoe's moe_transport for ``model_cfg``: None (fabric2d wherever it fits) for a model that opts in, "direct"
     for every other."""
@@ -77,7 +97,8 @@ def moe_fabric_payload_size(model_cfg) -> int:
     On Blackhole a model that opts into the overlap (routed_expert_combine_overlap_enabled) overlaps the routed
     expert with combine_fabric2d, so the mesh needs room for half a bf16 token plus combine's routing tail, and one
     that opts into the fabric2d transport (moe_fabric2d_transport_enabled) needs room for a whole routed token,
-    which dispatch_fabric2d sends in one packet. Everywhere else the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe
+    which dispatch_fabric2d then sends in one packet, or for half of one if the model also opts into
+    moe_fabric2d_split_tokens, in which case it sends two. Everywhere else the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe
     reads the payload back to decide whether to use either, so a mesh opened any other way simply runs without
     them. No larger than needed: a larger max packet can leave the fabric routers fewer buffer slots, which every
     fabric op pays for. Deferred to avoid probing hardware at import time.
@@ -89,7 +110,10 @@ def moe_fabric_payload_size(model_cfg) -> int:
         payload = max(payload, combine_overlap_payload_size(model_cfg.EMB_SIZE))
     if moe_fabric2d_transport_enabled(model_cfg):
         routed_emb_dim = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
-        payload = max(payload, dispatch_fabric2d_packet_bytes(routed_emb_dim))
+        if moe_fabric2d_split_tokens(model_cfg):
+            payload = max(payload, dispatch_fabric2d_min_payload_bytes(routed_emb_dim))
+        else:
+            payload = max(payload, dispatch_fabric2d_packet_bytes(routed_emb_dim))
     return payload
 
 
@@ -138,15 +162,15 @@ def fabric2d_setup_error(
             f"got {fabric_config}"
         )
     if op == "dispatch":
-        packet_bytes = dispatch_fabric2d_packet_bytes(emb_dim)
-        what = f"dispatch_fabric2d sends a {emb_dim}-wide bf16 token"
+        packet_bytes = dispatch_fabric2d_min_payload_bytes(emb_dim)
+        what = f"dispatch_fabric2d sends a {emb_dim}-wide bf16 token as two halves at most"
     else:
         packet_bytes = combine_overlap_payload_size(emb_dim)
         what = f"combine_fabric2d sends a {emb_dim}-wide bf16 token as two halves at most"
     max_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     if max_payload < packet_bytes:
         return (
-            f"{what} plus a {CMB_FABRIC2D_ROUTING_INFO_BYTES} B routing tail in one packet ({packet_bytes} B), but "
+            f"{what}, the last with a {CMB_FABRIC2D_ROUTING_INFO_BYTES} B routing tail ({packet_bytes} B), but "
             f"the fabric max payload is {max_payload} B. Open the mesh with moe_fabric_payload_size for a model "
             f"that opts in, or raise it with create_fabric_router_config(max_payload_size=...) in device_params."
         )
