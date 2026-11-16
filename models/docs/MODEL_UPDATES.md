@@ -8,8 +8,8 @@
 
 ### [EXAONE 4.5](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 - Added support for EXAONE-4.5-33B text inference on Blackhole LoudBox (8xP150) to [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers), including hybrid sliding window / global attention and 128K context length.
-- Added an experimental on-device vision tower in [models/experimental/exaone45_vl](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/exaone45_vl) and a host-vision hybrid demo ([exaone_45_vision_hybrid.py](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/demo/exaone_45_vision_hybrid.py)).
-- Added a text-only vLLM generator class (`Exaone4_5_ForConditionalGeneration`) in [generator_vllm.py](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/tt/generator_vllm.py).
+- Added an experimental on-device vision tower in [models/experimental/exaone45_vl](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/exaone45_vl) and a host-vision hybrid demo ([exaone_45_vision_hybrid.py](https://github.com/tenstorrent/tt-metal/tree/main/models/ttt_compat/demo/exaone_45_vision_hybrid.py)).
+- Added a text-only vLLM generator class (`Exaone4_5_ForConditionalGeneration`) in [generator_vllm.py](https://github.com/tenstorrent/tt-metal/tree/main/models/ttt_compat/tt/generator_vllm.py).
 
 ## December 8, 2025
 
@@ -147,7 +147,7 @@
 
 ### [Llama 3.1/3.2](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
 > **Note:** This feature is available as of release [v0.56.0-rc37](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc37)
-- Overhauled the demo script (now called [simple_text_demo.py](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/demo/simple_text_demo.py)) to use a simplified causal generation interface.
+- Overhauled the demo script (now called [simple_text_demo.py](https://github.com/tenstorrent/tt-metal/tree/main/models/ttt_compat/demo/simple_text_demo.py)) to use a simplified causal generation interface.
 - Added support for custom input argument overrides to the demo.
 
 ## February 10, 2025
@@ -191,7 +191,7 @@
 
 ## October 7, 2024
 
-### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/llama31_8b)
+### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc1/models/demos/wormhole/llama31_8b)
 - Added support for continuous batching
 - Added paged caching support for PagedAttention
 - Added a demo which runs with TT-NN tracing (23 t/s/u decode on main)
@@ -205,7 +205,7 @@
 
 ## September 9, 2024
 
-### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/mixtral8x7b)
+### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc1/models/demos/t3000/mixtral8x7b)
 > **Note:** This feature is available as of release [v0.52.0-rc1](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc1)
 - Added support for any user prompt size up to a maximum of 32k tokens
 
@@ -215,31 +215,31 @@
 - Added data parallel demo for a single Galaxy (32 chips)
 - Refactored all modules and tests to use ttnn multi-device tensors
 
-### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/llama31_8b)
+### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33/models/demos/wormhole/llama31_8b)
 > **Note:** This feature is available as of release [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33)
 - Added multi-batching support to the demo for running multiple batches of users consecutively
 
-### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/mixtral8x7b)
+### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33/models/demos/t3000/mixtral8x7b)
 - Improved end-to-end performance through optimizations to the attention mask in flash decoding
 
 ## August 12, 2024
 
-### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/llama31_8b)
+### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33/models/demos/wormhole/llama31_8b)
 - Added support for flash decoding
 
-### [Mistral7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mistral7b)
+### [Mistral7B](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33/models/demos/wormhole/mistral7b)
 - Updated the demo to support multiple batches of users
 
 ### [Mamba-2.8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mamba)
 - Updated the demo to use the full prefill graph instead of processing a single token of the prompt at a time using decode
 
-### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/mixtral8x7b)
+### [Mixtral8x7B](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33/models/demos/t3000/mixtral8x7b)
 - Added support for decode with 32K context length using flash decoding
 - Fused mixture of experts into a single operation using `ttnn.moe`
 
 ## July 29, 2024
 
-### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/llama31_8b)
+### [Llama 3.1 - 8B](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33/models/demos/wormhole/llama31_8b)
 - Added support for LLaMA 3.1 - 8B
 - Runs fast prefill for sequence lengths of up to 512 tokens
 - Supports a maximum context length of 8K tokens
@@ -248,5 +248,5 @@
 - Added support for LLaMA 3.1 70B (new scaled rotary position embeddings)
 - Prefill and decode now support 8K context length with batch size 16
 
-### [Mistral7B](demos/wormhole/mistral7b)
+### [Mistral7B](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33/models/demos/wormhole/mistral7b)
 - Added prefill support for 4K context length, using scaled dot product attention
