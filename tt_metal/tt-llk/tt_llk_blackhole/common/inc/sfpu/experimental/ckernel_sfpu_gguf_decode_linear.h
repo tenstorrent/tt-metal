@@ -22,14 +22,35 @@ using namespace ckernel::gguf;
 template <int FMT>
 constexpr bool q40_params = FMT == Q8_0 || FMT == Q4_0 || FMT == Q5_0 || FMT == Q4_1 || FMT == Q5_1;
 
+// A group step's store of entry e, also DELTA tiles further (the other DEST set) when DELTA is not 0.
+template <int DELTA>
+sfpi_inline void gstore(const int e, const vUInt v)
+{
+    sfpi::dst_reg[e].mode<sfpi::DataLayout::U32>() = v;
+    if constexpr (DELTA != 0)
+    {
+        sfpi::dst_reg[e + TILE * DELTA].mode<sfpi::DataLayout::U32>() = v;
+    }
+}
+
+template <int DELTA>
+sfpi_inline void gstore(const int e, const vFloat v)
+{
+    sfpi::dst_reg[e] = v;
+    if constexpr (DELTA != 0)
+    {
+        sfpi::dst_reg[e + TILE * DELTA] = v;
+    }
+}
+
 // Q4_K and Q5_K: k4_group (sfpu_gguf_decode_group) unpacks a group's 6-bit scales and mins once, from the scale rows
 // (0..5: 12 bytes per column), into scratch entries K4 .. K4 + 15. Word K4 + 4 (2a + b) + 2v + u, byte t: field v
 // (0 scale, 1 min) of tile 4u + t, column half b, word parity a; the bytes of tiles 0..3 keep their native top two bits
 // (bits() drops them). Rows 6, 7 (fp16 d, dmin) are in the page as stored: k4_group converts them and stores them
-// where pf32 reads them, past the page.
+// where pf32 reads them, past the page. DELTA: also into the tiles DELTA further (gstore).
 constexpr int K4 = 2 * TILE;
 
-template <int FMT>
+template <int FMT, int DELTA = 0>
 sfpi_inline void k4_group()
 {
     constexpr int src = CO + scale_row<FMT>() / 2;
@@ -53,28 +74,28 @@ sfpi_inline void k4_group()
         sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)].template mode<sfpi::DataLayout::U32>() = q2;
         sfpi::dst_reg[pf32_idx<FMT>(1, 1, a)].template mode<sfpi::DataLayout::U32>() = q3;
 
-        sfpi::dst_reg[w0 + 0].mode<sfpi::DataLayout::U32>() = r0;
-        sfpi::dst_reg[w0 + 2].mode<sfpi::DataLayout::U32>() = r1;
-        sfpi::dst_reg[w1 + 0].mode<sfpi::DataLayout::U32>() = r3;
-        sfpi::dst_reg[w1 + 2].mode<sfpi::DataLayout::U32>() = q0;
-        sfpi::dst_reg[w0 + 1].mode<sfpi::DataLayout::U32>() = (r2 & lo4) | ((r0 >> 2u) & hi2);
-        sfpi::dst_reg[w0 + 3].mode<sfpi::DataLayout::U32>() = ((r2 >> 4u) & lo4) | ((r1 >> 2u) & hi2);
-        sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = ((r3 >> 2u) & hi2) | (q1 & lo4);
-        sfpi::dst_reg[w1 + 3].mode<sfpi::DataLayout::U32>() = ((q1 >> 4u) & lo4) | ((q0 >> 2u) & hi2);
+        gstore<DELTA>(w0 + 0, r0);
+        gstore<DELTA>(w0 + 2, r1);
+        gstore<DELTA>(w1 + 0, r3);
+        gstore<DELTA>(w1 + 2, q0);
+        gstore<DELTA>(w0 + 1, (r2 & lo4) | ((r0 >> 2u) & hi2));
+        gstore<DELTA>(w0 + 3, ((r2 >> 4u) & lo4) | ((r1 >> 2u) & hi2));
+        gstore<DELTA>(w1 + 1, ((r3 >> 2u) & hi2) | (q1 & lo4));
+        gstore<DELTA>(w1 + 3, ((q1 >> 4u) & lo4) | ((q0 >> 2u) & hi2));
 
 #pragma GCC unroll 2
         for (int F = 0; F < 2; F++)
         {
             vFloat lo, hi;
             f16_both(ldu(pf32_idx<FMT>(F, 1, a)), lo, hi, vUInt(0x38000000u));
-            sfpi::dst_reg[pf32_idx<FMT>(F, 0, a)] = lo;
-            sfpi::dst_reg[pf32_idx<FMT>(F, 1, a)] = hi;
+            gstore<DELTA>(pf32_idx<FMT>(F, 0, a), lo);
+            gstore<DELTA>(pf32_idx<FMT>(F, 1, a), hi);
         }
     }
 }
 
 // Q2_K's group step: rows 8, 9 (fp16 d and dmin) to fp32, where pf32 reads them, past the page.
-template <int FMT>
+template <int FMT, int DELTA = 0>
 sfpi_inline void q2_group()
 {
 #pragma GCC unroll 2
@@ -85,10 +106,10 @@ sfpi_inline void q2_group()
         vFloat d0, d1, m0, m1;
         f16_both(r0, d0, d1, vUInt(0x38000000u));
         f16_both(r1, m0, m1, vUInt(0x38000000u));
-        sfpi::dst_reg[pf32_idx<FMT>(0, 0, a)] = d0;
-        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)] = d1;
-        sfpi::dst_reg[pf32_idx<FMT>(1, 0, a)] = m0;
-        sfpi::dst_reg[pf32_idx<FMT>(1, 1, a)] = m1;
+        gstore<DELTA>(pf32_idx<FMT>(0, 0, a), d0);
+        gstore<DELTA>(pf32_idx<FMT>(0, 1, a), d1);
+        gstore<DELTA>(pf32_idx<FMT>(1, 0, a), m0);
+        gstore<DELTA>(pf32_idx<FMT>(1, 1, a), m1);
     }
 }
 
@@ -106,7 +127,7 @@ sfpi_inline vUInt q3_word(const vUInt lo, const vUInt hi)
     return (l & sfpi::as<vUInt>(sfpi::vConstIntPrgm0)) | ((h & sfpi::as<vUInt>(sfpi::vConstIntPrgm1)) << 4u);
 }
 
-template <int FMT>
+template <int FMT, int DELTA = 0>
 sfpi_inline void q3_group()
 {
     sfpi::vConstIntPrgm0 = 0x0F0F0F0F;
@@ -117,22 +138,22 @@ sfpi_inline void q3_group()
         const int w0 = Q3 + 8 * a, w1 = w0 + 4;
         vUInt r0, r1, r2, r3;
         rep4<FMT>(0, a, r0, r1, r2, r3);
-        sfpi::dst_reg[w0 + 0].mode<sfpi::DataLayout::U32>() = q3_word<0, 0>(r0, r2);
-        sfpi::dst_reg[w0 + 1].mode<sfpi::DataLayout::U32>() = q3_word<0, 2>(r1, r2);
-        sfpi::dst_reg[w0 + 2].mode<sfpi::DataLayout::U32>() = q3_word<4, 4>(r0, r2);
-        sfpi::dst_reg[w0 + 3].mode<sfpi::DataLayout::U32>() = q3_word<4, 6>(r1, r2);
+        gstore<DELTA>(w0 + 0, q3_word<0, 0>(r0, r2));
+        gstore<DELTA>(w0 + 1, q3_word<0, 2>(r1, r2));
+        gstore<DELTA>(w0 + 2, q3_word<4, 4>(r0, r2));
+        gstore<DELTA>(w0 + 3, q3_word<4, 6>(r1, r2));
         sfpi::dst_reg[w1 + 0].mode<sfpi::DataLayout::U32>() = r3;  // row 3, until the transpose below is done
         vUInt q0, q1, q2, q3;
         rep4<FMT>(1, a, q0, q1, q2, q3);
         const vUInt l0 = ldu(w1 + 0);
-        sfpi::dst_reg[w1 + 0].mode<sfpi::DataLayout::U32>() = q3_word<0, 0>(l0, q1);
-        sfpi::dst_reg[w1 + 1].mode<sfpi::DataLayout::U32>() = q3_word<0, 2>(q0, q1);
-        sfpi::dst_reg[w1 + 2].mode<sfpi::DataLayout::U32>() = q3_word<4, 4>(l0, q1);
-        sfpi::dst_reg[w1 + 3].mode<sfpi::DataLayout::U32>() = q3_word<4, 6>(q0, q1);
+        gstore<DELTA>(w1 + 0, q3_word<0, 0>(l0, q1));
+        gstore<DELTA>(w1 + 1, q3_word<0, 2>(q0, q1));
+        gstore<DELTA>(w1 + 2, q3_word<4, 4>(l0, q1));
+        gstore<DELTA>(w1 + 3, q3_word<4, 6>(q0, q1));
         vFloat d0, d1;
         f16_both(q2, d0, d1, vUInt(0x38000000u));
-        sfpi::dst_reg[pf32_idx<FMT>(0, 0, a)] = d0;
-        sfpi::dst_reg[pf32_idx<FMT>(0, 1, a)] = d1;
+        gstore<DELTA>(pf32_idx<FMT>(0, 0, a), d0);
+        gstore<DELTA>(pf32_idx<FMT>(0, 1, a), d1);
     }
 }
 

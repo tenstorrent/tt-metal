@@ -323,30 +323,32 @@ constexpr bool sfpu_gguf_decode_body_macro_stores()
  *
  * @tparam FMT: ckernel::gguf::Format of the page.
  * @param dst_index: As @ref sfpu_gguf_decode_tile; the page in tile dst_index + 1 is any page of the group.
+ * @tparam DELTA: When not 0, the results also go to the tiles of dst_index + DELTA (in place of a group step or
+ *                @ref sfpu_gguf_decode_group_copy there); nothing else may write those entries until the group ends.
  * @param rows: As @ref sfpu_gguf_decode_tile; the same value as the group's tile calls.
  * @note Call before the first tile of a group that @ref sfpu_gguf_decode_tile decodes at dst_index and rows; nothing
  *       else may write scratch tile dst_index + 2 (entries 0..15) or tile dst_index + 1 past its page until the
  *       group ends. Q4_K, Q5_K, Q3_K: overwrites programmable constants 0 and 1.
  */
-template <int FMT>
+template <int FMT, int DELTA = 0>
 inline void sfpu_gguf_decode_group(const std::uint32_t dst_index, const std::uint32_t rows = 0)
 {
     if constexpr (FMT == gguf::Q4_K || FMT == gguf::Q5_K)
     {
         sfpu_gguf_decode_start(dst_index, rows);
-        gguf::k4_group<FMT>();
+        gguf::k4_group<FMT, DELTA>();
         sfpu_gguf_decode_done();
     }
     else if constexpr (FMT == gguf::Q2_K)
     {
         sfpu_gguf_decode_start(dst_index, rows);
-        gguf::q2_group<FMT>();
+        gguf::q2_group<FMT, DELTA>();
         sfpu_gguf_decode_done();
     }
     else if constexpr (FMT == gguf::Q3_K)
     {
         sfpu_gguf_decode_start(dst_index, rows);
-        gguf::q3_group<FMT>();
+        gguf::q3_group<FMT, DELTA>();
         sfpu_gguf_decode_done();
     }
 }
