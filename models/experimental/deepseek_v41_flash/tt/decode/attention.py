@@ -132,6 +132,8 @@ _SELECT_KV_RATE = 4
 # ``flash_mqa_decode``: more S-blocks or 128-row chunks measured no faster; HiFi2 matches HiFi4's PCC.
 _FLASH_MQA_K_CHUNK = 64
 _FLASH_MQA_S_BLOCKS = 8
+# A compressed layer's verify block spreads its ring + dense rows over more S-blocks.
+_FLASH_MQA_S_BLOCKS_BLOCK = 12
 _FLASH_MQA_COMPUTE = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
@@ -1284,6 +1286,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         dense: bool,
         dense_entry,
         interleave: int = 0,
+        prev_slot=None,
     ):
         """:meth:`_latent` of one row of one session as ``compress_pool_decode``, which also RoPEs the closed group:
         ``(latent, row)``, the pre-RoPE latent (TILE DRAM ``[1, 1, 1, Dh]``) and its RoPE'd row (ROW_MAJOR DRAM),
@@ -1298,9 +1301,11 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         windows = {}
         if self.compress_ratio > 1:
             assert (
-                scache.win_kv.shape[2] == self.compress_ratio
-            ), "a window deeper than the ratio pairs through win_prev"
+                scache.win_kv.shape[2] == self.compress_ratio or prev_slot is not None
+            ), "a window deeper than the ratio pairs through prev_slot"
             windows = dict(gate=gate, win_kv=scache.win_kv, win_gate=scache.win_gate, win_slot=win_slot)
+            if prev_slot is not None:
+                windows["prev_slot"] = prev_slot
         writes = {}
         if pool:
             writes = dict(cos=cos_win, sin=sin_win)
@@ -1517,6 +1522,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         dense_offset: ttnn.Tensor | None = None,
         tokens: ttnn.Tensor | None = None,
         dense_fill: bool = False,
+        prev_slot: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """One decode step: ``hidden`` ``[B, S, 1, D]`` -> the block's output, same shape.
 
@@ -1612,7 +1618,13 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             ), f"build_decode_caches(..., verify_rows={s}) holds this step's selections"
         latent = roped = None
         pool_writes = False
-        pooled_step = s == 1 and win_prev is None and win_offset is None and self.device.arch() == ttnn.Arch.BLACKHOLE
+        # A speculative window (deeper than the ratio) pairs through prev_slot, the window slot of pos - 1.
+        pooled_step = (
+            s == 1
+            and (win_prev is None or prev_slot is not None)
+            and win_offset is None
+            and self.device.arch() == ttnn.Arch.BLACKHOLE
+        )
         # attention_qkv_decode computes the compressor's columns of the row too; they are pooled after it.
         comp_in_qkv = fused and pooled_step and self.fused_comp_row is not None
         if self.is_kv_source and not comp_in_qkv:
@@ -1623,7 +1635,18 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                     kv, gate = self._compressor_rows(tokens, to_dram=False)
                     assert select or not pool, "a closed group is written by the select that follows it"
                     latent, roped = self._pooled_latent(
-                        kv, gate, scache, win_slot, pool, cos_win, sin_win, entry, page_row, dense, dense_entry
+                        kv,
+                        gate,
+                        scache,
+                        win_slot,
+                        pool,
+                        cos_win,
+                        sin_win,
+                        entry,
+                        page_row,
+                        dense,
+                        dense_entry,
+                        prev_slot=prev_slot,
                     )
                     pool_writes = pool and FUSED_POOL_WRITES
                 elif s == 1:
@@ -1654,6 +1677,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                         dense,
                         dense_entry,
                         interleave=interleave,
+                        prev_slot=prev_slot,
                     )
                     if interleave:
                         gate = None
@@ -1762,6 +1786,201 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             )
         out = self._attend(q, scache.sel_tile, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
         return ttnn.reshape(out, [b, s, 1, d])
+
+    # -- DSpark verify blocks: R consecutive positions of one session in (R, 32) tiles (see BRIEF's contract) -- #
+    def enable_block(self, rows: int) -> None:
+        """Allocate what :meth:`decode_block` keeps per layer for ``rows``-row blocks (before any trace capture): the
+        compressor's block of this rank's columns (a kv source)."""
+        self.block_rows = rows
+        self.fused_comp_block = None
+        if self.is_kv_source and self.fused_comp_row is not None:
+            self.fused_comp_block = ttnn.from_torch(
+                torch.zeros(1, 1, rows, self.fused_comp_row.shape[-1]),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                tile=ttnn.Tile((rows, ttnn.TILE_SIZE)),
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.tp_size > 1 else None,
+            )
+
+    def block_q_memory_config(self, rows: int) -> ttnn.MemoryConfig:
+        """attention_qkv_decode's q of a block, as flash_mqa_decode reads it: ROW_MAJOR ``[H * R, Dh]`` head-major,
+        32 rows per core over the first cores of row 0."""
+        per_core = ttnn.TILE_SIZE
+        ncores = self.local_num_heads * rows // per_core
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ncores - 1, 0))})
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, [per_core, self.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    def block_out_memory_config(self, rows: int) -> ttnn.MemoryConfig:
+        """flash_mqa_decode's block output: the ``(R, 32)`` block ``[R, H * Dh]`` on core (0, 0), where o_a's
+        all_gather_for_matmul reads it."""
+        core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core, [rows, self.local_num_heads * self.head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    def _project_out_block(self, attn):
+        """:meth:`_project_out` of an ``(R, 32)`` block ``[1, 1, R, H_local * Dh]`` on core (0, 0) -> the all-reduced
+        ``(R, 32)`` block ``[1, 1, R, D]``, width-sharded over o_b's cores."""
+        rows = attn.shape[-2]
+        width = self.local_num_heads * self.head_dim
+        in_per_group = width // self.local_o_groups
+        oa_dest = ttnn.CoreRangeSet({self.o_a_proj.b_core_grid().bounding_box()})
+        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(attn, oa_dest)
+        ttnn.deallocate(attn)
+        # The block's [R, groups * K] is groups tile rows of R rows each: batched o_a's [batch * R, K] A.
+        x = ttnn.experimental.view(gathered, [1, self.local_o_groups, oa_dest.num_cores() * rows, in_per_group])
+        y = self.o_a_proj(x)
+        ttnn.deallocate(gathered)
+        y = ttnn.experimental.view(y, [1, 1, y.shape[-2], self.local_o_groups * self.o_lora_rank])
+        out = self.o_b_proj(y)
+        ttnn.deallocate(y)
+        if self.tp_size > 1:
+            reduced = ttnn.experimental.deepseek.width_sharded_all_reduce(
+                out, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
+            )
+            ttnn.deallocate(out)
+            out = reduced
+        return out
+
+    def decode_block(
+        self,
+        tokens: ttnn.Tensor,
+        scache: _StaticLayerCache,
+        *,
+        cos: ttnn.Tensor,
+        sin: ttnn.Tensor,
+        neg_sin: ttnn.Tensor,
+        staging: ttnn.Tensor,
+        lengths: ttnn.Tensor,
+        ring_slots: ttnn.Tensor,
+        cos_win: ttnn.Tensor | None = None,
+        sin_win: ttnn.Tensor | None = None,
+        win_slot: ttnn.Tensor | None = None,
+        prev_slot: ttnn.Tensor | None = None,
+        start_odd: bool = False,
+        entry: ttnn.Tensor | None = None,
+        dense_entry: ttnn.Tensor | None = None,
+        page_row: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        """One verify block of ``R`` rows (positions ``p .. p + R - 1`` of one session) through this layer's
+        attention; returns its all-reduced output, the ``(R, 32)`` block ``[1, 1, R, D]``.
+
+        ``tokens`` is the ``(R, 32)`` replica of the block's (normed) rows on attention_qkv_decode's grid (ATTN_HC's
+        ``collapsed_replica_grid``). ``cos`` / ``sin`` / ``neg_sin`` are ``(R, 32)`` ``[1, 1, R, Rd]``, row ``j`` at
+        ``p + j``. The new kv rows go into ``staging`` (``[1, 1, 32, Dh]`` TILE, rows past R finite); flash_mqa_decode
+        reads the ring (positions <= p - 1) and them, bounded per row by ``lengths`` INT32 ``[1, 1, 1, 4 + R]``
+        (``[p, 0, 0, 0, n_0 .. n_{R-1}]``, ``n_j`` the dense selected rows), and then the rows are committed into the
+        ring at ``ring_slots`` INT32 ``[R]``. A compressed layer attends its group's ``dense_kv`` (the dense select:
+        every closed group); its kv source first closes the block's groups with compress_pool_decode (``win_slot``
+        ``[R]``, ``prev_slot`` ``[1]``, ``start_odd``, the closing groups' ``cos_win`` / ``sin_win`` / ``entry`` /
+        ``dense_entry``), writing their index keys, comp_kv and dense_kv rows.
+        """
+        rows = tokens.memory_config().shard_spec.shape[0]
+        pipes = []
+        if self.fused_pipes is not None:
+            if not self.fused_prefetch_queued:
+                self._queue_fused_prefetch()
+            self.fused_prefetch_queued = False
+            pipes = [*self.fused_pipes["q_a"], *self.fused_pipes["kv"], *self.fused_pipes["q_b"]]
+        comp = self.is_kv_source and self.fused_comp_block is not None
+        q = ttnn.experimental.deepseek.attention_qkv_decode(
+            tokens,
+            self.fused_w_q_a,
+            self.kv_proj.weight,
+            self.q_b_proj.weight,
+            self.fused_q_a_gamma,
+            self.fused_kv_gamma,
+            cos,
+            sin,
+            staging,
+            ring_slots,
+            epsilon=self.eps,
+            prefetcher_pipes=pipes,
+            w_comp=self.comp_proj.weight if comp else None,
+            comp_output=self.fused_comp_block if comp else None,
+            memory_config=self.block_q_memory_config(rows),
+        )
+        if self.is_kv_source:
+            assert comp, "a block's compressor columns come out of attention_qkv_decode"
+            with _region("COMPRESSOR"):
+                gathered = self.fused_comp_block
+                if self.tp_size > 1:
+                    gathered = ttnn.all_gather(
+                        self.fused_comp_block,
+                        dim=3,
+                        cluster_axis=_tp_cluster_axis(self.device),
+                        num_links=1,
+                        topology=CCL_TOPOLOGY,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                windows = {}
+                if self.compress_ratio > 1:
+                    windows = dict(
+                        gate=gathered,
+                        win_kv=scache.win_kv,
+                        win_gate=scache.win_gate,
+                        win_slot=win_slot,
+                        prev_slot=prev_slot,
+                    )
+                outs = ttnn.experimental.deepseek.compress_pool_decode(
+                    gathered,
+                    self.comp_norm_weight,
+                    epsilon=self.eps,
+                    do_pool=True,
+                    kv_gate_interleave=self._comp_interleave(),
+                    cos=cos_win,
+                    sin=sin_win,
+                    index_wk=self.index_wk.weight,
+                    index_norm_weight=self.index_k_norm.weight,
+                    idx_key_cache=scache.idx_key_cache,
+                    page_table=scache.idx_page_table,
+                    entry=entry,
+                    page_row=page_row,
+                    dense_kv=scache.dense_kv,
+                    dense_entry=dense_entry,
+                    comp_kv=scache.comp_kv,
+                    start_odd=start_odd,
+                    **windows,
+                )
+                for t in outs:
+                    ttnn.deallocate(t)
+                if gathered is not self.fused_comp_block:
+                    ttnn.deallocate(gathered)
+        compressed = self.compress_ratio > 0
+        attn = ttnn.experimental.deepseek.flash_mqa_decode(
+            q,
+            scache.kv,
+            lengths,
+            selected_kv=scache.dense_kv if compressed else None,
+            selected_row_offset=0,
+            ring_rows=self.window,
+            selected_rows=self.index_topk if compressed else 0,
+            attention_sink=self.sdpa_sinks_tt,
+            scale=self.scaling,
+            k_chunk_size=_FLASH_MQA_K_CHUNK,
+            num_s_blocks=_FLASH_MQA_S_BLOCKS_BLOCK if compressed else _FLASH_MQA_S_BLOCKS,
+            memory_config=self.block_out_memory_config(rows),
+            compute_kernel_config=_FLASH_MQA_COMPUTE,
+            cos=cos,
+            sin=neg_sin,
+            new_kv=staging,
+            num_rows=rows,
+            dense_selected=compressed,
+        )
+        ttnn.deallocate(q)
+        # The ring held positions <= p - 1 for the attention; now the block's rows go in at their slots.
+        new_rows = _rows_on_one_core(ttnn.slice(staging, [0, 0, 0, 0], [1, 1, rows, self.head_dim]))
+        ttnn.experimental.paged_update_cache(scache.kv, new_rows, update_idxs_tensor=ring_slots)
+        ttnn.deallocate(new_rows)
+        return self._project_out_block(attn)
 
     def decode_inputs(self, pos: int, cos_half: torch.Tensor, sin_half: torch.Tensor, rows: int = 1) -> dict:
         """Host-built :meth:`decode` keyword arguments for absolute positions ``pos .. pos + rows - 1``.

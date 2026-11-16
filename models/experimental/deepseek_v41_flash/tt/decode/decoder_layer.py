@@ -488,6 +488,21 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         return streams_out, ffn_pre
 
 
+def _gain_block(weight: ttnn.Tensor, rows: int, device) -> ttnn.Tensor:
+    """An RMSNorm gain ``[D]`` (any device layout, replicated) as the ``(rows, 32)``-tiled ``[1, 1, rows, D]`` block
+    the block hyper-connection's fused norm reads (the gain repeated per row), in DRAM."""
+    gain = ttnn.to_torch(ttnn.get_device_tensors(weight)[0]).float().reshape(-1)
+    return ttnn.from_torch(
+        gain.reshape(1, -1).expand(rows, -1).reshape(1, 1, rows, -1).contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((rows, ttnn.TILE_SIZE)),
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
+    )
+
+
 class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
     """V4.1 decode decoder layer ``layer_idx`` whose MoE runs on a persistent TP12 MoE server.
 
@@ -518,6 +533,7 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         use_prefetcher: bool = False,
         prefetch_buffers=None,
         engram_sockets=None,
+        verify_rows: int = 1,
     ):
         if layer_idx not in moe_server.table_rows:
             raise ValueError(f"layer {layer_idx} is not on the persistent MoE (it serves {moe_server.layer_ids})")
@@ -534,7 +550,7 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
             engram_sockets=engram_sockets,
-            verify_rows=1,
+            verify_rows=verify_rows,
             # One device holds every layer here, and each HC module's L1 bias tiles take 6 KB of every core's L1:
             # ~480 KB over 40 layers, past where the step's circular buffers have to end. The single-row program
             # reads them from DRAM instead, ~0.2 us per call.
@@ -544,6 +560,15 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         )
         self.moe_server = moe_server
         self.requester = requester
+        self.block_rows = verify_rows if verify_rows > 1 else 0
+        self.input_norm_block = self.post_norm_block = None
+        if self.block_rows:
+            # The norms' gains as (R, 32) blocks, the gain repeated per row: what the block hyper-connections' fused
+            # norms read.
+            self.self_attn.enable_block(self.block_rows)
+            if self.self_attn.needs_normed_input:
+                self.input_norm_block = _gain_block(self.input_layernorm.weight, self.block_rows, device)
+            self.post_norm_block = _gain_block(self.post_attention_layernorm.weight, self.block_rows, device)
 
     def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True, fused_qkv: Optional[bool] = None):
         """Queue this layer's ring requests: Engram's wkv, then attention's -- the order :meth:`decode` pops them.
@@ -707,3 +732,44 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         ttnn.deallocate(hidden_streams)
         ttnn.deallocate(mlp_out)
         return streams_out, ffn_pre
+
+    def decode_block(self, streams: ttnn.Tensor, pre_mix: ttnn.Tensor, scache: _StaticLayerCache, **attn_inputs):
+        """One verify block of ``R`` rows through the layer: ``(streams, pre_mix)`` -> the same pair for the next layer.
+
+        ``streams`` are the block's ``(R, 32)``-tiled ``[1, 1, hc * R, D]`` stream-major (row ``h * R + j``) in the
+        server's :meth:`~.persistent_moe.PersistentMoE.streams_memory_config` for ``R`` rows, and are consumed;
+        ``pre_mix`` is ``[1, R, 1, hc]`` (one tile per row). ``attn_inputs`` go to
+        :meth:`~.attention.DeepSeekV41Attention.decode_block`. The server must serve ``R``-row requests. Every step
+        is one block op: Engram, ATTN_HC (input norm where the ratio-2 compressor needs it, and the token replica),
+        attention, FFN_HC (the attention mix and the post-attention norm folded, the MoE row in DRAM) and the MoE
+        request, which runs the FFN mix."""
+        attn = self.self_attn
+        if self.engram is not None:
+            with _region("ENGRAM"):
+                streams_in = streams
+                streams = self.engram.forward_block(streams_in)
+                ttnn.deallocate(streams_in)
+        norm = (self.input_norm_block, self.input_layernorm.eps, True) if attn.needs_normed_input else None
+        replica_grid = attn.token_replica_grid(select=False, dense=True)
+        with _region("ATTN_HC"):
+            post, comb, collapsed, attn_pre, tokens = self.attn_hc(
+                streams, pre_mix=pre_mix, norm=norm, replica_grid=replica_grid
+            )
+        ttnn.deallocate(collapsed)
+        with _region("ATTENTION"):
+            attn_out = attn.decode_block(tokens, scache, **attn_inputs)
+        ttnn.deallocate(tokens)
+        with _region("FFN_HC"):
+            post2, comb2, row, ffn_pre, mixed = self.ffn_hc(
+                streams,
+                pre_mix=attn_pre,
+                mix=(post, comb, attn_out),
+                norm=(self.post_norm_block, self.post_attention_layernorm.eps),
+            )
+        for t in (post, comb, attn_out, attn_pre, streams):
+            ttnn.deallocate(t)
+        with _region("MOE"):
+            out = self.moe_server.request(self.requester, self.layer_idx, row, streams=mixed, post=post2, comb=comb2)
+        for t in (row, mixed, post2, comb2):
+            ttnn.deallocate(t)
+        return out, ffn_pre
