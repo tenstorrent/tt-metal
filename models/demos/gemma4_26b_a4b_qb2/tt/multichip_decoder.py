@@ -1715,7 +1715,11 @@ class MultichipDecoder(OptimizedDecoder):
             memory = getattr(self, "decode_residual_memory", None)
             if memory is not None:
                 x = ttnn.to_memory_config(x, memory)
-            normed = self.normalize(x, eps, self.input_norm_weight)
+            if self.ws2_norm is not None:
+                # Same input norm as the batch-1 path, so a slot writes the same K/V either way.
+                normed = self._ws2_input_norm(x)
+            else:
+                normed = self.normalize(x, eps, self.input_norm_weight)
             attention = self.layer.self_attn(
                 normed,
                 rope_mats=rope_mats,
@@ -1783,6 +1787,21 @@ class MultichipDecoder(OptimizedDecoder):
         combined = self.normalize(combined, eps, self.tail_weights[2])
         return ttnn.typecast(ttnn.mul(ttnn.add(residual, combined), self.layer.layer_scalar), ttnn.bfloat16)
 
+    def _ws2_input_norm(self, x):
+        """Input RMSNorm of one decode row: bf16, gamma inside the sharded norm, L1 interleaved for QKV."""
+        cfg = self.ws2_norm
+        if not x.is_sharded():
+            x = ttnn.interleaved_to_sharded(x, cfg.memory, output_dtype=ttnn.bfloat16)
+        normed = ttnn.rms_norm(
+            x,
+            epsilon=self.config.rms_norm_eps,
+            weight=cfg.gamma["input"],
+            program_config=cfg.program,
+            memory_config=cfg.memory,
+            compute_kernel_config=self.layer.self_attn.compute,
+        )
+        return ttnn.to_memory_config(normed, ttnn.L1_MEMORY_CONFIG)
+
     def _ws2_decode(self, x, **attention_kwargs):
         """Batch-1 decode layer with the residual stream width-sharded in L1 between the norms.
 
@@ -1810,7 +1829,7 @@ class MultichipDecoder(OptimizedDecoder):
         out_memory = cfg.memory if x.is_sharded() else ttnn.DRAM_MEMORY_CONFIG
         if not x.is_sharded():
             x = shard(x)
-        normed = ttnn.to_memory_config(norm(x, "input"), ttnn.L1_MEMORY_CONFIG)
+        normed = self._ws2_input_norm(x)
         attention = self.layer.self_attn(normed, **attention_kwargs)
         residual = ttnn.add(x, norm(shard(attention), "post_attention"), memory_config=cfg.memory)
         normalized = ttnn.sharded_to_interleaved(norm(residual, None), ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.float32)
