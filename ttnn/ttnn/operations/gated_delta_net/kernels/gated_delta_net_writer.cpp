@@ -151,6 +151,9 @@ FORCE_INLINE void push_chunk_coefs(
         const uint32_t e = elem_index(p, 0);
         coef[e] = valid ? gates[elem_index(p, gate_col)] : 0u;
         coef[TILE_WORDS + e] = valid ? gates[TILE_WORDS + elem_index(p, gate_col)] : 0u;
+        if constexpr (GDN_CHUNK_COEF_PAGES > 2) {
+            coef[2 * TILE_WORDS + e] = coef[TILE_WORDS + e] ^ 0x80000000u;  // -beta (STATE_FUSED_RHS)
+        }
     }
     cb_push_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES);
 }
@@ -218,6 +221,35 @@ void prep_writer(
         o_landed.wait_min(row_count * GROUP);
         cb_push_back(cb_o_in, O_PAGES);
     };
+    // NORM_SPLIT: the norm rows' o landings and output stores are served while a prep row waits for its grant or for
+    // compute, and after the last prep row. The state cores are at most an inbox apart (<= the norm cores per group,
+    // host), so the cumulative o count identifies the row here too.
+    const uint32_t norm_first = first_tr + norm_offset;
+    const uint32_t norm_rows = norm_first <= last_tr ? (last_tr - norm_first) / norm_stride + 1 : 0;
+    uint32_t landed_rows = 0;
+    uint32_t stored_rows = 0;
+    volatile tt_l1_ptr uint32_t* granted_count =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS));
+    volatile tt_l1_ptr uint32_t* o_count =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 1));
+    auto serve_norms = [&]() {
+        if (landed_rows < norm_rows && *o_count >= (landed_rows + 1) * GROUP) {
+            cb_push_back(cb_o_in, O_PAGES);
+            ++landed_rows;
+        }
+        if (stored_rows < landed_rows && cb_pages_available_at_front(cb_out_rows, O_PAGES)) {
+            store(norm_first + stored_rows * norm_stride);
+            ++stored_rows;
+        }
+    };
+    auto wait_send = [&](uint32_t pages) {
+        if constexpr (NORM_SPLIT) {
+            while (!cb_pages_available_at_front(cb_prep_send, pages)) {
+                serve_norms();
+            }
+        }
+        cb_wait_front(cb_prep_send, pages);
+    };
     const uint32_t first_row = first_tr + tr_offset;
     uint32_t sent = 0;
     for (uint32_t tr = first_row; tr <= last_tr; tr += tr_stride, ++sent) {
@@ -242,6 +274,11 @@ void prep_writer(
 
         // Every state core of the group grants each of its rows once, in order; this core's next row is granted
         // only after this one has landed (stride >= inbox slots), so the cumulative count identifies the row.
+        if constexpr (NORM_SPLIT) {
+            while (*granted_count < (sent + 1) * GROUP) {
+                serve_norms();
+            }
+        }
         granted.wait_min((sent + 1) * GROUP);
         // The row's o slot is free (compute has normalized the row that used it), so the row may be sent.
         // NORM_SPLIT: a norm core's cb_o_in holds every row it normalizes (host), so no row waits for a slot.
@@ -251,7 +288,7 @@ void prep_writer(
         const uint32_t slot = (tr - first_tr) % INBOX_SLOTS;
         // One head block at a time, each part sent as compute pushes it (pack order: exp(c) | QD, M | kq | knT | v).
         for (uint32_t j = 0; j < RATIO; ++j) {
-            cb_wait_front(cb_prep_send, VEC_PAGES + GDN_IN_MAT_PAGES);
+            wait_send(VEC_PAGES + GDN_IN_MAT_PAGES);
             const uint32_t vec_src = get_read_ptr(cb_prep_send);
             const uint32_t mat_src = vec_src + VEC_PAGES * T_BYTES;
             const uint32_t kq_src = mat_src + GDN_IN_MAT_PAGES * T_BYTES;
@@ -260,11 +297,11 @@ void prep_writer(
             mcast_rects(head_rects[j], vec_src, vec_base + slot * VEC_PAGES * T_BYTES, VEC_PAGES * T_BYTES);
             mcast_rects(
                 head_rects[j], mat_src, mat_base + slot * GDN_IN_MAT_PAGES * T_BYTES, GDN_IN_MAT_PAGES * T_BYTES);
-            cb_wait_front(cb_prep_send, VEC_PAGES + GDN_IN_MAT_PAGES + 2 * Kt);
+            wait_send(VEC_PAGES + GDN_IN_MAT_PAGES + 2 * Kt);
             mcast_rects(head_rects[j], kq_src, kq_base + slot * 2 * Kt * T_BYTES, 2 * Kt * T_BYTES);
-            cb_wait_front(cb_prep_send, HEAD_PAGES - Vt);
+            wait_send(HEAD_PAGES - Vt);
             mcast_rects(head_rects[j], knT_src, knT_base + slot * Kt * T_BYTES, Kt * T_BYTES);
-            cb_wait_front(cb_prep_send, HEAD_PAGES);
+            wait_send(HEAD_PAGES);
             for (uint32_t p = 0; p < PIECES; ++p) {
                 const uint32_t c = j * PIECES + p;
                 noc_async_write(
@@ -281,12 +318,8 @@ void prep_writer(
         }
     }
     if constexpr (NORM_SPLIT) {
-        // The state cores are at most an inbox apart (<= the norm cores per group, host), so the cumulative count
-        // identifies the row here too.
-        uint32_t landed_rows = 0;
-        for (uint32_t tr = first_tr + norm_offset; tr <= last_tr; tr += norm_stride) {
-            land_o(++landed_rows);
-            store(tr);
+        while (stored_rows < norm_rows) {
+            serve_norms();
         }
         return;
     }

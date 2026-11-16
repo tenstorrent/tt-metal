@@ -162,6 +162,10 @@ PREP_SEND_HEADS = None  # R-PREP: head blocks a prep core holds for its writer; 
 # a core normalizes (no slot is reused, so o needs no flow control): only where that is at most PREP_NORM_MAX_ROWS.
 PREP_NORM_SPLIT = True
 PREP_NORM_MAX_ROWS = 4
+# R-PREP state step: the prep core sends -(beta exp(c)) (*) kn, so the state core accumulates the k read onto beta V in
+# DEST (the rhs of M in one window: no packed reads, no subtraction window) and starts the output's window with the q
+# read. Same operands and fp32 accumulation as the separate read.
+STATE_FUSED_RHS = True
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 # Per-unit inputs (S0, conv / gate / norm weights) in flight on a core that runs several units: the next unit's reads
 # overlap this unit's compute instead of waiting for its last pop (decode B=16: 2 units on most cores).
@@ -575,6 +579,7 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, o_in_
     prep[CB_V_PREP] = heads * Vt
     prep[CB_PREP_SEND] = (PREP_SEND_HEADS or heads) * _head_block_pages(Kt, Vt)
     prep[CB_O_IN] = (o_in_depth or O_IN_DEPTH) * heads * Vt
+    prep[CB_TOK_COEF] = (CHUNK_COEF_PAGES + int(STATE_FUSED_RHS)) * TOK_COEF_DEPTH  # STATE_FUSED_RHS: -beta too
     prep[CB_NORM_W] = Vt
     prep[CB_RINV_O] = heads * TOKEN_TILE_ROWS_PER_BLOCK
     prep[CB_ZW] = 2 * heads * Vt  # row k's, made before row k - 1's RMS norm, which takes row k - 1's
@@ -1667,9 +1672,13 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_TOKEN_VECTOR_FUSED", str(int(pieces > 1 if TOKEN_VECTOR_FUSED == "auto" else TOKEN_VECTOR_FUSED))),
             ("GDN_DECAY_ONE_PASS", str(int(DECAY_ONE_PASS))),
             ("GDN_PREP_NORM_SPLIT", str(int(norm_split))),
+            ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
         ]
     )
-    defines = [(name, str(o_in_depth) if name == "GDN_O_IN_DEPTH" else value) for name, value in defines]
+    program_values = {"GDN_O_IN_DEPTH": o_in_depth}
+    if prep is not None and STATE_FUSED_RHS:
+        program_values["GDN_CHUNK_COEF_PAGES"] = CHUNK_COEF_PAGES + 1
+    defines = [(name, str(program_values.get(name, value))) for name, value in defines]
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).
     remote = {}
     if prep is not None:
