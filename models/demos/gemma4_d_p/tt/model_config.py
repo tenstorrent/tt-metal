@@ -1,0 +1,216 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Configuration and checkpoint loading for Gemma4-31B-it."""
+
+from dataclasses import dataclass
+from pathlib import Path
+
+import torch
+from loguru import logger
+from tqdm import tqdm
+from transformers import AutoConfig, AutoModelForCausalLM
+
+from models.demos.gemma4_d_p.tt.precision import dtype_to_str
+
+
+def resolve_cache_dir_from_tt_cache_path(tt_cache_path, *, dtype, mesh_shape):
+    """Return the TT tensor-cache directory beneath the configured root.
+
+    Canonical bf16, 8x4 example:
+        tt_cache_path = "/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it"
+        cache_dir     = "/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it/tensor_cache_bf16_mesh8x4"
+    """
+
+    if not tt_cache_path:
+        raise ValueError("tt_cache_path must be provided")
+
+    mesh_suffix = "x".join(str(size) for size in mesh_shape)
+    cache_dir = Path(tt_cache_path) / f"tensor_cache_{dtype_to_str(dtype)}_mesh{mesh_suffix}"
+    if not cache_dir.is_dir():
+        raise FileNotFoundError(f"Weight cache directory does not exist or is not a directory: {cache_dir}")
+
+    return cache_dir
+
+
+def validate_31b_config(config):
+    """Reject unsupported text architectures before allocating device weights."""
+    expected = {
+        "hidden_size": 5376,
+        "num_hidden_layers": 60,
+        "intermediate_size": 21504,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 16,
+        "num_global_key_value_heads": 4,
+        "head_dim": 256,
+        "global_head_dim": 512,
+        "vocab_size": 262144,
+        "sliding_window": 1024,
+        "attention_k_eq_v": True,
+        "tie_word_embeddings": True,
+        "attention_bias": False,
+    }
+    mismatches = [name for name, value in expected.items() if getattr(config, name, None) != value]
+    for name in ("enable_moe_block", "hidden_size_per_layer_input", "num_kv_shared_layers", "use_double_wide_mlp"):
+        if getattr(config, name, False):
+            mismatches.append(name)
+    pattern = ("sliding_attention",) * 5 + ("full_attention",)
+    if tuple(getattr(config, "layer_types", ()) or ()) != pattern * 10:
+        mismatches.append("layer_types")
+    if mismatches:
+        raise ValueError("Only Gemma4-31B-it is supported; incompatible configuration: " + ", ".join(mismatches))
+
+
+@dataclass
+class Gemma4ModelArgs:
+    """Gemma4 model arguments parsed from HuggingFace config.
+
+    All fields have safe defaults but should be populated via from_hf_config()
+    for any real model.
+    """
+
+    # Core dimensions
+    hidden_size: int = 5376
+    num_hidden_layers: int = 60
+    num_attention_heads: int = 32
+    num_key_value_heads: int = 16
+    head_dim: int = 256
+    # Global attention overrides (None = same as sliding)
+    num_global_key_value_heads: int = 4
+    global_head_dim: int = 512
+    attention_k_eq_v: bool = True
+    # Sliding window
+    sliding_window: int = 1024
+    # RoPE
+    rope_theta: float = 10000.0
+    global_rope_theta: float = 1000000.0
+    partial_rotary_factor: float = 0.25
+    # Shared MLP
+    intermediate_size: int = 21504
+    hidden_activation: str = "gelu_pytorch_tanh"
+    # General
+    vocab_size: int = 262144
+    rms_norm_eps: float = 1e-6
+    final_logit_softcapping: float = 30.0
+    tie_word_embeddings: bool = True
+    attention_bias: bool = False
+    # Layer pattern
+    layer_types: tuple = None
+
+    def __post_init__(self):
+        if self.layer_types is None:
+            pattern = ["sliding_attention"] * 5 + ["full_attention"]
+            self.layer_types = tuple(pattern * (self.num_hidden_layers // 6 + 1))
+            self.layer_types = self.layer_types[: self.num_hidden_layers]
+
+    @classmethod
+    def from_hf_config(cls, hf_config):
+        """Create Gemma4ModelArgs from a HuggingFace AutoConfig.
+
+        Requires the Gemma4-31B text architecture before loading weights.
+        """
+        tc = getattr(hf_config, "text_config", hf_config)
+        validate_31b_config(tc)
+        layer_types = tuple(tc.layer_types) if hasattr(tc, "layer_types") and tc.layer_types else None
+
+        rope_params = getattr(tc, "rope_parameters", {}) or {}
+        sliding_rope = rope_params.get("sliding_attention", {})
+        full_rope = rope_params.get("full_attention", {})
+
+        # num_global_key_value_heads: None means use same as sliding
+        num_global_kv = getattr(tc, "num_global_key_value_heads", None)
+        if num_global_kv is None:
+            num_global_kv = getattr(tc, "num_key_value_heads", 8)
+
+        return cls(
+            hidden_size=tc.hidden_size,
+            num_hidden_layers=tc.num_hidden_layers,
+            num_attention_heads=tc.num_attention_heads,
+            num_key_value_heads=getattr(tc, "num_key_value_heads", 8),
+            head_dim=getattr(tc, "head_dim", 256),
+            num_global_key_value_heads=num_global_kv,
+            global_head_dim=getattr(tc, "global_head_dim", 512),
+            attention_k_eq_v=getattr(tc, "attention_k_eq_v", False),
+            sliding_window=getattr(tc, "sliding_window", 1024),
+            rope_theta=sliding_rope.get("rope_theta", getattr(tc, "rope_theta", 10000.0)),
+            global_rope_theta=full_rope.get("rope_theta", 1000000.0),
+            partial_rotary_factor=full_rope.get("partial_rotary_factor", 0.25),
+            intermediate_size=tc.intermediate_size,
+            hidden_activation=getattr(tc, "hidden_activation", "gelu_pytorch_tanh"),
+            vocab_size=tc.vocab_size,
+            rms_norm_eps=getattr(tc, "rms_norm_eps", 1e-6),
+            final_logit_softcapping=getattr(tc, "final_logit_softcapping", None) or 0.0,
+            tie_word_embeddings=getattr(tc, "tie_word_embeddings", True),
+            attention_bias=getattr(tc, "attention_bias", False),
+            layer_types=layer_types,
+        )
+
+    @staticmethod
+    def load_state_dict(weights_path, dummy_weights=False):
+        """Load model state dict from safetensors (fast) or HF checkpoint."""
+        if dummy_weights:
+            return {}
+
+        from pathlib import Path
+
+        safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
+        if safetensor_files:
+            from safetensors.torch import load_file
+
+            logger.info(f"Loading {len(safetensor_files)} safetensor files from {weights_path}")
+            state_dict = {}
+            for f in tqdm(safetensor_files, desc="Loading safetensors"):
+                shard = load_file(str(f))
+                state_dict.update(shard)
+
+            for k, v in state_dict.items():
+                if v.dtype == torch.float32:
+                    state_dict[k] = v.to(torch.bfloat16)
+
+            logger.info(f"Loaded {len(state_dict)} tensors")
+            return state_dict
+
+        logger.info(f"No safetensors found, loading via AutoModelForCausalLM from {weights_path}")
+        model = AutoModelForCausalLM.from_pretrained(weights_path, torch_dtype="auto")
+        state_dict = model.state_dict()
+        del model
+
+        if any(v.dtype == torch.float32 for v in state_dict.values()):
+            state_dict = {
+                k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+                for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
+            }
+
+        return state_dict
+
+    @staticmethod
+    def load_hf_config(hf_model_id):
+        """Load HuggingFace config."""
+        return AutoConfig.from_pretrained(hf_model_id, trust_remote_code=True)
+
+    # ── Generator compatibility properties ─────────────────────────────────
+    # The tt_transformers Generator expects these attribute names.
+
+    @property
+    def dim(self):
+        return self.hidden_size
+
+    @property
+    def n_layers(self):
+        return self.num_hidden_layers
+
+    @property
+    def max_batch_size(self):
+        return getattr(self, "_max_batch_size", 1)
+
+    @max_batch_size.setter
+    def max_batch_size(self, value):
+        self._max_batch_size = value
+
+    @property
+    def max_seq_len(self):
+        return getattr(self, "_max_seq_len", 262144)
+
+    @max_seq_len.setter
+    def max_seq_len(self, value):
+        self._max_seq_len = value

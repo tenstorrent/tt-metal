@@ -10,8 +10,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "program_with_kernel_created_from_string_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -35,7 +36,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         CreateKernelFromString(
             program,
             kernel_src_code,
@@ -66,7 +67,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         CreateKernelFromString(
             program,
             kernel_src_code,
@@ -82,6 +83,9 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
 }
 
 TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     const std::string& kernel_src_code = R"(
     #include "api/debug/dprint.h"
     #include "api/dataflow/dataflow_api.h"
@@ -94,7 +98,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     )";
 
     for (const auto& mesh_device : this->devices_) {
-        auto device = mesh_device->get_devices()[0];
+        auto device = mesh_device->impl().get_devices()[0];
         const std::unordered_set<CoreCoord>& active_ethernet_cores = device->get_active_ethernet_cores(true);
         if (active_ethernet_cores.empty()) {
             const ChipId device_id = device->id();
@@ -104,7 +108,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         tt_metal::CreateKernelFromString(
             program,
             kernel_src_code,

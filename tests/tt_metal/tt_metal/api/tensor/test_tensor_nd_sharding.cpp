@@ -13,6 +13,7 @@
 // (loopback/region/BDS-creation/perf/buffer-size) that exercise the runtime
 // MeshTensor/HostTensor API on a single-device mesh via MeshDevice1x1Fixture.
 
+#include "impl/buffers/compute_page_mapping.hpp"
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
@@ -44,6 +45,7 @@
 
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>

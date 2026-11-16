@@ -38,16 +38,63 @@ def interleave_pe(pe: torch.Tensor) -> torch.Tensor:
     return torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(-1, d)
 
 
-def gather_cache_tp0(tt_cache, mesh_device) -> torch.Tensor:
-    """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2, TP-replicated) to host float32, keeping
-    TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
+def gather_cache_tp0(tt_cache, mesh_device, sp_axis: int = 0) -> torch.Tensor:
+    """Gather a caller-owned KV/indexer cache (SP-sharded on dim 2 over ``sp_axis``, TP-replicated) to host
+    float32, keeping TP replica 0. Returns [num_slots, seq_len_cache, head_dim] (still block-cyclic rotated)."""
+    dims = (2, 1) if sp_axis == 0 else (1, 2)
     cache_full = ttnn.to_torch(
         tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=dims, mesh_shape=mesh_device.shape),
     ).to(torch.float32)[
         :, :1
     ]  # [num_slots, 1, seq_len_cache, head_dim]
     return cache_full[:, 0]
+
+
+def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False, sp_axis: int = 0):
+    """Gather a KV/indexer cache to host float32 in shard-major (block-cyclic) order, returning
+    ``(cache [num_slots, seq_len_cache, head_dim], stripe_count)`` for the caller to un-rotate.
+    An ``MlaKvCache`` is decoded to logical [latent || RoPE] rows (incl. packed scaled FP8).
+
+    The sequence is sharded along mesh axis ``sp_axis`` and TP runs along the other one.
+    TP-sharded, every tp-coord holds a distinct slice, so flatten into linear chip order (sp_coord*tp +
+    tp_coord) over sp*tp stripes. Mirrors sparse_mla/test_sparse_mla.py::_cache_natural."""
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, striped_cache_to_host
+
+    tp_axis = 1 - sp_axis
+    sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
+    is_mla_cache = isinstance(tt_cache, MlaKvCache)
+    storage = tt_cache.storage if is_mla_cache else tt_cache
+    if tp_shard_kv:
+        cache = striped_cache_to_host(storage, mesh_device, sp_axis)  # [num_slots, seq_len_cache, head_dim]
+        stripes = sp * tp
+    else:
+        dims = [None, None]
+        dims[sp_axis], dims[tp_axis] = 2, 1  # sequence along SP, TP replicas on dim 1
+        # [num_slots, seq_dim, head_dim]: any TP replica
+        cache = ttnn.to_torch(
+            storage,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=mesh_device.shape),
+        )[:, 0]
+        stripes = sp
+    if is_mla_cache:
+        cache = tt_cache.unpack_host(cache)
+    return cache.to(torch.float32), stripes
+
+
+def tp_stripe_major_cache(linear_chip_order: torch.Tensor, sp: int, tp: int) -> torch.Tensor:
+    """[seq, D] in linear chip order -> [tp, seq/tp, D]: a dims[sp]=2, dims[tp]=1 mapper then puts rank
+    s*tp+t on chip (s, t). Inverse of gather_cache_natural(tp_shard_kv=True)."""
+    seq, head_dim = linear_chip_order.shape
+    local = seq // (sp * tp)
+    return linear_chip_order.reshape(sp, tp, local, head_dim).permute(1, 0, 2, 3).reshape(tp, seq // tp, head_dim)
+
+
+def preload_cache(host_tensor, storage) -> None:
+    """Copy a host-staged cache onto device, keeping the cache's declared topology (the copy would replace it)."""
+    topology = storage.tensor_topology()
+    ttnn.copy_host_to_device_tensor(host_tensor, storage)
+    storage.update_tensor_topology(topology)
 
 
 def unrotate_cache_layer(cache_slot: torch.Tensor, positions: torch.Tensor, total_len: int) -> torch.Tensor:
@@ -64,7 +111,7 @@ def cache_half_pccs(golden: torch.Tensor, dev: torch.Tensor, split: int, pe_inte
     golden's HF half-split RoPE is re-based to the device Meta interleave. This is the single home for the
     cache-compare convention: KVPE = [nope | pe] (split=kv_lora, pe_interleave=True); indexer-K =
     [rope | nope] (split=index_head_dim//2, pe_interleave=False -- GLM indexer RoPE is natively interleaved)."""
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     _, pcc_first = comp_pcc(golden[:, :split], dev[:, :split])
     ref_second = golden[:, split:]
@@ -95,14 +142,18 @@ def print_l1_small_buffers(device, name):
 def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True):
     """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct.
 
+    The TP extent is read along config.ccl_config["TP_AXIS"] (mesh axis 1 by default). Only a TP
+    extent below 4 scales the dim down; a wider one (TP=8, the 8x4 Galaxy with SP on axis 1) keeps
+    the model's real dim and splits it finer.
+
     `tile_align_width` rounds the model dim up so the per-device width (config.dim / n_tp_devices) is
     a multiple of 32. An L1-sharded gate input needs that -- a shard width must be whole tiles -- so
     it is the default, and it is a no-op for every model whose per-device width already is (only
     GPT-OSS is not: 2880 -> 720/device, 22.5 tiles). Pass False when the input is DRAM-interleaved,
     where TILE_LAYOUT padding covers the ragged width and the test can hold the deployed dim exactly.
     """
-    _, n_tp_devices = mesh_device.shape
-    if n_tp_devices != 4:
+    n_tp_devices = mesh_device.shape[config.ccl_config.get("TP_AXIS", 1)]
+    if n_tp_devices < 4:
         config.dim = config.dim // (4 // n_tp_devices)
     if tile_align_width:
         tile_multiple = 32 * n_tp_devices
@@ -112,7 +163,8 @@ def adjust_shapes_for_testing(config, mesh_device, tile_align_width: bool = True
 def get_input_mem_config(config, mesh_shape):
     shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
     shard_height = ((shard_height + 31) // 32) * 32
-    shard_width = (config.dim + mesh_shape[1] - 1) // mesh_shape[1]
+    n_tp_devices = mesh_shape[config.ccl_config.get("TP_AXIS", 1)]
+    shard_width = (config.dim + n_tp_devices - 1) // n_tp_devices
     return ttnn.create_sharded_memory_config(
         shape=(shard_height, shard_width),
         core_grid=config.core_grid,
@@ -189,7 +241,7 @@ def save_intermediate_output(
 def detect_language_model_prefix(state_dict: Mapping[str, torch.Tensor]) -> str:
     """Detect the multimodal LM-submodule key prefix of a checkpoint.
 
-    Multimodal checkpoints (e.g. Kimi K2.6's ``KimiK25ForConditionalGeneration``) nest the
+    Multimodal checkpoints (e.g. Kimi K2.7-Code's ``KimiK25ForConditionalGeneration``) nest the
     language model under ``language_model.`` alongside ``vision_tower.``; text-only or
     already-dequantized checkpoints use bare ``model.`` keys. Returns the prefix to prepend so
     the rest of the pipeline can address weights with bare ``model.``/``lm_head.`` keys.
@@ -266,7 +318,7 @@ def _dequantize_packed_int4_weight(
     """Dequantize one compressed-tensors pack-quantized INT weight to ``dtype`` (pure torch).
 
     Self-contained INT counterpart to the shared fp8 ``dequantize_weight_tensor``, so the INT4
-    path used by Kimi K2.6's routed experts needs no external quant library.
+    path used by compressed-tensors INT4 checkpoints needs no external quant library.
 
     Layout:
       * ``packed`` is an int32 tensor holding ``32 // num_bits`` little-endian ``num_bits``-wide
@@ -349,6 +401,81 @@ def _dequantize_pack_quantized_state_dict(
     return out
 
 
+def is_per_tensor_fp8(quantization_config: Any) -> bool:
+    """True for fp8 checkpoints scaled per tensor rather than per [128,128] block.
+
+    Signature is ``quant_method == "fp8"`` with **no** ``weight_block_size`` (Mistral Small 4 ships
+    `null`). The block-wise dequantizer cannot express this: it asserts
+    ``tensor.ndim == inv_scale.ndim`` and a block shape of matching rank, and per-tensor scales are
+    rank-0 scalars (dense) or ``[E, 1, 1]`` (stacked experts).
+    """
+    if not isinstance(quantization_config, dict):
+        return False
+    if quantization_config.get("quant_method") != "fp8":
+        return False
+    return not quantization_config.get("weight_block_size")
+
+
+def _scale_to(tensor: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """``(tensor * scale).to(dtype)``, without promoting the whole tensor to fp32 at once.
+
+    A stacked-expert weight is huge -- Mistral's ``mlp.experts.gate_up_proj`` is
+    [128, 4096, 4096] = 2.1G elements -- so the one-expression form costs ~21 GB of transient
+    host RAM (8.6 fp32 input + 8.6 fp32 product + 4.3 bf16 output) for a single tensor, on a
+    box that loads these layer by layer precisely to stay within RAM. When the scale has one
+    entry per leading slice, fill the output slice by slice instead: same arithmetic, same
+    result, but the fp32 transient is one expert (67 MB) rather than the whole stack.
+    """
+    if scale.ndim == tensor.ndim and tensor.ndim > 0 and tensor.shape[0] > 1:
+        out = torch.empty(tensor.shape, dtype=dtype)
+        for i in range(tensor.shape[0]):
+            out[i] = (tensor[i].float() * scale[i].float()).to(dtype)
+        return out
+    return (tensor.float() * scale.float()).to(dtype).contiguous()
+
+
+def _dequantize_per_tensor_fp8_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Dequantize per-tensor fp8 weights: ``w = w_fp8.float() * scale_inv``.
+
+    Handles both scale ranks the format uses, with one expression, because torch broadcasting
+    already does the right thing:
+
+      * dense weights -- rank-0 scalar scale against an ``[out, in]`` weight;
+      * stacked experts -- ``[E, 1, 1]`` scale against an ``[E, out, in]`` weight, i.e. one scale
+        per expert.
+
+    ``*_activation_scale`` entries are inputs to a static activation-quantization scheme, not weight
+    scales; they are dropped rather than emitted as weights.
+    """
+    out: dict[str, torch.Tensor] = {}
+    n_dequantized = 0
+    for name in sorted(state_dict.keys()):
+        if name.endswith("_scale_inv") or name.endswith("activation_scale"):
+            continue
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
+        scale = state_dict.get(f"{name}_scale_inv")
+        if scale is None:
+            if tensor.dtype == torch.float8_e4m3fn:
+                raise ValueError(f"Found float8 tensor '{name}' without matching inverse scale '{name}_scale_inv'.")
+            out[name] = tensor.to(dtype).contiguous() if tensor.is_floating_point() else tensor.clone()
+            continue
+        if scale.ndim not in (0, tensor.ndim):
+            raise ValueError(
+                f"per-tensor fp8 scale for '{name}' has ndim {scale.ndim}; expected 0 (one scale per "
+                f"tensor) or {tensor.ndim} (one per leading slice), tensor shape {tuple(tensor.shape)}"
+            )
+        out[name] = _scale_to(tensor, scale, dtype)
+        n_dequantized += 1
+    if n_dequantized:
+        logger.info(f"per-tensor fp8: dequantized {n_dequantized} weight tensor(s)")
+    return out
+
+
 def dequantize_state_dict(
     state_dict: Mapping[str, torch.Tensor],
     hf_config: Any,
@@ -356,13 +483,15 @@ def dequantize_state_dict(
 ) -> dict[str, torch.Tensor]:
     """Dequantize an HF (sub-)state_dict for the d_p pipeline.
 
-    Kimi K2.6's compressed-tensors pack-quantized INT4 weights are dequantized locally; every
-    other checkpoint (DeepSeek fp8 block-wise) is delegated unchanged to the shared deepseek_v3
-    dequantizer.
+    Three schemes are in play: compressed-tensors pack-quantized INT4, Mistral Small 4's
+    per-tensor fp8, and DeepSeek's block-wise fp8 (delegated unchanged to the shared deepseek_v3
+    dequantizer).
     """
     quant_cfg = _get_quantization_config_dict(hf_config)
     if is_pack_quantized_int4(quant_cfg):
         return _dequantize_pack_quantized_state_dict(state_dict, quant_cfg, dtype=dtype)
+    if is_per_tensor_fp8(quant_cfg):
+        return _dequantize_per_tensor_fp8_state_dict(state_dict, dtype=dtype)
     return _fp8_dequantize_state_dict(state_dict, hf_config, dtype)
 
 
@@ -376,7 +505,7 @@ def passthrough_state_dict(state_dict: Mapping[str, torch.Tensor]) -> dict[str, 
     Source dtypes are preserved for the same reason `_dequantize_pack_quantized_state_dict` preserves
     them on its non-quantized tensors: the fp32 `e_score_correction_bias` feeding the router top-k must
     not be downcast to bf16. A dequantized checkpoint already stores the dtypes the model expects
-    (Kimi K2.6: bf16 weights, fp32 router bias), so there is nothing to convert.
+    (Kimi K2.7-Code: bf16 weights, fp32 router bias), so there is nothing to convert.
     """
     out: dict[str, torch.Tensor] = {}
     for name in sorted(state_dict.keys()):
@@ -442,3 +571,16 @@ def convert_state_dict(
         "quantized; dequantizing weights."
     )
     return dequantize_state_dict(state_dict, hf_config, dtype)
+
+
+def token_normalized(t: torch.Tensor) -> torch.Tensor:
+    """Per-token RMS-normalized copy: each position's feature vector divided by its own RMS.
+
+    Raw PCC on late-layer hidden states of a model with massive activations (an attention-sink
+    effect: a few channels carry values orders of magnitude larger than the rest) is dominated by
+    those channels and measures almost nothing about the other thousands. Normalizing PER TOKEN --
+    not globally -- makes the metric insensitive to them while still catching a genuine regression,
+    because a real error moves the whole feature vector rather than rescaling it.
+    """
+    x = t.float()
+    return x / x.pow(2).mean(dim=-1, keepdim=True).clamp_min(1e-12).sqrt()

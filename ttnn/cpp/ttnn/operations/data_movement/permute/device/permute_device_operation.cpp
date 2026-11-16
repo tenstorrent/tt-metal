@@ -8,11 +8,17 @@
 #include <numeric>
 #include <utility>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 #include "permute_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -72,20 +78,27 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
     // ND-sharded fallback: permute is a dimension reorder, so the shard follows the
     // same permutation. Keep ND provenance instead of dropping into legacy synthesis,
     // otherwise the output loses created_with_nd_shard_spec for 4D / rank-greater-4.
-    if (output_mem_config.created_with_nd_shard_spec() &&
-        input_tensor.memory_config().created_with_nd_shard_spec() &&
-        output_mem_config.nd_shard_spec().has_value() && input_tensor.nd_shard_spec().has_value()) {
-        ttsl::SmallVector<uint32_t> shard_shape_vec(attributes.dims.size());
-        std::transform(attributes.dims.begin(), attributes.dims.end(), shard_shape_vec.begin(), [&](auto dim) {
-            return input_tensor.nd_shard_spec()->shard_shape[dim];
-        });
-        auto reordered = output_mem_config.nd_shard_spec()->with_shard_shape(Shape(std::move(shard_shape_vec)));
+    if (output_mem_config.created_with_nd_shard_spec() && output_mem_config.nd_shard_spec().has_value()) {
+        auto nd_spec = *output_mem_config.nd_shard_spec();
+        if (input_tensor.memory_config().created_with_nd_shard_spec() && input_tensor.nd_shard_spec().has_value()) {
+            // An ND-sharded input keeps the existing derivation: the shard shape is reordered
+            // by the same permutation as the tensor. The attributes cannot tell whether this
+            // config was supplied by the caller or defaulted from the input, so both behave
+            // alike here.
+            ttsl::SmallVector<uint32_t> shard_shape_vec(attributes.dims.size());
+            std::transform(attributes.dims.begin(), attributes.dims.end(), shard_shape_vec.begin(), [&](auto dim) {
+                return input_tensor.nd_shard_spec()->shard_shape[dim];
+            });
+            nd_spec = nd_spec.with_shard_shape(Shape(std::move(shard_shape_vec)));
+        }
+        // A non-ND input cannot have produced an ND config by defaulting, so this one came from
+        // the caller and is already expressed in the output frame: honor it verbatim.
         return tt::tt_metal::TensorSpec(
             output_shape,
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(),
                 tt::tt_metal::PageConfig(input_tensor.layout()),
-                MemoryConfig(output_mem_config.buffer_type(), reordered)));
+                MemoryConfig(output_mem_config.buffer_type(), nd_spec)));
     }
 
     // Derive shard_spec when sharded output lacks one.
@@ -172,6 +185,41 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     std::optional<Tensor> optional_output_tensor,
     float pad_value) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
+
+    // BH 8-bit int RM pack_untilize drops the top 24 bits of each 32-bit Dest lane (#61827).
+    // Workaround: stage via UInt32 in DRAM, permute, cast back. Lives in prim (not user API)
+    // because fold/transpose/quasar call prim::permute directly; a user-API-only workaround
+    // would need to be duplicated at every call site. Delete this block once #61827 lands.
+    if ((input_tensor.dtype() == DataType::UINT8 || input_tensor.dtype() == DataType::INT8) &&
+        input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.device() != nullptr &&
+        input_tensor.device()->arch() == tt::ARCH::BLACKHOLE && !dims.empty() &&
+        dims.back() != static_cast<uint32_t>(dims.size() - 1)) {
+        const auto src_dtype = input_tensor.dtype();
+        const auto& input_mc = input_tensor.memory_config();
+        const auto final_memory_config = memory_config.value_or(input_mc);
+        // A sharded preallocated output tensor would be silently dropped by the final cast;
+        // reject it so callers do not get a newly-allocated tensor they did not ask for.
+        TT_FATAL(
+            !(optional_output_tensor.has_value() && final_memory_config.is_sharded()),
+            "prim::permute BH 8-bit RM workaround cannot honor a sharded optional_output_tensor; "
+            "pass interleaved or omit it (see #61827).");
+        const auto interleaved_l1 = tt::tt_metal::MemoryConfig(
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+        auto staged = input_tensor.is_sharded() ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt)
+                                                : input_tensor;
+        auto as_u32 = ttnn::typecast(staged, DataType::UINT32, ttnn::DRAM_MEMORY_CONFIG);
+        auto permuted_u32 = ttnn::device_operation::launch<OperationType>(
+            OperationType::operation_attributes_t{
+                .dims = dims, .output_mem_config = ttnn::DRAM_MEMORY_CONFIG, .pad_value = pad_value},
+            OperationType::tensor_args_t{.input_tensor = as_u32, .optional_output_tensor = std::nullopt});
+        const auto cast_mc = final_memory_config.is_sharded() ? interleaved_l1 : final_memory_config;
+        auto as_8bit = optional_output_tensor.has_value()
+                           ? ttnn::typecast(permuted_u32, src_dtype, cast_mc, optional_output_tensor)
+                           : ttnn::typecast(permuted_u32, src_dtype, cast_mc);
+        return final_memory_config.is_sharded() ? ttnn::to_memory_config(as_8bit, final_memory_config, std::nullopt)
+                                                : as_8bit;
+    }
+
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dims = dims,

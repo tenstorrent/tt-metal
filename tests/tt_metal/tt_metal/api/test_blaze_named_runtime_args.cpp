@@ -10,6 +10,7 @@
 // 3. Named compile-time args accessible via blaze_ct_args:: namespace
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -26,14 +27,15 @@
 
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
-using NamedArgsTest = GenericMeshDeviceFixture;
+using NamedArgsTest = MeshDevice1x1Fixture;
 
 TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -50,10 +52,10 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", 0}, {"my_kernel.param_b", 0}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", 0}, {"my_kernel.param_b", 0}},
                 .named_common_runtime_args = {{"my_kernel.marker", expected_marker}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core0, core0_idx}, {core1, core1_idx}}}},
             },
@@ -66,9 +68,9 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results_core0;
-    detail::ReadFromDeviceL1(device, core0, write_addr, 2 * sizeof(uint32_t), results_core0);
+    slow_dispatch::ReadFromL1(*mesh_device, core0, write_addr, 2 * sizeof(uint32_t), results_core0);
     std::vector<uint32_t> results_core1;
-    detail::ReadFromDeviceL1(device, core1, write_addr, 2 * sizeof(uint32_t), results_core1);
+    slow_dispatch::ReadFromL1(*mesh_device, core1, write_addr, 2 * sizeof(uint32_t), results_core1);
 
     EXPECT_EQ(results_core0[0], expected_marker) << "Core (0,0): marker should be 0xCAFE";
     EXPECT_EQ(results_core1[0], expected_marker) << "Core (1,0): marker should be 0xCAFE";
@@ -78,7 +80,6 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -121,15 +122,15 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, sizeof(uint32_t), results);
 
     EXPECT_EQ(results[0], expected_sum) << "Sum should be prefix(" << prefix_val << ") + sum(data) = " << expected_sum
                                         << ", got " << results[0];
 }
 
+// Both header channels must remain usable together on the data-movement path.
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -140,14 +141,16 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
 
     const uint32_t param_a = 42;
     const uint32_t param_b = 0xBEEF;
+    const uint32_t legacy_param = 0xCAFE;
 
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
-        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .named_compile_time_args = {{"legacy_param", legacy_param}},
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}, {"TEST_LEGACY_NAMED_CT_ARGS", "1"}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -160,15 +163,15 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 5 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[2], param_a) << "blaze_ct_args::my_kernel::param_a should be 42";
     EXPECT_EQ(results[3], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF";
+    EXPECT_EQ(results[4], legacy_param);
 }
 
 TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -213,9 +216,9 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results_core0;
-    detail::ReadFromDeviceL1(device, core0, write_addr, sizeof(uint32_t), results_core0);
+    slow_dispatch::ReadFromL1(*mesh_device, core0, write_addr, sizeof(uint32_t), results_core0);
     std::vector<uint32_t> results_core1;
-    detail::ReadFromDeviceL1(device, core1, write_addr, sizeof(uint32_t), results_core1);
+    slow_dispatch::ReadFromL1(*mesh_device, core1, write_addr, sizeof(uint32_t), results_core1);
 
     EXPECT_EQ(results_core0[0], expected_sum_core0)
         << "Core (0,0): sum should be " << expected_sum_core0 << ", got " << results_core0[0];
@@ -223,17 +226,10 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
         << "Core (1,0): sum should be " << expected_sum_core1 << ", got " << results_core1[0];
 }
 
-// Covers the COMPUTE JIT compile path for the experimental named blaze_ct_args:: header.
-// All tests above use DataMovementConfigDescriptor (the BRISC/NCRISC path via
-// jit_build_genfiles_kernel_include); this one uses ComputeConfigDescriptor (the
-// TRISC path via jit_build_genfiles_triscs_src + build_trisc_prolog). Before the
-// genfiles relocation, named_args_generated.h was emitted per-source by build.cpp's
-// compile_one and delivered via `-include` — a non-atomic write on a shared path
-// (racy under multiprocess, and never carried to the remote/JIT-server path). This
-// exercises the relocated, presence-gated prolog #include on the compute path.
-TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
+// Verifies that TRISC kernels can use the force-included legacy CT map together with
+// the Blaze header included by build_trisc_prolog. Both values must reach device L1.
+TEST_F(NamedArgsTest, TensixTestMixedNamedCompileTimeArgsComputeKernel) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -244,13 +240,16 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
 
     const uint32_t param_a = 42;
     const uint32_t param_b = 0xBEEF;
+    const uint32_t legacy_param = 0xCAFE;
 
     KernelDescriptor kernel = {
         .kernel_source =
             "tests/tt_metal/tt_metal/test_kernels/compute/blaze_named_compile_time_args_compute_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
+        .named_compile_time_args = {{"legacy_param", legacy_param}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .blaze_named_args =
+            {.named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}}},
         .config = ComputeConfigDescriptor{},
     };
 
@@ -260,10 +259,11 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 2 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 3 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[0], param_a) << "blaze_ct_args::my_kernel::param_a should be 42 (compute path)";
     EXPECT_EQ(results[1], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF (compute path)";
+    EXPECT_EQ(results[2], legacy_param) << "legacy named compile-time arg should remain available";
 }
 
 // Test 1: Mixed positional + named args coexist in the same kernel.
@@ -273,7 +273,6 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
 // is correct: positional at [0..N-1], named at [N..].
 TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -311,7 +310,7 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 4 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[0], positional_per_core) << "Positional per-core RT arg at index 0";
     EXPECT_EQ(results[1], positional_common) << "Positional common RT arg at index 0";
@@ -319,11 +318,9 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     EXPECT_EQ(results[3], named_common_val) << "Named common RT arg (after positional)";
 }
 
-// Test 2a: CT arg redefinition with same value succeeds (dedup).
-// Two entries with the same name and value should be silently deduplicated.
-TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
+// Test 2a: The legacy field still accepts repeated names with the same value.
+TEST_F(NamedArgsTest, TensixTestLegacyCTArgDedupSameValue) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -356,7 +353,7 @@ TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 4 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[2], param_a) << "Deduplicated blaze_ct_args::my_kernel::param_a should be 42";
     EXPECT_EQ(results[3], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF";
@@ -377,10 +374,10 @@ TEST_F(NamedArgsTest, TensixTestCTArgConflictFails) {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
         // Same name, conflicting values — should fatal
-        .named_compile_time_args = {{"my_kernel.param_a", 42}, {"my_kernel.param_a", 99}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", 42}, {"my_kernel.param_a", 99}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -405,10 +402,10 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
     KernelDescriptor kernel_bad_ns = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"123bad.field", 1}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"123bad.field", 1}},
                 .named_common_runtime_args = {{"123bad.marker", 0}},
                 .named_per_core_runtime_args = {{"123bad.core_idx", {{core, 0}}}},
             },
@@ -421,10 +418,10 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
     KernelDescriptor kernel_bad_field = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.bad-field", 1}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.bad-field", 1}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -647,4 +644,209 @@ TEST(NamedArgsDescriptorCacheHit, CPU_MultipleNamedArgsPerVariantReappliedOnCach
 
     apply_descriptor_runtime_args(program, desc_v2);
     expect_values(program, 1000);
+}
+
+TEST(NamedArgsDescriptorCacheHit, CPU_PositionalRuntimeArgCountChangeIsRejected) {
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{1, 0};
+    ProgramDescriptor desc{.kernels = {blaze_cache_hit_kernel(core0, core1, 0)}};
+    ProgramDescriptor changed = desc;
+    changed.kernels[0].runtime_args[0].second.push_back(99u);
+    EXPECT_EQ(std::hash<ProgramDescriptor>{}(desc), std::hash<ProgramDescriptor>{}(changed))
+        << "Per-core length is not part of the cache key";
+
+    Program program{desc};
+    const uint32_t core0_positional = GetRuntimeArgs(program, 0, core0)[0];
+    const uint32_t core0_named = GetRuntimeArgs(program, 0, core0)[1];
+    EXPECT_THROW(apply_descriptor_runtime_args(program, changed), std::runtime_error);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], core0_positional);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[1], core0_named);
+}
+
+TEST(NamedArgsDescriptorCacheHit, CPU_DroppedNamedOnlyCoreIsRejected) {
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{1, 0};
+    auto make_kernel = [&](bool both_cores) {
+        std::vector<std::pair<CoreCoord, uint32_t>> values = {{core0, 1u}};
+        if (both_cores) {
+            values.push_back({core1, 2u});
+        }
+        return KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(std::set<CoreRange>({CoreRange(core0, core1)})),
+            .blaze_named_args = {.named_per_core_runtime_args = {{"my_kernel.core_idx", values}}},
+            .config = DataMovementConfigDescriptor{},
+        };
+    };
+    ProgramDescriptor desc{.kernels = {make_kernel(true)}};
+    ProgramDescriptor dropped{.kernels = {make_kernel(false)}};
+    EXPECT_EQ(std::hash<ProgramDescriptor>{}(desc), std::hash<ProgramDescriptor>{}(dropped))
+        << "Named-arg schema hash does not include which cores carry values";
+
+    Program program{desc};
+    const uint32_t core1_before = GetRuntimeArgs(program, 0, core1)[0];
+    EXPECT_THROW(apply_descriptor_runtime_args(program, dropped), std::runtime_error);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], core1_before);
+}
+
+TEST(RuntimeArgCountCacheHit, CPU_PaddedDispatchCapacityIsNotTheLogicalCount) {
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{0, 1};
+    ProgramDescriptor desc{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(core0, core1)),
+            .runtime_args = {{core0, {1u, 2u}}, {core1, {5u, 6u, 7u, 8u}}},
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    Program program{desc};
+    auto kernel = program.impl().get_kernel(0);
+    uint32_t max_stored = 0;
+    for (const CoreCoord& core : {core0, core1}) {
+        max_stored = std::max(max_stored, static_cast<uint32_t>(kernel->runtime_args(core).size()));
+    }
+    CoreRangeSet ranges = kernel->core_range_set();
+    kernel->set_runtime_args_count(ranges, max_stored);
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core0).size(), 4u);
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core1).size(), 4u);
+
+    ProgramDescriptor same_count = desc;
+    same_count.kernels[0].runtime_args[0].second = {3u, 4u};
+    same_count.kernels[0].runtime_args[1].second = {9u, 10u, 11u, 12u};
+    apply_descriptor_runtime_args(program, same_count);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 3u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[1], 4u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], 9u);
+
+    ProgramDescriptor grown = same_count;
+    grown.kernels[0].runtime_args[0].second = {3u, 4u, 90u, 91u};
+    EXPECT_THROW(apply_descriptor_runtime_args(program, grown), std::runtime_error);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 3u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[1], 4u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], 9u);
+}
+
+TEST(RuntimeArgCountCacheHit, CPU_DuplicateCoreEntryCannotExceedCachedCount) {
+    // Two equal-length entries for one core are legal; growing only the first must still be rejected.
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{0, 1};
+    const std::vector<uint32_t> core0_args{1u, 2u, 3u, 4u};
+    const std::vector<uint32_t> core1_args{5u, 6u, 7u, 8u};
+    ProgramDescriptor desc{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(core0, core1)),
+            .runtime_args = {{core0, core0_args}, {core0, core0_args}, {core1, core1_args}},
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    Program program{desc};
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core0).size(), 4u);
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core1).size(), 4u);
+
+    ProgramDescriptor grown = desc;
+    grown.kernels[0].runtime_args[0].second = {1u, 2u, 3u, 4u, 90u, 91u, 92u, 93u};
+    EXPECT_EQ(std::hash<ProgramDescriptor>{}(desc), std::hash<ProgramDescriptor>{}(grown))
+        << "A duplicate core entry keeps the entry count, so the default hash is unchanged";
+    EXPECT_THROW(apply_descriptor_runtime_args(program, grown), std::runtime_error);
+    for (uint32_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[i], core0_args[i]);
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[i], core1_args[i]);
+    }
+
+    ProgramDescriptor same_count = desc;
+    same_count.kernels[0].runtime_args[0].second = {9u, 10u, 11u, 12u};
+    same_count.kernels[0].runtime_args[1].second = {13u, 14u, 15u, 16u};
+    same_count.kernels[0].runtime_args[2].second = {17u, 18u, 19u, 20u};
+    apply_descriptor_runtime_args(program, same_count);
+    for (uint32_t i = 0; i < 4; ++i) {
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[i], same_count.kernels[0].runtime_args[1].second[i]);
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[i], same_count.kernels[0].runtime_args[2].second[i]);
+    }
+}
+
+TEST(RuntimeArgCountCacheHit, CPU_TrailingEmptyDuplicateReusesCachedCount) {
+    // SetRuntimeArgs skips an empty list, so a trailing empty duplicate keeps the earlier count.
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{0, 1};
+    const std::vector<uint32_t> core0_args{1u, 2u};
+    const std::vector<uint32_t> core1_args{5u, 6u, 7u, 8u};
+    ProgramDescriptor desc{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(core0, core1)),
+            .runtime_args = {{core0, core0_args}, {core0, {}}, {core1, core1_args}},
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    Program program{desc};
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core0).size(), core0_args.size());
+    ASSERT_EQ(GetRuntimeArgs(program, 0, core1).size(), core1_args.size());
+
+    apply_descriptor_runtime_args(program, desc);
+    for (uint32_t i = 0; i < core0_args.size(); ++i) {
+        EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[i], core0_args[i]);
+    }
+
+    ProgramDescriptor same_count = desc;
+    same_count.kernels[0].runtime_args[0].second = {9u, 10u};
+    apply_descriptor_runtime_args(program, same_count);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 9u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[1], 10u);
+
+    ProgramDescriptor grown = same_count;
+    grown.kernels[0].runtime_args[0].second = {9u, 10u, 11u};
+    EXPECT_THROW(apply_descriptor_runtime_args(program, grown), std::runtime_error);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 9u);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[1], 10u);
+
+    ProgramDescriptor emptied = desc;
+    emptied.kernels[0].runtime_args = {{core0, {}}, {core1, core1_args}};
+    EXPECT_THROW(apply_descriptor_runtime_args(program, emptied), std::runtime_error);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core0)[0], 9u);
+}
+
+TEST(RuntimeArgCountCacheHit, CPU_OmittedCoreIsRejected) {
+    const CoreCoord core0{0, 0};
+    const CoreCoord core1{0, 1};
+    ProgramDescriptor desc{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(core0, core1)),
+            .runtime_args = {{core0, {1u, 2u, 3u, 4u}}, {core1, {5u, 6u, 7u, 8u}}},
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    Program program{desc};
+    const uint32_t core1_before = GetRuntimeArgs(program, 0, core1)[0];
+
+    ProgramDescriptor missing = desc;
+    missing.kernels[0].runtime_args = {{core0, {1u, 2u, 3u, 4u}}};
+    EXPECT_THROW(apply_descriptor_runtime_args(program, missing), std::runtime_error);
+    EXPECT_EQ(GetRuntimeArgs(program, 0, core1)[0], core1_before);
+}
+
+TEST(RuntimeArgCountCacheHit, CPU_EmptyCommonArgsSurviveCountFinalization) {
+    const CoreCoord core{0, 0};
+    ProgramDescriptor desc{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(core, core)),
+            .runtime_args = {{core, {1u, 2u, 3u, 4u}}},
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    Program program{desc};
+    auto kernel = program.impl().get_kernel(0);
+    kernel->set_common_runtime_args_count(static_cast<uint32_t>(kernel->common_runtime_args().size()));
+    apply_descriptor_runtime_args(program, desc);
+
+    ProgramDescriptor nonempty = desc;
+    nonempty.kernels[0].common_runtime_args = {1u};
+    EXPECT_THROW(apply_descriptor_runtime_args(program, nonempty), std::runtime_error);
+
+    ProgramDescriptor with_common = desc;
+    with_common.kernels[0].common_runtime_args = {10u, 11u};
+    Program populated{with_common};
+    ProgramDescriptor cleared = with_common;
+    cleared.kernels[0].common_runtime_args.clear();
+    const uint32_t common_before = GetCommonRuntimeArgs(populated, 0)[0];
+    EXPECT_THROW(apply_descriptor_runtime_args(populated, cleared), std::runtime_error);
+    EXPECT_EQ(GetCommonRuntimeArgs(populated, 0)[0], common_before);
 }

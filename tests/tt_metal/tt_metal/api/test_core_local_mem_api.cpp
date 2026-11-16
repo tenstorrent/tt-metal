@@ -28,7 +28,7 @@ namespace {
 
 void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     const tt::tt_metal::CoreCoord core = {0, 0};
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
     tt::tt_metal::distributed::MeshWorkload workload;
 
     auto zero_coord = tt::tt_metal::distributed::MeshCoordinate(0, 0);

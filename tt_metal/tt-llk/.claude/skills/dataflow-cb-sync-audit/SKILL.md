@@ -23,6 +23,15 @@ known-pattern worklist (reserve/push & wait/pop credit balance per CB):
 # from the tt-metal repo root; do NOT cd into the tool dir (run.sh self-locates)
 tt_metal/tt-llk/.claude/tools/llk-audit/run.sh <arch> --full-jit   # cb-sync runs in the kernel tier
 ```
+`CB_RESERVE_PUSH_IMBALANCE` = within one function, a CB's `cb_reserve_back` and
+`cb_push_back` call-site counts differ (the producer half); `CB_WAIT_POP_IMBALANCE` =
+the same for `cb_wait_front` vs `cb_pop_front` (the consumer half). One side missing
+entirely counts as a difference. Both are **candidates**, never verdicts: the counts
+are STATIC call sites grouped by the TEXT of the CB id, so one CB named two ways (a
+variable in one call, `CBIndex::c_in0` in another) splits into two groups that each
+read as unbalanced, and a reserve whose push is written once per branch of an
+`if`/`else` reads as 1-vs-2.
+
 `cb-sync` is **empty over the tt-llk headers** — CBs live in JIT-compiled kernels
 (ttnn/models), so it only emits findings when fed a KERNEL fact base via `--full-jit`
 (the on-request capture; runbook in `race-audit-all`). Treat `findings[]` as a **floor,

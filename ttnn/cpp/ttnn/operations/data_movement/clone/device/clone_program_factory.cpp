@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cmath>
+#include <tuple>
 
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -15,7 +16,6 @@ namespace ttnn::operations::data_movement::clone {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_artifacts(
     const CloneOperation::operation_attributes_t& operation_attributes,
@@ -43,8 +43,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     CoreRangeSet core_group_2;
     uint32_t num_units_per_core_group_1;
     uint32_t num_units_per_core_group_2;
-    uint32_t num_cores_x;
-    uint32_t num_cores_y;
+    std::vector<CoreCoord> cores;
 
     if (is_sharded) {
         auto shard_spec = output.buffer()->shard_spec();
@@ -72,13 +71,18 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet();
 
-        auto grid_size = all_cores.bounding_box();
-        num_cores_x = grid_size.end_coord.x + 1;
-        num_cores_y = grid_size.end_coord.y + 1;
+        // Walk the shard's own CoreRangeSet, not a bbox rectangle (wrong unless the grid is a rectangle at the origin).
+        cores = corerange_to_cores(all_cores, num_cores, shard_spec.orientation() == ShardOrientation::ROW_MAJOR);
+    } else if (operation_attributes.sub_core_grids.has_value()) {
+        std::tie(
+            num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2) =
+            split_work_to_cores(*operation_attributes.sub_core_grids, num_units);
+        // The runtime-args loop below gives the first core_group_1.num_cores() cores the group-1 share.
+        cores = corerange_to_cores(core_group_1);
+        const auto group_2_cores = corerange_to_cores(core_group_2);
+        cores.insert(cores.end(), group_2_cores.begin(), group_2_cores.end());
     } else {
         auto compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
-        num_cores_x = compute_with_storage_grid_size.x;
-        num_cores_y = compute_with_storage_grid_size.y;
         auto
             [num_cores_result,
              all_cores_result,
@@ -92,9 +96,10 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
         core_group_2 = core_group_2_result;
         num_units_per_core_group_1 = num_units_per_core_group_1_result;
         num_units_per_core_group_2 = num_units_per_core_group_2_result;
+        cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y);
     }
 
-    auto alignment = input.buffer()->alignment();
+    auto alignment = input.mesh_buffer().alignment();
     uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
     uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
 
@@ -181,7 +186,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
             .dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     KernelSpec writer{
         .unique_id = WRITER,
@@ -190,7 +195,7 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
             .dfb_spec_name = writer_dfb, .accessor_name = "dst", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = rta_names},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     spec.kernels.push_back(reader);
     spec.kernels.push_back(writer);
@@ -199,14 +204,13 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     // Compute KernelSpecs for dtype conversion (per core group — preserved multiplicity)
     // ---------------------------------------------------------------------
     if (convert_dtype) {
-        auto compute_hw =
-            ttnn::to_compute_hardware_config(input.device()->arch(), operation_attributes.compute_kernel_config);
+        auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
         // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
         // Float32 DFB with a 32-bit dest register. Legacy ComputeConfigDescriptor left
         // unpack_to_dest_mode default (== UnpackToSrc); mirror that value faithfully.
-        if (auto* gen1 = std::get_if<ComputeGen1Config>(&compute_hw)) {
-            if (input_data_format == tt::DataFormat::Float32 && gen1->enable_32_bit_dest) {
-                gen1->unpack_modes = ComputeUnpackModes{{SRC, UnpackMode::UnpackToSrc}};
+        if (input.device()->arch() != tt::ARCH::QUASAR) {
+            if (input_data_format == tt::DataFormat::Float32 && compute_hw.enable_32_bit_dest) {
+                compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{SRC, UnpackMode::UnpackToSrc}};
             }
         }
 
@@ -262,7 +266,6 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
 
     uint32_t start_id = 0;
     uint32_t num_cores_group_1 = core_group_1.num_cores();
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
     for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;

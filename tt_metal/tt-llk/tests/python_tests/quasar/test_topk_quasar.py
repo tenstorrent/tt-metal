@@ -37,7 +37,7 @@ from helpers.golden_generators import (
     UntilizeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
+from helpers.llk_params import DestAccumulation, TopKSortDirection
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -48,7 +48,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TOPK,
 )
-from helpers.utils import _RECORD_TEST_ORDER, passed_test
+from helpers.utils import _RECORD_TEST_ORDER, passed_test, result_tensor
 
 NUM_STAGES = 2  # Values and Indices stage
 
@@ -283,8 +283,9 @@ def run_topk_quasar_case(
     sort_direction: TopKSortDirection,
     stable_sort: bool,
     unique_values: bool = False,
+    value_range: tuple = (0.0, 1.0),
 ):
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    sfpu_false_spec = StimuliSpec.uniform(low=value_range[0], high=value_range[1])
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -339,7 +340,7 @@ def run_topk_quasar_case(
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     res_tensor = transform_result_tensor_to_right_form(
         res_tensor, formats, K, input_dimensions
@@ -390,8 +391,8 @@ def test_topk_quasar(
 ):
     if stable_sort:
         pytest.skip(
-            "Stable sort is currently broken in LLK API."
-        )  # TODO: Check tenstorrent/tt-metal#33492 and remove this once fixed.
+            "Quasar LLK implements no stable-sort bitonic network; ttnn rejects stable sort on Quasar by design."
+        )
 
     run_topk_quasar_case(
         formats,
@@ -411,4 +412,37 @@ def test_topk_quasar_unique_indices():
         TopKSortDirection.Descending,
         False,
         unique_values=True,
+    )
+
+
+# The topk network compares floats with SFPSWAP. In its int32 compare mode (imm12 bit 0 = 0) the
+# fp32 bit patterns of two negative values compare in reverse order, so cover all-negative and
+# mixed-sign rows on both a single-iteration and a multi-iteration (merge + rebuild) shape.
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+        ]
+    ),
+    input_dimensions=[
+        [32, 128],
+        [32, 1024],
+    ],
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    value_range=[(-1.0, 0.0), (-1.0, 1.0)],
+)
+def test_topk_quasar_signed_values(
+    formats: InputOutputFormat,
+    input_dimensions: list,
+    sort_direction: TopKSortDirection,
+    value_range: tuple,
+):
+    run_topk_quasar_case(
+        formats,
+        input_dimensions,
+        32,
+        sort_direction,
+        False,
+        value_range=value_range,
     )

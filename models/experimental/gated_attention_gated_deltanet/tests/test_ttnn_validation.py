@@ -18,7 +18,13 @@ import time
 import sys
 import os
 
+import pytest
+
+from models.common.device_utils import is_blackhole
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+_CHUNKED_BLACKHOLE_ONLY = "test_gated_deltanet_chunked_ttnn runs on Blackhole only (the seq kernel's L1 use)"
 
 
 def assert_with_pcc(torch_output, ttnn_output, pcc_threshold=0.99):
@@ -72,7 +78,9 @@ def test_gated_attention_ttnn():
 
     from torch_functional.gated_attention import gated_attention_forward
     from tt.ttnn_gated_attention import gated_attention_forward_ttnn
-    from tests.test_gated_attention import make_gated_attention_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_attention import (
+        make_gated_attention_params,
+    )
 
     params = make_gated_attention_params()
 
@@ -119,7 +127,7 @@ def test_gated_deltanet_recurrent_ttnn(seq_len=16):
 
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len)
 
@@ -171,8 +179,9 @@ def test_gated_deltanet_recurrent_ttnn(seq_len=16):
         ttnn.close_device(device)
 
 
+@pytest.mark.skipif(not is_blackhole(), reason=_CHUNKED_BLACKHOLE_ONLY)
 def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=128):
-    """Validate production-shaped TTNN GatedDeltaNet chunked mode.
+    """Validate production-shaped TTNN GatedDeltaNet chunked mode (Blackhole only).
 
     The production seq-kernel path intentionally differs from the generic torch
     golden for these stress shapes, so this test checks the Win 1 invariant:
@@ -184,10 +193,13 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=128):
     except ImportError:
         print("SKIP: test_gated_deltanet_chunked_ttnn (ttnn not available)")
         return
+    if not is_blackhole():
+        print(f"SKIP: {_CHUNKED_BLACKHOLE_ONLY}")
+        return
 
     from tt import ttnn_delta_rule_seq
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len, batch_size=1, num_heads=12, num_v_heads=12, head_v_dim=128)
 
@@ -371,7 +383,9 @@ def benchmark_gated_attention(warmup=3, iterations=10):
 
     from torch_functional.gated_attention import gated_attention_forward
     from tt.ttnn_gated_attention import gated_attention_forward_ttnn
-    from tests.test_gated_attention import make_gated_attention_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_attention import (
+        make_gated_attention_params,
+    )
 
     params = make_gated_attention_params()
 
@@ -444,7 +458,7 @@ def benchmark_gated_deltanet(warmup=3, iterations=10, seq_len=16, mode="recurren
 
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len)
 

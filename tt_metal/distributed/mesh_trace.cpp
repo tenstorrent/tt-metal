@@ -11,12 +11,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
-#include <functional>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -24,14 +21,11 @@
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "math.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
-#include "dispatch/system_memory_manager.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
 #include <distributed/mesh_device_impl.hpp>
@@ -92,9 +86,10 @@ void MeshTrace::populate_mesh_buffer(
         .size = padded_size,
     };
 
-    // Give dynamically allocated trace storage a useful diagnostic context. The allocator excludes BufferType::TRACE
-    // storage in the reserved trace region, but intentionally tracks top-down BufferType::DRAM trace storage because
-    // it can be unsafe for older traces.
+    // Trace storage is safe from every live trace: reserved BufferType::TRACE storage is disjoint from ordinary DRAM,
+    // and dynamic top-down BufferType::DRAM storage is checked against every live trace's high-water mark below. The
+    // "trace_storage" allocation context is explicitly recognized by the trace allocation tracker, which uses it to
+    // exclude both forms from unsafe-allocation accounting (and from the tracking-disabled warning).
     {
         auto trace_storage_context = tt::tt_metal::make_allocation_context_guard("trace_storage");
         trace_buffer->mesh_buffer =

@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Per-op test: ``ttnn.transformer.scaled_dot_product_attention``  (prefill SDPA).
+Per-op test: ``ttnn.experimental.quasar.transformer.scaled_dot_product_attention``  (prefill SDPA).
 
 Model call site (modules/attention/attention_1d.py:566-575, prefill_forward):
-    attn_output = ttnn.transformer.scaled_dot_product_attention(
+    attn_output = ttnn.experimental.quasar.transformer.scaled_dot_product_attention(
         q_heads_sdpa,          # [B, n_heads,    per_user_seq_len, head_dim]
         k_heads_cache_dtype,   # [B, n_kv_heads, per_user_seq_len, head_dim]
         v_heads_cache_dtype,   # [B, n_kv_heads, per_user_seq_len, head_dim]
@@ -69,7 +69,7 @@ def test_scaled_dot_product_attention(ttnn_mesh_device, reset_seeds, seq):
         packer_l1_acc=False,
     )
 
-    out = ttnn.transformer.scaled_dot_product_attention(
+    out = ttnn.experimental.quasar.transformer.scaled_dot_product_attention(
         q,
         k,
         v,

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose
@@ -42,6 +43,23 @@ def test_manual_tensors_wrong_config(device, expect_error):
     seed_tensor = ttnn.from_torch(torch.Tensor([42]), dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR, device=device)
     with expect_error(Exception, "Seeds were provided as a tensor, so user_ids must not be provided as a scalar."):
         ttnn.manual_seed(seeds=seed_tensor, device=device, user_ids=7)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "layout", "shape", "message"),
+    [
+        (ttnn.uint32, ttnn.TILE_LAYOUT, (32,), "ROW_MAJOR layout"),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (32,), "type UINT32"),
+        (ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, (4, 8), "1-dimensional"),
+    ],
+    ids=["tile_layout", "bfloat16", "rank2"],
+)
+def test_manual_seed_scalar_seed_rejects_invalid_user_ids_tensor(device, expect_error, dtype, layout, shape, message):
+    user_id_tensor = ttnn.from_torch(
+        torch.arange(32, dtype=torch.float32).reshape(shape), dtype=dtype, layout=layout, device=device
+    )
+    with expect_error(RuntimeError, message):
+        ttnn.manual_seed(seeds=42, device=device, user_ids=user_id_tensor)
 
 
 def test_manual_seed_base_functionality(device):

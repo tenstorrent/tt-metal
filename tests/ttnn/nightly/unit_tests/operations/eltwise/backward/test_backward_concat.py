@@ -212,3 +212,34 @@ def test_bw_concat_with_output(input_shapes, input_shapes_2, dimension, device, 
         if are_required_outputs[i]:
             status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status
+
+
+# Negative dims were not normalized, so neither branch of the dim chain matched and other_grad was
+# sliced from the start of grad (#57356).
+@pytest.mark.parametrize("dim, positive_dim", [(-1, 3), (-2, 2), (-3, 1), (-4, 0)])
+def test_bw_concat_negative_dim(device, dim, positive_dim):
+    shape = [1, 1, 32, 32]
+    shape[positive_dim] = 2 if positive_dim < 2 else 32
+    grad_shape = list(shape)
+    grad_shape[positive_dim] *= 2
+    torch.manual_seed(0)
+    a, b, g = torch.rand(shape), torch.rand(shape), torch.rand(grad_shape)
+    to_tt = lambda x: ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    got_a, got_b = ttnn.concat_bw(to_tt(g), to_tt(a), to_tt(b), dim)
+
+    gq = ttnn.to_torch(to_tt(g)).float()
+    expect_a, expect_b = torch.split(gq, shape[positive_dim], dim=positive_dim)
+    assert torch.equal(ttnn.to_torch(got_a).float(), expect_a)
+    assert torch.equal(ttnn.to_torch(got_b).float(), expect_b)
+
+
+# The slicing indexes all four dims of grad and input and writes into an output shaped like other, so
+# every operand must be rank 4, not only grad.
+@pytest.mark.parametrize("which", ["input", "other"])
+def test_bw_concat_rejects_lower_rank_operand(device, which, expect_error):
+    to_tt = lambda x: ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    full, low = torch.rand(1, 1, 32, 32), torch.rand(32, 32)
+    a, b = (low, full) if which == "input" else (full, low)
+    with expect_error(RuntimeError, "concat_bw expects rank-4 tensors"):
+        ttnn.concat_bw(to_tt(torch.rand(1, 1, 32, 64)), to_tt(a), to_tt(b), 3)

@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
@@ -75,6 +76,7 @@ void ConfigureDevicePrintForCoord(
     rtopts.set_feature_prepend_device_core_risc(kDprint, true);
     rtopts.set_feature_mesh_coords(kDprint, {{row, col}});
     rtopts.set_feature_all_chips(kDprint, false);
+    rtopts.resolve_mesh_coords_to_chip_ids(MetalContext::instance().get_system_mesh());
 }
 
 // Builds a MeshWorkload where each device DEVICE_PRINTs its global mesh coordinate (row, col).
@@ -82,15 +84,15 @@ void ConfigureDevicePrintForCoord(
 // so the DEVICE_PRINT output directly matches what was configured in the DEVICE_PRINT filter.
 distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
-    constexpr experimental::NodeCoord kNode = {0, 0};
-    const experimental::KernelSpecName kKernel{"mesh_coord_print"};
+    constexpr NodeCoord kNode = {0, 0};
+    const KernelSpecName kKernel{"mesh_coord_print"};
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        auto [row, col] = GetGlobalCoord(mesh_device->get_device(coord)->id());
+        auto [row, col] = GetGlobalCoord(internal::get_device(*mesh_device, coord)->id());
 
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "dprint_mesh_coord",
-            .kernels = {experimental::KernelSpec{
+            .kernels = {KernelSpec{
                 .unique_id = kKernel,
                 .source =
                     std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/device_print/print_mesh_coord.cpp"},
@@ -98,7 +100,7 @@ distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distribut
                 .compile_time_args = {{"row", row}, {"col", col}},
                 .hw_config = DevicePrintFixture::SingleThreadDmConfig(mesh_device->arch()),
             }},
-            .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = kNode}},
+            .work_units = {WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = kNode}},
         };
 
         workload.add_program(
@@ -168,15 +170,11 @@ void RunAllChipsVerificationTest(
 }  // namespace
 
 void DevicePrintMeshCoordsFixture::ExtraSetUp() {
-    // Teardown forces MetalContext to re-initialize (including resolve_mesh_coords_to_chip_ids)
-    // when devices are opened by DebugToolsMeshFixture::SetUp().  Re-apply rtoptions afterwards
-    // because ParseAllFeatureEnv resets them to defaults on re-initialization.
-    MetalContext::instance().teardown();
     CMAKE_UNIQUE_NAMESPACE::ConfigureDevicePrintForCoord(
         MetalContext::instance().rtoptions(), dprint_file_name, target_coord.first, target_coord.second);
 }
 
-void DevicePrintMeshCoordsFixture::ExtraTearDown() { MetalContext::instance().teardown(); }
+void DevicePrintMeshCoordsFixture::ExtraTearDown() {}
 
 // Test 1: Only the device at mesh coord (0,0) should produce DEVICE_PRINT output.
 TEST_F(DevicePrintMeshCoordsFixture, TensixTestDevicePrintMeshCoordsFiltersCorrectDevice) {

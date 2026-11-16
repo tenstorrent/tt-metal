@@ -254,6 +254,7 @@ Check memory for already-submitted ideas; do not re-propose them. Create a fresh
 ### Task 6: Stale PR Nudges
 
 1. List open non-Repo-Assist PRs not updated in **3+ days**. Skip draft/WIP PRs. A PR is eligible for a repeat action only if **3 or more days have passed since the last repo-assist nudge/ping** on that PR (check memory for the last action timestamp).
+   - **PRs labeled `copilot-flow`** (Copilot coding-agent PRs from the `copilot-ready` flow) are nudged on the author side by the PR Sous Chef workflow, which mentions Copilot with specific instructions every hour at most. For these PRs **skip the author-blocked path entirely** (do not post an author nudge — a second, vaguer nudge on the same PR only wastes a Copilot session). The reviewer-blocked path (`/codeowners ping`) still applies to them unchanged: Sous Chef deliberately never pings humans.
 2. For each stale PR, classify the blocker and act:
    - **Author-blocked** — nudge the author. This includes:
      - Merge conflicts or the branch being behind `main`.

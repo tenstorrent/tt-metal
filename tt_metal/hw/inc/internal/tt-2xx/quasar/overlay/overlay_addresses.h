@@ -8,11 +8,16 @@
 
 #include <cstdint>
 #include "internal/tt-2xx/quasar/noc/tt_tensix_noc_overlay_reg.h"
-#include "internal/tt-2xx/quasar/overlay/meta/registers/overlay_reg.h"
+#include "registers/overlay_reg.h"
 
 #define MEM_PORT_CACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define MEM_PORT_NONCACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define PERIPH_PORT_BASE_ADDR (uint64_t)TT_CLUSTER_CTRL_REG_MAP_BASE_ADDR
+
+#define MEM_L1_SIZE MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE
+// Note: RISC-V LR/SC and AMO atomics don't work with uncached L1 (they hang).
+// Both require the cache coherence system. Only plain loads/stores with fences work uncached.
+#define MEM_L1_UNCACHED_BASE MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR
 
 // =============================================================================
 // L2 Cache Controller Registers

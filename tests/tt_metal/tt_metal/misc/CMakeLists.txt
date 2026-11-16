@@ -6,15 +6,10 @@ add_executable(unit_tests_misc ${UNIT_TESTS_MISC_SRC})
 
 # Enable unity build for the executable
 TT_ENABLE_UNITY_BUILD(unit_tests_misc)
-target_precompile_headers(unit_tests_misc REUSE_FROM metal_test_pch)
+tt_reuse_precompile_headers(unit_tests_misc metal_test_pch)
 
 # Link libraries
-target_link_libraries(
-    unit_tests_misc
-    PRIVATE
-        test_metal_common_libs
-        Boost::smart_ptr
-)
+target_link_libraries(unit_tests_misc PRIVATE test_metal_common_libs)
 
 # Set include directories
 target_include_directories(

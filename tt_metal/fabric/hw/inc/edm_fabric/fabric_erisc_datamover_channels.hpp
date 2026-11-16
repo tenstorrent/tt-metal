@@ -16,7 +16,7 @@
 #endif
 #include "api/alignment.h"
 #include "internal/risc_attribs.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "fabric_static_channels_ct_args.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
@@ -43,6 +43,47 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
+// Channels at or below this depth tabulate every slot address; deeper ones compute addresses.
+// Only the worker-connected VC0 sender can exceed it. The budget is 1912 B (-Werror=stack-usage, bh_hal.cpp).
+// The mode is picked from NUM_BUFFERS at compile time
+constexpr uint8_t MAX_TABULATED_SLOTS = 32;
+
+template <uint8_t NUM_BUFFERS>
+inline constexpr bool tabulates_all_slots = NUM_BUFFERS <= MAX_TABULATED_SLOTS;
+
+// Slot addressing for a channel that tabulates: one stored address per slot.
+template <uint8_t NUM_BUFFERS, bool Tabulate = tabulates_all_slots<NUM_BUFFERS>>
+struct SlotAddresses {
+    FORCE_INLINE void init(size_t channel_base_address, size_t slot_stride) {
+// need to avoid unrolling to keep code size within limits
+#pragma GCC unroll 1
+        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+            this->addresses[i] = channel_base_address + i * slot_stride;
+        }
+    }
+    [[nodiscard]] FORCE_INLINE size_t operator[](uint8_t slot) const { return this->addresses[slot]; }
+    [[nodiscard]] FORCE_INLINE size_t base() const { return this->addresses[0]; }
+
+    std::array<size_t, NUM_BUFFERS> addresses;
+};
+
+// Slot addressing for a channel too deep to tabulate: base plus stride, computed on demand. Both
+// erisc targets have a hardware multiplier (rv32im_zmmul), so this is a mul and an add.
+template <uint8_t NUM_BUFFERS>
+struct SlotAddresses<NUM_BUFFERS, false> {
+    FORCE_INLINE void init(size_t channel_base_address, size_t stride) {
+        this->base_address = channel_base_address;
+        this->slot_stride = stride;
+    }
+    [[nodiscard]] FORCE_INLINE size_t operator[](uint8_t slot) const {
+        return this->base_address + slot * this->slot_stride;
+    }
+    [[nodiscard]] FORCE_INLINE size_t base() const { return this->base_address; }
+
+    size_t base_address;
+    size_t slot_stride;
+};
+
 // This class implements the interface for static sized sender channels.
 // Static sized sender channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
@@ -57,16 +98,20 @@ public:
     FORCE_INLINE void init_impl(
         size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
         this->next_packet_buffer_index = BufferIndex{0};
+        this->slot_addresses.init(channel_base_address, max_eth_payload_size_in_bytes);
+        // A channel too deep to tabulate stores no per-slot address, so walk a cursor to zero
+        // every header rather than reading one back.
+        size_t slot_addr = channel_base_address;
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
             for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
             }
+            slot_addr += max_eth_payload_size_in_bytes;
         }
         if constexpr (NUM_BUFFERS) {
-            cached_next_buffer_slot_addr = this->buffer_addresses[0];
+            cached_next_buffer_slot_addr = this->slot_addresses.base();
         }
     }
 
@@ -77,18 +122,18 @@ public:
 
     // For sender channel, only need a get_next_packet style
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl() const {
-        return this->buffer_addresses[next_packet_buffer_index.get()];
+        return this->slot_addresses[next_packet_buffer_index.get()];
     }
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
 
     FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
         next_packet_buffer_index = BufferIndex{wrap_increment<NUM_BUFFERS>(next_packet_buffer_index.get())};
-        this->cached_next_buffer_slot_addr = this->buffer_addresses[next_packet_buffer_index.get()];
+        this->cached_next_buffer_slot_addr = this->slot_addresses[next_packet_buffer_index.get()];
     }
 
 private:
-    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    SlotAddresses<NUM_BUFFERS> slot_addresses;
     std::size_t cached_next_buffer_slot_addr;
     BufferIndex next_packet_buffer_index;
 };
@@ -100,8 +145,10 @@ class EthChannelBufferInterface {
 public:
     explicit EthChannelBufferInterface() = default;
 
-    FORCE_INLINE void init(size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
-        static_cast<DERIVED_T*>(this)->init_impl(channel_base_address, max_eth_payload_size_in_bytes, header_size_bytes);
+    FORCE_INLINE void init(
+        size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
+        static_cast<DERIVED_T*>(this)->init_impl(
+            channel_base_address, max_eth_payload_size_in_bytes, header_size_bytes);
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address(const BufferIndex& buffer_index) const {
@@ -164,17 +211,21 @@ public:
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
+        this->slot_addresses.init(channel_base_address, this->max_eth_payload_size_in_bytes);
+        // A channel too deep to tabulate stores no per-slot address, so walk a cursor to zero
+        // every header rather than reading one back.
+        size_t slot_addr = channel_base_address;
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
-            // need to avoid unrolling to keep code size within limits
-            #pragma GCC unroll 1
+// need to avoid unrolling to keep code size within limits
+#pragma GCC unroll 1
             for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
             }
+            slot_addr += this->max_eth_payload_size_in_bytes;
         }
 
         if constexpr (NUM_BUFFERS) {
-            set_cached_next_buffer_slot_addr_impl(this->buffer_addresses[0]);
+            set_cached_next_buffer_slot_addr_impl(this->slot_addresses.base());
         }
     }
 
@@ -183,12 +234,12 @@ public:
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl(const BufferIndex& buffer_index) const {
-        return this->buffer_addresses[buffer_index];
+        return this->slot_addresses[buffer_index.get()];
     }
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
+        return reinterpret_cast<volatile T*>(this->slot_addresses[buffer_index.get()]);
     }
 
     template <typename T>
@@ -200,7 +251,9 @@ public:
     }
 
     // Doesn't return the message size, only the maximum eth payload size
-    [[nodiscard]] FORCE_INLINE size_t get_max_eth_payload_size_impl() const { return this->max_eth_payload_size_in_bytes; }
+    [[nodiscard]] FORCE_INLINE size_t get_max_eth_payload_size_impl() const {
+        return this->max_eth_payload_size_in_bytes;
+    }
 
 #if defined(COMPILE_FOR_ERISC)
     [[nodiscard]] FORCE_INLINE bool eth_is_acked_or_completed_impl(const BufferIndex& buffer_index) const {
@@ -214,12 +267,10 @@ public:
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
     }
 
-    FORCE_INLINE uint32_t channel_base_address() const {
-        return static_cast<uint32_t>(this->buffer_addresses[0]);
-    }
+    FORCE_INLINE uint32_t channel_base_address() const { return static_cast<uint32_t>(this->slot_addresses.base()); }
 
 private:
-    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    SlotAddresses<NUM_BUFFERS> slot_addresses;
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;
@@ -383,15 +434,65 @@ using ReceiverChannelBuffersFromAllocs =
 template <typename HEADER_TYPE, auto& ChannelBuffers>
 using SenderEthChannelBuffers = StaticSizedSenderEthChannelBuffers<HEADER_TYPE, ChannelBuffers>;
 
+// A sender channel's connection to its producer, whatever the channel's slot count: the producer's location info, the
+// connection semaphore, the producer's credit address (cached when it connects) and the command buffer of its credits.
+// One type for every channel, so code that only opens and closes connections exists once. An aggregate: the derived
+// interfaces initialize it in place.
+template <uint8_t WORKER_HANDSHAKE_NOC>
+struct EdmChannelWorkerConnection {
+    [[nodiscard]] FORCE_INLINE uint32_t get_worker_semaphore_address() const {
+        return cached_worker_semaphore_address & 0xFFFFFFFF;
+    }
+
+    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
+    FORCE_INLINE void cache_producer_noc_addr() {
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+        const auto& worker_info = *worker_location_info_ptr;
+        uint64_t worker_semaphore_address;
+        worker_semaphore_address = get_noc_addr(
+            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
+        this->cached_worker_semaphore_address = worker_semaphore_address;
+    }
+
+    [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
+        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
+    }
+
+    // Closes the connection: the semaphore back to unused, `read_counter` (the credits returned so far) into the
+    // producer's location info, and +1 on the producer's teardown semaphore.
+    template <bool posted = false, bool RISC_CPU_DATA_CACHE_ENABLED>
+    FORCE_INLINE void close_connection(uint32_t read_counter) const {
+        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
+        const auto& worker_info = *worker_location_info_ptr;
+        uint64_t worker_semaphore_address = get_noc_addr(
+            (uint32_t)worker_info.worker_xy.x,
+            (uint32_t)worker_info.worker_xy.y,
+            worker_info.worker_teardown_semaphore_address);
+
+        *this->connection_live_semaphore = tt::tt_fabric::connection_interface::unused_connection_value;
+
+        worker_location_info_ptr->edm_read_counter = read_counter;
+
+        noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
+    }
+
+    volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr = nullptr;
+    uint64_t cached_worker_semaphore_address = 0;
+    volatile tt_l1_ptr uint32_t* const connection_live_semaphore = nullptr;
+    uint8_t sender_sync_noc_cmd_buf = write_at_cmd_buf;
+};
+
 // Base class for channel worker interfaces
 // Derived classes implement specific counter management strategies.
 template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED>
-struct EdmChannelWorkerInterface {
-    EdmChannelWorkerInterface() :
-        worker_location_info_ptr(nullptr),
-        cached_worker_semaphore_address(0),
-        connection_live_semaphore(nullptr),
-        sender_sync_noc_cmd_buf(write_at_cmd_buf) {}
+struct EdmChannelWorkerInterface : EdmChannelWorkerConnection<WORKER_HANDSHAKE_NOC> {
+    using Connection = EdmChannelWorkerConnection<WORKER_HANDSHAKE_NOC>;
+    using Connection::cached_worker_semaphore_address;
+    using Connection::connection_live_semaphore;
+    using Connection::sender_sync_noc_cmd_buf;
+    using Connection::worker_location_info_ptr;
+
+    EdmChannelWorkerInterface() : Connection{nullptr, 0, nullptr, write_at_cmd_buf} {}
 
     EdmChannelWorkerInterface(
         // TODO: PERF: See if we can make this non-volatile and then only
@@ -405,10 +506,7 @@ struct EdmChannelWorkerInterface {
         volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value) :
-        worker_location_info_ptr(worker_location_info_ptr),
-        cached_worker_semaphore_address(0),
-        connection_live_semaphore(connection_live_semaphore),
-        sender_sync_noc_cmd_buf(sender_sync_noc_cmd_buf) {
+        Connection{worker_location_info_ptr, 0, connection_live_semaphore, sender_sync_noc_cmd_buf} {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
         static_cast<DERIVED*>(this)->reset_counters();
     }
@@ -417,10 +515,6 @@ struct EdmChannelWorkerInterface {
     //
     // local_wrptr trails from_remote_wrptr
     // we have new data if they aren't equal
-
-    [[nodiscard]] FORCE_INLINE uint32_t get_worker_semaphore_address() const {
-        return cached_worker_semaphore_address & 0xFFFFFFFF;
-    }
 
     // Only used for persistent connections (i.e. upstream is EDM)
     template <bool enable_deadlock_avoidance>
@@ -460,26 +554,6 @@ struct EdmChannelWorkerInterface {
 
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
     }
-
-    template <bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
-    FORCE_INLINE void cache_producer_noc_addr() {
-        router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
-        const auto& worker_info = *worker_location_info_ptr;
-        uint64_t worker_semaphore_address;
-        worker_semaphore_address = get_noc_addr(
-            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
-        this->cached_worker_semaphore_address = worker_semaphore_address;
-    }
-
-    [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
-        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
-    }
-
-
-    volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
-    uint64_t cached_worker_semaphore_address = 0;
-    volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
-    uint8_t sender_sync_noc_cmd_buf;
 };
 
 // Derived class for static-sized sender channels with fixed number of buffer slots.

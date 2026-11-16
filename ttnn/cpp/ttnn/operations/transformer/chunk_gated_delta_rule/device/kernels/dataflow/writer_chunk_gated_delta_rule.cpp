@@ -14,10 +14,8 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
     constexpr uint32_t Vt = get_compile_time_arg_val(2);
-    constexpr uint32_t has_s0 = get_compile_time_arg_val(3);
-    (void)has_s0;
 
-    constexpr auto o_a = TensorAccessorArgs<4>();
+    constexpr auto o_a = TensorAccessorArgs<3>();
     constexpr auto fs_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);

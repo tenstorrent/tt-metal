@@ -106,7 +106,7 @@ ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descript
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
-    IDevice* device = output.device();
+    MeshDevice* device = output.device();
     const auto ws = uniform_work_split(output);
     const auto& all_cores = ws.all_cores;
     const auto num_cores_total = ws.cores.size();
@@ -206,7 +206,7 @@ void UniformDeviceOperation::UniformProgramFactory::override_runtime_arguments(
     constexpr uint32_t compute_kernel_idx = 1;
 
     const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes);
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     const auto ws = uniform_work_split(output);
     const auto layout = uniform_core_layout(ws);

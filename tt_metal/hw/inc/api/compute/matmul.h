@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
@@ -25,9 +26,10 @@ namespace ckernel {
 // defines the FW-controlled throttle level for block matmul kernels on Blackhole
 #define MM_THROTTLE_MAX 5
 // 4-byte word at MEM_L1_ARC_FW_SCRATCH written by FW - even means no throttle, odd means throttle
-volatile tt_l1_ptr uint32_t* throttle_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
+volatile tt_l1_ptr std::uint32_t* throttle_ptr =
+    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
 // tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
-static uint32_t throttled_mop_status = 0;
+static std::uint32_t throttled_mop_status = 0;
 
 // clang-format off
 /**
@@ -35,6 +37,9 @@ static uint32_t throttled_mop_status = 0;
  * This function is only available on Blackhole architecture and implements
  * firmware-controlled dynamic throttling for block matmul operations.
  * The throttle level is controlled by firmware via MEM_L1_ARC_FW_SCRATCH.
+ *
+ * Template parameter row_mop: run the unthrottled matmul as the row MOP (see matmul_block_init); the throttled
+ * MOP ignores it.
  *
  * Return value: None
  *
@@ -46,29 +51,37 @@ static uint32_t throttled_mop_status = 0;
  * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
  * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
  * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
- * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
+ * | k_steps        | Consecutive inner-dimension steps accumulated into the same output block | uint32_t | >= 1                                          | False    |
  */
 // clang-format on
+template <bool row_mop = false>
 ALWI void matmul_block_math_dynamic_throttle(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t idst, const uint32_t transpose, uint32_t ct_dim, uint32_t rt_dim) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t k_steps = 1) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
-    volatile uint32_t mm_throttle_en = *(throttle_ptr) % 2;
+    volatile std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
             MATH((
                 llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim, k_steps)));
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, row_mop>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, row_mop>(idst, ct_dim, rt_dim, k_steps)));
     }
 #endif
 }
@@ -98,15 +111,17 @@ ALWI void matmul_block_math_dynamic_throttle(
  */
 // clang-format on
 ALWI void matmul_init(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 #else
-    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
 #endif
 }
@@ -129,7 +144,7 @@ ALWI void matmul_init(
  * | in1_cb_id | Second input CB used in the matmul                     | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void mm_uninit(uint32_t in0_cb_id, uint32_t in1_cb_id) {
+ALWI void mm_uninit(std::uint32_t in0_cb_id, std::uint32_t in1_cb_id) {
 #ifdef ARCH_QUASAR
     UNPACK((llk_unpack_AB_matmul_uninit(in0_cb_id, in1_cb_id)));
     MATH((llk_math_matmul_uninit(in0_cb_id, in1_cb_id)));
@@ -155,7 +170,11 @@ ALWI void mm_uninit(uint32_t in0_cb_id, uint32_t in1_cb_id) {
  */
 // clang-format on
 ALWI void matmul_tiles(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst) {
     LLK_SAN_FUNCTION();
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
 #ifndef ARCH_QUASAR
@@ -180,6 +199,11 @@ ALWI void matmul_tiles(
  * reconfig_data_format is inappropriate when the data formats did not change. No current kernel hits this;
  * tracked in #46769.
  *
+ * Template parameter row_mop (default false; Blackhole only, a build error elsewhere): run each reuse row of the
+ * output block as one math MOP instead of one MOP per tile. Bit-identical to the per-tile MOP (see
+ * _llk_math_matmul_init_). Full 32x32 in0/in1 tiles only; every matmul_block / matmul_block_k after this init must
+ * pass the same row_mop, ct_dim and rt_dim.
+ *
  * Return value: None
  *
  * | Argument  | Description                                                | Type     | Valid Range                                                                                    | Required |
@@ -192,26 +216,27 @@ ALWI void matmul_tiles(
  * | kt_dim    | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension                                                      | False    |
  */
 // clang-format on
+template <bool row_mop = false>
 ALWI void matmul_block_init(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    const uint32_t transpose = 0,
-    uint32_t ct_dim = 1,
-    uint32_t rt_dim = 1,
-    uint32_t kt_dim = 1,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t ct_dim = 1,
+    std::uint32_t rt_dim = 1,
+    std::uint32_t kt_dim = 1,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, row_mop>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #endif
 #else
-    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
+    static_assert(!row_mop, "The matmul row MOP is only implemented for Blackhole");
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 #endif
 }
@@ -228,6 +253,8 @@ ALWI void matmul_block_init(
  * call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block
  * size is limited by DST size and sync mode (see matmul_block_init for the valid ct_dim/rt_dim ranges).
  *
+ * Template parameter row_mop: as at matmul_block_init (default false).
+ *
  * Return value: None
  *
  * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
@@ -243,32 +270,115 @@ ALWI void matmul_block_init(
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
  */
 // clang-format on
+template <bool row_mop = false>
 ALWI void matmul_block(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t in0_tile_index,
-    uint32_t in1_tile_index,
-    uint32_t idst,
-    const uint32_t transpose,
-    uint32_t ct_dim,
-    uint32_t rt_dim,
-    uint32_t kt_dim,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE
     // Dynamic throttling is only available on Blackhole architecture
-    MATH((matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+    MATH((matmul_block_math_dynamic_throttle<row_mop>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
-    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, row_mop>(idst, ct_dim, rt_dim)));
 #endif
 #else
-    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
+    static_assert(!row_mop, "The matmul row MOP is only implemented for Blackhole");
     LLK_ASSERT(idst == 0, "non-default idst not supported on Quasar");
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_block(ct_dim, rt_dim)));
+#endif
+}
+
+// clang-format off
+/**
+ * Runs k_steps consecutive matmul_block calls into the same output block: step k multiplies the in0 tiles at
+ * in0_tile_index + k by the in1 tiles at in1_tile_index + k * in1_k_stride and accumulates into DST at idst, so
+ *
+ *   matmul_block_k(in0, in1, i0, i1, idst, transpose, ct, rt, kt, k_steps, in1_k_stride)
+ *
+ * gives the same result, bit for bit, as
+ *
+ *   for (k = 0; k < k_steps; k++) matmul_block(in0, in1, i0 + k, i1 + k * in1_k_stride, idst, transpose, ct, rt, kt);
+ *
+ * which is the inner-dimension loop of a block matmul whose in0 block is row-major with kt_dim tiles per row and
+ * whose in1 block is row-major with in1_k_stride tiles per row. The unpacker unpacks the k_steps in0/in1 sets and the
+ * math thread runs them in one LLK call. With row_mop (Blackhole) and a single reuse row (rt_dim == 1, or
+ * ct_dim == 1) it writes the DEST offset once for all steps and runs one MOP per step with nothing between the runs.
+ *
+ * Template parameter row_mop: as at matmul_block_init (default false).
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of the first step's tile in block A                           | uint32_t | Must be less than the size of the CB           | True     |
+ * | in1_tile_index | The index of the first step's tile in block B                           | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
+ * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
+ * | kt_dim         | The inner dimension of block A (its row stride in tiles).               | uint32_t | Must be equal to block A column dimension      | True     |
+ * | k_steps        | The number of inner-dimension steps to accumulate.                      | uint32_t | >= 1                                           | True     |
+ * | in1_k_stride   | The tile stride between consecutive inner-dimension rows of block B.    | uint32_t | Any                                            | True     |
+ */
+// clang-format on
+template <bool row_mop = false>
+ALWI void matmul_block_k(
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t k_steps,
+    std::uint32_t in1_k_stride,
+    std::uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    LLK_SAN_FUNCTION();
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK(({
+        for (std::uint32_t k = 0; k < k_steps; k++) {
+            llk_unpack_AB_matmul(
+                in0_cb_id, in1_cb_id, in0_tile_index + k, in1_tile_index + k * in1_k_stride, ct_dim, rt_dim, kt_dim);
+        }
+    }));
+#ifdef ARCH_BLACKHOLE
+    // Dynamic throttling is only available on Blackhole architecture
+    MATH((matmul_block_math_dynamic_throttle<row_mop>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, k_steps)));
+#else
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, row_mop>(idst, ct_dim, rt_dim, k_steps)));
+#endif
+#else
+    // Quasar's block matmul has no K steps: the matmul_block loop
+    for (std::uint32_t k = 0; k < k_steps; k++) {
+        matmul_block<row_mop>(
+            in0_cb_id,
+            in1_cb_id,
+            in0_tile_index + k,
+            in1_tile_index + k * in1_k_stride,
+            idst,
+            transpose,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            call_line);
+    }
 #endif
 }
 

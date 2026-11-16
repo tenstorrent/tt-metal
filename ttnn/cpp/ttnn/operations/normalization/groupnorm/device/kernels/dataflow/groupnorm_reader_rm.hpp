@@ -13,11 +13,17 @@
 #include "api/core_local_mem.h"
 
 // Read one out-block of a ROW_MAJOR tensor into `dfb` row by row, for the compute kernel to tilize.
-template <uint32_t tile_width, uint32_t tile_height, uint32_t block_w, uint32_t datum_size_bytes, typename AccessorT>
+template <
+    uint32_t tile_width,
+    uint32_t tile_height,
+    uint32_t block_w,
+    uint32_t datum_size_bytes,
+    typename AccessorT,
+    typename DFB>
 void groupnorm_gather_rm_block(
-    Noc& noc,
+    const Noc& noc,
     const AccessorT& accessor,
-    DataflowBuffer& dfb,
+    DFB& dfb,
     uint32_t base_start_id,
     uint32_t out_block_start_id_offset,
     uint32_t index_b_offset,
@@ -27,7 +33,7 @@ void groupnorm_gather_rm_block(
     uint32_t out_block_hw_normal) {
     constexpr uint32_t row_chunk_bytes = tile_width * datum_size_bytes;
     uint32_t l1_write_addr = dfb.get_write_ptr();
-    dfb.reserve_back(out_block_hw_normal);
+    dfb.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
     for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
         for (uint32_t r = 0; r < tile_height; r++) {
             for (uint32_t nt = 0; nt < block_w; nt++) {
@@ -51,5 +57,5 @@ void groupnorm_gather_rm_block(
         }
         noc.async_read_barrier();
     }
-    dfb.push_back(out_block_hw_normal);
+    dfb.push_back(static_cast<uint16_t>(out_block_hw_normal));
 }

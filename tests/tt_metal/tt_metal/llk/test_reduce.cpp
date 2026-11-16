@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <bit>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -11,6 +12,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -39,16 +42,14 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <impl/context/metal_context.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 
@@ -59,12 +60,12 @@ using namespace constants;
 
 namespace unit_tests::compute::reduce {
 
-enum ReduceDim : uint8_t { H = 0, W = 1, HW = 2 };
+enum ReduceDim : std::uint8_t { H = 0, W = 1, HW = 2 };
 
-enum ReduceType : uint8_t { SUM = 0, AVG = 1, MAX = 2 };
+enum ReduceType : std::uint8_t { SUM = 0, AVG = 1, MAX = 2 };
 struct ReduceConfig {
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH});
-    std::vector<uint32_t> shape;
+    std::vector<std::uint32_t> shape;
     ReduceDim reduce_dim;
     ReduceType reduce_type = ReduceType::SUM;
     float data_gen_rand_max;
@@ -72,10 +73,10 @@ struct ReduceConfig {
     float data_gen_offset;
     float atol;
     float rtol;
-    std::function<std::vector<uint16_t>(
-        const std::vector<uint16_t>&, const std::vector<uint32_t>&, float, uint8_t, bool)>
+    std::function<std::vector<std::uint16_t>(
+        const std::vector<std::uint16_t>&, const std::vector<std::uint32_t>&, float, std::uint8_t, bool)>
         golden_function;
-    std::vector<uint32_t> result_shape;
+    std::vector<std::uint32_t> result_shape;
     bool math_only_reduce = false;
     // Whether or not we want the result to be stored in DST in FP32:
     bool fp32_dest_acc_en = false;
@@ -89,8 +90,8 @@ struct ReduceConfig {
 };
 
 float get_scaler(const ReduceConfig& test_config) {
-    uint32_t H = test_config.shape[2];
-    uint32_t W = test_config.shape[3];
+    std::uint32_t H = test_config.shape[2];
+    std::uint32_t W = test_config.shape[3];
     // If PoolType is MAX or SUM, then the operation is determined by PoolType,
     // but the scaler is 1
     if (test_config.reduce_type != ReduceType::AVG) {
@@ -109,19 +110,19 @@ float get_scaler(const ReduceConfig& test_config) {
 
 // Tiled dimensions and buffer sizes derived from a 4-D NCHW tensor shape, with shared validation.
 struct ReduceDims {
-    uint32_t tile_H;
-    uint32_t tile_W;
-    uint32_t W;
-    uint32_t H;
-    uint32_t NC;
-    uint32_t N;
-    uint32_t Wt;
-    uint32_t Ht;
-    uint32_t num_tensor_tiles;
-    uint32_t single_tile_bytes;
-    uint32_t dram_buffer_size;
-    uint32_t num_golden_elements;
-    uint32_t output_size_bytes;
+    std::uint32_t tile_H;
+    std::uint32_t tile_W;
+    std::uint32_t W;
+    std::uint32_t H;
+    std::uint32_t NC;
+    std::uint32_t N;
+    std::uint32_t Wt;
+    std::uint32_t Ht;
+    std::uint32_t num_tensor_tiles;
+    std::uint32_t single_tile_bytes;
+    std::uint32_t dram_buffer_size;
+    std::uint32_t num_golden_elements;
+    std::uint32_t output_size_bytes;
 };
 
 static ReduceDims compute_and_validate_reduce_dims(const ReduceConfig& test_config) {
@@ -145,7 +146,7 @@ static ReduceDims compute_and_validate_reduce_dims(const ReduceConfig& test_conf
     dims.Ht = dims.H / dims.tile_H;
     dims.num_tensor_tiles = dims.NC * dims.H * dims.W / (dims.tile_W * dims.tile_H);
 
-    const uint32_t divisor = test_config.reduce_dim == ReduceDim::W ? dims.Wt : dims.Ht;
+    const std::uint32_t divisor = test_config.reduce_dim == ReduceDim::W ? dims.Wt : dims.Ht;
     TT_FATAL(dims.num_tensor_tiles % divisor == 0, "Error");
 
     dims.single_tile_bytes = 2 * (dims.tile_W * dims.tile_H);
@@ -171,7 +172,7 @@ static ReduceDims compute_and_validate_reduce_dims(const ReduceConfig& test_conf
 }
 
 void set_math_fid_masks_binary(
-    uint16_t& srca_fid_mask, uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+    std::uint16_t& srca_fid_mask, std::uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: {
@@ -217,10 +218,10 @@ std::string get_compute_kernel_name(const ReduceDim& reduce_dim) {
 }
 
 void validate_reduce_result(
-    const std::vector<uint32_t>& result_vec,
-    uint32_t num_golden_elements,
+    const std::vector<std::uint32_t>& result_vec,
+    std::uint32_t num_golden_elements,
     const ReduceConfig& test_config,
-    const std::vector<uint32_t>& src_vec,
+    const std::vector<std::uint32_t>& src_vec,
     float scaler) {
     EXPECT_EQ(result_vec.size(), num_golden_elements);
 
@@ -234,28 +235,28 @@ void validate_reduce_result(
 
     auto u16_src0_vec = u16_from_u32_vector(src_vec);
     if (test_config.reduce_type == ReduceType::AVG) {
-        uint16_t srca_fid_mask = 0xFFFF;
-        uint16_t srcb_fid_mask = 0xFFFF;
+        std::uint16_t srca_fid_mask = 0xFFFF;
+        std::uint16_t srcb_fid_mask = 0xFFFF;
         set_math_fid_masks_binary(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
-        uint32_t uint32_scaler = *reinterpret_cast<uint32_t*>(&scaler);
+        std::uint32_t uint32_scaler = *reinterpret_cast<std::uint32_t*>(&scaler);
         uint32_scaler &= (0xFFFFFFFF & (srcb_fid_mask << 16));
         scaler = *reinterpret_cast<float*>(&uint32_scaler);
         for (unsigned short& val : u16_src0_vec) {
             val &= srca_fid_mask;
         }
     }
-    uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0];
-    uint32_t tile_W = test_config.tile_shape.get_tile_shape()[1];
-    std::vector<uint16_t> src_linear = convert_layout<uint16_t>(
+    std::uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0];
+    std::uint32_t tile_W = test_config.tile_shape.get_tile_shape()[1];
+    std::vector<std::uint16_t> src_linear = convert_layout<std::uint16_t>(
         u16_src0_vec,
         test_config.shape,
         TensorLayoutType::TILED_NFACES,
         TensorLayoutType::LIN_ROW_MAJOR,
         PhysicalSize{tile_H, tile_W});
-    std::vector<uint16_t> gold_reduced =
-        test_config.golden_function(src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true);
+    std::vector<std::uint16_t> gold_reduced =
+        test_config.golden_function(src_linear, test_config.shape, scaler, std::uint8_t(test_config.reduce_type), true);
 
-    auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
+    auto gold_4f_u32 = u32_from_u16_vector(convert_layout<std::uint16_t>(
         gold_reduced,
         test_config.result_shape,
         TensorLayoutType::LIN_ROW_MAJOR,
@@ -269,8 +270,8 @@ void validate_reduce_result(
     EXPECT_TRUE(pass);
 }
 
-static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
-    experimental::KernelSpec::CompilerOptions::Defines reduce_defines;
+static KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
+    KernelSpec::CompilerOptions::Defines reduce_defines;
     reduce_defines.emplace("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
     switch (test_config.reduce_type) {
         case ReduceType::SUM: reduce_defines.emplace("REDUCE_OP", "PoolType::SUM"); break;
@@ -278,15 +279,15 @@ static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(c
         case ReduceType::MAX: reduce_defines.emplace("REDUCE_OP", "PoolType::MAX"); break;
     }
     reduce_defines.emplace("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
-    reduce_defines.emplace("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
     return reduce_defines;
 }
 
 // Build a TensorSpec describing a flat DRAM-interleaved buffer of `total_entries`
 // pages, each `entry_size` bytes. Used to bind src/dst tensors as TensorParameters
 // to the reader/writer kernels via the Metal 2.0 named TensorAccessor ctor.
-static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
-    const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
+static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(
+    std::uint32_t entry_size, std::uint32_t total_entries) {
+    const std::uint32_t entry_size_words = entry_size / sizeof(std::uint32_t);
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
     auto memory_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
@@ -294,10 +295,17 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry
     return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
 }
 
-void run_single_core_reduce_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
-    const experimental::NodeCoord node{0, 0};
+// Packs floats as bf16, two per word, in the order given.
+std::vector<std::uint32_t> pack_floats_as_bf16_words(const std::vector<float>& floats) {
+    std::vector<std::uint32_t> words(floats.size() / 2);
+    for (size_t i = 0; i < words.size(); i++) {
+        words[i] = pack_two_bfloat16_into_uint32({bfloat16(floats[2 * i]), bfloat16(floats[2 * i + 1])});
+    }
+    return words;
+}
+
+void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const ReduceConfig& test_config) {
+    const NodeCoord node{0, 0};
 
     const ReduceDims dims = compute_and_validate_reduce_dims(test_config);
 
@@ -309,42 +317,42 @@ void run_single_core_reduce_program(
     // srcA L1 page size follows the input format (MxFp4 tiles are smaller than bf16); the dim
     // bookkeeping (tile counts, output sizing, golden) stays in bf16 terms. dims.single_tile_bytes
     // already honors tiny-tile shapes, so only the MxFp4 path needs the format-derived size.
-    const uint32_t input_tile_bytes = (test_config.input_format == tt::DataFormat::MxFp4)
-                                          ? tt::tile_size(tt::DataFormat::MxFp4)
-                                          : dims.single_tile_bytes;
-    const uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
-    const uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
+    const std::uint32_t input_tile_bytes = (test_config.input_format == tt::DataFormat::MxFp4)
+                                               ? tt::tile_size(tt::DataFormat::MxFp4)
+                                               : dims.single_tile_bytes;
+    const std::uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
+    const std::uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
     auto in_tensor =
-        MeshTensor::allocate_on_device(*mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(input_tile_bytes, num_input_pages));
     auto out_tensor = MeshTensor::allocate_on_device(
-        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
+        mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages));
 
-    constexpr uint32_t num_buffer_tiles = 32;
-    constexpr uint32_t num_output_buffer_tiles = 32;
-    const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
-    const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
-    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+    constexpr std::uint32_t num_buffer_tiles = 32;
+    constexpr std::uint32_t num_output_buffer_tiles = 32;
+    const DFBSpecName SRC0_DFB{"src0_dfb"};
+    const DFBSpecName SRC1_DFB{"src1_dfb"};
+    const DFBSpecName DST_DFB{"dst_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    experimental::DataflowBufferSpec src0_dfb_spec{
+    DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = input_tile_bytes,
         .num_entries = num_buffer_tiles,
         .data_format_metadata = test_config.input_format,
         .tile_format_metadata = test_config.tile_shape,
     };
-    experimental::DataflowBufferSpec src1_dfb_spec{
+    DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = 2 * TILE_WIDTH * TILE_HEIGHT,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = tt_metal::Tile({32, 32}),
     };
-    experimental::DataflowBufferSpec dst_dfb_spec{
+    DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = dims.single_tile_bytes,
         .num_entries = num_output_buffer_tiles,
@@ -354,13 +362,13 @@ void run_single_core_reduce_program(
 
     // Build reader spec depending on reduce dim
     std::string reader_kernel_path;
-    experimental::KernelSpec::CompileTimeArgs reader_cta_bindings;
-    experimental::KernelSpec::CompilerOptions::Defines reader_defines;
+    KernelSpec::CompileTimeArgs reader_cta_bindings;
+    KernelSpec::CompilerOptions::Defines reader_defines;
     std::vector<std::string> reader_runtime_arg_names;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp";
         bfloat16 bfloat_scaler_value = bfloat16(scaler);
-        uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+        std::uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
         reader_cta_bindings = {{"scaler", packed_scaler_value}};
         reader_defines.emplace("REDUCE_SCALER", "1");
         reader_runtime_arg_names = {"N", "Ht", "Wt", "HtWt"};
@@ -371,14 +379,24 @@ void run_single_core_reduce_program(
         reader_runtime_arg_names = {"num_tiles", "scaler"};
     }
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = DataMovementHardwareConfig{
+            .config_2xx =
+                DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                },
+        };
     }
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = reader_kernel_path,
         .num_threads = 1,
@@ -387,14 +405,14 @@ void run_single_core_reduce_program(
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "out_data",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "out_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args = reader_cta_bindings,
@@ -402,40 +420,42 @@ void run_single_core_reduce_program(
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = DataMovementHardwareConfig{
+            .config_2xx =
+                DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                },
+        };
     }
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    } else {
-        compute_hw_config = experimental::ComputeGen1Config{
-            .fpu_math_fidelity = test_config.math_fidelity,
-            .enable_32_bit_dest = test_config.fp32_dest_acc_en,
-            .double_buffer_dest = !test_config.dst_full_sync_en,
-        };
-    }
-    experimental::KernelSpec compute_spec{
+    ComputeHardwareConfig compute_hw_config;
+    compute_hw_config = ComputeHardwareConfig{
+        .fpu_math_fidelity = test_config.math_fidelity,
+        .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+        .double_buffer_dest = !test_config.dst_full_sync_en,
+    };
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = get_compute_kernel_name(test_config.reduce_dim),
         .num_threads = 1,
@@ -444,32 +464,32 @@ void run_single_core_reduce_program(
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "in_data",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "in_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "single_core_reduce",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
@@ -481,19 +501,13 @@ void run_single_core_reduce_program(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    auto& program_run = workload.get_programs().at(device_range);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     // Reader/writer RTAs depend on reduce_dim
-    experimental::KernelRunArgs::RuntimeArgValues reader_named_rtas;
-    uint32_t writer_num_tiles;
+    KernelRunArgs::RuntimeArgValues reader_named_rtas;
+    std::uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+        reader_named_rtas = MakeRuntimeArgsForSingleNode(
             node,
             {
                 {"N", dims.N},
@@ -503,62 +517,58 @@ void run_single_core_reduce_program(
             });
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+        reader_named_rtas = MakeRuntimeArgsForSingleNode(
             node,
             {
                 {"num_tiles", dims.num_tensor_tiles},
-                {"scaler", *reinterpret_cast<uint32_t*>(&scaler)},
+                {"scaler", *reinterpret_cast<std::uint32_t*>(&scaler)},
             });
         writer_num_tiles = test_config.reduce_dim == ReduceDim::W ? (dims.num_tensor_tiles / dims.Wt)
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values = std::move(reader_named_rtas),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", writer_num_tiles}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", writer_num_tiles}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
-    experimental::SetProgramRunArgs(program_run, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // Shared seeded stimulus (packed bf16, TILED_NFACES). For bf16 input this is written to the
     // device as-is; for MxFp4 input it is quantized to MxFp4 for the device.
-    vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
+    vector<std::uint32_t> src_vec = create_random_vector_of_bfloat16(
         dims.dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
     if (test_config.input_format == tt::DataFormat::MxFp4) {
         std::vector<bfloat16> native = unpack_uint32_vec_into_bfloat16_vec(src_vec);
         std::vector<float> in_floats(native.begin(), native.end());
         // src_vec is already tile-major (TILED_NFACES), so pack as tile-major (no row-major
         // transform) - matching how the matmul stimulus feeds tile-major data.
-        std::vector<uint32_t> mxfp4_packed =
+        std::vector<std::uint32_t> mxfp4_packed =
             tt::tt_metal::pack_as_mxfp4_tiles(ttsl::make_const_span(in_floats), /*row_major_input=*/false);
-        tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), mxfp4_packed);
+        slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), mxfp4_packed);
         // Decode the quantized values back (tile-major) and repack as bf16 for the golden source.
         std::vector<float> quantized = tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(
             ttsl::make_const_span(mxfp4_packed), /*row_major_output=*/false);
-        src_vec.resize(quantized.size() / 2);
-        for (size_t i = 0; i < src_vec.size(); i++) {
-            src_vec[i] = pack_two_bfloat16_into_uint32({bfloat16(quantized[2 * i]), bfloat16(quantized[2 * i + 1])});
-        }
+        src_vec = pack_floats_as_bf16_words(quantized);
     } else {
-        tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
+        slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), src_vec);
     }
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
-    std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), result_vec);
+    std::vector<std::uint32_t> result_vec;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
 
     validate_reduce_result(result_vec, dims.num_golden_elements, test_config, src_vec, get_scaler(test_config));
 
@@ -573,28 +583,265 @@ void run_single_core_reduce_program(
         test_config.dst_full_sync_en);
 }
 
+// Quasar 2x column reduce at the metal layer, plus the restore that follows it. One MxFp4 data tile is
+// column-reduced (SUM) by an MxFp4 scaler -- both operands MxFp4 is what selects the 2x-packed src-register
+// format -- and then added to that scaler with an ordinary add on the same two buffers. The add unpacks
+// through UNP_A and UNP_B on the op-agnostic Float16_b formats, so it is only right if reduce_uninit put
+// both unpackers and the ALU back. The scaler is laid out like the bf16 scaler the other readers generate
+// (1.0 in the first row of each face, 0 elsewhere), which MxFp4 encodes exactly, so gold_reduce_h applies.
+void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_device, bool fp32_dest_acc_en) {
+    const NodeCoord node{0, 0};
+    constexpr std::uint32_t num_input_tiles = 1;
+    const std::uint32_t mxfp4_tile_bytes = tt::tile_size(tt::DataFormat::MxFp4);
+    const std::uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    constexpr std::uint32_t num_output_tiles = 2;  // tile 0: reduce, tile 1: add
+
+    const ReduceConfig reduce_config = {
+        .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
+        .reduce_dim = ReduceDim::H,
+        .reduce_type = ReduceType::SUM,
+        .data_gen_rand_max = 12.0f,
+        .data_gen_seed = 1234,
+        .data_gen_offset = -6.0f,
+        .atol = 0.1f,
+        .rtol = 0.1f,
+        .golden_function = ::unit_tests::compute::gold_reduce_h,
+        .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        // One fidelity phase multiplies FP4 by FP4 in full; a second would add nothing and cancel the 2x saving.
+        .math_fidelity = MathFidelity::LoFi,
+    };
+    const float scaler = get_scaler(reduce_config);
+
+    auto in_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, num_input_tiles));
+    auto scaler_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, num_input_tiles));
+    auto out_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(bf16_tile_bytes, num_output_tiles));
+
+    const DFBSpecName SRC0_DFB{"src0_dfb"};
+    const DFBSpecName SRC1_DFB{"src1_dfb"};
+    const DFBSpecName DST_DFB{"dst_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName SCALER_TENSOR{"scaler_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
+
+    const DataflowBufferSpec src0_dfb_spec{
+        .unique_id = SRC0_DFB,
+        .entry_size = mxfp4_tile_bytes,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::MxFp4,
+        .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
+    };
+    const DataflowBufferSpec src1_dfb_spec{
+        .unique_id = SRC1_DFB,
+        .entry_size = mxfp4_tile_bytes,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::MxFp4,
+        .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
+    };
+    const DataflowBufferSpec dst_dfb_spec{
+        .unique_id = DST_DFB,
+        .entry_size = bf16_tile_bytes,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
+    };
+
+    const DataMovementHardwareConfig dm_hw_config{
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
+            },
+    };
+    const KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_data_and_scaler_tile_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = SRC0_DFB,
+                 .accessor_name = "out_data",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = SRC1_DFB,
+                 .accessor_name = "out_scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             }},
+        .tensor_bindings =
+            {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"},
+             {.tensor_parameter_name = SCALER_TENSOR, .accessor_name = "scaler_tensor"}},
+        .hw_config = dm_hw_config,
+    };
+    const KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {ConsumerOf(DST_DFB, "in")},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+        .hw_config = dm_hw_config,
+    };
+    const KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/reduce_h_2x_then_add.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = SRC0_DFB,
+                 .accessor_name = "in_data",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = SRC1_DFB,
+                 .accessor_name = "in_scaler",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = DST_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             }},
+        .hw_config =
+            ComputeHardwareConfig{
+                .fpu_math_fidelity = reduce_config.math_fidelity,
+                .enable_32_bit_dest = reduce_config.fp32_dest_acc_en,
+                .double_buffer_dest = true,
+            },
+    };
+
+    const WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+    const ProgramSpec spec{
+        .name = "single_core_reduce_h_mxfp4_2x_then_add",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = SCALER_TENSOR, .spec = scaler_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_output_tiles}}),
+        },
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {SCALER_TENSOR, ProgramRunArgs::TensorArgument{scaler_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
+    };
+    experimental::SetProgramRunArgs(program, params);
+
+    // Data: the same seeded stimulus as the other MxFp4 reduce tests, quantized to MxFp4 (tile-major).
+    // Scaler: the SUM scaler (1.0) in the first row of each face, 0 elsewhere (tile-major).
+    const std::vector<std::uint32_t> data_bf16 = create_random_vector_of_bfloat16(
+        bf16_tile_bytes, reduce_config.data_gen_rand_max, reduce_config.data_gen_seed, reduce_config.data_gen_offset);
+    const std::vector<bfloat16> data_native = unpack_uint32_vec_into_bfloat16_vec(data_bf16);
+    const std::vector<float> data_floats(data_native.begin(), data_native.end());
+    std::vector<float> scaler_floats(TILE_HW, 0.0f);
+    for (std::uint32_t face = 0; face < TILE_HW / FACE_HW; face++) {
+        for (std::uint32_t col = 0; col < FACE_WIDTH; col++) {
+            scaler_floats[face * FACE_HW + col] = scaler;
+        }
+    }
+    const std::vector<std::uint32_t> data_mxfp4 =
+        tt::tt_metal::pack_as_mxfp4_tiles(ttsl::make_const_span(data_floats), /*row_major_input=*/false);
+    const std::vector<std::uint32_t> scaler_mxfp4 =
+        tt::tt_metal::pack_as_mxfp4_tiles(ttsl::make_const_span(scaler_floats), /*row_major_input=*/false);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), data_mxfp4);
+    slow_dispatch::WriteToBuffer(scaler_tensor.mesh_buffer(), scaler_mxfp4);
+    const std::vector<float> data_quantized =
+        tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(ttsl::make_const_span(data_mxfp4), /*row_major_output=*/false);
+    const std::vector<float> scaler_quantized = tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(
+        ttsl::make_const_span(scaler_mxfp4), /*row_major_output=*/false);
+    ASSERT_EQ(scaler_quantized, scaler_floats) << "the scaler must be exact in MxFp4";
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> result_vec;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
+    const std::uint32_t words_per_tile = TILE_HW / 2;
+    ASSERT_EQ(result_vec.size(), num_output_tiles * words_per_tile);
+
+    // Tile 0: the 2x column reduce, against the same golden the other column reduce tests use.
+    const std::vector<std::uint32_t> reduce_result(result_vec.begin(), result_vec.begin() + words_per_tile);
+    validate_reduce_result(
+        reduce_result, words_per_tile, reduce_config, pack_floats_as_bf16_words(data_quantized), scaler);
+
+    // Tile 1: data + scaler on the restored Float16_b formats (both inputs tile-major, as is the output).
+    std::vector<float> add_floats(TILE_HW);
+    for (std::uint32_t i = 0; i < TILE_HW; i++) {
+        add_floats[i] = data_quantized[i] + scaler_quantized[i];
+    }
+    const std::vector<std::uint32_t> add_golden = pack_floats_as_bf16_words(add_floats);
+    const std::vector<std::uint32_t> add_result(result_vec.begin() + words_per_tile, result_vec.end());
+    int argfail = -1;
+    const bool add_pass = packed_uint32_t_vector_comparison(
+        add_result,
+        add_golden,
+        [&](float a, float b) {
+            const float absdiff = fabsf(a - b);
+            return absdiff <= reduce_config.atol || absdiff <= reduce_config.rtol * fmaxf(fabsf(a), fabsf(b));
+        },
+        &argfail);
+    EXPECT_TRUE(add_pass) << "add after the 2x reduce is wrong at position " << argfail
+                          << ": reduce_uninit did not restore the unpacker/ALU formats";
+}
+
 }  // namespace unit_tests::compute::reduce
 
 using namespace unit_tests::compute::reduce;
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceH) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceH) {
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
-    std::vector<uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
+    std::vector<std::uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
+    std::vector<std::uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
+    for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
+         math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
+        for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
+             reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -612,22 +859,31 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceH) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceW) {
-    std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceW) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
+    std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
+    std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
+    for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
+         math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
+        for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
+             reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
@@ -645,22 +901,31 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceW) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHW) {
-    std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHW) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
+    std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
+    std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
+    for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
+         math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
+        for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
+             reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 // Currently fp32 dest unsupported with reduce scalar
                 if (fp32_dest_acc_en && this->arch_ != tt::ARCH::QUASAR) {
@@ -669,7 +934,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHW) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -687,31 +952,40 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHW) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHMathOnly) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
     if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
-    std::vector<uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+    std::vector<std::uint32_t> shape = {1, 3, 19 * TILE_HEIGHT, 17 * TILE_WIDTH};
+    std::vector<std::uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
+    for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
+         math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
+        for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
+             reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -730,27 +1004,36 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWMathOnly) {
-    std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
+    std::vector<std::uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
+    std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
+    for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
+         math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
+        for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
+             reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -769,22 +1052,31 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHWMathOnly) {
-    std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceHWMathOnly) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
+    }
+    std::vector<std::uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
+    std::vector<std::uint32_t> result_shape = {shape[0], shape[1], 32, 32};
+    for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
+         math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+        // Quasar's first fidelity phase covers Float16_b in full
+        if (this->arch_ == tt::ARCH::QUASAR && math_fid != std::uint8_t(MathFidelity::LoFi)) {
+            continue;
+        }
+        for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
+             reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 // Currently fp32 dest unsupported with reduce scalar
                 if (fp32_dest_acc_en && this->arch_ != tt::ARCH::QUASAR) {
@@ -793,7 +1085,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
-                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                          math_fid == std::uint8_t(MathFidelity::LoFi))) {
                         // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
@@ -812,27 +1104,29 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                         .fp32_dest_acc_en = fp32_dest_acc_en,
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWTinyTiles) {
+TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
-    std::vector<uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};
+    std::vector<std::uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
+    std::vector<std::uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};
     if (this->arch_ == tt::ARCH::QUASAR) {
         // Tiny tiles not yet supported on Quasar
         GTEST_SKIP();
     }
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+    for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi); math_fid <= std::uint8_t(MathFidelity::HiFi4);
+         math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
             continue;
         }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+        for (std::uint8_t reduce_type = std::uint8_t(ReduceType::SUM); reduce_type <= std::uint8_t(ReduceType::MAX);
+             reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     ReduceConfig test_config = {
@@ -851,19 +1145,23 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeReduceWTinyTiles) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid),
                     };
-                    run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    run_single_core_reduce_program(this->device(), test_config);
                 }
             }
         }
     }
 }
 
-// Quasar-only: MxFp4 column-reduce (SUM) exercising the 2x-packed src-register format via GAPOOL.
-// Mirrors the LLK test_reduce_quasar_mxfp4_2x_gapool python test at the metal layer. Only the
+// Quasar-only: MxFp4 column-reduce (SUM) via GAPOOL with the reader's Float16_b scaler, so it runs the
+// plain MxFp4 -> Float16_b path; TensixComputeReduceColumnMxFp4X2 below covers the 2x-packed path, which
+// also needs an MxFp4 scaler. Only the
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
+    }
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .reduce_dim = ReduceDim::H,
@@ -878,11 +1176,161 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
         .rtol = 0.1f,
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
-        .math_fidelity = MathFidelity::HiFi4,
-        // MxFp4 + column (H) reduce auto-selects the 2x-packed src-register format on Quasar.
+        // Quasar's first fidelity phase covers the Float16_b operands in full
+        .math_fidelity = MathFidelity::LoFi,
+        // Plain MxFp4 path: the reader's scaler is Float16_b (see the comment above the test)
         .input_format = tt::DataFormat::MxFp4,
     };
-    run_single_core_reduce_program(this->devices_.at(0), test_config);
+    run_single_core_reduce_program(this->device(), test_config);
+}
+
+// Quasar-only: MxFp4 column-reduce (SUM) with an MxFp4 scaler, which runs the 2x-packed src-register
+// format (both operands MxFp4), then an ordinary add on the same buffers to check that reduce_uninit
+// restores both unpackers and the ALU. The metal-layer counterpart of the LLK test_reduce_quasar_mxfp4_2x_gapool
+// python test (which drives the LLK directly, not the llk_api init/uninit), for SUM with 16- and 32-bit Dest.
+// AVG takes the same GAPOOL path with a different scaler value, so SUM covers it.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
+    }
+    run_single_core_reduce_h_mxfp4_2x_then_add(this->device(), /*fp32_dest_acc_en=*/false);
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2Fp32Dest) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
+    }
+    run_single_core_reduce_h_mxfp4_2x_then_add(this->device(), /*fp32_dest_acc_en=*/true);
+}
+
+// ============================================================================
+// Id-free (2.0) reduce, validated against the gold_reduce_h/w/hw host goldens (not a legacy kernel). Single
+// Float16_b data tile in c_0, a broadcast-scaler tile (scalar 1.0) in c_1, reduced -> c_16. The 2.0 kernel's
+// ReduceDim maps to the golden as: REDUCE_SCALAR -> gold_reduce_hw, REDUCE_ROW -> gold_reduce_w,
+// REDUCE_COL -> gold_reduce_h. scaler 1.0 (survives the HW double-apply since 1.0^2 == 1.0). Runs on Blackhole.
+// ============================================================================
+namespace {
+// Build the reduce broadcast-scaler tile (matches generate_bcast_scaler in reader_unary_8bank_2_0.cpp):
+// a 32x32 bf16 tile, zero everywhere except the first 16 datums of each of the 4 faces = `scalar`.
+std::vector<std::uint32_t> make_reduce_scaler_tile(float scalar) {
+    std::vector<std::uint16_t> datums(1024, 0);
+    const std::uint16_t packed = static_cast<std::uint16_t>(std::bit_cast<std::uint32_t>(scalar) >> 16);
+    for (int k = 0; k < 4; ++k) {
+        for (int j = 0; j < 16; ++j) {
+            datums[k * 256 + j] = packed;
+        }
+    }
+    return u32_from_u16_vector(datums);
+}
+
+// Compare a reduce device result against the gold_reduce_* golden, scaler 1.0. shape is the NCHW tensor shape
+// (C tiles are reduced independently, matching reduce_block's N-in/N-out per-tile semantics).
+void expect_reduce_matches_golden(
+    const std::vector<std::uint32_t>& result,
+    const std::vector<std::uint32_t>& data_src,
+    const std::function<std::vector<std::uint16_t>(
+        const std::vector<std::uint16_t>&, const std::vector<std::uint32_t>&, float, std::uint8_t, bool)>& golden_fn,
+    std::uint8_t red_type,
+    const std::vector<std::uint32_t>& shape = {1, 1, 32, 32}) {
+    auto src_linear = convert_layout<std::uint16_t>(
+        u16_from_u32_vector(data_src),
+        shape,
+        TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        PhysicalSize{32, 32});
+    auto gold_lin = golden_fn(src_linear, shape, /*scaler=*/1.0f, red_type, /*zeropad=*/true);
+    auto gold_tiled = u32_from_u16_vector(convert_layout<std::uint16_t>(
+        gold_lin, shape, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES, PhysicalSize{32, 32}));
+
+    EXPECT_EQ(gold_tiled.size(), result.size());
+    int argfail = -1;
+    auto cmp = [](float a, float b) {
+        float maxabs = fmaxf(fabsf(a), fabsf(b));
+        float absdiff = fabsf(a - b);
+        return (absdiff <= 0.1f) || (absdiff <= 0.1f * maxabs);
+    };
+    bool pass = packed_uint32_t_vector_comparison(result, gold_tiled, cmp, &argfail);
+    if (!pass) {
+        log_error(LogTest, "Reduce golden mismatch at position {}", argfail);
+    }
+    EXPECT_TRUE(pass);
+}
+
+// Kernel-side ckernel enum numeric values passed to the fused reduce_2_0.cpp as get_compile_time_arg_val(1)
+// (PoolType) / (2) (ReduceDim). PoolType: SUM=0, MAX=2. ReduceDim: REDUCE_ROW=0, REDUCE_COL=1, REDUCE_SCALAR=2.
+constexpr std::uint32_t kPoolSum = 0;
+constexpr std::uint32_t kPoolMax = 2;
+constexpr std::uint32_t kReduceRow = 0;
+constexpr std::uint32_t kReduceCol = 1;
+constexpr std::uint32_t kReduceScalar = 2;
+
+std::vector<std::uint32_t> run_reduce_idfree(
+    distributed::MeshDevice& md, const std::vector<std::uint32_t>& data, std::uint32_t pool, std::uint32_t dim) {
+    auto scaler = make_reduce_scaler_tile(1.0f);
+    return unit_tests::llk::single_core::run_binary(
+        md,
+        data,
+        scaler,
+        /*num_tiles=*/1,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reduce_2_0.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/1,
+        /*out_tiles=*/1,
+        /*extra_compile_args=*/{pool, dim});
+}
+}  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceScalarSumIdFreeGolden) {
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = run_reduce_idfree(this->device(), data, kPoolSum, kReduceScalar);
+    expect_reduce_matches_golden(result, data, ::unit_tests::compute::gold_reduce_hw, /*red_type=*/0);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceRowSumIdFreeGolden) {
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = run_reduce_idfree(this->device(), data, kPoolSum, kReduceRow);
+    expect_reduce_matches_golden(result, data, ::unit_tests::compute::gold_reduce_w, /*red_type=*/0);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceColSumIdFreeGolden) {
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = run_reduce_idfree(this->device(), data, kPoolSum, kReduceCol);
+    expect_reduce_matches_golden(result, data, ::unit_tests::compute::gold_reduce_h, /*red_type=*/0);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceScalarMaxIdFreeGolden) {
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = run_reduce_idfree(this->device(), data, kPoolMax, kReduceScalar);
+    expect_reduce_matches_golden(result, data, ::unit_tests::compute::gold_reduce_hw, /*red_type=*/2);
+}
+
+// reduce_block: N data tiles -> N output tiles, each output = REDUCE_SCALAR SUM of the matching input tile.
+// Modeled as a {1, N, 32, 32} HW reduce (each C tile reduced independently). scaler tile 0 in c_1.
+TEST_F(LLKBlackholeSingleCardFixture, TensixReduceBlockIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 4;
+    auto data = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    // c_1 holds num_tiles tiles; reduce_block uses scaler tile 0. Fill every slot with the 1.0 scaler tile.
+    auto scaler_tile = make_reduce_scaler_tile(1.0f);
+    std::vector<std::uint32_t> scaler;
+    for (std::uint32_t i = 0; i < num_tiles; ++i) {
+        scaler.insert(scaler.end(), scaler_tile.begin(), scaler_tile.end());
+    }
+    auto result = unit_tests::llk::single_core::run_binary(
+        this->device(),
+        data,
+        scaler,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reduce_block_2_0.cpp",
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/num_tiles,
+        /*out_tiles=*/num_tiles);
+    expect_reduce_matches_golden(
+        result, data, ::unit_tests::compute::gold_reduce_hw, /*red_type=*/0, /*shape=*/{1, num_tiles, 32, 32});
 }
 
 }  // namespace tt::tt_metal

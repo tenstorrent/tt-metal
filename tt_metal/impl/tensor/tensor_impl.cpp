@@ -8,12 +8,30 @@
 #include <tt-metalium/float8.hpp>
 
 #include "tensor_impl.hpp"
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
 #include <vector>
 
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::tensor_impl {
+
+LocalHostShards select_local_host_shards(
+    const DistributedHostBuffer& host_buffer, const distributed::MeshDevice& mesh_device) {
+    LocalHostShards local;
+    local.shards.reserve(host_buffer.shard_coords().size());
+    const auto& view = mesh_device.get_view();
+    for (const auto& coord : host_buffer.shard_coords()) {
+        if (!view.impl().is_local(coord)) {
+            continue;
+        }
+        if (auto shard = host_buffer.get_shard(coord)) {
+            local.size_bytes += shard->view_bytes().size();
+            local.shards.push_back({.coord = coord, .buffer = std::move(*shard)});
+        }
+    }
+    return local;
+}
 
 // ======================================================================================
 //                           Data reader, writer, and initializers
@@ -50,6 +68,14 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         case DataType::UINT16: return HostBuffer(std::vector<uint16_t>(size_bytes / sizeof(uint16_t)));
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
         case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
         case DataType::INVALID: TT_THROW("Invalid data type");
     }

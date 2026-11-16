@@ -26,6 +26,7 @@ The Docker build system uses **pre-built tool images** stored in GHCR (GitHub Co
    | mold | Fast linker |
    | doxygen | Documentation generator |
    | clangbuildanalyzer | ClangBuildAnalyzer for build profiling |
+   | iwyu | include-what-you-use; include analysis. Pinned to the Clang major version |
    | gdb | GNU Debugger |
    | cmake | Build system generator |
    | yq | YAML processor |
@@ -78,7 +79,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl tools
 | `install-curl.sh` | Build and install curl from source |
 | `install-doxygen.sh` | Build and install doxygen from source |
 | `install-gdb.sh` | Build and install GDB from source |
-| `install-iwyu.sh` | Build and install Include What You Use (not currently in Docker image) |
+| `install-iwyu.sh` | Build and install include-what-you-use |
 | `install-mold.sh` | Install mold linker binary release |
 | `install-openmpi.sh` | Build and install OpenMPI with ULFM support |
 | `install-sfpi.sh` | Install SFPI compiler tools |
@@ -90,18 +91,11 @@ docker buildx bake -f dockerfile/docker-bake.hcl tools
 
 ### Updating uv
 
-1. Find the new version's SHA256 digest at: https://github.com/astral-sh/uv/pkgs/container/uv/versions
-2. Look for the distroless image (tagged as `X.Y.Z`, `latest`)
-3. Update both `UV_VERSION` and the `FROM ghcr.io/astral-sh/uv@sha256:...` line in Dockerfile
-
-Example:
-```dockerfile
-# Update the version comment
-ARG UV_VERSION=0.9.27
-
-# Update the FROM line with new digest
-FROM ghcr.io/astral-sh/uv@sha256:NEW_DIGEST_HERE AS uv-layer
-```
+1. Find the new version's multi-arch index digest at: https://github.com/astral-sh/uv/pkgs/container/uv/versions (tag `X.Y.Z`)
+2. Update `UV_IMAGE` in `dockerfile/docker-bake.hcl` (single source of truth)
+3. Sync the fallback `ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:...` default in `Dockerfile`, `Dockerfile.python`, `Dockerfile.basic-dev` and `Dockerfile.evaluation`
+4. Update `UV_VERSION` and `UV_INSTALLER_SHA256` in `scripts/install-uv.sh`
+   (`curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sha256sum`)
 
 ### Updating other tools
 

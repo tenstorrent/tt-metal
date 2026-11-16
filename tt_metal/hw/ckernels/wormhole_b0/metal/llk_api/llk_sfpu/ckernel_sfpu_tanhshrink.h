@@ -10,8 +10,12 @@
 #include "ckernel_sfpu_tanh.h"
 #include "cmath_common.h"
 
+#include "ckernel_sfpu_tanhshrink_bf16.h"
+
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated tanhshrink kernel as one call over the whole tile.
+inline constexpr bool tanhshrink_bf16_whole_tile = true;
 // tanhshrink(x) = x - tanh(x).
 // For small |x|, tanh(x) ~= x, so the subtractive form x - tanh(x) suffers catastrophic
 // cancellation in bf16 (both operands round to the same value -> result 0). Instead, for
@@ -23,6 +27,12 @@ namespace ckernel::sfpu {
 // sigmoid-based accurate tanh (deg-3 would be ~1700 fp32 ULP).
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanhshrink() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_tanhshrink()) {
+            calculate_tanhshrink_bf16<ITERATIONS>();
+            return;
+        }
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -59,10 +69,7 @@ inline void calculate_tanhshrink() {
                 sfpi::vFloat axc = ax;
                 axc = sfpi::min(axc, 9.0f);
                 sfpi::vFloat e = _sfpu_exp_fp32_accurate_unsafe_(-2.f * axc);
-                // Denominator 1+e is provably well-conditioned here: |x|>1 so
-                // e = exp(-2|x|) in (0, e^-2], giving 1+e in [1, 1+e^-2] >= 1.
-                // A single Newton refinement therefore suffices (2->1 iterations).
-                sfpi::vFloat sig = sfpu_reciprocal_iter<1>(1.0f + e);  // sigmoid(2|x|)
+                sfpi::vFloat sig = sfpu_reciprocal_iter<2>(1.0f + e);  // sigmoid(2|x|)
                 sfpi::vFloat tanh_ax = 2.f * sig - 1.0f;               // tanh(|x|)
                 result = sfpi::copysgn(ax - tanh_ax, x);
             } else {

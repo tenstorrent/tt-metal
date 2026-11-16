@@ -53,26 +53,100 @@ static std::uint32_t src_zero_flag_hw       = 0xff; // last value written to the
 static std::uint32_t src_zero_flag_srca_fmt = 0xff; // cached operand formats feeding the compute default
 static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
-// The one writer. Out-of-line so the STALLWAIT + RMW exist in a single copy (code size — a matmul
-// kernel otherwise overflows its slot).
-inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
+// The one writer. Loop and reconfig sites call its out-of-line copy so the STALLWAIT + RMW exist in a single
+// copy there (code size: a matmul kernel otherwise overflows its slot); inits write inline (ZeroFlagAt).
+// Keep the STALLWAIT on Wormhole: an FPU instruction reads the live flag while it waits to enter the FPU
+// (e.g. for its Src operands), so a write must not land until MATH has drained. (Blackhole latches the
+// flag per instruction at issue and needs no stall.)
+inline __attribute__((always_inline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
 }
 
+inline __attribute__((noinline)) void _apply_src_zero_flag_outline_(const std::uint32_t value)
+{
+    _apply_src_zero_flag_(value);
+}
+
+// Where a flag check runs. Init runs once from a cold icache, so each init site keeps its usual outcome on the straight
+// path: no call to a cold callee and no taken branch over the write.
+enum class ZeroFlagAt
+{
+    loop,        // loops and format reconfigs: a change calls the out-of-line writer
+    init_write,  // hw_configure: sets the kernel's flag, inline on the straight path
+    init_holds,  // op inits after hw_configure: the flag usually holds the value, so the inline write is off the straight path
+    init_either, // copy and transpose inits: inline, the RMW word built ahead of the check so that it skips 3 instructions
+};
+
+// Inits write inline; LLK_ZEROFLAG_OUTLINE kernels keep the call there too, for code size.
+template <bool at_init>
+inline __attribute__((always_inline)) void _update_src_zero_flag_(const std::uint32_t value)
+{
+#if !defined(LLK_ZEROFLAG_OUTLINE)
+    if constexpr (at_init)
+    {
+        _apply_src_zero_flag_(value);
+        return;
+    }
+#endif
+    _apply_src_zero_flag_outline_(value);
+}
+
+// The RMWCIB0 word cfg_reg_rmw_tensix issues for a field inside its register's low byte.
+template <std::uint32_t CfgAddr32, std::uint32_t Shamt, std::uint32_t Mask>
+inline std::uint32_t cfg_reg_rmw_tensix_word(const std::uint32_t val)
+{
+    static_assert(Mask != 0 && (Mask & ~0xffu) == 0, "one RMWCIB0 byte");
+    return TT_OP_RMWCIB0(Mask, (val << Shamt) & 0xff, CfgAddr32);
+}
+
+// The init_holds and init_either checks (the others keep the check in the configurators below).
+template <ZeroFlagAt at>
+inline __attribute__((always_inline)) void _set_src_zero_flag_at_init_(const std::uint32_t value)
+{
+    if constexpr (at == ZeroFlagAt::init_holds)
+    {
+        if (__builtin_expect(src_zero_flag_hw != value, 0))
+        {
+            _apply_src_zero_flag_(value);
+        }
+    }
+    else
+    {
+        static_assert(at == ZeroFlagAt::init_either);
+        const std::uint32_t held = src_zero_flag_hw;
+        std::uint32_t rmw        = cfg_reg_rmw_tensix_word<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
+        asm volatile("" : "+r"(rmw) : "r"(held)); // keeps the load and the word ahead of the check
+        if (held != value)
+        {
+            src_zero_flag_hw = value;
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+            TT_INSN(rmw);
+        }
+    }
+}
+
 // Set the flag to `disable`; skip if it already holds that value. The check is inlined at every call
 // site so hot loops (whose operand formats change but map to the same flag value) stay call-free; only
 // a genuine value change pays the out-of-line write.
+template <ZeroFlagAt at = ZeroFlagAt::loop>
 inline void _configure_src_zero_flag_(const bool disable)
 {
     const std::uint32_t value = disable ? 1u : 0u;
+#if !defined(LLK_ZEROFLAG_OUTLINE)
+    if constexpr (at == ZeroFlagAt::init_holds || at == ZeroFlagAt::init_either)
+    {
+        _set_src_zero_flag_at_init_<at>(value);
+        return;
+    }
+#endif
     if (src_zero_flag_hw == value)
     {
         return;
     }
-    _apply_src_zero_flag_(value);
+    _update_src_zero_flag_<at != ZeroFlagAt::loop>(value);
 }
 
 // A kernel tight on program-config space (e.g. ring-joint SDPA, which reconfigs ~30x) can
@@ -93,20 +167,29 @@ inline void _configure_src_zero_flag_(const bool disable)
 // whether the resulting flag value changed).
 // TODO(tt-metal#53652): the flag must be CLEARED for all FPU compute; once that lands this collapses to
 // _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag() / the format cache are dropped.
+template <ZeroFlagAt at = ZeroFlagAt::loop>
 inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_()
 {
     const std::uint32_t value = requires_disabled_src_zero_flag(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt) ? 1u : 0u;
+#if !defined(LLK_ZEROFLAG_OUTLINE)
+    if constexpr (at == ZeroFlagAt::init_holds || at == ZeroFlagAt::init_either)
+    {
+        _set_src_zero_flag_at_init_<at>(value);
+        return;
+    }
+#endif
     if (src_zero_flag_hw == value)
     {
         return;
     }
-    _apply_src_zero_flag_(value);
+    _update_src_zero_flag_<at != ZeroFlagAt::loop>(value);
 }
 
 // Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).
+template <ZeroFlagAt at = ZeroFlagAt::loop>
 inline void _configure_preserve_zero_flag_state_()
 {
-    _configure_src_zero_flag_(true);
+    _configure_src_zero_flag_<at>(true);
 }
 
 // Datacopy zero-flag, chosen by the source (SrcA) format. Default is preserve (keep) so bf16 -0.0 and
@@ -118,7 +201,7 @@ inline void _configure_copy_zero_flag_state_(const std::uint32_t src_dst_format)
     const std::uint32_t fmt = src_dst_format & 0x1F;
     // Wormhole fp8 is Lf8 (e5m2) only; Fp8_e4m3 is a Blackhole-only DataFormat.
     const bool flush_fp8 = (fmt == static_cast<std::uint32_t>(DataFormat::Lf8));
-    _configure_src_zero_flag_(!flush_fp8);
+    _configure_src_zero_flag_<ZeroFlagAt::init_either>(!flush_fp8); // copy_init: once or more in a kernel's init
 }
 
 // After a raw cfg write that bypassed the setter, mark the tracked value unknown so the next
@@ -136,6 +219,19 @@ inline void reset_counters(const std::uint32_t setrwc)
 inline void incr_counters(const std::uint32_t incr_a, const std::uint32_t incr_b, const std::uint32_t incr_d, const std::uint32_t incr_cr)
 {
     TT_INCRWC(incr_cr, incr_d, incr_b, incr_a);
+}
+
+// MOVD2A/MOVD2B write SrcA/SrcB from Dest, so they fall outside the Src auto-wait, which covers
+// only instructions that read Src. Gate the row moves on the target bank's DVALID, and drain
+// in-flight math so the Dest values those moves read back have settled.
+inline void srca_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+}
+
+inline void srcb_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
 }
 
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
@@ -160,7 +256,7 @@ inline void move_d2a_row_broadcast_fixed_face(const std::uint8_t addrmod)
 {
     // MOVD2A does not auto-wait for SrcA[MatrixUnit.SrcABank].AllowedClient == MatrixUnit, so gate on SRCA_VLD
     // before the row moves (mirrors move_d2b_fixed_face's SRCB_VLD wait). See llk_math_transpose_dest.h. tt-llk#1664.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     // // Seems to make things 200 clocks slower. Really shouldn't though.
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, addrmod, p_movd2a::MOV_1_ROW, 0);
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 1, addrmod, p_movd2a::MOV_1_ROW, 0);
@@ -191,11 +287,11 @@ inline void wait_bank_valid()
 {
     if constexpr (SrcReg == Srcs::SrcA)
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     }
     else
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
     }
 }
 
@@ -326,6 +422,21 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
 
     return ((input_df == to_underlying(DataFormat::Int32)) || (input_df == to_underlying(DataFormat::Float32))) &&
            ((output_df == to_underlying(DataFormat::Int32)) || (output_df == to_underlying(DataFormat::Float32)));
+}
+
+// Pack the SrcA/SrcB ALU formats into their fields of the ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 config word. The two fields
+// are DATA_FORMAT_BIT_COUNT (4) bits wide and adjacent, so each value is masked before the shift, as the unpacker does:
+// shifting a raw UInt8 (30) / UInt32 (24) in would land SrcA's bit 4 on SrcB's LSB. Writers that program both fields go
+// through this helper; writers that program one field mask it with masked_data_format() before the single-field RMW.
+inline constexpr std::uint32_t alu_src_format_cfg(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
+{
+    // masked_data_format() only keeps SrcA's spill out of SrcB if each field is exactly DATA_FORMAT_BIT_COUNT wide and
+    // both live in the one word this helper packs.
+    static_assert((ALU_FORMAT_SPEC_REG0_SrcA_MASK >> ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) == DATA_FORMAT_CONFIG_MASK);
+    static_assert((ALU_FORMAT_SPEC_REG1_SrcB_MASK >> ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) == DATA_FORMAT_CONFIG_MASK);
+    static_assert(ALU_FORMAT_SPEC_REG0_SrcA_ADDR32 == ALU_FORMAT_SPEC_REG1_SrcB_ADDR32);
+    return (masked_data_format(srca_data_format) << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) |
+           (masked_data_format(srcb_data_format) << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT);
 }
 
 inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)

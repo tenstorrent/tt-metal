@@ -49,7 +49,7 @@ def test_mse_loss(device, input_shapes, loss_mode):
 
     if loss_mode[0] in ("mean", "sum"):
         # Reduced losses are scalars; PCC is undefined on constant tensors.
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=3)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=3)
     else:
         assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
@@ -92,6 +92,6 @@ def test_l1_loss(device, input_shapes, loss_mode):
 
     if loss_mode[0] in ("mean", "sum"):
         # Reduced losses are scalars; PCC is undefined on constant tensors.
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=3)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=3)
     else:
         assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

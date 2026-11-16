@@ -50,9 +50,22 @@ def normalize_health_report(report: dict) -> dict:
     return out
 
 
+def phase_gates(phase: dict) -> bool:
+    """Whether a phase's findings reach the run's verdict.
+
+    A phase may set ``gates: false`` to record findings at their real severity
+    without being able to fail a node — how a tool still being validated against
+    the fleet reports honestly before it is trusted to act. Absent, as in every
+    report written before the flag existed, a phase gates.
+    """
+    return phase.get("gates", True) is not False
+
+
 def has_actionable_failure(report: dict) -> bool:
-    """True if any non-excluded, non-reset-op check FAILs in the (normalized) report."""
+    """True if any non-excluded, non-reset-op check FAILs in a gating phase."""
     for phase in report.get("phases", {}).values():
+        if not phase_gates(phase):
+            continue
         for check in phase.get("checks", []):
             name = check.get("name", "")
             if name in EXCLUDED_CHECKS or is_reset_op_check(name):

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <allocator.hpp>
 #include "device/device_manager.hpp"
 #include <host_api.hpp>
@@ -15,6 +15,7 @@
 #include "impl/allocator/allocator.hpp"
 #include "tt_metal.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 
 namespace tt::tt_metal {
 
@@ -30,7 +31,7 @@ TEST(DevicePool, DevicePoolOpenClose) {
     std::vector<ChipId> device_ids{all_chip_ids.begin(), all_chip_ids.end()};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     MetalContext::instance().initialize_device_manager(
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
@@ -48,7 +49,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
     int worker_l1_size = 0;
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     MetalContext::instance().initialize_device_manager(
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
@@ -83,7 +84,7 @@ TEST(DevicePool, DevicePoolAddDevices) {
     std::vector<ChipId> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     MetalContext::instance().initialize_device_manager(
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
@@ -115,7 +116,7 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     std::vector<ChipId> device_ids{0, 1, 2, 3};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     MetalContext::instance().initialize_device_manager(
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
@@ -136,6 +137,23 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
     ASSERT_TRUE(dev->is_initialized());
     CloseDevicesInPool();
+}
+
+TEST(DevicePool, HostTransferStatsCountFirmwareLoads) {
+    auto& context = MetalContext::instance();
+    if (context.get_cluster().is_mock_or_emulated() || context.rtoptions().get_skip_loading_fw()) {
+        GTEST_SKIP() << "Firmware is not loaded on this target";
+    }
+    std::vector<ChipId> device_ids{*context.get_cluster().all_chip_ids().begin()};
+    test::HostTransferStatsScope transfer_stats;
+    context.initialize_device_manager(
+        device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, context.resolve_dispatch_core_config());
+    const auto firmware = transfer_stats.totals(HostTransferCategory::Firmware);
+    CloseDevicesInPool();
+
+    EXPECT_GT(firmware.bytes, 0u);
+    EXPECT_GT(firmware.transfers, 0u);
+    EXPECT_GT(firmware.busy, HostTransferStats::Clock::duration::zero());
 }
 
 }  // namespace tt::tt_metal

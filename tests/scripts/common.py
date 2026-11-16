@@ -91,6 +91,15 @@ def get_git_home_dir_str():
     result = run_process_and_get_result("git rev-parse --show-toplevel")
     git_home_dir_str = result.stdout.decode("utf-8").replace("\n", "")
 
+    # A source tree without .git (a prebuilt test image, an export) leaves git with
+    # no answer; TT_METAL_HOME is the repo root by contract and is what this feeds.
+    if not git_home_dir_str:
+        git_home_dir_str = os.environ.get("TT_METAL_HOME", "")
+
+    # Without this, an empty string becomes Path("") == Path("."), which passes both
+    # checks below and silently yields paths like /build/test/... at the filesystem root.
+    assert git_home_dir_str, "Could not find the repo root: git rev-parse failed and TT_METAL_HOME is not set"
+
     git_home_dir = pathlib.Path(git_home_dir_str)
 
     assert git_home_dir.exists(), f"{git_home_dir} doesn't exist"
@@ -258,33 +267,3 @@ def error_out_if_test_report_has_failures(test_report):
 
 
 # Device helpers to be shared with top-level conftest.py and other conftest.py files that will handle open/close of devices.
-
-
-def get_updated_device_params(device_params):
-    import ttnn
-
-    new_device_params = device_params.copy()
-
-    dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
-    dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
-    fabric_tensix_config = new_device_params.get("fabric_tensix_config", None)
-
-    if ttnn.device.is_blackhole():
-        # Only when both fabric_config and fabric_tensix_config are set, we can use ROW dispatch, otherwise force to use COL dispatch
-        fabric_config = new_device_params.get("fabric_config", None)
-        if not (fabric_config and fabric_tensix_config):
-            # When not both are set, force COL dispatch
-            if dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
-                logger.warning(
-                    "ROW dispatch requires both fabric and tensix config, using DispatchCoreAxis.COL instead."
-                )
-                dispatch_core_axis = ttnn.DispatchCoreAxis.COL
-        elif fabric_config and fabric_tensix_config:
-            logger.warning(
-                f"Blackhole with fabric_config and fabric_tensix_config enabled, using fabric_tensix_config={fabric_tensix_config}"
-            )
-
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis, fabric_tensix_config)
-    new_device_params["dispatch_core_config"] = dispatch_core_config
-
-    return new_device_params

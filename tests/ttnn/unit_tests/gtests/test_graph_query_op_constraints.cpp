@@ -56,12 +56,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <llrt/tt_cluster.hpp>
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
 
 namespace ttnn::operations::binary::test {
 
@@ -777,20 +773,24 @@ TEST_P(MatmulOpIfTest, Matmul) {
             output_spec.tensor_layout().get_memory_config(),
             output_spec.data_type(),
             matmul_program_config,
-            std::nullopt,   // activation
-            std::nullopt,   // compute_kernel_config
-            std::nullopt,   // core_grid
-            std::nullopt,   // output_tile
-            std::nullopt,   // optional_output_tensor
-            std::nullopt,   // global_cb
-            std::nullopt);  // sub_device_id
+            std::nullopt,                 // activation
+            std::nullopt,                 // compute_kernel_config
+            std::nullopt,                 // core_grid
+            std::nullopt,                 // output_tile
+            std::nullopt,                 // optional_output_tensor
+            std::nullopt,                 // global_cb
+            std::nullopt,                 // sub_device_id
+            ttnn::PrefetcherPipeList{});  // prefetcher_pipes
 
         log_info(
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        // Ensure some real usage is reported
-        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 1024);
+        // Ensure some real usage is reported. The matmul program factories are Metal 2.0 ops: their
+        // program-scope L1 is reported under dataflow_buffer_peak_size_per_core (and
+        // peak_memory_usage_per_core), not cb_peak_size_per_core, which is legitimately 0 for a ported
+        // op. See ResourceUsage in ttnn/api/ttnn/graph/graph_query_op_constraints.hpp.
+        EXPECT_GT(query.resource_usage.dataflow_buffer_peak_size_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
@@ -1295,7 +1295,7 @@ TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
 TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
     // rms_allgather_program_factory slices stats_cores_vec by ring_size, which
     // requires a physical core layout matching the number of devices.  Mock
-    // devices don't satisfy this, causing a heap-buffer-overflow in create_at().
+    // devices don't satisfy this, causing a heap-buffer-overflow in build_rms_allgather_program_descriptor().
     if (tt::tt_metal::experimental::is_mock_mode_registered()) {
         GTEST_SKIP() << "fused_rms_minimal requires real hardware (mock core layout is insufficient)";
     }

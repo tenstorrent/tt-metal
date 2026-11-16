@@ -13,6 +13,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 using fds_filter::kPayloadGo;
@@ -29,7 +30,7 @@ constexpr uint32_t kTimeoutFloorCapture = 0x5A5A0032;
 
 void kernel_main() {
     constexpr uint32_t l1_address = get_named_compile_time_arg_val("l1_address");
-    constexpr uint32_t dispatch_mask = get_named_compile_time_arg_val("dispatch_mask");
+    constexpr uint32_t dispatch_mask = overlay::fds_signalling::dispatch_lane_mask;
     constexpr uint32_t long_filter = get_named_compile_time_arg_val("long_filter");
     constexpr uint32_t floor_filter = get_named_compile_time_arg_val("floor_filter");
     constexpr uint32_t silence_iterations = get_named_compile_time_arg_val("silence_iterations");
@@ -47,14 +48,14 @@ void kernel_main() {
 
     // Ask for the session go to be dropped, and let the hardware capture of its zero prove the
     // wire is clear before the filter is raised.
-    overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenLaneKnown);
+    overlay::FdsNeo::fds_done(kTokenLaneKnown);
     if (!fds_kernel::wait_de_status(go_inst, 0, poll_iterations)) {
         result = kTimeoutGoClear;
     }
 
     if (result == kComplete) {
         overlay::FdsNeo::fds_config_filter_length(long_filter);
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenArmed);
+        overlay::FdsNeo::fds_done(kTokenArmed);
 
         // The engine fires a train of brief pulses early in this window, each far shorter than
         // the long threshold, so the lane must stay clear.
@@ -65,7 +66,7 @@ void kernel_main() {
     }
 
     if (result == kComplete) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenPulseChecked);
+        overlay::FdsNeo::fds_done(kTokenPulseChecked);
         if (!fds_kernel::wait_de_status(go_inst, kPayloadGo, poll_iterations)) {
             result = kTimeoutHeldCapture;
         }
@@ -74,11 +75,11 @@ void kernel_main() {
     if (result == kComplete) {
         overlay::FdsNeo::fds_clear_de_status(go_inst);
         overlay::FdsNeo::fds_config_filter_length(floor_filter);
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenRearmed);
+        overlay::FdsNeo::fds_done(kTokenRearmed);
         if (!fds_kernel::wait_de_status(go_inst, kPayloadGo, poll_iterations)) {
             result = kTimeoutFloorCapture;
         } else {
-            overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenDone);
+            overlay::FdsNeo::fds_done(kTokenDone);
         }
     }
 

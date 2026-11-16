@@ -7,14 +7,11 @@
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/distributed_context.hpp>
 #include <algorithm>
 #include <cstddef>
-#include <unordered_set>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "shape_base.hpp"
 #include <tt_stl/small_vector.hpp>

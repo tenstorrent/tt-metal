@@ -362,7 +362,6 @@ def test_different_feature_sizes(n_features, out_features):
     assert cpp_shape == (batch_size, 1, 1, out_features)
 
 
-@pytest.mark.skip(reason="Tracking: #41657 (AutocastTensor stale FULL view after BF16 updates)")
 def test_gradient_flow(sample_data):
     """Test that gradients flow correctly in both models."""
     n_features = sample_data["n_features"]

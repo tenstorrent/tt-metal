@@ -1,0 +1,9 @@
+# Two ranks own two consecutive devices each in a 1x4 Blackhole mesh on one host.
+mesh_descriptors {
+  name: "DUAL_RANK_1X4"
+  arch: BLACKHOLE
+  device_topology { dims: [1, 4] dim_types: [LINE, LINE] }
+  host_topology { dims: [1, 2] }
+  channels { count: 1 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "DUAL_RANK_1X4" mesh_id: 0 } }

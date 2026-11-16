@@ -45,10 +45,10 @@ void kernel_main() {
     constexpr auto num_tiles_per_worker = get_arg(args::num_tiles_per_worker);
     constexpr auto num_tiles_per_worker_bytes = get_arg(args::num_tiles_per_worker_bytes);
     constexpr auto num_tiles_per_worker_last_bytes = get_arg(args::num_tiles_per_worker_last_bytes);
-    constexpr bool row_major = (bool)get_arg(args::row_major);
+    constexpr bool row_major = static_cast<bool>(get_arg(args::row_major));
     constexpr auto num_x = get_arg(args::num_x);
     constexpr auto num_y = get_arg(args::num_y);
-    constexpr bool use_two_stage_reduce = (bool)get_arg(args::use_two_stage_reduce);
+    constexpr bool use_two_stage_reduce = static_cast<bool>(get_arg(args::use_two_stage_reduce));
     constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
     constexpr auto num_mcast_dests = get_arg(args::num_mcast_dests);
@@ -84,8 +84,8 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_y; ++i) {
         remote_noc_y[i] = get_vararg(num_x + i);
     }
-    df::L1Ptr in0_remote_noc_x = (df::L1Ptr)remote_noc_x;
-    df::L1Ptr in0_remote_noc_y = (df::L1Ptr)remote_noc_y;
+    auto* in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(remote_noc_x);
+    auto* in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(remote_noc_y);
 
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
@@ -95,15 +95,24 @@ void kernel_main() {
     Semaphore<> reduce_sender_sem(sem::reduce_sender);
     Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
-    MulticastEndpoint mcast_ep;
 
     // RMSNorm only allocates the Var[x] partial buffer; the host skips the E[x] one.
 #ifdef RMSNORM
     DataflowBuffer dfb_partial_size_ref(dfb::ex_partial2);
 #else
-    DataflowBuffer dfb_partial_size_ref(dfb::ex_partial);
+    const DataflowBuffer dfb_partial_size_ref(dfb::ex_partial);
 #endif
     const uint32_t single_tile_size_bytes = dfb_partial_size_ref.get_tile_size();
+#ifdef ARCH_WORMHOLE
+    constexpr bool split_exchange = !use_welford;
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+#else
+    constexpr bool split_exchange = false;
+#endif
+    const uint32_t face_bytes = single_tile_size_bytes / 4;
+    const bool read_half_tiles = split_exchange && single_tile_size_bytes == 2048;
+    constexpr uint32_t partial_push_blocks = 3;
+    const bool send_half_tiles = split_exchange && (single_tile_size_bytes == 2048 || single_tile_size_bytes == 4096);
 
     // Compute the NOC coordinates for remote cores that interact with this core
     df::RemoteNocCoords<num_blocks> remote_coords{};
@@ -122,17 +131,17 @@ void kernel_main() {
                                            const uint32_t dfb_ex_global_id,
                                            const uint32_t dfb_reduce_first_stage_id,
                                            const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
-        DataflowBuffer dfb_partial_obj(dfb_partial_id);
-        DataflowBuffer dfb_external_obj(dfb_external_id);
-        DataflowBuffer dfb_ex_obj(dfb_ex_id);
-        DataflowBuffer dfb_ex_global_obj(dfb_ex_global_id);
-        DataflowBuffer dfb_reduce_first_stage_obj(dfb_reduce_first_stage_id);
+        DataflowBuffer dfb_partial_obj(static_cast<uint16_t>(dfb_partial_id));
+        DataflowBuffer dfb_external_obj(static_cast<uint16_t>(dfb_external_id));
+        DataflowBuffer dfb_ex_obj(static_cast<uint16_t>(dfb_ex_id));
+        DataflowBuffer dfb_ex_global_obj(static_cast<uint16_t>(dfb_ex_global_id));
+        const DataflowBuffer dfb_reduce_first_stage_obj(static_cast<uint16_t>(dfb_reduce_first_stage_id));
 
         // ============================================================================
         // Partial reduction
         // ============================================================================
 
-        dfb_partial_obj.wait_front(block_h * num_tiles_scaler);
+        dfb_partial_obj.wait_front(static_cast<uint16_t>(block_h * num_tiles_scaler));
 
         if constexpr (num_blocks > 1) {
             reduce_sender_sem.set(VALID);
@@ -173,20 +182,53 @@ void kernel_main() {
             }
         }
         for (uint32_t i = 0; i < num_tiles_per_worker; ++i) {
-            dfb_external_obj.reserve_back(num_blocks_first_stage * num_tiles_scaler);
+            dfb_external_obj.reserve_back(static_cast<uint16_t>(num_blocks_first_stage * num_tiles_scaler));
             uint32_t write_offset = 0;
+            uint32_t num_pushed = 0;
+            uint32_t num_read = 0;
             for (uint32_t block = 0; block < num_blocks_first_stage; ++block) {
-                noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                    remote_ep,
-                    dfb_external_obj,
-                    num_tiles_scaler * single_tile_size_bytes,
-                    {.noc_x = remote_coords[block].x, .noc_y = remote_coords[block].y, .addr = l1_read_addr_ex_par},
-                    {.offset_bytes = write_offset});
+                if (read_half_tiles) {
+                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        remote_ep,
+                        dfb_external_obj,
+                        face_bytes,
+                        {.noc_x = remote_coords[block].x, .noc_y = remote_coords[block].y, .addr = l1_read_addr_ex_par},
+                        {.offset_bytes = write_offset});
+                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        remote_ep,
+                        dfb_external_obj,
+                        face_bytes,
+                        {.noc_x = remote_coords[block].x,
+                         .noc_y = remote_coords[block].y,
+                         .addr = l1_read_addr_ex_par + 2 * face_bytes},
+                        {.offset_bytes = write_offset + 2 * face_bytes});
+#ifdef ARCH_WORMHOLE
+                    const uint32_t l1_write_addr = dfb_external_obj.get_write_ptr() + write_offset;
+                    noc_async_read(zeros_noc_addr, l1_write_addr + face_bytes, face_bytes);
+                    noc_async_read(zeros_noc_addr, l1_write_addr + 3 * face_bytes, face_bytes);
+#endif
+                } else {
+                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        remote_ep,
+                        dfb_external_obj,
+                        num_tiles_scaler * single_tile_size_bytes,
+                        {.noc_x = remote_coords[block].x, .noc_y = remote_coords[block].y, .addr = l1_read_addr_ex_par},
+                        {.offset_bytes = write_offset});
+                }
                 write_offset += num_tiles_scaler * single_tile_size_bytes;
+                ++num_read;
+                if constexpr (split_exchange) {
+                    if (num_read % partial_push_blocks == 0 && num_read < num_blocks_first_stage) {
+                        noc.async_read_barrier();
+                        dfb_external_obj.push_back(static_cast<uint16_t>(partial_push_blocks * num_tiles_scaler));
+                        num_pushed += partial_push_blocks;
+                        write_offset = 0;
+                    }
+                }
             }
             l1_read_addr_ex_par += num_tiles_scaler * single_tile_size_bytes;
             noc.async_read_barrier();
-            dfb_external_obj.push_back(num_blocks_first_stage * num_tiles_scaler);
+            dfb_external_obj.push_back(static_cast<uint16_t>((num_blocks_first_stage - num_pushed) * num_tiles_scaler));
 
             // ---------------------------------------------------------------------------
             // Handle the two-stage reduce
@@ -198,7 +240,7 @@ void kernel_main() {
                 }
 
                 uint32_t curr_block_index = block_index_stride;
-                dfb_external_obj.reserve_back((num_blocks_second_stage - 1) * num_tiles_scaler);
+                dfb_external_obj.reserve_back(static_cast<uint16_t>((num_blocks_second_stage - 1) * num_tiles_scaler));
                 write_offset = 0;
                 for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                     noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
@@ -214,7 +256,7 @@ void kernel_main() {
                 }
                 l1_read_addr_ex += num_tiles_scaler * single_tile_size_bytes;
                 noc.async_read_barrier();
-                dfb_external_obj.push_back((num_blocks_second_stage - 1) * num_tiles_scaler);
+                dfb_external_obj.push_back(static_cast<uint16_t>((num_blocks_second_stage - 1) * num_tiles_scaler));
             }
         }
 
@@ -222,8 +264,8 @@ void kernel_main() {
         // Wait for all final combined results to be ready
         // ---------------------------------------------------------------------------
 
-        dfb_ex_obj.wait_front(num_tiles_per_worker * num_tiles_scaler);
-        dfb_partial_obj.pop_front(block_h * num_tiles_scaler);
+        dfb_ex_obj.wait_front(static_cast<uint16_t>(num_tiles_per_worker * num_tiles_scaler));
+        dfb_partial_obj.pop_front(static_cast<uint16_t>(block_h * num_tiles_scaler));
 
         if constexpr (num_all_to_all_workers_first_stage > 1) {
             reduce_receiver_sem.wait(num_all_to_all_workers_first_stage - 1);
@@ -235,16 +277,31 @@ void kernel_main() {
         // Read from the E[x] buffer into the global buffer, multicast the global buffer to all cores
         // ============================================================================
 
-        uint32_t l1_read_addr_ex_remote = dfb_ex_obj.get_read_ptr();
-        dfb_ex_global_obj.reserve_back(block_h * num_tiles_scaler);
+        const uint32_t l1_read_addr_ex_remote = dfb_ex_obj.get_read_ptr();
+        dfb_ex_global_obj.reserve_back(static_cast<uint16_t>(block_h * num_tiles_scaler));
         uint32_t gather_write_offset = 0;
         // Account for num_tiles_scaler (2 for Welford, 1 otherwise) when checking
         // if the gather read fits in a single NOC packet.
         constexpr uint32_t gather_tiles_scaler = use_welford ? 2 : 1;
         for (uint32_t block = 0; block < num_all_to_all_workers_first_stage; ++block) {
-            uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1 ? num_tiles_per_worker_last_bytes
-                                                                                       : num_tiles_per_worker_bytes;
-            if constexpr (num_tiles_per_worker_bytes * gather_tiles_scaler <= NOC_MAX_BURST_SIZE) {
+            const uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1
+                                                 ? num_tiles_per_worker_last_bytes
+                                                 : num_tiles_per_worker_bytes;
+            if (send_half_tiles) {
+                for (uint32_t offset = 0; offset < num_tiles_scaler * num_tiles_bytes;
+                     offset += single_tile_size_bytes) {
+                    for (uint32_t face = 0; face < 4; face += 2) {
+                        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                            remote_ep,
+                            dfb_ex_global_obj,
+                            face_bytes,
+                            {.noc_x = remote_coords[block].x,
+                             .noc_y = remote_coords[block].y,
+                             .addr = l1_read_addr_ex_remote + offset + face * face_bytes},
+                            {.offset_bytes = gather_write_offset + offset + face * face_bytes});
+                    }
+                }
+            } else if constexpr (num_tiles_per_worker_bytes * gather_tiles_scaler <= NOC_MAX_BURST_SIZE) {
                 noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                     remote_ep,
                     dfb_ex_global_obj,
@@ -263,29 +320,49 @@ void kernel_main() {
         }
         noc.async_read_barrier();
 
-        uint32_t l1_read_addr_ex_global = dfb_ex_global_obj.get_read_ptr();
-        dfb_ex_global_obj.push_back(block_h * num_tiles_scaler);
+        dfb_ex_global_obj.push_back(static_cast<uint16_t>(block_h * num_tiles_scaler));
         if constexpr (num_blocks > 1) {
             uint32_t mcast_src_offset = 0;
             for (uint32_t block = 0; block < num_all_to_all_workers_first_stage; ++block) {
                 reduce_sender_sem.set(block + 2);
 
-                uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1
-                                               ? num_tiles_per_worker_last_bytes
-                                               : num_tiles_per_worker_bytes;
+                const uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1
+                                                     ? num_tiles_per_worker_last_bytes
+                                                     : num_tiles_per_worker_bytes;
 
-                noc.async_write_multicast(
-                    dfb_ex_global_obj,
-                    mcast_ep,
-                    num_tiles_scaler * num_tiles_bytes,
-                    num_mcast_dests,
-                    {.offset_bytes = mcast_src_offset},
-                    {.noc_x_start = mcast_dest_noc_start_x,
-                     .noc_y_start = mcast_dest_noc_start_y,
-                     .noc_x_end = mcast_dest_noc_end_x,
-                     .noc_y_end = mcast_dest_noc_end_y,
-                     .addr = l1_read_addr_ex_global + mcast_src_offset},
-                    true);
+                if (send_half_tiles) {
+                    for (uint32_t offset = 0; offset < num_tiles_scaler * num_tiles_bytes;
+                         offset += single_tile_size_bytes) {
+                        for (uint32_t face = 0; face < 4; face += 2) {
+                            const uint32_t src_offset = mcast_src_offset + offset + face * face_bytes;
+                            noc.async_write_multicast(
+                                dfb_ex_global_obj,
+                                read_ptr_view(dfb_ex_global_obj),
+                                face_bytes,
+                                num_mcast_dests,
+                                {.offset_bytes = src_offset},
+                                {.noc_x_start = mcast_dest_noc_start_x,
+                                 .noc_y_start = mcast_dest_noc_start_y,
+                                 .noc_x_end = mcast_dest_noc_end_x,
+                                 .noc_y_end = mcast_dest_noc_end_y,
+                                 .offset_bytes = src_offset},
+                                true);
+                        }
+                    }
+                } else {
+                    noc.async_write_multicast(
+                        dfb_ex_global_obj,
+                        read_ptr_view(dfb_ex_global_obj),
+                        num_tiles_scaler * num_tiles_bytes,
+                        num_mcast_dests,
+                        {.offset_bytes = mcast_src_offset},
+                        {.noc_x_start = mcast_dest_noc_start_x,
+                         .noc_y_start = mcast_dest_noc_start_y,
+                         .noc_x_end = mcast_dest_noc_end_x,
+                         .noc_y_end = mcast_dest_noc_end_y,
+                         .offset_bytes = mcast_src_offset},
+                        true);
+                }
                 reduce_sender_sem.set_multicast(
                     noc,
                     mcast_dest_noc_start_x,
@@ -298,6 +375,13 @@ void kernel_main() {
                 noc.async_write_barrier();
             }
         }
+
+        // The combined-result buffer is waited before the gather, which reads this core's copy and,
+        // over the NOC, the copies held by the other all-to-all workers. That gather finishes at the
+        // read barrier above; the multicast that follows sends the global buffer, not this one, and
+        // does not run at all for a single block. Nothing reads this buffer after the barrier, so
+        // pop the waited count here.
+        dfb_ex_obj.pop_front(static_cast<uint16_t>(num_tiles_per_worker * num_tiles_scaler));
     };
 
     // RMSNorm has no mean to reduce, so its buffers are not declared and the call is compiled out.
@@ -308,6 +392,12 @@ void kernel_main() {
     // Welford produces the mean and variance together in the pass above, so it has no separate
     // variance reduction and those buffers are not declared either.
 #ifndef USE_WELFORD
+#ifdef TWO_STAGE_REDUCE
     global_reduce_sender(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2, 1);
+#else
+    // A single-stage reduce has no first-stage result, so ex2 does not exist. The argument goes unused;
+    // ex2pe stands in for it, as ex does in the E[x] call above.
+    global_reduce_sender(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2pe, 1);
+#endif
 #endif
 }

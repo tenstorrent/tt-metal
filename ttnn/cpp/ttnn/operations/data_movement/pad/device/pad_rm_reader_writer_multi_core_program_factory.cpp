@@ -4,13 +4,12 @@
 
 #include "pad_rm_reader_writer_multi_core_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
@@ -234,11 +233,11 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
     [[maybe_unused]] int32_t src_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * a.element_size();
     int32_t dst_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * output.element_size();
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t dfb_npages = 16;  // multibuffering for perf
     // uint32_t dfb_npages = 1; // multibuffering for perf
-    uint32_t dfb_page_alignment = std::max(tt::constants::TILE_WIDTH, a.buffer()->alignment());
+    uint32_t dfb_page_alignment = std::max(tt::constants::TILE_WIDTH, a.mesh_buffer().alignment());
     uint32_t dfb_pagesize =
         static_cast<uint32_t>(std::ceil((float)dst_nbytes_per_core_w / dfb_page_alignment)) * dfb_page_alignment;
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -298,7 +297,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                      "num_local_unpadded_Y",
                      "num_local_W"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -331,7 +330,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                      "dst_stick_offset",
                      "num_local_W"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     KernelRunArgs reader_run_args{.kernel = RM_MC_READER};

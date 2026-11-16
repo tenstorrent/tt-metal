@@ -7,8 +7,9 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -23,7 +24,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -64,10 +64,10 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         input_tensor.dtype());
 
     const ttnn::PadValue& fill_value = operation_attributes.fill_value;
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input buffer should be allocated on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input buffer should be allocated on device!");
 
     const std::uint32_t input_element_size_bytes = detail::data_type_to_size.at(input_tensor.dtype());
     const std::uint32_t tile_bytes = tt::tile_size(cb_data_format);
@@ -101,6 +101,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const std::optional<CoreRangeSet>& sub_core_grids = operation_attributes.sub_core_grids;
 
     // Unified border-tile split across all slices.
     //   right_slice_stride  = rows per slice in the right block (H_tiles-1 if both pads, else H_tiles).
@@ -118,7 +119,8 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_work_per_core_group_1, num_work_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_work);
+            sub_core_grids.has_value() ? tt::tt_metal::split_work_to_cores(*sub_core_grids, total_work)
+                                       : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_work);
     const std::uint32_t g1_numcores = core_group_1.num_cores();
 
     // ---- Named resources ----
@@ -186,7 +188,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_right", "num_right", "start_bottom", "num_bottom", "start_corner", "num_corner"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     reader_spec.compiler_options.defines = fill_defines;
 
@@ -213,7 +215,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"start_right", "num_right", "start_bottom", "num_bottom", "start_corner", "num_corner"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     writer_spec.compiler_options.defines = mask_defines;
 
@@ -230,7 +232,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
             .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::CONSUMER});
     }
 
-    ComputeGen1Config compute_hw{};
+    ComputeHardwareConfig compute_hw{};
     compute_hw.enable_32_bit_dest = need_fp32_dest_acc;
     if (is_fp32) {
         // Match legacy UnpackToDestFp32 on the FP32 DFBs the compute kernel consumes.
@@ -270,7 +272,15 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     // Each core's global range [work_start, work_start + num_work) is intersected with the three
     // global blocks to produce per-phase (start, num) pairs. Phases with num==0 are skipped in the
     // kernels.
-    const std::vector<CoreCoord> cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
+    std::vector<CoreCoord> cores;
+    if (sub_core_grids.has_value()) {
+        // The loop gives the first g1_numcores cores the group-1 share.
+        cores = corerange_to_cores(core_group_1);
+        const std::vector<CoreCoord> group_2_cores = corerange_to_cores(core_group_2);
+        cores.insert(cores.end(), group_2_cores.begin(), group_2_cores.end());
+    } else {
+        cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
+    }
     KernelRunArgs reader_run{.kernel = READER};
     KernelRunArgs writer_run{.kernel = WRITER};
     KernelRunArgs compute_run{.kernel = COMPUTE};
@@ -578,7 +588,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
                 {{"W_tiles", W_tiles}, {"has_right_pad", key.has_right_pad}, {"elem_size", input_element_size_bytes}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col"}},
-            .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         };
 
         // Writer.
@@ -606,7 +616,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             .runtime_arg_schema =
                 {.runtime_arg_names =
                      {"shard_H_tiles", "has_bottom_pad_core", "num_work", "local_right_col", "has_right_pad_core"}},
-            .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
         writer_spec.compiler_options.defines = mask_defines;
 
@@ -626,7 +636,7 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
             compute_dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::CONSUMER});
         }
-        ComputeGen1Config compute_hw{};
+        ComputeHardwareConfig compute_hw{};
         compute_hw.enable_32_bit_dest = need_fp32_dest_acc;
         if (is_fp32) {
             compute_hw.unpack_modes.insert({DATA_IN, UnpackMode::UnpackToDest});

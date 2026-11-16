@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_sdpa_custom_mm_reuse_dest_srcb.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK SDPA_CUSTOM_MM_REUSE_DEST_SRCB
@@ -23,6 +24,7 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
     const std::uint32_t operandB,
     const std::uint32_t transpose = 0,
     const std::uint32_t kt_dim = 1) {
+    SAN_HOOK(unsupported());
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
@@ -54,6 +56,7 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     bool signal_output = false) {
+    SAN_HOOK(unsupported());
     _llk_math_sdpa_custom_mm_reuse_dest_srcb_<output_granularity, input_granularity>(
         src_index, dst_index, transpose, kt_dim, nt_dim, signal_output);
 }

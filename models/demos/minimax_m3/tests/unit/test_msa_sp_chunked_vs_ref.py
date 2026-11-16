@@ -6,14 +6,14 @@
 The real chunked-prefill case: chunk 0 (5120) is already processed/cached; chunk 1 (5120) arrives and
 its tokens must be able to "talk" to chunk-0's cached tokens (if the indexer's top-k selects them). So:
   - query / index_q = CHUNK 1 only (5120), SP-sharded 640 rows/device.
-  - K / V / index_k = the FULL accumulated context chunk0+chunk1 (10240), SP-sharded, AllGathered to full.
+  - K / V / index_k = the FULL accumulated context chunk0+chunk1 (10240), SP-sharded contiguous, gathered
+    to full by high_bw_all_gather (msa_sp_attention_nocache's exact-size gather into the persistent buffer).
   - per-device causal offset = cached_len(5120) + rank*640, so device r's rows sit at their true global
     positions and may causally see ALL of chunk 0 + their prefix of chunk 1.
 T=10240 -> 80 blocks, top-16 => real sparsity AND genuine cross-chunk selection (cached blocks reachable).
 
-Validated differentially against the golden gather-everything path (msa_sp_attention_gather_all, golden-validated
-in test_msa_sp_vs_ref): identical chunk-1 output whether the indexer ran on the full chunk-1 query with
-uniform chunk_start=cached_len, or on each device's 640-row shard with per-device chunk_offset.
+Smoke only (finite, right shape, non-degenerate); the exact-PCC coverage of the cross-chunk read is
+test_msa_sp_cache_read_vs_ref (block-cyclic cache read vs the reference read).
 """
 
 import pytest
@@ -90,9 +90,9 @@ def test_msa_sp_chunked(mesh_device, device_params, chunk_local, n_prior, reset_
     out = torch.cat(groups, dim=1)  # [1, NQ, chunk, HD]
 
     # SMOKE: chunk-1 over cached chunk-0 runs end-to-end at SP=8xTP=4 with non-zero cached_len -> finite,
-    # right-shape, non-degenerate. (Exact-PCC golden deferred: the gather-everything golden is incompatible
-    # with the merged op; MSA compute is covered by test_msa_layer_vs_ref real-weights PCC 0.9994, and the
-    # cluster_axis per-device causality by test_msa_sp_sharded. Full multi-chunk PCC is a follow-up.)
+    # right-shape, non-degenerate. MSA compute is covered by test_msa_layer_vs_ref (real weights), the
+    # cluster_axis per-device causality by test_msa_sp_sharded, and the block-cyclic cache read exact-PCC by
+    # test_msa_sp_cache_read_vs_ref.
     assert out.shape == (1, NQ, chunk, HEAD_DIM), f"bad output shape {tuple(out.shape)}"
     assert bool(torch.isfinite(out).all()), "chunked MSA output has non-finite values"
     assert out.std().item() > 1e-3, f"chunked MSA output degenerate (std={out.std().item():.2e})"

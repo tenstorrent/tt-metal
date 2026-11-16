@@ -5,8 +5,8 @@
 #include <limits>
 
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -20,7 +20,6 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& out = output.mesh_tensor();
@@ -189,7 +188,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
             {
                 .runtime_arg_names = {"input_is_dram", "num_cols_per_core", "tile_offset", "Ht", "Wt", "origin_h"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -214,7 +213,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
             {
                 .runtime_arg_names = {"output_is_dram", "num_cols_per_core", "tile_offset"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -225,19 +224,20 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
     if (p == 0.0f) {
         compute_defines["REDUCE_OP"] = "PoolType::SUM";
-        compute_defines["IS_ZERO"] = "1";
     } else {
         compute_defines["REDUCE_OP"] = "PoolType::MAX";
-        if (p == -std::numeric_limits<float>::infinity()) {
-            compute_defines["MINUS_INF"] = "1";
-        }
     }
+
+    const KernelSpec::CompileTimeArgs compute_compile_time_args{
+        {"is_zero", static_cast<uint32_t>(p == 0.0f)},
+        {"minus_inf", static_cast<uint32_t>(p == -std::numeric_limits<float>::infinity())},
+    };
 
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_h/kernels/"
         "moreh_norm_h_kernel.cpp";
 
-    auto compute_hw_config = ttnn::to_compute_hardware_config(arch, operation_attributes.compute_kernel_config);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     // The legacy config set UnpackToDestMode::Default for every CB index; Default is UnpackToSrc.
     // An explicit entry is *required* for any Float32 DFB the compute kernel consumes while
     // enable_32_bit_dest (= fp32_dest_acc_en) is set. That is reachable two independent ways here:
@@ -245,7 +245,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
     // input dtype is float32. Naming every consumed DFB covers both without a dtype-dependent branch,
     // and reproduces the legacy all-Default vector byte for byte. `output` is producer-only on
     // compute, so it takes no entry.
-    std::get<ComputeGen1Config>(compute_hw_config).unpack_modes = {
+    compute_hw_config.unpack_modes = {
         {INPUT_DFB, UnpackMode::UnpackToSrc},
         {ONE_DFB, UnpackMode::UnpackToSrc},
         {MASK_H_DFB, UnpackMode::UnpackToSrc},
@@ -326,6 +326,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryHOthe
                         .endpoint_type = DFBEndpointType::CONSUMER,
                     },
                 },
+            .compile_time_args = compute_compile_time_args,
             .runtime_arg_schema =
                 {
                     .runtime_arg_names = {"num_cols_per_core", "Ht", "origin_h"},

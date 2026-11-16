@@ -103,13 +103,14 @@ ReduceScatterDirectGeometry reduce_scatter_direct_geometry(
         inner_pages *= dim_pages(d);
     }
 
-    const uint32_t num_input_pages = input_tensor.buffer()->num_pages();
+    const uint32_t num_input_pages = input_tensor.mesh_buffer().num_pages();
     TT_FATAL(
         num_input_pages % num_devices == 0, "input pages {} must divide num_devices {}", num_input_pages, num_devices);
 
-    const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
+    const uint32_t single_tile_bytes = input_tensor.mesh_buffer().page_size();
     const uint32_t interm_tiles_per_packet =
-        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes()) / single_tile_bytes;
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device())) /
+        single_tile_bytes;
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
     const uint32_t tile_granularity = std::min(4u * std::min(4u, interm_tiles_per_packet), max_dst_size);
 
@@ -204,8 +205,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterMinimalDirectProgramFactory::creat
     // Parked on the descriptor's `semaphores` slot, which keeps them alive for the cached workload's
     // lifetime -- the kernels take their addresses as runtime args. Order is the contract in
     // SemaphoreIndex: arrivals [0..N-1], then reader_gen, writer_gen, compute_gen, init_sync.
-    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     auto& sems = workload_descriptor.semaphores;
     sems.reserve(SemaphoreIndex::count(operation_attributes.num_devices));
     for (size_t s = 0; s < SemaphoreIndex::count(operation_attributes.num_devices); ++s) {
@@ -332,12 +332,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
     if (arrivals_in_cb) {
         TT_FATAL(
-            staging.buffer()->aligned_page_size() * staging.buffer()->shard_spec().shape()[0] ==
+            staging.mesh_buffer().aligned_page_size() * staging.buffer()->shard_spec().shape()[0] ==
                 cb_reduce_pages * cb_page_size,
             "sharded staging shard ({} rows x {} B) must be exactly the reduce CB ({} tiles x {} B); the "
             "staging spec and the factory disagree on the shard geometry",
             staging.buffer()->shard_spec().shape()[0],
-            staging.buffer()->aligned_page_size(),
+            staging.mesh_buffer().aligned_page_size(),
             cb_reduce_pages,
             cb_page_size);
     }
@@ -634,6 +634,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         // onto writer_rt.
         tt::tt_metal::KernelHandle writer_kernel_handle = writer_kernel_id;
         append_routing_plane_connection_manager_rt_args(
+            *mesh_device,
             sender_fabric_node_id,
             dst_nodes,
             link_indices,

@@ -30,7 +30,8 @@ In Claude Code, `/perf-regression-check perf_math_matmul` (or "compare perf of
 | `--baseline <ref>` | `merge-base origin/main HEAD` | what to compare against |
 | `--current <ref>` | `HEAD` | what to judge |
 | `--iterations <N>` | `3` | sweeps per side; median-vs-median |
-| `--threshold <T>` | `0.05` | 5% — flagged in both directions |
+| `--threshold <T>` | `0.02` | 2% — flagged in both directions |
+| `--min-cycles <N>` | `30` | a point must ALSO move this many cycles; `0` disables |
 | `--speed-of-light` | off | compile-time-parameter build, applied to both sides |
 | `--refresh` | off | ignore cached runs and re-measure |
 | `--dry-run` | off | resolve refs, report the plan, measure nothing |
@@ -38,7 +39,12 @@ In Claude Code, `/perf-regression-check perf_math_matmul` (or "compare perf of
 
 Env knobs: `PERF_COMPARE_HOME` (cache + reports, default `~/.cache/tt-llk-perf-compare`),
 `WORK_ROOT` (worktrees and build trees, default `/tmp/tt-llk-perf-compare`), `PRODUCER_JOBS`,
-`CONSUMER_JOBS`, `RESET_BETWEEN_RUNS=1`, `SPARSE_PATHS`, `ALLOW_CROSS_HOST=1`.
+`CONSUMER_JOBS`, `RESET_BETWEEN_RUNS=1`, `SPARSE_PATHS`, `ALLOW_CROSS_HOST=1`,
+`TT_LLK_DISABLE_ASSERTS` (default `1`, as Wormhole/Blackhole CI perf builds,
+cache suffix `-noassert`; `0` keeps `LLK_ASSERT` on both sides, suffix
+`-assert`). With asserts off, a commit whose `test_config.py` predates the
+asserts toggle is refused; use a newer baseline or compare both sides with
+asserts.
 
 ## Output
 - `regression_report.md` — verdict, top regressions, top improvements, new points.
@@ -54,6 +60,12 @@ Env knobs: `PERF_COMPARE_HOME` (cache + reports, default `~/.cache/tt-llk-perf-c
   regressions).
 - **Noise:** deltas right at the threshold can be measurement noise. Raise `--iterations` — a
   re-run reuses the sweeps you already paid for and only measures the new ones.
+- **Deterministic deltas:** if every iteration of a side gives identical cycles, more
+  iterations change nothing. On Wormhole a build with unchanged measured code can still sit
+  ±10% away because the kernel layout moved. Prove whether the measured code changed with the
+  "Layout sensitivity" steps in `SKILL.md` before calling it a regression.
+- **Accounting:** a schema version or `tile_cnt` change makes points incomparable; it is not a
+  regression (`../perf-test/references/perf-facts.md`).
 
 ## Cost
 A full sweep per side per iteration, plus a build per commit — for a test like
@@ -65,5 +77,10 @@ B-vs-C) only pays for the new commit.
 For each side: a sparse `git worktree` at that commit (tt-llk plus the trees a kernel build
 includes from outside it), a private build tree, then N producer/consumer sweeps — interleaved
 between the two sides so thermals and other tenants bias neither. The two sets of CSVs go to
-`perf_regression_compare.py`, which reads the raw `perf_data` CSVs directly (no Parquet, no
-database — works on any commit, merged or not) and reports median-vs-median per point.
+`perf/regression_compare.py` — the same module the PR gate runs — which reads the raw
+`perf_data` CSVs directly (no Parquet, no database — works on any commit, merged or not) and
+reports median-vs-median per point.
+
+A point is a regression only when it is **both** more than `--threshold` slower **and** more
+than `--min-cycles` slower. Either clause alone produces false positives: percentage on small
+markers, cycles on large ones.

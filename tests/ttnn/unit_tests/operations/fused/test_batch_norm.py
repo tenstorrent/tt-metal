@@ -11,39 +11,44 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
     compare_results_batch_norm,
 )
 from itertools import product
-from models.common.utility_functions import comp_pcc, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
 pytestmark = pytest.mark.use_module_device
 
+BATCH_NORM_TESTS_SHAPES = [
+    torch.Size([5, 8, 32, 32]),
+    torch.Size([7, 3, 23, 23]),
+    torch.Size([3, 5, 64, 120]),
+    # C=129: past CB depth (2) on WH (64 cores); BH drain coverage comes from
+    # test_batch_norm_running_statistics_drain which derives C from the device grid.
+    torch.Size([1, 129, 14, 14]),
+    torch.Size([1, 8, 24, 42]),
+]
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([5, 8, 32, 32]),
-        torch.Size([7, 3, 23, 23]),
-        torch.Size([3, 5, 64, 120]),
-        # C=129: past CB depth (2) on WH (64 cores); BH drain coverage comes from
-        # test_batch_norm_running_statistics_drain which derives C from the device grid.
-        torch.Size([1, 129, 14, 14]),
-        torch.Size([1, 8, 24, 42]),
-    ],
-)
-@pytest.mark.parametrize(
-    "check_mean, check_var",
-    [
-        (False, False),
-        (True, False),
-        (False, True),
-        (True, True),
-    ],
-)
+# Evaluation mode needs both running statistics. The other evaluation-mode combinations used to be
+# collected and xfailed before the op was called, so they are left out.
+BATCH_NORM_STAT_MODES = [
+    (training, check_mean, check_var)
+    for training in (True, False)
+    for check_mean, check_var in ((False, False), (True, False), (False, True), (True, True))
+    if training or (check_mean and check_var)
+]
+
+# eps and momentum reach the kernels only as runtime-arg values, so every pair runs the same kernels.
+# Sanity runs one pair; the other pairs run nightly (#62486).
+BATCH_NORM_TESTS_EPS_MOMENTUM = [(1.0, 0.0), (1.0, 0.1), (1e-05, 0.0), (1e-05, 0.1)]
+BATCH_NORM_TESTS_SANITY_EPS_MOMENTUM = [(1e-05, 0.1)]
+BATCH_NORM_EPS_MOMENTUM = [(1.0, 0.0), (1.0, 0.5), (2.34, 0.0), (2.34, 0.5)]
+BATCH_NORM_SANITY_EPS_MOMENTUM = [(2.34, 0.5)]
+
+
+@pytest.mark.parametrize("input_shapes", BATCH_NORM_TESTS_SHAPES)
+@pytest.mark.parametrize("training, check_mean, check_var", BATCH_NORM_STAT_MODES)
 @pytest.mark.parametrize("weight", [True, False])
-@pytest.mark.parametrize("training", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
-@pytest.mark.parametrize("eps", [1.0, 1e-05])
-@pytest.mark.parametrize("momentum", [0.0, 0.1])
+@pytest.mark.parametrize("eps, momentum", BATCH_NORM_TESTS_SANITY_EPS_MOMENTUM)
 @pytest.mark.parametrize("testing_dtype", ["float32", "bfloat16"])
 def test_batch_norm_tests(
     input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype
@@ -260,32 +265,19 @@ def test_batch_norm_fp32(
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=1e-3, atol=1e-6, frobenius_threshold=0.05)
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([5, 8, 32, 32]),
-        torch.Size([7, 3, 23, 23]),
-        torch.Size([3, 5, 64, 120]),
-        torch.Size([1, 8, 24, 42]),
-    ],
-)
-@pytest.mark.parametrize(
-    "training, check_mean, check_var",
-    [
-        (True, True, True),
-        (True, True, False),
-        (True, False, True),
-        (True, False, False),
-        (False, False, False),  # xfail case
-        (False, True, False),  # xfail case
-        (False, False, True),  # xfail case
-        (False, True, True),
-    ],
-)
+BATCH_NORM_SHAPES = [
+    torch.Size([5, 8, 32, 32]),
+    torch.Size([7, 3, 23, 23]),
+    torch.Size([3, 5, 64, 120]),
+    torch.Size([1, 8, 24, 42]),
+]
+
+
+@pytest.mark.parametrize("input_shapes", BATCH_NORM_SHAPES)
+@pytest.mark.parametrize("training, check_mean, check_var", BATCH_NORM_STAT_MODES)
 @pytest.mark.parametrize("weight", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
-@pytest.mark.parametrize("eps", [1.0, 2.34])
-@pytest.mark.parametrize("momentum", [0.0, 0.5])
+@pytest.mark.parametrize("eps, momentum", BATCH_NORM_SANITY_EPS_MOMENTUM)
 def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias, eps, momentum, device):
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
@@ -438,6 +430,7 @@ def test_batch_norm_qid_Default(input_shapes, device):
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -458,6 +451,7 @@ def test_batch_norm_qid(input_shapes, device):
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -1240,3 +1234,62 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
             frobenius_threshold=frobenius_threshold,
             check_pcc=False,
         )
+
+
+def test_batch_norm_running_var_bessel_correction(device):
+    """
+    Test that ttnn.batch_norm training mode applies Bessel's correction factor m / (m - 1)
+    to running_var to match PyTorch's unbiased estimator update (correction=1).
+    Without Bessel's correction, this test fails with relative error ~5% when rtol=0.01.
+    """
+    input_shape = torch.Size([2, 1, 2, 2])
+    channels = input_shape[1]
+    momentum = 0.1
+    eps = 1e-5
+
+    in_data = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]], [[[5.0, 6.0], [7.0, 8.0]]]], dtype=torch.float32)
+    mean_data = torch.zeros(channels, dtype=torch.float32)
+    var_data = torch.ones(channels, dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+    mean_tensor = ttnn.from_torch(
+        mean_data.view(1, channels, 1, 1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    var_tensor = ttnn.from_torch(
+        var_data.view(1, channels, 1, 1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    # PyTorch reference
+    ref_mean = mean_data.clone()
+    ref_var = var_data.clone()
+    torch.nn.functional.batch_norm(
+        input=in_data,
+        running_mean=ref_mean,
+        running_var=ref_var,
+        training=True,
+        eps=eps,
+        momentum=momentum,
+    )
+
+    # TTNN
+    ttnn.batch_norm(
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        training=True,
+        eps=eps,
+        momentum=momentum,
+    )
+
+    tt_updated_var = ttnn.to_torch(var_tensor).view(-1)
+
+    # Without Bessel's correction, tt_updated_var is 1.425 while ref_var is 1.500 (5.0% error).
+    # With Bessel's correction, tt_updated_var matches ref_var (1.500).
+    assert_numeric_metrics(
+        ref_var,
+        tt_updated_var,
+        rtol=0.01,
+        atol=1e-3,
+        check_pcc=False,
+    )

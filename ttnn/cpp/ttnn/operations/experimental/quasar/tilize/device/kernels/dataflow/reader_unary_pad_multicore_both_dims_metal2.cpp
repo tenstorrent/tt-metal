@@ -22,6 +22,7 @@
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 using tt::data_movement::common::tt_memmove;
 
@@ -120,7 +121,9 @@ void kernel_main() {
             // l1_write_addr itself, so the addressing is unchanged -- get_ptr() only exposes the start
             // of the run.
             const auto in0_lock = cb_in0.scoped_write_lock(single_block_size * has_rows);
-            uint32_t l1_write_addr = static_cast<uint32_t>(in0_lock.get_ptr().get_address());
+            // Raw address: the walk does alignment math on it and feeds tt_memmove / the raw-address fill helper.
+            uint32_t l1_write_addr =
+                static_cast<uint32_t>(local_mem::detail::AddressAccess::address(in0_lock.get_ptr()));
 
             for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
                 uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
@@ -146,8 +149,8 @@ void kernel_main() {
                     }
                 } else {
                     // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
-                    // buffer. The aligned-down source is a full NoC address, so it is supplied directly via
-                    // UnicastEndpoint (decomposed into x/y/local addr; NOC_XY_ADDR repacks it unchanged).
+                    // buffer. The aligned-down source is already a full NoC address, so it is forwarded opaquely via
+                    // PrecomposedUnicastEndpoint - never decomposed or repacked.
                     const uint64_t aligned_src_noc_addr = (src_noc_addr + (uint64_t)start_column_id) & dram_align_mask;
                     {
                         // Separate lock for the staging DFB: it covers the NOC read that fills the scratch and
@@ -158,12 +161,10 @@ void kernel_main() {
                         const auto stage_lock = cb_in1.scoped_write_lock(1);
                         CoreLocalMem<uint32_t> temp_dst(temp_addr);
                         noc.async_read(
-                            UnicastEndpoint{},
+                            PrecomposedUnicastEndpoint{},
                             temp_dst,
                             width_size + dram_alignment,
-                            {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(aligned_src_noc_addr),
-                             .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(aligned_src_noc_addr),
-                             .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(aligned_src_noc_addr)},
+                            {.noc_addr = aligned_src_noc_addr},
                             {.offset_bytes = 0});
 
                         // Block before copying data from tmp to cb buffer

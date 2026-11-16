@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <set>
 #include <map>
+#include <optional>
+#include <utility>
 #include <unordered_set>
 #include <fstream>
 
@@ -28,13 +30,15 @@ void check_instance_count_by_type(const MeshGraphDescriptor& desc, const std::st
     EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " " << type << " instances";
 }
 
-void check_instance_exists_by_name(const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count = 1) {
+void check_instance_exists_by_name(
+    const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count = 1) {
     const auto& ids = desc.instances_by_name(name);
-    EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " instance(s) with name '" << name << "'";
+    EXPECT_EQ(ids.size(), expected_count)
+        << "Should have exactly " << expected_count << " instance(s) with name '" << name << "'";
 }
 
 void check_instance_type(const MeshGraphDescriptor& desc, uint32_t global_id, bool should_be_graph) {
-    const auto & inst = desc.get_instance(global_id);
+    const auto& inst = desc.get_instance(global_id);
     if (should_be_graph) {
         EXPECT_TRUE(desc.is_graph(inst)) << "Instance should be graph";
     } else {
@@ -46,32 +50,38 @@ std::set<std::string> get_instance_names_by_type(const MeshGraphDescriptor& desc
     std::set<std::string> names;
     auto ids = desc.instances_by_type(type);
     for (uint32_t id : ids) {
-        const auto & inst = desc.get_instance(id);
+        const auto& inst = desc.get_instance(id);
         names.insert(std::string(inst.name));
     }
     return names;
 }
 
-void check_instances_have_names(const MeshGraphDescriptor& desc, const std::string& type, const std::vector<std::string>& expected_names) {
+void check_instances_have_names(
+    const MeshGraphDescriptor& desc, const std::string& type, const std::vector<std::string>& expected_names) {
     auto names = get_instance_names_by_type(desc, type);
     for (const auto& expected_name : expected_names) {
         EXPECT_TRUE(names.contains(expected_name)) << "Should have " << type << " instance '" << expected_name << "'";
     }
 }
-void check_sub_instances(const MeshGraphDescriptor& desc, const std::string& name, size_t expected_count, const std::unordered_set<std::string_view>& expected_names) {
+void check_sub_instances(
+    const MeshGraphDescriptor& desc,
+    const std::string& name,
+    size_t expected_count,
+    const std::unordered_set<std::string_view>& expected_names) {
     auto ids = desc.get_instance(desc.instances_by_name(name)[0]).sub_instances;
-    EXPECT_EQ(ids.size(), expected_count) << "Should have exactly " << expected_count << " sub instances with name '" << name << "'";
-    for (const auto & id : ids) {
-        const auto & child = desc.get_instance(id);
-        EXPECT_TRUE(expected_names.contains(child.name))
-            << "Should have sub instance '" << child.name << "'";
+    EXPECT_EQ(ids.size(), expected_count)
+        << "Should have exactly " << expected_count << " sub instances with name '" << name << "'";
+    for (const auto& id : ids) {
+        const auto& child = desc.get_instance(id);
+        EXPECT_TRUE(expected_names.contains(child.name)) << "Should have sub instance '" << child.name << "'";
     }
 }
 
-void expect_hierarchy_names(const MeshGraphDescriptor& desc, const std::string& instance_name, const std::vector<std::string>& expected_names) {
+void expect_hierarchy_names(
+    const MeshGraphDescriptor& desc, const std::string& instance_name, const std::vector<std::string>& expected_names) {
     const auto& ids = desc.instances_by_name(instance_name);
     ASSERT_FALSE(ids.empty()) << "No instance found with name '" << instance_name << "'";
-    const auto & inst = desc.get_instance(ids[0]);
+    const auto& inst = desc.get_instance(ids[0]);
     std::vector<std::string> actual_names;
     actual_names.reserve(inst.hierarchy.size());
     for (auto nid : inst.hierarchy) {
@@ -85,11 +95,10 @@ void check_mesh_devices_simple(
     const MeshGraphDescriptor& desc,
     const std::string& mesh_name,
     size_t expected_devices,
-    const std::vector<uint32_t>& sample_local_ids
-) {
-    const auto & mesh_ids = desc.instances_by_name(mesh_name);
+    const std::vector<uint32_t>& sample_local_ids) {
+    const auto& mesh_ids = desc.instances_by_name(mesh_name);
     ASSERT_EQ(mesh_ids.size(), 1u) << "Expected exactly one instance named '" << mesh_name << "'";
-    const auto & mesh_inst = desc.get_instance(mesh_ids[0]);
+    const auto& mesh_inst = desc.get_instance(mesh_ids[0]);
     ASSERT_TRUE(desc.is_mesh(mesh_inst)) << "'" << mesh_name << "' should be a mesh instance";
 
     EXPECT_EQ(mesh_inst.sub_instances.size(), expected_devices)
@@ -99,7 +108,7 @@ void check_mesh_devices_simple(
         auto it = mesh_inst.sub_instances_local_id_to_global_id.find(local_id);
         ASSERT_TRUE(it != mesh_inst.sub_instances_local_id_to_global_id.end())
             << "Missing device local id " << local_id << " in mesh '" << mesh_name << "'";
-        const auto & dev = desc.get_instance(it->second);
+        const auto& dev = desc.get_instance(it->second);
         EXPECT_EQ(dev.kind, NodeKind::Device);
         EXPECT_EQ(std::string(dev.type), "DEVICE");
         EXPECT_EQ(dev.local_id, local_id);
@@ -120,7 +129,6 @@ void check_connections(
         EXPECT_EQ(connection.parent_instance_id, expected_parent_instance_id);
 
         const auto& global_nodes = connection.nodes;
-
 
         auto dst_nodes = std::vector<GlobalNodeId>(global_nodes.begin() + 1, global_nodes.end());
         for (const auto& node : dst_nodes) {
@@ -158,7 +166,7 @@ std::string single_mesh_proto(const std::string& dim_types) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 }
-}
+}  // namespace
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -357,10 +365,9 @@ TEST(MeshGraphDescriptorTests, InvalidProtoNoMeshDescriptors) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("There must be at least one mesh descriptor"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("There must be at least one mesh descriptor"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
@@ -369,7 +376,7 @@ TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
           # missing name - will cause protobuf parsing issues
           arch: WORMHOLE_B0
           device_topology: {
-            dims: [ 1, 4, 3 ]  # 3D for WORMHOLE_B0 (max 2D)
+            dims: [ 1, 4, 3 ]    # 3D for WORMHOLE_B0 (max 2D)
             dim_types: [ LINE ]  # size mismatch with dims
           }
           channels: { count: 1 }
@@ -381,10 +388,9 @@ TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Mesh descriptor 1 has no name"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Mesh descriptor 1 has no name"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoArchitectureDimLimit) {
@@ -402,10 +408,10 @@ TEST(MeshGraphDescriptorTests, InvalidProtoArchitectureDimLimit) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Architecture devices allow a maximum of 2 dimensions, but 3 were provided (Mesh: M0)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr(
+                "Architecture devices allow a maximum of 2 dimensions, but 3 were provided (Mesh: M0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoDeviceHostDimSizeMismatch) {
@@ -423,10 +429,9 @@ TEST(MeshGraphDescriptorTests, InvalidProtoDeviceHostDimSizeMismatch) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Device and host topology dimensions must be the same size (Mesh: M0)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Device and host topology dimensions must be the same size (Mesh: M0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoMixedArchitectures) {
@@ -452,10 +457,9 @@ TEST(MeshGraphDescriptorTests, InvalidProtoMixedArchitectures) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("All mesh descriptors must have the same architecture"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("All mesh descriptors must have the same architecture"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoExpressConnectionBounds) {
@@ -475,11 +479,10 @@ TEST(MeshGraphDescriptorTests, InvalidProtoExpressConnectionBounds) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Express connection source is out of bounds (Mesh: M0)"),
-                ::testing::HasSubstr("Express connection destination is out of bounds (Mesh: M0)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Express connection source is out of bounds (Mesh: M0)"),
+            ::testing::HasSubstr("Express connection destination is out of bounds (Mesh: M0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidGraphTopologyChannelCount) {
@@ -492,23 +495,22 @@ TEST(MeshGraphDescriptorTests, InvalidGraphTopologyChannelCount) {
           host_topology: { dims: [ 1, 2 ] }
         }
         graph_descriptors: {
-            name: "G0"
-            type: "fabric"
-            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-            graph_topology: {
-                layout_type: ALL_TO_ALL
-                channels: { count: -1 }
-            }
+          name: "G0"
+          type: "fabric"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: -1 }
+          }
         }
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Graph topology channel count must be positive (Graph: G0)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Graph topology channel count must be positive (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidConnectionChannelCount) {
@@ -522,15 +524,15 @@ TEST(MeshGraphDescriptorTests, InvalidConnectionChannelCount) {
         }
 
         graph_descriptors: {
-            name: "G0"
-            type: "fabric"
-            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-            connections: {
-                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-                channels: { count: -1 }
-                directional: false
-            }
+          name: "G0"
+          type: "fabric"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            channels: { count: -1 }
+            directional: false
+          }
         }
 
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
@@ -538,10 +540,9 @@ TEST(MeshGraphDescriptorTests, InvalidConnectionChannelCount) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Connection channel count must be positive (Graph: G0)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Connection channel count must be positive (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneInstance) {
@@ -555,14 +556,14 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneInstance) {
         }
 
         graph_descriptors: {
-            name: "G0"
-            type: "fabric"
-            connections: {
-                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-                channels: { count: 1 }
-                directional: false
-            }
+          name: "G0"
+          type: "fabric"
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            channels: { count: 1 }
+            directional: false
+          }
         }
 
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
@@ -570,10 +571,9 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneInstance) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Graph descriptor must have at least one instance (Graph: G0)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Graph descriptor must have at least one instance (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, GraphMustHaveTypeSpecified) {
@@ -587,12 +587,12 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveTypeSpecified) {
         }
 
         graph_descriptors: {
-            name: "G1"
-            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-            graph_topology: {
-                layout_type: ALL_TO_ALL
-                channels: { count: 1 }
-            }
+          name: "G1"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
@@ -600,10 +600,9 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveTypeSpecified) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Graph descriptor must have a type specified (Graph: G1)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Graph descriptor must have a type specified (Graph: G1)"))));
 }
 
 TEST(MeshGraphDescriptorTests, ConnectionMustHaveAtLeastTwoNodes) {
@@ -617,14 +616,14 @@ TEST(MeshGraphDescriptorTests, ConnectionMustHaveAtLeastTwoNodes) {
         }
 
         graph_descriptors: {
-            name: "G0"
-            type: "fabric"
-            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-            connections: {
-                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-                channels: { count: 1 }
-                directional: false
-            }
+          name: "G0"
+          type: "fabric"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            channels: { count: 1 }
+            directional: false
+          }
         }
 
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
@@ -632,10 +631,9 @@ TEST(MeshGraphDescriptorTests, ConnectionMustHaveAtLeastTwoNodes) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
-                ::testing::HasSubstr("Connection must have at least two nodes (Graph: G0)"))));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Connection must have at least two nodes (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
@@ -696,7 +694,6 @@ TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
     expect_hierarchy_names(desc, "M2", {"G2", "G1"});
     expect_hierarchy_names(desc, "M3", {"G2", "G1"});
     expect_hierarchy_names(desc, "M4", {"G2", "G1"});
-
 
     // Simple device check for one mesh (M2): just count and a few local IDs
     check_mesh_devices_simple(desc, "M2", 8 * 4, {0, 5, 31});
@@ -861,8 +858,10 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
         mesh_descriptors: {
           name: "M0"
           arch: WORMHOLE_B0
-          device_topology: { dims: [ 2, 3 ]
-                             dim_types: [ RING, LINE ] }
+          device_topology: {
+            dims: [ 2, 3 ]
+            dim_types: [ RING, LINE ]
+          }
           channels: { count: 1 }
           host_topology: { dims: [ 2, 3 ] }
           express_connections: { src: 0 dst: 5 }
@@ -881,7 +880,7 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     // Validate exactly one mesh instance and expected device population
     auto mesh_ids = desc.instances_by_type("MESH");
     ASSERT_EQ(mesh_ids.size(), 1);
-    const auto & mesh_inst = desc.get_instance(mesh_ids[0]);
+    const auto& mesh_inst = desc.get_instance(mesh_ids[0]);
     ASSERT_TRUE(desc.is_mesh(mesh_inst));
 
     // 2x3 mesh => 6 devices; sample a few local IDs
@@ -890,24 +889,26 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     // Check intra mesh connections
     const auto& all_connections = desc.connections_by_type("MESH");
 
-    ASSERT_EQ(all_connections.size(), 24);
+    // The RING is on the extent-2 axis, which has no distinct wrap edge, so N/S stay ordinary LINE links:
+    // 7 grid edges x 2 directions + 2 express connections x 2 directions.
+    ASSERT_EQ(all_connections.size(), 18);
 
-    // Layout should look like this with wrapping in x direction and express connections
+    // Layout (no wrap on the 2-row axis) with express connections
     // 0 1 2
     // 3 4 5
     auto device_0 = desc.instances_by_name("D0")[0];
     auto connections = desc.connections_by_source_device_id(device_0);
-    ASSERT_EQ(connections.size(), 4);
+    ASSERT_EQ(connections.size(), 3);
     check_connections(desc, connections, {1, 3, 5}, 1u, mesh_ids[0], {"D1", "D3", "D5"});
 
     auto device_1 = desc.instances_by_name("D1")[0];
     connections = desc.connections_by_source_device_id(device_1);
-    ASSERT_EQ(connections.size(), 5);
+    ASSERT_EQ(connections.size(), 4);
     check_connections(desc, connections, {2, 4, 0, 5}, 1u, mesh_ids[0], {"D0", "D2", "D4", "D5"});
 
     auto device_2 = desc.instances_by_name("D2")[0];
     connections = desc.connections_by_source_device_id(device_2);
-    ASSERT_EQ(connections.size(), 3);
+    ASSERT_EQ(connections.size(), 2);
     check_connections(desc, connections, {1, 5}, 1u, mesh_ids[0], {"D1", "D5"});
 
     // Test all_names() returns unique names (as unordered_set)
@@ -945,7 +946,6 @@ TEST(MeshGraphDescriptorTests, TestIntraMeshConnections) {
     }
 }
 
-
 TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
     std::string text_proto = R"proto(
         mesh_descriptors: {
@@ -962,7 +962,10 @@ TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
           type: "POD"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         graph_descriptors: {
@@ -970,7 +973,10 @@ TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
           type: "PODX"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 2 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 3 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         # Cluster graph that mixes two POD graphs of different types
@@ -979,7 +985,10 @@ TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
           type: "CLUSTER"
           instances: { graph: { graph_descriptor: "G_POD_A" graph_id: 0 } }
           instances: { graph: { graph_descriptor: "G_POD_B" graph_id: 1 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         top_level_instance: { graph: { graph_descriptor: "G_CLUSTER" graph_id: 0 } }
@@ -987,13 +996,11 @@ TEST(MeshGraphDescriptorTests, GraphInstancesWithDifferentGraphTypesError) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Graph instance type"),
-                ::testing::HasSubstr("does not match graph descriptor child type"),
-                ::testing::HasSubstr("POD"),
-                ::testing::HasSubstr("PODX")
-            )));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Graph instance type"),
+            ::testing::HasSubstr("does not match graph descriptor child type"),
+            ::testing::HasSubstr("POD"),
+            ::testing::HasSubstr("PODX"))));
 }
 
 TEST(MeshGraphDescriptorTests, DuplicateInstanceIdsInGraphError) {
@@ -1012,7 +1019,10 @@ TEST(MeshGraphDescriptorTests, DuplicateInstanceIdsInGraphError) {
           # Duplicate mesh_id (0) for two instances
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         top_level_instance: { graph: { graph_descriptor: "G_POD" graph_id: 0 } }
@@ -1020,12 +1030,10 @@ TEST(MeshGraphDescriptorTests, DuplicateInstanceIdsInGraphError) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Graph instance id"),
-                ::testing::HasSubstr("already exists in this graph"),
-                ::testing::HasSubstr("0")
-            )));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Graph instance id"),
+            ::testing::HasSubstr("already exists in this graph"),
+            ::testing::HasSubstr("0"))));
 }
 
 TEST(MeshGraphDescriptorTests, MissingDescriptorReferencesInInstancesError) {
@@ -1045,9 +1053,7 @@ TEST(MeshGraphDescriptorTests, MissingDescriptorReferencesInInstancesError) {
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto_missing_graph); }),
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Graph descriptor G_MISSING not found in instance")
-            )));
+            ::testing::AllOf(::testing::HasSubstr("Graph descriptor G_MISSING not found in instance"))));
 
     // Case 2: Missing mesh descriptor referenced inside a graph descriptor instance
     std::string text_proto_missing_mesh = R"proto(
@@ -1063,7 +1069,10 @@ TEST(MeshGraphDescriptorTests, MissingDescriptorReferencesInInstancesError) {
           name: "G_POD"
           type: "POD"
           instances: { mesh: { mesh_descriptor: "M_MISSING" mesh_id: 0 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         top_level_instance: { graph: { graph_descriptor: "G_POD" graph_id: 0 } }
@@ -1072,9 +1081,7 @@ TEST(MeshGraphDescriptorTests, MissingDescriptorReferencesInInstancesError) {
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto_missing_mesh); }),
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Mesh descriptor M_MISSING not found in instance")
-            )));
+            ::testing::AllOf(::testing::HasSubstr("Mesh descriptor M_MISSING not found in instance"))));
 }
 
 TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevelInvalid) {
@@ -1094,10 +1101,10 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevelInvalid) {
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
           connections: {
             nodes: {
-              mesh: { mesh_descriptor: "M0" mesh_id: 0 } # << Mesh Level
+              mesh: { mesh_descriptor: "M0" mesh_id: 0 }  # << Mesh Level
             }
             nodes: {
-              mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } # << One level down
+              mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 }  # << One level down
             }
             channels: { count: 1 }
             directional: false
@@ -1108,10 +1115,8 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevelInvalid) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Graph descriptor G0 connections must reference instances within same type")
-            )));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Graph descriptor G0 connections must reference instances within same type"))));
 }
 
 TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevelInvalidChild) {
@@ -1131,10 +1136,10 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevelInvalidChil
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
           connections: {
             nodes: {
-              graph: { graph_descriptor: "G0" graph_id: 0 } #<< These are wrong
+              graph: { graph_descriptor: "G0" graph_id: 0 }  #<< These are wrong
             }
             nodes: {
-              graph: { graph_descriptor: "G0" graph_id: 1} #<< These are wrong
+              graph: { graph_descriptor: "G0" graph_id: 1 }  #<< These are wrong
             }
             channels: { count: 1 }
             directional: false
@@ -1146,9 +1151,7 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevelInvalidChil
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Graph descriptor G0 does not match referenced instance M0")
-            )));
+            ::testing::AllOf(::testing::HasSubstr("Graph descriptor G0 does not match referenced instance M0"))));
 }
 
 TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevel) {
@@ -1167,12 +1170,8 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevel) {
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
           connections: {
-            nodes: {
-              mesh: { mesh_descriptor: "M0" mesh_id: 0 }
-            }
-            nodes: {
-              mesh: { mesh_descriptor: "M0" mesh_id: 1 }
-            }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
             channels: { count: 1 }
             directional: false
           }
@@ -1189,18 +1188,16 @@ TEST(MeshGraphDescriptorTests, IntermeshConnectionsExplicitMultiLevel) {
           connections: {
             nodes: {
               graph: {
-                graph_descriptor: "G0" graph_id: 0
-                sub_ref: {
-                  mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 }
-                }
+                graph_descriptor: "G0"
+                graph_id: 0
+                sub_ref: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
               }
             }
             nodes: {
               graph: {
-                graph_descriptor: "G0" graph_id: 1
-                sub_ref: {
-                  mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 }
-                }
+                graph_descriptor: "G0"
+                graph_id: 1
+                sub_ref: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
               }
             }
             channels: { count: 2 }
@@ -1306,14 +1303,20 @@ TEST(MeshGraphDescriptorTests, DuplicateGraphDescriptorTypeInHierarchyError) {
           name: "G_POD_CHILD"
           type: "POD"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         graph_descriptors: {
           name: "G_POD_PARENT"
           type: "POD"
           instances: { graph: { graph_descriptor: "G_POD_CHILD" graph_id: 0 } }
-          graph_topology: { layout_type: ALL_TO_ALL channels: { count: 1 } }
+          graph_topology: {
+            layout_type: ALL_TO_ALL
+            channels: { count: 1 }
+          }
         }
 
         top_level_instance: { graph: { graph_descriptor: "G_POD_PARENT" graph_id: 0 } }
@@ -1321,12 +1324,10 @@ TEST(MeshGraphDescriptorTests, DuplicateGraphDescriptorTypeInHierarchyError) {
 
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::AllOf(
-                ::testing::HasSubstr("Graph descriptor type"),
-                ::testing::HasSubstr("already exists in hierarchy"),
-                ::testing::HasSubstr("POD")
-            )));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Graph descriptor type"),
+            ::testing::HasSubstr("already exists in hierarchy"),
+            ::testing::HasSubstr("POD"))));
 }
 
 TEST(MeshGraphDescriptorTests, AllToAllGraphTopology) {
@@ -2541,6 +2542,611 @@ TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
         << "First MGD's MESH connection index must survive vector reallocation";
     EXPECT_FALSE(mgds[1].connections_by_type("FABRIC").empty())
         << "Dual MGD should retain FABRIC connections after emplace";
+}
+
+// express_links expands into the expected intra-mesh Z edges on the 8x4 [RING, RING] descriptor.
+TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 32u);  // 8x4 = 32 chips
+
+    // wrap: LINE on the step-4 pattern keeps only block [2,5]; the wrapping block is dropped even
+    // though the row axis is RING. Row 0 <-> row 7 is the ordinary wrap, not an express link. chip = row*4 + col.
+    const std::vector<std::pair<int, int>> expected_express_edges = {{8, 20}, {9, 21}, {10, 22}, {11, 23}};
+
+    for (const auto& [a, b] : expected_express_edges) {
+        EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
+        EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
+        if (m0[a].contains(b) && m0[b].contains(a)) {
+            EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+        }
+    }
+
+    EXPECT_EQ(m0[4].count(24), 0u);  // row 1 is not a block endpoint, so it gets no express link
+
+    // chip 8 keeps its 4 base-grid neighbors plus the one express edge
+    EXPECT_EQ(m0[8].count(4), 1u);
+    EXPECT_EQ(m0[8].count(12), 1u);
+    EXPECT_EQ(m0[8].count(9), 1u);
+    EXPECT_EQ(m0[8].count(11), 1u);
+    EXPECT_EQ(m0[8].size(), 5u);
+
+    // 4 bidirectional express edges = 8 directed Z entries, no others
+    int z_directed = 0;
+    for (int c = 0; c < 32; ++c) {
+        for (const auto& [nb, edge] : m0[c]) {
+            if (edge.port_direction == tt::tt_fabric::RoutingDirection::Z) {
+                ++z_directed;
+            }
+        }
+    }
+    EXPECT_EQ(z_directed, 8) << "expected exactly 4 bidirectional express edges (8 directed Z entries)";
+}
+
+TEST(MeshGraphDescriptorTests, PlainFabric2DDowngradesExpressMgdToMesh) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
+
+    const tt::tt_fabric::MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D);
+    const auto& m0 = mesh_graph.get_intra_mesh_connectivity().at(0);
+    ASSERT_EQ(m0.size(), 32u);
+
+    int z_directed = 0;
+    for (const auto& edges_by_destination : m0) {
+        for (const auto& [_, edge] : edges_by_destination) {
+            z_directed += edge.port_direction == tt::tt_fabric::RoutingDirection::Z ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(z_directed, 0);
+    EXPECT_EQ(m0[8].count(20), 0u);  // the descriptor's row 2 <-> row 5 express chord is absent
+    EXPECT_EQ(m0[0].count(28), 0u);  // plain FABRIC_2D also removes the ordinary row 0 <-> row 7 wrap
+    EXPECT_EQ(m0[0].at(4).port_direction, tt::tt_fabric::RoutingDirection::S);
+    EXPECT_EQ(m0[0].at(1).port_direction, tt::tt_fabric::RoutingDirection::E);
+}
+
+namespace {
+// Write an inline MGD, build a MeshGraph (optionally with a process-wide override), and return the config
+// mesh `mesh_id` runs -- the override, else the mesh's dim_types default -- or nullopt if construction was
+// rejected (an incompatible config-vs-topology request, or the 1D-multi-mesh guard).
+std::optional<tt::tt_fabric::FabricConfig> resolve_mesh_fabric_config(
+    const std::string& text_proto,
+    tt::tt_metal::ClusterType cluster,
+    std::optional<tt::tt_fabric::FabricConfig> process_wide_override,
+    uint32_t mesh_id = 0) {
+    const auto path = std::filesystem::temp_directory_path() / "test_fabric_config_resolution.textproto";
+    {
+        std::ofstream file(path);
+        file << text_proto;
+    }
+    std::optional<tt::tt_fabric::FabricConfig> resolved;
+    try {
+        tt::tt_fabric::MeshGraph mesh_graph(cluster, path.string(), process_wide_override);
+        resolved = process_wide_override.value_or(
+            mesh_graph.get_mesh_graph_descriptor().default_fabric_config_from_dim_types(MeshId{mesh_id}));
+    } catch (const std::exception&) {
+        // A rejected config (config-vs-topology or the 1D-multi-mesh guard) is the expected negative outcome;
+        // report it as nullopt.
+        resolved.reset();
+    }
+    std::filesystem::remove(path);
+    return resolved;
+}
+}  // namespace
+
+// Single-mesh resolution rules (T3K so an explicit 1D config maps to MESH, not a torus). See the per-case
+// inline comments below; the config-vs-topology check rejects an incompatible torus override.
+TEST(MeshGraphDescriptorTests, FabricConfigResolutionSingleMesh) {
+    using FabricConfig = tt::tt_fabric::FabricConfig;
+    const auto mgd = [](const std::string& dim_types) {
+        return "mesh_descriptors { name: \"M\" arch: WORMHOLE_B0 device_topology { dims: [ 1, 8 ] dim_types: [ " +
+               dim_types +
+               " ] } host_topology { dims: [ 1, 1 ] } channels { count: 1 } "
+               "} graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+               "instances { mesh { mesh_descriptor: \"M\" mesh_id: 0 } } } "
+               "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
+    };
+    const auto cfg = [&](const std::string& dt, std::optional<FabricConfig> ov) {
+        return resolve_mesh_fabric_config(mgd(dt), tt::tt_metal::ClusterType::T3K, ov);
+    };
+
+    // Auto-derive is always 2D, never 1D -- even for a 1-row mesh.
+    EXPECT_EQ(cfg("LINE, LINE", std::nullopt), FabricConfig::FABRIC_2D);
+    EXPECT_EQ(cfg("LINE, RING", std::nullopt), FabricConfig::FABRIC_2D_TORUS_X);
+    // An explicit override can request anything (incl. 1D) the topology provides.
+    EXPECT_EQ(cfg("LINE, LINE", FabricConfig::FABRIC_1D), FabricConfig::FABRIC_1D);
+    EXPECT_EQ(cfg("LINE, LINE", FabricConfig::FABRIC_2D), FabricConfig::FABRIC_2D);
+    // An incompatible torus override is rejected.
+    EXPECT_EQ(cfg("LINE, LINE", FabricConfig::FABRIC_2D_TORUS_X), std::nullopt);
+}
+
+// Multi-mesh resolution: a two-mesh line MGD (4x8 RING,LINE + 4x2 LINE,LINE). Without an override each mesh
+// derives its own config from dim_types; an override applies to every mesh; and an explicit 1D config is
+// rejected here (contrast the single-mesh test, where explicit 1D is kept). See the per-case inline comments.
+TEST(MeshGraphDescriptorTests, FabricConfigResolutionMultiMesh) {
+    using FabricConfig = tt::tt_fabric::FabricConfig;
+    const std::string mgd =
+        "mesh_descriptors { name: \"R\" arch: BLACKHOLE device_topology { dims: [ 4, 8 ] "
+        "dim_types: [ RING, LINE ] } host_topology { dims: [ 4, 4 ] } channels { count: 2 policy: RELAXED } "
+        "} mesh_descriptors { name: \"L\" arch: BLACKHOLE device_topology { dims: [ 4, 2 ] "
+        "dim_types: [ LINE, LINE ] } host_topology { dims: [ 1, 1 ] } channels { count: 2 policy: RELAXED } "
+        "} graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+        "instances { mesh { mesh_descriptor: \"R\" mesh_id: 0 } } "
+        "instances { mesh { mesh_descriptor: \"L\" mesh_id: 1 } } "
+        "connections { nodes { mesh { mesh_descriptor: \"R\" mesh_id: 0 } } "
+        "nodes { mesh { mesh_descriptor: \"L\" mesh_id: 1 } } channels { count: 4 policy: RELAXED } } } "
+        "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
+    const auto cfg = [&](std::optional<FabricConfig> ov, uint32_t mesh) {
+        return resolve_mesh_fabric_config(mgd, tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, ov, mesh);
+    };
+
+    // Per-mesh derived defaults differ and build cleanly.
+    EXPECT_EQ(cfg(std::nullopt, 0), FabricConfig::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(cfg(std::nullopt, 1), FabricConfig::FABRIC_2D);
+    // A FABRIC_2D override restricts the torus mesh to plain mesh.
+    EXPECT_EQ(cfg(FabricConfig::FABRIC_2D, 0), FabricConfig::FABRIC_2D);
+    // A global TORUS_Y override is rejected on the LINE,LINE mesh (provides only MESH).
+    EXPECT_EQ(cfg(FabricConfig::FABRIC_2D_TORUS_Y, 1), std::nullopt);
+    // An explicit 1D config is single-mesh only: rejected on this 2-mesh MGD.
+    EXPECT_EQ(cfg(FabricConfig::FABRIC_1D, 0), std::nullopt);
+}
+
+// express_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.
+TEST(MeshGraphDescriptorTests, ExpressLinks32x4) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto";
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 128u);  // 32x4 = 128 chips
+
+    // dim 0 (32 rows, RING). chip = row*4 + col. Two patterns:
+    //   start=2 step=4 -> 8 row pairs (last wraps)
+    //   start=0 step=8 -> 4 row pairs
+    const std::vector<std::pair<int, int>> row_blocks = {
+        {2, 5},
+        {6, 9},
+        {10, 13},
+        {14, 17},
+        {18, 21},
+        {22, 25},
+        {26, 29},
+        {30, 1},  // start=2 step=4
+        {0, 7},
+        {8, 15},
+        {16, 23},
+        {24, 31}};  // start=0 step=8
+    for (const auto& [ra, rb] : row_blocks) {
+        for (int col = 0; col < 4; ++col) {
+            const int a = ra * 4 + col;
+            const int b = rb * 4 + col;
+            EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
+            EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
+            if (m0[a].contains(b) && m0[b].contains(a)) {
+                EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+                EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            }
+        }
+    }
+
+    // (8 + 4) blocks x 4 columns = 48 bidirectional express edges = 96 directed Z entries, no others
+    int z_directed = 0;
+    for (int c = 0; c < 128; ++c) {
+        for (const auto& [nb, edge] : m0[c]) {
+            if (edge.port_direction == tt::tt_fabric::RoutingDirection::Z) {
+                ++z_directed;
+            }
+        }
+    }
+    EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
+}
+
+std::optional<std::pair<std::size_t, MeshId>> decode_merged_mesh_id(
+    MeshId global_mesh_id, const std::vector<std::map<MeshId, MeshId>>& per_part_local_to_global) {
+    for (std::size_t part = 0; part < per_part_local_to_global.size(); ++part) {
+        for (const auto& [local, global] : per_part_local_to_global[part]) {
+            if (global == global_mesh_id) {
+                return std::make_pair(part, local);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+TEST(MeshGraphDescriptorTests, MergeSingleDescriptorKeepsLocalIdsAndNames) {
+    MeshGraphDescriptor source{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&source}, &maps);
+
+    ASSERT_EQ(maps.size(), 1u);
+    ASSERT_EQ(maps[0].size(), 1u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_TRUE(names.contains(MeshId{0}));
+    EXPECT_EQ(names.at(MeshId{0}), "M0") << "a single descriptor is cloned; names stay unprefixed";
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("M0").at(0)), 4u);
+}
+
+TEST(MeshGraphDescriptorTests, MergeTwoSameNamedMeshesRenumbersAndPrefixes) {
+    MeshGraphDescriptor left{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor right{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right}, &maps);
+
+    ASSERT_EQ(maps.size(), 2u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    EXPECT_EQ(maps[1].at(MeshId{0}), MeshId{1});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_EQ(names.size(), 2u);
+    EXPECT_EQ(names.at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(names.at(MeshId{1}), "mgd1_M0");
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd0_M0").at(0)), 2u);
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd1_M0").at(0)), 1u);
+
+    const auto decoded0 = decode_merged_mesh_id(MeshId{0}, maps);
+    const auto decoded1 = decode_merged_mesh_id(MeshId{1}, maps);
+    ASSERT_TRUE(decoded0.has_value());
+    ASSERT_TRUE(decoded1.has_value());
+    EXPECT_EQ(decoded0->first, 0u);
+    EXPECT_EQ(decoded0->second, MeshId{0});
+    EXPECT_EQ(decoded1->first, 1u);
+    EXPECT_EQ(decoded1->second, MeshId{0});
+}
+
+TEST(MeshGraphDescriptorTests, MergePreservesInterMeshSeamAndDecodesGlobals) {
+    MeshGraphDescriptor pair{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor singleton{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&pair, &singleton}, &maps);
+
+    ASSERT_EQ(maps.size(), 2u);
+    EXPECT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    EXPECT_EQ(maps[0].at(MeshId{1}), MeshId{1});
+    EXPECT_EQ(maps[1].at(MeshId{0}), MeshId{2});
+
+    const auto names = merged.mesh_id_to_instance_name();
+    ASSERT_EQ(names.size(), 3u);
+    EXPECT_EQ(names.at(MeshId{0}), "mgd0_M0");
+    EXPECT_EQ(names.at(MeshId{1}), "mgd0_M1");
+    EXPECT_EQ(names.at(MeshId{2}), "mgd1_M0");
+    EXPECT_TRUE(merged.has_connections_of_type("FABRIC"))
+        << "the first descriptor's inter-mesh seam must survive under the merged graph";
+    EXPECT_TRUE(merged.is_inter_mesh_policy_relaxed());
+
+    for (MeshId global : {MeshId{0}, MeshId{1}, MeshId{2}}) {
+        const auto decoded = decode_merged_mesh_id(global, maps);
+        ASSERT_TRUE(decoded.has_value()) << "global mesh " << *global << " should invert through the merge maps";
+    }
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{0}, maps)->first, 0u);
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{1}, maps)->second, MeshId{1});
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{2}, maps)->first, 1u);
+    EXPECT_EQ(decode_merged_mesh_id(MeshId{2}, maps)->second, MeshId{0});
+}
+
+TEST(MeshGraphDescriptorTests, MergeMeshTopLevelDescriptors) {
+    MeshGraphDescriptor first{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor second{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&first, &second}, &maps);
+
+    ASSERT_EQ(maps[0].at(MeshId{0}), MeshId{0});
+    ASSERT_EQ(maps[1].at(MeshId{0}), MeshId{1});
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd0_M0").at(0)), 4u);
+    EXPECT_EQ(merged.get_chip_count(merged.instances_by_name("mgd1_M0").at(0)), 4u);
+    EXPECT_EQ(merged.top_level().name, "G0");
+}
+
+TEST(MeshGraphDescriptorTests, MergeRemapsPinningsToGlobalMeshIds) {
+    MeshGraphDescriptor left{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor right{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 1 }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    std::vector<std::map<MeshId, MeshId>> maps;
+    const MeshGraphDescriptor merged = MeshGraphDescriptor::merge({&left, &right}, &maps);
+    const auto& pinnings = merged.get_pinnings();
+
+    ASSERT_TRUE(pinnings.contains(MeshId{0}));
+    ASSERT_TRUE(pinnings.contains(MeshId{1}));
+    ASSERT_EQ(pinnings.at(MeshId{0}).size(), 1u);
+    ASSERT_EQ(pinnings.at(MeshId{1}).size(), 1u);
+    EXPECT_EQ(*pinnings.at(MeshId{0})[0].fabric_nodes[0].mesh_id, 0u);
+    EXPECT_EQ(pinnings.at(MeshId{0})[0].fabric_nodes[0].chip_id, 0u);
+    EXPECT_EQ(*pinnings.at(MeshId{1})[0].fabric_nodes[0].mesh_id, 1u);
+    EXPECT_EQ(pinnings.at(MeshId{1})[0].fabric_nodes[0].chip_id, 3u);
+}
+
+TEST(MeshGraphDescriptorTests, MergeRejectsInconsistentInterMeshPolicy) {
+    MeshGraphDescriptor relaxed{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor strict{std::string(R"delimiter(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
+}
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+
+    EXPECT_ANY_THROW(MeshGraphDescriptor::merge({&relaxed, &strict}));
+}
+
+TEST(MeshGraphDescriptorTests, MergeEmptyDescriptorsThrows) { EXPECT_ANY_THROW(MeshGraphDescriptor::merge({})); }
+
+// A RING on an axis of extent <= 2 has no distinct wrap edge. Wrapping it anyway makes N == S, so each chip
+// lists its single row neighbor twice and the topology mapper demands 2x the channels a 2x4 BH Loudbox has
+// between its rows, failing FABRIC_2D_TORUS_XY under STRICT validation.
+TEST(MeshGraphDescriptorTests, RingOnShortAxisDoesNotDuplicateNeighbors) {
+    const auto desc = MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+        tt::tt_metal::distributed::MeshShape(2, 4),
+        FabricType::TORUS_XY,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        tt::ARCH::BLACKHOLE,
+        /*num_connections_per_direction=*/2);
+
+    const auto mesh_ids = desc.instances_by_type("MESH");
+    ASSERT_EQ(mesh_ids.size(), 1u);
+    const auto& mesh_inst = desc.get_instance(mesh_ids[0]);
+    for (const auto& [local_id, global_id] : mesh_inst.sub_instances_local_id_to_global_id) {
+        std::multiset<GlobalNodeId> destinations;
+        for (const auto connection_id : desc.connections_by_source_device_id(global_id)) {
+            destinations.insert(desc.get_connection(connection_id).nodes[1]);
+        }
+        // One row neighbor (no wrap on the extent-2 axis) plus two distinct ring neighbors on the extent-4 axis.
+        EXPECT_EQ(destinations.size(), 3u) << "device " << local_id;
+        EXPECT_EQ(std::set<GlobalNodeId>(destinations.begin(), destinations.end()).size(), destinations.size())
+            << "device " << local_id << " lists a neighbor more than once";
+    }
+}
+
+// The 32x4 fixture transposed to 4x32, with the express patterns moved from dim 0 to dim 1.
+TEST(MeshGraphDescriptorTests, ExpressLinks4x32Dim1) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_4x32_mesh_graph_descriptor.textproto";
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 128u);
+
+    // dim 1 (32 columns, RING). chip = row*32 + col. These are the same blocks as the
+    // 32x4 fixture; only the varying coordinate and linear indexing have changed.
+    const std::vector<std::pair<int, int>> col_blocks = {
+        {2, 5},
+        {6, 9},
+        {10, 13},
+        {14, 17},
+        {18, 21},
+        {22, 25},
+        {26, 29},
+        {30, 1},
+        {0, 7},
+        {8, 15},
+        {16, 23},
+        {24, 31}};
+    for (const auto& [ca, cb] : col_blocks) {
+        for (int row = 0; row < 4; ++row) {
+            const int a = row * 32 + ca;
+            const int b = row * 32 + cb;
+            EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
+            EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
+            if (m0[a].contains(b) && m0[b].contains(a)) {
+                EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+                EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            }
+        }
+    }
+
+    int z_directed = 0;
+    for (const auto& edges_by_destination : m0) {
+        for (const auto& [_, edge] : edges_by_destination) {
+            z_directed += edge.port_direction == tt::tt_fabric::RoutingDirection::Z ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -14,6 +14,7 @@
 
 #include "hal_types.hpp"
 #include "noc_debugging_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -33,8 +34,7 @@ void VerifyIssuesOnAllCores(
     bool expect_issue,
     const IssueChecker& has_issue,
     const std::string& issue_type) {
-    auto* device = mesh_device->get_devices()[0];
-    auto device_id = device->id();
+    auto device_id = mesh_device->get_device_ids()[0];
 
     for (uint32_t x = grid_start.x; x <= grid_end.x; ++x) {
         for (uint32_t y = grid_start.y; y <= grid_end.y; ++y) {
@@ -81,7 +81,7 @@ void RunWritesTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -160,7 +160,7 @@ void RunPostedWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -230,7 +230,7 @@ void RunSemaphoreIncTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -314,7 +314,7 @@ void RunSemaphoreIncMulticastTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
@@ -354,8 +354,7 @@ void RunSemaphoreIncMulticastTest(
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    auto* device = mesh_device->get_devices()[0];
-    auto device_id = device->id();
+    auto device_id = mesh_device->get_device_ids()[0];
     auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
 
     bool has_issue = fixture->has_unflushed_semaphore_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
@@ -366,6 +365,13 @@ void RunSemaphoreIncMulticastTest(
         EXPECT_TRUE(has_issue) << "Without atomic barrier, should have unflushed multicast semaphore issue at device "
                                << device_id << " core " << sender_core_virtual.str();
     }
+
+    // Only BRISC runs here. When the suite runs in order, this core's NCRISC recorded unflushed semaphore increments
+    // in SemaphoreIncWriteBarrierDoesNotFlush, and those events are still in its L1 profiler buffer. BRISC must not
+    // push them again, which relies on init_profiler clearing every RISC's DEVICE_BUFFER_END_INDEX.
+    EXPECT_FALSE(fixture->has_unflushed_semaphore_issue(device_id, sender_core_virtual, NCRISC_PROCESSOR_ID))
+        << "NCRISC does not run in this program, yet an issue was reported for it at device " << device_id << " core "
+        << sender_core_virtual.str();
 }
 
 // Every core issues repeated inline dword writes (4-byte immediate value, no L1 source buffer) to one destination
@@ -384,7 +390,7 @@ void RunInlineWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -469,7 +475,7 @@ void RunStatefulWriteTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -534,7 +540,7 @@ void RunStatefulReadTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -602,7 +608,7 @@ void RunFullBarrierWritesSingleCore(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     distributed::DeviceLocalBufferConfig l1_config{
@@ -632,8 +638,8 @@ void RunFullBarrierWritesSingleCore(
     fixture->RunProgram(mesh_device, workload);
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    for (IDevice* device : mesh_device->get_devices()) {
-        EXPECT_FALSE(fixture->has_unflushed_write_issue(device->id(), writer_virtual, 0))
+    for (auto device_id : mesh_device->get_device_ids()) {
+        EXPECT_FALSE(fixture->has_unflushed_write_issue(device_id, writer_virtual, 0))
             << "A full barrier must flush pending writes by kernel end; the FULL_BARRIER host mapping was not "
                "applied so the writes were falsely reported as unflushed.";
     }
@@ -658,7 +664,7 @@ void RunAtomicBarrierWritesSingleCore(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     distributed::DeviceLocalBufferConfig l1_config{
@@ -688,8 +694,8 @@ void RunAtomicBarrierWritesSingleCore(
     fixture->RunProgram(mesh_device, workload);
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    for (IDevice* device : mesh_device->get_devices()) {
-        EXPECT_TRUE(fixture->has_unflushed_write_issue(device->id(), writer_virtual, 0))
+    for (auto device_id : mesh_device->get_device_ids()) {
+        EXPECT_TRUE(fixture->has_unflushed_write_issue(device_id, writer_virtual, 0))
             << "An atomic barrier must not flush pending writes (writes use a NIU counter separate from atomics); "
                "the writes should still be reported as unflushed at kernel end.";
     }
@@ -707,7 +713,7 @@ void RunReadsTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -779,7 +785,7 @@ void RunInterleavedReadsWritesTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;
@@ -985,7 +991,7 @@ void run_stress_write_program(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     // Fixed-size buffer regardless of num_iterations; the kernel wraps its source within SRC_SLOTS slots so a huge
     // iteration count (e.g. 100000) stays in-bounds while still generating that many distinct profiler events.
     constexpr uint32_t kBufferBytes = 4096;
@@ -1075,7 +1081,7 @@ private:
         // start_debug_dump_thread() clears the stop flag, so the thread is live again after this.
         // Must cover EVERY device the thread originally covered (profiler_initializer.cpp launches it with all of
         // them): a device left out stops being drained, and later tests running on it see no events at all.
-        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(devices_);
+        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(tt::tt_metal::MetalContext::instance(), devices_);
     }
 
     std::vector<tt::tt_metal::IDevice*> devices_;
@@ -1101,7 +1107,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingDuringLongKernel) {
         [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
             ASSERT_TRUE(noc_debug_state != nullptr);
-            const auto device_id = mesh_device->get_devices()[0]->id();
+            const auto device_id = mesh_device->get_device_ids()[0];
             const uint32_t writes = marker_test_iterations();
             const uint32_t burst = writes / 4;
             constexpr uint32_t wait_iters = 50'000'000u;
@@ -1144,7 +1150,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
     // covering every device, not just the one this test runs on -- see ScopedDebugDumpTuning.
     std::vector<tt::tt_metal::IDevice*> all_devices;
     for (const auto& md : this->devices_) {
-        for (auto* d : md->get_devices()) {
+        for (auto* d : md->impl().get_devices()) {
             all_devices.push_back(d);
         }
     }
@@ -1152,7 +1158,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
         [all_devices](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
             ASSERT_TRUE(noc_debug_state != nullptr);
-            const auto device_id = mesh_device->get_devices()[0]->id();
+            const auto device_id = mesh_device->get_device_ids()[0];
 
             // The margin must exceed the poll interval (start_debug_dump_thread enforces that) and must be well
             // under the kernel's event span, or nothing ever falls behind the watermark. That threshold is what this
@@ -1176,10 +1182,16 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
 
             // NO user read: only the background thread drains, processes, reports and discharges.
             run_stress_write_program(fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst);
-            // Let the last full-read pass land after the kernel finished.
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            // Let the full-read passes after the kernel land. Wait for them rather than a fixed time: on Blackhole a
+            // pass that finds new data reads the whole profiler DRAM buffer over MMIO (no DMA), which takes ~0.5 s.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            auto summary = noc_debug_state->get_state_summary();
+            while ((summary.issues == 0 || summary.pending_events >= writes / 2) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                summary = noc_debug_state->get_state_summary();
+            }
 
-            const auto summary = noc_debug_state->get_state_summary();
             const size_t markers = total_device_marker_count(device_id);
             log_info(
                 tt::LogMetal,
@@ -1387,7 +1399,7 @@ void RunMcastTest(
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     uint32_t num_dest_cores = CoreRange(mcast_start, mcast_end).size();
 
@@ -1430,8 +1442,7 @@ void RunMcastTest(
 
     ReadMeshDeviceProfilerResults(*mesh_device);
 
-    auto* device = mesh_device->get_devices()[0];
-    auto device_id = device->id();
+    auto device_id = mesh_device->get_device_ids()[0];
     auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
 
     bool has_write_mcast_issue =

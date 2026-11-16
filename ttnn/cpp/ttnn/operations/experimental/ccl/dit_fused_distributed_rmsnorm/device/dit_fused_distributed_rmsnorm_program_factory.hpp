@@ -4,7 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <vector>
+
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -13,47 +19,50 @@
 
 namespace ttnn::experimental::prim {
 
-struct DitFusedDistributedRmsnormSharedVariables {
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-    std::vector<tt::tt_metal::KernelHandle> compute_kernel_ids;
-    // Forwarder kernels (AG path) + their cores; used to refresh the stats DRAM
-    // scratch address on cache hits. Empty on the is_tp_1 path.
-    std::vector<tt::tt_metal::KernelHandle> forwarder_kernel_ids;
-    std::vector<tt::tt_metal::CoreCoord> forwarder_cores;
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    // Index of the stats DRAM scratch address inside the worker-writer's
-    // runtime-args vector. Set on the all-gather path (TP>1, whole-row norm);
-    // empty on the is_tp_1 path. The address changes per launch because the
-    // scratch is a regular device tensor allocated by create_output_tensors, so
-    // override_runtime_arguments refreshes this slot on cache hits.
-    std::optional<size_t> stats_dram_addr_writer_arg_idx;
-};
+// Kernel indices follow the push order in the per-coordinate descriptor builder (reader, writer, forwarders,
+// compute), which TT_FATALs on a cache miss if a pushed index differs from these; forwarder arg slots follow the
+// forwarder runtime-arg layout. override_runtime_arguments() patches these.
+// The reader and writer common-arg slot order is owned by the factory's slot tables.
+namespace dit_fused_distributed_rmsnorm_dynamic {
+inline constexpr uint32_t kReaderKernelIdx = 0;
+inline constexpr uint32_t kWriterKernelIdx = 1;
+// Forwarder f (all-gather path only) sits at kFirstForwarderKernelIdx + f; the compute kernel follows them.
+inline constexpr uint32_t kFirstForwarderKernelIdx = 2;
+constexpr uint32_t compute_kernel_idx(uint32_t num_forwarders) { return kFirstForwarderKernelIdx + num_forwarders; }
+
+// Forwarder per-core runtime args.
+inline constexpr uint32_t kForwarderStatsAddrArg = 0;
+inline constexpr uint32_t kForwarderOutReadySemArg = 1;
+
+// Common runtime-arg slot of the live tile-row count in each kernel (kernels read the same slots). The reader's
+// word sits before the optional affine-map address so its slot is the same with and without AFFINE_TILE_ROW_MAP.
+inline constexpr uint32_t kReaderRowsSlot = 6;        // after the six buffer addresses
+inline constexpr uint32_t kDrainWriterRowsSlot = 2;   // after output, trans_mat
+inline constexpr uint32_t kWorkerWriterRowsSlot = 3;  // after output, trans_mat, stats scratch
+inline constexpr uint32_t kComputeRowsSlot = 0;
+inline constexpr uint32_t kForwarderRowsSlot = 0;
+}  // namespace dit_fused_distributed_rmsnorm_dynamic
 
 struct DitFusedDistributedRmsnormMeshWorkloadFactory {
-    using shared_variables_t = DitFusedDistributedRmsnormSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    // Local normalization (ring_size == 1 or per_head_norm) shares one ProgramDescriptor per range; the
+    // all-gather path builds one per coordinate (device index and fabric neighbors depend on it).
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const DitFusedDistributedRmsnormParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const DitFusedDistributedRmsnormInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
+    // Re-applies the caller-supplied out_ready GlobalSemaphore address and the live tile-row count, which
+    // DitFusedDistributedRmsnormDeviceOperation::compute_program_hash excludes from the key, and every tensor
+    // address by role. Buffer* bindings alone are not enough: when two tensor arguments share a buffer (for
+    // example weight and bias, or rope_cos and rope_sin), binding resolution yields no bindings, and the
+    // workload path has no rebuild fallback.
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const DitFusedDistributedRmsnormParams& operation_attributes,
         const DitFusedDistributedRmsnormInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const DitFusedDistributedRmsnormParams& args,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const DitFusedDistributedRmsnormInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

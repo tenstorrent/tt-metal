@@ -24,8 +24,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_mesh_mapper, tt_to_torch_dtype
-from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
+from models.common.moe.compute_helpers import gen_expert_mapping
+from tt_py_test_utils_common.all_to_all_dispatch import get_mesh_mapper, tt_to_torch_dtype
 
 
 def gen_tensors_for_metadata_op(
@@ -398,6 +398,7 @@ def run_all_to_all_dispatch_metadata_test(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "trace_region_size": 0,

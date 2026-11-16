@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Public API for the DeepSeek-V3.2 / GLM-5.1 sparse-MLA CPU reference.
+Public API for the DeepSeek-V3.2 / GLM-5.3 sparse-MLA CPU reference.
 
 Shaped after the device model ``ttMLA``: construct with ``(config, weights)`` plus ``seq_len``, then
 ``forward(hidden_states)``. The HF-attribute config is the only configuration input; the upstream
@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.utils import precom
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.weights import (
     CANONICAL_TO_CPU,
     DEFAULT_REPO,
+    canonical_to_cpu,
     load_attention_state_dict,
     resolve_layer_shards,
 )
@@ -35,7 +36,7 @@ Weights = dict[str, torch.Tensor]
 
 @runtime_checkable
 class SparseMLAConfig(Protocol):
-    """The HF-attribute config contract this package reads (deepseek_v32_hf_config / glm_hf_config)."""
+    """The HF-attribute config contract this package reads (deepseek_v32_hf_config / glm_5_3_hf_config)."""
 
     hidden_size: int
     num_attention_heads: int
@@ -45,7 +46,8 @@ class SparseMLAConfig(Protocol):
     qk_rope_head_dim: int
     v_head_dim: int
     rope_theta: float
-    rope_scaling: dict  # factor, mscale, beta_fast, beta_slow, original_max_position_embeddings
+    # factor, mscale, beta_fast, beta_slow, original_max_position_embeddings; None for NoPE (Kimi-K3.1).
+    rope_scaling: dict | None
     index_n_heads: int
     index_head_dim: int
     index_topk: int
@@ -55,7 +57,12 @@ class SparseMLAConfig(Protocol):
 # Canonical (HF/checkpoint) <-> CPU-port name maps. The correspondence is owned by weights.py
 # (CANONICAL_TO_CPU); here we just take it and its inverse so device weights and the CPU truth agree.
 _CANONICAL_TO_CPU = CANONICAL_TO_CPU
-_CPU_TO_CANONICAL: dict[str, str] = {cpu: canon for canon, cpu in _CANONICAL_TO_CPU.items()}
+_CPU_TO_CANONICAL: dict[str, str] = {cpu: canon for canon, cpu in canonical_to_cpu(gated=True).items()}
+
+
+def _is_gated(config) -> bool:
+    return bool(getattr(config, "mla_use_output_gate", False))
+
 
 # Canonical key set, for callers that want to validate against the ttnn contract.
 CANONICAL_WEIGHT_NAMES: tuple[str, ...] = tuple(_CANONICAL_TO_CPU)
@@ -68,8 +75,18 @@ def _model_args_from_hf(config: SparseMLAConfig, seq_len: int) -> ModelArgs:
     ``rope_scaling.factor`` (not from ``config.max_seq_len``, which tests mutate to the device rope-table
     length). ``seq_len`` sizes the RoPE table + the internal KV/PE cache. Fields the config doesn't
     carry (``scale_fmt``) keep the ModelArgs defaults.
+
+    Kimi-K3.1 is NoPE (``mla_use_nope``, ``rope_scaling=None``): no YaRN, so the gate is closed
+    (max == original) and MLACPU additionally skips the mscale under NoPE. Its indexer is NoPE too
+    (``index_rope_dim=0``).
     """
-    rs = config.rope_scaling
+    rs = config.rope_scaling or {
+        "original_max_position_embeddings": int(seq_len),
+        "factor": 1.0,
+        "beta_fast": 32,
+        "beta_slow": 1,
+        "mscale": 1.0,
+    }
     original = int(rs["original_max_position_embeddings"])
     factor = float(rs["factor"])
     if factor > 1.0:  # YaRN active (V3.2): gate must be True
@@ -97,6 +114,9 @@ def _model_args_from_hf(config: SparseMLAConfig, seq_len: int) -> ModelArgs:
         index_head_dim=config.index_head_dim,
         index_topk=config.index_topk,
         index_rope_interleave=config.index_rope_interleave,
+        index_rope_dim=getattr(config, "index_rope_dim", None),
+        mla_use_nope=bool(getattr(config, "mla_use_nope", False)),
+        mla_use_output_gate=_is_gated(config),
     )
 
 
@@ -131,6 +151,8 @@ def random_mla_weights(config: SparseMLAConfig, *, seed: int = 42) -> Weights:
         "indexer.k_norm.weight": torch.ones(idx_dim, dtype=torch.float32),
         "indexer.k_norm_bias.weight": torch.zeros(idx_dim, dtype=torch.float32),
         "indexer.weights_proj.weight": (torch.randn(idx_heads, h, generator=g) * std).to(torch.float32),
+        # Drawn last, so the other tensors' random streams do not depend on whether the model is gated.
+        **({"g_proj.weight": lin(n_heads * config.v_head_dim, h)} if _is_gated(config) else {}),
     }
 
 
@@ -152,7 +174,7 @@ def pretrained_mla_weights(
 
 
 class SparseMLAReference:
-    """CPU truth for one DeepSeek-V3.2 / GLM-5.1 sparse-MLA layer. Built like ttMLA: ``(config, weights)``."""
+    """CPU truth for one DeepSeek-V3.2 / GLM-5.3 sparse-MLA layer. Built like ttMLA: ``(config, weights)``."""
 
     def __init__(
         self,
@@ -168,21 +190,31 @@ class SparseMLAReference:
         self._mla = MLACPU(self._args, simulate_fp8=simulate_fp8).eval()
         self._mla.indexer.use_fp8_path = simulate_fp8
 
-        missing_canon = [c for c in _CANONICAL_TO_CPU if c not in weights]
+        # The required key set follows the config: a gated (Kimi-K3) layer additionally needs g_proj.
+        name_map = canonical_to_cpu(gated=_is_gated(config))
+        missing_canon = [c for c in name_map if c not in weights]
         if missing_canon:
             raise KeyError(f"weights missing canonical keys: {missing_canon}")
-        cpu_weights = {_CANONICAL_TO_CPU[c]: t for c, t in weights.items() if c in _CANONICAL_TO_CPU}
+        cpu_weights = {name_map[c]: t for c, t in weights.items() if c in name_map}
         self._mla.load_state_dict(cpu_weights, strict=True)
 
         self._freqs = precompute_freqs_cis(self._args)
         self._filled = 0  # highest end position written into the caches (across chunked calls)
         self._last_topk: torch.Tensor | None = None
         self._last_logits: torch.Tensor | None = None
+        self._inject_topk: torch.Tensor | None = None
         # Capture the indexer's (topk, logits) from inside the single forward pass — no second run.
         self._mla.indexer.register_forward_hook(self._capture_indexer)
 
-    def _capture_indexer(self, module, inputs, output) -> None:  # noqa: ANN001 (torch hook signature)
+    def _capture_indexer(self, module, inputs, output):  # noqa: ANN001 (torch hook signature)
         topk, logits = output
+        if self._inject_topk is not None:
+            assert (
+                self._inject_topk.shape == topk.shape
+            ), f"injected top-k {tuple(self._inject_topk.shape)} != computed {tuple(topk.shape)}"
+            topk = self._inject_topk
+            self._last_topk, self._last_logits = topk, logits
+            return topk, logits
         self._last_topk, self._last_logits = topk, logits
 
     def forward(
@@ -191,6 +223,7 @@ class SparseMLAReference:
         *,
         actual_start: int = 0,
         actual_end: int | None = None,
+        indexer_topk: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Single forward pass; returns the MLA output [B, S, dim].
 
@@ -198,6 +231,9 @@ class SparseMLAReference:
         the causal mask are built internally. The indexer runs inside this pass — its logits/topk and the
         KV/index caches are exposed via the properties below. Chunked prefill = call this in a loop with
         increasing ``actual_start`` (the same pattern as the device chunked test).
+
+        ``indexer_topk`` overrides the indexer's selection with indices computed elsewhere, the CPU
+        dual of ttMLA's ``indexer_indices``.
         """
         x = hidden_states.to(torch.bfloat16)
         seqlen = x.shape[-2]
@@ -206,8 +242,12 @@ class SparseMLAReference:
         freqs = self._freqs[actual_start:end]
         # Causal mask [seqlen, end]; triu offset by actual_start keeps chunk causality (== single-shot at 0).
         mask = torch.full((seqlen, end), float("-inf")).triu_(actual_start + 1)
-        with torch.no_grad():
-            out = self._mla.forward(x, actual_start, freqs, mask)
+        self._inject_topk = indexer_topk
+        try:
+            with torch.no_grad():
+                out = self._mla.forward(x, actual_start, freqs, mask)
+        finally:
+            self._inject_topk = None
         self._filled = max(self._filled, end)
         return out
 

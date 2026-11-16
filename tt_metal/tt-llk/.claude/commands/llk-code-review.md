@@ -24,6 +24,11 @@ The workflow also materializes the exact PR revisions in these directories:
 Expand `H` and `B` to those literal paths in every Task prompt. The checkout root
 contains review orchestration and MUST NOT be used as the source of PR code.
 
+The head SHA named in the coordination system prompt is the reviewed revision
+for the entire run. The PR may receive new commits while the review runs; that is
+expected and is not an error. Never switch to, fetch, or review a newer head.
+Step 7 defines how to post when the PR head has moved.
+
 ## Operating rules
 
 - Task subagents have isolated contexts. They do not inherit this command, the
@@ -50,13 +55,15 @@ contains review orchestration and MUST NOT be used as the source of PR code.
   only under `B`. Never read repository implementation from the checkout root,
   another branch, a Claude execution file, or a tool-result cache.
 - Use Read, Grep, and Glob for files under `H`, `B`, and `K`. Use Bash only for
-  one direct, single-line `gh api` command, the intake agent's one complete
-  `gh pr diff` call, or one read-only `git diff`, `git show`, `git log`, or
-  `git rev-parse` command per tool call. Outside intake, scope diffs to a relevant
-  changed path and use the exact comparison-base/head SHAs. Never run `find /`.
+  one direct, single-line `gh api` command, the intake agent's one `gh pr view`
+  metadata call, or one read-only `git diff`, `git show`, `git log`, or
+  `git rev-parse` command per tool call. Every diff uses the exact
+  comparison-base/head SHAs; outside the intake agent's one complete diff, scope
+  diffs to a relevant changed path. Never run `find /`.
 - Run read-only git commands directly from the orchestration checkout root, whose
   object database contains both exact commits. A valid diff starts literally
-  with `git diff COMPARISON_BASE_SHA HEAD_SHA -- CHANGED_PATH`. Never prepend
+  with `git diff COMPARISON_BASE_SHA HEAD_SHA`, followed by `-- CHANGED_PATH`
+  everywhere except the intake agent's one complete diff. Never prepend
   `git -C`, `cd`, an absolute worktree path, or any other command/prefix. `H` and
   `B` are for Read/Grep/Glob file access, not for changing Bash's working directory.
 - Do not use pipes, `&&`, `||`, `;`, `&`, redirects, heredocs, command/process
@@ -79,6 +86,18 @@ contains review orchestration and MUST NOT be used as the source of PR code.
   concerns merely to produce comments.
 - Delegated agents return candidates or verdicts only. They MUST NOT post to
   GitHub or call `ReportFindings`; the parent command is the sole posting owner.
+- Comment signature. Several `github-actions[bot]` reviewers comment on LLK PRs,
+  so every GitHub comment this command posts — each inline finding, each
+  issue-level fallback, the no-findings summary, and the closed-PR skip note —
+  MUST end with the exact two-line footer below so readers and tooling can tell
+  LLK PR Reviewer comments apart from the other bots. Separate it from the body
+  by one blank line, place it once as the final content of the body, and never
+  attach it to a subagent's returned candidate:
+
+  ```markdown
+  <!-- llk-pr-reviewer -->
+  _Posted by the **LLK PR Reviewer**._
+  ```
 
 Follow these steps precisely:
 
@@ -86,7 +105,8 @@ Follow these steps precisely:
    parsed PR reference and the shell/filesystem constraints; it may inspect PR
    state only and must not inspect code or post. If the PR is closed, the parent
    posts a short issue-level skip comment through the issue-comments `gh api`
-   endpoint when `--comment` was provided, selects `.html_url`, verifies that it
+   endpoint when `--comment` was provided, ending the comment body with the
+   comment signature footer, selects `.html_url`, verifies that it
    is non-empty, then stops. Review every open
    PR that was explicitly dispatched, including draft, automated,
    Claude-generated, and trivial PRs.
@@ -100,9 +120,12 @@ Follow these steps precisely:
 
 3. Launch a Sonnet intake agent to inspect the entire PR, including the complete
    PR diff, metadata, and discussion, so the shared context covers every changed
-   file and cross-file relationship. It may make one direct `gh pr diff` call for
-   this purpose. It must return:
-   - title, description, exact base-branch-tip/head SHAs, and changed-file list;
+   file and cross-file relationship. Pass it the exact comparison-base/head SHAs.
+   It may make one unscoped exact-SHA
+   `git diff COMPARISON_BASE_SHA HEAD_SHA` call for the complete diff; it must not
+   use `gh pr diff`, which follows the PR's current head. It must return:
+   - title, description, the current base-branch-tip/head SHAs that GitHub
+     reports, and the changed-file list of the exact-SHA diff;
    - a concise change summary and which architecture/code paths are affected;
    - compact changed-file groups that later agents can use for path-scoped review;
    - booleans for `touches_test_or_golden`, `touches_sfpi_or_raw_tti`, and
@@ -112,11 +135,11 @@ Follow these steps precisely:
 
    The intake agent should synthesize the complete diff rather than echoing large
    patches in its response, but must not omit a changed file from its analysis.
-   The parent verifies that the returned base-tip/head SHAs match the exact
-   revisions named in the coordination system prompt before launching code
-   reviewers; a mismatch is an error and must stop the review. The parent adds
-   the exact PR merge-base comparison SHA from that system prompt to the shared
-   context.
+   The SHAs from the coordination system prompt remain authoritative. If GitHub
+   already reports a different head, the PR moved after the workflow pinned it;
+   continue reviewing the pinned revision and handle the move in step 7. The
+   parent adds the exact PR merge-base comparison SHA and reviewed head SHA from
+   that system prompt to the shared context.
 
 4. Launch these four review agents concurrently and synchronously. In one
    assistant message, emit exactly four Agent tool calls, each with
@@ -216,28 +239,93 @@ Follow these steps precisely:
 
    If `--comment` was provided, do not return the final response yet. Immediately
    before any review-result write, query the PR's current `.head.sha` with a
-   direct `gh api` call and compare it to the exact reviewed head SHA from step 3.
-   If they differ, do not post stale findings or a no-findings summary; report
-   that the PR changed during review and stop with an error.
+   direct `gh api` call and compare it to the exact reviewed head SHA. If they
+   match, post normally. If they differ, the PR moved during the review. That is
+   not an error: the review stays valid for the reviewed commit and is still
+   posted, with these additions:
+
+   - If no findings survived, add this line, with literal short SHAs, right
+     after the `## Code review` heading of the no-findings comment:
+
+     ```markdown
+     _Reviewed at `REVIEWED_SHORT_SHA`; the PR has since moved to `CURRENT_SHORT_SHA`. Dispatch the review again to cover the latest commit._
+     ```
+
+   - If findings survived, list the files changed since the reviewed commit with
+     one direct call:
+
+     ```bash
+     gh api 'repos/OWNER/REPOSITORY/compare/REVIEWED_HEAD_SHA...CURRENT_HEAD_SHA' --jq '{status: .status, truncated: (.files[299] != null), paths: [.files[].filename, (.files[].previous_filename // empty)]}'
+     ```
+
+     `paths` also holds the old path of every renamed file. Trust `paths` only
+     when `status` is `ahead` (new commits were added on top of the reviewed
+     commit) and `truncated` is false; GitHub lists at most 300 files per
+     comparison. Any other status means the branch history was rewritten (rebase,
+     amend, or reset), and `paths` then misses files whose reviewed changes were
+     dropped. In that case, or if the call fails, treat every finding as being in
+     a changed file.
+     Add this note, with literal short SHAs, as the first line of every finding
+     whose `path` is in `paths`:
+
+     ```markdown
+     _Reviewed at `REVIEWED_SHORT_SHA`; the PR has since moved to `CURRENT_SHORT_SHA`, so this may already be addressed._
+     ```
+
+   - When findings survived, first post one issue-level comment, ending with the
+     comment signature footer, before the findings:
+
+     ```markdown
+     ## Code review
+
+     This review covers `REVIEWED_SHORT_SHA`. The PR head moved to
+     `CURRENT_SHORT_SHA` while the review was running. Inline comments are
+     anchored to the reviewed commit, and GitHub marks them outdated where the
+     lines have since changed. Dispatch the review again to cover the latest
+     commit.
+     ```
+
+   The head can also move while results are being posted. After the last
+   review-result write, query `.head.sha` once more with a direct `gh api` call.
+   If the pre-write check matched the reviewed head but this one does not, post
+   this issue-level comment with one direct issue-comments `gh api` call using
+   `--raw-field body=... --jq '.html_url'`, and verify that it returns a non-empty
+   URL. The body ends with the comment signature footer. Skip this note when the
+   pre-write check already found a moved head.
+
+   ```markdown
+   ## Code review
+
+   This review covers `REVIEWED_SHORT_SHA`. The PR head moved to
+   `CURRENT_SHORT_SHA` while the review was being posted. Dispatch the review
+   again to cover the latest commit.
+   ```
 
    If no findings survived, post this issue-level comment with one direct issue-
-   comments `gh api` call using `--raw-field body=... --jq '.html_url'`:
+   comments `gh api` call using `--raw-field body=... --jq '.html_url'`. The body
+   ends with the comment signature footer:
 
    ```markdown
    ## Code review
 
    No issues found. Checked LLK correctness, hazards, team rules, and applicable
    architecture/test context.
+
+   <!-- llk-pr-reviewer -->
+   _Posted by the **LLK PR Reviewer**._
    ```
 
-   Verify that the command result is a non-empty URL. Only then return the concise
-   no-findings summary and the posted URL in the final response.
+   Verify that the command result is a non-empty URL, then run the final head
+   check above. Only then return the concise no-findings summary and the posted
+   URLs in the final response.
 
 8. If findings survived, refresh the PR's issue comments and inline review
    comments immediately before posting. Remove any finding another reviewer has
    already covered since step 3. Prepare one self-contained comment per unique
-   issue in context; do not create a file or publish the preparation list. Check
-   each final `path`, `start_line`, and `line` against the refreshed diff. Use
+   issue in context, ending every comment body with the comment signature footer;
+   do not create a file or publish the preparation list. Check
+   each final `path`, `start_line`, and `line` against the exact-SHA reviewed
+   diff, not the PR's current diff. Use
    `start_line: null` for a single-line anchor; for a range, require
    `start_line < line` and keep both endpoints on the right side of the same diff
    hunk.
@@ -246,15 +334,9 @@ Follow these steps precisely:
    `mcp__github_inline_comment__create_inline_comment`: claude-code-action does
    not install that server for `workflow_dispatch` runs.
 
-   Re-read the current head SHA immediately before posting each batch:
-
-   ```bash
-   gh api "repos/OWNER/REPOSITORY/pulls/PR_NUMBER" --jq '.head.sha'
-   ```
-
-   Confirm again that it equals the exact reviewed head SHA, then place it
-   literally in the separate posting call. Do not assign a shell variable or
-   combine the calls. A mismatch is an error and no stale comment may be posted.
+   Always set `commit_id` to the exact reviewed head SHA, placed literally in
+   the posting call, even when the PR head has moved. Do not assign a shell
+   variable or combine calls.
 
    For a single-line anchor (`start_line: null`), post using the changed-file path
    and valid new-side diff line:
@@ -274,11 +356,13 @@ Follow these steps precisely:
    anchor is rejected, post that finding through the issue-comments `gh api`
    endpoint with `--jq '.html_url'`, prefixing its body with
    `` `path:line` `` for a single line or `` `path:start_line-line` `` for a
-   range, so the location is preserved. A fallback failure is an error. Never
+   range, followed by `` at `REVIEWED_SHORT_SHA` `` when the PR head has moved,
+   so the location is preserved. A fallback failure is an error. Never
    finish a `--comment` run without at least one successful GitHub write.
 
-   Only after all required writes have returned non-empty URLs may you return the
-   concise findings summary and posted URLs in the final response.
+   Then run the final head check from step 7. Only after all required writes,
+   including that check's note when needed, have returned non-empty URLs may you
+   return the concise findings summary and posted URLs in the final response.
 
 When a comment relies on a documented repository rule, identify that rule and
 link it using the reviewed repository and full head SHA. Do not add redundant

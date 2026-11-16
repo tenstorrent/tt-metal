@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_randn ${LIB_TYPE})
 add_library(TTNN::Ops::Randn ALIAS ttnn_op_randn)
 
-target_precompile_headers(ttnn_op_randn REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_randn TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_randn)
 
 set_target_properties(

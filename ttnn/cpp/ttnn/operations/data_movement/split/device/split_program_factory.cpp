@@ -16,7 +16,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_artifacts(
     const SplitParams& operation_attributes, const SplitInputs& tensor_args, std::vector<Tensor>& tensor_return_value) {
@@ -24,7 +23,7 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
     const uint32_t num_chunks = static_cast<uint32_t>(operation_attributes.num_splits);
 
     auto input_shape = input_tensor.padded_shape();
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
@@ -132,7 +131,7 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
                 {"y_stride", y_stride_read},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"in0_tensor_tile_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // N writers of ONE source, one per chunk. Each writer is bound to its chunk's output tensor and is
@@ -177,7 +176,7 @@ ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_art
                     {"y_stride", y_stride_write},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"out_tensor_tile_id"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         });
 
         tensor_parameters.push_back(

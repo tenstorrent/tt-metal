@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_moe")
 
@@ -45,7 +45,7 @@ def _ci_unsupported_param_combos(**params):
 
     if not on_ci:
         return False
-    if gate_mode != GateComputeMode.DEVICE:
+    if gate_mode != GateComputeMode.DEVICE_FP32:
         return True
     return False
 
@@ -65,8 +65,8 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize(
     "gate_mode",
-    [GateComputeMode.DEVICE, GateComputeMode.HOST_ALL],
-    ids=["device_gate", "host_gate"],
+    [GateComputeMode.DEVICE_FP32, GateComputeMode.HOST_ALL],
+    ids=["device_fp32", "host_gate"],
 )
 def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     """Test: weights → cold cache → warm cache produce identical outputs."""
@@ -164,6 +164,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
     output1_tt, _ = moe_from_weights(create_input(), return_intermediates=False)
     output1 = to_torch_tp(output1_tt)
@@ -231,6 +233,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
     profiler.end("cold_load")
     output2_tt, _ = moe_cold(create_input(), return_intermediates=False)
@@ -271,6 +275,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        dispatch_fwd_vc_pages=64,
+        combine_fwd_vc_pages=64,
     )
     profiler.end("warm_load")
     output3_tt, _ = moe_warm(create_input(), return_intermediates=False)
@@ -289,7 +295,7 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     logger.info(f"  warm_load:   {profiler.get('warm_load')*1000:.1f} ms")
 
     # MoE integration test should achieve high PCC like component tests
-    # Using GateComputeMode.DEVICE ensures gate runs on device (not host fallback)
+    # Using GateComputeMode.DEVICE_FP32 ensures gate runs on device (not host fallback)
     # This avoids issues with uninitialized torch tensors in cache mode
     pcc_threshold = 0.99
     assert pcc_cold >= pcc_threshold, f"Cold cache mismatch: PCC={pcc_cold} < {pcc_threshold}"

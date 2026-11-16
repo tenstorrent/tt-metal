@@ -30,6 +30,29 @@
 namespace ttnn::h2d_stream_service {
 
 void py_module_types(nb::module_& mod) {
+    nb::class_<tt::tt_metal::StreamCounter>(mod, "StreamCounter", R"doc(
+        A 32-bit L1 word a stream service's kernels or workers bump: its logical core, its L1
+        address, and step, how far it moves per transfer.
+    )doc")
+        .def_ro("core", &tt::tt_metal::StreamCounter::core)
+        .def_ro("addr", &tt::tt_metal::StreamCounter::addr)
+        .def_ro("step", &tt::tt_metal::StreamCounter::step);
+
+    nb::class_<tt::tt_metal::StreamInputCounters>(mod, "StreamInputCounters", R"doc(
+        How a transfer moves into a device: arrived once it lands in the service's FIFO, consumed once
+        the consuming op has copied it out.
+    )doc")
+        .def_ro("arrived", &tt::tt_metal::StreamInputCounters::arrived)
+        .def_ro("consumed", &tt::tt_metal::StreamInputCounters::consumed);
+
+    nb::class_<tt::tt_metal::StreamOutputCounters>(mod, "StreamOutputCounters", R"doc(
+        How a transfer moves out of a device: produced once the producing op has written it, pushed once
+        the service has handed it to fabric, forwarded once the next stage's receiver has taken it.
+    )doc")
+        .def_ro("produced", &tt::tt_metal::StreamOutputCounters::produced)
+        .def_ro("pushed", &tt::tt_metal::StreamOutputCounters::pushed)
+        .def_ro("forwarded", &tt::tt_metal::StreamOutputCounters::forwarded);
+
     nb::class_<tt::tt_metal::H2DStreamService>(mod, "H2DStreamService")
         .def(
             "__init__",
@@ -40,7 +63,7 @@ void py_module_types(nb::module_& mod) {
                uint32_t max_socket_page_size_bytes,
                std::unique_ptr<ttnn::distributed::TensorToMesh> mapper,
                tt::tt_metal::BufferType socket_buffer_type,
-               std::optional<CoreRange> worker_cores,
+               std::optional<tt::tt_metal::CoreRange> worker_cores,
                uint32_t metadata_size_bytes,
                bool parallel_host_push,
                uint32_t host_push_thread_count) {
@@ -148,6 +171,7 @@ void py_module_types(nb::module_& mod) {
             [](tt::tt_metal::H2DStreamService& self, const ttnn::Tensor& host_tensor, const nb::bytes& metadata) {
                 auto meta_span = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
+                nb::gil_scoped_release release;  // blocks while the socket FIFOs are full
                 self.forward_to_tensor(host_tensor, meta_span);
             },
             nb::arg("host_tensor"),
@@ -176,6 +200,7 @@ void py_module_types(nb::module_& mod) {
                     reinterpret_cast<const std::byte*>(data.data()), data.nbytes());
                 auto meta_span = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
+                nb::gil_scoped_release release;  // blocks while the socket FIFOs are full
                 self.forward_to_tensor(bytes, meta_span);
             },
             nb::arg("data"),
@@ -199,7 +224,10 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "barrier",
-            &tt::tt_metal::H2DStreamService::barrier,
+            [](tt::tt_metal::H2DStreamService& self) {
+                nb::gil_scoped_release release;  // blocks until the device has drained every transfer
+                self.barrier();
+            },
             R"doc(
                 Block until every forwarded transfer has fully landed in the backing
                 tensor (committed to DRAM), then return. Safe to read the backing
@@ -332,6 +360,29 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     CoreCoord: The logical service-core coordinate on that device.
+            )doc")
+        .def(
+            "get_input_counters",
+            &tt::tt_metal::H2DStreamService::get_input_counters,
+            nb::arg("coord"),
+            R"doc(
+                This coord's input counters. arrived is the bytes_sent word on
+                its service core: the bytes the host has pushed, each
+                transfer's data pages plus one metadata page when metadata is
+                configured. consumed is the consumed-counter: an inc from
+                every worker per transfer. Owner-only.
+
+                Args:
+                    coord (MeshCoordinate): The mesh coordinate whose socket to
+                        look up.
+
+                Raises:
+                    RuntimeError: If the coord does not participate in this
+                        service, or if the FIFO isn't whole socket pages (each
+                        wrap would also add the bytes past the last page).
+
+                Returns:
+                    StreamInputCounters: Each word, with how far it moves per transfer.
             )doc")
         .def(
             "get_metadata_addr",

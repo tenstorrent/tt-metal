@@ -18,8 +18,8 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -27,7 +27,7 @@ using namespace ttnn::operations::experimental::detail;
 
 namespace ttnn::prim::qsr {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace {
 SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
@@ -36,7 +36,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores) {
-    auto* output_buffer = output_tensor.buffer();
+    const auto* output_buffer = &output_tensor.mesh_buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < actual_input_shape.rank(); i++) {
@@ -108,7 +108,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         accumulated_total_tiles_per_dim,
         accumulated_input_total_tiles_per_dim);
 
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     TT_FATAL(
         output_tensor_start[-1] == 0,
         "slice_write expects output start for the last dimension to be 0. Got {}",
@@ -290,8 +290,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFacto
             "slice_write_reader_sharded.cpp"};
     reader.dfb_bindings = {ProducerOf(SWT_IN_DFB, "in0")};
     reader.runtime_arg_schema = {.runtime_arg_names = {"num_sticks"}};
-    reader.hw_config =
-        ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    reader.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     // Writer: drain the input DFB -> interleaved output, writing each TILE at start_id + the padded-tile-dim walk.
     KernelSpec writer{
@@ -313,8 +312,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFacto
             "num_sticks_per_core_read",
             "num_read_per_barrier"}};
     writer.advanced_options.num_runtime_varargs = 3 * num_dims;
-    writer.hw_config =
-        ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    writer.hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     spec.kernels = {reader, writer};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {SWT_READER, SWT_WRITER}, .target_nodes = input_cores}};
@@ -322,7 +320,7 @@ ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFacto
     // ---- Per-core runtime args ----
     auto per_core = get_slice_write_runtime_args_tiled_sharded_input(
         input, output, output_tensor_start, output_tensor_end, iter_cores);
-    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.mesh_buffer().address();
 
     ProgramRunArgs run_args;
     KernelRunArgs reader_run{.kernel = SWT_READER};

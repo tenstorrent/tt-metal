@@ -11,8 +11,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
 
@@ -275,7 +275,6 @@ Tensor compute_reshape_mapping_host_tensor(
 ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_program_artifacts(
     const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = tensor_return_value;
@@ -303,7 +302,13 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                                 .to_device(device);
 
     const uint32_t mapping_page_size = mapping_tensor.logical_shape()[-1];
-    const auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
+    // Quasar has no UInt32 device format (tt::is_data_format_supported rejects it in ValidateProgramSpec),
+    // so describe the raw 32-bit mapping words as RawUInt32 there. The metadata is inert for this DFB:
+    // it is a DM-only FIFO (neither kernel consults the format; entry_size is the page size, not
+    // tile_size(format)), and RawUInt32 has the same datum/tile size. WH/BH keep the dtype-derived format.
+    const auto mapping_dataformat = device->arch() == tt::ARCH::QUASAR
+                                        ? tt::DataFormat::RawUInt32
+                                        : tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
     const uint32_t mapping_page_size_bytes = mapping_page_size * mapping_tensor.element_size();
 
     // Op-owned tensor: move the owning MeshTensor out of the built Tensor into the artifact so its
@@ -344,7 +349,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     const DFBSpecName MAPPING{"mapping"};  // reader-produces / writer-consumes mapping-page FIFO
     const DFBSpecName IN_TILES{"in_tiles"};  // reader-produces / writer-consumes input-tile FIFO
                                              // (distinct from tensor::input, the input tensor)
-    const DFBSpecName WORKING{"working"};  // writer-only L1 scratch page (self-loop)
+    const ScratchpadSpecName WORKING{"working"};  // writer-private L1 scratch page
     const TensorParamName INPUT_T{"input"};
     const TensorParamName MAPPING_T{"map"};  // the op-owned page-mapping tensor
     const TensorParamName OUTPUT_T{"output"};
@@ -353,8 +358,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     spec.name = "reshape_view_tiled";
 
     // DFBs (placement derived from bindings; no core_ranges). The mapping metadata DFB stages
-    // mapping pages on the fly; the input DFB stages input tiles; the output/working DFB is an L1
-    // scratch page the writer both fills and drains (self-loop).
+    // mapping pages on the fly; the input DFB stages input tiles. The working buffer is a
+    // writer-private L1 scratch page (formerly a self-loop DFB the writer filled and drained;
+    // that FIFO synchronized nothing and is rejected on Quasar) — now a Scratchpad.
     spec.dataflow_buffers = {
         DataflowBufferSpec{
             .unique_id = MAPPING,
@@ -368,11 +374,11 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
             .num_entries = reader_dfb_len,
             .data_format_metadata = input_dfb_data_format,
         },
-        DataflowBufferSpec{
+    };
+    spec.scratchpads = {
+        ScratchpadSpec{
             .unique_id = WORKING,
-            .entry_size = output_tile_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = output_dfb_data_format,
+            .size_per_node = output_tile_size_bytes,  // entry_size * num_entries (1)
         },
     };
 
@@ -397,7 +403,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                 {"Tile_size_bytes", input_tile_size_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -409,10 +415,10 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                     .dfb_spec_name = MAPPING, .accessor_name = "mapping", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
                     .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::CONSUMER},
-                DFBBinding{
-                    .dfb_spec_name = WORKING, .accessor_name = "working", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = WORKING, .accessor_name = "working", .endpoint_type = DFBEndpointType::CONSUMER},
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = WORKING, .accessor_name = "working"},
             },
         .tensor_bindings =
             {
@@ -425,7 +431,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                 {"element_sz_bytes", tt::datum_size(output_dfb_data_format)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     spec.kernels = {reader, writer};

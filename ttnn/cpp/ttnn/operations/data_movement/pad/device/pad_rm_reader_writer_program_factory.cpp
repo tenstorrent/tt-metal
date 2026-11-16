@@ -4,13 +4,14 @@
 
 #include "pad_rm_reader_writer_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <algorithm>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
@@ -63,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // Build the pad-value const tensor once on cache miss and release its owning MeshTensor into
     // the artifact.  The framework parks it in the cache entry, so its address stays valid for
@@ -76,9 +77,17 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
 
     const NodeCoord node{0, 0};
 
-    uint32_t dfb_npages = 16;  // multibuffering
     uint32_t dfb_pagesize =
-        tt::round_up(padded_row_size_nbytes, std::max(a.buffer()->alignment(), tt::constants::TILE_WIDTH));
+        tt::round_up(padded_row_size_nbytes, std::max(a.mesh_buffer().alignment(), tt::constants::TILE_WIDTH));
+    // 16 pages is a multibuffering choice; use fewer when 16 would overflow L1.
+    const uint32_t l1_budget =
+        (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+    TT_FATAL(
+        dfb_pagesize <= l1_budget,
+        "ttnn.pad: padded row of {} B does not fit in the per-core L1 budget ({} B)",
+        dfb_pagesize,
+        l1_budget);
+    uint32_t dfb_npages = std::clamp(l1_budget / dfb_pagesize, 1u, 16u);
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     DataflowBufferSpec in0_dfb{
         .unique_id = RM_SC_IN0,
@@ -136,7 +145,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                      "num_local_unpadded_Y",
                      "num_local_W"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -169,7 +178,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                      "dst_stick_offset",
                      "num_local_W"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;

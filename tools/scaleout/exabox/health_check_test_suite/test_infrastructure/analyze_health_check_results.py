@@ -32,7 +32,7 @@ import re
 import sys
 from datetime import datetime, timezone
 
-from utils.report import is_reset_op_check
+from utils.report import is_reset_op_check, phase_gates
 
 SCHEMA_VERSION = 1
 
@@ -62,8 +62,24 @@ ACKNOWLEDGED_CHECKS = {"cpld_fw_old"}
 # verdict, so it is re-labelled EXCLUDED: kept visible, counts as nothing.
 EXCLUDED_CHECKS = {"snapshot_capture"}
 
-# checks whose details list offending BDFs - keep more text for triage.
-DETAIL_RICH = {"pcie_gen", "gddr_speed", "pcie_lane_width", "physical_vs_fw_location", "asic_location_per_ubb"}
+# checks whose details list offending BDFs or ETH port paths - keep more text
+# for triage. The qsfp_* entries name the ports at fault ("ubb=2/asic=1/
+# eth=6 -> ..."), which is the whole value of the row: truncated to 140 they
+# say a link is down without saying which.
+DETAIL_RICH = {
+    "pcie_gen",
+    "gddr_speed",
+    "pcie_lane_width",
+    "physical_vs_fw_location",
+    "asic_location_per_ubb",
+    "qsfp_link_training",
+    "qsfp_missing_channel",
+    "qsfp_miscabled",
+    "qsfp_partner_disagreement",
+    "qsfp_link_asymmetry",
+    "qsfp_cage_gaps",
+    "qsfp_collection_failures",
+}
 
 # numeric forensic checks: dropped from checks_fact, folded into runs rollups.
 GDDR_INFO_PREFIX = "gddr_info_"
@@ -304,6 +320,7 @@ def machine_meta(report, hostname, job_id, jira_ticket, ts, versions=None, run_i
 
 
 def checks_rows(report: dict, meta: dict):
+    non_gating = {pname for pname, ph in report.get("phases", {}).items() if not phase_gates(ph)}
     rows = []
     for pname, _ps, c in iter_checks(report):
         name = c.get("name", "")
@@ -336,7 +353,9 @@ def checks_rows(report: dict, meta: dict):
                 "is_fail": int(st == "FAIL"),
                 "is_skip": int(st == "SKIP"),
                 "is_covered": int(st in COVERED and executed == 1),
-                "acknowledged": int(name in ACKNOWLEDGED_CHECKS or excluded or is_reset_op_check(name)),
+                "acknowledged": int(
+                    name in ACKNOWLEDGED_CHECKS or excluded or is_reset_op_check(name) or pname in non_gating
+                ),
                 "testcases_passed": tp,
                 "testcases_failed": tf,
                 "executed": executed,

@@ -16,10 +16,12 @@
 // Runtime VALUES, by contrast, are written per enqueue and never affect the
 // generated header, so hashing them would only cause needless cache misses --
 // they are deliberately EXCLUDED from the hash.
+// Compile-time names and values are baked into the header and MUST be hashed.
 //
-// These tests lock in BOTH directions:
+// These tests lock in:
 //   * schema-sensitive  -- any schema difference => DIFFERENT hash
-//   * value-insensitive  -- values-only difference => SAME hash
+//   * runtime-value-insensitive  -- runtime-values-only difference => SAME hash
+//   * compile-time-value-sensitive  -- compile-time value difference => DIFFERENT hash
 //
 // Tier 1 (this file) is host-only: it exercises
 //   (a) experimental::blaze::hash_named_args_schema() directly, and
@@ -54,9 +56,10 @@ std::uint64_t blaze_hash_schema(const NamedKernelArgs& args) {
 // its program-cache hash via the public std::hash<ProgramDescriptor> specialization
 // (which folds in hash_kernel_descriptor per kernel). Everything except
 // blaze_named_args is held constant, so the only hash input that varies between
-// calls is hash_named_args_schema(kernel.blaze_named_args). Note: named-arg values
+// calls is hash_named_args_schema(kernel.blaze_named_args), including compile-time
+// values baked into the generated header. Note: named runtime-arg values
 // are NOT merged into kernel.runtime_args here (that merge happens only during
-// Program construction, not descriptor hashing), so value-only differences leave
+// Program construction, not descriptor hashing), so runtime-value-only differences leave
 // every hashed field untouched.
 std::uint64_t blaze_program_hash(const NamedKernelArgs& args) {
     KernelDescriptor kernel = {
@@ -98,6 +101,12 @@ const CoreCoord kCore1{1, 0};
 TEST(NamedArgsHashSchema, CPU_EmptyEqualsEmpty) {
     EXPECT_EQ(blaze_hash_schema(NamedKernelArgs{}), blaze_hash_schema(NamedKernelArgs{}))
         << "Two empty schemas must hash identically";
+}
+
+TEST(NamedArgsHashSchema, CPU_CompileTimeValueDiffers) {
+    NamedKernelArgs a{.named_compile_time_args = {{"kernel.value", 1}}};
+    NamedKernelArgs b{.named_compile_time_args = {{"kernel.value", 2}}};
+    EXPECT_NE(blaze_hash_schema(a), blaze_hash_schema(b));
 }
 
 // --- value-insensitivity: same schema, different runtime values => SAME hash ---
@@ -199,6 +208,13 @@ TEST(NamedArgsHashSchema, CPU_CountCollisionGuard) {
 // ============================================================================
 // Tier 1b -- hash_kernel_descriptor via public std::hash<ProgramDescriptor>
 // ============================================================================
+
+TEST(NamedArgsHashProgramDescriptor, CPU_CompileTimeValueChangesProgramHash) {
+    NamedKernelArgs a{.named_compile_time_args = {{"kernel.value", 1}}};
+    NamedKernelArgs b{.named_compile_time_args = {{"kernel.value", 2}}};
+    EXPECT_NE(blaze_program_hash(a), blaze_program_hash(b))
+        << "Compile-time values change the generated header and must change the program hash";
+}
 
 TEST(NamedArgsHashProgramDescriptor, CPU_SchemaDifferenceChangesProgramHash) {
     // Two descriptors identical except for a named-arg field name.

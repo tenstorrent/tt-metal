@@ -21,7 +21,6 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanNCFactory:
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input = tensor_args.input;
     auto dim = operation_attributes.dim;
@@ -143,7 +142,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanNCFactory:
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_input_tiles", "num_output_tiles", "input_tile_stride", "start_id", "HtWt", "inner_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // ---- Writer kernel ----
@@ -157,7 +156,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanNCFactory:
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // ---- Compute kernels (two groups) ----
@@ -168,7 +167,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanNCFactory:
     // No unpack_modes entry: this factory never widens the intermediate DFB to Float32, so no DFB the
     // compute kernel consumes carries a 32-bit format. Legacy left unpack_to_dest_mode all-Default,
     // which is exactly an empty table.
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         return KernelSpec{

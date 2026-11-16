@@ -24,21 +24,21 @@
 
 #include "ttnn/tensor/types.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using ttnn::device_operation::ProgramArtifacts;
 
 constexpr std::array<const char*, 3> KERNEL_PATHS{
@@ -51,11 +51,6 @@ constexpr std::array<const char*, 3> KERNEL_PATHS{
 }  // namespace
 
 namespace ttnn::experimental::prim {
-
-// it is expected that this operator is used primarily on BOS' custom chips, which are 4 rows and 5 columns, however the
-// expected parallelisation of the maximal input shape is calculated to be 4 rows and 2 columns
-constexpr uint32_t CORES_X = 2;
-constexpr uint32_t CORES_Y = 4;
 
 ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::create_program_artifacts(
     const operation_attributes_t& /*operation_attributes*/,
@@ -137,8 +132,6 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
         {"cores_y", CORES_Y},
     };
 
-    const auto arch = input_tensor.device()->arch();
-
     // ---- Reader (DM). Produces START (zero-fill) and INPUT (DRAM load). Reads the input tensor via binding. ----
     m2::KernelSpec reader_spec{
         .unique_id = READER,
@@ -150,7 +143,7 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
                  .dfb_spec_name = INPUT, .accessor_name = "input", .endpoint_type = m2::DFBEndpointType::PRODUCER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = T_INPUT, .accessor_name = "input"}},
         .compile_time_args = scalar_ctas,
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Compute. Consumes START/INPUT/AXIS_3_BUFFER, produces OUTPUT, self-loops ACC/CUMSUM_STAGE_0/1/2/
@@ -208,9 +201,9 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
                  .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .compile_time_args = scalar_ctas,
     };
-    // Compute hw_config — Style B (legacy set a Metal ComputeConfig directly). Build ComputeGen1Config; carry the
+    // Compute hw_config — Style B (legacy set a Metal ComputeConfig directly). Build ComputeHardwareConfig; carry the
     // resolved legacy values (HiFi4, math_approx_mode=false -> Precise, fp32_dest_acc_en -> enable_32_bit_dest).
-    m2::ComputeGen1Config compute_cfg{
+    m2::ComputeHardwareConfig compute_cfg{
         .fpu_math_fidelity = MathFidelity::HiFi4,
         .sfpu_precision_mode = Precision::Precise,
         .enable_32_bit_dest = fp32_dest_acc_en,
@@ -219,7 +212,7 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
     // mode default (=UnpackToSrc); replicate that for the 8 DFBs the compute kernel consumes (OUTPUT is producer-only).
     // For bf16 input enable_32_bit_dest is false and no entries are required.
     if (fp32_dest_acc_en) {
-        compute_cfg.unpack_modes = m2::ComputeUnpackModes{
+        compute_cfg.unpack_modes = m2::ComputeHardwareConfig::ComputeUnpackModes{
             {START, UnpackMode::UnpackToSrc},
             {INPUT, UnpackMode::UnpackToSrc},
             {ACC, UnpackMode::UnpackToSrc},
@@ -246,7 +239,7 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
                  .endpoint_type = m2::DFBEndpointType::PRODUCER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = T_OUTPUT, .accessor_name = "output"}},
         .compile_time_args = scalar_ctas,
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- WorkUnit: all three kernels on the fixed 2x4 grid (placement derives DFB residency). ----

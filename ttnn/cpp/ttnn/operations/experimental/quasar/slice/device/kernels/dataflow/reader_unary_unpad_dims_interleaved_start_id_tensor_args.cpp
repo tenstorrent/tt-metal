@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -41,7 +42,7 @@ void kernel_main() {
 
     // Create objects for Device 2.0 API
     DataflowBuffer cb_in0(dfb::cb_in);
-    DataflowBuffer cb_tensor(dfb::cb_tensor);
+    Scratchpad<uint32_t> cb_tensor(scratch::cb_tensor);
     Noc noc;
 
     // Get tile size from DFB interface
@@ -55,39 +56,29 @@ void kernel_main() {
     uint32_t start_indices[num_dims];
     uint32_t end_indices[num_dims];
 
+    // Read each index tensor under a scoped_lock. On Quasar DM the scratchpad is reached through the DM
+    // caches, and the NoC writes below land in L1 behind them: without the lock's invalidate on entry the
+    // loads can return lines cached by an earlier read (e.g. the previous call's start indices). No-op on WH/BH.
+
     // Read start tensor data using separate circular buffer
-    cb_tensor.reserve_back(1);
-    uint32_t start_buffer_l1_addr = cb_tensor.get_read_ptr();
     noc.async_read(start_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch CB
-    // is left balanced after this single-tile staging read.
-    cb_tensor.push_back(1);
-    cb_tensor.wait_front(1);
-
-    volatile tt_l1_ptr uint32_t* start_data = (volatile tt_l1_ptr uint32_t*)start_buffer_l1_addr;
-
-    for (uint32_t i = 0; i < num_dims; i++) {
-        start_indices[i] = start_data[i];
+    {
+        const auto cb_tensor_lock = cb_tensor.scoped_lock(0, num_dims);
+        for (uint32_t i = 0; i < num_dims; i++) {
+            start_indices[i] = cb_tensor[i];
+        }
     }
-    cb_tensor.pop_front(1);
 
     // Read end tensor data using separate circular buffer
-    cb_tensor.reserve_back(1);
-    uint32_t end_buffer_l1_addr = cb_tensor.get_read_ptr();
     noc.async_read(end_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch CB
-    // is left balanced after this single-tile staging read.
-    cb_tensor.push_back(1);
-    cb_tensor.wait_front(1);
-
-    volatile tt_l1_ptr uint32_t* end_data = (volatile tt_l1_ptr uint32_t*)end_buffer_l1_addr;
-
-    for (uint32_t i = 0; i < num_dims; i++) {
-        end_indices[i] = end_data[i];
+    {
+        const auto cb_tensor_lock = cb_tensor.scoped_lock(0, num_dims);
+        for (uint32_t i = 0; i < num_dims; i++) {
+            end_indices[i] = cb_tensor[i];
+        }
     }
-    cb_tensor.pop_front(1);
 
     uint32_t start_offset = 0;
 

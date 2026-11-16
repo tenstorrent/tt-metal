@@ -7,6 +7,7 @@
 #include <optional>
 #include <variant>
 
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
@@ -65,32 +66,19 @@ struct ExampleMultipleReturnDeviceOperation {
     // i.e. if spec_return_value_t is a std::vector<std::optional<tt::tt_metal::TensorSpec>> then tensor_return_value_t
     // should be std::vector<std::optional<Tensor>>
 
-    struct SingleCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+    // Describe the program declaratively. The operation has no per-dispatch state beyond its tensor
+    // bindings, so the factory returns a ProgramSpec whose tensor parameters the framework refreshes
+    // on cache hits; no override_runtime_arguments and no shared_variables_t are needed.
+    struct ExampleMultipleReturnProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
-
-    using program_factory_t = std::variant<SingleCore>;
+    using program_factory_t = std::variant<ExampleMultipleReturnProgramFactory>;
 
     // Mandatory methods
 
-    // Select the program factory based on the operation attributes and tensor args
     // Validate the operation when it creates a program. Usually will have more checks
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

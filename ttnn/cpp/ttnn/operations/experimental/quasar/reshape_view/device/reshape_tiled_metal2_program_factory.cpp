@@ -18,8 +18,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/experimental/quasar/reshape_view/device/reshape_tiled_program_factory.hpp"
@@ -28,7 +28,6 @@
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 const TensorParamName RT_INPUT{"reshape_tiled_input"};
@@ -142,8 +141,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
             {{"max_map_size_bytes", mapping_page_size_bytes}, {"tile_size_bytes", input_tile_size_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
         // Explicit CB credit ops (staged reads) -> disable implicit sync (Quasar tile-counter double-count).
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -162,8 +160,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
              {"max_map_entries", max_map_entries},
              {"element_sz_bytes", element_sz_bytes}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels = {reader, writer};

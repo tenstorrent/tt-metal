@@ -18,6 +18,8 @@ file(
     bcast/device/kernels/*.cpp
     clone/device/kernels/*.cpp
     concat/device/kernels/*.cpp
+    concat/device/kernels/*.hpp
+    concat/codegen/kernels/*.cpp
     common/kernels/*.hpp
     common/kernels/codegen/*.cpp
     common/kernels/codegen/*.h
@@ -27,6 +29,8 @@ file(
     fold/device/kernels/*.cpp
     gather/device/kernels/*.cpp
     gather/device/kernels/*.hpp
+    gather/codegen/kernels/*.cpp
+    gather/codegen/kernels/*.hpp
     copy/device/kernels/*.cpp
     indexed_fill/device/kernels/*.cpp
     moe_expert_token_remap/device/kernels/*.cpp
@@ -42,6 +46,9 @@ file(
     repeat/codegen/kernels/*.cpp
     roll/device/kernels/*.cpp
     reshape_view/device/device/*.cpp
+    reshape_view/codegen/kernels/*.cpp
+    reshape_view/codegen/kernels/*.h
+    scatter/device/kernels/*.cpp
     scatter/device/kernels/*.hpp
     sharded/device/kernels/*.cpp
     sharded/reshard/device/kernels/*.cpp
@@ -82,7 +89,6 @@ target_sources(
             tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
             untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
             tilize/device/kernels/compute/tilize_wh.cpp
-            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
             # bcast/
             bcast/bcast_nanobind.hpp
             bcast/device/bcast_device_operation.hpp

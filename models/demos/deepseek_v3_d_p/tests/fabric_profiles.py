@@ -10,7 +10,29 @@ import re
 from pathlib import Path
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    create_fabric_router_config,
+    get_max_payload_size,
+    moe_fabric_payload_size,
+)
+
+
+def moe_fabric_payload(model_config):
+    """The payload for a mesh running TtMoe: room for the routed expert / combine overlap on Blackhole, the
+    model's own FABRIC_PAYLOAD_SIZE everywhere else. See init_helpers.moe_fabric_payload_size."""
+    return moe_fabric_payload_size(model_config)
+
+
+# Each model opens the fabric at its production packet size; other variants at the arch maximum.
+MODEL_PAYLOAD_CONFIGS = {"kimi_k3_1": KimiK31Config, "glm_5_3": GLM53Config}
+
+
+def model_fabric_payload(variant_name):
+    """The production fabric packet size for `variant_name`, or None (the arch maximum) for a variant without one."""
+    config = MODEL_PAYLOAD_CONFIGS.get(variant_name)
+    return moe_fabric_payload(config) if config else None
 
 
 def fabric2d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
@@ -35,6 +57,28 @@ def fabric_1d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
         ),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     }
+    params.update(overrides)
+    return params
+
+
+def fabric_1d_plain_device_params(**overrides) -> dict:
+    """Bare 1D fabric profile: ``fabric_config`` and nothing else.
+
+    ``fabric_1d_device_params`` above additionally pins a router config and RELAXED_INIT, which the
+    dispatch/combine tests want. The op-level CSA tests deliberately do not -- they open a 1D fabric on
+    its defaults, which is what they were characterized against, and adding a router config to them is
+    a behavioral change that needs its own hardware run. This exists so those tests still get a FRESH
+    dict per ``pytest.param`` (a shared literal is mutable fixture state) and so the profile has one
+    home instead of one copy per test file.
+    """
+    params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+    params.update(overrides)
+    return params
+
+
+def fabric_disabled_device_params(**overrides) -> dict:
+    """No fabric, for the single-device (1x1) cases that run no collective at all."""
+    params = {"fabric_config": ttnn.FabricConfig.DISABLED}
     params.update(overrides)
     return params
 
@@ -66,7 +110,15 @@ def torus_x_device_params(*, fabric_payload_size=None, **overrides) -> dict:
 
 
 def torus_xy_device_params(*, fabric_payload_size=None, **overrides) -> dict:
-    """Production 8x4 Ring/Ring profile; requires a cabling-certified explicit descriptor."""
+    """Production 8x4 Ring/Ring profile.
+
+    Leave `TT_MESH_GRAPH_DESC_PATH` unset. A torus descriptor declares its channel counts
+    `policy: STRICT`, which prunes any physical pair carrying fewer channels than declared,
+    so a box one degraded link down fails the whole map; auto-discovery validates RELAXED
+    and maps the wrap. What auto-discovery gives up is an error on a wrap it cannot cable,
+    substituting a lesser fabric instead, which is what `assert_requested_tp_wrap_was_realized`
+    holds it to.
+    """
     params = {
         "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         "fabric_router_config": create_fabric_router_config(
@@ -78,8 +130,8 @@ def torus_xy_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     return params
 
 
-def assert_torus_xy_descriptor(path: str) -> None:
-    """Fail before device open unless every declared device mesh is 8x4 Ring/Ring."""
+def _device_topologies(path: str) -> tuple[Path, list[tuple[str, str, str, str]]]:
+    """(dims..., dim_types...) of every device mesh a descriptor declares; fails on a non-2D one."""
     descriptor_path = Path(path).resolve()
     text = descriptor_path.read_text()
     declared = len(re.findall(r"device_topology\s*\{", text))
@@ -91,8 +143,91 @@ def assert_torus_xy_descriptor(path: str) -> None:
     assert topologies, f"{descriptor_path}: no two-dimensional device topology found"
     assert len(topologies) == declared, (
         f"{descriptor_path}: {declared} device_topology block(s) declared but only "
-        f"{len(topologies)} are two-dimensional; TorusXY requires every mesh to be 8x4 Ring/Ring"
+        f"{len(topologies)} are two-dimensional; a certified torus requires every mesh to be 2D"
     )
+    return descriptor_path, topologies
+
+
+def mesh_descriptor_topologies(path: str) -> list[tuple[str, str, str, str]]:
+    """(dims..., dim_types...) of every device mesh a mesh graph descriptor declares."""
+    return _device_topologies(path)[1]
+
+
+def assert_torus_xy_descriptor(path: str) -> None:
+    """Fail before device open unless every declared device mesh is 8x4 Ring/Ring."""
+    descriptor_path, topologies = _device_topologies(path)
     assert all(
         topology == ("8", "4", "RING", "RING") for topology in topologies
     ), f"{descriptor_path}: TorusXY requires every device topology to be 8x4 Ring/Ring; found {topologies}"
+
+
+# One tray half as a 4x4 prefill stage: SP on the axis-1 ring, TP on the axis-0 line.
+STAGE_4X4_TOPOLOGY = ("4", "4", "LINE", "RING")
+
+
+def certified_torus_fabric(path: str) -> ttnn.FabricConfig:
+    """The wrapped fabric a cabling-certified Galaxy may open under this explicit descriptor.
+
+    8x4 Ring/Ring is the production TorusXY. A 4x4 Line/Ring descriptor is one tray half (the
+    4x4 stage), whose axis-1 rings are the certified torus's own X wraps, so it certifies TorusX.
+    Anything else fails before device open.
+    """
+    _, topologies = _device_topologies(path)
+    if all(topology == STAGE_4X4_TOPOLOGY for topology in topologies):
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_X
+    assert_torus_xy_descriptor(path)
+    return ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+
+
+_REQUESTS_TP_WRAP = frozenset(
+    {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    }
+)
+
+
+def tp_axis_is_wrapped(mesh_device) -> bool:
+    """Whether the fabric that came up rings the TP axis, read from the routes it resolved.
+
+    The mesh graph descriptor cannot answer this: it is absent whenever the graph came from
+    auto-discovery, which is the one path that substitutes a fabric for the requested one.
+    Routing tables are always populated, and they are what the collective actually consumes,
+    so a wrap is detected by where a route goes rather than by what the topology claims. The
+    far peer sits one hop behind on a ring and `cols - 1` hops ahead on a line.
+    """
+    _, cols = tuple(mesh_device.shape)
+    mesh_shapes = ttnn.get_physical_mesh_shapes()
+    assert len(mesh_shapes) == 1, f"expected a single local mesh, got {mesh_shapes}"
+    mesh_id = ttnn.MeshId(next(iter(mesh_shapes)))
+
+    def direction(src, dst):
+        node = lambda col: ttnn.FabricNodeId(mesh_id, col)  # noqa: E731 -- row 0, so chip id is the column
+        value = ttnn.get_eth_forwarding_direction(node(src), node(dst))
+        assert value is not None, f"no TP route from column {src} to {dst}"
+        return value
+
+    return direction(0, cols - 1) == direction(1, 0)
+
+
+def assert_requested_tp_wrap_was_realized(mesh_device) -> None:
+    """Fail an arm whose wrap the control plane dropped on its way to the device.
+
+    Auto-discovery matches the requested fabric against the cabling it finds and falls back
+    TORUS_XY -> TORUS_Y -> TORUS_X -> MESH behind a log warning rather than raising. A box
+    short one wrap link therefore answers a torus request with an unwrapped fabric and runs
+    the arm to green on the single topology that arm exists to exercise.
+    """
+    if ttnn.get_fabric_config() not in _REQUESTS_TP_WRAP:
+        return
+
+    _, cols = tuple(mesh_device.shape)
+    if cols <= 2:
+        # `is_genuine_torus_dim`: a dimension this narrow keeps ordinary mesh links, so the
+        # fabric is right to leave it unwrapped and there is nothing here to hold it to.
+        return
+
+    assert tp_axis_is_wrapped(mesh_device), (
+        f"{ttnn.get_fabric_config()} was requested but the TP axis came up unwrapped; "
+        f"this box cannot gate a wrap-direction bug -- check the wrap cabling"
+    )

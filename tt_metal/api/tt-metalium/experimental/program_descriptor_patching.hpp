@@ -11,9 +11,9 @@
  *
  * A stop-gap that lets descriptor-based op factories re-patch Buffer addresses and the handful
  * of hash-excluded scalar runtime args on a program-cache hit — standing in for the legacy
- * override_runtime_arguments() path until Metal 2.0 lands. Metal 2.0 solves this at the
- * framework level with native Tensor/Buffer bindings, at which point THIS ENTIRE FILE AND ITS
- * IMPLEMENTATION ARE DELETED. Do not extend the API, do not depend on it outside the
+ * override_runtime_arguments() path while these factories migrate to Metal 2.0. Metal 2.0
+ * provides native Tensor/Buffer bindings at the framework level. Remove this header and its
+ * implementation after all callers have migrated. Do not extend the API, do not depend on it outside the
  * mesh-device-operation adapter. New code almost certainly wants the Metal 2.0 binding instead.
  *
  * CODE REVIEWERS: if anyone builds on top of this, reject immediately — unless it's Diego.
@@ -37,6 +37,8 @@
  *   tt::tt_metal::apply_resolved_bindings(program, resolved, current);
  */
 
+#include <cstddef>
+#include <string_view>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -60,7 +62,7 @@ struct ProgramDescriptor;
 // is_common == true means the arg is in common (non-per-core) runtime args.
 struct ResolvedRtArgBinding {
     uint32_t kernel_idx = 0;
-    CoreCoord core{};  // unused when is_common == true
+    CoreCoord core;  // unused when is_common == true
     uint32_t arg_idx = 0;
     uint32_t tensor_buffer_idx = 0;
     bool is_common = false;
@@ -157,7 +159,7 @@ void apply_resolved_bindings(
 // just the destination (kernel/core/arg) plus the value to write.
 struct DynamicRuntimeArg {
     uint32_t kernel_idx = 0;  // index into ProgramDescriptor::kernels
-    CoreCoord core{};         // ignored when is_common == true
+    CoreCoord core;           // ignored when is_common == true
     uint32_t arg_idx = 0;     // position within that kernel/core's runtime args
     uint32_t value = 0;       // current value, derived from the live operation_attributes
     bool is_common = false;   // true => common (non-per-core) runtime args

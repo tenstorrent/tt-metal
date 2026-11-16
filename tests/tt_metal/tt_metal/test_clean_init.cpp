@@ -53,7 +53,7 @@ int main(int argc, char** /*argv*/) {
         ids.push_back(id);
     }
 
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
@@ -88,14 +88,14 @@ int main(int argc, char** /*argv*/) {
             auto output_dram_buffer =
                 distributed::MeshBuffer::create(global_buffer_config, local_dram_config, device.get());
 
-            Program program = CreateProgram();
+            Program program = CreateProgram(*device);
             auto mesh_workload = distributed::MeshWorkload();
 
             constexpr CoreCoord core = {0, 0};
 
             std::vector<uint32_t> compile_time_args;
-            TensorAccessorArgs(*(input_dram_buffer->get_backing_buffer())).append_to(compile_time_args);
-            TensorAccessorArgs(*(output_dram_buffer->get_backing_buffer())).append_to(compile_time_args);
+            TensorAccessorArgs(*input_dram_buffer).append_to(compile_time_args);
+            TensorAccessorArgs(*output_dram_buffer).append_to(compile_time_args);
             KernelHandle dram_copy_kernel_id = CreateKernel(
                 program,
                 "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",

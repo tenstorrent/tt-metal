@@ -13,31 +13,33 @@ USE_PERF_TEST_MODE = True
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-def test_dram_group_norm_welford_reciprocal_vae(device):
-    from tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM import test_group_norm_DRAM
+def test_dram_group_norm_two_pass_vae(device):
+    from tt_py_test_utils_common.group_norm_dram import run_group_norm_DRAM_with_input_mask
 
-    test_group_norm_DRAM(device, 1, 256, 256, 256, 32, 4, 8, 8, "welford_reciprocal", perf_test_mode=USE_PERF_TEST_MODE)
+    run_group_norm_DRAM_with_input_mask(
+        device, 1, 256, 256, 256, 32, 4, 8, 8, "two_pass", perf_test_mode=USE_PERF_TEST_MODE
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_block_sharded_group_norm_sdxl(device):
-    from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_group_norm import run_sdxl_base_group_norm
 
-    test_sdxl_base_group_norm(device, (1, 1920, 32, 32), use_welford=False, perf_test_mode=USE_PERF_TEST_MODE)
+    run_sdxl_base_group_norm(device, (1, 1920, 32, 32), use_welford=False, perf_test_mode=USE_PERF_TEST_MODE)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
 def test_block_sharded_group_norm_negative_mask_sdxl(device):
-    from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm_negative_mask
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_group_norm import run_sdxl_base_group_norm_negative_mask
 
-    test_sdxl_base_group_norm_negative_mask(device, (1, 640, 128, 128), perf_test_mode=USE_PERF_TEST_MODE)
+    run_sdxl_base_group_norm_negative_mask(device, (1, 640, 128, 128), perf_test_mode=USE_PERF_TEST_MODE)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_ff_matmul_with_gelu_sdxl(device):
-    from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul import test_sdxl_matmul
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_matmul import run_sdxl_matmul
 
-    test_sdxl_matmul(
+    run_sdxl_matmul(
         device,
         core_grid=ttnn.CoreGrid(y=8, x=5),
         M=1024,
@@ -55,9 +57,9 @@ def test_ff_matmul_with_gelu_sdxl(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 def test_conv2d_block_sharded_sdxl(device):
-    from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import test_conv2d_sdxl
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_conv2d import run_sdxl_conv2d
 
-    test_conv2d_sdxl(
+    run_sdxl_conv2d(
         device,
         torch_tensor_map={},
         batch=1,
@@ -87,9 +89,9 @@ def test_conv2d_block_sharded_sdxl(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
 def test_conv2d_auto_sliced_vae(device):
-    from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import test_conv2d_vae_sdxl
+    from models.demos.stable_diffusion_xl_base.tests.sdxl_conv2d import run_sdxl_conv2d_vae
 
-    test_conv2d_vae_sdxl(
+    run_sdxl_conv2d_vae(
         device,
         torch_tensor_map={},
         batch=1,
@@ -117,10 +119,10 @@ def test_conv2d_auto_sliced_vae(device):
 
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @pytest.mark.models_device_performance_bare_metal
-def test_dram_group_norm_vae_welford_reciprocal_performance():
+def test_dram_group_norm_vae_two_pass_performance():
     # Create a command that runs the specific test
-    command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_dram_group_norm_welford_reciprocal_vae" -v'
-    subdir = f"dram_group_norm_vae_welford_reciprocal_perf"
+    command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_dram_group_norm_two_pass_vae" -v'
+    subdir = f"dram_group_norm_vae_two_pass_perf"
     cols = ["DEVICE KERNEL"]
     op_name = "GroupNormDeviceOperation"
 
@@ -135,11 +137,11 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1331396  # Measured: 1.33ms for GroupNorm VAE welford_reciprocal
+    expected_duration_ns = 1236000  # Wormhole two-pass VAE: ~1.236 ms, confirmed locally and in CI.
 
     # Log the performance result
     print(
-        f"DRAM GroupNorm VAE welford_reciprocal Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
+        f"DRAM GroupNorm VAE two-pass Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
     )
 
     # Performance validation with 1.5% margin
@@ -172,7 +174,10 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 73722  # Measured: ~74μs for GroupNorm SDXL block sharded
+    # #55698 (2026-09-25) migrated the GroupNorm kernels to eltwise_chain and set 68875 from its own measurement;
+    # #56292, three hours later, removed the legacy rsqrt from the sharded kernel (modern routine, fewer SFPU
+    # instructions per pass). Thirteen single-kernel readings since then span 67332-68004 ns, mean 67712.
+    expected_duration_ns = 67750
 
     # Log the performance result
     print(
@@ -209,7 +214,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 549179  # Measured: ~549μs for GroupNorm SDXL negative mask
+    expected_duration_ns = 460175  # Measured: ~460μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -246,7 +251,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
+    expected_duration_ns = 235541  # Measured: ~235.5μs for FF Matmul SDXL with GELU
 
     # Log the performance result
     print(
@@ -283,9 +288,7 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = (
-        993500  # Updated 2026-07-09: ~3% faster (~0.9935ms) after CircularBuffer->DataflowBuffer kernel port
-    )
+    expected_duration_ns = 994294  # Measured: ~0.9943ms for Conv2D SDXL block sharded
 
     # Log the performance result
     print(
@@ -322,7 +325,7 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3082972  # Measured: 3.08ms for Conv2D VAE auto sliced
+    expected_duration_ns = 3135000  # Measured: ~3.135ms on main (avg of 3 runs)
 
     # Log the performance result
     print(

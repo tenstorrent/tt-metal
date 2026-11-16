@@ -5,6 +5,7 @@
 #include "moreh_arange_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <bit>
@@ -26,8 +27,17 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
     auto W = output.padded_shape()[-1];
     auto Wt = tt::div_up(W, tt::constants::TILE_WIDTH);
 
-    auto start = operation_attributes.start;
-    auto step = operation_attributes.step;
+    // INT32 outputs are generated with integer arithmetic on device: the host passes int32 start/step
+    // (validated to be integral), so values above 2^24 are not rounded through float.
+    uint32_t start_bits;
+    uint32_t step_bits;
+    if (dtype == DataType::INT32) {
+        start_bits = std::bit_cast<uint32_t>(static_cast<int32_t>(operation_attributes.start));
+        step_bits = std::bit_cast<uint32_t>(static_cast<int32_t>(operation_attributes.step));
+    } else {
+        start_bits = std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.start));
+        step_bits = std::bit_cast<uint32_t>(static_cast<float>(operation_attributes.step));
+    }
 
     auto* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
@@ -73,6 +83,12 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
     writer_desc.runtime_args.reserve(num_cores);
 
     // Runtime args per core
+    // A ROW_MAJOR output is exactly W elements long (no tile padding in the last dim), so
+    // the last chunk a core writes must be clamped to the logical width: a fixed
+    // TILE_WIDTH-wide chunk would otherwise write past the end of the output buffer into
+    // whatever tensor is allocated next in DRAM. The width of that last chunk is computed
+    // here and handed to the kernel as a runtime argument.
+    const uint32_t last_chunk_width = ((W - 1) % tt::constants::TILE_WIDTH) + 1;
     uint32_t core_h = grid.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
@@ -85,14 +101,21 @@ ProgramDescriptor MorehArangeOperation::create_descriptor(
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
+        // Only the very last chunk of the very last core can be partial: every core's
+        // chunk range is a contiguous tile span, and tile_offset counts whole tiles.
+        const bool writes_last_chunk = (tile_offset + num_tiles_per_core) == Wt;
+        const uint32_t last_chunk_bytes =
+            (writes_last_chunk ? last_chunk_width : tt::constants::TILE_WIDTH) * output.element_size();
+
         writer_desc.emplace_runtime_args(
             core,
             {output.buffer(),
              tile_offset,
              num_tiles_per_core,
-             std::bit_cast<uint32_t>(start),
-             std::bit_cast<uint32_t>(step),
-             output.element_size()});
+             start_bits,
+             step_bits,
+             output.element_size(),
+             last_chunk_bytes});
 
         tile_offset += num_tiles_per_core;
     }

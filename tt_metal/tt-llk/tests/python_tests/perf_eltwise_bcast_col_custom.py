@@ -1,47 +1,38 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
-
 import pytest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BroadcastType,
     DestAccumulation,
-    MathFidelity,
     MathOperation,
-    PerfRunType,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.test_variant_parameters import (
-    BROADCAST_TYPE,
-    LOOP_FACTOR,
-    MATH_FIDELITY,
-    MATH_OP,
-    TILE_COUNT,
-    TemplateParameter,
+from helpers.perf.core import ALL_PERF_RUN_TYPES
+from test_eltwise_bcast_col_custom import (
+    _TILE_ROWS,
+    _run_eltwise_bcast_col_custom,
 )
-
-
-@dataclass
-class CT_DIM(TemplateParameter):
-    ct_dim: int
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t CT_DIM = {self.ct_dim};"
 
 
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=[MathOperation.Elwsub],
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+        ]
+    ),
+    mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
-    math_fidelity=[MathFidelity.LoFi],
+    math_fidelity=ALL_MATH_FIDELITIES,
     broadcast_type=[BroadcastType.Column],
-    ct_dim=[1, 8],
-    loop_factor=[64],
+    tile_rows=_TILE_ROWS,
+    input_width=list(range(32, 257, 32)) + [1024],
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[32],
+    is_perf=[True],
 )
 def test_perf_eltwise_bcast_col_custom(
     perf_report,
@@ -50,39 +41,22 @@ def test_perf_eltwise_bcast_col_custom(
     dest_acc,
     math_fidelity,
     broadcast_type,
-    ct_dim,
+    tile_rows,
+    input_width,
+    run_types,
     loop_factor,
+    is_perf,
 ):
-    configuration = PerfConfig(
-        "sources/eltwise_bcast_col_custom_perf.cpp",
+    _run_eltwise_bcast_col_custom(
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-        ],
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=mathop),
-            BROADCAST_TYPE(broadcast_type),
-            CT_DIM(ct_dim),
-        ],
-        runtimes=[
-            TILE_COUNT(ct_dim),
-            LOOP_FACTOR(loop_factor),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=ct_dim,
-            tile_count_B=1,
-            tile_count_res=ct_dim,
-        ),
-        dest_acc=dest_acc,
+        mathop,
+        dest_acc,
+        math_fidelity,
+        broadcast_type,
+        tile_rows,
+        input_width,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
-
-    configuration.run(perf_report)

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "tt-metalium/experimental/fabric/fabric.hpp"
 
@@ -110,6 +111,10 @@ void enable_fabric(uint32_t num_devices) {
 
 void disable_fabric() {
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+}
+
+void release_metal_env() {
+    tt::tt_metal::detail::ReleaseOwnership();
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

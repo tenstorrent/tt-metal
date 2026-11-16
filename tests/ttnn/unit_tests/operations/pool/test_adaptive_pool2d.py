@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import pytest
+import torch
+import ttnn
 from tests.sweep_framework.sweep_utils.adaptive_pool2d_common import run_adaptive_pool2d
 
 
@@ -71,6 +72,32 @@ def test_adaptive_pool2d(
         dtype=dtype,
         pool_type=pool_type,
     )
+
+
+# Kernels look uniform but lowered pool2d does not match pytorch adaptive windows
+@pytest.mark.parametrize(
+    "input_hw, output_hw",
+    [
+        (6, 4),
+        (10, 4),
+    ],
+)
+def test_adaptive_pool2d_rejects_mismatched_windows(device, input_hw, output_hw, expect_error):
+    batch, channels = 1, 32
+    ttnn_input = ttnn.from_torch(
+        torch.randn(1, 1, batch * input_hw * input_hw, channels, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "do not produce uniform pooling behavior"):
+        ttnn.adaptive_avg_pool2d(
+            input_tensor=ttnn_input,
+            batch_size=batch,
+            input_h=input_hw,
+            input_w=input_hw,
+            channels=channels,
+            output_size=[output_hw, output_hw],
+        )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

@@ -9,6 +9,9 @@
 #
 # Simulator mode (TT_METAL_SIMULATOR set):
 #   Exports TT_METAL_SLOW_DISPATCH_MODE=1 and TT_METAL_DISABLE_SFPLOADMACRO=1.
+#   Does not set TT_METAL_QUASAR_NOC_API_VERSION (default is 2).
+#   ttsim does not implement NOC API v2: for Quasar ttsim, export
+#   TT_METAL_QUASAR_NOC_API_VERSION=1 yourself.
 #   Skips flock, device resets, and triage (these require real hardware).
 #   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
 #

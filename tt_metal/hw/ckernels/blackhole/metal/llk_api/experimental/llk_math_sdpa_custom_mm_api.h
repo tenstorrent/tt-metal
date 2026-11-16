@@ -6,10 +6,12 @@
 #include <cstdint>
 #include "experimental/llk_math_sdpa_custom_mm.h"
 #include "llk_math_common_api.h"
+#include "sanitizer/api.h"
 
 template <bool transpose = false>
 inline void llk_math_sdpa_custom_mm_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandB_id = get_operand_id(operandA);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
@@ -24,6 +26,7 @@ inline void llk_math_sdpa_custom_mm(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
     const bool mask_chunk = false) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandB_id = get_operand_id(operandA);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 

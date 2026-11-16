@@ -8,13 +8,13 @@
 #include <string>
 #include <vector>
 
-#include "impl/context/context_types.hpp"
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/debug/noc_logging.hpp"
+#include "impl/device/device_impl.hpp"
 #include "impl/dispatch/debug_tools.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -27,6 +27,19 @@ using std::vector;
 
 string output_dir_name = "generated/watcher/";
 string logfile_name = "cq_dump.txt";
+
+// Attach to a device with minimal setup; the chip may be hung so MeshDevice::create_unit_mesh is not appropriate.
+static IDevice* create_device_minimal(
+    ChipId device_id, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
+    auto& ctx = MetalContext::instance();  // runtime state
+    auto& env = ctx.get_env();             // default low level state
+    ctx.initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
+    auto* dev =
+        new Device(&env, &ctx, device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto& control_plane = MetalEnvAccessor(env).impl().get_control_plane();
+    MetalEnvAccessor(env).impl().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
+    return dev;
+}
 
 void dump_data(
     MetalEnv& env,
@@ -56,14 +69,13 @@ void dump_data(
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
         std::ofstream iq_file = std::ofstream(iq_fname);
-        // Attach with minimal setup; the chip may be hung so MeshDevice::create_unit_mesh is not appropriate.
-        IDevice* device = tt::tt_metal::CreateDeviceMinimal(
+        IDevice* device = create_device_minimal(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
         devices.push_back(std::unique_ptr<IDevice>(device));
         if (dump_cqs) {
             cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
             std::unique_ptr<SystemMemoryManager> sysmem_manager =
-                std::make_unique<SystemMemoryManager>(DEFAULT_CONTEXT_ID, id, num_hw_cqs);
+                std::make_unique<SystemMemoryManager>(env_impl, MetalContext::instance(), id, num_hw_cqs);
             ::internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
     }

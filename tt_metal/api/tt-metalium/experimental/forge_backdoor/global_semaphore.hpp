@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal::experimental {
 // clang-format off
@@ -30,13 +33,13 @@ GlobalSemaphore CreateGlobalSemaphore(
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
-    uint64_t address);
+    uint64_t address,
+    uint8_t cq_id = 0);
 
-[[deprecated(
-    "Use CreateGlobalSemaphore(distributed::MeshDevice&, ...) instead. "
-    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
+// Same as above, but the semaphore is created on `mesh_cq`'s mesh device and the initial value is written through
+// `mesh_cq` with fast dispatch. The queue is not used for the write on slow dispatch / simulator.
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
+    distributed::MeshCommandQueue& mesh_cq,
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,

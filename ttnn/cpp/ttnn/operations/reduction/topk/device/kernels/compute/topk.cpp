@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -16,14 +17,14 @@
  * Transpose tiles from width-height to height-width format and pack to destination buffer
  * Used in final stage to convert sorted results back to output format
  *
- * @param input_dfb_index    Dataflow buffer id for the tiles to transpose (source buffer)
- * @param dest_dfb_index     Dataflow buffer id to store transposed tiles (destination buffer)
+ * @param input_dfb    Dataflow buffer holding the tiles to transpose (source buffer)
+ * @param dest_dfb     Dataflow buffer to store transposed tiles (destination buffer)
  * @param total_tiles       Number of tiles to process and transpose
  */
-FORCE_INLINE void transpose_and_pack(
-    const uint32_t input_dfb_index, const uint32_t dest_dfb_index, const uint32_t total_tiles) {
-    DataflowBuffer input_dfb(input_dfb_index);
-    DataflowBuffer dest_dfb(dest_dfb_index);
+template <bool strip_rank_tags = false, typename InputDfb, typename DestDfb>
+FORCE_INLINE void transpose_and_pack(InputDfb& input_dfb, DestDfb& dest_dfb, const uint32_t total_tiles) {
+    const uint32_t input_dfb_index = input_dfb.get_id();
+    const uint32_t dest_dfb_index = dest_dfb.get_id();
 
     // Configure data formats for transpose operation.
     // Pack using the DESTINATION CB format: input_dfb may be bf16 (higher-precision
@@ -31,13 +32,23 @@ FORCE_INLINE void transpose_and_pack(
     reconfig_data_format_srca(input_dfb_index);
     transpose_init(input_dfb_index);
     pack_reconfig_data_format(dest_dfb_index);
+    // On Quasar, pack_reconfig_data_format does not change the buffer that pack_tile writes to; only
+    // pack_init does (#58488). Every switch of the pack target needs a pack_init.
+#ifdef ARCH_QUASAR
+    pack_init(dest_dfb_index);
+#endif
 
     // Wait for all tiles to be available (double-buffered, hence 2 * total_tiles)
-    input_dfb.wait_front(2 * total_tiles);
+    input_dfb.wait_front(static_cast<uint16_t>(2 * total_tiles));
     for (uint32_t i = 0; i < total_tiles; ++i) {
         // Transpose tile from WH to HW format
         tile_regs_acquire();
         transpose_tile(input_dfb_index, i, 0);
+        if constexpr (strip_rank_tags) {
+            // Rank-stamped values carry stale rank tags in their low 16 bits; clear them so the
+            // following Float32->bf16 pack is exact instead of RNE-rounding on tag bits.
+            ckernel::topk_strip_rank_tags(0);
+        }
         tile_regs_commit();
 
         dest_dfb.reserve_back(1);
@@ -51,8 +62,8 @@ FORCE_INLINE void transpose_and_pack(
     }  // i loop
     // Pop in two halves so a single pop never crosses the circular buffer
     // wrap boundary (fifo_rd_ptr must not exceed fifo_limit in one step).
-    input_dfb.pop_front(total_tiles);
-    input_dfb.pop_front(total_tiles);
+    input_dfb.pop_front(static_cast<uint16_t>(total_tiles));
+    input_dfb.pop_front(static_cast<uint16_t>(total_tiles));
 }
 
 /**
@@ -66,11 +77,19 @@ FORCE_INLINE void transpose_and_pack(
 FORCE_INLINE void pack_results(const uint32_t dfb0, const uint32_t dfb1, const uint32_t base_offset) {
     // Pack first tile (values) to cb0
     pack_reconfig_data_format(dfb0);
+    // On Quasar, only pack_init switches the pack target (#58488).
+#ifdef ARCH_QUASAR
+    pack_init(dfb0);
+#endif
     pack_tile(base_offset, dfb0);
 
     // Pack second tile (indices) to cb1, reconfig only if different buffer
     if (dfb0 != dfb1) {
         pack_reconfig_data_format(dfb1);
+        // On Quasar, only pack_init switches the pack target (#58488).
+#ifdef ARCH_QUASAR
+        pack_init(dfb1);
+#endif
     }
     pack_tile(base_offset + 1, dfb1);
 }
@@ -94,26 +113,36 @@ FORCE_INLINE void read_cb_and_transpose(const uint32_t dfb, const uint32_t base_
  * Utility function: Wait for tiles and pop them from front of dataflow buffer
  * Refactored to reduce code duplication
  *
- * @param dfb      Dataflow buffer id to operate on
+ * @param dfb      Dataflow buffer to operate on
  * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
-FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
-    DataflowBuffer dfb_obj(dfb);
-    dfb_obj.wait_front(count);
-    dfb_obj.pop_front(count);
+template <typename Dfb>
+FORCE_INLINE void cb_wait_pop_front(Dfb& dfb, const uint32_t count) {
+    dfb.wait_front(static_cast<uint16_t>(count));
+#ifdef ARCH_QUASAR
+    // The tiles are dropped unread, but Quasar needs a real unpack on this buffer between the wait and
+    // the pop, or the pop can retire before the tiles are available (TEN-4746).
+    dummy_unpack(dfb.get_id());
+#endif
+    dfb.pop_front(static_cast<uint16_t>(count));
 }
 
 /**
  * Utility function: Reserve space and push tiles to back of dataflow buffer
  * Refactored to reduce code duplication
  *
- * @param dfb      Dataflow buffer id to operate on
+ * @param dfb      Dataflow buffer to operate on
  * @param count   Number of tile slots to reserve at the back and then mark as available
  */
-FORCE_INLINE void cb_reserve_push_back(const uint32_t dfb, const uint32_t count) {
-    DataflowBuffer dfb_obj(dfb);
-    dfb_obj.reserve_back(count);
-    dfb_obj.push_back(count);
+template <typename Dfb>
+FORCE_INLINE void cb_reserve_push_back(Dfb& dfb, const uint32_t count) {
+    dfb.reserve_back(static_cast<uint16_t>(count));
+#ifdef ARCH_QUASAR
+    // Nothing is packed into the slots, but Quasar needs a real pack on this buffer between the reserve
+    // and the push, or the push can retire before the space is available (TEN-4746).
+    dummy_pack(dfb.get_id());
+#endif
+    dfb.push_back(static_cast<uint16_t>(count));
 }
 
 void kernel_main() {
@@ -137,16 +166,32 @@ void kernel_main() {
     constexpr uint32_t largest = get_arg(args::largest);            // 1 for largest K, 0 for smallest K
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;   // Ties keep the lowest index
 
+    // Rank-stamped stable mode: sort [bf16 value | local-rank tag] keys with the unstable network
+    // while the true u32 indices ride the index-tracking swaps, instead of running the index-aware
+    // comparator network on every compare. The stamp before each local sort provides the
+    // torch-stable tie order; the value intermediates travel as raw Float32 tiles.
+    constexpr bool rank_stamped = get_arg(args::rank_stamped) == 1;
+    // The rank tag IS the stable tie-break; the network itself runs unstable in rank-stamped mode.
+    constexpr bool network_stable = stable_sort && !rank_stamped;
+
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
-    ckernel::topk_tile_init();
+    ckernel::topk_tile_init<false, rank_stamped>();
+    constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
+    // Construct the DataflowBuffer objects once, here, so that they live for the whole kernel; the helpers
+    // above that wait, pop, reserve, or push take them by reference. On Quasar a DataflowBuffer destructor
+    // waits until every pushed tile has been popped, so one constructed inside a helper or a loop body would
+    // wait on a buffer that still holds tiles, and for the buffers this kernel both pushes to and pops from,
+    // that wait would never end.
     DataflowBuffer input_val_dfb(input_val_dfb_index);
     DataflowBuffer input_ind_dfb(input_ind_dfb_index);
     DataflowBuffer transposed_val_dfb(transposed_val_dfb_index);
     DataflowBuffer transposed_ind_dfb(transposed_ind_dfb_index);
     DataflowBuffer result_prep_val_dfb(result_prep_val_dfb_index);
     DataflowBuffer result_prep_ind_dfb(result_prep_ind_dfb_index);
+    DataflowBuffer output_val_dfb(output_val_dfb_index);
+    DataflowBuffer output_ind_dfb(output_ind_dfb_index);
 
     constexpr uint32_t DST_VAL = 0;
     constexpr uint32_t DST_IND = 2;
@@ -249,10 +294,18 @@ void kernel_main() {
                 tile_regs_wait();
                 // Pack transposed values
                 pack_reconfig_data_format(transposed_val_dfb_index);
+                // On Quasar, only pack_init switches the pack target (#58488).
+#ifdef ARCH_QUASAR
+                pack_init(transposed_val_dfb_index);
+#endif
                 pack_tile(DST_VAL, transposed_val_dfb_index);
 
                 // Pack transposed indices
                 pack_reconfig_data_format(transposed_ind_dfb_index);
+                // On Quasar, only pack_init switches the pack target (#58488).
+#ifdef ARCH_QUASAR
+                pack_init(transposed_ind_dfb_index);
+#endif
                 pack_tile(DST_IND, transposed_ind_dfb_index);
                 tile_regs_release();
 
@@ -264,6 +317,9 @@ void kernel_main() {
             // Insertion sort into result preparation buffer
             // Process each output tile position for insertion sort
             for (uint32_t index = 0; index < output_tiles; index++) {
+                // Cases A/B below overwrite `index` to exit the loop; the rank-stamp needs the
+                // cascade level this iteration actually processes.
+                const uint32_t cascade_level = index;
                 // Initialize variables for current insertion iteration
                 uint32_t incr = 1;                        // Default buffer advance increment
                 uint32_t transposed_offset = 0;           // Offset in transposed buffer (0 or 1)
@@ -305,11 +361,15 @@ void kernel_main() {
                 }
 
                 // Prepare data for merge operation
-                // Wait for required tiles to be available
-                DataflowBuffer dfb0_obj(dfb0);
-                DataflowBuffer dfb1_obj(dfb1);
-                dfb0_obj.wait_front(in_dfb_offset);  // Wait for existing sorted data
-                dfb1_obj.wait_front(in_dfb_offset);
+                // Wait for required tiles to be available: the existing sorted data in dfb0/dfb1, which are
+                // the transposed buffers for the first sort and the result prep buffers otherwise.
+                if (first_sort_from_transposed) {
+                    transposed_val_dfb.wait_front(static_cast<uint16_t>(in_dfb_offset));
+                    transposed_ind_dfb.wait_front(static_cast<uint16_t>(in_dfb_offset));
+                } else {
+                    result_prep_val_dfb.wait_front(static_cast<uint16_t>(in_dfb_offset));
+                    result_prep_ind_dfb.wait_front(static_cast<uint16_t>(in_dfb_offset));
+                }
                 if (transposed_offset == 0) {
                     transposed_val_dfb.wait_front(1);  // Wait for new input tile
                     transposed_ind_dfb.wait_front(1);
@@ -353,7 +413,38 @@ void kernel_main() {
                 // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
                 // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
                 // largest flag determines ascending (0) vs descending (1) sort order
-                ckernel::topk_local_sort<stable_sort>(0, (int)!largest, end_phase);
+                if constexpr (rank_stamped) {
+                    // Chain-rank stamps: every tag in one insertion round is that element's
+                    // round-start CHAIN position (accumulator tile p = range [32p, 32p+32), the
+                    // fresh chunk = the top range), which is globally consistent with the true
+                    // (value, index) order — the accumulator chain is the (value, index)-sorted
+                    // prefix of everything seen, and the fresh chunk holds the highest indices in
+                    // ascending position order. Each 64-sort therefore compares distinct keys
+                    // whose tie order is the true index order, at every cascade level: the
+                    // accumulator side is re-stamped with its level's range when loaded, while a
+                    // loser tile's tags RIDE unchanged into the next level (raw Float32
+                    // transport), so a displaced OLD element still outranks NEWER accumulator
+                    // entries. The stamp also folds -0.0 into +0.0; every fresh datum passes
+                    // through exactly one stamp (level 0 / first sort) before its first compare.
+                    if (first_sort_from_transposed) {
+                        // Both tiles fresh (width chunks 0 and 1): plain positions [0, 64).
+                        ckernel::topk_stamp_local_positions<largest != 0>(0);
+                    } else {
+                        ckernel::topk_stamp_tile_rank_range<largest != 0>(
+                            0 /*idst*/, 0 /*dst_tile_index*/, 32 * cascade_level /*rank_base*/);
+                        if (cascade_level == 0) {
+                            ckernel::topk_stamp_tile_rank_range<largest != 0>(
+                                0 /*idst*/, 1 /*dst_tile_index*/, 32 * output_tiles /*rank_base*/);
+                        }
+                    }
+                }
+                if constexpr (network_stable) {
+                    if (cascade_level == 0) {
+                        ckernel::topk_canonicalize_negzero_values(0);
+                    }
+                }
+                ckernel::topk_local_sort<network_stable, DST_ACCUM_MODE, /*fused=*/false, rank_stamped, tie_order>(
+                    0, static_cast<int>(largest == 0), end_phase);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
                 tile_regs_commit();
@@ -363,14 +454,14 @@ void kernel_main() {
                     transposed_val_dfb.pop_front(1);
                     transposed_ind_dfb.pop_front(1);
                 } else {
-                    dfb0_obj.pop_front(in_dfb_offset);
-                    dfb1_obj.pop_front(in_dfb_offset);
+                    result_prep_val_dfb.pop_front(static_cast<uint16_t>(in_dfb_offset));
+                    result_prep_ind_dfb.pop_front(static_cast<uint16_t>(in_dfb_offset));
                 }
 
                 // Store sorted results back to buffers
                 // Reserve space for storing the best K elements
-                result_prep_val_dfb.reserve_back(incr);
-                result_prep_ind_dfb.reserve_back(incr);
+                result_prep_val_dfb.reserve_back(static_cast<uint16_t>(incr));
+                result_prep_ind_dfb.reserve_back(static_cast<uint16_t>(incr));
 
                 tile_regs_wait();
                 pack_results(result_prep_val_dfb_index, dfb2, 0);  // Store top 32 elements
@@ -378,8 +469,8 @@ void kernel_main() {
                 tile_regs_release();
 
                 // Advance result prep buffer pointers
-                result_prep_val_dfb.push_back(incr);
-                result_prep_ind_dfb.push_back(incr);
+                result_prep_val_dfb.push_back(static_cast<uint16_t>(incr));
+                result_prep_ind_dfb.push_back(static_cast<uint16_t>(incr));
 
                 // Clean up transposed buffers if we consumed from them
                 if ((transposed_offset == 0) && !first_sort_from_transposed) {
@@ -388,6 +479,17 @@ void kernel_main() {
                 }
 
                 // Maintain transposed buffer structure
+#ifdef ARCH_QUASAR
+                // When the bottom 32 elements went to the result prep buffers, the transposed slot reserved
+                // above holds no packed tile. Quasar still needs a real pack on that buffer between its
+                // reserve and its push (TEN-4746).
+                if (dfb2 != transposed_val_dfb_index) {
+                    dummy_pack(transposed_val_dfb_index);
+                }
+                if (dfb3 != transposed_ind_dfb_index) {
+                    dummy_pack(transposed_ind_dfb_index);
+                }
+#endif
                 transposed_val_dfb.push_back(1);
                 transposed_ind_dfb.push_back(1);
             }  // index loop
@@ -396,18 +498,18 @@ void kernel_main() {
             input_take = 1;
 
             // Clean up intermediate transposed tile
-            cb_wait_pop_front(transposed_val_dfb_index, 1);
-            cb_wait_pop_front(transposed_ind_dfb_index, 1);
+            cb_wait_pop_front(transposed_val_dfb, 1);
+            cb_wait_pop_front(transposed_ind_dfb, 1);
         }  // count loop
 
         // Final output preparation
         // Prepare result buffers for final output
-        cb_reserve_push_back(result_prep_val_dfb_index, output_tiles);
-        cb_reserve_push_back(result_prep_ind_dfb_index, output_tiles);
+        cb_reserve_push_back(result_prep_val_dfb, output_tiles);
+        cb_reserve_push_back(result_prep_ind_dfb, output_tiles);
 
         // Transpose and pack final results to output buffers
         // Convert sorted results from HW back to WH format for output
-        transpose_and_pack(result_prep_val_dfb_index, output_val_dfb_index, output_tiles);
-        transpose_and_pack(result_prep_ind_dfb_index, output_ind_dfb_index, output_tiles);
+        transpose_and_pack<rank_stamped>(result_prep_val_dfb, output_val_dfb, output_tiles);
+        transpose_and_pack(result_prep_ind_dfb, output_ind_dfb, output_tiles);
     }  // core_loop loop
 }

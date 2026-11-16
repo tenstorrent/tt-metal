@@ -4,23 +4,41 @@
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 from collections import namedtuple
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
+import pytest
 import torch
 from filelock import FileLock
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat, FormatConfig
-from .llk_params import format_dict
+from .llk_params import ReduceDimension, format_dict
 from .logger import logger
+from .target_config import TestTargetConfig
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
+    MAX_FACE_R_DIM,
 )
 from .tile_shape import construct_tile_shape
+from .ulp import (
+    FLUSH_SUBNORMAL_OUTPUTS,
+    has_ulp_gate,
+    mantissa_bits,
+    max_meaningful_ulp,
+    selected_lanes,
+    ulp_distance,
+    ulp_dtype,
+    ulp_elementwise_valid,
+    ulp_stats,
+    ulp_verdict_message,
+)
 
 TEMP_DIR = Path(tempfile.gettempdir())
 
@@ -85,6 +103,8 @@ tolerances = {
     DataFormat.UInt16: Tolerance(atol=0, rtol=0),
     DataFormat.Int8: Tolerance(atol=0, rtol=0),
     DataFormat.UInt8: Tolerance(atol=0, rtol=0),
+    DataFormat.Int4: Tolerance(atol=0, rtol=0),
+    DataFormat.UInt4: Tolerance(atol=0, rtol=0),
     DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
     DataFormat.Bfp4_b: Tolerance(atol=0.125, rtol=0.3),
     DataFormat.Bfp2_b: Tolerance(atol=0.5, rtol=0.4),
@@ -140,6 +160,20 @@ def matmul_acc_atol(
         tolerances[output_data_format].atol,
         MATMUL_ACC_REL_ERR_PER_KT * kt_dim * mean_active,
     )
+
+
+def classify_special(value) -> str:
+    """One float result as a short label for special-value tests: "NaN", "+inf" / "-inf",
+    "+0.0" / "-0.0" (the sign of a zero kept), or the value to nine significant digits.
+    Turns a dict of per-probe results into something an expected-results dict can compare
+    with ==, and a failure message can print readably."""
+    if np.isnan(value):
+        return "NaN"
+    if np.isinf(value):
+        return "+inf" if value > 0 else "-inf"
+    if value == 0.0:
+        return "-0.0" if np.signbit(value) else "+0.0"
+    return "%.9g" % value
 
 
 def print_faces(operand1, tile_shape=None):
@@ -443,10 +477,12 @@ def _mxint_block_aware_compare(
     two, so 2^floor(log2(amax)) == amax == max(|g|,|r|) and ULP == block scale,
     preserving the original MxInt2 behavior.
 
-    Tilizes first to match HW's block layout (32-element block = one face
-    row-pair), so block scales line up with how HW derived them.
+    Groups the tensors as they are, in 32-element blocks, which is how the
+    packer's scales line up against them and how the golden's own quantizer
+    groups: reshaping to a different 32 scores each element against a block
+    whose maximum neither side used, and the allowance for a one-step block
+    exponent then comes out sized for the wrong magnitude.
     """
-    from helpers.tilize_untilize import tilize_block, untilize_block
 
     BLOCK = 32
     TILE_SIZE = 1024
@@ -458,14 +494,8 @@ def _mxint_block_aware_compare(
     if n == 0:
         return torch.ones(0, dtype=torch.bool)
 
-    if n % TILE_SIZE == 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        g_til = tilize_block(g_flat, tile_dim, DataFormat.Float32).flatten()
-        r_til = tilize_block(r_flat, tile_dim, DataFormat.Float32).flatten()
-    else:
-        g_til = g_flat
-        r_til = r_flat
+    g_til = g_flat
+    r_til = r_flat
 
     # Batch over 32-element blocks (zero-pad a partial tail block; padded zeros
     # never raise a block's amax, so the real elements compare identically).
@@ -503,21 +533,116 @@ def _mxint_block_aware_compare(
 
     is_valid_til = ((diff <= bound) | both_nan).reshape(-1)[:n]
 
-    if n % TILE_SIZE == 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        is_valid = (
-            untilize_block(is_valid_til.float(), DataFormat.Float32, tile_dim)
-            .flatten()
-            .bool()
-        )
-    else:
-        is_valid = is_valid_til
-
-    return is_valid
+    return is_valid_til
 
 
 _RECORD_TEST_ORDER: bool = False
+
+# --ulp-report: log the step count of every comparison on a ULP-capable format, enrolled
+# or not. Computed after the verdict and never read back into it.
+_ULP_REPORT: bool = False
+
+# --ulp-measure=<path>: append one Measurement per comparison that followed exactly one
+# accuracy_contract lookup in the same test (see _record_ulp_measurement). Written
+# after the verdict and never read back into it, but the sweep's records are required:
+# one not written fails its cell (RecordDropped).
+_ULP_MEASURE_PATH: Optional[str] = None
+# Set by the first failed write: a path that stops taking writes mid-run (disk full, the
+# directory removed) is reported once, not once per comparison per worker.
+_ULP_MEASURE_WARNED: bool = False
+
+
+def _promoted(in_fmt, out_fmt, dest, arch) -> bool:
+    """Whether TestConfig ran this variant with another ``dest_acc`` than it names: on
+    Wormhole and Blackhole an exponent-B input packed to Float16 needs a 32-bit Dest,
+    so a ``No`` request runs the ``Yes`` kernel -- against a golden a driver built for
+    ``No``."""
+    from .data_format_inference import effective_dest_acc
+
+    if in_fmt is None or out_fmt is None or dest is None:
+        return False
+    # The one rule, read where TestConfig reads it, rather than re-derived here, for the
+    # architecture the contract was resolved for.
+    return effective_dest_acc(in_fmt, out_fmt, dest, arch) != dest
+
+
+def prepare_ulp_measure_file() -> None:
+    """Create ``--ulp-measure``'s file empty, once per session on the controller; an
+    ``OSError`` is the plugin's to turn into a usage error."""
+    if _ULP_MEASURE_PATH:
+        path = Path(_ULP_MEASURE_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+
+def _consume_ulp_query() -> None:
+    """Drop ``accuracy_contract``'s pending query once per :func:`passed_test`. Looked up
+    rather than imported: importing the registry loads the whole table, which every
+    comparison in the tree would then pay for."""
+    budget = sys.modules.get(f"{__package__}.sfpu_accuracy_budget")
+    if budget is not None:
+        budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
+
+
+class RecordDropped(RuntimeError):
+    """A record the caller required was not written under ``--ulp-measure``."""
+
+
+def _record_ulp_measurement(
+    distance, *, mask, nonfinite: int = 0, bins=None, readings=(), required=False
+) -> None:
+    """Append one comparison's worst measurable lane as a ``Measurement`` under
+    ``accuracy_contract``'s last query, which is consumed here. Nothing is written when
+    the query is missing, ambiguous, from another test, or names a ``dest_acc``
+    TestConfig did not run (:func:`_promoted`): a lost datapoint is recoverable, a budget
+    folded back under the wrong variant is not. *nonfinite* counts the lanes disagreeing
+    with the golden about being finite; *bins* and *readings* are the sweep's profile.
+    A failed write warns once -- unless *required*: the headroom report judges only the
+    cells it reads, so a sweep record that is not written raises :class:`RecordDropped`.
+    """
+    if not _ULP_MEASURE_PATH:
+        return
+
+    def dropped(why: str) -> None:
+        if required:
+            raise RecordDropped(f"--ulp-measure: no record written: {why}")
+
+    from . import sfpu_accuracy_budget as budget
+    from .ulp_table import Measurement
+
+    query, budget.LAST_QUERY = budget.LAST_QUERY, None
+    ambiguous, budget.PENDING_AMBIGUOUS = budget.PENDING_AMBIGUOUS, False
+    if query is None or ambiguous or query.test != budget._current_test():
+        return dropped("no single accuracy_contract query of this test is pending")
+    key = query.key
+    if _promoted(key.input_format, key.output_format, key.dest_acc, key.arch):
+        return dropped(f"{key.describe()} runs with another dest_acc")
+    stats = ulp_stats(distance, mask)
+    measurement = Measurement(
+        op=query.op,
+        key=key,
+        worst=int(stats["max"]),
+        lanes=int(stats["lanes"]),
+        unmeasurable=int(stats["unmeasurable"]),
+        nonfinite=int(nonfinite),
+        test=query.test,
+        bins=tuple((int(b), *counts) for b, counts in sorted((bins or {}).items())),
+        readings=tuple(readings),
+    )
+    global _ULP_MEASURE_WARNED
+    try:
+        with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
+            handle.write(measurement.to_json() + "\n")
+    except OSError as exc:
+        if not _ULP_MEASURE_WARNED:
+            _ULP_MEASURE_WARNED = True
+            logger.warning(
+                "--ulp-measure: cannot write {}: {} (not repeated)",
+                _ULP_MEASURE_PATH,
+                exc,
+            )
+        dropped(f"cannot write {_ULP_MEASURE_PATH}: {exc}")
+
 
 # Per-format params for _mxfp_block_aware_compare:
 # (mantissa_bits, max_steps, max_normal, min_subnormal).
@@ -600,6 +725,16 @@ def _mxfp_block_aware_compare(
     return is_valid | both_nan
 
 
+def result_tensor(res_from_L1, output_format: DataFormat, golden=None) -> torch.Tensor:
+    """The device result as a tensor of *output_format*'s torch dtype. With *golden*,
+    first assert the result has as many datums as the golden."""
+    if golden is not None:
+        assert len(res_from_L1) == len(
+            golden
+        ), f"result has {len(res_from_L1)} datums, golden has {len(golden)}"
+    return torch.tensor(res_from_L1, dtype=format_dict[output_format])
+
+
 def passed_test(
     golden_tensor,
     res_tensor,
@@ -612,10 +747,100 @@ def passed_test(
     custom_rtol=None,
     custom_pcc_threshold=None,
     tile_shape=None,
+    max_ulp: Optional[int] = None,
+    near_zero_atol: Optional[float] = None,
+    flush_subnormals: Optional[bool] = None,
+    mask=None,
 ):
+    """Verdict for one result tensor against its golden.
+
+    With *max_ulp* the gate is "every element within *max_ulp* representable steps of
+    the reference" and both the tolerance check and PCC are skipped; it warns when the
+    budget is looser than the ``rtol`` it replaces (``rtol * 2**mantissa_bits`` steps).
+    *mask* narrows the gate to the lanes it selects, *near_zero_atol* is the floor under
+    the budget where the reference crosses zero (:func:`helpers.ulp.ulp_elementwise_valid`)
+    and *flush_subnormals* overrides the metric's per-dtype default; all three are
+    refused without a budget. A ``Bfp8_b`` budget is counted in bfloat16 steps and
+    charges for block quantization (``helpers.ulp._ULP_PROXY_DTYPES``).
+
+    ``max_ulp=None`` gives the previous verdict bit for bit. Under ``--ulp-report`` and
+    ``--ulp-measure`` the comparison is measured after the verdict, with subnormal
+    outputs ranked flushed, and never read back. Every call spends the variant
+    ``accuracy_contract`` last resolved.
+    """
 
     if tile_shape is None:
         tile_shape = construct_tile_shape((DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM))
+
+    if max_ulp is None:
+        # The tolerance arm is `torch.isclose`: no flush, no floor, no lane selection.
+        inert = sorted(
+            name
+            for name, value in {
+                "near_zero_atol": near_zero_atol,
+                "flush_subnormals": flush_subnormals,
+                "mask": mask,
+            }.items()
+            if value is not None
+        )
+        if inert:
+            raise ValueError(
+                f"{', '.join(inert)}: read only with max_ulp; pass a step budget as "
+                "well, or custom_atol for a flat tolerance over every lane"
+            )
+
+    if max_ulp is not None:
+        if max_ulp < 0:
+            # -1 is ulp.UNMEASURABLE; 0 stays legal as the bit-exact gate.
+            raise ValueError(
+                f"max_ulp must not be negative, got {max_ulp}; 0 is the bit-exact gate"
+            )
+        if near_zero_atol is not None and near_zero_atol < 0:
+            raise ValueError(
+                f"near_zero_atol must not be negative, got {near_zero_atol}; "
+                "0.0 is the no-floor value, and None is the default"
+            )
+        gate_dtype = ulp_dtype(output_data_format)  # raises for a format with no ULP
+        if max_ulp > max_meaningful_ulp(gate_dtype):
+            logger.warning(
+                "max_ulp={} exceeds the largest meaningful ULP budget for {} ({} = "
+                "2**mantissa_bits, one binade); the op belongs on the tolerance metric",
+                max_ulp,
+                gate_dtype,
+                max_meaningful_ulp(gate_dtype),
+            )
+        gate_tolerance = tolerances[output_data_format]
+        displaced = gate_tolerance.rtol * (1 << mantissa_bits(gate_dtype))
+        if max_ulp > displaced:
+            logger.warning(
+                "max_ulp={} is looser than the rtol={} tolerance it replaces (~{:.1f} "
+                "steps at large magnitude) and PCC no longer backs it up",
+                max_ulp,
+                gate_tolerance.rtol,
+                displaced,
+            )
+        if near_zero_atol is not None and near_zero_atol > gate_tolerance.atol:
+            logger.warning(
+                "near_zero_atol={} is looser than the atol={} half of the tolerance it "
+                "replaces, with no PCC behind it",
+                near_zero_atol,
+                gate_tolerance.atol,
+            )
+        ignored = {
+            "custom_atol": custom_atol,
+            "custom_rtol": custom_rtol,
+            "custom_pcc_threshold": custom_pcc_threshold,
+            "custom_bfp4_max_ulp_diff": custom_bfp4_max_ulp_diff,
+        }
+        named = sorted(name for name, value in ignored.items() if value is not None)
+        if L1_to_L1_iterations != 1:
+            # Its only effect is `target_pcc = pow(0.99, n)`, which this arm never reaches.
+            named.append("L1_to_L1_iterations")
+        if named:
+            raise ValueError(
+                f"max_ulp replaces the tolerance and PCC gates, so {', '.join(named)} "
+                "would be silently ignored. Pass a step budget or a tolerance, not both."
+            )
 
     def get_tolerance(output_data_format):
         try:
@@ -636,7 +861,32 @@ def passed_test(
     golden_tensor = golden_tensor.type(format_dict[output_data_format])
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
-    if output_data_format == DataFormat.Bfp8_b:
+    ulp_distances = None
+
+    if max_ulp is not None and golden_tensor.numel() == 0:
+        # Before the verdict and before any logging. torch.all is True on an empty mask,
+        # so this arm would otherwise emit "ULP within budget -- no measurable lane" on a
+        # DEBUG run and only then raise -- recording a passing accuracy datapoint for an
+        # input that compared nothing and then failed validation.
+        raise ValueError(
+            "passed_test received an empty tensor; there is nothing to compare"
+        )
+
+    if max_ulp is not None:
+        # The near-zero band sizes its dynamic range over the judged lanes only, so the
+        # selection is resolved before the verdict. No lattice arm is ORed in: max_ulp
+        # is the enforced maximum, Bfp8_b's block quantization included.
+        ulp_selected = selected_lanes(mask, golden_tensor)
+        is_valid, ulp_distances, ulp_rescued = ulp_elementwise_valid(
+            golden_tensor,
+            res_tensor,
+            max_ulp,
+            near_zero_atol=near_zero_atol,
+            flush_subnormals=flush_subnormals,
+            selected=ulp_selected,
+        )
+        is_valid = is_valid | ~ulp_selected
+    elif output_data_format == DataFormat.Bfp8_b:
         # Bfp8_b shares one exponent across 16 elements, so when a block spans a wide
         # magnitude range the small elements quantize toward zero and a flat atol reads
         # that as a mismatch. But Bfp8_b's lattice is fine enough that one step can be
@@ -683,7 +933,7 @@ def passed_test(
         # count fallback; per-format lattice parameters live in
         # _MXFP_COMPARE_PARAMS.
         (
-            mantissa_bits,
+            element_bits,
             max_steps,
             element_max_normal,
             element_min_subnormal,
@@ -691,7 +941,7 @@ def passed_test(
         is_valid = _mxfp_block_aware_compare(
             golden_tensor,
             res_tensor,
-            mantissa_bits=mantissa_bits,
+            mantissa_bits=element_bits,
             max_steps=max_steps,
             element_max_normal=element_max_normal,
             element_min_subnormal=element_min_subnormal,
@@ -704,6 +954,80 @@ def passed_test(
         is_valid = is_close | is_nan
 
     is_within_tolerance = torch.all(is_valid)
+
+    if ulp_distances is not None:
+        # Ranked without the lanes the floor accepted (they hold the largest step counts
+        # by construction), ahead of the tile dump so the worst lane leads the log.
+        ranked = ulp_selected & ~ulp_rescued
+        _record_ulp_measurement(ulp_distances, mask=ranked)
+
+        def _ulp_summary():
+            return ulp_verdict_message(
+                golden_tensor,
+                res_tensor,
+                ulp_distances,
+                output_data_format,
+                mask=ranked,
+                max_ulp=max_ulp,
+                flush_subnormals=flush_subnormals,
+                rescued=None if near_zero_atol is None else ulp_rescued & ulp_selected,
+            )
+
+        if is_within_tolerance and _ULP_REPORT:
+            logger.info("ULP within budget - {}", _ulp_summary())
+        elif is_within_tolerance:
+            logger.opt(lazy=True).debug("ULP within budget - {}", _ulp_summary)
+        elif print_errors and not _RECORD_TEST_ORDER:
+            logger.error("ULP budget exceeded - {}", _ulp_summary())
+        elif _ULP_REPORT:
+            logger.info("ULP budget exceeded - {}", _ulp_summary())
+        else:
+            # Silence keeps the line out of the test_errors.log CI uploads, not out of DEBUG.
+            logger.opt(lazy=True).debug("ULP budget exceeded - {}", _ulp_summary)
+
+    if (
+        (_ULP_REPORT or _ULP_MEASURE_PATH)
+        and ulp_distances is None
+        and has_ulp_gate(output_data_format)
+    ):
+        # No step budget measured it: an op on the tolerance metric. After the verdict,
+        # never read back into it.
+        if golden_tensor.shape != res_tensor.shape:
+            # `torch.isclose` broadcast these; `ulp_distance` would refuse them.
+            logger.warning(
+                "{} skipped - golden {} and result {} differ in shape; the verdict "
+                "above compared them broadcast",
+                " and ".join(
+                    name
+                    for name, on in (
+                        ("ULP report", _ULP_REPORT),
+                        ("--ulp-measure", _ULP_MEASURE_PATH),
+                    )
+                    if on
+                ),
+                tuple(golden_tensor.shape),
+                tuple(res_tensor.shape),
+            )
+        else:
+            # Ranked flushed, as every step-budget gate ranks.
+            distances = ulp_distance(
+                golden_tensor, res_tensor, flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS
+            )
+            _record_ulp_measurement(distances, mask=None)
+            if _ULP_REPORT:
+                logger.info(
+                    "ULP report - {}",
+                    ulp_verdict_message(
+                        golden_tensor,
+                        res_tensor,
+                        distances,
+                        output_data_format,
+                        flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS,
+                    ),
+                )
+
+    # Spent on every path, so a later comparison in the same test cannot inherit it.
+    _consume_ulp_query()
 
     if output_data_format.is_mx_format():
         # Every MX low-bit format is judged by its lattice-aware compare
@@ -795,6 +1119,11 @@ def passed_test(
                     golden_tensor[idx],
                 )
 
+    if max_ulp is not None:
+        # The empty-tensor refusal is up before the verdict, so nothing to re-check here.
+        # A step budget already subsumes both remaining checks; see the docstring.
+        return bool(is_within_tolerance)
+
     if golden_tensor.abs().max().item() < PCC_SIGNAL_FLOOR:
         return bool(is_within_tolerance)
 
@@ -828,6 +1157,48 @@ def passed_test(
     return is_within_tolerance and (pcc > target_pcc)
 
 
+def bf16_from_bits(bits: int) -> float:
+    """One bfloat16 value, as a Python float, from its 16-bit pattern."""
+    return float(torch.tensor([bits], dtype=torch.int16).view(torch.bfloat16).item())
+
+
+def assert_bf16_separates_rne(wide: torch.Tensor) -> None:
+    """Fail when every lane rounds the same under truncation and round-to-nearest-even.
+
+    A bit-exact NearestEven check is vacuous on values that are already bf16.
+    """
+    rne = wide.to(torch.bfloat16)
+    trunc = (wide.view(torch.int32) & 0xFFFF0000).view(torch.float32).to(torch.bfloat16)
+    if torch.equal(rne.view(torch.int16), trunc.view(torch.int16)):
+        raise AssertionError("stimulus does not separate NearestEven from truncation")
+
+
+def assert_bit_exact(got: torch.Tensor, want: torch.Tensor, what: str) -> None:
+    """Fail unless two 16-bit tensors have the same dtype and the same bits."""
+    if got.dtype != want.dtype:
+        raise AssertionError(f"{what}: dtype {got.dtype} vs {want.dtype}")
+    if torch.equal(got, want):
+        return
+    differ = int((got.view(torch.int16) != want.view(torch.int16)).sum())
+    raise AssertionError(f"{what}: {differ} of {got.numel()} lanes differ")
+
+
+def fp32_bits_as_int32(tensor: torch.Tensor) -> torch.Tensor:
+    """Reinterpret a float32 tensor's bits as int32 (no numeric conversion)."""
+    return tensor.to(torch.float32).contiguous().view(torch.int32)
+
+
+def int32_to_smag32(tensor: torch.Tensor) -> torch.Tensor:
+    """Encode a 2's-complement int32 tensor as sign-magnitude 32-bit (SMAG32).
+
+    Bit 31 is the sign and bits [30:0] are the magnitude. Used to stage operands
+    for and model the SIGN_MAGNITUDE_FORMAT kernel path, which skips the
+    2's-comp<->SM casts.
+    """
+    values = tensor.to(torch.int64)
+    return (values.abs() | ((values < 0).to(torch.int64) << 31)).to(torch.int32)
+
+
 def create_directories(dirs: list[Path]):
     """Create directories with file lock to handle race conditions in parallel execution."""
 
@@ -840,3 +1211,22 @@ def create_directories(dirs: list[Path]):
     with lock:
         for dir in dirs:
             os.makedirs(dir, exist_ok=True)
+
+
+_TTSIM_PACR_ZERO_WRITE_REASON = (
+    "ttsim does not implement PACR ZeroWrite (UnimplementedFunctionality: tensix_pacr: "
+    "zero_write=1), which WH uses to zero face 1 of partial-face BFP Row/Scalar reduce "
+    "packs. Runs on silicon."
+)
+
+
+def skip_ttsim_partial_face_bfp_zero_write(tile_shape, output_format, reduce_dim):
+    if (
+        TestTargetConfig().run_simulator
+        and get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and tile_shape.face_r_dim < MAX_FACE_R_DIM
+        and output_format
+        in {DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b}
+        and reduce_dim in {ReduceDimension.Row, ReduceDimension.Scalar}
+    ):
+        pytest.skip(_TTSIM_PACR_ZERO_WRITE_REASON)

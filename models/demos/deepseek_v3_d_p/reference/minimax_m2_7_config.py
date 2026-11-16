@@ -22,12 +22,20 @@ class MiniMaxM27Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    MOE_FWD_VC_PAGES = 80
     NUM_SHARED_EXPERTS = 0  # shared_intermediate_size = 0
     # MiniMax routes with a single expert group -> gate collapses to plain top-k.
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
     # Reference route_tokens_to_experts sum-normalizes with no extra scaling.
     ROUTE_SCALE = 1.0
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 256 experts, top-8 floors at
+    # 0.9977 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.987
 
     # Model architecture
     NUM_LAYERS = 62

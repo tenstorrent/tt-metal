@@ -8,12 +8,14 @@
 #include "experimental/llk_math_top32_rm.h"
 #include "llk_math_common_api.h"
 #include "llk_math_transpose_dest_api.h"
+#include "sanitizer/api.h"
 
 /*****************************************
  * LLK MATH — Top32 row-major transpose
  *****************************************/
 
 inline void llk_math_top32_rm_init(const std::uint32_t icb) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb);
     _llk_math_top32_rm_init_<DST_ACCUM_MODE>(get_operand_num_faces(operand_id), get_operand_dst_format(operand_id));
 
@@ -25,6 +27,7 @@ inline void llk_math_top32_rm_init(const std::uint32_t icb) {
 }
 
 inline void llk_math_top32_rm(const std::uint32_t icb, const std::uint32_t idst, const std::uint32_t num_faces) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(icb);
     const std::uint32_t src_format = get_operand_src_format(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);

@@ -47,6 +47,12 @@
         }
       },
       {
+        "name": "iwyu",
+        "inherits": "clang-static-analyzer",
+        "description": "Export compile_commands.json for include-what-you-use (host code)",
+        "binaryDir": "${sourceDir}/.build/iwyu"
+      },
+      {
         "name": "clang-tidy-fix",
         "inherits": "clang-tidy",
         "description": "Run Clang Tidy and apply fixes",

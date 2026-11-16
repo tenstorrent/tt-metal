@@ -116,8 +116,8 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
     // - memory clobber
     //     - prevents the COMPILER from reordering memory accesses across this boundary
 
-    volatile char *dstc       = reinterpret_cast<volatile char *>(dst);
-    const volatile char *srcc = reinterpret_cast<const volatile char *>(src);
+    volatile char *dstc       = static_cast<volatile char *>(dst);
+    const volatile char *srcc = static_cast<const volatile char *>(src);
 
     for (std::size_t i = 0; i < len; i++)
     {
@@ -235,7 +235,7 @@ inline void sync_regfile_write(const std::uint32_t index);
 
 // Field value overflow check
 template <typename T>
-static constexpr bool is_valid(const T val, const std::uint8_t wid)
+constexpr bool is_valid(const T val, const std::uint8_t wid)
 {
     const T mask = (1 << wid) - 1;
     return (val & mask) == val;
@@ -323,9 +323,15 @@ inline void t6_semaphore_wait_on_zero(const std::uint8_t index)
     TTI_SEMWAIT(WaitRes, semaphore::t6_sem(index), p_stall::STALL_ON_ZERO);
 }
 
-// Tensix thread semaphore get optionally stalled
+// Tensix thread semaphore init optionally stalled
+template <std::uint32_t WaitRes = p_stall::NONE>
 inline void t6_semaphore_init(const std::uint8_t index, const std::uint8_t min_value, const std::uint8_t max_value)
 {
+    if constexpr (WaitRes != p_stall::NONE)
+    {
+        TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes);
+    }
+
     TTI_SEMINIT(max_value, min_value, semaphore::t6_sem(index));
 }
 
@@ -543,10 +549,10 @@ inline void mailbox_write(const std::uint8_t thread, const std::uint32_t data)
     mailbox_base[thread][0] = data;
 }
 
-// Blocking read
-inline std::uint32_t mailbox_read(const std::uint8_t thread)
+// Blocking read: returns only once the message has arrived, even when the caller never uses the value.
+[[nodiscard]] inline std::uint32_t mailbox_read(const std::uint8_t thread)
 {
-    return mailbox_base[thread][0];
+    return load_blocking(&mailbox_base[thread][0]);
 }
 
 inline bool mailbox_not_empty(const std::uint8_t thread)
@@ -615,12 +621,12 @@ inline void record_kernel_runtime(std::uint64_t kernel_runtime)
 // example, a TRISC access to an unpacker 1 register and an UNPACR
 // instruction that targets unpacker 0).
 //
-constexpr static std::uint32_t TRACK_GLOBAL_CFG             = 1 << 0;
-constexpr static std::uint32_t EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
-constexpr static std::uint32_t TRACK_GPR                    = 1 << 2;
-constexpr static std::uint32_t TRACK_TDMA                   = 1 << 3;
-constexpr static std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
-constexpr static std::uint32_t TRACK_ALL                    = 0x1F;
+constexpr std::uint32_t TRACK_GLOBAL_CFG             = 1 << 0;
+constexpr std::uint32_t EN_SUBDIVIDED_CFG_FOR_UNPACR = 1 << 1;
+constexpr std::uint32_t TRACK_GPR                    = 1 << 2;
+constexpr std::uint32_t TRACK_TDMA                   = 1 << 3;
+constexpr std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
+constexpr std::uint32_t TRACK_ALL                    = 0x1F;
 
 // Uses a template to guarantee compile time execution (could probably
 // get away with constexpr but this seems better)
@@ -663,6 +669,8 @@ inline void enable_gathering()
 // replay buffer, and LEN is the number of instructions to record
 // (should match the expansion of CALLABLE). CALLABLE is a callable,
 // to which ARGS are forwarded.
+// Every record goes through here, never a raw lltt::record / TTI_REPLAY: loading the replay
+// buffer is incompatible with Blackhole instruction gathering, which this disables around it.
 // When we move to c++23 we can use 'using enum lltt::ExecBool;'
 enum ExecBool : bool
 {
@@ -816,7 +824,7 @@ inline void init_prng_seed(const std::uint32_t seed)
 
 inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
 {
-    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::UINT16;
 }
 
 inline void apply_sign_magnitude_conversion(std::uint32_t src, std::uint32_t dst, InstrModCast cast_mode)
@@ -858,17 +866,16 @@ constexpr std::uint32_t get_dest_max_tiles()
 
 /**
  * @brief Runtime variant of get_dest_max_tiles for assert sites. Reads dest
- *        accumulation mode from ALU_ACC_CTRL_Fp32_enabled rather than a
+ *        accumulation mode from llk_assert_fp32_dest_acc_en rather than a
  *        template parameter. Only ever evaluated inside LLK_ASSERT (compiled
  *        out in production via sizeof).
  */
 template <DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
 inline std::uint32_t get_dest_max_tiles_rt()
 {
-    const bool accum_mode = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
-    const std::uint32_t dest_register_size =
-        SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
-                                       : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    const bool accum_mode                  = llk_assert_fp32_dest_acc_en;
+    const std::uint32_t dest_register_size = SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                                            : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
     return dest_register_size >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
 }
 

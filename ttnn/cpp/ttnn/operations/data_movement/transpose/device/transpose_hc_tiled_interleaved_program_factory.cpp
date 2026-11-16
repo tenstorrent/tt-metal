@@ -15,9 +15,7 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
-using ttnn::operations::data_movement::float_to_uint16;
-using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+using ttnn::operations::data_movement::pack_scalar_into_uint32;
 
 namespace ttnn::prim {
 
@@ -101,7 +99,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     const float pad_value = operation_attributes.pad_value;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
     auto tile = input_tensor.tensor_spec().tile();
     auto tile_shape = tile.get_tile_shape();
@@ -112,7 +110,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
 
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     auto tile_hw = tile_shape[0] * tile_shape[1];
@@ -163,24 +161,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     if (C % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = max_padding_write / num_packed_values;
-        switch (input_tensor.dtype()) {
-            case DataType::INT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            case DataType::UINT32: padding_val_packed = pad_value; break;
-            case DataType::BFLOAT16:
-                padding_val_packed = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-                break;
-            case DataType::UINT16:
-                padding_val_packed =
-                    pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-                break;
-            case DataType::FLOAT32: padding_val_packed = std::bit_cast<uint32_t>(pad_value); break;
-            default:
-                padding_val_packed = 0;
-                TT_ASSERT(
-                    false,
-                    "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
-                    "FLOAT32");
-        }
+        padding_val_packed = pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
     }
 
     // The reader is the shared Metal 2.0 fork that the permute op also binds; its binding
@@ -215,7 +196,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
              {"tile_height", 1u},
              {"tile_width", 1u}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -241,7 +222,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
              {"face_width", face_shape[1]}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_idx", "end_tile_idx", "start_padding_tile_idx", "end_padding_tile_idx"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     if (needs_padding) {

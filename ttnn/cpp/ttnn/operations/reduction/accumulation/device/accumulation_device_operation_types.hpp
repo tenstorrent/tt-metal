@@ -21,6 +21,10 @@ struct AccumulationParams {
     const MemoryConfig output_memory_config;
     const bool flip;
     const AccumulationOp op;
+    // When true, skip the compensated (Kahan) accumulation that fp32 cumsum uses by default and
+    // fall back to the plain sequential sum. An escape hatch for parity checks and debugging; it
+    // has no effect on cumprod or on integer formats, which never take the compensated path.
+    const bool disable_compensation = false;
 };
 
 struct AccumulationInputs {

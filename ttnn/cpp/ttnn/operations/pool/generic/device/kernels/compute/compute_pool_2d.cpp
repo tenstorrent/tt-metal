@@ -20,7 +20,7 @@
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 
 #define ALWI inline __attribute__((always_inline))
@@ -144,6 +144,9 @@ void kernel_main() {
         }
         if (is_output_tiled && !tilize_stick_counter) {
             out_dfb.reserve_back(in_ntiles_c);
+            // The producer view is pushed a stick at a time across the whole round, so it is
+            // reserved here, before the round's first push.
+            pre_tilize_dfb.reserve_back(TILE_HEIGHT * in_ntiles_c);
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
@@ -205,7 +208,7 @@ void kernel_main() {
                             ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
                         pre_tilize_dfb.push_back(filler_stick_tiles);
                     }
-                    PACK((pack_untilize_uninit(pre_tilize_cb_id)));
+                    pack_untilize_uninit(pre_tilize_cb_id);
 
                     unpack_tilizeA_B_uninit(curr_in_cb_id);
                     pack_reconfig_data_format(out_cb_id);
@@ -217,6 +220,7 @@ void kernel_main() {
                     // advance by the same number of bytes per round so their rd/wr pointers
                     // stay aligned. The producer-view wait_front/pop_front/reserve_back below
                     // continues to drive the producer pointer ledger.
+                    fast_tilize_dfb.reserve_back(in_ntiles_c);
                     fast_tilize_dfb.push_back(in_ntiles_c);
                     fast_tilize_dfb.wait_front(in_ntiles_c);
 
@@ -226,27 +230,17 @@ void kernel_main() {
 
                     out_dfb.push_back(in_ntiles_c);
                     fast_tilize_dfb.pop_front(in_ntiles_c);
-                    fast_tilize_dfb.reserve_back(in_ntiles_c);
                     pre_tilize_dfb.pop_front(TILE_HEIGHT * in_ntiles_c);
-                    pre_tilize_dfb.reserve_back(TILE_HEIGHT * in_ntiles_c);
 
                     tilize_stick_counter = 0;
 
-                    UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
-                    // init math for reduction again since FPU gets reprogrammed by tilize
-                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(
-                        in_cb_id_0, in_scalar_cb_id_0)));
-#ifdef ARCH_BLACKHOLE
-                    // need this on BH to set swizzle bit before pack untilize dest
-                    MATH((llk_math_reconfig_remap(true)));
-#endif
-
+                    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+                        in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce);
                     if constexpr (is_output_block_format) {
                         pack_reconfig_data_format(pre_tilize_cb_id);
                     }
-                    PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                        pre_tilize_cb_id)));
+                    pack_untilize_dest_init<max_tiles_per_iter, max_tiles_per_iter, false /*narrow_row*/, TILE_C_DIM>(
+                        pre_tilize_cb_id);
                 }
             } else {
                 // ROW_MAJOR output: pack directly to output CB
@@ -262,5 +256,10 @@ void kernel_main() {
         if constexpr (!one_scalar_per_core) {
             curr_scalar_dfb.pop_front(1);
         }
+    }
+
+    // Pairs with the wait_front before the loop.
+    if constexpr (one_scalar_per_core) {
+        in_scalar_dfb_0.pop_front(1);
     }
 }

@@ -25,7 +25,7 @@ add_library(ttnn_pch_lean STATIC)
 add_library(TTNN::PCHLean ALIAS ttnn_pch_lean)
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_lean.cpp CONTENT "/*dummy ttnn lean pch file*/\n")
 target_sources(ttnn_pch_lean PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_lean.cpp)
-target_precompile_headers(ttnn_pch_lean REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_pch_lean TT::CommonPCH)
 target_link_libraries(
     ttnn_pch_lean
     PUBLIC
@@ -98,6 +98,17 @@ add_library(TTNN::Core ALIAS ttnn_core)
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
+# These declare ttnn::experimental and include tt-metalium/experimental/command_list.hpp, which declares
+# tt::tt_metal::experimental::detail. Either changes unqualified `experimental::` / `detail::` lookup in files that
+# share a unity translation unit with them.
+set_source_files_properties(
+    core/command_list.cpp
+    cpp/ttnn-nanobind/operations/command_list.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_compile_definitions(ttnn_core PRIVATE "TT_METAL_BUILD_TYPE=\"$<CONFIG>\"")
 
@@ -106,6 +117,10 @@ target_compile_definitions(ttnn_core PRIVATE "TT_METAL_BUILD_TYPE=\"$<CONFIG>\""
 # ttnn target (PUBLIC so header consumers see it consistently) instead of defining it globally.
 if(ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK)
     target_compile_definitions(ttnn_core PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
+    # ttnn_pch_full precompiles <ttnn/device_operation.hpp>, which pulls in the adapter header.
+    # Without the define here the #ifdef is resolved when the PCH is built, and every target that
+    # reuses the PCH silently compiles the check out despite carrying -D on its own command line.
+    target_compile_definitions(ttnn_pch_full PUBLIC TT_DESCRIPTOR_PATCHING_PARITY_CHECK)
 endif()
 
 tt_reuse_precompile_headers(ttnn_core TTNN::PCHFull)
@@ -116,6 +131,7 @@ set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_topology.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/overlapped_tensor.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/d2d_pipeline_descriptor.fbs
 )
 
 set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
@@ -234,7 +250,11 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${ttnn_kernels}
+        FILES
+            ${ttnn_kernels}
+            cpp/ttnn/operations/common/shared_with_host/runtime_length.hpp
+            cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_worker_split.hpp
+            cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/nlp_concat_heads_split.hpp
     PRIVATE
         ${TTNNCPP_SRCS}
 )
@@ -316,9 +336,6 @@ if(WITH_PYTHON_BINDINGS)
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
     )
-    if(TTNN_BUILD_TESTS)
-        target_compile_definitions(ttnn PRIVATE TTNN_WITH_LAYER_COMPLETION_CONSUMER)
-    endif()
     target_include_directories(
         ttnn
         PUBLIC
@@ -378,7 +395,6 @@ if(WITH_PYTHON_BINDINGS)
             "$<BUILD_INTERFACE:TTNN::CPP>"
         PRIVATE
             TT::Nanobind
-            Boost::algorithm
             TT::Metalium
     )
     # .. enable size optimizations

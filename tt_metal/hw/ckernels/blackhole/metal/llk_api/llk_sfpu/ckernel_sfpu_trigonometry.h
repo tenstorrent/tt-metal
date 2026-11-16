@@ -13,8 +13,8 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_log1p.h"
-#include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -287,10 +287,6 @@ inline void calculate_cosine() {
         // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
         sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-        // sfpi::vFloat rounding_bias;
-        // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-
         j = j + ROUNDING_BIAS;
 
         // At this point, the mantissa bits of j contain the rounded integer.
@@ -339,9 +335,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
 
     // If input is NaN then output must be NaN as well
-    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::Biased);
-    sfpi::vInt mantissa = sfpi::exman(val);
-    v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+    v_if(sfpi::is_nan(val)) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - 1.0f;
 
@@ -445,6 +439,8 @@ inline void calculate_atan() {
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_asin_poly_bf16(sfpi::vFloat val) {
+    sfpi::lreg_pressure _;
+
     // asin(z) = z*P(z^2) for |z| <= 5/8.
     sfpi::vFloat z2 = val * val;
     // Single-precision fit to asin(sqrt(u))/sqrt(u). Regenerate with:
@@ -460,6 +456,8 @@ sfpi_inline sfpi::vFloat sfpu_asin_poly_bf16(sfpi::vFloat val) {
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_asin_range_reduced_bf16(sfpi::vFloat val) {
+    sfpi::lreg_pressure _;
+
     // Range reduction near the endpoints:
     // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
     sfpi::vFloat abs_v = sfpi::abs(val);
@@ -494,6 +492,8 @@ sfpi_inline sfpi::vFloat sfpu_acos_bf16(sfpi::vFloat val) {
 }
 
 sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
+    sfpi::lreg_pressure _;
+
     sfpi::vFloat r;
     sfpi::vFloat ax = sfpi::abs(x);
     sfpi::vFloat d = 1.0f - ax;
@@ -625,8 +625,22 @@ inline void acos_init() {
     asin_acos_init<is_fp32_dest_acc_en>();
 }
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_acos_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated acos kernel as one call over the whole tile.
+inline constexpr bool acos_bf16_whole_tile = true;
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_acos()) {
+            calculate_acos_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat result;
@@ -692,13 +706,13 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
-// t = exp(a); cosh(a) = 0.5 * (t + 1/t)
+// t = exp(|x|); cosh(x) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat a = sfpi::setsgn(x, 0);
-        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(a);
+        // _sfpu_quarter_exp_abs_ takes |x| itself; no setsgn needed here.
+        sfpi::vFloat q = _sfpu_quarter_exp_abs_<is_fp32_dest_acc_en>(x);
         sfpi::vFloat r = _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(q);
         sfpi::vFloat y = q + q;
         r *= 0.125f;
@@ -1065,6 +1079,14 @@ inline void calculate_acosh() {
     }
 }
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_asinh_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated asinh kernel as one call over the whole tile.
+inline constexpr bool asinh_bf16_whole_tile = true;
 // asinh(x) = sign(x) * log(|x| + sqrt(x^2 + 1)), reformulated to remove the
 // cancellation at x -> 0 and the x^2 overflow at large |x|. Regions in a = |x|:
 //   a < 0.75          -> a * P(a^2), degree-6 minimax polynomial (<=1 ulp)
@@ -1078,6 +1100,12 @@ inline void calculate_acosh() {
 // overflows (the old x^2 + 1 produced +inf at ~1.84e19).
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_asinh() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_asinh()) {
+            calculate_asinh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     constexpr float LOG1P_LARGE = 268435456.0f;  // 2^28
     constexpr float LN2 = 0.6931471805599453f;
     // SFPU microcode

@@ -192,8 +192,8 @@ void kernel_main() {
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(dst0, cb_ex2pe);

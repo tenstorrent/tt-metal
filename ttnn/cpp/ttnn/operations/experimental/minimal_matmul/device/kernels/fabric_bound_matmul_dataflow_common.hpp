@@ -219,10 +219,11 @@ void write_block_sync(
  * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
  * of data movement and compute improves overall throughput.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+// The ternary tensors can have different memory layouts or buffer types.
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TernaryAAccessor, typename TernaryBAccessor>
 void read_ternary_blocks_sync(
-    const TensorAccessorType& ternary_a_accessor,
-    const TensorAccessorType& ternary_b_accessor,
+    const TernaryAAccessor& ternary_a_accessor,
+    const TernaryBAccessor& ternary_b_accessor,
     const TensorShape2D& shape,
     uint32_t ternary_a_cb,
     uint32_t ternary_b_cb,
@@ -333,9 +334,9 @@ void write_block_sync_granular(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
@@ -377,9 +378,9 @@ void write_block_sync_granular_interleaved(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }
 
 /**
@@ -508,7 +509,7 @@ void write_block_sync_granular_split(
                 out_read_ptr += tile_size_bytes;
             }
         }
+        noc_async_writes_flushed();
         cb_pop_front(cb_id_out, N_block_tiles);
     }
-    noc_async_writes_flushed();
 }

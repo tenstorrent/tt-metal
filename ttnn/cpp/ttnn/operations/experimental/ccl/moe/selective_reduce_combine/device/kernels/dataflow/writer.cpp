@@ -11,41 +11,11 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 #ifndef LOCAL_COMBINE
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
-
-using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
-using tt::tt_fabric::NocUnicastCommandHeader;
-using tt::tt_fabric::WorkerToFabricEdmSender;
-using namespace ttnn::operations::ccl::common;
+#include "combine_fabric.hpp"
 #endif
 
 // packet size bytes 4352
 namespace detail {
-
-#ifndef LOCAL_COMBINE
-template <
-    uint32_t LinearizedMeshCoord,
-    uint32_t TokensPerDevice,
-    uint32_t MeshRows,
-    uint32_t MeshCols,
-    ReplicateGroup Axis>
-inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
-    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
-                                         : (Axis == ReplicateGroup::COLS) ? MeshRows
-                                                                          : MeshCols;
-    const uint32_t device_in_group = t / TokensPerDevice;
-
-    if constexpr (Axis == ReplicateGroup::NONE) {
-        return device_in_group;
-    } else if (Axis == ReplicateGroup::ROWS) {
-        return (LinearizedMeshCoord / MeshCols) * MeshCols + device_in_group;
-    } else {
-        return device_in_group * MeshCols + LinearizedMeshCoord % MeshCols;
-    }
-}
-#endif
 
 // output is [select_experts_k ,tokens, hidden]
 template <uint32_t TokensPerDevice>
@@ -86,6 +56,7 @@ private:
     bool idx;
 
 public:
+    // Runtime args: [x0, y0, x1, y1, ...] for each of the compute_cores_per_combine_core cores.
     DoubleBuffer(
         const Noc& noc,
         const uint32_t compute_cores_per_combine_core,
@@ -119,20 +90,6 @@ public:
     auto operator*() { return idx; }
 };
 
-#ifndef LOCAL_COMBINE
-template <uint8_t NumBuffers, uint8_t NumDirections>
-void mux_channel_writes_flushed(
-    const std::array<bool, NumDirections>& directions,
-    const std::array<WorkerToFabricMuxSender<NumBuffers>, NumDirections>& connections) {
-    for (uint8_t d = 0; d < NumDirections; ++d) {
-        if (directions[d]) {
-            while (connections[d].get_num_free_write_slots() != NumBuffers) {
-            };
-        }
-    }
-}
-#endif
-
 }  // namespace detail
 
 void kernel_main() {
@@ -152,10 +109,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("source_token_segment_buffer_size_bytes");
     constexpr uint32_t source_block_size_bytes = get_named_compile_time_arg_val("source_expert_block_size_bytes");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
-    constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
     constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
-    constexpr uint32_t compute_cores_per_combine_core =
-        get_named_compile_time_arg_val("compute_cores_per_combine_core");
     constexpr bool double_buffer_source = get_named_compile_time_arg_val("double_buffer_source") == 1;
 
 #ifdef LOCAL_COMBINE
@@ -163,40 +117,8 @@ void kernel_main() {
     constexpr uint32_t tokens_per_device = global_num_tokens;
     constexpr auto output_ta_args = TensorAccessorArgs<0>();
 #else
-    constexpr uint32_t packet_header_cb_id = get_named_compile_time_arg_val("packet_header_cb_id");
-    constexpr uint32_t num_workers_per_link = get_named_compile_time_arg_val("num_workers_per_link");
-    constexpr uint32_t noc_x_start = get_named_compile_time_arg_val("noc_x_start");
-    constexpr uint32_t noc_y_start = get_named_compile_time_arg_val("noc_y_start");
-    constexpr uint32_t noc_x_end = get_named_compile_time_arg_val("noc_x_end");
-    constexpr uint32_t noc_y_end = get_named_compile_time_arg_val("noc_y_end");
-    constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
-    constexpr uint32_t src_chip_id = get_named_compile_time_arg_val("src_chip_id");
-    constexpr uint32_t mesh_rows = get_named_compile_time_arg_val("mesh_rows");
-    constexpr uint32_t mesh_cols = get_named_compile_time_arg_val("mesh_cols");  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_named_compile_time_arg_val("fabric_max_packet_size_bytes");
-    constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
-    constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
-    constexpr uint32_t num_mux_workers_per_link = get_named_compile_time_arg_val("num_mux_workers_per_link");
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(3);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(4);
-
-    constexpr auto output_ta_args = TensorAccessorArgs<5>();
-
-    constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
-    constexpr uint32_t replicate_factor = (replicate_axis == ReplicateGroup::COLS) ? mesh_cols : mesh_rows;
-    constexpr uint8_t replicate_group_devices = num_devices / replicate_factor;
-    constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
-    constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
-
-    constexpr uint32_t tokens_per_device = global_num_tokens / replicate_group_devices;
-
-    constexpr uint8_t Num_Directions = 4;
-    constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
-    constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
-    const std::array<bool, Num_Directions> directions = DIRECTIONS;
+    constexpr uint32_t tokens_per_device = global_num_tokens / combine_fabric::replicate_group_devices;
+    constexpr auto output_ta_args = TensorAccessorArgs<0>();
 #endif
 
     size_t rt_arg_count = 0;
@@ -217,6 +139,10 @@ void kernel_main() {
 
     const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
 
+    // Double-buffered source only: number of compute cores feeding this combine core. It varies per
+    // combine core because a compute core's width slice may straddle combine columns.
+    const uint32_t compute_cores_per_combine_core = double_buffer_source ? get_arg_val<uint32_t>(rt_arg_count++) : 0;
+
     // rt_arg_count is incremented
     detail::DoubleBuffer<double_buffer_source> db(
         noc1_obj, compute_cores_per_combine_core, compute_sync_semaphore_addr, rt_arg_count);
@@ -224,42 +150,10 @@ void kernel_main() {
     const auto output_addrgen = TensorAccessor(output_ta_args, output_base_addr);
 
 #ifndef LOCAL_COMBINE
-    CircularBuffer cb_packet_header(packet_header_cb_id);
-
-    // rt_arg_count does not get incremented
-    MuxSyncCoreArgs sync_args(rt_arg_count);
-
-    std::array<WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>, Num_Directions> fabric_connections;
-
-    // rt_arg_count does not get incremented
-    open_direction_connections_async<
-        Num_Directions,
-        fabric_mux_num_buffers_per_channel,
-        fabric_mux_channel_buffer_size_bytes,
-        fabric_mux_status_address>(directions, fabric_connections, rt_arg_count);
-
-    volatile PACKET_HEADER_TYPE* packet_headers[3];
-    for (uint8_t i = 0; i < 3; ++i) {
-        cb_packet_header.reserve_back(1);
-        const uint32_t packet_header_addr = cb_packet_header.get_write_ptr();
-        packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
-        cb_packet_header.push_back(1);
-    }
-
-    // mux_rt_arg_count does not get incremented
-    open_direction_connections_barrier<Num_Directions, fabric_mux_num_buffers_per_channel, fabric_mux_status_address>(
-        directions, fabric_connections, rt_arg_count);
-
-    const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
+    combine_fabric::Connections fabric(rt_arg_count);
+    fabric.open();
     if (is_init_sync_core && use_init_semaphore) {
-        send_init_semaphore_to_configured_targets<
-            linearized_mesh_coord,
-            topology,
-            src_chip_id,
-            mesh_rows,
-            mesh_cols,
-            replicate_axis,
-            num_devices>(fabric_connections, packet_headers[1], dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+        fabric.send_init(init_semaphore_addr);
     }
 #endif
 
@@ -287,31 +181,11 @@ void kernel_main() {
     const uint32_t token_activations_l1_addr = cb_token_activations.get_write_ptr();
     auto* token_activations_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
 
-#ifdef LOCAL_COMBINE
-    // Local combine: skip the init semaphore entirely. In single-device mode there is no
-    // cross-device coordination needed; the compute_sync_semaphore and CB waits handle
-    // all necessary synchronization between matmul, reader, and writer.
-#else
+#ifndef LOCAL_COMBINE
+    // Local combine needs no init barrier: the compute sync semaphore and the CB waits order it.
     if constexpr (use_init_semaphore) {
-        auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
-        if (is_init_sync_core) {
-            // Device 2.0 migration: legacy primitive retained: init_semaphore_addr is a GlobalSemaphore address.
-            noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
-            // swap start/end coordinates because this kernel is using NOC1
-            const uint64_t semaphore_mc_addr =
-                get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, init_semaphore_addr, /*noc=*/1);
-            noc_semaphore_set_multicast(
-                init_semaphore_addr,
-                semaphore_mc_addr,
-                num_token_parallel_cores * num_data_parallel_cores - 1,
-                /*linked=*/false,
-                /*noc=*/1);
-            noc1_obj.async_writes_flushed();
-
-        } else {
-            noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
-        }
-        noc_semaphore_set(init_semaphore_ptr, 0);
+        fabric.wait_init(
+            noc1_obj, init_semaphore_addr, is_init_sync_core, num_token_parallel_cores * num_data_parallel_cores);
     }
 #endif
 
@@ -348,15 +222,8 @@ void kernel_main() {
                 {.page_id = output_page_idx, .offset_bytes = dest_token_segment_offset_bytes});
             noc1_obj.async_writes_flushed();
 #else
-            // figure out which device to send data to and routing
-            const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
-                linearized_mesh_coord,
-                tokens_per_device,
-                mesh_rows,
-                mesh_cols,
-                replicate_axis>(st);
-
-            if (dest_device_idx == linearized_mesh_coord) {
+            const uint32_t dest_device_idx = combine_fabric::device_of_token<tokens_per_device>(st);
+            if (dest_device_idx == combine_fabric::linearized_mesh_coord) {
                 noc1_obj.async_write(
                     CoreLocalMem<uint8_t>(src_data_l1_addr),
                     output_addrgen,
@@ -365,20 +232,12 @@ void kernel_main() {
                     {.page_id = output_page_idx, .offset_bytes = dest_token_segment_offset_bytes});
                 noc1_obj.async_writes_flushed();
             } else {
-                fabric_send_chip_unicast_noc_unicast_1d<
-                    linearized_mesh_coord,
-                    topology,
-                    mesh_rows,
-                    mesh_cols,
-                    fabric_max_packet_size_bytes>(
+                fabric.send(
                     output_addrgen,
-                    fabric_connections,
-                    packet_headers[0],
                     dest_device_idx,
                     src_data_l1_addr,
                     output_page_idx,
                     source_token_segment_size_bytes,
-                    alignment,
                     dest_token_segment_offset_bytes);
             }
 #endif
@@ -394,74 +253,10 @@ void kernel_main() {
     cb_data.push_back(1);
 
     noc1_obj.async_write_barrier();
-
-#ifndef LOCAL_COMBINE
-    // In order to ensure that the barrier semaphores land after all of the data has arrived we must wait for the mux
-    // cores to send off all of their transactions to the EDM.
-    detail::mux_channel_writes_flushed<fabric_mux_num_buffers_per_channel, Num_Directions>(
-        directions, fabric_connections);
-
-    if (sync_args.is_sync_core) {
-        auto* termination_sync_semaphore_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
-
-        // Device 2.0 migration: legacy primitive retained: termination_sync_address is a
-        // fabric-mux sync address (not a get_semaphore<>(id) address).
-        noc_semaphore_wait(termination_sync_semaphore_ptr, num_workers_per_link - 1);
-        noc_semaphore_set(termination_sync_semaphore_ptr, 0);
-
-        const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
-
-        // Topology is a CT arg from the host (already auto-downgraded via ttnn::ccl::get_usable_topology
-        // at the op API boundary in moe_compute_device_operation.cpp). For Linear topology, the helper
-        // derives per-device positive/negative ranges from linearized_mesh_coord so endpoints elide the
-        // absent-direction send via `if constexpr` — required to avoid UB on LINE endpoints.
-        fabric_multicast_bidirectional_atomic_inc_1d<
-            linearized_mesh_coord,
-            topology,
-            mesh_rows,
-            mesh_cols,
-            replicate_axis,
-            /*DoubleAntipodalAtomicInc=*/(topology == tt::tt_fabric::Topology::Ring)>(
-            fabric_connections, packet_headers[1], packet_headers[2], global_noc_semaphore_addr);
-
-        auto* semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-
-        noc1_obj.async_write_barrier();
-        noc1_obj.async_atomic_barrier();
-
-        close_direction_connections<
-            Num_Directions,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_termination_signal_address,
-            num_mux_workers_per_link>(directions, fabric_connections, true, rt_arg_count);
-
-        // Ring + DoubleAntipodalAtomicInc=true: each device receives `replicate_group_devices` inc's
-        //   (the antipodal device is incremented from both directions, summing to N senders).
-        // Linear: each device receives `replicate_group_devices - 1` inc's (no antipodal doubling;
-        //   each sender on the line sends to exactly N-1 other devices).
-        constexpr uint32_t expected_dispatch_device_inc =
-            (topology == tt::tt_fabric::Topology::Linear) ? (replicate_group_devices - 1) : replicate_group_devices;
-        noc_semaphore_wait(semaphore_ptr, expected_dispatch_device_inc);
-        noc_semaphore_set(semaphore_ptr, 0);
-    } else {
-        // get sync core semaphore noc address
-        close_direction_connections<
-            Num_Directions,
-            fabric_mux_num_buffers_per_channel,
-            fabric_mux_termination_signal_address>(directions, fabric_connections, false);
-
-        const uint64_t safe_termination_sync_address = safe_get_noc_addr(
-            sync_args.termination_master_noc_x,
-            sync_args.termination_master_noc_y,
-            sync_args.termination_sync_address,
-            /*noc=*/1);
-        // Device 2.0 migration: legacy primitive retained: termination_sync_address is a
-        // fabric-mux sync address (not a get_semaphore<>(id) address)
-        noc_semaphore_inc(safe_termination_sync_address, 1, /*noc=*/1);
-
-        noc1_obj.async_write_barrier();
-        noc1_obj.async_atomic_barrier();
-    }
+#ifdef LOCAL_COMBINE
+    // Atomics are non-posted on Blackhole: the next kernel's atomic barrier on this NoC waits for their acks.
+    noc1_obj.async_atomic_barrier();
+#else
+    fabric.finish(noc1_obj, global_semaphore_addr);
 #endif
 }

@@ -12,20 +12,26 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....pipelines.flux2.prompt_encoder import PromptEncoder
 from ....utils.check import assert_quality
+from .device_params import prompt_encoder_params_flux2
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
+    ("mesh_device", "checkpoint_name"),
     [
-        pytest.param((4, 8), id="4x8"),
+        pytest.param((2, 2), "black-forest-labs/FLUX.2-dev", id="2x2-dev"),
+        pytest.param((4, 8), "black-forest-labs/FLUX.2-dev", id="4x8-dev"),
+        pytest.param((2, 2), "black-forest-labs/FLUX.2-klein-4B", id="2x2-klein"),
     ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [prompt_encoder_params_flux2],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_encode(mesh_device: ttnn.MeshDevice) -> None:
+def test_encode(mesh_device: ttnn.MeshDevice, checkpoint_name: str) -> None:
     tp_axis = 1
     sequence_length = 64
-    checkpoint_name = "black-forest-labs/FLUX.2-dev"
     prompts = ["A painting", "A futuristic city skyline at sunset during winter"]
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
@@ -65,11 +71,16 @@ def test_encode(mesh_device: ttnn.MeshDevice) -> None:
 @pytest.mark.parametrize(
     "mesh_device",
     [
+        pytest.param((2, 2), id="2x2"),
         pytest.param((4, 8), id="4x8"),
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [prompt_encoder_params_flux2],
+    indirect=True,
+)
 def test_upsample(mesh_device: ttnn.MeshDevice) -> None:
     tp_axis = 1
     checkpoint_name = "black-forest-labs/FLUX.2-dev"

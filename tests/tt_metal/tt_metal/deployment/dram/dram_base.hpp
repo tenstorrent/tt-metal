@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _DRAM_BASE_H
-#define _DRAM_BASE_H
+#ifndef DRAM_BASE_H
+#define DRAM_BASE_H
 
 #include "command_queue_fixture.hpp"
 #include "kernels/common_dram.hpp"
@@ -151,4 +151,4 @@ std::vector<DramBankWorkerAssignment> get_optimal_dram_bank_worker_assignments(
 
 }  // namespace tt::tt_metal
 
-#endif /* _DRAM_BASE_H */
+#endif /* DRAM_BASE_H */

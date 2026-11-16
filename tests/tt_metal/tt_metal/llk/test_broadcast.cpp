@@ -31,16 +31,13 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 
@@ -53,7 +50,7 @@ namespace unit_tests::compute::broadcast {
 
 enum ApiConvention : std::uint8_t {
     DEFAULT = 0,
-    SHORT_INIT = 1,  // call <op>_bcast_<dim>_init_short instead of init_bcast
+    SHORT_INIT = 1,  // call <op>_bcast_<dim>_init instead of bcast_init<OP, DIM>
     SHORT_CALL = 2,  // call <op>_tiles_bcast_<dim> instead of <op>_tiles_bcast
     SHORT_BOTH = 3   // both SHORT_INIT and SHORT_CALL
 };
@@ -94,28 +91,47 @@ constexpr float k_broadcast_rtol = 0.0155;
 
 // Quasar drives dataflow through the Gen2 config and takes its DFB sync explicitly; Gen1 arches pin
 // the processor/NOC pair per direction. Identical for every runner in this file, hence the helpers.
-experimental::DataMovementHardwareConfig make_reader_hw_config(const distributed::MeshDevice& mesh_device) {
+DataMovementHardwareConfig make_reader_hw_config(const distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        return DataMovementHardwareConfig{
+            .config_2xx =
+                DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     }
-    return experimental::DataMovementGen1Config{
-        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    return DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+            },
+    };
 }
 
-experimental::DataMovementHardwareConfig make_writer_hw_config(const distributed::MeshDevice& mesh_device) {
+DataMovementHardwareConfig make_writer_hw_config(const distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        return DataMovementHardwareConfig{
+            .config_2xx =
+                DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     }
-    return experimental::DataMovementGen1Config{
-        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    return DataMovementHardwareConfig{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+            },
+    };
 }
 
-experimental::ComputeHardwareConfig make_compute_hw_config(
-    const distributed::MeshDevice& mesh_device, MathFidelity math_fidelity) {
+ComputeHardwareConfig make_compute_hw_config(const distributed::MeshDevice& mesh_device, MathFidelity math_fidelity) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::ComputeGen2Config{.fpu_math_fidelity = math_fidelity};
+        return ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity};
     }
-    return experimental::ComputeGen1Config{.fpu_math_fidelity = math_fidelity};
+    return ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity};
 }
 
 struct BroadcastConfig {
@@ -246,7 +262,7 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     tt_metal::Tile tile_dims = tile_shape_to_tile.at(test_config.tile_shape);
     std::uint32_t tile_width = tile_dims.get_tile_shape()[1];
@@ -266,9 +282,7 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
     auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, k_num_tiles_broadcast_test);
     std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    auto* device = mesh_device.get_devices().empty() ? nullptr : mesh_device.get_devices().front();
-    TT_FATAL(device != nullptr, "mesh_device has no backing devices");
-    const bool is_quasar = device->arch() == ARCH::QUASAR;
+    const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;
 
     std::map<std::string, std::string> defines = {
         {"BCAST_LLKOP", eltwise_op_to_type.at(test_config.eltwise_op)},
@@ -291,19 +305,11 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
     if (test_config.api_convention == ApiConvention::SHORT_INIT ||
         test_config.api_convention == ApiConvention::SHORT_BOTH) {
         defines["BCAST_OP_INIT"] = eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_bcast_" +
-                                   broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init_short";
-
-        if ((test_config.eltwise_op == EltwiseOp::SUB || test_config.eltwise_op == EltwiseOp::MUL) &&
-            test_config.broadcast_dim == BroadcastDim::SCALAR) {
-            // FIXME sub_bcast_scalar_init_short and mul_bcast_scalar_init_short are instead called
-            // sub_tiles_bcast_scalar_init_short and mul_tiles_bcast_scalar_init_short
-            defines["BCAST_OP_INIT"] = eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_tiles_bcast_" +
-                                       broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init_short";
-        }
+                                   broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init";
 
         log_info(tt::LogTest, "Init function is {}", defines["BCAST_OP_INIT"]);
     } else {
-        log_info(tt::LogTest, "Init function is init_bcast");
+        log_info(tt::LogTest, "Init function is bcast_init");
     }
 
     if (test_config.api_convention == ApiConvention::SHORT_CALL ||
@@ -314,20 +320,20 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
 
     log_info(tt::LogTest, "Compute function is {}", defines["BCAST_OP"]);
 
-    experimental::KernelSpec::CompilerOptions::Defines defines_vec;
+    KernelSpec::CompilerOptions::Defines defines_vec;
     for (auto& kv : defines) {
         defines_vec.emplace(kv.first, kv.second);
     }
 
-    const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
-    const experimental::DFBSpecName INP1_DFB{"inp1_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName INP0_DFB{"inp0_dfb"};
+    const DFBSpecName INP1_DFB{"inp1_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    auto make_dfb = [&](const experimental::DFBSpecName& name) {
-        return experimental::DataflowBufferSpec{
+    auto make_dfb = [&](const DFBSpecName& name) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = single_tile_size,
             .num_entries = k_num_tiles_broadcast_test,
@@ -336,12 +342,12 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
         };
     };
 
-    experimental::DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB);
-    experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB);
-    experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB);
+    DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB);
+    DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB);
+    DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB);
 
-    experimental::DataMovementHardwareConfig reader_hw_config = make_reader_hw_config(mesh_device);
-    experimental::KernelSpec reader_spec{
+    DataMovementHardwareConfig reader_hw_config = make_reader_hw_config(mesh_device);
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source =
 
@@ -351,36 +357,35 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
             {{
                  .dfb_spec_name = INP0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config = make_writer_hw_config(mesh_device);
-    experimental::KernelSpec writer_spec{
+    DataMovementHardwareConfig writer_hw_config = make_writer_hw_config(mesh_device);
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config =
-        make_compute_hw_config(mesh_device, test_config.math_fidelity);
+    ComputeHardwareConfig compute_hw_config = make_compute_hw_config(mesh_device, test_config.math_fidelity);
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
 
@@ -391,31 +396,31 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
             {{
                  .dfb_spec_name = INP0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "single_core_broadcast",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {inp0_dfb_spec, inp1_dfb_spec, out_dfb_spec},
@@ -426,11 +431,11 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
     workload.add_program(device_range, std::move(built_program));
     auto& program_run = workload.get_programs().at(device_range);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src0_addr", static_cast<std::uint32_t>(dram_buffer_src_a_addr)},
                  {"src0_bank_id", 0u},
@@ -438,15 +443,15 @@ void run_single_core_broadcast(distributed::MeshDevice& mesh_device, const Broad
                  {"src1_bank_id", 0u},
                  {"num_tiles", static_cast<std::uint32_t>(k_num_tiles_broadcast_test)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", static_cast<std::uint32_t>(dram_buffer_dst_addr)},
                  {"bank_id", 0u},
                  {"num_tiles", static_cast<std::uint32_t>(k_num_tiles_broadcast_test)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program_run, params);
 
@@ -522,7 +527,7 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     tt_metal::Tile tile_dims = tile_shape_to_tile.at(test_config.tile_shape);
     const std::uint32_t tile_width = tile_dims.get_tile_shape()[1];
@@ -544,31 +549,38 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
 
     // srcA and the output are total_tile_rows x ct_dim grids; srcB is rt_dim tiles, each reused by
     // its row in every block.
-    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
+    //
+    // One page per buffer rather than one per tile, because the reader and writer kernels walk a
+    // single DRAM bank linearly (bank_id 0, the address advancing by one tile per transfer). A
+    // page-per-tile buffer is interleaved, so page k lands in bank k % num_banks -- two banks on
+    // Quasar -- and a linear walk of bank 0 would read page 2k for tile k and run off the end of
+    // that bank's share of the buffer once k passes half the tile count. Giving the allocator one
+    // page puts the whole buffer in one bank, which is what these kernels address.
+    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * total_tiles, 1);
     std::uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
 
-    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, test_config.rt_dim);
+    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * test_config.rt_dim, 1);
     std::uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
 
-    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
+    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * total_tiles, 1);
     std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;
 
-    experimental::KernelSpec::CompilerOptions::Defines defines_vec;
+    KernelSpec::CompilerOptions::Defines defines_vec;
     defines_vec.emplace("CT_DIM", std::to_string(test_config.ct_dim));
     defines_vec.emplace("RT_DIM", std::to_string(test_config.rt_dim));
     defines_vec.emplace("NUM_BLOCKS", std::to_string(test_config.num_blocks));
 
-    const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
-    const experimental::DFBSpecName INP1_DFB{"inp1_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName INP0_DFB{"inp0_dfb"};
+    const DFBSpecName INP1_DFB{"inp1_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    auto make_dfb = [&](const experimental::DFBSpecName& name, std::uint32_t num_entries) {
-        return experimental::DataflowBufferSpec{
+    auto make_dfb = [&](const DFBSpecName& name, std::uint32_t num_entries) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = single_tile_size,
             .num_entries = num_entries,
@@ -580,12 +592,12 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
     // in0/out hold one whole block: the compute kernel indexes every row of the block off the read
     // pointer inside a single dest acquire, so all rt_dim * ct_dim tiles must be resident. in1 holds
     // the rt_dim reused tiles.
-    experimental::DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB, tiles_per_block);
-    experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, test_config.rt_dim);
-    experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, tiles_per_block);
+    DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB, tiles_per_block);
+    DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, test_config.rt_dim);
+    DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, tiles_per_block);
 
-    experimental::DataMovementHardwareConfig reader_hw_config = make_reader_hw_config(mesh_device);
-    experimental::KernelSpec reader_spec{
+    DataMovementHardwareConfig reader_hw_config = make_reader_hw_config(mesh_device);
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_bcast_col_reuse.cpp",
         .num_threads = 1,
@@ -593,14 +605,14 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
             {{
                  .dfb_spec_name = INP0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .runtime_arg_schema =
             {.runtime_arg_names =
@@ -608,20 +620,19 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config = make_writer_hw_config(mesh_device);
-    experimental::KernelSpec writer_spec{
+    DataMovementHardwareConfig writer_hw_config = make_writer_hw_config(mesh_device);
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config =
-        make_compute_hw_config(mesh_device, test_config.math_fidelity);
+    ComputeHardwareConfig compute_hw_config = make_compute_hw_config(mesh_device, test_config.math_fidelity);
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/sub_bcast_col_custom.cpp",
         .num_threads = 1,
@@ -630,31 +641,31 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
             {{
                  .dfb_spec_name = INP0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "single_core_sub_bcast_col_custom",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {inp0_dfb_spec, inp1_dfb_spec, out_dfb_spec},
@@ -665,11 +676,11 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
     workload.add_program(device_range, std::move(built_program));
     auto& program_run = workload.get_programs().at(device_range);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src0_addr", static_cast<std::uint32_t>(dram_buffer_src_a_addr)},
                  {"src0_bank_id", 0u},
@@ -679,15 +690,15 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
                  {"num_tiles", static_cast<std::uint32_t>(total_tiles)},
                  {"num_bcast_tiles", static_cast<std::uint32_t>(test_config.rt_dim)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", static_cast<std::uint32_t>(dram_buffer_dst_addr)},
                  {"bank_id", 0u},
                  {"num_tiles", static_cast<std::uint32_t>(total_tiles)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program_run, params);
 
@@ -862,7 +873,7 @@ INSTANTIATE_TEST_SUITE_P(
                           MathFidelity::HiFi4,
                           20}));  // Row 20
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb) {
     for (std::uint8_t op = std::uint8_t(EltwiseOp::ADD); op <= std::uint8_t(EltwiseOp::MUL); op++) {
         for (std::uint8_t dim = std::uint8_t(BroadcastDim::ROW); dim <= std::uint8_t(BroadcastDim::SCALAR); dim++) {
             for (std::uint8_t math_fid = std::uint8_t(MathFidelity::LoFi);
@@ -911,7 +922,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
 //   - the tiny-tile (16x32) cases come last and mostly repeat a full-tile shape, so a red tiny-tile
 //     case with its full-tile twin green isolates the shape-driven parts (face-row count, dest slot
 //     stride, per-face unpack, buffer-descriptor z_dim).
-TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
     using unit_tests::compute::broadcast::SubBcastColCustomConfig;
 
     const std::vector<SubBcastColCustomConfig> cases = {
@@ -949,6 +960,74 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
             break;
         }
     }
+}
+
+// ============================================================================
+// Id-free (2.0) binary broadcast MUL (rows / cols / scalar), validated against the gold_broadcast host golden
+// (not a legacy kernel). c_0 = A (full tile), c_1 = B (masked bcast tile), MUL-broadcast -> c_16. Both inputs
+// are tilized host-side (the device reads tiled operands); the golden broadcast is computed row-major then
+// tilized. Single Float16_b tile, is_close(rtol 0.0155). Runs on Blackhole (BH-only API).
+// ============================================================================
+namespace {
+// Map the test-side BroadcastDim to the kernel-side ckernel BroadcastType numeric value (COL=1, ROW=2,
+// SCALAR=3) passed as get_compile_time_arg_val(1) to the fused bcast_mul_2_0.cpp kernel.
+std::uint32_t bcast_type_arg(BroadcastDim dim) {
+    switch (dim) {
+        case BroadcastDim::ROW: return 2;
+        case BroadcastDim::COL: return 1;
+        case BroadcastDim::SCALAR: return 3;
+    }
+    return 0;
+}
+
+void expect_bcast_mul_matches_golden(distributed::MeshDevice& md, BroadcastDim dim) {
+    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/compute/bcast_mul_2_0.cpp";
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto in0_packed = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/2, /*seed=*/42, /*offset=*/-1.0f);
+    auto in1_packed = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/2, /*seed=*/7, /*offset=*/-1.0f);
+
+    auto in0_bf16 = unpack_vector<bfloat16, std::uint32_t>(in0_packed);
+    auto in1_bf16 = unpack_vector<bfloat16, std::uint32_t>(in1_packed);
+    // Zero the non-broadcast positions of B so device and golden read the same broadcast operand.
+    mask_src_b_for_broadcast(in1_bf16, {32, 32}, dim, /*row_idx=*/0);
+    auto golden_rm = gold_broadcast(in0_bf16, in1_bf16, {32, 32}, EltwiseOp::MUL, dim, /*row_idx=*/0);
+
+    auto c0_input = ::unit_tests::compute::gold_standard_tilize(in0_packed, config);
+    auto c1_input = ::unit_tests::compute::gold_standard_tilize(pack_vector<std::uint32_t, bfloat16>(in1_bf16), config);
+    auto golden_tiled =
+        ::unit_tests::compute::gold_standard_tilize(pack_vector<std::uint32_t, bfloat16>(golden_rm), config);
+
+    auto result = unit_tests::llk::single_core::run_binary(
+        md,
+        c0_input,
+        c1_input,
+        /*num_tiles=*/1,
+        kernel,
+        /*compute_defines=*/{},
+        /*cb_depth_tiles=*/1,
+        /*out_tiles=*/0,
+        /*extra_compile_args=*/{bcast_type_arg(dim)});
+
+    EXPECT_EQ(golden_tiled.size(), result.size());
+    bool close = is_close_packed_vectors<bfloat16, std::uint32_t>(
+        result, golden_tiled, [](const bfloat16& a, const bfloat16& b) { return is_close(a, b, k_broadcast_rtol); });
+    EXPECT_TRUE(close);
+}
+}  // namespace
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulRowsIdFreeGolden) {
+    expect_bcast_mul_matches_golden(this->device(), BroadcastDim::ROW);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulColsIdFreeGolden) {
+    expect_bcast_mul_matches_golden(this->device(), BroadcastDim::COL);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBcastMulScalarIdFreeGolden) {
+    expect_bcast_mul_matches_golden(this->device(), BroadcastDim::SCALAR);
 }
 
 }  // namespace tt::tt_metal

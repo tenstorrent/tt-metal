@@ -25,12 +25,12 @@ Four easily-missed details, all verified against the pinned reference:
   parameters at all.
 
 RoPE rotates only 48 of each head's 64 lanes and pairs lane *i* with *i + 24*. See
-``rope_minimax_h3.py``: the q/k weight rows are permuted once at load time so
-``ttnn.alt_complex_rotate90`` computes exactly the reference rotation with no slicing.
+``rope_minimax_h3.py``: the q/k weight rows are permuted once at load time so the RoPE stage
+of ``ttnn.experimental.dit_fused_distributed_rmsnorm`` (standard 32x32 trans_mat) computes
+exactly the reference rotation with no slicing.
 
 The 1792 patches are tile-aligned but 1797 is not, so the suffix is padded out to a full
-tile and the pad columns are masked in attention. Without the mask those rows are not
-neutral -- they would corrupt every softmax.
+tile; attention sees q/k/v at the logical length, so the pad keys never enter a softmax.
 """
 
 from __future__ import annotations
@@ -42,6 +42,9 @@ import ttnn
 from ....layers.linear import Linear
 from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import LayerNorm, RMSNorm
+from ....utils.matmul import get_matmul_config, get_matmul_core_grid
+from ....utils.mochi import get_rot_transformation_mat
+from ....utils.tensor import bf16_tensor
 from .rope_minimax_h3 import head_lane_permutation, rope_tables
 
 TILE = 32
@@ -51,6 +54,25 @@ def padded_sequence_length(num_patches: int, num_suffix_tokens: int) -> int:
     """Round ``num_patches + num_suffix_tokens`` up to a whole tile."""
     total = num_patches + num_suffix_tokens
     return ((total + TILE - 1) // TILE) * TILE
+
+
+def _proj_add_residual(
+    linear: Linear, x: ttnn.Tensor, residual: ttnn.Tensor, gate: ttnn.Tensor, mesh_device: ttnn.MeshDevice
+) -> ttnn.Tensor:
+    """``residual + (x @ W + b)`` folded into the projection's matmul epilogue (``gate`` is ones)."""
+    weight = linear.weight.data
+    m, k, n = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+    matmul_config = get_matmul_config(m, k, n, get_matmul_core_grid(mesh_device))
+    return ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+        x,
+        weight,
+        1.0,
+        residual,
+        gate,
+        bias_tensor=linear.bias.data if linear.bias is not None else None,
+        config=matmul_config,
+        compute_kernel_config=linear.compute_config,
+    )
 
 
 class MiniMaxH3ViTAttention(Module):
@@ -101,15 +123,15 @@ class MiniMaxH3ViTAttention(Module):
             fp32_dest_acc_en=False,
         )
 
-        # The elementwise and norm ops all default to HiFi4, which the profile shows costs
-        # 21.5 % of layer device time (BinaryNg 13.2 %, LayerNorm 5.1 %, Typecast 3.2 %,
-        # Unary 1.6 %). None of them is a matmul; HiFi4 buys nothing here. fp32 accumulation
-        # stays on for the q/k RMS, which the reference computes in fp32.
-        self.elementwise_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        self._ones_gate = bf16_tensor(torch.ones(1, 1, dim), device=mesh_device)
+
+        self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+        self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
+            packer_l1_acc=True,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -142,20 +164,34 @@ class MiniMaxH3ViTAttention(Module):
             if key in state:
                 state[f"to_out.{suffix}"] = state.pop(key)
 
-    def _rms(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Parameter-free RMS over the head dim, computed in fp32 like the reference."""
-        original = x.get_dtype()
-        if original != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
-        x = ttnn.rms_norm(x, epsilon=self.eps, compute_kernel_config=self.elementwise_compute_kernel_config)
-        return ttnn.typecast(x, original) if original != ttnn.float32 else x
+    def _norm_rope(self, t: ttnn.Tensor, rope_cos: ttnn.Tensor, rope_sin: ttnn.Tensor) -> ttnn.Tensor:
+        """Per-head RMSNorm + RoPE in one local launch; a tile batch B > 1 folds into the op's [1, B*H, S, Dh]."""
+        batch, heads, seq_len, head_dim = t.shape
+        if batch != 1:
+            t = ttnn.reshape(t, (1, batch * heads, seq_len, head_dim))
+        out = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            t,
+            None,
+            self.mesh_device,
+            [],
+            topology=ttnn.Topology.Linear,
+            epsilon=self.eps,
+            num_heads_per_device=1,
+            per_head_norm=False,
+            transformation_mat=self.rope_trans_mat,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            compute_kernel_config=self.rope_compute_kernel_config,
+        )
+        return ttnn.reshape(out, (batch, heads, seq_len, head_dim)) if batch != 1 else out
 
     def forward(
         self,
         x: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        attention_mask: ttnn.Tensor | None = None,
+        residual: ttnn.Tensor | None = None,
+        valid_len: int | None = None,
     ) -> ttnn.Tensor:
         batch, seq_len, _ = x.shape
         qkv = self.to_qkv(x)
@@ -174,25 +210,31 @@ class MiniMaxH3ViTAttention(Module):
             transpose_k_heads=False,
         )
 
-        query = self._rms(query)
-        key = self._rms(key)
+        query = self._norm_rope(query, rope_cos, rope_sin)
+        key = self._norm_rope(key, rope_cos, rope_sin)
 
-        # Partial RoPE: the lane permute at load time makes this a full-width op.
-        query = ttnn.add(ttnn.mul(query, rope_cos), ttnn.mul(ttnn.alt_complex_rotate90(query), rope_sin))
-        key = ttnn.add(ttnn.mul(key, rope_cos), ttnn.mul(ttnn.alt_complex_rotate90(key), rope_sin))
+        padded = ttnn.Shape([batch, self.num_heads, seq_len, self.head_dim])
+        if valid_len is not None and valid_len < seq_len:
+            logical = ttnn.Shape([batch, self.num_heads, valid_len, self.head_dim])
+            query, key, value = (ttnn.reshape(t, logical, padded) for t in (query, key, value))
 
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
             value,
-            attn_mask=attention_mask,
+            attn_mask=None,
             is_causal=False,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
+            output_concat_heads=True,
         )
-        attended = ttnn.reshape(
-            ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, self.num_heads * self.head_dim)
-        )
+        dim = self.num_heads * self.head_dim
+        full = ttnn.Shape([batch, 1, seq_len, dim])
+        if attended.shape[-2] != seq_len:
+            attended = ttnn.reshape(attended, full, full)
+        attended = ttnn.reshape(attended, (batch, seq_len, dim))
+        if residual is not None:
+            return _proj_add_residual(self.to_out, attended, residual, self._ones_gate, self.mesh_device)
         return self.to_out(attended)
 
 
@@ -227,6 +269,8 @@ class MiniMaxH3TransformerBlock(Module):
         # order does not reproduce the reference, so exactly one order is right.
         self.ff1 = Linear(dim, inner, bias=True, activation_fn="swiglu", mesh_device=mesh_device, dtype=dtype)
         self.ff2 = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
+        self.mesh_device = mesh_device
+        self._ones_gate = bf16_tensor(torch.ones(1, 1, dim), device=mesh_device)
         # LayerScale, initialised to zeros in the reference and trained.
         # No scale1/scale2 Parameters: LayerScale is folded into to_out / ff2 at load time
         # (see _prepare_torch_state), which is exact and saves two multiplies per layer.
@@ -262,17 +306,17 @@ class MiniMaxH3TransformerBlock(Module):
         x: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
-        attention_mask: ttnn.Tensor | None = None,
+        valid_len: int | None = None,
     ) -> ttnn.Tensor:
-        x = ttnn.add(x, self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask))
-        return ttnn.add(x, self.ff2(self.ff1(self.norm2(x))))
+        x = self.attn(self.norm1(x), rope_cos, rope_sin, residual=x, valid_len=valid_len)
+        return _proj_add_residual(self.ff2, self.ff1(self.norm2(x)), x, self._ones_gate, self.mesh_device)
 
 
 class MiniMaxH3ViTDecoder3d(Module):
     """Latent voxels to pixels: ``proj_in -> 36 blocks -> norm_out -> proj_out -> unpatchify``.
 
     Shape-specialised on ``(num_frames, height, width)`` of the *latent* tile, because the
-    RoPE tables, the padded suffix and the attention mask are all constants for a given
+    RoPE tables and the padded suffix are constants for a given
     shape -- and with tiling on there is only ever one shape.
     """
 
@@ -351,16 +395,8 @@ class MiniMaxH3ViTDecoder3d(Module):
         self.rope_sin = Parameter(total_shape=[1, 1, self.seq_len, head_dim], device=mesh_device, dtype=dtype)
         self._rope_host = (cos.reshape(1, 1, self.seq_len, head_dim), sin.reshape(1, 1, self.seq_len, head_dim))
 
-        # Mask the tile-pad columns: they are not neutral in a softmax.
-        mask = torch.zeros(1, 1, self.seq_len, self.seq_len)
-        valid = self.num_patches + self.num_suffix_tokens
-        if valid < self.seq_len:
-            mask[..., valid:] = float("-inf")
-        self.attention_mask = Parameter(total_shape=[1, 1, self.seq_len, self.seq_len], device=mesh_device, dtype=dtype)
-        self._mask_host = mask
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Build the fused suffix constant, and the RoPE / mask constants.
+        """Build the fused suffix constant and the RoPE constants.
 
         ``register_tokens`` is ``(1, 4, dim)``; the cls token is a runtime zero in the
         reference, and the remaining rows are tile padding, so all three fold into one
@@ -374,23 +410,25 @@ class MiniMaxH3ViTDecoder3d(Module):
         cos, sin = self._rope_host
         state["rope_cos"] = cos
         state["rope_sin"] = sin
-        state["attention_mask"] = self._mask_host
 
     def forward(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
-        """``(1, num_patches, in_channels)`` latent tokens to ``(1, seq_len, C*pt*p*p)``.
+        """``(B, num_patches, in_channels)`` latent tokens to ``(B, seq_len, C*pt*p*p)``.
 
-        The caller flattens the latent voxel grid to tokens and unpatchifies the result;
-        it already owns the tiling, hence the host-side reshapes. :func:`unpatchify` is the
-        tail, and it crops the suffix rows off before reshaping.
+        ``B`` is the per-device tile batch; the constants are shared across it. The caller flattens the
+        latent voxel grid to tokens and unpatchifies the result; :func:`unpatchify` crops the suffix rows off.
         """
         assert (
             tokens.shape[1] == self.num_patches
         ), f"expected {self.num_patches} patch tokens for latent {self.latent_shape}, got {tokens.shape[1]}"
         hidden = self.proj_in(tokens)
         # One concat covers the register tokens, the zero cls token and the tile pad.
-        hidden = ttnn.concat([hidden, self.suffix.data], dim=1)
+        suffix = self.suffix.data
+        if suffix.shape[0] != hidden.shape[0]:
+            suffix = ttnn.repeat(suffix, ttnn.Shape([hidden.shape[0], 1, 1]))
+        hidden = ttnn.concat([hidden, suffix], dim=1)
+        valid_len = self.num_patches + self.num_suffix_tokens
         for block in self.transformer_blocks:
-            hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, self.attention_mask.data)
+            hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, valid_len=valid_len)
         return self.proj_out(self.norm_out(hidden))
 
 

@@ -89,5 +89,5 @@ target_include_directories(
 
 # Reuse the shared test PCH (gtest + heavy tt-metalium headers).
 foreach(_mh_target IN ITEMS multi_host_fabric mesh_socket_components test_mesh_socket_main)
-    target_precompile_headers(${_mh_target} REUSE_FROM metal_test_pch)
+    tt_reuse_precompile_headers(${_mh_target} metal_test_pch)
 endforeach()

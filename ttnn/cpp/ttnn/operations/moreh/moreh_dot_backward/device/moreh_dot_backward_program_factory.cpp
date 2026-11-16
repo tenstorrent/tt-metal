@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "moreh_dot_backward_device_operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -12,7 +12,6 @@
 namespace ttnn::operations::moreh::moreh_dot_backward {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 static const std::filesystem::path READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/reader_moreh_dot_backward.cpp";
@@ -102,7 +101,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
                 TensorBinding{.tensor_parameter_name = OTHER, .accessor_name = "s2"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"has_input_grad", "has_other_grad", "num_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(output_grad.device().arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer kernel ----
@@ -135,11 +134,11 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
             },
         .tensor_bindings = std::move(writer_tensor_bindings),
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(output_grad.device().arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- Compute kernel ----
-    // Legacy ComputeConfigDescriptor{} (all defaults) → ComputeGen1Config{} (defaults match).
+    // Legacy ComputeConfigDescriptor{} (all defaults) → ComputeHardwareConfig{} (defaults match).
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = COMPUTE_KERNEL_PATH,
@@ -153,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotBackwardOperation::ProgramFacto
                 DFBBinding{.dfb_spec_name = OUT1, .accessor_name = "out1", .endpoint_type = DFBEndpointType::PRODUCER},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"has_input_grad", "has_other_grad", "per_core_block_cnt"}},
-        .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+        .hw_config = ComputeHardwareConfig{},
     };
 
     // ---- Assemble the spec ----

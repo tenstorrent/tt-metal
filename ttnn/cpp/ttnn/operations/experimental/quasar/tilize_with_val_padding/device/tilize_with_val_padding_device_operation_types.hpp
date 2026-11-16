@@ -16,7 +16,7 @@ struct TilizeWithValPaddingParams {
     bool use_multicore{};
     bool enough_space_width{};
     bool enough_space_height{};
-    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
 }  // namespace ttnn::prim::qsr

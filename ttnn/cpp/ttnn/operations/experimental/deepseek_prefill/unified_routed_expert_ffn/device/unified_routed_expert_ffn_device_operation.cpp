@@ -21,17 +21,57 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
     return mem.buffer_type() == tt::tt_metal::BufferType::DRAM &&
            mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
 }
+
+// Weights may instead be DRAM ND-sharded, which lets a core fetch a whole (K-row x per-core-N)
+// slice in ONE NoC request rather than one per tile: that slice is exactly one shard, hence
+// contiguous in a single bank.
+//
+// The shard must be a whole number of tile-rows tall. Height is otherwise free — the reader walks
+// shard-row runs, whose stride does not depend on it — but it decides how many DRAM banks a
+// K-block touches: shards distribute ROUND_ROBIN_1D, so consecutive K-rows land in DIFFERENT
+// banks, and a taller shard trades that rotation for fewer requests. Bank rotation is what buys
+// the bandwidth (a core pinned to one bank saturates near 30 GB/s regardless of request size), so
+// one tile-row is the height to ship; the program factory pins the WIDTH, which is the part
+// correctness depends on.
+bool is_dram_nd_sharded_by_tile_rows(const ttnn::Tensor& t) {
+    const auto& mem = t.memory_config();
+    if (mem.buffer_type() != tt::tt_metal::BufferType::DRAM || !mem.created_with_nd_shard_spec()) {
+        return false;
+    }
+    const auto& spec = mem.nd_shard_spec();
+    if (!spec.has_value() || spec->shard_shape.rank() < 2) {
+        return false;
+    }
+    const auto& shard_shape = spec->shard_shape;
+    return shard_shape[-2] >= tt::constants::TILE_HEIGHT && shard_shape[-2] % tt::constants::TILE_HEIGHT == 0 &&
+           shard_shape[-1] % tt::constants::TILE_WIDTH == 0;
+}
+
+// The program factory builds the kernels for LoFi, a bf16 DEST and exact SFPU whatever the
+// caller asks for, and compute_kernel_config is not in the program hash. Reject any other
+// setting instead of silently running LoFi.
+void validate_compute_kernel_config(const std::optional<ttnn::DeviceComputeKernelConfig>& config) {
+    if (!config.has_value()) {
+        return;
+    }
+    TT_FATAL(
+        config->math_fidelity == tt::tt_metal::MathFidelity::LoFi,
+        "unified_routed_expert_ffn runs at LoFi only; pass math_fidelity=LoFi");
+    TT_FATAL(!config->fp32_dest_acc_en, "unified_routed_expert_ffn needs fp32_dest_acc_en=False (bf16 DEST)");
+    TT_FATAL(!config->math_approx_mode, "unified_routed_expert_ffn needs math_approx_mode=False");
+}
 }  // namespace
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
+    validate_compute_kernel_config(op.compute_kernel_config);
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
-    if (op.activation == RoutedExpertActivation::SituGlu) {
+    if (op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::ClampedSiluGlu) {
         TT_FATAL(
             t.x.device()->arch() == tt::ARCH::BLACKHOLE,
-            "unified_routed_expert_ffn: SiTU-GLU is implemented for Blackhole only, got arch {}",
+            "unified_routed_expert_ffn: SiTU-GLU and clamped SiLU-GLU are implemented for Blackhole only, got arch {}",
             t.x.device()->arch());
     }
     // x layout/dtype depends on x_is_row_major:
@@ -115,7 +155,12 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                  {"down_proj", t.down_projs[e], t.down_projs[0]}}) {
             TT_FATAL(w.storage_type() == ttnn::StorageType::DEVICE, "{}[{}] must be on device", name, e);
             TT_FATAL(w.layout() == tt::tt_metal::Layout::TILE, "{}[{}] must be TILE layout", name, e);
-            TT_FATAL(is_dram_interleaved(w), "{}[{}] must be DRAM-interleaved", name, e);
+            TT_FATAL(
+                is_dram_interleaved(w) || is_dram_nd_sharded_by_tile_rows(w),
+                "{}[{}] must be DRAM-interleaved or DRAM ND-sharded with a tile-aligned shard, got {}",
+                name,
+                e,
+                w.memory_config());
             TT_FATAL(
                 w.padded_shape() == ref.padded_shape() && w.dtype() == ref.dtype(),
                 "{}[{}] shape/dtype ({}, {}) must match expert 0 ({}, {}) — all experts share one program",
@@ -125,6 +170,16 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                 w.dtype(),
                 ref.padded_shape(),
                 ref.dtype());
+            // The page->bank map lives in the accessor layout descriptor, which is built once from
+            // expert 0; only the base address varies per expert. An expert placed differently would
+            // be read through expert 0's map and give silently wrong numbers rather than fail.
+            TT_FATAL(
+                w.memory_config() == ref.memory_config(),
+                "{}[{}] memory config ({}) must match expert 0 ({}) — all experts share one program",
+                name,
+                e,
+                w.memory_config(),
+                ref.memory_config());
         }
     }
 
@@ -141,6 +196,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
              {"counts", t.counts}, {"global_expert_idx_table", t.global_expert_idx_table}}) {
         TT_FATAL(a.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
         TT_FATAL(a.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32", name);
+        // The reader indexes page 0 as a flat uint32 vector; a TILE page is in face order, so
+        // entries past the first face row would be read from the wrong expert.
+        TT_FATAL(
+            a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout, got {}", name, a.layout());
         TT_FATAL(is_dram_interleaved(a), "{} must be DRAM-interleaved", name);
         const uint32_t num_entries = a.logical_shape()[-1];
         TT_FATAL(
@@ -156,6 +215,15 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         "experts_per_chip ({}) must be <= idx_table size ({})",
         op.experts_per_chip,
         t.global_expert_idx_table.logical_shape()[-1]);
+
+    // An inverted band drops every expert down the same count-0 path a genuine skip takes, so the
+    // op would run to completion and write nothing rather than fail.
+    TT_FATAL(
+        op.min_active_tokens <= op.max_active_tokens,
+        "unified_routed_expert_ffn: active-token band is inverted: min_active_tokens {} > "
+        "max_active_tokens {}",
+        op.min_active_tokens,
+        op.max_active_tokens);
 
     // The kernels always read each expert's x slice at its region offset
     // (fusing ttnn::extract) and write that expert's output into `output` at the
@@ -304,18 +372,20 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                     t.gate_biases[e].dtype() == t.gate_biases[0].dtype(),
                 "all gate/up/down biases must share one dtype");
         }
-        // Bias fusion lives in the kernel's shared binary-activation phase and is
-        // activation-agnostic, so every fused binary activation supports it. Only the SiLU
-        // path has no bias branch.
+        // ClampedSiluGlu is excluded because DeepSeek-V4's experts are bias-free, not
+        // because the kernel lacks a bias branch.
         TT_FATAL(
             op.activation == RoutedExpertActivation::SwiGluOai || op.activation == RoutedExpertActivation::SituGlu,
-            "unified_routed_expert_moe: expert biases require a fused binary activation "
-            "(SwiGluOai or SituGlu); the SiLU path has no bias branch.");
+            "unified_routed_expert_moe: expert biases are enabled only for SwiGluOai and SituGlu.");
     }
 }
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t&, const tensor_args_t&) {}
+    const operation_attributes_t& op, const tensor_args_t&) {
+    // compute_kernel_config is not in the program hash, so a hit can carry a config the
+    // cached program never validated.
+    validate_compute_kernel_config(op.compute_kernel_config);
+}
 
 UnifiedRoutedExpertFfnDeviceOperation::spec_return_value_t UnifiedRoutedExpertFfnDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& t) {
@@ -347,7 +417,9 @@ ttnn::Tensor unified_routed_expert_moe(
     ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation,
     const std::vector<ttnn::Tensor>& gate_biases,
     const std::vector<ttnn::Tensor>& up_biases,
-    const std::vector<ttnn::Tensor>& down_biases) {
+    const std::vector<ttnn::Tensor>& down_biases,
+    uint32_t min_active_tokens,
+    uint32_t max_active_tokens) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -357,7 +429,9 @@ ttnn::Tensor unified_routed_expert_moe(
             .x_is_row_major = x_is_row_major,
             .activation = activation,
             .fuse_bias = !gate_biases.empty(),
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .min_active_tokens = min_active_tokens,
+            .max_active_tokens = max_active_tokens},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

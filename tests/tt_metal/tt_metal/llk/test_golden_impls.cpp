@@ -35,6 +35,8 @@ std::vector<std::uint32_t> gold_standard_untilize(
     int face_size = (config.tiny_tile ? config.face_r_dim : FACE_HEIGHT) * FACE_WIDTH *
                     static_cast<int>(config.datum_bytes) / sizeof(std::uint32_t);
     int tile_size = face_size * (config.tiny_tile ? config.num_faces : TILE_HW / FACE_HW);
+    const int num_faces_c_dim = std::min(config.num_faces, config.num_faces_c_dim);
+    const int num_faces_r_dim = config.num_faces / num_faces_c_dim;
 
     std::set<int> ind;
 
@@ -45,8 +47,7 @@ std::vector<std::uint32_t> gold_standard_untilize(
         int physical_start_for_tile_row = tile_start_index * tile_size;
 
         // Iterate over tile columns 32 times (naive, but simple for validation)
-        std::uint32_t num_iterations = (config.num_faces > 2) ? 2 : 1;
-        for (int x = 0; x < num_iterations; x++) {
+        for (int x = 0; x < num_faces_r_dim; x++) {
             for (int i = 0; i < config.face_r_dim; i++) {  // num rows in a face
                 for (int j = 0; j < num_tile_cols; j++) {  // num columns top two faces
                     // Left face row copy
@@ -57,7 +58,7 @@ std::vector<std::uint32_t> gold_standard_untilize(
                         dst_vec.push_back(src_vec.at(idx));
                     }
 
-                    if (config.num_faces > 1) {
+                    if (num_faces_c_dim > 1) {
                         // Right face row copy
                         for (int k = 0; k < num_c_dim; k++) {
                             int idx = physical_start_for_tile_row + (i * num_c_dim) + k + face_size + (j * tile_size);
@@ -69,7 +70,7 @@ std::vector<std::uint32_t> gold_standard_untilize(
                 }
             }
 
-            physical_start_for_tile_row += 2 * face_size;  // Move to bottom faces
+            physical_start_for_tile_row += num_faces_c_dim * face_size;  // Move to bottom faces
         }
     }
 
@@ -349,16 +350,6 @@ std::vector<std::uint32_t> gold_standard_tilize_w_reduce_col_max(
     }
 
     return tt::test_utils::pack_vector<std::uint32_t, bfloat16>(result);
-}
-
-std::vector<std::uint32_t> gold_standard_pack_rows(
-    const std::vector<std::uint32_t>& src_vec, const PackRowsConfig& config) {
-    // Each row = 16 datums = 8 uint32_t (bfloat16 pairs)
-    size_t num_uint32_to_extract = config.num_rows * 8;
-    size_t actual_count = std::min(num_uint32_to_extract, src_vec.size());
-    vector<std::uint32_t> dst_vec(actual_count);
-    std::copy_n(src_vec.begin(), actual_count, dst_vec.begin());
-    return dst_vec;
 }
 
 }  // namespace unit_tests::compute

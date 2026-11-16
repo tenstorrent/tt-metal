@@ -5,16 +5,17 @@
 #pragma once
 
 #include <tt_stl/indestructible.hpp>
+#include <atomic>
+#include <optional>
 #include <vector>
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
-#include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
-#include "hostdevcommon/api/hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_values.hpp"
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
@@ -38,6 +39,7 @@ namespace inspector {
 class Data;
 }
 
+class BuildEnvManager;
 class ContextDescriptor;
 class DataCollector;
 class DeviceManager;
@@ -47,6 +49,7 @@ class DispatchQueryManager;
 class DPrintServer;
 class WatcherServer;
 class DispatchMemMap;
+class HostTransferStats;
 class NOCDebugState;
 
 // A class to manage one-time initialization and teardown (FW, dispatch, fabric, cluster) and access to related state.
@@ -81,20 +84,56 @@ public:
     // IDs are recycled after instances are destroyed.
     ContextId get_context_id() const { return context_id_; }
 
-    [[deprecated("Use MetalEnv instead")]] Cluster& get_cluster();
-    [[deprecated("Use MetalEnv instead")]] llrt::RunTimeOptions& rtoptions();
-    [[deprecated("Use MetalEnv instead")]] const Cluster& get_cluster() const;
-    [[deprecated("Use MetalEnv instead")]] const llrt::RunTimeOptions& rtoptions() const;
-    [[deprecated("Use MetalEnv instead")]] const Hal& hal() const;
+    Cluster& get_cluster();
+    llrt::RunTimeOptions& rtoptions();
+    const Cluster& get_cluster() const;
+    const llrt::RunTimeOptions& rtoptions() const;
+    const Hal& hal() const;
 
     // Returns the MetalEnv instance assigned to this context.
-    [[deprecated(
-        "Use MetalEnv directly instead. This is a temporary workaround until all code is migrated to use "
-        "MetalEnv.")]] tt::tt_metal::MetalEnv&
-    get_env();
+    tt::tt_metal::MetalEnv& get_env();
 
     dispatch_core_manager& get_dispatch_core_manager();
+
+    // Snapshot of the dispatch-core partition used to build the currently live
+    // dispatch managers. Written only by initialize(); default-constructed
+    // (WORKER, unset axis) until then. Teardown does not clear it.
     const DispatchCoreConfig& get_dispatch_core_config() const { return dispatch_core_config_; }
+
+    // TEMPORARY:
+    // Propose a complete dispatch-core config from the environment attached to
+    // this context, plus optional caller preferences.
+    //
+    // This is not a getter for get_dispatch_core_config(). That member is the
+    // snapshot stored by initialize(), describing how already-built dispatch
+    // state was partitioned. This method never reads that snapshot. It
+    // recomputes from live architecture, live fabric tensix config, optional
+    // type/axis arguments, and the TT_METAL_GTEST_ETH_DISPATCH override
+    // (explicit argument > env-var override > platform default).
+    //
+    // Call this when choosing the config to pass into a forthcoming
+    // initialize() / device open: no usable snapshot exists yet, or the caller
+    // is proposing a new partition. Call get_dispatch_core_config() when asking
+    // how live dispatch managers were built.
+    //
+    // The two agree only after initialize() has run and the last initialize
+    // used exactly what this method would produce from the same inputs now.
+    // They differ when initialize has not run, when initialize was given an
+    // explicit non-default that the no-argument call would not pick, or when
+    // fabric tensix config changed after the snapshot was stored.
+    //
+    // initialize() itself is not this method: it keeps the incoming type and
+    // only fills an unset axis. Calling resolve after initialize does not
+    // refresh the snapshot; it re-runs default policy against the live env.
+    //
+    // Temporary. Dispatch config is still a parameter to initialize() because
+    // MetalContext has no construct-with-settings step. The intended end state
+    // is to resolve (or accept an already-complete config) when the
+    // environment is set up, after fabric config is known, and to store that
+    // result for the context lifetime. This helper should then go away;
+    // remaining callers query the snapshot.
+    DispatchCoreConfig resolve_dispatch_core_config(
+        std::optional<DispatchCoreType> type = std::nullopt, std::optional<DispatchCoreAxis> axis = std::nullopt) const;
     internal::ServiceCoreManager& get_service_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
 
@@ -108,10 +147,14 @@ public:
 
     std::unique_ptr<ProfilerStateManager>& profiler_state_manager() { return profiler_state_manager_; }
     std::unique_ptr<DataCollector>& data_collector() { return data_collector_; }
+    // Lives as long as the context; teardown logs and clears it.
+    HostTransferStats& host_transfer_stats() { return *host_transfer_stats_; }
     std::unique_ptr<DeviceManager>& device_manager() { return device_manager_; }
     bool is_device_manager_initialized() const { return device_manager_ != nullptr; }
 
     std::unique_ptr<NOCDebugState>& noc_debug_state() { return noc_debug_state_; }
+
+    BuildEnvManager& build_env_manager() { return *build_env_manager_; }
 
     void initialize_device_manager(
         const std::vector<ChipId>& device_ids,
@@ -168,7 +211,6 @@ public:
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
     const tt_fabric::FabricRouterConfig& get_fabric_router_config() const;
 
-    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
     tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
@@ -185,6 +227,11 @@ public:
 
     // Hang detection
     void on_dispatch_timeout_detected();
+
+    // Set when a Tensix BRISC is found with a halt record. Until the next init, halt checks throw at once and device
+    // close skips dispatch teardown.
+    bool l1_ecc_halt_detected() const { return l1_ecc_halt_detected_.load(std::memory_order_acquire); }
+    void set_l1_ecc_halt_detected(bool detected) { l1_ecc_halt_detected_.store(detected, std::memory_order_release); }
 
 private:
     friend class ttsl::Indestructible<MetalContext>;
@@ -227,12 +274,18 @@ private:
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
 
+    std::atomic<bool> l1_ecc_halt_detected_{false};
+
     // The MetalEnv is normally owned by the user
     // For the legacy code, we will initialize it in the MetalContext constructor and own the env
     // This means MetalContext will delete the env in the MetalContext destructor.
     tt::tt_metal::MetalEnv* env_;
     bool env_owned_ = false;
     ContextId context_id_;
+
+    // Declared before the other components so it is destroyed after them: their teardown may still read build envs.
+    // Not reset by teardown(); build envs persist across re-initialization of this context.
+    std::unique_ptr<BuildEnvManager> build_env_manager_;
 
     std::unique_ptr<internal::ServiceCoreManager> service_core_manager_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
@@ -242,6 +295,7 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
+    std::unique_ptr<HostTransferStats> host_transfer_stats_;
     std::unique_ptr<DeviceManager> device_manager_;
     std::unique_ptr<NOCDebugState> noc_debug_state_;
     // The context descriptor used for runtime components.

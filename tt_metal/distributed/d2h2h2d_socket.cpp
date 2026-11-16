@@ -1,0 +1,349 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+#include "tt_metal/distributed/d2h2h2d_socket.hpp"
+
+#include <chrono>
+#include <deque>
+#include <vector>
+
+#include <fmt/format.h>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include "tt_metal/distributed/host_rdma_window.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "tt_metal/distributed/mesh_device_impl.hpp"
+
+namespace tt::tt_metal::experimental {
+
+struct D2H2H2DSocket::Impl {
+    Config cfg{};
+    L1MapUVA l1{};
+    Counters counters{};
+    Timing timing{};
+    // Stamped at publish, popped when the device reports that page drained. A DEQUE per core,
+    // not one stamp: at ring_pages > 1 several are outstanding and drained() reports in order.
+    std::vector<std::deque<std::chrono::steady_clock::time_point>> published;
+    uint64_t d2h_w = 0;  // ring write cursors, once the sample caps are reached
+    uint64_t h2d_w = 0;
+    // A handle, not a raw pointer: this socket may be destroyed after the mesh has closed, and
+    // its destructor still calls release() on the region (see MeshDeviceImpl::host_region_).
+    std::shared_ptr<HostRegion> region;
+
+    // Declaration order is teardown order and is load-bearing: the window must go before
+    // the region it covers, and the legs' overlays before the sockets they alias.
+    std::unique_ptr<D2HLeg> d2h;
+    std::unique_ptr<H2DLeg> h2d;
+    std::unique_ptr<H2HSocket> h2h;
+
+    std::string err;
+};
+
+D2H2H2DSocket::D2H2H2DSocket() : impl_(std::make_unique<Impl>()) {}
+
+// Three-step, because the window and the overlays want opposite sides of the unpin: the RMA
+// window names pinned pages and must go first, the legs' anonymous re-maps must come after.
+D2H2H2DSocket::~D2H2H2DSocket() {
+    impl_->h2h.reset();
+    // Harmless after the mesh's close(): that already released it, and release() is idempotent.
+    if (impl_->region) {
+        impl_->region->release();
+    }
+}
+
+std::unique_ptr<D2H2H2DSocket> D2H2H2DSocket::create(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+    tt::tt_metal::IDevice* device,
+    const Config& cfg,
+    std::string& err) {
+    err.clear();
+    std::unique_ptr<D2H2H2DSocket> s(new D2H2H2DSocket());
+    Impl& im = *s->impl_;
+    im.cfg = cfg;
+    if (cfg.collect_timing) {
+        im.published.resize(cfg.cores);
+        // Reserved so the push_backs below never realloc inside poll(), and so reset_timing()
+        // at the warmup boundary does not hand the measured window a fresh empty vector.
+        im.timing.d2h_issue_cycles.reserve(1u << 20);
+        im.timing.d2h_stall_cycles.reserve(1u << 20);
+        im.timing.h2d_publish_to_drained_ns.reserve(1u << 20);
+    }
+    const uint32_t page = tt_uva_frame_page_size(cfg.payload_bytes);
+
+    // Steps 1 and 2 are local and can fail on ONE host (pin limits, shm, a device throw), so
+    // they run to a verdict rather than returning: every rank must reach the agreement below.
+    // The call is wrapped, not the body: reserved_base() and the socket ctors throw, and an
+    // exception escaping here leaves every peer blocked in the agreement below forever.
+    bool local_ok = false;
+    try {
+        local_ok = [&]() -> bool {
+        if (mesh == nullptr || device == nullptr || cfg.cores == 0 || cfg.payload_bytes == 0) {
+            err = "D2H2H2DSocket::create: mesh, device, cores and payload_bytes are all required";
+            return false;
+        }
+        if (cfg.cores > cfg.grid_width * cfg.grid_height) {
+            err = fmt::format(
+                "D2H2H2DSocket::create: cores {} exceeds the {} on a {}x{} grid",
+                cfg.cores,
+                cfg.grid_width * cfg.grid_height,
+                cfg.grid_width,
+                cfg.grid_height);
+            return false;
+        }
+
+        const uint32_t l1_base = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+        im.l1 = L1MapUVA::compute(
+            l1_base, static_cast<uint32_t>(device->l1_size_per_core()), cfg.payload_bytes, cfg.bidirectional);
+        if (const std::string e = im.l1.fits(cfg.payload_bytes); !e.empty()) {
+            err = e;
+            return false;
+        }
+
+        const std::shared_ptr<HostRegion> region_h = mesh->impl().host_region();
+        HostRegion& region = *region_h;
+        uint8_t* const base = region.reserved_base(cfg.reserved_cores != 0 ? cfg.reserved_cores : cfg.cores);
+
+        // 1. Both legs first: they allocate their sockets and MAP_FIXED the rings over the
+        //    arenas, which must happen before anything pins those pages.
+        D2HLeg::Config dc;
+        dc.cores = cfg.cores;
+        dc.grid_width = cfg.grid_width;
+        dc.payload_bytes = cfg.payload_bytes;
+        dc.ring_pages = cfg.ring_pages;
+        dc.consumed_addr = im.l1.consumed_addr;
+        dc.alias_region_base = base;
+        im.d2h = D2HLeg::create(mesh, dc, err);
+        if (!im.d2h) {
+            return false;
+        }
+
+        H2DLeg::Config hc;
+        hc.cores = cfg.cores;
+        hc.grid_width = cfg.grid_width;
+        hc.page_bytes = page;
+        hc.ring_pages = cfg.ring_pages;
+        hc.alias_region_base = base;
+        im.h2d = H2DLeg::create(mesh, hc, err);
+        if (!im.h2d) {
+            return false;
+        }
+
+        // 2. Now pin and publish.
+        try {
+            region.provision(
+                mesh, cfg.chip, cfg.cores, cfg.topo, HostRegion::Grid{cfg.grid_width, cfg.grid_height});
+            im.region = region_h;
+        } catch (const std::exception& ex) {
+            err = std::string("host region unavailable: ") + ex.what();
+            return false;
+        }
+        if (const std::string e = im.region->verify_header(); !e.empty()) {
+            err = "region header check failed: " + e;
+            return false;
+        }
+        return true;
+        }();
+    } catch (const std::exception& ex) {
+        err = std::string("D2H2H2DSocket::create: ") + ex.what();
+        local_ok = false;
+    }
+
+    if (!RdmaWindow::agree(local_ok, err)) {
+        return nullptr;
+    }
+
+    // 3. The window last, over pages that are now pinned and will not move.
+    H2HSocket::Config mc;
+    mc.topo = cfg.topo;
+    mc.chip = cfg.chip;
+    mc.cores = cfg.cores;
+    mc.page_bytes = page;
+    mc.ring_pages = cfg.ring_pages;
+    // From the leg that owns these rings: H2HSocket writes into the same RX arenas the H2D
+    // leg aliased, so it has to start where that ring starts. Core 0 speaks for all of them.
+    mc.rx_data_offset = im.h2d->data_offset(0);
+    mc.region_base = im.region->base();
+    mc.region_bytes = im.region->pinned_bytes();
+    mc.send_window = cfg.send_window;
+    mc.collect_timing = cfg.collect_timing;
+    im.h2h = H2HSocket::create(mc, err);
+    if (!im.h2h) {
+        return nullptr;
+    }
+    return s;
+}
+
+// The whole pipeline. Each leg is non-blocking and refuses rather than waits, so a full
+// queue anywhere propagates back to the device as an unacked FIFO page.
+namespace {
+// Only read when collect_timing is set: poll() is the spin loop, and two clock reads per
+// leg would otherwise be charged to runs that asked for no timing.
+inline uint64_t ns_since(std::chrono::steady_clock::time_point t0) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+}
+}  // namespace
+
+uint32_t D2H2H2DSocket::poll() {
+    Impl& im = *impl_;
+    uint32_t progress = 0;
+    const bool t = im.cfg.collect_timing;
+    const auto zero = std::chrono::steady_clock::time_point{};
+    if (t) {
+        ++im.timing.poll_calls;
+    }
+
+    const auto d2h_t0 = t ? std::chrono::steady_clock::now() : zero;
+    progress += im.d2h->poll([&](const SendTask& t) {
+        if (!im.h2h->submit(t)) {
+            return false;
+        }
+        ++im.counters.sent;
+        if (im.cfg.collect_timing) {
+            // Overwrite oldest past the cap: keeping the head reported the ramp while
+            // throughput reported the steady tail. A percentile ignores order.
+            const uint64_t iss = tt_uva_frame_elapsed_issue(t.elapsed);
+            const uint64_t stl = tt_uva_frame_elapsed_stall(t.elapsed);
+            if (im.timing.d2h_issue_cycles.size() < kMaxTimingSamples) {
+                im.timing.d2h_issue_cycles.push_back(iss);
+                im.timing.d2h_stall_cycles.push_back(stl);
+            } else {
+                const size_t w = im.d2h_w++ % kMaxTimingSamples;
+                im.timing.d2h_issue_cycles[w] = iss;
+                im.timing.d2h_stall_cycles[w] = stl;
+            }
+        }
+        return true;
+    });
+    if (t) {
+        im.timing.d2h_poll_ns += ns_since(d2h_t0);
+    }
+
+    const auto h2h_t0 = t ? std::chrono::steady_clock::now() : zero;
+    progress += im.h2h->poll(
+        [&](uint32_t core, uint32_t pages) {
+            const auto cb0 = t ? std::chrono::steady_clock::now() : zero;
+            im.d2h->retire(core, pages);
+            im.counters.retired += pages;
+            if (t) {
+                im.timing.h2h_cb_ns += ns_since(cb0);
+            }
+        },
+        [&](const DeliverTask& dt) {
+            const auto cb0 = t ? std::chrono::steady_clock::now() : zero;
+            if (!im.h2d->publish(dt)) {
+                if (t) {
+                    im.timing.h2h_cb_ns += ns_since(cb0);
+                }
+                return false;
+            }
+            ++im.counters.received;
+            if (im.cfg.collect_timing && dt.core < im.published.size()) {
+                im.published[dt.core].push_back(std::chrono::steady_clock::now());
+            }
+            if (t) {
+                im.timing.h2h_cb_ns += ns_since(cb0);
+            }
+            return true;
+        });
+    if (t) {
+        im.timing.h2h_poll_ns += ns_since(h2h_t0);
+    }
+
+    // A drained page is what frees the peer's slot, so the credit follows the device.
+    const auto h2d_t0 = t ? std::chrono::steady_clock::now() : zero;
+    for (uint32_t c = 0; c < im.cfg.cores; ++c) {
+        if (const uint32_t pages = im.h2d->drained(c); pages != 0) {
+            im.h2h->consumed(c, pages);
+            im.counters.drained += pages;
+            ++progress;
+            if (im.cfg.collect_timing) {
+                // One sample per drained page, oldest first: drained() can report several.
+                const auto now = std::chrono::steady_clock::now();
+                for (uint32_t k = 0; k < pages && !im.published[c].empty(); ++k) {
+                    const auto d = now - im.published[c].front();
+                    im.published[c].pop_front();
+                    const uint64_t ns =
+                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
+                    if (im.timing.h2d_publish_to_drained_ns.size() < kMaxTimingSamples) {
+                        im.timing.h2d_publish_to_drained_ns.push_back(ns);
+                    } else {
+                        im.timing.h2d_publish_to_drained_ns[im.h2d_w++ % kMaxTimingSamples] = ns;
+                    }
+                }
+            }
+        }
+        // Publish the inbound credit to our own sender, so tt_uva_sync() can see it.
+        im.d2h->credit(c, im.h2h->credit_total(c));
+    }
+    // After the whole loop, so one put covers every core that freed a slot this pass.
+    (void)im.h2h->publish_credits();
+    if (t) {
+        im.timing.h2d_drain_ns += ns_since(h2d_t0);
+    }
+    return progress;
+}
+
+void D2H2H2DSocket::reset_timing() {
+    Impl& im = *impl_;
+    // clear(), not Timing{}: assigning a fresh struct frees the reserves above and the
+    // vectors would then double-and-copy inside poll() across the measured window.
+    im.timing.d2h_issue_cycles.clear();
+    im.timing.d2h_stall_cycles.clear();
+    im.timing.h2h_put_to_credit_ns.clear();
+    im.timing.h2d_publish_to_drained_ns.clear();
+    im.timing.poll_calls = 0;
+    im.timing.d2h_poll_ns = 0;
+    im.timing.h2h_poll_ns = 0;
+    im.timing.h2d_drain_ns = 0;
+    im.timing.h2h_cb_ns = 0;
+    im.d2h_w = 0;
+    im.h2d_w = 0;
+    // The pending publish stamps go too: a frame published before the boundary and drained
+    // after it belongs to neither window, so its sample is dropped rather than misdated.
+    for (auto& q : im.published) {
+        q.clear();
+    }
+    if (im.h2h) {
+        im.h2h->reset_stats();
+    }
+}
+
+const L1MapUVA& D2H2H2DSocket::l1() const { return impl_->l1; }
+const D2H2H2DSocket::Counters& D2H2H2DSocket::counters() const { return impl_->counters; }
+const D2H2H2DSocket::Timing& D2H2H2DSocket::timing() const {
+    Impl& im = *impl_;
+    // Copied on read rather than mirrored per frame: H2HSocket owns both ends of this
+    // interval, and nothing here could close it -- the credit word is read only there.
+    if (im.cfg.collect_timing && im.h2h) {
+        im.timing.h2h_put_to_credit_ns = im.h2h->put_to_credit_ns();
+    }
+    return im.timing;
+}
+HostRegion& D2H2H2DSocket::region() const { return *impl_->region; }
+D2HLeg& D2H2H2DSocket::d2h() const { return *impl_->d2h; }
+H2HSocket& D2H2H2DSocket::h2h() const { return *impl_->h2h; }
+H2DLeg& D2H2H2DSocket::h2d() const { return *impl_->h2d; }
+
+std::string D2H2H2DSocket::barrier() { return impl_->h2h->barrier(); }
+
+bool D2H2H2DSocket::failed() const { return !first_error().empty(); }
+
+// First non-empty wins, in pipeline order, so the earliest failure is the one reported.
+std::string D2H2H2DSocket::first_error() const {
+    const Impl& im = *impl_;
+    for (const std::string& e : {im.d2h->first_error(), im.h2h->first_error(), im.h2d->first_error(), im.err}) {
+        if (!e.empty()) {
+            return e;
+        }
+    }
+    return {};
+}
+
+std::string D2H2H2DSocket::describe() const {
+    return fmt::format("{}\n  {}\n  {}", impl_->d2h->describe(), impl_->h2h->describe(), impl_->h2d->describe());
+}
+
+}  // namespace tt::tt_metal::experimental

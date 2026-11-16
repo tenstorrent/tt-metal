@@ -10,20 +10,20 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::prim::qsr {
 
 ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_program_artifacts(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input_tensor = tensor_args.input;
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output.padded_shape();
@@ -61,8 +61,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     uint32_t input_bytes_per_row = actual_input_w * element_size;
     uint32_t cb_page_size = input_bytes_per_row;
 
-    auto src_buffer_alignment = input_tensor.buffer()->alignment();
-    auto dst_buffer_alignment = output.buffer()->alignment();
+    auto src_buffer_alignment = input_tensor.mesh_buffer().alignment();
+    auto dst_buffer_alignment = output.mesh_buffer().alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     uint32_t cb_page_size_aligned = tt::round_up(cb_page_size, alignment);
@@ -91,8 +91,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}};
     reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "in"}};
-    reader.hw_config =
-        ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    reader.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     KernelSpec writer;
     writer.unique_id = WRITER;
@@ -100,8 +99,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     writer.dfb_bindings = {
         DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::CONSUMER}};
     writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "out"}};
-    writer.hw_config =
-        ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    writer.hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
 
     const auto& slice_start = args.slice_start;
     const auto& slice_end = args.slice_end;

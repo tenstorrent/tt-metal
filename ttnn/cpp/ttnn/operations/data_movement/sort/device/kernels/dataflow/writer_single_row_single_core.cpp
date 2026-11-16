@@ -8,7 +8,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-#include "sort_dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
 
 /*
 To improve performance of both reader and writer kernels the work has been split so that they both prepare input and
@@ -68,9 +68,9 @@ void kernel_main() {
         // Generate index tiles into the index DFB (consumed by compute)
         for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {
-                generate_index_tile<uint32_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
             } else {
-                generate_index_tile<uint16_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
             }
         }
 
@@ -149,13 +149,13 @@ void kernel_main() {
                            get_absolute_logical_y() * compute_with_storage_grid_size_x + get_absolute_logical_x();
 
         // Generate Wt index tiles (TILE / integer format) into the index DFB.
-        // The topk LLK reads indices via LO16 (uint16) or INT32 (uint32) mode, so
+        // The topk LLK reads indices via UINT16 (uint16) or INT32 (uint32) mode, so
         // the index DFB must contain raw unsigned integers, not floating-point values.
         for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {
-                generate_index_tile<uint32_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
             } else {
-                generate_index_tile<uint16_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
             }
         }
 

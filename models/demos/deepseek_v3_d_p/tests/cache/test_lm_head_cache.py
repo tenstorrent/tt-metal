@@ -15,7 +15,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import report_and_clear
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_lm_head")
 
@@ -29,15 +29,6 @@ def cleanup_cache():
     report_and_clear()
 
 
-def _ci_unsupported_param_combos(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-
-    if not on_ci:
-        return False
-    return True
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [

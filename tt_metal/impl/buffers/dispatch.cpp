@@ -5,7 +5,9 @@
 #include <tt_stl/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <algorithm>
+#include <mutex>
 #include <optional>
 #include <stack>
 #include <type_traits>
@@ -18,6 +20,7 @@
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
@@ -25,7 +28,6 @@
 #include "math.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
-#include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -36,7 +38,7 @@
 #include <tt_stl/overloaded.hpp>
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal::buffer_dispatch {
@@ -446,7 +448,7 @@ bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t 
 }
 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
-    const HalMemType buffer_mem_type = buffer.memory_type();
+    const HalMemType buffer_mem_type = buffer.impl().memory_type();
     const uint32_t partial_page_size = tt::align(
         DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH,
         MetalContext::instance(extract_context_id(buffer.device()))
@@ -470,7 +472,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
     buf_dispatch_constants.max_prefetch_cmd_size =
-        MetalContext::instance(sysmem_manager.get_context_id()).dispatch_mem_map().max_prefetch_command_size();
+        sysmem_manager.metal_context().dispatch_mem_map().max_prefetch_command_size();
 
     return buf_dispatch_constants;
 }
@@ -741,8 +743,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                dispatch_params.expected_num_workers_completed[offset_index],
-                dispatch_params.cq_id);
+                dispatch_params.expected_num_workers_completed[offset_index]);
         }
 
         TT_ASSERT(
@@ -990,8 +991,7 @@ void issue_buffer_dispatch_command_sequence(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                dispatch_params.expected_num_workers_completed[offset_index],
-                dispatch_params.cq_id);
+                dispatch_params.expected_num_workers_completed[offset_index]);
         }
     }
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
@@ -1190,25 +1190,36 @@ bool write_to_device_buffer(
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
             const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
             const uint64_t pinned_size = pinned_memory->get_buffer_size();
-            auto region = buffer.root_buffer_region();
+            auto region = buffer.impl().root_buffer_region();
             const uint8_t* src_region_start = src_ptr + region.offset;
             const uint8_t* src_region_end = src_region_start + region.size;
             // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
-            if (reinterpret_cast<uintptr_t>(src_region_start) % hal.get_read_alignment(HalMemType::L1) != 0) {
-                log_info(
-                    tt::LogMetal,
-                    "Pinned source memory start address {:#x} must be aligned {} B",
-                    reinterpret_cast<uintptr_t>(src_region_start),
-                    hal.get_read_alignment(HalMemType::HOST));
+            const uint32_t pinned_src_alignment = hal.get_read_alignment(HalMemType::L1);
+            if (reinterpret_cast<uintptr_t>(src_region_start) % pinned_src_alignment != 0) {
+                // Once per process: buffer writes run inside per-step model loops.
+                static std::once_flag unaligned_pinned_src_warned;
+                std::call_once(unaligned_pinned_src_warned, [&] {
+                    log_info(
+                        tt::LogMetal,
+                        "Pinned source memory start address {:#x} must be aligned to {} B to be read directly by the "
+                        "device; copying through the command queue instead. This message is emitted once per process.",
+                        reinterpret_cast<uintptr_t>(src_region_start),
+                        pinned_src_alignment);
+                });
             } else if ((src_region_start < pinned_host_base) or (pinned_host_base + pinned_size < src_region_end)) {
-                log_info(
-                    tt::LogMetal,
-                    "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} src "
-                    "start:{:#X} end:{:#X}",
-                    reinterpret_cast<uintptr_t>(pinned_host_base),
-                    reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
-                    reinterpret_cast<uintptr_t>(src_region_start),
-                    reinterpret_cast<uintptr_t>(src_region_end));
+                // Once per process: buffer writes run inside per-step model loops.
+                static std::once_flag pinned_src_out_of_region_warned;
+                std::call_once(pinned_src_out_of_region_warned, [&] {
+                    log_info(
+                        tt::LogMetal,
+                        "Pinned memory region must contain source buffer region: pinned region start:{:#X} end:{:#X} "
+                        "src start:{:#X} end:{:#X}; copying through the command queue instead. This message is "
+                        "emitted once per process.",
+                        reinterpret_cast<uintptr_t>(pinned_host_base),
+                        reinterpret_cast<uintptr_t>(pinned_host_base + pinned_size),
+                        reinterpret_cast<uintptr_t>(src_region_start),
+                        reinterpret_cast<uintptr_t>(src_region_end));
+                });
             } else {
                 const uint64_t src_offset_base = static_cast<uintptr_t>(src_region_start - pinned_host_base);
                 pinned_src_addr = pinned_noc_base + src_offset_base;
@@ -1352,8 +1363,8 @@ bool write_to_device_buffer(
         // Empty filter -> no-op (consistent with the sharded path); nothing was actually written.
         return false;
     }
-    auto root_buffer = buffer.root_buffer();
-    auto region = buffer.root_buffer_region();
+    auto root_buffer = buffer.impl().root_buffer(buffer);
+    auto region = buffer.impl().root_buffer_region();
     InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant = initialize_interleaved_buf_dispatch_params(
         *root_buffer,
         cq_id,
@@ -1403,8 +1414,8 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
-    auto root_buffer = buffer.root_buffer();
-    const BufferRegion region = buffer.root_buffer_region();
+    auto root_buffer = buffer.impl().root_buffer(buffer);
+    const BufferRegion region = buffer.impl().root_buffer_region();
     IDevice* device = root_buffer->device();
 
     BufferReadDispatchParams dispatch_params;
@@ -1425,10 +1436,7 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
 // Issue dispatch commands for forwarding device buffer data to the Completion Queue
 template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
-    Buffer& buffer,
-    T& dispatch_params,
-    ttsl::Span<const SubDeviceId> sub_device_ids,
-    CoreType /*dispatch_core_type*/) {
+    Buffer& buffer, T& dispatch_params, ttsl::Span<const SubDeviceId> sub_device_ids, CoreType /*dispatch_core_type*/) {
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
         return;
     }
@@ -1440,7 +1448,7 @@ void issue_read_buffer_dispatch_command_sequence(
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
 
     // Mock/emulated devices don't have real hardware to read from, skip actual dispatch
-    if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().is_mock_or_emulated()) {
+    if (sysmem_manager.env_impl().get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1510,16 +1518,14 @@ void issue_read_buffer_dispatch_command_sequence(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index],
-            dispatch_params.cq_id);
+            dispatch_params.expected_num_workers_completed[offset_index]);
     }
     auto offset_index = *sub_device_ids[last_index];
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
         MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
-        dispatch_params.expected_num_workers_completed[offset_index],
-        dispatch_params.cq_id);
+        dispatch_params.expected_num_workers_completed[offset_index]);
 
     // Select write op once, then unify relay
     if (use_pinned_transfer) {
@@ -1644,18 +1650,16 @@ void read_completion_queue(
     uint32_t completion_q_data_offset,
     const SystemMemoryManager& sysmem_manager) {
     if (sysmem_manager.is_dram_backed()) {
-        const uint32_t dram_channel = tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
+        const uint32_t dram_channel = sysmem_manager.metal_context()
                                           .device_manager()
                                           ->get_active_device(device_id)
                                           ->allocator_impl()
                                           ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
-        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
-            .get_cluster()
-            .read_dram_vec(dst, size_bytes, device_id, dram_channel, completion_q_read_ptr + completion_q_data_offset);
+        sysmem_manager.env_impl().get_cluster().read_dram_vec(
+            dst, size_bytes, device_id, dram_channel, completion_q_read_ptr + completion_q_data_offset);
     } else {
-        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
-            .get_cluster()
-            .read_sysmem(dst, size_bytes, completion_q_read_ptr + completion_q_data_offset, device_id, channel);
+        sysmem_manager.env_impl().get_cluster().read_sysmem(
+            dst, size_bytes, completion_q_read_ptr + completion_q_data_offset, device_id, channel);
     }
 }
 
@@ -1862,8 +1866,7 @@ void copy_completion_queue_data_into_user_space(
     }
 }
 
-ttsl::Span<const SubDeviceId> select_sub_device_ids(
-    IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
+ttsl::Span<const SubDeviceId> select_sub_device_ids(IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
         return device->get_sub_device_stall_group();
     }

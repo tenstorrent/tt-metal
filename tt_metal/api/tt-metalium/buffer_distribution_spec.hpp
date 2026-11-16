@@ -4,27 +4,24 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace tt::tt_metal {
 
 namespace detail {
-// TODO: These functions in the detail namespace are sharding utility functions and should be moved to a separate
-// header.
-UncompressedBufferPageMapping compute_page_mapping(
-    const Shape& tensor_shape,
-    const Shape& shard_shape,
-    const std::vector<CoreCoord>& cores,
-    ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
-
 // Squeezes tensor and shard shapes to minimize rank while preserving sharding semantics.
 // The returned shapes are guaranteed to have the same rank.
 std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape);
-}
+}  // namespace detail
 
 class BufferDistributionSpec {
 public:
@@ -48,6 +45,13 @@ public:
 
     const Shape& tensor_shape_in_pages() const { return tensor_shape_in_pages_; }
     const Shape& shard_shape_in_pages() const { return shard_shape_in_pages_; }
+
+    // Host twins of TensorAccessor::contiguous_page_stride() / num_contiguous_pages(), same semantics:
+    // page ids page_id + k * contiguous_page_stride(), k < num_contiguous_pages(page_id), are contiguous in memory.
+    uint32_t contiguous_page_stride() const;
+    uint32_t num_contiguous_pages(uint32_t page_id) const;
+    // As above, but the run also stops before end_page_id, an exclusive page id (not a count).
+    uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const;
 
     size_t num_shards() const;
     size_t max_num_shards_per_core() const;
@@ -75,10 +79,7 @@ public:
     // number of shards per core in group 1, number of shards per core in group 2.
     std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> core_groups_tuple() const;
 
-    UncompressedBufferPageMapping compute_page_mapping() const {
-        return detail::compute_page_mapping(
-            tensor_shape_in_pages_, shard_shape_in_pages_, cores_, shard_distribution_strategy_);
-    }
+    UncompressedBufferPageMapping compute_page_mapping() const;
 
 private:
     static std::vector<CoreCoord> compute_core_list(
@@ -88,6 +89,7 @@ private:
         ShardOrientation shard_orientation,
         ShardDistributionStrategy shard_distribution_strategy);
     void init_precomputed_data();
+    int contiguous_page_dim() const;
 
     Shape tensor_shape_in_pages_;
     Shape shard_shape_in_pages_;

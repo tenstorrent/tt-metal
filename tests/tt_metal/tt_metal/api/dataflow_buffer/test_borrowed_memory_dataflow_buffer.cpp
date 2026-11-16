@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <numeric>
 #include <optional>
@@ -16,10 +17,10 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
@@ -30,7 +31,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
-#include "metal2_host_api/test_helpers.hpp"
+#include "metal2_host_api/test_helpers/test_helpers.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -119,12 +120,12 @@ void run_borrowed_memory_dfb_program(
     };
     producer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
-        {.tensor_parameter_name = experimental::TensorParamName{"src_tensor"}, .accessor_name = "src_tensor"},
+        {.tensor_parameter_name = TensorParamName{"src_tensor"}, .accessor_name = "src_tensor"},
         // dfb_ring_tensor backs the borrowed DFB; the kernel does not access it directly,
         // but every TensorParameter must be bound to at least one kernel.
-        {.tensor_parameter_name = experimental::TensorParamName{"dfb_ring_tensor"}, .accessor_name = "dfb_ring"},
+        {.tensor_parameter_name = TensorParamName{"dfb_ring_tensor"}, .accessor_name = "dfb_ring"},
     };
-    producer_spec.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"borrowed_dfb"}, "out"));
+    producer_spec.dfb_bindings.push_back(ProducerOf(DFBSpecName{"borrowed_dfb"}, "out"));
 
     // --- Consumer kernel ---
     KernelSpec consumer_spec;
@@ -149,12 +150,12 @@ void run_borrowed_memory_dfb_program(
         };
         consumer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
         consumer_spec.tensor_bindings = {{
-            .tensor_parameter_name = experimental::TensorParamName{"dst_tensor"},
+            .tensor_parameter_name = TensorParamName{"dst_tensor"},
             .accessor_name = "dst_tensor",
         }};
     }
     consumer_spec.dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = experimental::DFBSpecName{"borrowed_dfb"},
+        .dfb_spec_name = DFBSpecName{"borrowed_dfb"},
         .accessor_name = "in",
         .endpoint_type = DFBEndpointType::CONSUMER,
         .access_pattern = cfg.cap,
@@ -163,23 +164,29 @@ void run_borrowed_memory_dfb_program(
     // Disable implicit sync on the borrowed DFB for every DM endpoint (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        auto& producer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         if (!cfg.tensix_consumer) {
-            auto& consumer_hw_config =
-                std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+            auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
+            if (!consumer_spec_dm.config_2xx) {
+                consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+            }
+            auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
             consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
         }
     }
 
     // --- Borrowed DFB spec ---
     DataflowBufferSpec dfb_spec{
-        .unique_id = experimental::DFBSpecName{"borrowed_dfb"},
+        .unique_id = DFBSpecName{"borrowed_dfb"},
         .entry_size = cfg.entry_size,
         .num_entries = cfg.num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .borrowed_from = experimental::TensorParamName{"dfb_ring_tensor"},
+        .borrowed_from = TensorParamName{"dfb_ring_tensor"},
     };
 
     // --- TensorParameters ---
@@ -187,12 +194,11 @@ void run_borrowed_memory_dfb_program(
     const TensorSpec dst_spec  = make_flat_dram_tensor_spec(cfg.entry_size, cfg.num_entries);
     const TensorSpec ring_spec = make_flat_l1_tensor_spec(cfg.entry_size, cfg.num_entries);
 
-    spec.tensor_parameters.push_back({.unique_id = experimental::TensorParamName{"src_tensor"}, .spec = src_spec});
+    spec.tensor_parameters.push_back({.unique_id = TensorParamName{"src_tensor"}, .spec = src_spec});
     if (!cfg.tensix_consumer) {
-        spec.tensor_parameters.push_back({.unique_id = experimental::TensorParamName{"dst_tensor"}, .spec = dst_spec});
+        spec.tensor_parameters.push_back({.unique_id = TensorParamName{"dst_tensor"}, .spec = dst_spec});
     }
-    spec.tensor_parameters.push_back(
-        {.unique_id = experimental::TensorParamName{"dfb_ring_tensor"}, .spec = ring_spec});
+    spec.tensor_parameters.push_back({.unique_id = TensorParamName{"dfb_ring_tensor"}, .spec = ring_spec});
 
     spec.kernels          = {producer_spec, consumer_spec};
     spec.dataflow_buffers = {dfb_spec};
@@ -221,29 +227,28 @@ void run_borrowed_memory_dfb_program(
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-        .kernel = experimental::KernelSpecName{"producer"},
+        .kernel = KernelSpecName{"producer"},
         .runtime_arg_values = dm_rtas,
     });
     if (cfg.tensix_consumer) {
-        params.kernel_run_args.push_back(
-            ProgramRunArgs::KernelRunArgs{.kernel = experimental::KernelSpecName{"consumer"}});
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"consumer"}});
     } else {
         params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-            .kernel = experimental::KernelSpecName{"consumer"},
+            .kernel = KernelSpecName{"consumer"},
             .runtime_arg_values = dm_rtas,
         });
     }
-    params.tensor_args.emplace(experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor});
+    params.tensor_args.emplace(TensorParamName{"src_tensor"}, TensorArgument{src_tensor});
     if (!cfg.tensix_consumer) {
-        params.tensor_args.emplace(experimental::TensorParamName{"dst_tensor"}, TensorArgument{*dst_tensor});
+        params.tensor_args.emplace(TensorParamName{"dst_tensor"}, TensorArgument{*dst_tensor});
     }
-    params.tensor_args.emplace(experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor});
+    params.tensor_args.emplace(TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor});
 
     // Issue #45925: optional mutable-size override on the borrowed DFB (applied inside
     // SetProgramRunArgs before the borrowed buffer is attached).
     if (cfg.num_entries_override.has_value()) {
         params.dfb_run_overrides.push_back(
-            {.dfb = experimental::DFBSpecName{"borrowed_dfb"}, .num_entries = cfg.num_entries_override});
+            {.dfb = DFBSpecName{"borrowed_dfb"}, .num_entries = cfg.num_entries_override});
     }
     if (cfg.expect_attach_fatal) {
         // Oversized borrowed resize: rejected by the per-bank fit check in AttachBorrowedDFBBuffers
@@ -312,10 +317,10 @@ void run_update_address_test(
     };
     producer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
-        {.tensor_parameter_name = experimental::TensorParamName{"src_tensor"}, .accessor_name = "src_tensor"},
-        {.tensor_parameter_name = experimental::TensorParamName{"dfb_ring_tensor"}, .accessor_name = "dfb_ring"},
+        {.tensor_parameter_name = TensorParamName{"src_tensor"}, .accessor_name = "src_tensor"},
+        {.tensor_parameter_name = TensorParamName{"dfb_ring_tensor"}, .accessor_name = "dfb_ring"},
     };
-    producer_spec.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"borrowed_dfb"}, "out"));
+    producer_spec.dfb_bindings.push_back(ProducerOf(DFBSpecName{"borrowed_dfb"}, "out"));
 
     KernelSpec consumer_spec = (arch == ARCH::QUASAR)
                                    ? MakeMinimalGen2DMKernel("consumer")
@@ -329,28 +334,34 @@ void run_update_address_test(
     };
     consumer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     consumer_spec.tensor_bindings = {{
-        .tensor_parameter_name = experimental::TensorParamName{"dst_tensor"},
+        .tensor_parameter_name = TensorParamName{"dst_tensor"},
         .accessor_name = "dst_tensor",
     }};
-    consumer_spec.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"borrowed_dfb"}, "in"));
+    consumer_spec.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"borrowed_dfb"}, "in"));
 
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
-        auto& producer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
-        auto& consumer_hw_config =
-            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
+        if (!producer_spec_dm.config_2xx) {
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& producer_hw_config = *producer_spec_dm.config_2xx;
+        auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
+        if (!consumer_spec_dm.config_2xx) {
+            consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
+        }
+        auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }
 
     DataflowBufferSpec dfb_spec{
-        .unique_id = experimental::DFBSpecName{"borrowed_dfb"},
+        .unique_id = DFBSpecName{"borrowed_dfb"},
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .borrowed_from = experimental::TensorParamName{"dfb_ring_tensor"},
+        .borrowed_from = TensorParamName{"dfb_ring_tensor"},
     };
 
     const TensorSpec src_spec  = make_flat_dram_tensor_spec(entry_size, num_entries);
@@ -358,9 +369,9 @@ void run_update_address_test(
     const TensorSpec ring_spec = make_flat_l1_tensor_spec(entry_size, num_entries);
 
     spec.tensor_parameters = {
-        {.unique_id = experimental::TensorParamName{"src_tensor"}, .spec = src_spec},
-        {.unique_id = experimental::TensorParamName{"dst_tensor"}, .spec = dst_spec},
-        {.unique_id = experimental::TensorParamName{"dfb_ring_tensor"}, .spec = ring_spec},
+        {.unique_id = TensorParamName{"src_tensor"}, .spec = src_spec},
+        {.unique_id = TensorParamName{"dst_tensor"}, .spec = dst_spec},
+        {.unique_id = TensorParamName{"dfb_ring_tensor"}, .spec = ring_spec},
     };
     spec.kernels          = {producer_spec, consumer_spec};
     spec.dataflow_buffers = {dfb_spec};
@@ -391,18 +402,18 @@ void run_update_address_test(
     ProgramRunArgs params1;
     params1.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
-            .kernel = experimental::KernelSpecName{"producer"},
+            .kernel = KernelSpecName{"producer"},
             .runtime_arg_values = dm_rtas,
         },
         ProgramRunArgs::KernelRunArgs{
-            .kernel = experimental::KernelSpecName{"consumer"},
+            .kernel = KernelSpecName{"consumer"},
             .runtime_arg_values = dm_rtas,
         },
     };
     params1.tensor_args = {
-        {experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
-        {experimental::TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
-        {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_a}},
+        {TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
+        {TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
+        {TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_a}},
     };
     SetProgramRunArgs(program, params1);
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
@@ -422,6 +433,10 @@ void run_update_address_test(
     std::vector<uint32_t> input_b(total_words);
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
     slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input_b);
+    // Zero ring B on the node so run 2 can only fill it if the device received the rebound address.
+    const uint32_t ring_b_address = static_cast<uint32_t>(ring_tensor_b.address());
+    std::vector<uint32_t> ring_zeros(total_words, 0u);
+    slow_dispatch::WriteToL1(mesh_device, node, ring_b_address, ring_zeros);
 
     if (reentry_num_entries_override.has_value()) {
         // Combined re-bind + resize in ONE SetProgramRunArgs: point the borrowed ring at a different
@@ -431,24 +446,24 @@ void run_update_address_test(
             MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}});
         ProgramRunArgs params2;
         params2.kernel_run_args = {
-            {.kernel = experimental::KernelSpecName{"producer"}, .runtime_arg_values = dm_rtas2},
-            {.kernel = experimental::KernelSpecName{"consumer"}, .runtime_arg_values = dm_rtas2},
+            {.kernel = KernelSpecName{"producer"}, .runtime_arg_values = dm_rtas2},
+            {.kernel = KernelSpecName{"consumer"}, .runtime_arg_values = dm_rtas2},
         };
         params2.tensor_args = {
-            {experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
-            {experimental::TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
-            {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
+            {TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
+            {TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
+            {TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
         };
         params2.dfb_run_overrides.push_back(
-            {.dfb = experimental::DFBSpecName{"borrowed_dfb"}, .num_entries = reentry_num_entries_override});
+            {.dfb = DFBSpecName{"borrowed_dfb"}, .num_entries = reentry_num_entries_override});
         SetProgramRunArgs(program, params2);
     } else {
         UpdateTensorArgs(
             program,
-            Table<experimental::TensorParamName, TensorArgument>{
-                {experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
-                {experimental::TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
-                {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
+            Table<TensorParamName, TensorArgument>{
+                {TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
+                {TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
+                {TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
             });
     }
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
@@ -463,6 +478,22 @@ void run_update_address_test(
         std::vector<uint32_t> output;
         slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), output);
         EXPECT_EQ(input_b, output);
+    }
+    // The data check above passes even if the device kept ring A, so check ring B directly: entry i of
+    // run 2 lands in ring slot i % ring_entries, and later entries overwrite earlier ones.
+    {
+        const uint32_t ring_entries = reentry_num_entries_override.value_or(num_entries);
+        constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+        std::vector<uint32_t> expected_ring(total_words, 0u);
+        for (uint32_t entry = 0; entry < num_entries; entry++) {
+            std::copy_n(
+                input_b.begin() + entry * words_per_entry,
+                words_per_entry,
+                expected_ring.begin() + (entry % ring_entries) * words_per_entry);
+        }
+        std::vector<uint32_t> ring_b;
+        slow_dispatch::ReadFromL1(mesh_device, node, ring_b_address, total_words * sizeof(uint32_t), ring_b);
+        EXPECT_EQ(expected_ring, ring_b) << "DFB ring was not redirected to ring_tensor_b on the device";
     }
 }
 
@@ -487,11 +518,11 @@ TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S) {
         });
 }
 
-TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddress) {
+TEST_F(UnitMeshAnyDispatchFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddress) {
     run_update_address_test(this->device(), NodeCoord{0, 0});
 }
 
-TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddressAndSize) {
+TEST_F(UnitMeshAnyDispatchFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddressAndSize) {
     run_update_address_test(this->device(), NodeCoord{0, 0}, /*reentry_num_entries_override=*/8);
 }
 

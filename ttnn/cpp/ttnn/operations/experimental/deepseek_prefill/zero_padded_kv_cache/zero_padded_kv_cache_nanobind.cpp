@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "zero_padded_kv_cache.hpp"
@@ -47,8 +48,9 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
 
             Args:
                 cache (ttnn.Tensor): 4D, DRAM-backed KV cache tensor with head dim 1. Supports
-                    TILE layout, or ROW_MAJOR layout with BF16 or FP8_E4M3 dtype. The per-element-tensor
-                    (metadata) form of slot_idx/valid_global below is TILE-only; ROW_MAJOR uses scalars.
+                    TILE layout with the standard 32x32 tile, or ROW_MAJOR layout with BF16 or FP8_E4M3
+                    dtype. The per-element-tensor (metadata) form of slot_idx/valid_global below is
+                    TILE-only; ROW_MAJOR uses scalars.
                 slot_idx (int, scalar form / ttnn.Tensor, tensor form): user slot in the batched prefill
                     cache. As a tensor: a 1-element uint32 DRAM tensor (replicated across the mesh, the
                     runner's h2d_socket_sync payload element 0 [slot_id]); read on-device from element 0.
@@ -61,14 +63,23 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
                 chunk_size_global (int): block-cyclic chunk size (= sp_factor * chunk_local).
                 cluster_axis (int): Cluster axis along which the cache is sharded (0 or 1).
                 pad_align (int): migration read alignment; window ends at ceil_pad_align (default 128).
+                tp_axis (int, optional): set for a TP-deduped cache; the block-cyclic order becomes sp*tp.
 
             Returns:
                 ttnn.Tensor: handle to `cache`, pad window zeroed in place.
         )doc",
         // Scalar form (original signature preserved).
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(
-                &zero_padded_kv_cache),
+            nb::overload_cast<
+                const Tensor&,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                std::optional<uint32_t>>(&zero_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("slot_idx"),
             nb::arg("layer_idx"),
@@ -76,7 +87,8 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             nb::arg("valid_global"),
             nb::arg("chunk_size_global"),
             nb::arg("cluster_axis"),
-            nb::arg("pad_align") = 128),
+            nb::arg("pad_align") = 128,
+            nb::arg("tp_axis") = nb::none()),
         // Tensor form (traceable): slot_idx + valid_global as 1-element uint32 tensors.
         ttnn::overload_t(
             nb::overload_cast<
@@ -87,7 +99,8 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 uint32_t,
-                uint32_t>(&zero_padded_kv_cache),
+                uint32_t,
+                std::optional<uint32_t>>(&zero_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("slot_idx").noconvert(),
             nb::arg("valid_global").noconvert(),
@@ -95,7 +108,8 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             nb::arg("num_layers"),
             nb::arg("chunk_size_global"),
             nb::arg("cluster_axis"),
-            nb::arg("pad_align") = 128));
+            nb::arg("pad_align") = 128,
+            nb::arg("tp_axis") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache::detail

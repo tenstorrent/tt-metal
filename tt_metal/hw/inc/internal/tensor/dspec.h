@@ -8,6 +8,7 @@
 #include <variant>
 #include "internal/tensor/helpers.h"
 #include "internal/tensor/array_wrapper.h"
+#include "internal/tensor/binding_id.h"
 #include "api/compile_time_args.h"
 #include <cstring>
 
@@ -46,8 +47,14 @@ template <
     typename BankCoordsWrapper = ArrayDynamicWrapper,
     bool IsInterleaved = false,
     bool IsDram = false,
-    bool IsShardContiguous = false>
+    bool IsShardContiguous = false,
+    // Op-to-op R/W inference: the accessor's tensor-binding identity (the binding's base-address CRTA
+    // byte offset), threaded in by the TensorAccessor deduction guide so it survives to the NoC call site.
+    // Purely a type tag -- no runtime state, no effect on distribution behavior. NO_BINDING_ID when the
+    // accessor was not built from a Metal 2.0 binding token.
+    uint32_t BindingId = NO_BINDING_ID>
 struct DistributionSpec {
+    static constexpr uint32_t binding_id = BindingId;
     static constexpr bool has_static_rank = RankCT != 0;
     static constexpr bool has_static_num_banks = NumBanksCT != 0;
     static constexpr bool tensor_shape_static = has_static_rank && TensorShapeWrapper::is_static;

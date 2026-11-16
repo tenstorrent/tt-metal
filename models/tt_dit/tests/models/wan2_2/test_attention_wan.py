@@ -5,6 +5,7 @@
 import pytest
 import torch
 from diffusers import WanTransformer3DModel
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 
 import ttnn
@@ -13,10 +14,11 @@ from ....models.transformers.wan2_2.attention_wan import WanAttention
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
-from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
 
 
 @pytest.mark.parametrize(
@@ -57,6 +59,8 @@ def test_wan_attention(
     is_fsdp: bool,
     topology: ttnn.Topology,
 ) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     torch_dtype = torch.float32
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
@@ -84,7 +88,11 @@ def test_wan_attention(
 
     # Load Wan2.2-T2V-14B model from HuggingFace
     parent_torch_model = WanTransformer3DModel.from_pretrained(
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
+        ensure_cached("Wan-AI/Wan2.2-T2V-A14B-Diffusers"),
+        subfolder="transformer",
+        torch_dtype=torch_dtype,
+        trust_remote_code=True,
+        local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
     )
     parent_torch_model.eval()
 

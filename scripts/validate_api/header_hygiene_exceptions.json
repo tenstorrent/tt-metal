@@ -1,0 +1,79 @@
+[
+  {
+    "source": "tt-metalium/mesh_device_view.hpp",
+    "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing stable mesh view dependency on experimental fabric types (FabricNodeId, MeshId).",
+    "remove_when": "The stable mesh view interface no longer requires the experimental fabric types header."
+  },
+  {
+    "source": "tt-metalium/program_descriptors.hpp",
+    "include": "tt-metalium/experimental/blaze/named_kernel_args.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing ProgramDescriptor exposes experimental Blaze named kernel arguments.",
+    "remove_when": "Blaze-specific arguments are segregated from the stable descriptor or graduate through design review."
+  },
+  {
+    "source": "tt-metalium/program_descriptors.hpp",
+    "include": "internal/reload_table.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "ProgramDescriptor carries internal runtime-reload metadata used by Blaze.",
+    "remove_when": "Runtime-reload metadata is removed from the stable descriptor."
+  },
+  {
+    "source": "tt-metalium/system_mesh.hpp",
+    "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Existing stable system mesh dependency on experimental fabric types (FabricNodeId).",
+    "remove_when": "The stable system mesh interface no longer requires the experimental fabric types header."
+  },
+  {
+    "source": "tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp",
+    "include": "internal/disaggregation/kv_chunk_address_table.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header retained during the disaggregation move into internal APIs.",
+    "remove_when": "tt-llm-engine and tt-blaze have migrated and the deprecated experimental forwarding header is removed."
+  },
+  {
+    "source": "tt-metalium/workload/run_args/program_run_args.hpp",
+    "include": "tt-metalium/experimental/metal2_host_api/advanced_options.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Including advanced options from the experimental folder allows FAFO and WIP work on Metal 2.0 without introducing it into the main stable API surface. Unlike other parts of the API, which use PImpl to hide these features, advanced options structs are needed because most Metal 2.0 specifications cannot use PImpl.",
+    "remove_when": "Metal 2.0 has productized all advanced options and no longer has any experimental extensions."
+  },
+  {
+    "source": "tt-metalium/workload/specification/dataflow_buffer_spec.hpp",
+    "include": "tt-metalium/experimental/metal2_host_api/advanced_options.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Including advanced options from the experimental folder allows FAFO and WIP work on Metal 2.0 without introducing it into the main stable API surface. Unlike other parts of the API, which use PImpl to hide these features, advanced options structs are needed because most Metal 2.0 specifications cannot use PImpl.",
+    "remove_when": "Metal 2.0 has productized all advanced options and no longer has any experimental extensions."
+  },
+  {
+    "source": "tt-metalium/workload/specification/kernel_spec.hpp",
+    "include": "tt-metalium/experimental/metal2_host_api/advanced_options.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Including advanced options from the experimental folder allows FAFO and WIP work on Metal 2.0 without introducing it into the main stable API surface. Unlike other parts of the API, which use PImpl to hide these features, advanced options structs are needed because most Metal 2.0 specifications cannot use PImpl.",
+    "remove_when": "Metal 2.0 has productized all advanced options and no longer has any experimental extensions."
+  },
+  {
+    "source": "tt-metalium/workload/specification/program_spec.hpp",
+    "include": "tt-metalium/experimental/metal2_host_api/advanced_options.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Including advanced options from the experimental folder allows FAFO and WIP work on Metal 2.0 without introducing it into the main stable API surface. Unlike other parts of the API, which use PImpl to hide these features, advanced options structs are needed because most Metal 2.0 specifications cannot use PImpl.",
+    "remove_when": "Metal 2.0 has productized all advanced options and no longer has any experimental extensions."
+  },
+  {
+    "source": "tt-metalium/workload/specification/scratchpad_spec.hpp",
+    "include": "tt-metalium/experimental/metal2_host_api/advanced_options.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Including advanced options from the experimental folder allows FAFO and WIP work on Metal 2.0 without introducing it into the main stable API surface. Unlike other parts of the API, which use PImpl to hide these features, advanced options structs are needed because most Metal 2.0 specifications cannot use PImpl.",
+    "remove_when": "Metal 2.0 has productized all advanced options and no longer has any experimental extensions."
+  },
+  {
+    "source": "tt-metalium/workload/specification/semaphore_spec.hpp",
+    "include": "tt-metalium/experimental/metal2_host_api/advanced_options.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Including advanced options from the experimental folder allows FAFO and WIP work on Metal 2.0 without introducing it into the main stable API surface. Unlike other parts of the API, which use PImpl to hide these features, advanced options structs are needed because most Metal 2.0 specifications cannot use PImpl.",
+    "remove_when": "Metal 2.0 has productized all advanced options and no longer has any experimental extensions."
+  }
+]

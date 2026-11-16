@@ -109,7 +109,16 @@ def test_generator_decode_matches_reference(device):
     tok = torch.tensor([[int(pf.argmax())]], dtype=torch.long)
     for i, pos in enumerate(DECODE_POSITIONS):
         out = gen.decode_forward(
-            tok, torch.tensor([pos]), page_table=page_table, kv_cache=None, enable_trace=False, read_from_device=True
+            tok,
+            torch.tensor([pos]),
+            page_table=page_table,
+            kv_cache=None,
+            enable_trace=False,
+            read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         dl = out[0].squeeze().float() if isinstance(out, tuple) else out.squeeze().float()
         assert torch.allclose(dl, ref_dec[i], atol=1e-2, rtol=1e-2), f"decode step {i} drifted from decode_paged"
@@ -143,7 +152,16 @@ def test_generator_decode_traced_matches_reference(device):
     prime_decode_trace(gen, model, tok, torch.tensor([16]), page_table)
     for i, pos in enumerate(DECODE_POSITIONS):
         out = gen.decode_forward(
-            tok, torch.tensor([pos]), page_table=page_table, kv_cache=None, enable_trace=True, read_from_device=True
+            tok,
+            torch.tensor([pos]),
+            page_table=page_table,
+            kv_cache=None,
+            enable_trace=True,
+            read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )  # TRACED (trace already captured)
         dl = out[0].squeeze().float() if isinstance(out, tuple) else out.squeeze().float()
         assert torch.allclose(dl, ref_dec[i], atol=1e-2, rtol=1e-2), f"traced decode step {i} drifted from decode_paged"

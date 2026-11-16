@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include <tt_stl/reflection.hpp>
 
 #include <cstdint>
@@ -19,16 +21,14 @@
 
 namespace ttnn::experimental::prim {
 
-// Shared struct for program artifacts - used for caching kernel handles and core info
-struct ReduceScatterProgramArtifacts {
-    tt::tt_metal::KernelHandle reader_kernel_id;
-    tt::tt_metal::KernelHandle writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t num_directions_per_link;
-    uint32_t num_workers_per_direction;
-    uint32_t num_mux_cores_per_direction_per_link;
-    uint32_t num_cores_per_link;
-    uint32_t normalized_dim;
+// Kernel indices of the reduce-scatter reader and writer inside a ProgramDescriptor. A Program built from the
+// descriptor uses the same indices as kernel handles, which is how cache-hit overrides find the common args.
+struct ReduceScatterDescriptorArtifacts {
+    static constexpr size_t no_kernel = static_cast<size_t>(-1);
+    size_t reader_kernel_index = 0;
+    size_t writer_kernel_index = 0;
+    // Set by the line builder; the ring builder leaves it unset.
+    size_t reduce_kernel_index = no_kernel;
 };
 
 struct ReduceScatterMinimalAsyncParams {
@@ -48,7 +48,12 @@ struct ReduceScatterMinimalAsyncParams {
     std::optional<uint32_t> num_buffers_per_channel;
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    // Compile-time attributes drive the default program-cache reflection hash and the canonical key
+    std::optional<ttnn::MeshShape> mesh_shape;
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_nodes;
+
+    // Compile-time attributes drive the default program-cache reflection hash and the canonical key. The semaphore
+    // and barrier addresses are deliberately left out (only the barrier's presence is keyed): callers cycle them, so
+    // Ring/LineReduceScatterProgramFactory::override_runtime_arguments re-applies them on every cache hit.
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",
@@ -63,23 +68,24 @@ struct ReduceScatterMinimalAsyncParams {
         "chunks_per_sync",
         "num_workers_per_link",
         "num_buffers_per_channel",
-        "compute_kernel_config");
+        "compute_kernel_config",
+        "mesh_shape",
+        "fabric_nodes");
     auto attribute_values() const {
-        return std::make_tuple(
-            dim,
-            num_links,
-            ring_size,
-            output_mem_config,
-            optional_intermediate_mem_config,
-            topology,
-            barrier_semaphore.has_value(),
-            using_persistent_buffers,
-            sub_device_id,
-            cluster_axis,
-            chunks_per_sync,
-            num_workers_per_link,
-            num_buffers_per_channel,
-            compute_kernel_config);
+        // Reference stored attributes; the computed presence flag must remain an owned value.
+        return std::tuple_cat(
+            std::tie(dim, num_links, ring_size, output_mem_config, optional_intermediate_mem_config, topology),
+            std::make_tuple(barrier_semaphore.has_value()),
+            std::tie(
+                using_persistent_buffers,
+                sub_device_id,
+                cluster_axis,
+                chunks_per_sync,
+                num_workers_per_link,
+                num_buffers_per_channel,
+                compute_kernel_config,
+                mesh_shape,
+                fabric_nodes));
     }
 };
 

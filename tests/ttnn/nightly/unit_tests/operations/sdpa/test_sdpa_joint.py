@@ -174,3 +174,61 @@ def test_joint_sdpa_program_cache(device, b, nh, seq_len, joint_seq_len, d, q_ch
             ttnn.from_torch(fa_rand(b, nh, seq_len, d), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
         )
         run_test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, dummy_tensors)
+
+
+def _zero_div_tensors(device, count, heads=1):
+    return [
+        ttnn.from_torch(torch.randn(1, heads, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(count)
+    ]
+
+
+# Chunk sizes and head counts are used as host-side divisors, so zero must raise a RuntimeError.
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size, name", [(0, 32, "q_chunk_size"), (32, 0, "k_chunk_size")])
+def test_joint_sdpa_zero_chunk_size(device, expect_error, q_chunk_size, k_chunk_size, name):
+    q, k, v, joint_q, joint_k, joint_v = _zero_div_tensors(device, 6)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(1, 1), q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
+    )
+    with expect_error(RuntimeError, f"{name} must be a positive multiple of TILE_SIZE"):
+        ttnn.transformer.joint_scaled_dot_product_attention(
+            q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
+        )
+
+
+def test_joint_sdpa_zero_heads(device, expect_error):
+    q, k, v, joint_q, joint_k, joint_v = _zero_div_tensors(device, 6, heads=0)
+    program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(1, 1), q_chunk_size=32, k_chunk_size=32)
+    with expect_error(RuntimeError, "Q num_heads must be equal to K num_heads, and greater than 0"):
+        ttnn.transformer.joint_scaled_dot_product_attention(
+            q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
+        )
+
+
+def test_joint_sdpa_scale_not_exact_in_float32(device):
+    torch.manual_seed(1234)
+    b, nh, seq_len, joint_seq_len, d = 1, 1, 64, 32, 128
+    scale = d**-0.5
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=32,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+    inputs = [fa_rand(b, nh, n, d) for n in (seq_len, seq_len, seq_len, joint_seq_len, joint_seq_len, joint_seq_len)]
+    tensors = [ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for x in inputs]
+
+    def run(s):
+        out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+            *tensors, joint_strategy="rear", program_config=program_config, scale=s
+        )
+        return [ttnn.to_torch(out)[:, :, :seq_len, :], ttnn.to_torch(joint_out)[:, :, :joint_seq_len, :]]
+
+    outputs = run(scale)
+    expected = run(torch.tensor(scale, dtype=torch.float32).item())
+    gt = torch.nn.functional.scaled_dot_product_attention(
+        torch.cat(inputs[0::3], dim=2), torch.cat(inputs[1::3], dim=2), torch.cat(inputs[2::3], dim=2), scale=scale
+    )
+    for out, exp, ref in zip(outputs, expected, [gt[:, :, :seq_len, :], gt[:, :, seq_len:, :]]):
+        assert torch.equal(out, exp)
+        assert comp_pcc(ref, out, 0.994)[0]

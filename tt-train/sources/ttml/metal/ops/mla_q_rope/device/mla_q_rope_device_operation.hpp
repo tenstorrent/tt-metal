@@ -24,8 +24,6 @@ struct MlaQRopeDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttml::metal::ops::mla_q_rope::device
@@ -38,6 +36,7 @@ ttml::metal::ops::mla_q_rope::device::MlaQRopeDeviceOperation::tensor_return_val
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim);
+    uint32_t qk_rope_dim,
+    bool packed_input);
 
 }  // namespace ttnn::prim

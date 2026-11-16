@@ -1,0 +1,24 @@
+# Model weights — 8 GB and CC BY-NC 4.0 (non-commercial) licensed; never commit.
+# Download from HF mistralai/Voxtral-4B-TTS-2603 (see reference/PROVENANCE.md).
+# NB: reference/CKPT_MANIFEST.json IS tracked — it is tensor metadata (name/dtype/shape), not weights.
+reference/weights/
+
+# Golden tensors — regenerable by running the reference block scripts against the checkpoint.
+golden/
+
+# Generated audio
+generated/
+
+# Third-party vLLM-Omni source fetched for the upstream comparison (Apache-2.0). Not vendored —
+# re-fetch from the pinned commit with scripts/upstream_compare/fetch_upstream.py.
+scripts/upstream_compare/upstream_src/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# The repo ROOT .gitignore has a blanket `*.pt`, which silently swallowed the test fixture when
+# it was first added (0a172981d4 says it vendored the file; the `git add` skipped it, and the
+# loss went unnoticed because test_real_speech_frames_decode_correctly SKIPS when it is absent
+# while gates.py --gate decode raises FileNotFoundError). Re-include it explicitly.
+!tests/real_frames_fixture.pt

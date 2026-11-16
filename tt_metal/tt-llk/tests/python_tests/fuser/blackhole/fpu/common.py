@@ -12,6 +12,4 @@ from fuser.wormhole.fpu.common import (  # noqa: F401
 
 
 def math_dest_remap_config(required: bool) -> str:
-    if not required:
-        return ""
-    return "_llk_math_reconfig_remap_(true);\n"
+    return "_llk_math_reconfig_remap_(true);\n" if required else ""

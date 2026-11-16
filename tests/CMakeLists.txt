@@ -15,7 +15,6 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         enchantum::enchantum
         fmt::fmt-header-only
-        Boost::algorithm
         Taskflow::Taskflow
         TT::Metalium
 )
@@ -64,6 +63,7 @@ endif()
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tt_metal)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/scale_out)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/didt)
 endif(TT_METAL_BUILD_TESTS)
 
 if(TTNN_BUILD_TESTS)

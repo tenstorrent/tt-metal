@@ -18,7 +18,8 @@ void kernel_main() {
     constexpr uint32_t output_stick_nbytes = get_compile_time_arg_val(1);
     constexpr uint32_t num_cb_pages = get_compile_time_arg_val(2);
     constexpr uint32_t burst_size = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(4);  // stride between sticks in the CB
+    constexpr auto dst_args = TensorAccessorArgs<5>();
     const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr);
 
     DataflowBuffer output_dfb(output_cb_id);
@@ -38,7 +39,7 @@ void kernel_main() {
                 output_stick_nbytes,
                 {.offset_bytes = read_offset},
                 {.page_id = global_stick_idx});
-            read_offset += output_stick_nbytes;
+            read_offset += cb_page_size;
         }
         noc.async_write_barrier();
         output_dfb.pop_front(sticks_this_burst);

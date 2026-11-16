@@ -39,7 +39,7 @@ void kernel_main() {
 
     // Local output-shard base L1 address from the resident output TensorAccessor (no borrowed self-loop CB).
     const auto s = TensorAccessor(tensor::output);
-    uint32_t dst_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0));
+    uint32_t dst_addr = noc_address_backend::extract_local_address(s.get_noc_addr(0));
 
     // temporary fix until pack_untilze is fully fixed
     if constexpr (Ht > 8) {

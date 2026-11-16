@@ -5,6 +5,9 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 // Fills one full tile of bfloat16 with a scalar value
 // Scalar is assumed to be a 16-bit value double packed into a u32
@@ -369,25 +372,38 @@ FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t l1_write_ptr) {
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 32-bit elements (float32/int32).
 FORCE_INLINE void fill_tile_with_first_row(uint32_t l1_write_ptr) {
-    // Tile with 4 faces (16x16) and 32-bit elements
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_ptr);
-
-    uint32_t row_offset = 16;  // Start at the second row (offset by 16 elements)
-    uint32_t num_rows = 15;    // 15 rows to fill per face
-
-    // Iterate over face pairs (0,1) and (2,3)
-    for (uint32_t k = 0, face_offset = 0; k < 2; ++k, face_offset += 512) {  // Offset 512 = 256 elements x 2 faces
-        for (uint32_t row = 0; row < num_rows; ++row) {
-            uint32_t dst_offset = face_offset + row_offset;
-            for (uint32_t col = 0; col < 16; ++col) {
-                ptr[dst_offset + col] = ptr[col];              // left face
-                ptr[dst_offset + col + 256] = ptr[col + 256];  // right face
-            }
-            row_offset += 16;  // Move to the next row (16 elements per row)
-        }
-        row_offset = 0;  // Reset for the next face pair
-        num_rows = 16;   // Process all rows for the next face pair
+    // Replicate the row with local NoC copies rather than ~992 volatile loads and ~992 stores.
+    // A face is 1024 B of 16 contiguous 64 B rows, so repeatedly doubling the valid region fills
+    // one in four transfers. Faces 0 and 1 are the top half of the tile and hold the source row;
+    // faces 2 and 3 are the bottom half and have none of their own. The four faces are contiguous,
+    // so once the loop leaves faces 0 and 1 both valid the bottom half is one 2 KB copy of the top.
+    constexpr uint32_t kFaceBytes = 1024;
+    constexpr uint32_t kRowBytes = 64;
+    const uint32_t f0 = l1_write_ptr;
+    const uint32_t f1 = f0 + kFaceBytes;
+    Noc noc;
+    for (uint32_t n = kRowBytes; n < kFaceBytes; n <<= 1) {
+        noc.async_read(
+            PrecomposedUnicastEndpoint{},
+            CoreLocalMem<uint32_t>(f0 + n),
+            n,
+            {.noc_addr = get_noc_addr(f0, noc.get_noc_id())},
+            {.offset_bytes = 0});
+        noc.async_read(
+            PrecomposedUnicastEndpoint{},
+            CoreLocalMem<uint32_t>(f1 + n),
+            n,
+            {.noc_addr = get_noc_addr(f1, noc.get_noc_id())},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
     }
+    noc.async_read(
+        PrecomposedUnicastEndpoint{},
+        CoreLocalMem<uint32_t>(f0 + 2 * kFaceBytes),
+        2 * kFaceBytes,
+        {.noc_addr = get_noc_addr(f0, noc.get_noc_id())},
+        {.offset_bytes = 0});
+    noc.async_read_barrier();
 }
 
 // Reads the very first column of the CB and fills the entire tile with the same column.

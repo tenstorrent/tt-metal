@@ -16,10 +16,11 @@
 // in named args could collide and be served a stale binary. WS5 routes it through
 // the shared experimental::blaze::hash_named_args_schema() helper.
 //
-// These tests lock in BOTH directions on the generic-op hasher:
+// These tests lock in the generic-op hasher's contract:
 //   * schema-sensitive  -- any schema difference (incl. the previously-missing
 //                          per-core-array variant's name/length) => DIFFERENT hash
-//   * value-insensitive  -- values-only difference => SAME hash
+//   * runtime-value-insensitive  -- runtime-values-only difference => SAME hash
+//   * compile-time-value-sensitive  -- compile-time value difference => DIFFERENT hash
 //
 // Host-only: compute_program_descriptor_hash() is a pure function, so these use
 // plain TEST(...) and open no device.
@@ -52,7 +53,7 @@ const CoreCoord kCore1{1, 0};
 
 // Wrap named args in an otherwise-fixed single-kernel ProgramDescriptor and hash it
 // via the ttnn generic-op hasher under test. Everything except blaze_named_args is
-// held constant, so the only varying hash input is the named-arg schema.
+// held constant, so only the compile-time names/values and runtime-arg schema vary.
 ttsl::hash::hash_t program_hash(const experimental::blaze::NamedKernelArgs& args) {
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
@@ -74,6 +75,13 @@ experimental::blaze::NamedKernelArgs per_core_array(
 }
 
 }  // namespace genop_named_args_hash_test
+
+TEST(GenericOpNamedArgsHash, CompileTimeValueChangesHash) {
+    using namespace genop_named_args_hash_test;
+    experimental::blaze::NamedKernelArgs a{.named_compile_time_args = {{"kernel.value", 1}}};
+    experimental::blaze::NamedKernelArgs b{.named_compile_time_args = {{"kernel.value", 2}}};
+    EXPECT_NE(program_hash(a), program_hash(b));
+}
 
 TEST(GenericOpNamedArgsHash, SchemaDifferenceChangesHash) {
     using namespace genop_named_args_hash_test;
@@ -110,4 +118,48 @@ TEST(GenericOpNamedArgsHash, ValueOnlyDifferenceKeepsHash) {
     };
     EXPECT_EQ(program_hash(a), program_hash(b))
         << "Named-arg values (and per-core core count) must not change the generic-op program hash";
+}
+
+namespace genop_build_options_hash_test {
+
+using namespace tt::tt_metal;
+
+KernelDescriptor base_kernel() {
+    return KernelDescriptor{
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+        .core_ranges = CoreRangeSet(CoreRange(CoreCoord{0, 0})),
+        .config = DataMovementConfigDescriptor{},
+    };
+}
+
+ttsl::hash::hash_t program_hash(const KernelDescriptor& kernel) {
+    ProgramDescriptor descriptor{.kernels = {kernel}};
+    return ttnn::operations::generic::compute_program_descriptor_hash(descriptor);
+}
+
+}  // namespace genop_build_options_hash_test
+
+TEST(GenericOpBuildOptionsHash, OptLevelChangesHash) {
+    using namespace genop_build_options_hash_test;
+    auto unset = base_kernel();
+    auto o0 = base_kernel();
+    o0.opt_level = KernelBuildOptLevel::O0;
+    auto o3 = base_kernel();
+    o3.opt_level = KernelBuildOptLevel::O3;
+    EXPECT_NE(program_hash(o0), program_hash(o3));
+    EXPECT_NE(program_hash(unset), program_hash(o0));
+}
+
+TEST(GenericOpBuildOptionsHash, CompilerIncludePathsChangeHash) {
+    using namespace genop_build_options_hash_test;
+    auto a = base_kernel();
+    a.compiler_include_paths = {"include/a"};
+    auto b = base_kernel();
+    b.compiler_include_paths = {"include/b"};
+    auto ab = base_kernel();
+    ab.compiler_include_paths = {"include/a", "include/b"};
+    auto ba = base_kernel();
+    ba.compiler_include_paths = {"include/b", "include/a"};
+    EXPECT_NE(program_hash(a), program_hash(b));
+    EXPECT_NE(program_hash(ab), program_hash(ba)) << "include path order affects compilation";
 }

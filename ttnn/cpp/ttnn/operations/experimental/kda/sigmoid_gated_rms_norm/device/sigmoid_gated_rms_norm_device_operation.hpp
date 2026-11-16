@@ -5,6 +5,7 @@
 
 #include "sigmoid_gated_rms_norm_device_operation_types.hpp"
 #include "sigmoid_gated_rms_norm_program_factory.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -19,6 +20,8 @@ struct SigmoidGatedRmsNormOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
 Tensor sigmoid_gated_rms_norm(
@@ -29,6 +32,7 @@ Tensor sigmoid_gated_rms_norm(
     float epsilon,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    tt::tt_metal::DataType output_dtype);
+    tt::tt_metal::DataType output_dtype,
+    uint32_t gate_column_offset);
 
 }  // namespace ttnn::experimental::prim

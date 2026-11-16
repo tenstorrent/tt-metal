@@ -2,17 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
+import random
 from functools import partial
+from typing import Optional, Tuple
 
 import torch
-import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
+
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import (
+    gen_func_with_cast_tt,
+)
+from tests.ttnn.utils_for_testing import (
+    check_with_pcc,
+    start_measuring_time,
+    stop_measuring_time,
+)
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -28,8 +34,8 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 128, 128], [1, 1, 1, 1], 16)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
         + gen_shapes([1, 1], [256, 256], [1, 1], 16),
-        "input_a_dtype": [ttnn.int32],
-        "input_b_dtype": [ttnn.int32],
+        "input_a_dtype": [ttnn.int32, ttnn.uint32],
+        "input_b_dtype": [ttnn.int32, ttnn.uint32],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -52,6 +58,8 @@ def mesh_device_fixture():
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
+    if test_vector["input_a_dtype"] != test_vector["input_b_dtype"]:
+        return True, "bitwise_right_shift requires matching input dtypes"
     return False, None
 
 
@@ -80,11 +88,18 @@ def run(
         partial(torch_random, low=-2147483647, high=2147483648, dtype=torch.int32), input_a_dtype
     )(input_shape)
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=1, high=31, dtype=torch.int32), input_a_dtype
+        partial(torch_random, low=1, high=31, dtype=torch.int32), input_b_dtype
     )(input_shape)
+    if input_a_dtype == ttnn.uint32:
+        torch_input_tensor_a = torch_input_tensor_a.to(torch.uint32)
+        torch_input_tensor_b = torch_input_tensor_b.to(torch.uint32)
 
     golden_function = ttnn.get_golden_function(ttnn.bitwise_right_shift)
-    torch_output_tensor = torch.bitwise_right_shift(torch_input_tensor_a, torch_input_tensor_b).to(torch.int32)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    if torch_output_tensor.dtype == torch.uint32:
+        torch_output_tensor = torch_output_tensor.view(torch.int32)
+    else:
+        torch_output_tensor = torch_output_tensor.to(torch.int32)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

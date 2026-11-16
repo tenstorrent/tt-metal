@@ -9,9 +9,12 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/distributed/types.hpp"
 
 #include <optional>
 #include <string>
@@ -47,7 +50,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
 
     uint32_t num_tile_rows = NC * Ht;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
@@ -169,6 +172,7 @@ ProgramDescriptor PostAllGatherWelfordProgramFactory::create_descriptor(
     reader_compile_time_args.push_back((std::uint32_t)gamma_batch_stride_tiles);
     reader_compile_time_args.push_back((std::uint32_t)beta_batch_stride_tiles);
     reader_compile_time_args.push_back((std::uint32_t)Ht);
+    reader_compile_time_args.push_back((std::uint32_t)a.padded_shape()[-3]);
 
     TensorAccessorArgs(a_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(stats_buffer).append_to(reader_compile_time_args);

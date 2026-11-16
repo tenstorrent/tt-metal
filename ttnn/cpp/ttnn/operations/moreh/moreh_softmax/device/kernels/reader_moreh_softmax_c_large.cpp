@@ -10,11 +10,11 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    std::uint32_t num_tiles = get_arg(args::num_tiles);
-    std::uint32_t tile_offset = get_arg(args::tile_offset);
-    std::uint32_t outer_stride = get_arg(args::outer_stride);
-    std::uint32_t inner_size = get_arg(args::inner_size);
-    std::uint32_t dim_size = get_arg(args::dim_size);
+    const std::uint32_t num_tiles = get_arg(args::num_tiles);
+    const std::uint32_t tile_offset = get_arg(args::tile_offset);
+    const std::uint32_t outer_stride = get_arg(args::outer_stride);
+    const std::uint32_t inner_size = get_arg(args::inner_size);
+    const std::uint32_t dim_size = get_arg(args::dim_size);
 
     constexpr auto dfb_in = dfb::in;
 
@@ -22,17 +22,17 @@ void kernel_main() {
 
     const auto src_in = TensorAccessor(tensor::src);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in_obj(dfb_in);
     const auto in_tile_bytes = dfb_in_obj.get_entry_size();
 
     std::uint32_t curr_tile = tile_offset;
     for (std::uint32_t i = 0; i < num_tiles; i += onetile) {
-        std::uint32_t outer_idx = curr_tile / (inner_size);
-        std::uint32_t inner_idx = curr_tile % inner_size;
-        std::uint32_t tile_idx = outer_idx * outer_stride + inner_idx;
+        const std::uint32_t outer_idx = curr_tile / (inner_size);
+        const std::uint32_t inner_idx = curr_tile % inner_size;
+        std::uint32_t tile_idx = (outer_idx * outer_stride) + inner_idx;
 
-        std::uint32_t dim_stride = inner_size;
+        const std::uint32_t dim_stride = inner_size;
         for (std::uint32_t d = 0; d < dim_size; d++) {
             dfb_in_obj.reserve_back(onetile);
             noc.async_read(src_in, dfb_in_obj, in_tile_bytes, {.page_id = tile_idx}, {.offset_bytes = 0});

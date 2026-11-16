@@ -10,8 +10,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt;
 using namespace tt::constants;

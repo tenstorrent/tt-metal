@@ -26,6 +26,65 @@ extern void (*__init_array_end[])(void);
 // even though -fno-asynchronous-unwind-tables -fno-exceptions flags are set
 void* __gxx_personality_v0;
 
+// Mirror of tt-metal firmware's configure_gathering() (tt_metal/hw/inc/internal/firmware_common.h).
+// Blackhole boots with instruction gathering on; tt-metal firmware disables it on every RISC.
+// The guard matches tt-metal's, so defining ENABLE_GATHERING both leaves gathering on and
+// switches on the load_replay_buf record-window bracketing in ckernel.h.
+TT_ALWAYS_INLINE void configure_gathering()
+{
+#if defined(ARCH_BLACKHOLE) && !defined(ENABLE_GATHERING)
+    asm(R"ASM(
+        .option push
+        li   t1, 0x2
+        csrrs zero, 0x7c0, t1
+        li   t1, 0x1
+        slli t1, t1, 18
+        fence
+        csrrs zero, 0x7c0, t1
+        li   t1, 0x2
+        csrrc zero, 0x7c0, t1
+        fence
+        .option pop
+         )ASM" ::
+            : "t1");
+#endif
+}
+
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+// STREAM_SCRATCH_0 of overlay stream 0 (24 bits, host readable, outside L1 and the Tensix register bus): BRISC marks the
+// launch done there (brisc.cpp), so the host waits on a kernel without touching anything the kernel uses.
+namespace host_signal
+{
+#if defined(ARCH_WORMHOLE)
+constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 248;
+#else
+constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 36;
+#endif
+constexpr std::uint32_t NOC_OVERLAY_START_ADDR = 0xFFB40000;
+
+constexpr std::uint32_t LAUNCH_DONE_MASK = 0xFFFFFF; // the register's 24 bits (HOST_SIGNAL_MASK on the host)
+
+TT_ALWAYS_INLINE volatile std::uint32_t* launch_done()
+{
+    return reinterpret_cast<volatile std::uint32_t*>(NOC_OVERLAY_START_ADDR + STREAM_SCRATCH_REG_INDEX * 4);
+}
+} // namespace host_signal
+#elif defined(ARCH_QUASAR)
+// Quasar has no overlay streams: TT_CLUSTER_CTRL_SCRATCH_28..31 (host readable, outside L1, unused elsewhere) carry the
+// TRISC completion flags in slots 0..3, so the host can wait on a kernel without reading its L1.
+namespace host_signal
+{
+constexpr std::uint32_t CLUSTER_CTRL_SCRATCH_28 = 0x030000B0;
+
+TT_ALWAYS_INLINE void write([[maybe_unused]] std::uint32_t slot, [[maybe_unused]] std::uint32_t value)
+{
+#if !defined(TT_METAL_TTSIM) // ttsim models no cluster control scratch registers; the host polls L1 there
+    *reinterpret_cast<volatile std::uint32_t*>(CLUSTER_CTRL_SCRATCH_28 + slot * 4) = value;
+#endif
+}
+} // namespace host_signal
+#endif
+
 __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 {
     asm volatile(
@@ -37,6 +96,9 @@ __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 
     // Set stack pointer
     asm volatile("la sp, %0" : : "i"(__stack_top) : "memory");
+
+    // Before any global constructor or Tensix instruction can run.
+    configure_gathering();
 
     // Initialize .bss
     for (volatile std::uint32_t* p = (volatile std::uint32_t*)__ldm_bss_start; p < (volatile std::uint32_t*)__ldm_bss_end; p++)
@@ -104,7 +166,13 @@ TT_ALWAYS_INLINE void device_setup()
 #if defined(ARCH_QUASAR)
     // Reset all dest dvalid bits for all clients
     TTI_CLEARDVALID(0, 0, 0xf, 0xf, 0, 0);
+    volatile std::uint32_t* dvalid_cfg                      = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
+    dvalid_cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+    dvalid_cfg[MATH_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
+    dvalid_cfg[SFPU_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
+    dvalid_cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32]      = 0;
     TTI_SEMINIT(1, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::PACK_UNPACK));
+    TTI_SEMINIT(2, 0, 0, ckernel::trisc::semaphore::t6_sem(ckernel::trisc::semaphore::MATH_PACK));
 #endif
 
 // Enable CC stack
@@ -123,11 +191,30 @@ TT_ALWAYS_INLINE void device_setup()
     // Initialize tensix semaphores
     ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_TO_DEST, 0, 1);
     ckernel::t6_semaphore_init(ckernel::semaphore::MATH_DONE, 0, 1);
+    // A kernel that ends with a dest section still posted would otherwise stall the next math init.
+    ckernel::t6_semaphore_init(ckernel::semaphore::MATH_PACK, 0, 2);
+#if defined(LLK_BARRIER_ON_TRISC)
+    // barrier.h is already in scope and has reserved the raw names, so go through its own.
+    ckernel::t6_semaphore_init(llk_barrier::ARRIVE_SEM, 0, 1);
+    ckernel::t6_semaphore_init(llk_barrier::RELEASE_SEM, 0, 1);
+#else
     ckernel::t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 1);
+    ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_OPERAND_SYNC, 0, 1);
+#endif
+    // The REG_RMW mutex keeps its last grantee across kernels (chip reset only) and the unpack and pack inits race for
+    // it, so take and release it here: every launch then starts with the same thread ahead in its round robin.
+    TTI_ATGETM(ckernel::mutex::REG_RMW);
+    TTI_ATRELM(ckernel::mutex::REG_RMW);
 #endif
 }
 
-constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
+#if defined(ARCH_QUASAR)
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000; // TRISC1..3 (TRISC0 is bit 11): what unpack releases
+#else
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK  = RISCV_SOFT_RESET_0_TRISCS;
+constexpr std::uint32_t TRISC1_SOFT_RESET_MASK = 0x2000; // math: tensix.h has no per TRISC bit
+static_assert((TRISC1_SOFT_RESET_MASK & RISCV_SOFT_RESET_0_TRISCS) == TRISC1_SOFT_RESET_MASK);
+#endif
 
 #ifndef ARCH_QUASAR
 
@@ -164,17 +251,6 @@ TT_ALWAYS_INLINE void clear_trisc_soft_reset()
     soft_reset &= ~TRISC_SOFT_RESET_MASK;
     ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
 
-    do
-    {
-        asm volatile("nop");
-    } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != soft_reset);
-}
-
-TT_ALWAYS_INLINE void set_triscs_soft_reset()
-{
-    std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
-    soft_reset |= TRISC_SOFT_RESET_MASK;
-    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
     do
     {
         asm volatile("nop");

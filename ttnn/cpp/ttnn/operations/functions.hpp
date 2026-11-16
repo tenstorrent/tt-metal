@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <functional>
 #include <iterator>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -16,6 +18,7 @@
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
 #include "ttnn/common/constants.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn {
 
@@ -42,7 +45,8 @@ inline TensorLayout legacy_tensor_layout_from_padded_shape(
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
-    auto layout = TensorLayout::fromPaddedShape(dtype, page_config, memory_config, logical_shape, padded_shape);
+    auto layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        dtype, page_config, memory_config, logical_shape, padded_shape);
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(__GNUC__)
@@ -475,22 +479,32 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
     tt::tt_metal::TensorSpec spec(shape, TensorLayout(data_type, PageConfig(layout), MemoryConfig{}));
     auto output_buffer = std::vector<T>(spec.padded_shape().volume());
 
+    // std::ref keeps this generator. std::bind would copy it and repeat the same sequence.
     if constexpr (std::is_same_v<T, uint32_t>) {
-        auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
+        auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), std::ref(RANDOM_GENERATOR));
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = rand_value();
         }
     } else if constexpr (std::is_same_v<T, float>) {
-        auto rand_value = std::bind(std::uniform_real_distribution<T>(low, high), RANDOM_GENERATOR);
+        auto rand_value = std::bind(std::uniform_real_distribution<T>(low, high), std::ref(RANDOM_GENERATOR));
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = rand_value();
         }
     } else if constexpr (std::is_same_v<T, ::bfloat16>) {
         auto rand_value = std::bind(
-            std::uniform_real_distribution<float>(static_cast<float>(low), static_cast<float>(high)), RANDOM_GENERATOR);
+            std::uniform_real_distribution<float>(static_cast<float>(low), static_cast<float>(high)),
+            std::ref(RANDOM_GENERATOR));
         for (auto index = 0; index < output_buffer.size(); index++) {
             output_buffer[index] = ::bfloat16(rand_value());
         }
+    } else if constexpr (std::is_same_v<T, uint8_t> || std::is_same_v<T, uint16_t>) {
+        // uniform_int_distribution can't take 8-bit types, so draw uint32 and narrow.
+        auto rand_value = std::bind(
+            std::uniform_int_distribution<uint32_t>(static_cast<uint32_t>(low), static_cast<uint32_t>(high)),
+            RANDOM_GENERATOR);
+        std::ranges::generate(output_buffer, [&] { return static_cast<T>(rand_value()); });
+    } else {
+        static_assert(sizeof(T) == 0, "uniform: unsupported element type");
     }
 
     return Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);

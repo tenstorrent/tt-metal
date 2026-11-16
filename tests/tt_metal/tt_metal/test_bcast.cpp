@@ -76,7 +76,7 @@ void run_bcast_test(distributed::MeshDevice& mesh_device, BcastDim::Enum bcast_d
         bdim_to_log_string[bcast_dim],
         op_id_to_op_name[bcast_op]);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     CoreCoord core = {0, 0};
 
@@ -256,7 +256,7 @@ void run_bcast_test(distributed::MeshDevice& mesh_device, BcastDim::Enum bcast_d
     vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
     slow_dispatch::WriteToBuffer(*src0_dram_buffer, src0_vec);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);

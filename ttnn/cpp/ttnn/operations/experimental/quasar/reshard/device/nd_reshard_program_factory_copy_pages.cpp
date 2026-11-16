@@ -6,14 +6,13 @@
 
 #include <filesystem>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -38,7 +37,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
     const auto& input_mt = input.mesh_tensor();
     const auto& output_mt = output.mesh_tensor();
 
-    auto* input_buffer = input.buffer();
+    const auto* input_buffer = &input.mesh_buffer();
 
     auto input_nd_shard_spec = input.memory_config().nd_shard_spec().value();
 
@@ -87,8 +86,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -109,13 +107,12 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Work split: per-core page ranges.
-    uint32_t num_dev_pages =
-        static_cast<uint32_t>(input_buffer->buffer_distribution_spec()->tensor_shape_in_pages().volume());
+    uint32_t num_dev_pages = static_cast<uint32_t>(
+        input_buffer->device_local_config().sharding_args.buffer_distribution_spec()->tensor_shape_in_pages().volume());
     uint32_t n_pages_per_core = num_dev_pages / static_cast<uint32_t>(cores.size());
     uint32_t remainder = num_dev_pages % static_cast<uint32_t>(cores.size());
 

@@ -8,111 +8,31 @@ import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.common.utility_functions import nearest_y
+from tt_py_test_utils_common.utility_functions import nearest_y
 
 import ttnn
 from loguru import logger
 import pytest
+from ttnn.operations.transformer_golden import (
+    scaled_dot_product_attention_reference,
+    scaled_dot_product_attention_reference_prefill,
+)
 
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 
 
-def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_len, scale, is_causal=True):
-    b, nh, _, _ = Q.shape
-    _, nkv, _, _ = K.shape
-
-    attn_mask = None
-    if is_causal:
-        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
-        for i in range(b):
-            start_idx = start_indices[i]
-            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
-    else:
-        assert False, "Non-causal attention is not supported in this function."
-
-    Q_slice = Q[:, :nh, :, :]
-    K_slice = K[:, :nkv, :padded_layer_len, :]
-    K_slice = torch.cat([K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
-    V_slice = V[:, :, :padded_layer_len, :]
-    V_slice = torch.cat([V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
-    attn_mask_slice = attn_mask[:, :nh, :, :]
-    out = torch.nn.functional.scaled_dot_product_attention(
-        Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
-    )
-
-    return out
-
-
-def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=True):
-    """
-    Memory-efficient full-sequence causal SDPA reference.
-    Q: (B, nh, S, d_qk), K/V: (B, nkv, S, d)
-
-    Chunks over heads (and, only for very long sequences, the Q sequence) so
-    the [B, nh, S, S] attention matrix never materializes at full size — CPU
-    SDPA's math kernel otherwise allocates it in fp32 and OOMs on large
-    nh/batch/seq configs. GQA heads are gathered per head-chunk (HEAD_CHUNK at
-    a time) rather than expanding the whole KV tensor up front via
-    repeat_interleave (a copy).
-
-    Within a head-chunk we keep the fast fused/flash SDPA kernel via the
-    is_causal flag whenever the Q-chunk spans the whole sequence; an explicit
-    causal mask (which forces the slow O(S^2) math kernel) is only built for
-    offset Q-chunks, i.e. when S > SEQ_CHUNK.
-    """
-    SEQ_CHUNK = 4096
-    HEAD_CHUNK = 16
-
-    B, nh, S, _ = Q.shape
-    _, nkv, _, _ = V.shape
-    Dv = V.shape[-1]
-    head_rep = nh // nkv
-
-    attn_out = torch.empty(B, nh, S, Dv, dtype=Q.dtype)
-    for h_start in range(0, nh, HEAD_CHUNK):
-        h_end = min(h_start + HEAD_CHUNK, nh)
-        # Map each Q head in the chunk to its KV head (GQA broadcast) without
-        # copying the full KV tensor — gather is limited to HEAD_CHUNK heads.
-        kv_idx = torch.arange(h_start, h_end) // head_rep
-        k_heads = K[:, kv_idx]
-        v_heads = V[:, kv_idx]
-        q_heads = Q[:, h_start:h_end]
-        for seq_start in range(0, S, SEQ_CHUNK):
-            seq_end = min(seq_start + SEQ_CHUNK, S)
-            q_chunk = q_heads[:, :, seq_start:seq_end]
-            if is_causal and seq_start == 0 and seq_end == S:
-                # Full-sequence chunk: the square is_causal flag is exactly
-                # correct and lets PyTorch pick the fast fused kernel.
-                out = torch.nn.functional.scaled_dot_product_attention(
-                    q_chunk, k_heads, v_heads, scale=scale, is_causal=True
-                )
-            elif is_causal:
-                # Offset Q-chunk: the square is_causal flag doesn't apply, so
-                # build the explicit causal mask for this chunk's positions.
-                q_pos = torch.arange(seq_start, seq_end).unsqueeze(1)
-                k_pos = torch.arange(seq_end).unsqueeze(0)
-                mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
-                out = torch.nn.functional.scaled_dot_product_attention(
-                    q_chunk, k_heads[:, :, :seq_end], v_heads[:, :, :seq_end], attn_mask=mask, scale=scale
-                )
-            else:
-                out = torch.nn.functional.scaled_dot_product_attention(q_chunk, k_heads, v_heads, scale=scale)
-            attn_out[:, h_start:h_end, seq_start:seq_end] = out
-
-    return attn_out
-
-
 def comp_pcc_lowmem(golden, calculated, pcc=0.99, chunk=1 << 23):
     """
     Memory-frugal drop-in for comp_pcc on very large tensors.
 
-    Computes the same Pearson correlation coefficient as comp_pcc, but in a
-    chunked two-pass scan instead of np.ma.corrcoef (which flattens to float64
-    and allocates several full-size temporaries, ~16x the input — enough to
-    OOM-kill the CI host on the largest prefill outputs). Non-finite elements
-    are excluded pairwise, matching np.ma.masked_invalid. Returns
+    Scans the tensors in chunks, in two passes, instead of making full-size
+    float64 copies of both (comp_pcc needs ~20-26 bytes per element, 10-13 GiB
+    on the largest prefill outputs). On finite, non-constant data the PCC agrees
+    with comp_pcc up to float32 rounding. It skips pairs where either value is
+    non-finite, while comp_pcc sets those values to 0, and it scores constant
+    tensors 1.0 or 0.0 where comp_pcc falls back to allclose. Returns
     (passing, output_str) so it can substitute for comp_pcc directly.
     """
     if golden.dtype != calculated.dtype:
@@ -174,7 +94,7 @@ def page_table_setup(batch_size: int, config: PagedAttentionConfig) -> torch.Ten
     Returns:
         page_table: The page table tensor.
     """
-    block_size, max_num_blocks = config.block_size, config.max_num_blocks
+    max_num_blocks = config.max_num_blocks
     assert (
         max_num_blocks % batch_size == 0
     ), f"max_num_blocks {max_num_blocks} must be divisible by batch_size {batch_size}."
@@ -289,6 +209,7 @@ def run_flash_mla_decode_impl(
     block_size=ttnn.TILE_SIZE,
     reuse_k=False,
     max_cores_per_head_batch=16,
+    q_column_groups=False,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 3
@@ -374,13 +295,7 @@ def run_flash_mla_decode_impl(
     start_indices = np.linspace(0, max_start_idx, batch, dtype=np.int32).tolist() if batch > 1 else [max_start_idx]
     padded_layer_len = nearest_y(max_start_idx + 1, k_chunk_size)
 
-    sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
-        max_cores_per_head_batch=max_cores_per_head_batch,
-    )
+    sdpa_grid = device.compute_with_storage_grid_size()
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -410,6 +325,23 @@ def run_flash_mla_decode_impl(
         q_core_grid = ttnn.num_cores_to_corerangeset(
             q_num_cores, device.compute_with_storage_grid_size(), row_wise=True
         )
+        if q_column_groups:
+            # One 32 row Q shard per virtual batch on its group's output core (column major groups on an 8x8 grid).
+            num_shards = batch * nh // ttnn.TILE_SIZE
+            max_cores_per_head_batch = 64 // num_shards
+            groups_per_row = 8 // max_cores_per_head_batch
+            group_rows = num_shards // groups_per_row
+            q_core_grid = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(g * max_cores_per_head_batch, 0),
+                        ttnn.CoreCoord(g * max_cores_per_head_batch, group_rows - 1),
+                    )
+                    for g in range(groups_per_row)
+                ]
+            )
+            sdpa_grid = ttnn.CoreCoord(8, 8)
+            block_height = ttnn.TILE_SIZE
         if q_mem_config is None:
             q_mem_config = ttnn.create_sharded_memory_config(
                 shape=(block_height, q.shape[-1]),
@@ -429,6 +361,14 @@ def run_flash_mla_decode_impl(
     # GQA only supports DRAM memory config for output
     if nkv > 1:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+        max_cores_per_head_batch=max_cores_per_head_batch,
+    )
 
     tt_q = ttnn.from_torch(
         q_for_tt,
@@ -688,10 +628,9 @@ def run_flash_mla_prefill_impl(
         pcc_threshold = 0.98
 
     # The full prefill output is [B, nh, S, d] — up to ~0.5G elements. The
-    # shared comp_pcc routes through np.ma.corrcoef, which flattens to float64
-    # and builds several full-size temporaries (~16x input), OOM-killing the CI
-    # host on the largest configs. comp_pcc_lowmem computes the same Pearson PCC
-    # in a chunked two-pass scan, keeping peak memory at the input size.
+    # shared comp_pcc makes full-size float64 copies of both tensors (10-13 GiB
+    # at that size). comp_pcc_lowmem computes the Pearson PCC in a chunked
+    # two-pass scan, keeping peak memory at the input size.
     out_pass, out_pcc = comp_pcc_lowmem(tt_out_torch, out_t, pcc_threshold)
     logger.debug(f"Output PCC: {out_pcc}")
 

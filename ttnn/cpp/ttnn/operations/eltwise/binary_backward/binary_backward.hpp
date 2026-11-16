@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 
@@ -75,9 +76,9 @@ std::vector<std::optional<Tensor>> subalpha_bw(
     std::optional<Tensor> other_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> rsub_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
+    const Tensor& grad_tensor_arg,
+    const Tensor& input_tensor_arg,
+    const Tensor& other_tensor_arg,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
     std::optional<Tensor> input_grad = std::nullopt,
@@ -134,6 +135,20 @@ std::vector<Tensor> bias_gelu_bw(
     const Tensor& grad_tensor,
     const Tensor& input_a,
     const Tensor& input_b,
+    operations::unary::GeluVariant variant = operations::unary::GeluVariant::ACCURATE,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt);
+
+std::vector<Tensor> bias_gelu_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_tensor,
+    float bias,
+    operations::unary::GeluVariant variant = operations::unary::GeluVariant::ACCURATE,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt);
+
+std::vector<Tensor> bias_gelu_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& input_b,
     const std::string& approximate,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt);
 
@@ -162,9 +177,9 @@ std::vector<std::optional<Tensor>> add_bw(
     std::optional<Tensor> input_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> add_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
+    const Tensor& grad_tensor_arg,
+    const Tensor& input_tensor_arg,
+    const Tensor& other_tensor_arg,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
     std::optional<Tensor> input_grad = std::nullopt,
@@ -185,13 +200,13 @@ std::vector<std::optional<Tensor>> sub_bw(
     std::optional<Tensor> input_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> sub_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
+    const Tensor& grad_tensor_arg,
+    const Tensor& input_tensor_arg,
+    const Tensor& other_tensor_arg,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<Tensor>& input_grad = std::nullopt,
-    const std::optional<Tensor>& other_grad = std::nullopt);
+    const std::optional<Tensor>& input_grad_in = std::nullopt,
+    const std::optional<Tensor>& other_grad_in = std::nullopt);
 
 std::vector<ComplexTensor> sub_bw(
     const ComplexTensor& grad_tensor,
@@ -209,9 +224,9 @@ std::vector<std::optional<Tensor>> div_bw(
     std::optional<Tensor> input_grad = std::nullopt);
 
 std::vector<std::optional<Tensor>> div_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
+    const Tensor& grad_tensor_arg,
+    const Tensor& input_tensor_arg,
+    const Tensor& other_tensor_arg,
     const std::optional<std::string>& rounding_mode = std::nullopt,
     const std::vector<bool>& are_required_outputs = std::vector<bool>{true, true},
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,

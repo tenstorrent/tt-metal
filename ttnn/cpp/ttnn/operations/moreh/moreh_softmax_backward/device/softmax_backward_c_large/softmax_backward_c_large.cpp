@@ -10,8 +10,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
@@ -22,7 +22,6 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create_program
     tensor_return_value_t& input_grad_tensor) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace metal2;
 
     log_info(tt::LogTest, "Large tensor algorithm selected");
@@ -66,8 +65,9 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create_program
 
     KernelSpec reader_spec{
         .unique_id = READER_KERNEL,
-        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
-                  "reader_moreh_softmax_backward_c.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
+            "reader_moreh_softmax_backward_c.cpp",
         .compiler_options = {.defines = std::move(reader_defines)},
         .dfb_bindings =
             {DFBBinding{
@@ -85,13 +85,14 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create_program
              TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_TENSOR, .accessor_name = "dy"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "tile_offset", "outer_stride", "inner_size", "dim_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer_spec{
         .unique_id = WRITER_KERNEL,
-        .source = "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
-                  "writer_moreh_softmax_backward_c.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/"
+            "writer_moreh_softmax_backward_c.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = DX_DFB,
             .accessor_name = "out",
@@ -100,7 +101,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create_program
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_GRAD_TENSOR, .accessor_name = "dx"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"num_tiles", "tile_offset", "outer_stride", "inner_size", "dim_size"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     auto outer_stride = Ht * Wt;
@@ -111,8 +112,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create_program
     auto inner_size = outer_stride / dim_size;
 
     // create compute kernel
-    auto compute_hw_config = ttnn::to_compute_hardware_config(device.arch(), compute_kernel_config);
-    unpack_modes(compute_hw_config) = MakeUnpackModes(
+    auto compute_hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
+    compute_hw_config.unpack_modes = MakeUnpackModes(
         fp32_dest_acc_en,
         {{Y_DFB, data_format},
          {DY_DFB, data_format},

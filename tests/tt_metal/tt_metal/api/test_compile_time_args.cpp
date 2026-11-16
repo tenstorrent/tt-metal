@@ -23,14 +23,11 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
-
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
-using CompileTimeArgsTest = GenericMeshDeviceFixture;
+using CompileTimeArgsTest = MeshDevice1x1Fixture;
 
 TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
     for (const auto& mesh_device : this->devices_) {
@@ -39,10 +36,9 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord);
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
-        auto* device = mesh_device->get_devices()[0];
 
         const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
@@ -68,7 +64,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
             std::accumulate(compile_time_args.begin(), compile_time_args.end(), 0u)};
 
         std::vector<uint32_t> compile_time_args_actual;
-        detail::ReadFromDeviceL1(device, core, write_addr, sizeof(uint32_t), compile_time_args_actual);
+        slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, sizeof(uint32_t), compile_time_args_actual);
 
         ASSERT_EQ(compile_time_args_actual, compile_time_args_expected);
     }
@@ -80,10 +76,9 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
@@ -109,7 +104,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 4 * sizeof(uint32_t), results);
 
     ASSERT_EQ(results[0], compile_time_args[0]) << "'!@#$%^&*()' should be 12";
     ASSERT_EQ(results[1], compile_time_args[1])
@@ -136,10 +131,9 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgsExceedingArgvLimit) {
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
@@ -177,7 +171,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgsExceedingArgvLimit) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 4 * sizeof(uint32_t), results);
 
     ASSERT_EQ(results[0], compile_time_args[0]) << "'!@#$%^&*()' should be 12";
     ASSERT_EQ(results[1], compile_time_args[1])

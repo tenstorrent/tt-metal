@@ -9,10 +9,11 @@
 #include <set>
 #include <vector>
 #include <queue>
+#include <numeric>
 #include <optional>
 #include <fstream>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -131,8 +132,7 @@ public:
         std::vector<ChipId> ids(this->num_devices, 0);
         std::iota(ids.begin(), ids.end(), 0);
 
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
 
         // Use MeshDevice::create_unit_meshes instead of DevicePool
         auto device_map = tt_metal::distributed::MeshDevice::create_unit_meshes(
@@ -208,7 +208,7 @@ private:
             {closest_phys_tensix.value(), CoreType::TENSIX, CoordSystem::NOC0}, CoordSystem::LOGICAL);
 
         tt_metal::ShardSpecBuffer shard_spec = tt_metal::ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>({CoreRange(logical_tensix)})),
+            tt::tt_metal::CoreRangeSet(std::set<tt::tt_metal::CoreRange>({tt::tt_metal::CoreRange(logical_tensix)})),
             {1, params.packet_size},
             tt_metal::ShardOrientation::ROW_MAJOR,
             {1, params.packet_size},
@@ -328,7 +328,11 @@ private:
 // NOLINTEND(cppcoreguidelines-prefer-member-initializer)
 
 std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper, const TestParams& params) {
-    std::vector<tt_metal::Program> programs(device_helper.num_devices);
+    std::vector<tt_metal::Program> programs;
+    programs.reserve(device_helper.devices.size());
+    for (const auto& device : device_helper.devices) {
+        programs.push_back(tt_metal::CreateProgram(*device));
+    }
     // Create a mapping from chip ID to vector index
     std::map<ChipId, size_t> chip_to_index;
     for (size_t i = 0; i < device_helper.devices.size(); i++) {

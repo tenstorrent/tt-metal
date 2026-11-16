@@ -510,6 +510,7 @@ on:
           - embedding_bw.embedding_bw
           - fused.layer_norm_traces
           - fused.softmax_traces
+          - indexed_fused_update_cache
           - losses.l1_loss
           - losses.mse_loss
           - matmul.full.matmul_default_block_sharded
@@ -827,7 +828,7 @@ jobs:
       needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -897,7 +898,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -1008,14 +1009,6 @@ jobs:
           jq . /tmp/sweep_matrix.pretty.json
           echo "::endgroup::"
 
-      - name: Verify test timeouts against budget
-        shell: bash
-        run: |
-          pip3 install PyYAML > /dev/null 2>&1
-          python3 .github/scripts/utils/verify_time_budget.py \
-            tests/pipeline_reorg/ttnn_sweep_tests.yaml \
-            .github/time_budget.yaml \
-            sweep
 
   ttnn-run-single-sweep:
     name: Run single sweep
@@ -1070,7 +1063,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -1229,7 +1222,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           submodules: recursive

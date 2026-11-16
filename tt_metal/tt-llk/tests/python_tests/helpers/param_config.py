@@ -5,13 +5,12 @@ import inspect
 import math
 from dataclasses import dataclass
 from itertools import product
-from typing import Iterator, List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple, Union
 
 import pytest
 from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .constraints import (
     _quasar_effective_sfpu_format,
     _quasar_fpu_source_format,
@@ -20,7 +19,7 @@ from .constraints import (
     is_valid_quasar_packer_conversion,
     is_valid_quasar_unpack_to_dest,
 )
-from .data_format_inference import is_format_combination_outlier
+from .data_format_inference import _dest_acc_flag, effective_dest_acc
 from .format_config import (
     DataFormat,
     FormatConfig,
@@ -61,6 +60,18 @@ DEST_SYNC_TILE_LIMITS = {
     DestSync.Half: 8,
     DestSync.Full: 16,
 }
+
+
+def max_dest_tiles(
+    dest_acc: Union[bool, DestAccumulation], dest_sync: DestSync = DestSync.Half
+) -> int:
+    """Tiles one Dest section holds: DEST_SYNC_TILE_LIMITS[dest_sync], halved at a 32-bit Dest."""
+    return DEST_SYNC_TILE_LIMITS[dest_sync] // (2 if _dest_acc_flag(dest_acc) else 1)
+
+
+def quasar_dest_sync_modes(*, is_perf: bool = False) -> List[DestSync]:
+    """Dest sync modes a Quasar test sweeps: Half only for perf runs, else Half and Full."""
+    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def format_combination_sweep(
@@ -433,6 +444,41 @@ def input_output_formats(
     return [InputOutputFormat(input, output) for input in formats for output in formats]
 
 
+def quasar_mx_smoke(
+    input_format: DataFormat, output_format: DataFormat
+) -> List[InputOutputFormat]:
+    """
+    Single MX format pair for a test that is not the pack or the unpack test.
+
+    On Quasar the MX formats live only in L1. The unpacker decodes every one of them
+    to Float16_b in SrcA/SrcB (@ref infer_unpack_out), so an op fed an MX input runs
+    the exact same math and pack configuration as the Float16_b row beside it in the
+    same sweep, and an op writing an MX output only exercises the packer. Sweeping MX
+    across a whole test therefore re-measures one unpacker descriptor field against an
+    unchanged pipeline. test_pack_quasar and test_unpack_unary_operand_quasar own
+    those two conversions: MxFp4 / MxInt8 / MxInt4 / MxInt2 as a full cross product,
+    and MxFp8R / MxFp8P as one directed pair each (unpack decodes MxFp8* to
+    Float16_b, pack encodes Float16_b to MxFp8*). MxFp8 stays out of that cross
+    product because those two suites are already the bulk of the Quasar compile.
+
+    Every other test keeps exactly one pair, so the MX-conditional plumbing it does
+    own stays covered: MX stimulus clamping and the sub-byte L1 tile-size constraints.
+
+    MxFp4_2x_A / MxFp4_2x_B are not covered by this rule. They are real SrcA/SrcB
+    register formats that change the math format and the per-tile MVMUL sequence, so
+    they are swept wherever they apply (matmul, reduce GAPOOL).
+
+    Parameters:
+    input_format (DataFormat): MX format to feed from L1, or the L1 input paired with
+        an MX output when the test's MX coverage is on the pack side.
+    output_format (DataFormat): the paired output format.
+    Returns:
+    List[InputOutputFormat]: a one-element list, ready to concatenate onto an
+        input_output_formats() product.
+    """
+    return [InputOutputFormat(input_format, output_format)]
+
+
 def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]:
     """
     A function that creates a list of FormatConfig objects from a list of DataFormat objects that client wants to test.
@@ -621,6 +667,17 @@ def _resolve_quasar_fpu_sfpu_variant(
     )
 
 
+def _quasar_dest_candidates(
+    formats: InputOutputFormat, dest_acc: DestAccumulation
+) -> Tuple[DataFormat, ...]:
+    if dest_acc == DestAccumulation.No:
+        return _quasar_narrow_dest_candidates(
+            formats.input_format, formats.output_format
+        )
+    wide = DataFormat.Int32 if formats.input_format.is_integer() else DataFormat.Float32
+    return (wide,)
+
+
 def resolve_quasar_sfpu_variant(
     op: Optional[MathOperation],
     formats: InputOutputFormat,
@@ -634,12 +691,7 @@ def resolve_quasar_sfpu_variant(
     if formats.input_format.is_integer() != formats.output_format.is_integer():
         return None
 
-    dest_candidates = (
-        (DataFormat.Int32 if formats.input_format.is_integer() else DataFormat.Float32,)
-        if dest_acc == DestAccumulation.Yes
-        else _quasar_narrow_dest_candidates(formats.input_format, formats.output_format)
-    )
-    for dest_format in dest_candidates:
+    for dest_format in _quasar_dest_candidates(formats, dest_acc):
         variant = _resolve_quasar_direct_sfpu_variant(formats, dest_acc, dest_format)
         if variant is not None:
             return variant
@@ -725,6 +777,31 @@ def generate_quasar_sfpu_format_variants(
     return _deduplicate_quasar_sfpu_operation_variants(variants)
 
 
+def unique_quasar_sfpu_formats(
+    variants: List[QuasarSfpuVariant],
+) -> List[InputOutputFormat]:
+    """Return each external input/output format pair once, preserving order."""
+    formats = []
+    seen = set()
+    for variant in variants:
+        key = (variant.formats.input_format, variant.formats.output_format)
+        if key not in seen:
+            seen.add(key)
+            formats.append(variant.formats)
+    return formats
+
+
+def quasar_sfpu_dest_acc_modes(
+    variants: List[QuasarSfpuVariant], formats: InputOutputFormat
+) -> List[DestAccumulation]:
+    """Return the Dest modes retained by a deduplicated variant list for *formats*."""
+    dest_acc_modes = []
+    for variant in variants:
+        if variant.formats == formats and variant.dest_acc not in dest_acc_modes:
+            dest_acc_modes.append(variant.dest_acc)
+    return dest_acc_modes
+
+
 def generate_quasar_srcs_format_dest_acc_combinations(
     formats_list: List[InputOutputFormat],
 ) -> List[Tuple[InputOutputFormat, DestAccumulation]]:
@@ -764,6 +841,8 @@ def calculate_edgecase_dest_indices(
     1. The lowest possible dest index is always 0.
     2. When DestSync.Half:  max_dst_tiles=8 (if dest is 16bit) or max_dst_tiles=4 (if dest is 32bit)
     3. When DestSync.Full:  max_dst_tiles=16 (if dest is 16bit) or max_dst_tiles=8 (if dest is 32bit)
+    4. A result that does not fit in dest is processed one full section at a time, which
+       leaves no room for an offset, so 0 is the only index.
 
     Args:
         dest_acc: Dest 16/32 bit mode, has to match is_fp32_dest_acc_en from C++
@@ -776,17 +855,9 @@ def calculate_edgecase_dest_indices(
 
     combinations = []
 
-    capacity_divisor = 2 if dest_acc else 1
-
     for dest_sync in dest_sync_modes:
-        base_tile_limit = DEST_SYNC_TILE_LIMITS[dest_sync]
-        max_tiles = base_tile_limit // capacity_divisor
-        max_index = max_tiles - result_tiles
-
-        if max_index < 0:
-            raise ValueError(
-                f"Too many result tiles ({result_tiles}) for destination capacity ({max_tiles}) with {dest_sync.name}"
-            )
+        # get_max_dst_index clamps dest_index to 0 when result_tiles > dest capacity
+        max_index = get_max_dst_index(dest_sync, dest_acc, result_tiles)
 
         # Add both combinations: lowest possible index = 0 and at max possible index
         # If max_index = 0 add only (dest_sync, 0) to avoid duplicates
@@ -798,9 +869,7 @@ def calculate_edgecase_dest_indices(
 
 
 def get_max_dst_index(dest_sync: DestSync, dest_acc: bool, result_tiles: int) -> int:
-    capacity_divisor = 2 if dest_acc else 1
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
-    return max(max_tiles - result_tiles, 0)
+    return max(max_dest_tiles(dest_acc, dest_sync) - result_tiles, 0)
 
 
 def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shape=None):
@@ -820,8 +889,7 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
         List of input dimensions
     """
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
 
     if tile_shape is None:
         tile_shape = construct_tile_shape()
@@ -834,6 +902,118 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
         for row in range(1, max_tiles_in_dest + 1)
         for column in range(1, (max_tiles_in_dest // row) + 1)
     ]
+
+
+def generate_reduced_input_dimensions(
+    dest_acc, dest_sync=DestSync.Half, tile_shape=None
+):
+    """Minimal set of input dimensions that cover every distinct dest layout.
+    Returns shapes: a single tile, a full-width row, a full-height column,
+    a balanced grid, an odd tile number example (max_tiles_in_dest - 1), and a multi-section
+    matrix that overflows dest and forces bank switching (three sections:
+    bank 0 → 1 → 0).
+
+    Args:
+        dest_acc: Dest 16/32 bit mode
+        dest_sync: DestSync mode. Defaults to DestSync.Half
+        tile_shape: Tile shape the dimensions are expressed in. Defaults to 32x32.
+
+    Returns:
+        List of representative input dimensions
+    """
+
+    # Three sections walk bank 0 -> bank 1 -> bank 0 under DestSync.Half, so the
+    # wrap back to the first bank is covered and not just the initial switch.
+    num_dest_sections = 3
+
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
+
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    num_tile_rows = tile_shape.total_row_dim()
+    num_tile_cols = tile_shape.total_col_dim()
+
+    tile_counts = [
+        (1, 1),
+        (1, max_tiles_in_dest),
+        (max_tiles_in_dest, 1),
+        (2, max_tiles_in_dest // 2),
+        (max_tiles_in_dest - 1, 1),
+        (num_dest_sections * max_tiles_in_dest, 1),
+    ]
+
+    return [
+        [rows * num_tile_rows, columns * num_tile_cols] for rows, columns in tile_counts
+    ]
+
+
+# Dest sections a dest-depth sweep refills: 4 and 8 blocks walk both Half-sync banks several times.
+DEST_DEPTH_BLOCK_COUNTS = (4, 8)
+
+
+def generate_dest_depth_input_dimensions(
+    dest_acc,
+    dest_sync=DestSync.Half,
+    tile_shape=None,
+    block_counts=DEST_DEPTH_BLOCK_COUNTS,
+):
+    """Tall matrices that fill one Dest section per block, ``block_counts`` blocks each.
+
+    Args:
+        dest_acc: Dest 16/32 bit mode
+        dest_sync: DestSync mode. Defaults to DestSync.Half
+        tile_shape: Tile shape the dimensions are expressed in. Defaults to 32x32.
+        block_counts: Number of full Dest sections each matrix spans.
+
+    Returns:
+        List of input dimensions, one per block count
+    """
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
+    return [
+        [
+            blocks * max_tiles_in_dest * tile_shape.total_row_dim(),
+            tile_shape.total_col_dim(),
+        ]
+        for blocks in block_counts
+    ]
+
+
+def generate_parallel_matmul_dest_depth_profiles(dest_acc, dest_sync=DestSync.Half):
+    """(SFPU operand, matmul A, matmul B) dims for the SFPU-parallel-matmul dest-depth sweeps.
+
+    The matmul output (ct=2, kt=1) spans 4 and 8 full Dest sections beside an 8-tile SFPU operand.
+    """
+    rt_per_block = max_dest_tiles(dest_acc, dest_sync) // 2
+    return [
+        ([32, 256], [32 * blocks * rt_per_block, 32], [32, 64])
+        for blocks in DEST_DEPTH_BLOCK_COUNTS
+    ]
+
+
+def quasar_sfpu_fpu_route_variants(
+    formats_list: List[InputOutputFormat],
+) -> List[QuasarSfpuVariant]:
+    """FPU-datacopy routes into a 16-bit and a 32-bit Dest for the formats SrcA holds unconverted.
+
+    The resolver prefers Unpack-to-Dest wherever it is valid, so it never picks these routes itself.
+    """
+    variants = []
+    for formats in formats_list:
+        if _quasar_fpu_source_format(formats.input_format) != formats.input_format:
+            continue
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+            for dest_format in _quasar_dest_candidates(formats, dest_acc):
+                variant = _resolve_quasar_fpu_sfpu_variant(
+                    formats, dest_acc, dest_format
+                )
+                if variant is not None:
+                    variants.append(variant)
+                    break
+    return variants
 
 
 PERF_INPUT_DIMENSIONS = (
@@ -912,8 +1092,7 @@ def generate_perf_input_dimensions(
     if tile_shape is None:
         tile_shape = construct_tile_shape()
 
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
     tile_rows = tile_shape.total_row_dim()
     tile_cols = tile_shape.total_col_dim()
 
@@ -977,23 +1156,14 @@ def get_num_blocks_and_num_tiles_in_block(
     num_rows_tensor, num_cols_tensor = input_dimensions
     num_rows_tile, num_cols_tile = tile_dimensions
 
-    is_outlier = (
-        is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-        and get_chip_architecture() != ChipArchitecture.QUASAR
-    )
+    # The Dest the kernel will actually run with: TestConfig promotes an outlier
+    # combination to a 32-bit Dest, which halves the tile capacity just as a requested
+    # dest_acc=Yes does.
+    dest_acc = effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
 
-    capacity_divisor = (
-        2
-        if (
-            dest_acc == DestAccumulation.Yes
-            or formats.input_format.is_32_bit()
-            or is_outlier
-        )
-        else 1
+    max_tiles_in_dest = max_dest_tiles(
+        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit(), dest_sync
     )
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
 
     # Here we make an assumption that dense tiling is used,
     # meaning that the input matrix is fully covered by tiles without any padding or partial tiles.

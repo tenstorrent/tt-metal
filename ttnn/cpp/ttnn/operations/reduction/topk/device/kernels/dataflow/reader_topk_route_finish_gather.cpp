@@ -71,7 +71,7 @@ void kernel_main() {
     constexpr uint32_t cb_indices = get_compile_time_arg_val(5);
     constexpr bool index_is_u32 = get_compile_time_arg_val(6) == 1;
     constexpr auto src_args = TensorAccessorArgs<7>();
-    constexpr auto idx_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto idx_args = TensorAccessorArgs<decltype(src_args)::next_compile_time_args_offset()>();
 
     // Page sizes are baked compile-time by the host's TensorAccessorArgs (2048 B tiles /
     // k_rounded*4 B sticks).

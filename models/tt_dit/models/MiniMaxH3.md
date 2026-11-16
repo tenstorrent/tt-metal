@@ -25,15 +25,15 @@ in the same file, sharing its module-level parametrize constants:
 
 ```
 tests/models/minimax_h3/
-├── test_transformer_minimax_h3.py    # attention, one block, token refiner, precomputed AdaLN, whole DiT
+├── test_transformer_minimax_h3.py    # attention, one block, token refiner, whole DiT, Tracy block device-perf
 ├── test_vae_minimax_h3.py            # convs/resnets, encoder, 36-layer ViT decoder, tiling  (SINGLE_DEVICE)
 ├── test_vae_parallel_minimax_h3.py   # H/W sharding, data-parallel independence, device stitch  (mesh)
 ├── test_audio_minimax_h3.py          # weight-norm conversion, decode (accurate defaults), encode, traced
-├── test_performance_minimax_h3.py    # per-block device time (pipeline latency lives in the pipeline tests)
+├── test_performance_minimax_h3.py    # t2va pipeline wall-clock (`BenchmarkProfiler`)
 ├── test_performance_vae_minimax_h3.py    # VAE perf, and the shared VAE test helpers others import
 ├── test_packing_minimax_h3.py        # host-only layout parity (t2va/fl2va)
 ├── test_references_minimax_h3.py     # ref2va host parity (prep/layout/presentation) + device encode gate
-├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e mode each (perf + quality), one process each
+├── test_pipeline{,_fl2va,_ref2va}_minimax_h3.py   # one e2e quality gate each (t2va wall-clock is in test_performance_minimax_h3.py; fl2va/ref2va still log stage times)
 └── tools/                            # not tests: perf projection, Tracy harnesses, VBench runner
 ```
 
@@ -44,7 +44,9 @@ golden digests are designed to stand in when the diffusers branch is absent, and
 ## Running the transformer tests with real weights
 
 `MINIMAX_H3_MODEL_PATH` points at a MiniMax-H3 diffusers snapshot (the transformer tests read its
-`transformer/` partition). Without it, the real-weights cases skip and the rest still run.
+`transformer/` partition). Without it, the real-weights cases skip and the rest still run -- or set
+`TT_DIT_ALLOW_HF_DOWNLOAD=1` to fetch the partition instead of skipping (see [Getting the
+weights](#getting-the-weights)).
 
 ```bash
 export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
@@ -95,7 +97,8 @@ Two conditioner facts that break naive assumptions:
 - **`rope_scaling.mrope_interleaved` is true.** The chunked and interleaved rotary layouts coincide
   exactly while all three M-RoPE axes share a position — i.e. for `t2va`, where the flag is a no-op.
   A vision run makes them diverge. `create_rope_tensors(..., interleaved=True)` and
-  `mrope_position_ids()` cover that; see `tests/encoders/qwen3vl/test_qwen3vl_mrope.py`.
+  `mrope_position_ids()` cover that; the gate is the `get_rope_index` comparison in
+  `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py`.
 
 FSDP is a placement choice, and the two consumers make it differently. The pipeline builds the
 encoder with `is_fsdp=True` (`pipeline_minimax_h3.py`), sharding the weights across the non-TP axis
@@ -191,13 +194,43 @@ uv pip install --python <venv>/bin/python --no-deps \
 environment that `ttnn` was built against. The pinned commit's dependencies are already satisfied by
 an environment that had any recent `diffusers` installed. Re-check `import ttnn` after installing.
 
+### Getting the weights
+
+The tests read a diffusers snapshot of [`MiniMaxAI/MiniMax-H3`](https://huggingface.co/MiniMaxAI/MiniMax-H3).
+Either point `MINIMAX_H3_MODEL_PATH` at one you already have, or let the resolver fetch it:
+
+```bash
+export TT_DIT_ALLOW_HF_DOWNLOAD=1      # opt in once; unset, a missing snapshot just skips
+```
+
+`resolve_weights_dir` (`pipelines/minimax_h3/weights_minimax_h3.py`) tries `MINIMAX_H3_MODEL_PATH`,
+then the HuggingFace cache, then a download -- the same order, and the same
+`TT_DIT_ALLOW_HF_DOWNLOAD=1` opt-in, as the lightx2v loader. With the variable unset an absent
+snapshot still skips rather than pulling 144 GB mid-run.
+
+Only the partitions a test asks for are fetched, so the download is incremental and the repo's
+top-level `FL2VA/` and `Ref2VA/` trees -- self-contained original-format bundles that duplicate the
+root partitions and are never read here -- are skipped:
+
+| Partition | Size | Needed by |
+| --- | --- | --- |
+| `text_encoder/` | 66.7 GB | everything (Qwen3-VL conditioner) |
+| `transformer/` | 66.3 GB | `t2va`, `fl2va` |
+| `transformer_ref/` | 66.3 GB | `ref2va` only |
+| `vae/` | 10.4 GB | everything |
+| `audio_vae/` | 0.6 GB | everything |
+| `tokenizer/`, `processor/`, `scheduler/`, `audio_scheduler/` | ~20 MB | always fetched |
+
+That is ~144 GB for `t2va` / `fl2va` and ~210 GB with `ref2va`, against 498 GB for the whole repo.
+Set `HF_TOKEN` for higher rate limits and faster downloads, and `HF_HOME` to move the cache off `~`.
+
 ## Running `t2va` end to end
 
 One command, prompt in and an mp4 with a soundtrack out, at the production working point
 (1344x768, 124 frames @ 24 fps, 50 scheduler steps -> 49 forwards):
 
 ```bash
-export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers   # or TT_DIT_ALLOW_HF_DOWNLOAD=1
 export TT_DIT_CACHE_DIR=~/tt_dit_cache        # see the warning below
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_minimax_h3.py
 ```
@@ -213,7 +246,7 @@ Same command shape, plus a keyframe. `image=` is `fl2va`, `last_image=` is `fl2v
 both together anchors each end of the clip:
 
 ```bash
-export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers
+export MINIMAX_H3_MODEL_PATH=/path/to/MiniMax-H3-diffusers   # or TT_DIT_ALLOW_HF_DOWNLOAD=1
 export TT_DIT_CACHE_DIR=~/tt_dit_cache
 scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_fl2va_minimax_h3.py
 ```
@@ -287,7 +320,7 @@ The video VAE tiles this canvas **4x7 = 28** ways (256px tiles, overlap 64), mat
 
 ### Meshes
 
-Measured warm (the MEASUREMENT block in `test_pipeline_minimax_h3.py`), 768P/15s, 362 frames,
+Measured warm (the MEASUREMENT block in `test_performance_minimax_h3.py`), 768P/15s, 362 frames,
 49 forwards:
 
 | | 4x8 Galaxy | 4x32 quad (traced) | speedup |
@@ -302,7 +335,7 @@ measured denoise 85.3 s / total 118.0 s. One run does not establish a direction.
 
 The audio row is **not** a like-for-like comparison and the total inherits that. The 4x8 column was
 taken with the audio precision levers off, which was their default when it was measured; they are now
-on by default (`split_mode="full"`, `tap_matmul=True`, `prefer_mac=True` on `MiniMaxH3AudioDecoder`),
+on by default (`split_mode="full"` on `MiniMaxH3AudioDecoder`),
 which is an accuracy choice, not a regression -- the same levers cost the same on a single Galaxy.
 Denoise, the row the mesh actually changes, is 2.7-3.0x.
 
@@ -331,6 +364,111 @@ via `-x` in `--mpi-args`: tt-run builds a fixed per-rank environment, and `-x` l
 app context only, so it reaches rank 0 and no one else. Anything the model branches on must be
 identical on every rank -- a rank that takes a cache hit its peers miss skips collectives they are
 still waiting in, and the run deadlocks rather than failing.
+
+### Dynamic length on the 4x8
+
+The Blackhole 4x8 preset serves the packed length dynamically (`"dynamic_length": True`; optional
+`max_sequence_length=`, default the ladder's top rung, 120320 for t2va): a request is padded only to the SP
+alignment (256 rows), and the DiT ops that used to key a program on the padded length
+(`all_gather_minimal_matmul_async`, the fused ff2 MM+reduce-scatter, the ring SDPA, the standalone
+`minimal_matmul` heads, the fused distributed RMS/LayerNorm, `nlp_create_qkv_heads`, `nlp_concat_heads`,
+`all_gather_async`, `embedding` and its `untilize`) take the per-device row count as a runtime word
+instead; the norms' worker split (`row_capacity`) is sized once at `max_sequence_length / 8` rows per device
+and the ring attention's K/V gather pair, which holds the whole gathered sequence on every device, at
+`max_sequence_length` rows. Eager only: a trace freezes the length, so a dynamic request takes the quad preset
+off its trace (see *On the quad* below), and the Wormhole 4x8 preset stays bucketed (dynamic length is unmeasured
+there).
+A line topology (a `FABRIC_1D` fabric or `MINIMAX_H3_TOPOLOGY=linear`) takes the dynamic path too: there the
+projections run unfused (all-gather + matmul, matmul + reduce-scatter). The reduce-scatter keys its program
+without the row count when its worker and chunk counts are pinned (`CCLManager` pins both), the all-gathers key
+without it on their default path (the op's byte-derived worker count is 4 at every served length), and the gated
+residual's `addcmul` keys on its width alone.
+No stage of a dynamic-length pipeline is traced: the preset's `trace_audio` is ignored on that path (an
+explicit `trace_audio=True` raises), so the audio decoder runs eagerly too (about 0.3 s per request).
+A dynamic-length `task="ref2va"` pipeline also defaults to `dit_fsdp=True` when its preset has no `dit_fsdp`
+key (the Blackhole 4x8): that gather pair is sized at the ref2va cap (326656 rows against t2va's 120320), two
+bf16 `[1, 14, 326656, 128]` buffers per device, 2.34 GB together (862 MB at the t2va cap), and beside unsharded
+resident weights it does not fit at construction, while bucketed ref2va and dynamic t2va stay unsharded; `dit_fsdp=False` or `MINIMAX_H3_DIT_FSDP=0` turns it off. The measured ref2va
+numbers were taken with FSDP on (`test_performance_minimax_h3.py` passes `dit_fsdp=True`), and the construction
+log records the choice (`dit_fsdp: on (dynamic ref2va)`).
+
+**On the quad.** The 4x32 preset stays bucketed and traced by default; dynamic length is opt-in there, with
+`MINIMAX_H3_DYNAMIC_LENGTH=1` or `create_pipeline(..., dynamic_length=True)`. The opt-in runs the denoise eagerly
+(an explicit `trace_denoise=True` beside it raises).
+
+**Backup.** The 4x8 ladder path is kept behind a flag for a few weeks and then removed. It is selected by
+`create_pipeline(..., dynamic_length=False)`, by `MINIMAX_H3_DYNAMIC_LENGTH=0` in the environment, or by
+pinning any of its own kwargs (`trace_denoise=True`, `bucket_denoise=True`, `bucket_ladder=`), which the
+preset's dynamic default yields to. Precedence for `dynamic_length` is kwarg > env > preset: an explicit
+kwarg cannot be flipped by the shell, so a test that pins a path stays pinned (the audio T-shard factor
+follows the same order; `MINIMAX_H3_DIT_FSDP` is the odd one out). The env takes `0` or `1` and nothing
+else; on the quad `=1` takes the preset off its trace (see *On the quad*), and `dynamic_length=True` beside an
+explicit `trace_denoise=True` or `bucket_denoise=True` raises. A `bucket_ladder=` beside a dynamic request is
+allowed: it only supplies the default `max_sequence_length` and the ref2va warm-up's full-duration point.
+The construction log says which path was taken (`denoise path: dynamic length` / `bucketed`).
+
+**Removal plan** (a follow-up PR once the dynamic default has run without complaint): delete the 4x8
+ladders (`MINIMAX_H3_*_BUCKET_LADDER_4X8`), the `bucket_denoise` and `bucket_ladder` keys of both 4x8
+presets (which then carry `max_sequence_length`, 120320 t2va / 326656 ref2va, instead), the env switch and
+the yielding rule in `_resolve_denoise_path`, so that `bucket_denoise` collapses to `trace_denoise`.
+`_select_bucket`, `_warm_denoise_buckets`, `_capture_denoise`, `validate_bucket_ladder` and the quad
+ladders stay: the quad's default path is still bucketed and traced (*On the quad*) until its dynamic path is the
+faster one. The encoder-side
+presentation and vision-patch ladders are unrelated to denoise bucketing and stay regardless.
+
+Every program choice is frozen at construction into **length classes** keyed on rows per device
+(padded length / 8), `models/transformers/minimax_h3/length_classes.py`:
+
+| class | rows/device | served points | ring SDPA chunks | ff1 blocking | to_qkv | to_out |
+|---|---|---|---|---|---|---|
+| short | <= 6144 | 4 s (2368), 5 s (4736) | (320, 384) | 6/3/16 | 4/6/16, 11x10 non-transposed | 6/8/6, 12x9 transposed |
+| long | > 6144 | 10 s (9184), 15 s (13664), capacity (15040) | (256, 512) | 4/3/16 | same | same |
+
+The fused ff2 MM+RS keeps one blocking (12x8, 6/4/8) for every length, and the blocks' adaLN gathers stay
+one-hot matmuls, run through the row-free `minimal_matmul` with one frozen blocking (gathering the
+`[rows, 1344]` modulations with `ttnn.embedding` instead measured 3-4 % per block slower). A class value
+reaches the op as a config object, never as a shape, so a length inside a class never compiles anything; a
+new class costs one more program set. The warm-up runs one two-step generation at `max_sequence_length` (the capacity
+point), one at the shortest served request (4 s at 1:1, padded 18944) and one inside every class neither
+of those falls in, then the usual VAE / audio / prompt-encoder warms. The measured gate is
+`test_pipeline_minimax_h3.py::test_t2va_dynamic_length_zero_misses`, which runs by default on the Blackhole
+4x8 (`MINIMAX_H3_DYNAMIC_GATE=0` opts out): no init warm-up, audio untraced, and per length class one quiet
+request then a measured one at a new padded length (4 s -> 5 s, 10 s -> 15 s at 16:9), each with zero
+denoising cache misses. `MINIMAX_H3_DYNAMIC_GATE=1` adds `..._zero_misses_full_warm`, the served
+configuration (init warm-up, quiet 5 s, measured 10 s across the class boundary), which takes about an
+hour. The block-level flat-cache test in `test_transformer_minimax_h3.py` covers the ops alone, not the
+pipeline-level hashes.
+
+#### Rules for a length-dependent op on the dynamic path
+
+- The row count reaches the op only through an input tensor's logical shape (or a `[1, 1, 1, 1]` device
+  scalar such as the ring SDPA's `logical_n`), never as a Python int: a trace bakes Python values in.
+- `compute_program_hash` drops the rows (`hash_spec_without_rows`) and hashes everything else that changes
+  the program (dtype, layout, sharding, grid, which optional tensors are present); blockings and core grids
+  come from a config object pinned at construction (`length_classes.py`), never from the shape.
+- A converted op is opt-in: the runtime-row program is selected by a hashed bool attribute
+  (`runtime_rows`, `dynamic_local_n`, a pinned config), default off, and the model passes
+  `runtime_rows=self.dynamic_length` (`nlp_create_qkv_heads`, `concatenate_heads`, `ttnn.embedding`, which
+  forwards it to the TILE table's untilize). Without the flag the op is main's: main's work split, kernels,
+  hash and cache-hit validation, so every other model's programs are byte-identical to main's.
+- One common runtime word per kernel carries the per-device row count, and every per-core range is derived
+  from it on device with `ttnn/operations/common/shared_with_host/runtime_length.hpp`, so a reader and its
+  writer can never disagree on the split; `validate_on_program_cache_hit` checks the capacity and the
+  alignment on every call.
+- Every compile-time value of the program is a function of the capacity and the config, never of the first
+  call's split: the ring SDPA keeps its K/V chains unicast under `dynamic_local_n` (the reader's multicast
+  flag is compile-time; create and every cache hit assert it) and rejects one K head per chip, whose
+  shared-K chain is host-built per length.
+- Eager only. Runtime arguments are frozen in a captured trace, so a replay serves the captured length
+  whatever the buffers hold. Four guards: the pipeline refuses `dynamic_length` with `trace_denoise` or
+  `trace_audio` (and ignores the preset's audio trace), the transformer's `forward` raises while a trace
+  capture is active, and the `Tracer` rejects a replay input whose shape differs from the captured one.
+- Device state. Sized once and written in place, true rows leading: the assembly source table, the ring
+  attention's K/V gather pair and the prompt arena (at the arena caps / `max_sequence_length`); the fused
+  norms' worker split is likewise fixed at `max_sequence_length / SP` rows. Per request: the hidden stream,
+  the rope and adaLN tables, the timestep / one-hot state tensors and, on the 4x8, the CCL ping-pong pairs
+  (allocated for the step loop and freed after it). No op reads a capacity-sized buffer past the rows the
+  current request wrote.
 
 ## Fully-warm latency
 
@@ -386,7 +524,7 @@ repeating.
 against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
 rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in
 the 50-block stack is keyed on the padded packed length, so warming a different one warms nothing.
-`test_performance_minimax_h3.py` asserts the warm and measured lengths agree; for t2va the hazard is
+`run_warm_generation` asserts the warm and measured lengths agree; for t2va the hazard is
 masked only by luck, since 1 and 39 tokens both round up to 37888.
 
 ## Precision
@@ -408,40 +546,46 @@ one model's measurement is not evidence about LTX, Wan or Ideogram-4, which keep
 the video not at all (40-48 dB PSNR frame-to-frame, identical anchor and CLIP numbers), so this is
 conditioner fidelity rather than output quality.
 
+## adaLN modulation knobs
+
+The adaLN scale/shift reach the fused norms as a dynamic weight and bias. Each block gathers them from its small
+modulation table (one row per timestep slot and modality, nine for a text-to-video request) with one-hot matmuls
+(exact), and the pipeline hands the norms a per-tile-row map built once per
+request: the norm reads tile row `tile_map[r]` of a small expanded table, so the gather runs over the table's few
+rows rather than the whole packed sequence. A request with more boundary tiles than `MINIMAX_H3_ADALN_MIXED_TILES`
+slots falls back to the per-token one-hot gathers and says so in the log; a transformer driven without the pipeline
+(no tile-row map) takes the same per-token path. The norms' static weight is multiplied into the modulation
+table instead of the per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores). None of these change the numerics.
+
+| env | effect |
+|---|---|
+| `MINIMAX_H3_ADALN_MIXED_TILES=N` | tile-row slots for tiles that straddle an adaLN run boundary (default 16) |
+| `MINIMAX_H3_FOLD_NORM_WEIGHT=0` | apply the norm's static weight per token again instead of folding it into the table |
+
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /
-`MiniMaxH3AudioEncoder` take `split_mode="full"`, `tap_matmul=True`, `prefer_mac=True`
-(and `max_c_in_block=128`) as constructor defaults, and register the H3 conv blockings themselves.
-That takes the decode from 10.5 % to **0.45 %** relative RMSE against the diffusers reference, for
-~3x the stage time. The three constructor levers are independent and each targets a different one of
-the three error sources the 10.5 % is made of. They are strongly complementary — the chain error is
-set by whichever source is worst, so enabling one moves the total far less than enabling all three:
+`MiniMaxH3AudioEncoder` take `split_mode="full"` (and `max_c_in_block=128`) as constructor
+defaults, and register the H3 conv blockings themselves. The one remaining lever answers a
+hardware fact: an fp32 **multiply** through SrcA/SrcB keeps only ~11 significand bits (the FPU
+takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is the ceiling), so the error is
+*flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher fidelity can help.
 
-| `split_mode` | `prefer_mac` | `tap_matmul` | rel RMSE | PCC | PSNR | warm |
-|---|---|---|---|---|---|---|
-| `off` | 0 | 0 | 0.1046 | 99.5451 % | 40.29 dB | 4.03 s |
-| `full` | 0 | 0 | 0.0538 | 99.8950 % | 46.07 dB | 5.36 s |
-| `off` | 1 | 0 | 0.0920 | 99.6111 % | 41.41 dB | 8.72 s |
-| `full` | 1 | 0 | 0.0320 | 99.9522 % | 50.58 dB | 9.50 s |
-| `full` | 0 | 1 | 0.0371 | 99.9526 % | 49.31 dB | 9.97 s |
-| **`full`** | **1** | **1** | **0.0045** | **99.9990 %** | **67.53 dB** | **13.24 s** (default) |
-
-Why each exists — all three answer the same hardware fact, that an fp32 **multiply** on this hardware
-keeps only ~11 significand bits (the FPU takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is
-the ceiling), so the error is *flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher
-fidelity can help. Elementwise fp32 ops, by contrast, are exact.
-
-- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits an operand into `bf16 hi` plus its exact
-  residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
+- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits a conv3d operand into `bf16 hi` plus its
+  exact residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
   bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
-- **`prefer_mac`** runs the anti-aliased resample filters as shift-multiply-add instead of
-  `ttnn.conv1d`. This targets the single largest source: one `Activation1d` injects 1.54e-03, *all* of
-  it from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
-  exact — 1.5e-03 → 5.3e-08.
-- **`tap_matmul`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
-  splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per
-  conv.
+
+The retired `tap_matmul` lever reformulated stride-1 convs as per-tap matmuls to dodge conv3d's
+partial-sum and output-path roundings; those are now fixed in the conv3d kernel itself (fp32
+partials reduced on the SFPU, bias/untilize reading `UnpackToDestFp32` CBs — see
+`conv3d/device/kernels/compute.cpp`), so conv3d+split matches the old tap+split accuracy in one
+op with none of the per-tap weights or layout traffic.
+
+The depthwise resample filters (`depthwise_tap_filter`) need no lever: their `ttnn.conv1d` kernel
+accumulates on the SFPU for fp32 operands (`compute_depthwise_conv1d.cpp`) and measures bit-equal to
+the exact shift-multiply-add form at every production shape, 2.1–4.1x faster. The retired
+`prefer_mac` lever selected that MAC form as a precision workaround; MAC survives only as the
+fallback for shapes conv1d cannot configure.
 
 Two things that look like levers and are not: widening `C_in_block` helps an isolated conv (1.48x) but
 **not** end to end, because the chain is dominated by the 126 narrow-channel AMP convs where it cannot

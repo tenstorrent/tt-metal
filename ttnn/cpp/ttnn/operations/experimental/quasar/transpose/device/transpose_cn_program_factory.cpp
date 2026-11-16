@@ -9,14 +9,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -44,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
+    TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_cn needs to be allocated in a buffer on device!");
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t page_shape[2] = {TILE_WIDTH, TILE_HEIGHT};
@@ -55,8 +54,8 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     uint32_t page_size = page_shape[0] * page_shape[1];
     uint32_t stick_size = (row_major) ? page_shape[1] * input_tensor.element_size() : tt::tile_size(cb_data_format);
 
-    Buffer* src0_buffer = input_tensor.buffer();
-    IDevice* device = input_tensor.device();
+    const auto* src0_buffer = &input_tensor.mesh_buffer();
+    MeshDevice* device = input_tensor.device();
 
     uint32_t num_tensor_pages = input_tensor.physical_volume() / page_size;
 
@@ -69,7 +68,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_pages);
 
-    Buffer* dst_buffer = output_tensor.buffer();
+    const auto* dst_buffer = &output_tensor.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t num_input_pages = 2;
@@ -133,8 +132,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"N", "C", "HtWt", "batch_step", "channel_step", "num_pages", "start_id", "hw", "n"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer KernelSpec.
@@ -158,8 +156,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
                 {"write_size", stick_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels.push_back(std::move(reader));

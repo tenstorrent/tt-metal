@@ -10,6 +10,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -22,22 +23,16 @@ namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::det
 struct StridedReduceScatterProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id;
     tt::tt_metal::KernelHandle writer_kernel_id;
-    std::vector<tt::tt_metal::CoreCoord> all_cores;
-    uint32_t num_directions_per_link;
-    uint32_t num_workers_per_direction;
-    uint32_t num_mux_cores_per_direction_per_link;
-    uint32_t num_cores_per_link;
-    // Index into the reader RT args where addcmul_a_address lives (0 = not used).
-    uint32_t reader_addcmul_rt_arg_offset = 0;
+    tt::tt_metal::KernelHandle reduce_kernel_id;
     // Per-core MM signaling: privately allocated L1 backing for the per-MM-core progress counter array
-    std::shared_ptr<tt::tt_metal::Buffer> mm_progress_counters_buffer;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> mm_progress_counters_buffer;
     // The counter-array L1 address baked into the reader + MM runtime args at build time
     uint32_t mm_progress_counters_addr = 0;
     // Rolling-window return path: backing L1 buffer for the per-RS-reader credit counters (one
     // shard/row per MM core). Held for the same reason as the array above — its L1 address is baked
     // into the reader + MM runtime args, so freeing it would leave both kernels polling memory the
     // allocator has handed to something else.
-    std::shared_ptr<tt::tt_metal::Buffer> rs_credit_counters_buffer;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> rs_credit_counters_buffer;
     // Credit-array L1 address baked into the reader + MM runtime args at build time
     uint32_t rs_credit_counters_addr = 0;
 };

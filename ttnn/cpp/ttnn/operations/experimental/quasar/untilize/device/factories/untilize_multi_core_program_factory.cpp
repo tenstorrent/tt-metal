@@ -21,7 +21,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -44,8 +43,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    IDevice* device = a.device();
-    Buffer* src0_buffer = a.buffer();
+    MeshDevice* device = a.device();
+    const auto* src0_buffer = &a.mesh_buffer();
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t tensor_height = a.physical_volume() / tensor_width;
@@ -100,7 +99,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
     }
 
-    const bool input_is_dram_sharded = input_is_sharded && src0_buffer->buffer_type() == BufferType::DRAM;
+    const bool input_is_dram_sharded =
+        input_is_sharded && src0_buffer->device_local_config().buffer_type == BufferType::DRAM;
     // Block reader: streams from L1/DRAM shard block-by-block (uneven or DRAM sharding).
     // Even sharding uses a zero-copy DFB borrowed from the shard buffer.
     bool use_block_reader = input_is_sharded && (has_uneven_sharding || input_is_dram_sharded);
@@ -170,8 +170,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     reader.unique_id = READER;
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}};
-    reader.hw_config =
-        ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
+    reader.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
     if (use_block_reader) {
         reader.source = kdir / "reader_unary_sharded_blocks_metal2.cpp";
         reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
@@ -209,22 +208,17 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                   "num_unpadded_cols_per_input_block",
                   "width_wise_output_block_start_index",
                   "num_cols_already_processed_in_first_output_block"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute KernelSpec(s) (common; full + optional interleaved cliff) ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32 || a.dtype() == DataType::FLOAT32) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig hw{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), hw);
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(hw);
         if (fp32_dest_acc_en) {
-            std::visit(
-                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
+            compute_hw.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest);
         }
         return compute_hw;
     };

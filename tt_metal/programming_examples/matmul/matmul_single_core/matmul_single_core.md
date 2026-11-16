@@ -3,7 +3,7 @@
 We'll build a program that will perform matmul operations on two tensors with equal-size inner dimension. We will then go through specific sections of the program.
 
 The full example program is in
-[matmul_single_core.cpp](../../../tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp)
+[matmul_single_core.cpp](matmul_single_core.cpp)
 
 To build and execute, you may use the following commands:
 Then run the following:
@@ -34,7 +34,7 @@ We want a just a single core, so we will restrict the core range to be just one 
 distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 distributed::MeshWorkload workload;
 distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-Program program{};
+Program program = CreateProgram(*mesh_device);
 CoreCoord core({0, 0});
 ```
 
@@ -50,7 +50,7 @@ uint32_t Nt = N / TILE_WIDTH;
 
 DataFormat cb_data_format = DataFormat::Float16_b;
 uint32_t single_tile_size = detail::TileSize(cb_data_format);
-MathFidelity math_fidelity = MathFidelity::HiFi4;
+tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
 distributed::DeviceLocalBufferConfig dram_config{ .page_size = single_tile_size, .buffer_type = BufferType::DRAM };
 distributed::ReplicatedBufferConfig buffer_config_A{ .size = single_tile_size * Mt * Kt };
@@ -116,7 +116,7 @@ auto matmul_single_core_kernel_id = tt_metal::CreateKernel(
     program,
     "tt_metal/programming_examples/matmul/matmul_single_core/kernels/compute/mm.cpp",
     core,
-    tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_args}
+    tt_metal::ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .compile_args = compute_args}
 );
 ```
 

@@ -2,20 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.unpack_ab import unpack_ab_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
+from fuser.operand import BfdResource
 from helpers.llk_params import BroadcastType
 
 
 class UnpackerAB(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
+    golden_fn = staticmethod(unpack_ab_golden)
 
     def get_headers(self) -> List[str]:
         return [
@@ -23,18 +25,6 @@ class UnpackerAB(Unpacker):
             "llk_unpack_binary_broadcast_operands.h",
             "llk_unpack_common.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tensor_b = self.broadcast_golden(tensor_b, config, operation, compute_unit)
-
-        return tensor_a.flatten(), tensor_b.flatten()
 
     def perf_set_valid(
         self,
@@ -82,18 +72,27 @@ class UnpackerAB(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id_a = compute_unit.src_a.buf_desc_id
-        buf_desc_id_b = compute_unit.src_b.buf_desc_id
+        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
+            BfdResource.UNP0, result_name="bfd_a"
+        ) + compute_unit.src_b.bfd_alloc_and_program(
+            BfdResource.UNP1, result_name="bfd_b"
+        )
 
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
+            tensor_shape = compute_unit.src_a.tile_shape.cpp_value
             return (
-                f"_llk_unpack_binary_broadcast_operands_init_<{broadcast_type}>"
-                f"({buf_desc_id_a}, {buf_desc_id_b}, 1);\n"
+                "{\n"
+                + bfd_program
+                + f"_llk_unpack_binary_broadcast_operands_init_<{broadcast_type}>"
+                f"(bfd_a, bfd_b, {tensor_shape}, 1);\n}}\n"
             )
 
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return (
-            f"_llk_unpack_binary_operands_init_({buf_desc_id_a}, {buf_desc_id_b}, 1);\n"
+            "{\n"
+            + bfd_program
+            + f"_llk_unpack_binary_operands_init_(bfd_a, bfd_b, {tensor_shape}, 1);\n}}\n"
         )
 
     def unpack(
@@ -104,14 +103,12 @@ class UnpackerAB(Unpacker):
         block: BlockData,
     ) -> str:
         if compute_unit.broadcast_type != BroadcastType.None_:
-            tile_id_b = (
-                block.tile_id_global
-                if compute_unit.broadcast_tile is None
-                else compute_unit.broadcast_tile
-            )
-            return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_global}, {tile_id_b});\n"
+            tile_id_b = block.tile_id_src_b
+            tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+            return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_src_a}, {tile_id_b}, {tensor_shape});\n"
 
-        return f"_llk_unpack_binary_operands_({block.tile_id_global}, {block.tile_id_global});\n"
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
+        return f"_llk_unpack_binary_operands_({block.tile_id_src_a}, {block.tile_id_src_b}, {tensor_shape});\n"
 
     def uninit(
         self,

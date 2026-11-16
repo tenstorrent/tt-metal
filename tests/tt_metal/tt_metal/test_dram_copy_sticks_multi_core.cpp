@@ -27,7 +27,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -49,7 +49,7 @@ TEST_F(UnitMeshFixture, DramCopySticksMultiCore) {
     bool pass = true;
 
     try {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(this->device());
         auto num_cores_c = 2;
         auto num_cores_r = 2;
         CoreCoord start_core = {0, 0};
@@ -117,7 +117,7 @@ TEST_F(UnitMeshFixture, DramCopySticksMultiCore) {
             }
         }
 
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+        LaunchProgram(this->device(), std::move(program));
         // std::vector<uint32_t> result_vec;
         // slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////

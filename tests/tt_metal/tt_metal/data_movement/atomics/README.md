@@ -5,7 +5,7 @@ This directory contains tests for `noc_semaphore_inc` and `noc_async_atomic_barr
 **Note**: Due to how the test framework works, `Transaction Size (bytes)` in the output actually means `Increment Amount`.
 
 ## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 **Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
 

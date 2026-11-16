@@ -24,4 +24,5 @@
     wh_n300_civ2:
       timeout: 10
   team: scaleout
+  budget_type: merge_gate
   owner_id: U08RRAU5E15 # Ridvan Song

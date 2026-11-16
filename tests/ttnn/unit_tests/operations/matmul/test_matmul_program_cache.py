@@ -67,6 +67,7 @@ def run_matmul(device, m, k, n, dtype=ttnn.bfloat16, seed=0):
     return torch_ref, tt_out
 
 
+@pytest.mark.merge_gate
 def test_matmul_cache_reuse_same_config(device, isolate_program_cache):
     """Same shapes/dtype twice with different data -> 1 entry, different outputs."""
     ref1, out1 = run_matmul(device, 128, 256, 192, seed=0)
@@ -81,6 +82,7 @@ def test_matmul_cache_reuse_same_config(device, isolate_program_cache):
     ), "different input data (seed 0 vs 42) must yield different outputs; equal outputs mean a stale cached result was reused"
 
 
+@pytest.mark.merge_gate
 def test_matmul_cache_miss_different_shape(device, isolate_program_cache):
     """Different N -> 2 entries."""
     ref1, out1 = run_matmul(device, 128, 256, 192)
@@ -92,6 +94,7 @@ def test_matmul_cache_miss_different_shape(device, isolate_program_cache):
     assert count == 2, f"different N (192 vs 256) must produce 2 distinct cache entries, got {count} (shape not keyed)"
 
 
+@pytest.mark.merge_gate
 def test_matmul_cache_miss_different_dtype(device, isolate_program_cache):
     """Different dtype -> 2 entries."""
     ref1, out1 = run_matmul(device, 128, 256, 192, dtype=ttnn.bfloat16)

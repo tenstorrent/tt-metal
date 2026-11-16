@@ -59,7 +59,7 @@ inline void _llk_unpack_A_top32_rm_(
 
     if constexpr (unpack_to_dest)
     {
-        if (is_32bit_input(unpack_src_format, unpack_dst_format))
+        if (ckernel::unpacker::is_32bit_input(unpack_src_format, unpack_dst_format))
         {
             set_dst_write_addr(unp_cfg_context, unpack_dst_format);
             wait_for_dest_available();
@@ -80,9 +80,9 @@ inline void _llk_unpack_A_top32_rm_(
     else
     {
         // clear A to -infinity
-        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
         // clear B to zero
-        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
 
         for (std::uint32_t face_index = 0; face_index < num_faces - 1; face_index++)
         {
@@ -97,7 +97,7 @@ inline void _llk_unpack_A_top32_rm_(
 
     if (unpack_to_dest)
     {
-        if (is_32bit_input(unpack_src_format, unpack_dst_format))
+        if (ckernel::unpacker::is_32bit_input(unpack_src_format, unpack_dst_format))
         {
             unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }

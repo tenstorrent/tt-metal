@@ -14,15 +14,14 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #define MASK_64 0xFFFFFFFFFFFFFFC0
 
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 const TensorParamName RS_SRC{"reshape_rm_src"};
@@ -39,7 +38,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
     const auto& sub_core_grid = operation_attributes.sub_core_grid;
 
     const uint32_t data_size = input.element_size();
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
     CoreRangeSet total_cores = sub_core_grid.has_value() ? sub_core_grid.value() : CoreRangeSet(default_cores);
@@ -52,10 +51,10 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
     const uint32_t dest_page_size_bytes = output_log_shape[-1] * data_size;
     const uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const bool src_is_dram = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
 
     // Pages-per-core such that each core starts on a read AND write page boundary (logical volumes match,
     // so the last page is always aligned).
@@ -110,8 +109,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
                   "nop"}},
         // Repages with sub-tile writes (dest_page can be < source_page; tt_memmove chunks) -> per
         // ~/implicit_sync.md rule (A), revert to explicit credits.
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels = {reader};

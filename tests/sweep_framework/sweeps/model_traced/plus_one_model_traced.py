@@ -127,8 +127,6 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.plus_one(input_tensor_a, **op_kwargs)
-    if output_memory_config and output_memory_config != input_a_memory_config:
-        output_tensor = ttnn.to_memory_config(output_tensor, output_memory_config)
     mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)

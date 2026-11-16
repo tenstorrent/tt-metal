@@ -13,6 +13,7 @@
 - id: galaxy-fabric-stability-stress
   name: Galaxy Fabric Stability Tests
   team: scaleout
+  budget_type: stress
   owner_id: U08FXFFH7L0 # Abhishek Agarwal
   cmd: |
     # 0 disables the metal per-op timeout (overrides setup-job's 5s default), which

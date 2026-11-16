@@ -37,7 +37,8 @@ from models.experimental.llama32_1b_quasar.models.module_input_validation import
 )
 from models.experimental.llama32_1b_quasar.sampling.sampling_params import SamplingParams
 from models.experimental.llama32_1b_quasar.tests.demos.cleanup_utils import cleanup_ttnn_value
-from models.tt_transformers.tt.common import (
+from models.experimental.llama32_1b_quasar.utility_functions import is_quasar
+from models.ttt_compat.tt.common import (
     Mode,
     copy_host_to_device,
     get_block_size,
@@ -428,7 +429,7 @@ class EagerLLMExecutor:
                 if explicit is not None:
                     kv_cache_dtype = explicit
                 elif getattr(ma, "optimizations", None) is not None:
-                    from models.tt_transformers.tt.model_config import TensorGroup
+                    from models.ttt_compat.tt.model_config import TensorGroup
 
                     configured = ma.optimizations.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.KV_CACHE)
                     if configured is not None:
@@ -1148,7 +1149,9 @@ class EagerLLMExecutor:
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        gathered = ttnn.matmul(
+        # Quasar: the Quasar fork's matmul, which runs the unified matmul with no program config.
+        matmul = ttnn.experimental.quasar.matmul if is_quasar() else ttnn.matmul
+        gathered = matmul(
             sel_tt,
             hidden,
             dtype=ttnn.bfloat16,
@@ -2605,6 +2608,19 @@ def run_teacher_forcing(
     total_len = len(reference_tokens)
     num_target = total_len - prompt_len
 
+    # Bring-up / simulator escape hatch: the full refpt drives ~num_target-1 decode steps (≈255 for the
+    # 511-token Llama-3.2-1B refpt), each a complete model forward. On the Quasar functional simulator /
+    # emulator that is hours. LLAMA32_1B_TF_MAX_DECODE_STEPS=N caps the decode loop to N steps (the prefill
+    # + first predicted token always run, so N=0 exercises prefill+lm_head only, N=2 also covers steady-state
+    # decode + SDPA + KV-cache read). Accuracy is not meaningful when capped — this is for op bring-up.
+    _tf_cap = os.environ.get("LLAMA32_1B_TF_MAX_DECODE_STEPS")
+    if _tf_cap is not None:
+        num_target = min(num_target, max(int(_tf_cap), 0) + 1)
+        logger.warning(
+            f"[teacher-forcing] LLAMA32_1B_TF_MAX_DECODE_STEPS={_tf_cap} -> capping to {num_target - 1} decode "
+            f"steps (of {total_len - prompt_len - 1}); accuracy gate is not meaningful when capped"
+        )
+
     # Compile prefill + decode with config validation
     _compile_prefill_and_decode(
         executor,
@@ -2970,7 +2986,7 @@ def run_perf_benchmark(
 
 def load_eval_repeat_prompts_batch32() -> list[str]:
     """The 32 numeric sequence-continuation prompts TTTv1's ci-eval-32 uses (parity)."""
-    path = Path("models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json")
+    path = Path("models/ttt_compat/demo/sample_prompts/eval_repeat_prompts_batch32.json")
     with open(path) as f:
         data = json.load(f)
     return [entry["prompt"] for entry in data]

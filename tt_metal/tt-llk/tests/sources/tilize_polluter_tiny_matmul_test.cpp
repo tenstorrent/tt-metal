@@ -87,11 +87,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if constexpr (DO_RESTORE)
     {
         // Restore the canonical SrcA baseline mutated by the regular tilize.
-#ifdef ARCH_WORMHOLE
         _llk_unpack_tilize_uninit_wrapper_(formats_array[1].unpack_A_dst, POLLUTER_NUM_FACES, POLLUTER_FACE_R_DIM);
-#else
-        _llk_unpack_tilize_uninit_wrapper_(formats_array[1].unpack_A_dst, POLLUTER_NUM_FACES);
-#endif
     }
 
     // ---- Run 1: TINY matmul on independent pre-tilized operands (verbatim) ----
@@ -162,7 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         is_int_fpu_en,
-        llk_test_pack_mode_v<false, TILIZE>>(POLLUTER_NUM_FACES, formats_array[run].math);
+        llk_test_pack_mode_v<false, TILIZE>>(ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, POLLUTER_NUM_FACES), formats_array[run].math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats_array[run].math, formats_array[run].math);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -189,6 +185,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(params.DST_INDEX, params.CT_DIM, params.RT_DIM);
     }
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_matmul_uninit_();
 }
 
 #endif

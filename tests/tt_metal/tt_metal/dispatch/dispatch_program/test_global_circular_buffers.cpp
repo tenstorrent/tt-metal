@@ -22,10 +22,11 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -44,7 +45,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt::tt_metal::Program program = CreateProgram();
+    tt::tt_metal::Program program = CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -154,7 +155,6 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     constexpr tt::DataFormat tile_format = tt::DataFormat::Float16_b;
 
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
@@ -169,7 +169,7 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sparse_mapping = {{sender_core, receiver_cores}};
     auto sparse_global_cb = experimental::GlobalCircularBuffer(*mesh_device, sparse_mapping, 3200, BufferType::L1);
     distributed::MeshWorkload sparse_workload;
-    Program sparse_program = CreateProgram();
+    Program sparse_program = CreateProgram(*mesh_device);
     experimental::CreateCircularBuffer(sparse_program, receiver_cores, make_cb_config(), sparse_global_cb);
     CreateKernel(
         sparse_program,
@@ -186,7 +186,7 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
     ASSERT_GT(poison_size, 0);
     ASSERT_EQ(poison_size % sizeof(uint32_t), 0);
     std::vector<uint32_t> poison(poison_size / sizeof(uint32_t), 0xffffffff);
-    detail::WriteToDeviceL1(device, idle_core, poison_base, poison);
+    slow_dispatch::WriteToL1(*mesh_device, idle_core, poison_base, poison);
 
     this->RunProgram(mesh_device, sparse_workload);
 
@@ -194,8 +194,8 @@ TEST_F(MeshDispatchFixture, TensixProgramClearsStaleRemoteCircularBufferConfig) 
         sparse_workload.get_cb_base_addr(mesh_device, idle_core, CoreType::WORKER) +
         sparse_program_in_workload.impl().get_program_config(programmable_core_index).local_cb_size;
     std::vector<uint32_t> remote_config;
-    detail::ReadFromDeviceL1(
-        device,
+    slow_dispatch::ReadFromL1(
+        *mesh_device,
         idle_core,
         remote_config_address,
         UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),

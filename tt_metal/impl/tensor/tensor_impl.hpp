@@ -10,7 +10,9 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/float8.hpp>
 
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 #include <vector>
 
@@ -24,6 +26,20 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
+
+struct LocalHostShard {
+    distributed::MeshCoordinate coord;
+    HostBuffer buffer;
+};
+
+struct LocalHostShards {
+    ttsl::SmallVector<LocalHostShard> shards;
+    size_t size_bytes = 0;
+};
+
+// Host presence does not imply destination ownership on a mesh shared by multiple processes.
+LocalHostShards select_local_host_shards(
+    const DistributedHostBuffer& host_buffer, const distributed::MeshDevice& mesh_device);
 
 // Converts logical data into physical data based on tensor spec
 // - Logical data: Flat container of row major data corresponding to some ND logical shape
@@ -78,6 +94,8 @@ std::vector<T> to_tile_major_layout(const Shape2D& shape, const Tile& tile, ttsl
 // Empty structs to facilitate Tensor template logic.
 struct bfloat4_b {};
 struct bfloat8_b {};
+// One tag for all MX formats (packed MX tiles); the concrete format comes from the runtime DataType.
+struct mx_tiles {};
 
 // Utility to convert runtime DataType to compile-time constant and dispatch the function call
 template <typename Func, typename... Args>
@@ -102,6 +120,15 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
             return (std::forward<Func>(func)).template operator()<bfloat4_b>(std::forward<Args>(args)...);
         case DataType::FP8_E4M3:
             return (std::forward<Func>(func)).template operator()<float8_e4m3>(std::forward<Args>(args)...);
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
+            return (std::forward<Func>(func)).template operator()<mx_tiles>(std::forward<Args>(args)...);
         default: TT_THROW("Unsupported data type");
     }
 }

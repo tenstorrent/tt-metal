@@ -22,19 +22,19 @@ void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
 
     const ttnn::Tensor& scores_tensor = tensor_args.scores_tensor;
     TT_FATAL(scores_tensor.storage_type() == StorageType::DEVICE, "Scores tensor must be on device");
-    TT_FATAL(scores_tensor.buffer() != nullptr, "Scores tensor must have a buffer");
+    TT_FATAL(scores_tensor.is_allocated(), "Scores tensor must have a buffer");
 
     const ttnn::Tensor& expert_indices_tensor = tensor_args.expert_indices_tensor;
     TT_FATAL(expert_indices_tensor.storage_type() == StorageType::DEVICE, "Expert indices tensor must be on device");
-    TT_FATAL(expert_indices_tensor.buffer() != nullptr, "Expert indices tensor must have a buffer");
+    TT_FATAL(expert_indices_tensor.is_allocated(), "Expert indices tensor must have a buffer");
 
     const ttnn::Tensor& expert_mapping_tensor = tensor_args.expert_mapping_tensor;
     TT_FATAL(expert_mapping_tensor.storage_type() == StorageType::DEVICE, "Expert mapping tensor must be on device");
-    TT_FATAL(expert_mapping_tensor.buffer() != nullptr, "Expert mapping tensor must have a buffer");
+    TT_FATAL(expert_mapping_tensor.is_allocated(), "Expert mapping tensor must have a buffer");
 
     TT_FATAL(
         operation_attributes.cluster_axis <= 1,
@@ -103,12 +103,15 @@ void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_miss
         reduction_dim_size,
         num_shared_experts_val);
 
+    // One score row per input row, the padded rows of the input's last row tile excepted (they get a zero
+    // score).  Any number of row tiles is supported: the reader builds one score tile per (row tile, expert)
+    // and the compute kernel scales each output tile with its own row tile's scores.
     const uint32_t num_tokens = input_shape[-2];
     TT_FATAL(
-        (scores_shape[0] > num_tokens - tt::constants::TILE_WIDTH) && (scores_shape[0] <= num_tokens),
-        "scores dim 0 (tokens in slice = {}) must be between {} and {} for the current fused kernel",
+        (scores_shape[0] > num_tokens - tt::constants::TILE_HEIGHT) && (scores_shape[0] <= num_tokens),
+        "scores dim 0 (tokens in slice = {}) must be between {} and {} (the rows of the input's last row tile)",
         scores_shape[0],
-        num_tokens - tt::constants::TILE_WIDTH + 1,
+        num_tokens - tt::constants::TILE_HEIGHT + 1,
         num_tokens);
 }
 
@@ -119,6 +122,12 @@ tt::tt_metal::TensorSpec DeepseekMoEFastReduceNCFusedDeviceOperation::compute_ou
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.logical_shape();
 
+    TT_FATAL(input_shape[-1] > 0, "Last dim of the input must be greater than 0");
+    TT_FATAL(
+        operation_attributes.split_size > 0 && input_shape[-1] % operation_attributes.split_size == 0,
+        "split_size ({}) must be greater than 0 and divide the last dim ({})",
+        operation_attributes.split_size,
+        input_shape[-1]);
     const uint32_t num_output_tensors = input_shape[-1] / operation_attributes.split_size;
     const uint32_t split_dim = input_shape.rank() - 1;
 

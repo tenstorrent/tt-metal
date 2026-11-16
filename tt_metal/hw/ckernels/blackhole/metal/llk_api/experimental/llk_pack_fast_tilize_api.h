@@ -6,6 +6,7 @@
 
 #include "llk_pack_common_api.h"
 #include "experimental/llk_pack_fast_tilize.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK FAST TILIZE (BH)
@@ -14,6 +15,7 @@
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
+    SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const uint32_t use_32bit_dest =
@@ -24,6 +26,7 @@ inline void llk_pack_fast_tilize_init(
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
+    SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -32,6 +35,7 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
 }
 
 inline void llk_pack_fast_tilize_reinit_unit_dim(const std::uint32_t pack_output, const std::uint32_t new_unit_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     _llk_pack_fast_tilize_reinit_unit_dim_(pack_dst_format[output_id], new_unit_dim);
 }
@@ -41,6 +45,7 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t output,
     const std::uint32_t output_tile_index,
     const std::uint32_t unit_dim) {
+    SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const std::uint32_t pack_tile_addr = get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
@@ -50,6 +55,7 @@ inline void llk_pack_fast_tilize_block(
 // Row-scoped pack helpers: program destination once per row (row_begin),
 // stream chunks without reprogramming (row_chunk), cleanup (row_end).
 inline void llk_pack_fast_tilize_row_begin(const std::uint32_t output, const std::uint32_t output_tile_index) {
+    SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_tile_addr = get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
     _llk_pack_fast_tilize_row_begin_(pack_tile_addr);
@@ -57,9 +63,13 @@ inline void llk_pack_fast_tilize_row_begin(const std::uint32_t output, const std
 
 inline void llk_pack_fast_tilize_row_chunk(
     const std::uint32_t tile_index, const std::uint32_t output, const std::uint32_t unit_dim) {
+    SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     _llk_pack_fast_tilize_row_chunk_(tile_index, unit_dim, num_faces);
 }
 
-inline void llk_pack_fast_tilize_row_end() { _llk_pack_fast_tilize_row_end_(); }
+inline void llk_pack_fast_tilize_row_end() {
+    SAN_HOOK(unsupported());
+    _llk_pack_fast_tilize_row_end_();
+}

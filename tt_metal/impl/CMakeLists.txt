@@ -90,9 +90,20 @@ list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chun
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
+# Keep these from perturbing the established unity source batches. Shifting a batch boundary can
+# land a file in a chunk whose other members include <fmt/ranges.h>, which makes the std::vector
+# formatter in tt_stl/fmt.hpp ambiguous and fails the build.
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/simulator_termination.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
+
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(impl)
-target_precompile_headers(impl REUSE_FROM metal_common_pch)
+tt_reuse_precompile_headers(impl metal_common_pch)
 
 target_link_libraries(
     impl
@@ -101,7 +112,6 @@ target_link_libraries(
         Tracy::TracyClient
     PRIVATE
         FlatBuffers::FlatBuffers
-        range-v3::range-v3
         TT::Metalium::Common
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
@@ -121,6 +131,8 @@ target_include_directories(
         debug
         profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        # internal/profiler/perf_counters.hpp includes the shared tt-llk counter headers
+        ${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tools/include
         ${CMAKE_CURRENT_BINARY_DIR}
 )
 target_include_directories(impl SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
@@ -150,9 +162,10 @@ if(TT_METAL_USE_EMULE)
     target_link_libraries(
         impl
         PRIVATE
-            tt-emule::headers
+            tt_emule_runtime
             dl
     )
+    target_include_directories(impl PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulation)
 endif()
 
 # Generate Inspector RPC stub file

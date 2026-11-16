@@ -600,7 +600,7 @@ The table below lists pre-built training configs paired with matching MGDs for l
 
 | Strategy | Mesh shape | Training config | MGD |
 |---|---|---|---|
-| TP=8 only | `[8, 1]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml) | [`mgd/bh_galaxy_1_8_ring_ring.textproto`](../configs/mgd/bh_galaxy_1_8_ring_ring.textproto) |
+| TP=8 only | `[8, 1]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8.yaml) | [`mgd/bh_8_1_ring_ring.textproto`](../configs/mgd/bh_8_1_ring_ring.textproto) |
 | TP=8, DDP=4 | `[4, 8]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp8_ddp4.yaml) | [`mgd/bh_galaxy_4_8_line_line.textproto`](../configs/mgd/bh_galaxy_4_8_line_line.textproto) |
 | TP=4, DDP=8 | `[8, 4]` | [`training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml`](../configs/training_configs/llama8b/training_shakespeare_llama_8b_tp4_ddp8.yaml) | [`mgd/bh_galaxy_8_4_line_line.textproto`](../configs/mgd/bh_galaxy_8_4_line_line.textproto) |
 
@@ -670,7 +670,7 @@ export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_RUNTIME_ROOT/tt-train/configs/mgd/bh_ga
 
 **Error**: `"ParallelismContext is already initialized."`
 
-**Cause**: `initialize_parallelism_context()` is being called more than once. The parallelism context can only be initialized once per training session.
+**Cause**: `initialize_parallelism_context()` is being called more than once for the same open device. The parallelism context describes the mesh it was built for, so it can only be initialized once per open device; `close_device()` clears it, and it must be initialized again after the next device is opened.
 
 **Solution**:
 1. **Check for duplicate initialization**: Ensure `initialize_parallelism_context()` is called exactly once in your code flow. Common causes:

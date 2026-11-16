@@ -13,7 +13,6 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_memory_checks.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -42,7 +41,7 @@ enum class p_dim_stride_target
  * @param to_store: Value written to addr.
  * @return The value read back from addr after the store.
  */
-static inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
+inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
 {
     std::uint32_t result;
     __asm volatile("sw %2, %1; lw %0, %1" : "=r"(result) : "m"(*addr), "r"(to_store));
@@ -82,18 +81,6 @@ inline void _llk_unpack_hw_configure_(
 {
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
     LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
-
-    // sstanisic todo: add tile_size_a and tile_size_b to operand state? (see #47440)
-    llk::san::unpack_operand_configure(
-        is_fp32_dest_acc_en,
-        unpA_src_format,
-        unpB_src_format,
-        unpA_dst_format,
-        unpB_dst_format,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces);
 
     configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
         unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_face_r_dim, unpB_face_r_dim, 0, unpA_num_faces, unpB_num_faces);
@@ -239,17 +226,6 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
             static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), is_fp32_dest_acc_en),
         "Unsupported unpacker to register conversion.");
 
-    llk::san::unpack_operand_configure<true>(
-        llk::san::IGNORE,
-        unpack_src_format,
-        llk::san::IGNORE,
-        unpack_dst_format,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE);
-
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
     if constexpr (!skip_int8)
     {
@@ -321,17 +297,6 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         is_unpacker_format_conversion_supported_fp32_acc(
             static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), is_fp32_dest_acc_en),
         "Unsupported unpacker to register conversion.");
-
-    llk::san::unpack_operand_configure<true>(
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        unpack_src_format,
-        llk::san::IGNORE,
-        unpack_dst_format,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE,
-        llk::san::IGNORE);
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
     if constexpr (!skip_int8)

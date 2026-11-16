@@ -183,6 +183,21 @@ class ThroughputExperts:
             tensor_cache_path=tensor_cache_path,
         )
 
+        self.local_expert_ids = None
+        if ttnn.device.is_blackhole(mesh_device):
+            import torch
+
+            # Match the linear expert sharding used by load_throughput_expert_weights.
+            # Allocate once so decode and trace capture contain no host uploads.
+            self.local_expert_ids = ttnn.from_torch(
+                torch.arange(config.num_experts).reshape(1, config.num_experts, 1, 1),
+                device=mesh_device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=decode_memory_config,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            )
+
         # Create mapping tensors for all_to_all routing (dense flow)
         self.expert_mapping_tensors = create_expert_mapping_tensors(
             num_devices=config.num_devices,
@@ -276,7 +291,8 @@ class ThroughputExperts:
         """
         Decode forward pass.
 
-        When fused_config is set (passed at init), uses the fused flow:
+        Blackhole uses generic all-gather, expert matmuls and reduce-scatter.
+        On other architectures, when fused_config is set, uses the fused flow:
           all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine
         Otherwise uses the dense flow:
           all_to_all_dispatch → batched matmul → all_to_all_combine → weighted sum → all_reduce
@@ -287,10 +303,25 @@ class ThroughputExperts:
             topk_expert_weights: Routing weights [batch_per_device, 1, 1, k]
 
         Returns:
-            Dense flow: [batch_per_device, 1, 1, hidden_size] (fully reduced)
+            Blackhole/dense flow: [1, 1, tokens_per_device, hidden_size] (fully reduced)
             Fused flow: [1, 1, tokens_per_device, hidden_size] (unweighted expert sum +
                 all_reduce across cluster_axis=1; PCC vs. reference is low without bias)
         """
+        if self.local_expert_ids is not None:
+            from .gather_decode import gather_decode_forward
+
+            return gather_decode_forward(
+                hidden_states,
+                topk_expert_indices,
+                topk_expert_weights,
+                weights=self.weights,
+                config=self.config,
+                local_expert_ids=self.local_expert_ids,
+                program_config=self.program_config,
+                mesh_device=self.mesh_device,
+                cluster_axis=self.dispatch_config_decode.cluster_axis,
+                memory_config=self.dispatch_config_decode.memory_config,
+            )
         if self.fused_config is not None:
             return fused_decode_forward(
                 hidden_states=hidden_states,

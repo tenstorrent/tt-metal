@@ -34,7 +34,7 @@ bool should_use_split_reader(
     }
 
     // Get device architecture
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
     const auto arch = device->arch();
 
     // On wormhole, the bottleneck is always the reading of the input image, so split reader is beneficial

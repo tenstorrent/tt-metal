@@ -19,7 +19,7 @@ import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 BETA_GATE = 4.0  # Kimi K3 gate-half beta
 BETA_UP = 25.0  # Kimi K3 up-half beta
@@ -162,5 +162,5 @@ def test_situ_glu_sfpu(device, in_name, fp32_dest, dst_out):
         # no matter how accurate the SFPU is; ULP only says something about the bf16 arm.
         assert_with_pcc(g, a, pcc=BFP8_PCC)
     else:
-        assert_with_ulp(golden, actual, ulp_threshold=BF16_ULP)
+        assert_with_ulp(expected_result=golden, actual_result=actual, ulp_threshold=BF16_ULP)
         assert_with_pcc(g, a, pcc=BF16_PCC)

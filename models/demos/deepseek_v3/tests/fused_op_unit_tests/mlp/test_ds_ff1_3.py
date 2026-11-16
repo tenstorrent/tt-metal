@@ -293,7 +293,15 @@ def _build_ff1_3_inputs(
             memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             buffer_type=ttnn.BufferType.L1,
             shard_spec=ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+                # One [32, 128] shard per 128 columns of the per-device slice (hidden_size split
+                # across the mesh columns by the mapper below). Derive the cores from the device
+                # grid: under COL dispatch the Galaxy compute grid is only 7 cores wide, so a
+                # hard-coded 8-wide range includes the dispatch column and fails buffer validation.
+                ttnn.num_cores_to_corerangeset(
+                    hf_config.hidden_size // mesh_device.shape[1] // 128,
+                    mesh_device.compute_with_storage_grid_size(),
+                    row_wise=True,
+                ),
                 [32, 128],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),

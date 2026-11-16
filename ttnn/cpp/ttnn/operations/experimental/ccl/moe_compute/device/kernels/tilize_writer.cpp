@@ -104,7 +104,6 @@ void kernel_main() {
     // CBs
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
     constexpr uint32_t per_expert_total_tokens_cb_id = get_named_compile_time_arg_val("per_expert_total_tokens_cb_id");
-    constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
     constexpr uint32_t indices_tensor_cb_id = get_named_compile_time_arg_val("indices_tensor_cb_id");
     constexpr uint32_t scores_tensor_cb_id = get_named_compile_time_arg_val("scores_tensor_cb_id");
     constexpr uint32_t mapping_tensor_cb_id = get_named_compile_time_arg_val("mapping_tensor_cb_id");
@@ -116,6 +115,7 @@ void kernel_main() {
     // Alignment
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
     constexpr uint32_t e_t_entry_size = get_named_compile_time_arg_val("e_t_entry_size");
+    static_assert(e_t_entry_size >= 2 * sizeof(uint32_t), "an e_t entry holds the token id and the k slot");
 
     // Number of pages
     constexpr uint32_t shared_cb_num_pages = get_named_compile_time_arg_val("shared_cb_num_pages");
@@ -203,7 +203,6 @@ void kernel_main() {
     // CircularBuffer typed wrappers
     CircularBuffer cb_tilize_output(tilize_output_cb_id);
     CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
-    CircularBuffer cb_total_chunks(total_chunks_cb_id);
     CircularBuffer cb_indices_tensor(indices_tensor_cb_id);
     CircularBuffer cb_scores_tensor(scores_tensor_cb_id);
     CircularBuffer cb_mapping_tensor(mapping_tensor_cb_id);
@@ -371,10 +370,14 @@ void kernel_main() {
                     brisc_activation_l1_ptr[1 + e] = k;
                     brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
 
-                    // Write to BRISC's e_t buffer (16B aligned entries)
+                    // Write to BRISC's e_t buffer (16B aligned entries): word 0 token id, word 1 the
+                    // token's k slot for this expert (same entry format as the NCRISC buffer; the
+                    // merge copies whole entries).
                     const uint32_t brisc_e_t_offset =
                         (e * brisc_tokens_capacity + brisc_num_tokens_per_expert[e]) * e_t_entry_size;
-                    *reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset) = t;
+                    uint32_t* brisc_e_t_entry = reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset);
+                    brisc_e_t_entry[0] = t;
+                    brisc_e_t_entry[1] = k;
                     brisc_num_tokens_per_expert[e]++;
                     break;
                 }
@@ -415,11 +418,6 @@ void kernel_main() {
     for (uint32_t e = 0; e < experts_per_device; e++) {
         num_tokens_per_expert[e] = per_expert_counts[e];
     }
-
-    // Wait for reader to push total_chunks
-    cb_total_chunks.wait_front(one_page);
-    [[maybe_unused]] uint32_t total_chunks =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_total_chunks.get_read_ptr());
 
     /************************************************************************/
     /* Synchronization setup for signalling between tilize and matmul cores */
@@ -741,9 +739,8 @@ void kernel_main() {
         }
     }
 
-    // Pop the per-expert counts and total_chunks (cleanup)
+    // Pop the per-expert counts (cleanup).
     cb_per_expert_total_tokens.pop_front(one_page);
-    cb_total_chunks.pop_front(one_page);
 
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();

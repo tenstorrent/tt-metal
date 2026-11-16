@@ -4,15 +4,14 @@
 
 #include "pad_rm_sharded_width_only_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
@@ -26,7 +25,7 @@ const KernelSpecName SH_W_READER{"reader"};
 const KernelSpecName SH_W_WRITER{"writer"};
 const DFBSpecName SH_W_IN_SHARD{"in_shard"};
 const DFBSpecName SH_W_OUT_SHARD{"out_shard"};
-const DFBSpecName SH_W_PAD{"pad"};
+const ScratchpadSpecName SH_W_PAD{"pad"};
 const TensorParamName SH_W_INPUT{"input"};
 const TensorParamName SH_W_OUTPUT{"output"};
 }  // namespace
@@ -52,8 +51,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
 
-    IDevice* device = input_tensor.device();
-
     // input shard spec
     auto input_shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height_unpadded = input_shard_spec.shape[0];
@@ -67,7 +64,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
 
     tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat pad_val_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // Input shard DFB — borrows the input buffer's L1 memory; the framework re-points it from the
     // input TensorArgument on every dispatch. The reader only takes its base pointer (a raw peek,
@@ -96,11 +92,11 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     };
 
     // Const buffer holding one stick of the pad value. Writer-only, no FIFO ops — self-loop.
-    DataflowBufferSpec pad_dfb{
+    // Writer-private pad-value scratch (formerly a sync-free self-loop DFB; Quasar rejects DM
+    // self-loops). Byte view: address-only use, and padded_stick_bytes need not be a multiple of 4.
+    ScratchpadSpec pad_scratch{
         .unique_id = SH_W_PAD,
-        .entry_size = padded_stick_bytes,
-        .num_entries = 1,
-        .data_format_metadata = pad_val_dfb_data_format,
+        .size_per_node = padded_stick_bytes,  // entry_size * num_entries (1)
     };
 
     // W front-pad offset: input_tensor_start is [N, C, H, W];
@@ -109,7 +105,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value));
-        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
+        padding_value_as_u32 = static_cast<uint32_t>(bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
@@ -160,7 +156,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
                 {"unpadded_stick_step", unpadded_stick_step},
                 {"padded_stick_step", padded_stick_step},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -175,16 +171,10 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
                     .accessor_name = "out_shard",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = SH_W_PAD,
-                    .accessor_name = "pad",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = SH_W_PAD,
-                    .accessor_name = "pad",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = SH_W_PAD, .accessor_name = "pad"},
             },
         .compile_time_args =
             {
@@ -193,7 +183,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
                 {"padding_value_as_u32", padding_value_as_u32},
                 {"padding_value_num_bytes", static_cast<uint32_t>(output.element_size())},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Neither sharded kernel takes runtime args: every per-core value is pinned by the hashed
@@ -202,7 +192,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     ProgramSpec spec{
         .name = "pad_rm_sharded_width_only",
         .kernels = {std::move(reader), std::move(writer)},
-        .dataflow_buffers = {std::move(in_shard_dfb), std::move(out_shard_dfb), std::move(pad_dfb)},
+        .dataflow_buffers = {std::move(in_shard_dfb), std::move(out_shard_dfb)},
+        .scratchpads = {std::move(pad_scratch)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = SH_W_INPUT, .spec = input_mesh_tensor.tensor_spec()},

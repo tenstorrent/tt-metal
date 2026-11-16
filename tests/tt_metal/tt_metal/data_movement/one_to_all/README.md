@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions from one master core to all subordinate cores.
 
 ## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `UnitMeshFastDispatchFixture` and run on single-device unit meshes.
 
 **Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
 
@@ -75,4 +75,4 @@ The semaphore-based tests use additional kernels for sender-receiver synchroniza
 Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new API.
 
 ## Quasar Notes
-`TensixDataMovementOneToAllUnicastDirectedIdeal` includes a Quasar-specific code path inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).
+`TensixDataMovementOneToAllUnicastDirectedIdeal` includes a Quasar-specific code path inside `UnitMeshFastDispatchFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1`, the Quasar simulator, and a grid with at least 2 columns (e.g. `emu-quasar-2x3`).

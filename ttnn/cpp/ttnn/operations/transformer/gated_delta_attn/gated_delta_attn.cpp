@@ -24,7 +24,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> gated_delta_attn_seq(
     auto kc = init_device_compute_kernel_config(
         L_unit.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);

@@ -4,14 +4,14 @@
 
 #include "pad_tile_multicore_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 using namespace tt::constants;
 
 namespace ttnn::prim {
@@ -23,7 +23,7 @@ namespace {
 const KernelSpecName TILE_MC_READER{"reader"};
 const KernelSpecName TILE_MC_WRITER{"writer"};
 const DFBSpecName TILE_MC_IN0{"in0"};
-const DFBSpecName TILE_MC_PAD{"pad"};
+const ScratchpadSpecName TILE_MC_PAD{"pad"};
 const TensorParamName TILE_MC_INPUT{"input"};
 const TensorParamName TILE_MC_OUTPUT{"output"};
 }  // namespace
@@ -52,7 +52,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     const auto& a_shape = a.logical_shape();
     uint32_t num_pages = get_num_pages(output);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -64,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer().page_size();
     uint32_t multi_buffering_size = 2;
 
     DataflowBufferSpec in0_dfb{
@@ -75,38 +75,17 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     };
 
     // Pad buffer: the writer fills one entry with the pad value and NoC-writes it out for every
-    // page outside the input region. Nothing drains it, so the writer is its only toucher and
-    // binds both endpoints (self-loop).
-    DataflowBufferSpec pad_dfb{
+    // page outside the input region. Nothing drains it, so the writer is its only toucher.
+    // Formerly a fake-FIFO self-loop DFB (single DM kernel filled and drained it); converted to a
+    // writer-private Scratchpad, which Quasar requires (it rejects DM self-loop DFBs).
+    ScratchpadSpec pad_scratch{
         .unique_id = TILE_MC_PAD,
-        .entry_size = page_size,
-        .num_entries = 1,
-        .data_format_metadata = dfb_data_format,
+        .size_per_node = page_size,  // entry_size * num_entries (1)
     };
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
-    uint32_t packed_pad_value;
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    switch (a.dtype()) {
-        case DataType::INT32:
-        case DataType::UINT32: packed_pad_value = pad_value; break;
-        case DataType::BFLOAT16:
-            packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
-            break;
-        case DataType::UINT16:
-            packed_pad_value = ttnn::operations::data_movement::pack_two_uint16_into_uint32(
-                {ttnn::operations::data_movement::float_to_uint16(pad_value),
-                 ttnn::operations::data_movement::float_to_uint16(pad_value)});
-            break;
-        case DataType::FLOAT32: packed_pad_value = std::bit_cast<uint32_t>(pad_value); break;
-        default:
-            packed_pad_value = 0;
-            TT_ASSERT(
-                false,
-                "Unsupported datatype for pad tile multicore, can only support INT32, UINT32, BFLOAT16, UINT16, "
-                "FLOAT32");
-    }
+    const uint32_t packed_pad_value = ttnn::operations::data_movement::pack_scalar_into_uint32(a.dtype(), pad_value);
 
     // The four num_dims-long RTA blocks below (input/output page shapes and per-dim ids) are
     // reached by index in `for (d < num_dims)` loops, so they travel as runtime varargs rather
@@ -138,7 +117,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
                 {"num_dims", num_dims},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = num_varargs},
     };
 
@@ -152,16 +131,10 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = TILE_MC_PAD,
-                    .accessor_name = "pad",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = TILE_MC_PAD,
-                    .accessor_name = "pad",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = TILE_MC_PAD, .accessor_name = "pad"},
             },
         .tensor_bindings =
             {
@@ -178,7 +151,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
                 {"element_size", static_cast<uint32_t>(output.element_size())},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = num_varargs},
     };
 
@@ -300,7 +273,8 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     ProgramSpec spec{
         .name = "pad_tile_multicore",
         .kernels = {std::move(reader), std::move(writer)},
-        .dataflow_buffers = {std::move(in0_dfb), std::move(pad_dfb)},
+        .dataflow_buffers = {std::move(in0_dfb)},
+        .scratchpads = {std::move(pad_scratch)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = TILE_MC_INPUT, .spec = input_mesh_tensor.tensor_spec()},

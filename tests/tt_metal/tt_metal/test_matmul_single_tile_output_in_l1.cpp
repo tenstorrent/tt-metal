@@ -17,7 +17,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 using std::vector;
 using namespace tt;
@@ -41,7 +41,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
     auto l1_dst_noc_xy = this->device().virtual_core_from_logical_core(
         this->device().allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 1;
@@ -117,7 +117,7 @@ TEST_F(UnitMeshFixture, MatmulSingleTileOutputInL1) {
         core,
         {dst_l1_buffer->address(), (std::uint32_t)l1_dst_noc_xy.x, (std::uint32_t)l1_dst_noc_xy.y, num_tiles});
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);

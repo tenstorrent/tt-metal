@@ -16,14 +16,6 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      # No longer consumed by any matrix entry — the only runner label built from it
-      # belonged to the "N300 WH B0 not yet ported" bare-metal group, removed when the
-      # tier-3 models migrated to the Models CI. Kept declared because pipeline-select
-      # still passes it.
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
       architecture:
         description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
         required: false
@@ -190,7 +182,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive

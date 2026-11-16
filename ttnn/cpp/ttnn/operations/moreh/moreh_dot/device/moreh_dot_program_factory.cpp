@@ -4,8 +4,8 @@
 
 #include "moreh_dot_device_operation.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -13,7 +13,6 @@
 namespace ttnn::operations::moreh::moreh_dot {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 static constexpr const char* READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
@@ -42,8 +41,6 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     uint32_t pad_w = a_shape_wo_padding[3] % tt::constants::TILE_WIDTH;
     uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
     uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
-
-    IDevice* device = input_a.device();
 
     const uint32_t in0_t = 2;   // a
     const uint32_t in1_t = 2;   // b
@@ -101,7 +98,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 TensorBinding{.tensor_parameter_name = INPUT_B, .accessor_name = "src1"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id", "mask_h", "mask_w"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     // ----- Writer kernel -----
@@ -117,7 +114,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     // ----- Compute kernel -----
@@ -141,8 +138,8 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 DFBBinding{.dfb_spec_name = IM1, .accessor_name = "im1", .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
-        // Style A: op resolves a TTNN ComputeKernelConfig; translate it to the Gen1 hardware config.
-        .hw_config = to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+        // Style A: op resolves a TTNN ComputeKernelConfig; translate it to the hardware config.
+        .hw_config = to_compute_hardware_config(operation_attributes.compute_kernel_config),
     };
 
     // ----- ProgramSpec -----

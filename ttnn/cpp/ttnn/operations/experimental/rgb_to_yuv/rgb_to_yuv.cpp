@@ -14,10 +14,11 @@ std::tuple<Tensor, Tensor, Tensor> rgb_to_yuv(
     RGBRange input_range,
     YUVRange output_range,
     const std::optional<prim::YUVCoefficients>& coefficients,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    bool wide_rows) {
     const prim::YUVCoefficients coeffs =
         coefficients.value_or(yuv_coefficients(color_space, input_range, output_range));
-    return ttnn::prim::rgb_to_yuv(input, coeffs, format, memory_config);
+    return ttnn::prim::rgb_to_yuv(input, coeffs, format, memory_config, wide_rows);
 }
 
 }  // namespace ttnn::experimental

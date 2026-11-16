@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <variant>
+
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
@@ -19,23 +22,14 @@ struct ExecuteTestHangDeviceOperation {
 
     struct operation_attributes_t {};
 
-    struct SingleCore {
-        struct shared_variables_t {};
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+    struct ExecuteTestHangDeviceOperationProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
+    using program_factory_t = std::variant<ExecuteTestHangDeviceOperationProgramFactory>;
 
-    using program_factory_t = std::variant<SingleCore>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

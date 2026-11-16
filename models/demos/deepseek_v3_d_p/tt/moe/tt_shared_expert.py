@@ -21,14 +21,18 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # GLU activations this module can run over its gate/up pair. Spelled as the HF ``hidden_act``
 # and as the torch reference (reference/tt/moe/expert.py), so a model config's string maps across
 # without translation -- unlike the routed expert, whose fused kernel needs an enum.
 ACTIVATION_SILU = "silu"
 ACTIVATION_SITU = "situ"
-SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_SITU)
+ACTIVATION_CLAMPED_SILU_GLU = "clamped_silu_glu"
+SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_SITU, ACTIVATION_CLAMPED_SILU_GLU)
 
 
 def situ_glu(
@@ -52,6 +56,26 @@ def situ_glu(
     path allocates interleaved, i.e. on the dispatch sub-device's cores as well.
     """
     activated = ttnn.situ_glu(gate_out, up_out, situ_beta, situ_linear_beta, sub_core_grids=sub_core_grids)
+    ttnn.deallocate(gate_out)
+    ttnn.deallocate(up_out)
+    return activated
+
+
+def clamped_silu_glu(
+    gate_out: ttnn.Tensor,
+    up_out: ttnn.Tensor,
+    limit: float,
+    sub_core_grids: Optional[ttnn.CoreRangeSet] = None,
+) -> ttnn.Tensor:
+    """DeepSeek-V4's clamped SiLU-GLU over a raw gate/up matmul pair, consuming (deallocating) both.
+
+        silu(min(gate, limit)) * clamp(up, -limit, limit)
+
+    The wrapper exists only to free the two matmul accumulators, which an op may not do to its own
+    inputs. ``sub_core_grids`` confines it to the shared expert's sub-device so it can run
+    overlapped with the MoE dispatch.
+    """
+    activated = ttnn.clamped_silu_glu(gate_out, up_out, limit, sub_core_grids=sub_core_grids)
     ttnn.deallocate(gate_out)
     ttnn.deallocate(up_out)
     return activated
@@ -167,21 +191,21 @@ class TtSharedExpert(LightweightModule):
     TTNN implementation of Shared Expert MLP with multi-chip sharding.
 
     Architecture with multi-chip CCL:
-        Input: x [batch, seq_len, emb_dim] (replicated across mesh columns)
+        Input: x [batch, seq_len, emb_dim] (replicated across the TP axis)
         1. gate_out = x @ gate_proj → [batch, seq_len, hidden_dim / num_devices]
         2. up_out = x @ up_proj → [batch, seq_len, hidden_dim / num_devices]
         3. activated = glu_activation(gate_out, up_out) → [batch, seq_len, hidden_dim / num_devices]
            (SiLU fused into the gate matmul, or SiTU-GLU over both raw accumulators)
         4. output_full = activated @ down_proj → [batch, seq_len, emb_dim]
-        5. Reduce-scatter output across mesh columns → [batch, seq_len, emb_dim / num_devices]
+        5. Reduce-scatter output across the TP axis → [batch, seq_len, emb_dim / num_devices]
 
-    Weight Sharding (across mesh columns):
-        - gate_proj, up_proj: Shard on output dimension (-1) across mesh columns
+    Weight Sharding (across the TP axis, tp_axis; mesh columns by default):
+        - gate_proj, up_proj: Shard on output dimension (-1) across the TP axis
           Shape: [emb_dim, hidden_dim / num_devices]
-          mesh_mapper dims=(None, -1)
-        - down_proj: Shard on input dimension (-2) across mesh columns
+          mesh_mapper dims=(None, -1) for tp_axis=1, (-1, None) for tp_axis=0
+        - down_proj: Shard on input dimension (-2) across the TP axis
           Shape: [hidden_dim / num_devices, emb_dim]
-          mesh_mapper dims=(None, -2)
+          mesh_mapper dims=(None, -2) for tp_axis=1, (-2, None) for tp_axis=0
     """
 
     @staticmethod
@@ -205,6 +229,7 @@ class TtSharedExpert(LightweightModule):
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,
+        tp_axis: int = 1,
     ):
         """
         Shared logic for converting gate/up/down projections to ttnn with caching.
@@ -218,6 +243,7 @@ class TtSharedExpert(LightweightModule):
             cache_path: Cache directory
             cache_name_prefix: Prefix for cache files
             device: None for cache-only, mesh_device for cache+load
+            tp_axis: Mesh axis the hidden dim is sharded over
 
         Returns:
             Dict of ttnn.Tensor if device is not None, else None
@@ -252,11 +278,12 @@ class TtSharedExpert(LightweightModule):
                 dtype=weights_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
                 cache_file_name=_cache_name(name),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
-        gate_tt = _to_ttnn(gate_w, (None, -1), "gate_proj")
-        up_tt = _to_ttnn(up_w, (None, -1), "up_proj")
-        down_tt = _to_ttnn(down_w, (None, -2), "down_proj")
+        gate_tt = _to_ttnn(gate_w, mesh_shard_dims(-1, tp_axis), "gate_proj")
+        up_tt = _to_ttnn(up_w, mesh_shard_dims(-1, tp_axis), "up_proj")
+        down_tt = _to_ttnn(down_w, mesh_shard_dims(-2, tp_axis), "down_proj")
 
         if device is None:
             # Cache built, free host tensors
@@ -275,10 +302,19 @@ class TtSharedExpert(LightweightModule):
         weights_dtype: ttnn.DataType,
         cache_path: Path,
         cache_name_prefix: str,
+        tp_axis: int = 1,
     ):
         """Build TTNN cache for shared expert without device copy."""
         TtSharedExpert._convert_and_cache_weights(
-            torch_weights, emb_dim, hidden_dim, mesh_device, weights_dtype, cache_path, cache_name_prefix, device=None
+            torch_weights,
+            emb_dim,
+            hidden_dim,
+            mesh_device,
+            weights_dtype,
+            cache_path,
+            cache_name_prefix,
+            device=None,
+            tp_axis=tp_axis,
         )
 
     def __init__(
@@ -299,6 +335,8 @@ class TtSharedExpert(LightweightModule):
         activation: str = ACTIVATION_SILU,
         situ_beta: Optional[float] = None,
         situ_linear_beta: Optional[float] = None,
+        clamped_silu_glu_limit: Optional[float] = None,
+        tp_axis: int = 1,
     ):
         """
         Initialize TtSharedExpert module.
@@ -315,14 +353,21 @@ class TtSharedExpert(LightweightModule):
             compute_kernel_config: Compute kernel configuration
             weight_cache_path: Optional path for caching TTNN weight tensors
             cache_name_prefix: Optional prefix for cache file names
-            activation: GLU activation over the gate/up pair -- "silu" (default, every model but
-                Kimi-K3) or "situ" for K3's SiTU-GLU. Unlike the routed expert this is a plain
-                string: both paths are composed from Python-level ttnn ops, not a fused kernel.
+            activation: GLU activation over the gate/up pair -- "silu" (default), "situ" for
+                Kimi-K3's SiTU-GLU, or "clamped_silu_glu" for DeepSeek-V4's. Unlike the routed
+                expert this is a plain string: every path here is composed from Python-level ttnn
+                ops, not a fused kernel.
             situ_beta / situ_linear_beta: SiTU softcap betas (K3: 4.0 / 25.0). Required, and
                 non-zero, when activation == "situ"; ignored otherwise.
+            clamped_silu_glu_limit: the clamp limit (V4: 10.0). Required, and positive, when
+                activation == "clamped_silu_glu"; ignored otherwise.
+            tp_axis: Mesh axis the hidden dim is sharded and the output reduce-scattered over
+                (default: 1)
         """
         super().__init__()
+        assert tp_axis in (0, 1), f"tp_axis must be 0 or 1, got {tp_axis}"
         self.mesh_device = mesh_device
+        self.tp_axis = tp_axis
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.num_devices = mesh_device.get_num_devices()
@@ -348,9 +393,16 @@ class TtSharedExpert(LightweightModule):
                     f"activation {activation!r} requires non-zero situ_beta / situ_linear_beta, "
                     f"got {situ_beta} / {situ_linear_beta}"
                 )
+        if activation == ACTIVATION_CLAMPED_SILU_GLU:
+            if clamped_silu_glu_limit is None or clamped_silu_glu_limit <= 0:
+                raise ValueError(
+                    f"activation {activation!r} requires a positive clamped_silu_glu_limit, "
+                    f"got {clamped_silu_glu_limit}"
+                )
         self.activation = activation
         self.situ_beta = situ_beta
         self.situ_linear_beta = situ_linear_beta
+        self.clamped_silu_glu_limit = clamped_silu_glu_limit
 
         # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
         # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
@@ -374,6 +426,7 @@ class TtSharedExpert(LightweightModule):
                 weight_cache_path,
                 cache_name_prefix,
                 device=mesh_device,
+                tp_axis=tp_axis,
             )
             self.gate_proj = weights["gate"]
             self.up_proj = weights["up"]
@@ -389,6 +442,7 @@ class TtSharedExpert(LightweightModule):
                 weight_cache_path,
                 cache_name_prefix,
                 device=mesh_device,
+                tp_axis=tp_axis,
             )
             self.gate_proj = weights["gate"]
             self.up_proj = weights["up"]
@@ -396,13 +450,19 @@ class TtSharedExpert(LightweightModule):
         else:
             logger.debug("Creating random sharded weights")
             self.gate_proj = self._create_random_sharded_weight(
-                shape=(emb_dim, hidden_dim), dims=(None, -1), name="gate_proj", dtype=self.weights_dtype
+                shape=(emb_dim, hidden_dim),
+                dims=mesh_shard_dims(-1, tp_axis),
+                name="gate_proj",
+                dtype=self.weights_dtype,
             )
             self.up_proj = self._create_random_sharded_weight(
-                shape=(emb_dim, hidden_dim), dims=(None, -1), name="up_proj", dtype=self.weights_dtype
+                shape=(emb_dim, hidden_dim), dims=mesh_shard_dims(-1, tp_axis), name="up_proj", dtype=self.weights_dtype
             )
             self.down_proj = self._create_random_sharded_weight(
-                shape=(hidden_dim, emb_dim), dims=(None, -2), name="down_proj", dtype=self.weights_dtype
+                shape=(hidden_dim, emb_dim),
+                dims=mesh_shard_dims(-2, tp_axis),
+                name="down_proj",
+                dtype=self.weights_dtype,
             )
 
     def _cache_name(self, name: str) -> Optional[str]:
@@ -439,6 +499,7 @@ class TtSharedExpert(LightweightModule):
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=self._cache_name(name),
+            cache_dump_mode=weight_cache_dump_mode(),
         )
 
         logger.debug(f"Created {name}: {tt_weight.shape}")
@@ -468,16 +529,17 @@ class TtSharedExpert(LightweightModule):
         Forward pass with multi-chip sharding and CCL.
 
         Args:
-            x: Input tensor [batch, seq_len, emb_dim] (replicated across mesh columns)
+            x: Input tensor [batch, seq_len, emb_dim] (replicated across the TP axis)
 
         Returns:
             Output tensor [batch, seq_len, emb_dim / num_devices]
         """
         batch_size = x.shape[0]
-        logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
 
-        # Verify input is replicated (full emb_dim) when multiple mesh columns
-        if self.mesh_device.shape[1] > 1:
+        # Verify input is replicated (full emb_dim) when TP > 1
+        if self.mesh_device.shape[self.tp_axis] > 1:
             assert x.shape[-1] == self.emb_dim, (
                 f"Input must be replicated (full emb_dim={self.emb_dim}), "
                 f"but got sharded input with shape[-1]={x.shape[-1]}"
@@ -499,7 +561,6 @@ class TtSharedExpert(LightweightModule):
         ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
         # ===== Inlined shared expert FFN — 2D sub-device matmuls =====
-        TILE = 32
         # The grid these matmuls may use: the sub-device's when the expert is overlapped with the MoE
         # dispatch, the whole device's otherwise. Deriving it also drops a hardcoded 11x9 that was a
         # row short of Blackhole's 11x10 whenever there was no sub-device to be confined to.
@@ -509,14 +570,14 @@ class TtSharedExpert(LightweightModule):
             else self.mesh_device.compute_with_storage_grid_size()
         )
 
-        m_tiles = x.padded_shape[-2] // TILE
+        m_tiles = x.padded_shape[-2] // ttnn.TILE_SIZE
         gate_program_config, up_program_config, down_program_config = get_program_configs(
             grid,
             m_tiles,
-            self.gate_proj.padded_shape[-2] // TILE,
-            self.gate_proj.padded_shape[-1] // TILE,
-            self.down_proj.padded_shape[-2] // TILE,
-            self.down_proj.padded_shape[-1] // TILE,
+            self.gate_proj.padded_shape[-2] // ttnn.TILE_SIZE,
+            self.gate_proj.padded_shape[-1] // ttnn.TILE_SIZE,
+            self.down_proj.padded_shape[-2] // ttnn.TILE_SIZE,
+            self.down_proj.padded_shape[-1] // ttnn.TILE_SIZE,
             # SiTU-GLU is binary over (gate, up), so it cannot ride along as the gate matmul's fused
             # unary; the gate accumulator has to come out raw and be combined below.
             fuse_silu=self.activation == ACTIVATION_SILU,
@@ -547,6 +608,13 @@ class TtSharedExpert(LightweightModule):
                 self.situ_linear_beta,
                 sub_core_grids=self.subdevice_cores,
             )
+        elif self.activation == ACTIVATION_CLAMPED_SILU_GLU:
+            activated = clamped_silu_glu(
+                gate_out,
+                up_out,
+                self.clamped_silu_glu_limit,
+                sub_core_grids=self.subdevice_cores,
+            )
         else:
             # gate_out already carries the matmul-fused SiLU.
             ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
@@ -563,8 +631,8 @@ class TtSharedExpert(LightweightModule):
         )
         ttnn.deallocate(activated)
 
-        # 4) Reduce-scatter across mesh columns when TP > 1.
-        if self.mesh_device.shape[1] > 1:
+        # 4) Reduce-scatter across the TP axis when TP > 1.
+        if self.mesh_device.shape[self.tp_axis] > 1:
             # This reduce_scatter runs overlapped with the MoE dispatch op (on a separate
             # sub-device, overlap_shared_expert_with_dispatch). The op is async: its kernels keep
             # accessing its DRAM buffers after this Python call returns, while the concurrent
@@ -586,13 +654,13 @@ class TtSharedExpert(LightweightModule):
                 output_full,
                 persistent_output_buffers=[rs_intermediate],
                 dim=-1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.topology,
-                cluster_axis=1,
+                cluster_axis=self.tp_axis,
                 subdevice_id=self.subdevice_id,
             )
             # Keep the (fresh-per-iter) RS input alive until the next forward so the concurrent
@@ -601,6 +669,7 @@ class TtSharedExpert(LightweightModule):
             self.tt_ccl.set_shared_rs_input_keepalive(output_full)
         else:
             output = output_full
-        logger.debug(f"After shared_expert_ffn: {output.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"After shared_expert_ffn: {output.shape}")
 
         return output

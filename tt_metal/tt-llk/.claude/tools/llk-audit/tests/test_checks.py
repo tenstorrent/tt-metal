@@ -19,6 +19,7 @@ from llkaudit.checks.cb_sync import CbSync
 from llkaudit.checks.cfg_word_overlap import CfgWordOverlap
 from llkaudit.checks.mailbox_sync import MailboxSync
 from llkaudit.checks.mmio_race import MmioRace
+from llkaudit.checks.mop_replay import MopReplay
 from llkaudit.checks.noc_atomic_exit import NocAtomicExit
 from llkaudit.checks.noc_l1_invalidate import NocL1Invalidate
 from llkaudit.checks.noc_read_barrier import NocReadBarrier
@@ -26,6 +27,7 @@ from llkaudit.checks.noc_sync import NocSync
 from llkaudit.checks.reconfig_stall import ReconfigStall
 from llkaudit.checks.semaphore_handshake import SemaphoreHandshake
 from llkaudit.checks.srcreg_bank import SrcRegBank
+from llkaudit.checks.tensix_risc_order import TensixRiscOrder
 from llkaudit.factbase import FactBase
 
 
@@ -64,6 +66,17 @@ def macro(file, off, name, text, func=""):
         "name": name,
         "text": text,
     }
+
+
+def opcode_value(file, off, name, text, func=""):
+    """A `TT_OP_*` word as the EXTRACTOR files it — its own family, never "macro".
+
+    Building these as `macro` facts is what let the unattributed-word hint pass its
+    tests while being dead on every real fact base; the family is the contract.
+    """
+    f = macro(file, off, name, text, func)
+    f["family"] = registry.OPCODE_VALUE_FAMILY
+    return f
 
 
 def call(file, off, name, text=None, func="", arg0="", recv="", recv_type="", argc=-1):
@@ -1046,6 +1059,782 @@ def test_srcreg_cleardvalid_and_supported_forms():
     ]
     out = SrcRegBank().run(FactBase("blackhole", facts))
     assert len(out) == 1 and out[0].hint == "DVALID_CLEAR", out
+
+
+@case
+def test_srcreg_dest_to_src_missing_math_drain():
+    # The real WH shape before the fix: MOVD2A gated on SRCA_VLD alone. The wait
+    # indexes MatrixUnit.SrcABank live, so a bank-flipping FPU op still in flight
+    # makes it pass vacuously -> the move writes the bank the unpacker owns.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("move_d2a_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, addrmod, 0, 0)", func="m"),
+        # 3 more MOVD2As follow in the real code; only the first is reported.
+        macro(F, 130, "TTI_MOVD2A", "TTI_MOVD2A(0, 4, addrmod, 0, 4)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1, out
+    assert out[0].hint == "DEST2SRC_NO_MATH_DRAIN", out
+    assert out[0].line == 120, out
+
+
+@case
+def test_srcreg_dest_to_src_with_math_drain_is_clean():
+    # The fixed form: MATH | SRCB_VLD drains the FPU pipe first -> no finding.
+    # Also covers the WAIT_SFPU-carrying variant used by the experimental LLKs.
+    F = "tt_llk_blackhole/common/inc/cmath_common.h"
+    for cond in (
+        "p_stall::MATH | p_stall::SRCB_VLD",
+        "p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD",
+    ):
+        facts = [
+            fn("move_d2b_fixed_face", F, 100, 200),
+            macro(
+                F,
+                110,
+                "TTI_STALLWAIT",
+                f"TTI_STALLWAIT(p_stall::STALL_MATH, {cond})",
+                func="m",
+            ),
+            macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, addrmod, 0, 0)", func="m"),
+        ]
+        out = [
+            f
+            for f in SrcRegBank().run(FactBase("blackhole", facts))
+            if f.kind == "dvalid:DEST_TO_SRC"
+        ]
+        assert out == [], (cond, out)
+
+
+@case
+def test_srcreg_dest_to_src_wait_in_caller_is_recall_not_flag():
+    # No STALLWAIT in this function: the gate may be in the caller or in the MOP
+    # that replays the move. Must be a RECALL candidate, never a hard flag.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_sdpa_custom_mm.h"
+    facts = [
+        fn("_move_only_", F, 100, 200),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_1, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNSEEN", out
+
+
+@case
+def test_srcreg_dest_to_src_direction_and_opcode_exclusions():
+    # MOVA2D/MOVB2D read Src (Src->Dest) and DO auto-wait -> not this class.
+    # TT_OP_MOVD2A is an opcode VALUE, not an issued instruction -> excluded.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("move_a2d_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVA2D", "TTI_MOVA2D(0, 0, addrmod, 0, 0)", func="m"),
+        macro(F, 130, "TTI_MOVB2D", "TTI_MOVB2D(0, 0, addrmod, 0, 0)", func="m"),
+        macro(F, 140, "TT_OP_MOVD2A", "", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert out == [], out
+
+
+@case
+def test_srcreg_dest_to_src_unrelated_stall():
+    # A preceding STALLWAIT that gates on neither the bank nor the FPU pipe must
+    # not be credited as the gate.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse.h"
+    facts = [
+        fn("reuse_dest_as_src", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_1, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNRELATED", out
+
+
+@case
+def test_srcreg_dest_to_src_quasar_is_unconfirmed_not_flagged():
+    # Quasar's 4-operand STALLWAIT splits the wait condition across operands 2..4.
+    # The mask shape matches the WH/BH defect, but Quasar's bank model is not
+    # confirmed to need the drain -> surface as UNCONFIRMED, never as the flag.
+    F = "tt_llk_quasar/common/inc/cmath_common.h"
+    facts = [
+        fn("move_d2a_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, addrmod, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1, out
+    assert out[0].hint == "DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED", out
+    # The identical shape on Wormhole IS the flag.
+    out_wh = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out_wh) == 1 and out_wh[0].hint == "DEST2SRC_NO_MATH_DRAIN", out_wh
+
+
+@case
+def test_srcreg_dummy_publication_serializing():
+    # BH default form: Stall_Clr_Cntrl=0 -> waits on MatrixUnit.Src?Bank while
+    # clearing Unpackers[i].SrcBank. That wait is STRONGER (it holds until no bank
+    # is outstanding), so this is lost overlap, not corruption. Recall candidate,
+    # never a flag.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        # A bare unpacker-PIPELINE stall is not a bank guard.
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="u",
+        ),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_both_banks_pairing():
+    """The wait-like bit and a BOTH-BANKS clear are a matched pair.
+
+    Bank_Clr_Ctrl=1 clears both banks, but the own-bank wait covers only the bank
+    being prepared - so with both set the instruction can overwrite a bank the
+    Matrix Unit still owns. With the default drained wait it is correct, and must
+    NOT be reported as serializing (it has to serialize by design).
+    """
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h"
+    # Unsafe: wait bit (idx 5) = 1 AND both-banks (idx 6) = 1.
+    bad = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 1, 1, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", bad))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE", out
+
+    # Correct in-tree shape (llk_unpack_AB_custom_mm.h): both banks + default wait.
+    good = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", good))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+
+@case
+def test_srcreg_dummy_publication_packed_constant_is_arch_specific():
+    """UNP_ZEROSRC_STALL_RESET_WR_RDY means the wait bit ONLY on Wormhole.
+
+    Blackhole and Quasar take the controls as separate operands and size the last
+    one at 2 bits, so passing the packed 0b10001 there would land bit 4 =
+    Bank_Clr_Ctrl (an unintended both-banks clear) and leave the wait bit clear.
+    Crediting the bare substring as a guard was a false all-clear. Only Wormhole
+    defines these constants today, so the check guards re-introduction; this test
+    pins the behaviour so a header change cannot land unnoticed.
+    """
+    WH = "tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h"
+    BH = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    TXT = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)"
+    # All three WH-packed constants must be caught, not just the wait one.
+    # UNP_ZEROSRC_SET_DVALID is the worst: dropped into Blackhole's Unpack_Pop it
+    # sets Clr_to1_fmt_Ctrl and leaves Set_Dvalid (at <<8) at zero, so the DVALID
+    # is never published at all.
+    for const in (
+        "UNP_ZEROSRC_STALL_RESET_WR_RDY",
+        "UNP_ZEROSRC_RESET_ALL_BANKS",
+        "UNP_ZEROSRC_SET_DVALID",
+    ):
+        facts = [
+            fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+            macro(
+                BH,
+                110,
+                "TTI_UNPACR_NOP",
+                f"TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::{const})",
+                func="u",
+            ),
+        ]
+        got = [
+            f
+            for f in SrcRegBank().run(FactBase("blackhole", facts))
+            if f.kind == "dvalid:DUMMY_PUBLISH"
+        ]
+        assert (
+            len(got) == 1 and got[0].hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH"
+        ), (const, got)
+    # UNP_NEGINFSRC is NOT one of them: on Blackhole it lands as
+    # Src_ClrVal_Ctrl=CLR_SRC_NEGINF + Unpack_Pop=CLR_SRC, bit-identical to
+    # Blackhole's own idiomatic neginf clear. Flagging it would be a false positive.
+    benign = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+        macro(
+            BH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::UNP_NEGINFSRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", benign))
+        if f.hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH"
+    ]
+
+    # On Wormhole it is the real guard -> clean.
+    wh = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", WH, 100, 200),
+        macro(WH, 110, "TTI_UNPACR_NOP", TXT, func="u"),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", wh))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # On Blackhole the same token is a defect, not a guard.
+    bh = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+        macro(BH, 110, "TTI_UNPACR_NOP", TXT, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", bh))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH", out
+
+
+@case
+def test_srcreg_dummy_publication_quasar_operand_index():
+    """Quasar's wait bit is operand 2, not Blackhole's operand 5 (= Nop_type).
+
+    Indexing Quasar with Blackhole's position read an unrelated operand.
+    """
+    Q = "tt_llk_quasar/llk_lib/llk_unpack_unary_operand.h"
+    # Quasar guarded form: Stall_Cntrl (idx 2) = 1.
+    guarded = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", Q, 100, 200),
+        macro(
+            Q,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(p_unpacr::UNP_A, 1, 1, 0, 0, p_unpacr::UNP_CLRSRC_ZERO)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # Default form with a 1 sitting at Blackhole's index 5 (Nop_type) must NOT be
+    # mistaken for a guard.
+    default = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", Q, 100, 200),
+        macro(
+            Q,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(p_unpacr::UNP_A, 1, 0, 0, 0, 1)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", default))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_annotated_operand_is_read():
+    """Operands carry inline comments in-tree; the value must be read through them.
+
+    dest_reuse_dummy_unpack() emits `1 /* wait like UNPACR */` — the canonical
+    guarded form. A raw compare against "1" read that as the default form, i.e. the
+    tool reported the reference fix as the thing it was meant to detect.
+    """
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    guarded = [
+        fn("dest_reuse_dummy_unpack", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, "
+            "1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # The annotated DEFAULT form must still be reported.
+    default = [
+        fn("dest_reuse_dummy_unpack", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, "
+            "0 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", default))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_clr_src_is_a_publication():
+    """CLR_SRC clears the unpacker's bank exactly as ZEROSRC does.
+
+    Keying publication detection on ZEROSRC/SET_DVALID alone hid every
+    both-banks site in the tree, since those are all CLR_SRC with Set_Dvalid=0.
+    """
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h"
+    facts = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_guarded_forms_are_clean():
+    # Three accepted guards, one per variant, must all suppress the candidate.
+    BH = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    WH = "tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h"
+    # (1) BH Stall_Clr_Cntrl=1
+    bh = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", BH, 100, 200),
+        macro(
+            BH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    # (2) WH wait-like NoOp encoding
+    wh_bit = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", WH, 100, 200),
+        macro(
+            WH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)",
+            func="u",
+        ),
+    ]
+    # (3) WH explicit stall on the unpacker-owned-bank conditions (the real shape)
+    wh_stall = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", WH, 100, 200),
+        macro(
+            WH,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK | p_stall::SRCA_CLR | p_stall::SRCB_CLR)",
+            func="u",
+        ),
+        macro(
+            WH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID)",
+            func="u",
+        ),
+    ]
+    for arch, facts in (
+        ("blackhole", bh),
+        ("wormhole", wh_bit),
+        ("wormhole", wh_stall),
+    ):
+        out = [
+            f
+            for f in SrcRegBank().run(FactBase(arch, facts))
+            if f.kind == "dvalid:DUMMY_PUBLISH"
+        ]
+        assert out == [], (arch, out)
+
+
+@case
+def test_srcreg_dummy_publication_scoped_to_publisher_functions():
+    # An ordinary MOP-config publication (tilize/matmul/unpack_A) has no Dest->Src
+    # consumer; unscoped this bucket would swallow ~90% of all publications.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    facts = [
+        fn("_llk_unpack_A_mop_config_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert out == [], out
+
+
+@case
+def test_srcreg_waitlike_zerosrc_guards_a_following_set_dvalid():
+    # Regression: the WH fix shape is a wait-like ZEROSRC followed by a bare
+    # SET_DVALID that INHERITS that wait by sequencing. Crediting only a real
+    # UNPACR flagged the SET_DVALID and false-positived on correct code.
+    F = "tt_llk_wormhole_b0/llk_lib/experimental/llk_unpack_mul_reduce_scalar.h"
+    FIX = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)"
+    PUB = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID)"
+    fixed = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", F, 100, 200),
+        macro(F, 110, "TTI_UNPACR_NOP", FIX, func="u"),
+        macro(F, 111, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", fixed))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert out == [], out
+    # The same pair with a PLAIN ZEROSRC: the ZEROSRC itself is the serializing form,
+    # but the SET_DVALID after it is correctly NOT flagged. Per
+    # UNPACR_NOP_SETDVALID.md a bare SET_DVALID only needs to be sequenced after
+    # something that performed a wait, and a plain ZEROSRC does perform one (on
+    # MatrixUnit.Src?Bank, which is the STRONGER wait). So exactly one finding.
+    unfixed = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+        macro(F, 111, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out2 = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", unfixed))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out2) == 1 and out2[0].hint == "DUMMY_PUBLISH_SERIALIZING", out2
+    assert out2[0].line == 110, out2
+
+
+@case
+def test_srcreg_bare_setdvalid_needs_a_predecessor():
+    """A bare SET_DVALID performs NO wait, so it must inherit one by sequencing.
+
+    UNPACR_NOP_SETDVALID.md: it "does not automatically wait at the Wait Gate to
+    ensure that AllowedClient == SrcClient::Unpackers". It also does not CLEAR the
+    bank -- it sets AllowedClient = MatrixUnit and flips Unpackers[i].SrcBank -- so
+    the pipelined/serializing distinction does not apply to it at all.
+    """
+    F = "tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h"
+    PUB = "TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID)"
+
+    # Nothing before it -> a real defect, and NOT reported as serializing.
+    alone = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", alone))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SETDVALID_UNSEQUENCED", out
+
+    # An unpacker-PIPELINE stall is not a bank wait, so it still does not count.
+    pipe = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="u",
+        ),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", pipe))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SETDVALID_UNSEQUENCED", out
+
+    # The in-tree WH shape: an SRCA_CLR|SRCB_CLR stall, then two bare SET_DVALIDs.
+    guarded = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK | "
+            "p_stall::SRCA_CLR | p_stall::SRCB_CLR)",
+            func="u",
+        ),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+        macro(
+            F,
+            111,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+
+@case
+def test_srcreg_dummy_publication_guard_is_per_src_register():
+    # A guard established on SrcA must NOT clear a publication on SrcB.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_A_sdpa.h"
+    facts = [
+        fn("_llk_unpack_A_sdpa_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+        macro(
+            F,
+            111,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].line == 111, out
+
+
+@case
+def test_srcreg_dest_to_src_gate_must_name_the_written_register():
+    # MOVD2B writes SrcB; a stall naming only SRCA_VLD proves nothing about it.
+    F = "tt_llk_wormhole_b0/x.h"
+    facts = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, a, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WRONG_SRC_GATE", out
+    # A stall naming BOTH registers (transpose_dest's shape) gates either move.
+    both = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, a, 0, 0)", func="m"),
+    ]
+    assert [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", both))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ] == []
+
+
+@case
+def test_srcreg_dest_to_src_bank_flip_rearms_the_drain():
+    # The drain proves the FPU pipe was empty AT THE STALL; a flip issued after it
+    # re-arms the same in-flight-epilogue race.
+    F = "tt_llk_wormhole_b0/x.h"
+    base = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    flip = base + [
+        macro(
+            F,
+            130,
+            "TTI_SETRWC",
+            "TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+            func="m",
+        ),
+        macro(F, 140, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", flip))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert (
+        len(out) == 1 and out[0].hint == "DEST2SRC_DRAIN_REARMED" and out[0].line == 140
+    ), out
+    # CLR_NONE does not flip, and the moves of one burst do not re-arm each other.
+    noflip = base + [
+        macro(
+            F,
+            130,
+            "TTI_SETRWC",
+            "TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D)",
+            func="m",
+        ),
+        macro(F, 140, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    assert [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", noflip))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ] == []
+
+
+@case
+def test_srcreg_math_drain_alone_is_not_a_gate():
+    # A MATH-only stall settles the bank pointer but never waits for the unpacker
+    # to hand the bank over (the real llk_math_hadamard shape).
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_hadamard.h"
+    facts = [
+        fn("_llk_math_hadamard_h128_", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_7, 0, 16)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNRELATED", out
 
 
 # --- mailbox-sync (lite) --------------------------------------------------
@@ -2979,6 +3768,1115 @@ def test_cli_degraded_note_appended():
     assert "degraded" in d and any(
         "CAPTURE-HOLE-XYZ" in n for n in d["degraded"]
     ), d.get("degraded")
+
+
+# --- mop-replay: a word's SLOT, not its line ---------------------------------
+_MR_F = "tt_llk_wormhole_b0/llk_lib/llk_math_matmul.h"
+
+
+def _mr(facts):
+    return MopReplay().run(FactBase("wormhole", facts))
+
+
+def _hints(out):
+    return sorted(f.hint for f in out)
+
+
+@case
+def test_mop_end_op_flip_is_recalled_with_the_wrap_note():
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                120,
+                "set_end_op",
+                text="tmp.set_end_op",
+                func="configure_mop",
+                arg0="TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                argc=1,
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_SLOTTED_SRC_FLIP"], out
+    assert out[0].kind == "END_OP0", out[0].kind
+    # the wrap-around adjacency is the thing a textual reading gets wrong
+    assert "next outer iteration's START_OP" in out[0].detail, out[0].detail
+
+
+@case
+def test_mop_slot_notes_name_the_right_executed_neighbour():
+    """END_OP1 is issued only when END_OP0 is not a plain NOP, so the word that
+    precedes the next START_OP depends on the live slots. A _LAST override
+    replaces the last inner-loop op and the END ops still follow it — claiming
+    direct next-START adjacency for it would invent an executed edge."""
+    flip = "TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)"
+
+    def detail_for(setter):
+        out = _mr(
+            [
+                fn("configure_mop", _MR_F, 100, 200),
+                call(
+                    _MR_F,
+                    120,
+                    setter,
+                    text=f"tmp.{setter}",
+                    func="configure_mop",
+                    arg0=flip,
+                    argc=1,
+                ),
+            ]
+        )
+        assert _hints(out) == ["MOP_SLOTTED_SRC_FLIP"], out
+        return out[0].detail
+
+    # set_end_op leaves END_OP1 a plain NOP, so END_OP0 really is that word
+    assert "next outer iteration's START_OP" in detail_for("set_end_op")
+    # set_end_ops reports arg0 only, and END_OP1 still follows it
+    assert "END_OP1 still follows it" in detail_for("set_end_ops")
+    # a _LAST override is followed by the END ops, not by the next START_OP
+    for setter in ("set_last_inner_loop_instr", "set_last_outer_loop_instr"):
+        d = detail_for(setter)
+        assert "replaces the last inner-loop op" in d, d
+        assert "any live END op issues after" in d, d
+
+
+@case
+def test_mop_end_op_flip_recalled_through_the_clr_src_alias():
+    """The in-tree binary kernels spell the selector `CLR_SRC`, an alias for
+    CLR_A / CLR_AB. A slotted flip must be recalled through the alias, or the
+    Src-bank audit loses exactly the sites this check exists to surface."""
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                120,
+                "set_end_op",
+                text="tmp.set_end_op",
+                func="configure_mop",
+                arg0="TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB)",
+                argc=1,
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_SLOTTED_SRC_FLIP"], out
+    assert out[0].kind == "END_OP0", out[0].kind
+
+
+@case
+def test_mop_longer_clr_src_spellings_are_not_bank_flips():
+    """`CLR_SRC_NEGINF` and friends name a clear VALUE or a dvalid clear, not a
+    bank hand-back; a substring match on the alias would misread them."""
+    for selector in ("CLR_SRC_NEGINF", "CLR_SRC_0", "CLR_SRCB_VLD", "CLR_NONE"):
+        out = _mr(
+            [
+                fn("configure_mop", _MR_F, 100, 200),
+                call(
+                    _MR_F,
+                    120,
+                    "set_end_op",
+                    text="tmp.set_end_op",
+                    func="configure_mop",
+                    arg0=f"TT_OP_SETRWC({selector}, p_setrwc::CR_AB, 0, 0, 0, 0)",
+                    argc=1,
+                ),
+            ]
+        )
+        assert _hints(out) == ["MOP_SLOTTED_WORD"], (selector, out)
+
+
+@case
+def test_mop_last_inner_loop_instr_flip_slot():
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                130,
+                "set_last_inner_loop_instr",
+                text="tmp.set_last_inner_loop_instr",
+                func="configure_mop",
+                arg0="TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_0, 0)",
+                argc=1,
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_SLOTTED_SRC_FLIP"], out
+    assert out[0].kind == "LOOP1_LAST", out[0].kind
+
+
+@case
+def test_mop_clr_none_is_not_a_flip():
+    """CLR_NONE flips nothing — it must not be reported as handing a bank back."""
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                140,
+                "set_start_op",
+                text="tmp.set_start_op",
+                func="configure_mop",
+                arg0="TT_OP_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD)",
+                argc=1,
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_SLOTTED_WORD"], out
+    assert out[0].kind == "START_OP", out[0].kind
+
+
+@case
+def test_replay_record_defaults_to_noexec_and_a_literal_index_is_resolved():
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                150,
+                "record",
+                text="lltt::record",
+                func="_llk_math_matmul_",
+                arg0="0",
+                argc=2,
+            ),
+        ]
+    )
+    assert _hints(out) == ["REPLAY_RECORD_NOEXEC"], out
+
+
+@case
+def test_replay_record_noexec_beats_the_exec_substring():
+    """ "NoExec" CONTAINS "Exec" — the negative form must be tested first."""
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                150,
+                "record",
+                text="lltt::record<lltt::NoExec>",
+                func="_llk_math_matmul_",
+                arg0="4",
+                argc=2,
+            ),
+        ]
+    )
+    assert _hints(out) == ["REPLAY_RECORD_NOEXEC"], out
+
+
+@case
+def test_replay_record_exec_is_not_flagged_noexec():
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                150,
+                "record",
+                text="lltt::record<lltt::Exec>",
+                func="_llk_math_matmul_",
+                arg0="0",
+                argc=2,
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_replay_record_dependent_exec_is_unresolved():
+    out = _mr(
+        [
+            fn("load_replay_buf", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                150,
+                "record",
+                text="lltt::record<lltt::ExecBool(Exec)>",
+                func="load_replay_buf",
+                arg0="start",
+                argc=2,
+            ),
+        ]
+    )
+    assert "REPLAY_RECORD_EXEC_UNRESOLVED" in _hints(out), out
+
+
+@case
+def test_replay_symbolic_index_is_unresolved():
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                160,
+                "replay",
+                text="lltt::replay",
+                func="_llk_math_matmul_",
+                arg0="ckernel::math::replay_buf_offset",
+                argc=2,
+            ),
+        ]
+    )
+    assert _hints(out) == ["REPLAY_INDEX_UNRESOLVED"], out
+    assert "32" in out[0].detail, out[0].detail
+
+
+@case
+def test_generic_record_outside_lltt_is_not_recalled():
+    """`record` is a generic method name — gate it on the lltt namespace."""
+    out = _mr(
+        [
+            fn("some_helper", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                170,
+                "record",
+                text="tracer.record",
+                func="some_helper",
+                arg0="0",
+                argc=1,
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_unattributed_opcode_value_flip_is_recalled():
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            opcode_value(
+                _MR_F,
+                180,
+                "TT_OP_SETRWC",
+                "TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                func="configure_mop",
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_WORD_SLOT_UNATTRIBUTED"], out
+    assert "Src bank flip" in out[0].detail, out[0].detail
+
+
+@case
+def test_unattributed_opcode_value_sync_is_recalled():
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            opcode_value(
+                _MR_F,
+                190,
+                "TT_OP_SEMPOST",
+                "TT_OP_SEMPOST(ckernel::semaphore::MATH_PACK)",
+                func="configure_mop",
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_WORD_SLOT_UNATTRIBUTED"], out
+    assert "sync/wait" in out[0].detail, out[0].detail
+
+
+@case
+def test_arithmetic_opcode_value_is_not_recalled_here():
+    """Scoped to flips/sync — instruction-latency widens its own enumeration."""
+    out = _mr(
+        [
+            fn("sfpu_kernel", _MR_F, 100, 200),
+            opcode_value(
+                _MR_F,
+                195,
+                "TT_OP_SFPMAD",
+                "TT_OP_SFPMAD(0,1,2,3,0)",
+                func="sfpu_kernel",
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_issued_instruction_is_not_an_unattributed_word():
+    """A TTI_/TT_ form IS issued at its line; only TT_OP_* values are slotted."""
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            macro(
+                _MR_F,
+                198,
+                "TTI_SETRWC",
+                "TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                func="_llk_math_matmul_",
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_mop_replay_is_registered_in_all():
+    from llkaudit.checks import ALL
+
+    assert "mop-replay" in ALL, sorted(ALL)
+    assert ALL["mop-replay"].blind_spots, "every check must declare blind_spots"
+
+
+@case
+def test_mop_replay_hints_are_documented_in_the_skill_and_readme():
+    """The tool and the skills must name the SAME hints, or an agent handed a
+    finding cannot look up what to do with it. Skips (does not fail) if a doc is
+    not alongside the tool, so a vendored copy of the tool still tests clean."""
+    import re
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(here, "llkaudit", "checks", "mop_replay.py")).read()
+    hints = sorted(set(re.findall(r'"(MOP_[A-Z_]+|REPLAY_[A-Z_]+)"', src)))
+    assert hints, "no hints found in mop_replay.py"
+    docs = [
+        os.path.join(here, "README.md"),
+        os.path.join(here, "..", "..", "skills", "race-audit-all", "SKILL.md"),
+    ]
+    for d in docs:
+        if not os.path.exists(d):
+            continue
+        text = open(d).read()
+        missing = [h for h in hints if h not in text]
+        assert not missing, f"{os.path.basename(d)} does not name: {missing}"
+
+
+@case
+def test_replay_hex_literal_index_is_resolved():
+    """A hex index pins the slot just as a decimal one does."""
+    out = _mr(
+        [
+            fn("_llk_math_matmul_", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                165,
+                "replay",
+                text="lltt::replay",
+                func="_llk_math_matmul_",
+                arg0="0x10",
+                argc=2,
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_opcode_value_filed_as_a_macro_is_not_recalled():
+    """The family IS the contract. A `TT_OP_*` word the extractor filed under
+    "macro" is invisible to this check by design — the instruction-consuming
+    checks own that family, and an opcode value must never reach them."""
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            macro(
+                _MR_F,
+                180,
+                "TT_OP_SETRWC",
+                "TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+                func="configure_mop",
+            ),
+        ]
+    )
+    assert out == [], out
+
+
+@case
+def test_extractor_files_opcode_values_under_the_checkers_family():
+    """Extractor/checker sync, the axis a hint-NAME check cannot see.
+
+    `is_mop_word()` selects `TT_OP_*`; if the C++ MacroPass denylists that prefix
+    outright (as it once did) the unattributed-word hint is structurally DEAD — it
+    passes every hermetic test and returns 0 on every real fact base, which reads
+    as an all-clear. Assert the two sides still agree. Skips (does not fail) if the
+    extractor is not alongside, so a vendored copy of the Python tier tests clean."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src_path = os.path.join(here, "extractor", "llk_extract.cpp")
+    if not os.path.exists(src_path):
+        return
+    src = open(src_path).read()
+    assert (
+        f'"{registry.OPCODE_VALUE_FAMILY}"' in src
+    ), f"extractor never files facts under {registry.OPCODE_VALUE_FAMILY}"
+    # The prefix the checker selects must not be dropped wholesale by the macro pass.
+    assert (
+        f'nm.starts_with("{registry.OPCODE_VALUE_PREFIX}")' not in src
+    ), "extractor denylists the very prefix is_mop_word() matches -> dead hint"
+
+
+@case
+def test_built_extractor_places_instruction_and_opcode_facts_at_use_sites():
+    """Runs the BUILT extractor on a header shaped like `ckernel_ops.h`: the instruction
+    macros are layered over the `TT_INSN`/`TTI_INSN` encoding plumbing and `TT_OP`. An
+    instruction must be recorded at its use line, the plumbing must record nothing, and an
+    opcode value must land in its own family only where the source writes it. Skips (does
+    not fail) if the extractor is not built, or is older than its source."""
+    import json
+    import subprocess
+    import tempfile
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    exe = os.path.join(here, "extractor", "llk_extract")
+    src_path = os.path.join(here, "extractor", "llk_extract.cpp")
+    if not os.access(exe, os.X_OK) or os.path.getmtime(exe) < os.path.getmtime(
+        src_path
+    ):
+        return
+    lines = [
+        "#define TT_OP(opcode, params) ((opcode << 24) + params)",
+        '#define TTI_INSN(ENCODING) void(({ __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING))); }))',
+        "#define TT_INSN(ENCODING) void(::ckernel::instrn_buffer[0] = (ENCODING))",
+        "#define TT_OP_NOP TT_OP(0x02, 0)",
+        "#define TTI_NOP TTI_INSN(TT_OP_NOP)",
+        "#define TT_OP_SETC16(a, b) TT_OP(0xb2, (((a) << 16) + (b)))",
+        "#define TT_SETC16(a, b) TT_INSN(TT_OP_SETC16(a, b))",
+        "#define TTI_SETC16(a, b) TTI_INSN(TT_OP_SETC16(a, b))",
+        "namespace ckernel { extern volatile unsigned int instrn_buffer[]; }",
+        "inline unsigned f(unsigned v) {",
+        "    TTI_NOP;",  # use line 11
+        "    TTI_SETC16(1, 2);",  # 12
+        "    TT_SETC16(3, v);",  # 13
+        "    return TT_OP_SETC16(4, 5);",  # 14: an opcode VALUE written in source
+        "}",
+    ]
+    use = {"TTI_NOP": 11, "TTI_SETC16": 12, "TT_SETC16": 13}
+    with tempfile.TemporaryDirectory(prefix="llk_extract_probe_") as d:
+        hdr = os.path.join(d, "ops_probe.h")
+        with open(hdr, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        run = subprocess.run(
+            [
+                exe,
+                "--arch=wormhole",
+                f"--path-filter={d}",
+                hdr,
+                "--",
+                "clang++",
+                "-x",
+                "c++-header",
+                "-std=c++17",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    assert run.returncode == 0, run.stderr[-2000:]
+    facts = [
+        f
+        for ln in run.stdout.splitlines()
+        if ln.strip()
+        for f in json.loads(ln).get("facts", [])
+    ]
+    assert facts, "extractor emitted no facts for the probe header"
+    by_name = {}
+    for f in facts:
+        if f.get("family") in ("macro", "opcode_value"):
+            by_name.setdefault(f["name"], []).append((f["family"], f["line"]))
+    for name, line in use.items():
+        assert by_name.get(name) == [("macro", line)], (name, by_name.get(name))
+    assert "TT_INSN" not in by_name and "TTI_INSN" not in by_name, by_name
+    # nested TT_OP_* inside the instruction macros are dropped; only the source-written value remains
+    assert by_name.get("TT_OP_SETC16") == [("opcode_value", 14)], by_name.get(
+        "TT_OP_SETC16"
+    )
+    assert "TT_OP_NOP" not in by_name and "TT_OP" not in by_name, by_name
+
+
+@case
+def test_opcode_value_never_earns_an_instruction_role():
+    """Defense in depth for the same thesis: even if an opcode value reached a
+    macro-consuming path, it must not classify as an issued instruction — every
+    consumer of a role reasons about the fact's own LINE, which is exactly what a
+    MOP/replay word does not have."""
+    for name in ("TT_OP_STALLWAIT", "TT_OP_MVMUL", "TT_OP_UNPACR", "TT_OP_MOP"):
+        assert registry.classify_macro(name) is None, name
+    # the issued forms still classify
+    assert registry.classify_macro("TTI_STALLWAIT") == "stall"
+    assert registry.classify_macro("TTI_MVMUL") == "consumer_math"
+
+
+@case
+def test_is_mop_word_is_anchored_not_a_substring():
+    assert registry.is_mop_word("TT_OP_SETRWC")
+    assert not registry.is_mop_word("TTI_SETRWC")
+    # a name that merely CONTAINS the token is not an opcode-value macro
+    assert not registry.is_mop_word("MY_TT_OP_WRAPPER")
+    assert not registry.is_mop_word("")
+
+
+_FC = "tt_llk_blackhole/common/inc/cunpack_common.h"
+_FA = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+_ZS = "UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32"
+
+
+def _store_side(extra_before_store=()):
+    """configure_unpack_AB: polls UNPACK_SYNC (wait_for_idle), then stores Z-stride."""
+    return [
+        fn("wait_for_idle", _FC, 190, 199),
+        call(
+            _FC,
+            194,
+            "semaphore_read",
+            func="wait_for_idle",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        fn("configure_unpack_AB", _FC, 700, 900),
+        call(_FC, 786, "wait_for_idle", func="configure_unpack_AB"),
+        *extra_before_store,
+        pw(_FC, 806, "get_cfg_pointer", _ZS, func="configure_unpack_AB"),
+    ]
+
+
+def _wrcfg(off, func, file=_FC, tok=_ZS, name="TTI_WRCFG"):
+    text = f"{name}(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, {tok})"
+    if name == "TTI_SETC16":
+        text = f"TTI_SETC16({tok}, 0x0)"
+    return macro(file, off, name, text, func=func)
+
+
+def _tile_done_case(release_after_tile_done=False):
+    """_llk_unpack_A_ releases UNPACK_SYNC, then calls tile_done, whose WRCFG sits
+    behind a stalled SEMPOST (or, fixed, the release comes after tile_done)."""
+    get_off, done_off = (40, 30) if release_after_tile_done else (30, 40)
+    return _store_side() + [
+        fn("unpack_to_dest_tile_done", _FC, 970, 999),
+        call(
+            _FC,
+            978,
+            "t6_semaphore_post",
+            text="t6_semaphore_post<p_stall::UNPACK0>",
+            func="unpack_to_dest_tile_done",
+            arg0="semaphore::UNPACK_TO_DEST",
+        ),
+        _wrcfg(980, "unpack_to_dest_tile_done"),
+        fn("_llk_unpack_A_", _FA, 10, 60),
+        call(
+            _FA,
+            get_off,
+            "t6_semaphore_get",
+            func="_llk_unpack_A_",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        call(_FA, done_off, "unpack_to_dest_tile_done", func="_llk_unpack_A_"),
+    ]
+
+
+def _order(facts):
+    return TensixRiscOrder().run(FactBase("blackhole", facts))
+
+
+@case
+def test_order_write_after_release_flagged_and_held():
+    out = _order(_tile_done_case())
+    assert len(out) == 1, out
+    f = out[0]
+    assert f.hint == "TENSIX_WRITE_AFTER_RELEASE", f.hint
+    assert f.function == "configure_unpack_AB" and "UNPACK_SYNC" in f.detail, f.detail
+    assert (
+        "unpack_to_dest_tile_done" in f.evidence[0]
+        and "held: after t6_semaphore_post" in f.evidence[0]
+    ), f.evidence
+
+
+@case
+def test_order_release_after_the_write_is_clean():
+    # SEMGET after tile_done: the poll cannot return before the WRCFG executes.
+    assert _order(_tile_done_case(release_after_tile_done=True)) == []
+
+
+@case
+def test_order_writer_without_release_flagged():
+    # A reconfig that waits on UNPACK0 and then writes the register, with no
+    # SEMGET after it: nothing the store's poll waits for comes after the write.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = _store_side() + [
+        fn("_llk_unpack_reconfig_data_format_srca_impl_", F, 230, 260),
+        macro(
+            F,
+            235,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0)",
+            func="x",
+        ),
+        call(
+            F,
+            251,
+            "cfg_reg_rmw_tensix",
+            text="cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>",
+            func="_llk_unpack_reconfig_data_format_srca_impl_",
+        ),
+    ]
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+    assert "held: after TTI_STALLWAIT" in out[0].evidence[0], out[0].evidence
+
+
+@case
+def test_order_same_function_write_then_store():
+    facts = _store_side(extra_before_store=[_wrcfg(800, "configure_unpack_AB")])
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+
+
+@case
+def test_order_tensix_sync_orders_earlier_writes_only():
+    sync = call(_FC, 790, "tensix_sync", func="configure_unpack_AB")
+    # a drain before the store orders writes issued before it ...
+    assert _order(_tile_done_case() + [sync]) == []
+    # ... but not a write the same function issues after the drain
+    out = _order(
+        _store_side(extra_before_store=[sync, _wrcfg(800, "configure_unpack_AB")])
+    )
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+
+
+@case
+def test_order_drain_in_every_caller_counts():
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = _tile_done_case() + [
+        fn("_llk_unpack_hw_configure_", F, 60, 90),
+        call(F, 70, "tensix_sync", func="_llk_unpack_hw_configure_"),
+        call(F, 80, "configure_unpack_AB", func="_llk_unpack_hw_configure_"),
+    ]
+    assert _order(facts) == []
+
+
+@case
+def test_order_thread_config_write_not_matched():
+    # SETC16 writes ThreadConfig, which no RISC cfg[] store reaches.
+    facts = _store_side() + [
+        fn("switch_config_context", _FC, 170, 185),
+        _wrcfg(176, "switch_config_context", tok=_ZS, name="TTI_SETC16"),
+    ]
+    assert _order(facts) == []
+
+
+@case
+def test_order_release_between_writer_and_store_in_one_function():
+    # if/else arms: writer + SEMGET in one arm, poll + store in the other; across
+    # calls the SEMGET orders the writer before the store.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_tilize.h"
+    B = "THCON_SEC0_REG3_Base_address_ADDR32"
+    facts = [
+        fn("wait_for_next_context", _FC, 160, 170),
+        call(
+            _FC,
+            165,
+            "semaphore_read",
+            func="wait_for_next_context",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        fn("_llk_unpack_tilize_", F, 200, 360),
+        macro(
+            F,
+            271,
+            "TTI_CFGSHIFTMASK",
+            f"TTI_CFGSHIFTMASK(1, 3, 31, 0, 3, {B})",
+            func="_llk_unpack_tilize_",
+        ),
+        call(
+            F,
+            299,
+            "t6_semaphore_get",
+            func="_llk_unpack_tilize_",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        call(F, 306, "wait_for_next_context", func="_llk_unpack_tilize_"),
+        pw(F, 319, "get_cfg_pointer", B, func="_llk_unpack_tilize_"),
+    ]
+    assert _order(facts) == []
+
+
+@case
+def test_order_runtime_offset_store_matches_same_reg():
+    w = "THCON_SEC0_REG2_Unpack_if_sel_cntx0_ADDR32"
+    s = "THCON_SEC0_REG2_Out_data_format_ADDR32"
+    assert registry.same_register(w, s, True, {})  # `s + i` may reach w
+    assert not registry.same_register(w, s, False, {})  # a fixed word does not
+    assert not registry.same_register(
+        "THCON_SEC0_REG5_Dest_cntx0_address_ADDR32", s, True, {}
+    )
+
+
+def _helper_writer(off=950):
+    """A helper whose only body is a same-register WRCFG."""
+    return [fn("write_zstride", _FC, 940, 960), _wrcfg(off, "write_zstride")]
+
+
+@case
+def test_order_callee_write_after_drain_flagged():
+    # tensix_sync(); write_zstride(); cfg[...] = v: the helper's write is queued
+    # after the drain, so the drain does not order it.
+    sync = call(_FC, 790, "tensix_sync", func="configure_unpack_AB")
+    helper = call(_FC, 795, "write_zstride", func="configure_unpack_AB")
+    out = _order(_store_side(extra_before_store=[sync, helper]) + _helper_writer())
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+    # the same helper called BEFORE the drain is ordered by it
+    helper_early = call(_FC, 788, "write_zstride", func="configure_unpack_AB")
+    facts = _store_side(extra_before_store=[helper_early, sync]) + _helper_writer()
+    assert _order(facts) == []
+
+
+def _caller_with_drain(writer_call_off, drain_off):
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    return [
+        fn("_llk_unpack_hw_configure_", F, 60, 90),
+        call(F, writer_call_off, "write_zstride", func="_llk_unpack_hw_configure_"),
+        call(F, drain_off, "tensix_sync", func="_llk_unpack_hw_configure_"),
+        call(F, 80, "configure_unpack_AB", func="_llk_unpack_hw_configure_"),
+    ]
+
+
+@case
+def test_order_caller_drain_between_writer_call_and_store_call_is_clean():
+    facts = _store_side() + _helper_writer() + _caller_with_drain(65, 70)
+    assert _order(facts) == []
+
+
+@case
+def test_order_caller_writer_call_after_caller_drain_flagged():
+    facts = _store_side() + _helper_writer() + _caller_with_drain(75, 70)
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+
+
+@case
+def test_order_drain_beyond_caller_depth_is_not_credited():
+    # store fn <- L1 <- L2 <- L3(tensix_sync): L3 is past CALLER_DEPTH = 2, so the
+    # writer stays a NO_RELEASE finding instead of being cleared.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = (
+        _store_side()
+        + _helper_writer()
+        + [
+            fn("l1", F, 10, 19),
+            call(F, 15, "configure_unpack_AB", func="l1"),
+            fn("l2", F, 20, 29),
+            call(F, 25, "l1", func="l2"),
+            fn("l3", F, 30, 39),
+            call(F, 32, "tensix_sync", func="l3"),
+            call(F, 35, "l2", func="l3"),
+        ]
+    )
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+
+
+@case
+def test_order_release_after_poll_does_not_order():
+    # wait_for_idle(); WRCFG; t6_semaphore_get(UNPACK_SYNC); cfg[...] = v: the
+    # poll returned before the write and the release were issued.
+    get = call(
+        _FC,
+        800,
+        "t6_semaphore_get",
+        func="configure_unpack_AB",
+        arg0="semaphore::UNPACK_SYNC",
+    )
+    facts = _store_side(extra_before_store=[_wrcfg(795, "configure_unpack_AB"), get])
+    out = _order(facts)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+
+
+@case
+def test_order_callee_write_after_poll_flagged():
+    # wait_for_idle(); write_zstride(); cfg[...] = v, where the helper releases
+    # UNPACK_SYNC after its write: that release follows the poll, so it does
+    # not order the write.
+    helper = call(_FC, 795, "write_zstride", func="configure_unpack_AB")
+    rel = call(
+        _FC,
+        955,
+        "t6_semaphore_get",
+        func="write_zstride",
+        arg0="semaphore::UNPACK_SYNC",
+    )
+    out = _order(_store_side(extra_before_store=[helper]) + _helper_writer() + [rel])
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_SAME_FN", out
+    # called before the poll, the helper's own release orders it
+    helper_early = call(_FC, 780, "write_zstride", func="configure_unpack_AB")
+    facts = (
+        _store_side(extra_before_store=[]) + [helper_early] + _helper_writer() + [rel]
+    )
+    assert _order(facts) == []
+
+
+@case
+def test_order_literal_word_offset_kept():
+    R = "THCON_SEC0_REG1_Row_start_section_size_ADDR32"
+    a32 = {R: 68}
+    w = macro(
+        _FC, 1, "TTI_WRCFG", f"TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, {R} + 2)"
+    )
+    ns, tok = registry.ordered_write_target(w)
+    assert (ns, tok) == ("cfg", f"{R}+2"), tok
+    assert registry.resolve_word(tok, a32)[0] == 70
+    s0 = registry.risc_store_target(pw(_FC, 2, "get_cfg_pointer", f"{R} + 0"))
+    s2 = registry.risc_store_target(pw(_FC, 3, "get_cfg_pointer", f"{R}+0x2"))
+    assert s0 == ("cfg", R, False) and s2 == ("cfg", f"{R}+2", False), (s0, s2)
+    assert not registry.same_register(tok, s0[1], False, a32)
+    assert registry.same_register(tok, s2[1], False, a32)
+    assert registry.same_register(tok, s2[1], False, {})  # equal normalized tokens
+    # a runtime offset stays outside the token
+    sr = registry.risc_store_target(pw(_FC, 4, "get_cfg_pointer", f"{R} + i"))
+    assert sr == ("cfg", R, True), sr
+
+
+_FT = "tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h"
+_BA = "THCON_SEC0_REG3_Base_address_ADDR32"
+
+
+def _store_then_writer(release=False, poll=False):
+    """One per-tile function: RISC store to Base_address, then a same-register
+    REG2FLOP held behind a stall (call N's writer meets call N+1's store)."""
+    F = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    facts = [
+        fn("unpack_tilize_to_dest_impl", _FT, 170, 240),
+        pw(_FT, 195, "get_cfg_pointer", _BA, func="unpack_tilize_to_dest_impl"),
+        macro(
+            _FT,
+            210,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_TDMA, p_stall::UNPACK)",
+            func="unpack_tilize_to_dest_impl",
+        ),
+        macro(
+            _FT,
+            219,
+            "TTI_REG2FLOP",
+            f"TTI_REG2FLOP(1, 0, 0, 0, {_BA} - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0)",
+            func="unpack_tilize_to_dest_impl",
+        ),
+    ]
+    if poll:
+        facts += [
+            fn("wait_for_idle", F, 190, 199),
+            call(
+                F,
+                194,
+                "semaphore_read",
+                func="wait_for_idle",
+                arg0="semaphore::UNPACK_SYNC",
+            ),
+            call(_FT, 180, "wait_for_idle", func="unpack_tilize_to_dest_impl"),
+        ]
+    if release:
+        facts.append(
+            call(
+                _FT,
+                230,
+                "t6_semaphore_get",
+                func="unpack_tilize_to_dest_impl",
+                arg0="semaphore::UNPACK_SYNC",
+            )
+        )
+    return facts
+
+
+@case
+def test_order_writer_after_store_in_same_function_flagged():
+    # call N's writer is issued before call N+1's store; with no release it is
+    # unordered, like a writer in another function.
+    out = _order(_store_then_writer())
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_NO_RELEASE", out
+    assert "llk_unpack_tilize.h:219" in out[0].evidence[0], out[0].evidence
+
+
+@case
+def test_order_writer_after_store_released_before_next_poll_is_clean():
+    # a SEMGET after the writer, and a poll before the store: call N+1's poll
+    # waits for call N's SEMGET, so the writer has executed.
+    assert _order(_store_then_writer(release=True, poll=True)) == []
+
+
+def _partial_poll_case(n, store_tok, writer_tok):
+    """Store behind wait_for_next_context(n); the writer is in another function
+    and is followed by a SEMGET of UNPACK_SYNC."""
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_AB.h"
+    return [
+        fn("wait_for_next_context", _FC, 160, 170),
+        call(
+            _FC,
+            165,
+            "semaphore_read",
+            func="wait_for_next_context",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        fn("_llk_unpack_AB_", F, 300, 340),
+        call(F, 310, "wait_for_next_context", func="_llk_unpack_AB_", arg0=str(n)),
+        pw(F, 320, "get_cfg_pointer", store_tok, func="_llk_unpack_AB_"),
+        fn("_llk_unpack_writer_", F, 400, 440),
+        _wrcfg(410, "_llk_unpack_writer_", file=F, tok=writer_tok),
+        call(
+            F,
+            420,
+            "t6_semaphore_get",
+            func="_llk_unpack_writer_",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+    ]
+
+
+@case
+def test_order_partial_poll_does_not_clear_a_shared_word():
+    # wait_for_next_context(2) returns while the last SEMGET may be pending, so it
+    # does not order a write to a word both contexts use.
+    out = _order(_partial_poll_case(2, _ZS, _ZS))
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_AFTER_RELEASE", out
+    assert "UNPACK_SYNC (partial)" in out[0].detail, out[0].detail
+    # a full poll does
+    assert _order(_partial_poll_case(1, _ZS, _ZS)) == []
+
+
+@case
+def test_order_partial_poll_clears_a_per_context_word():
+    assert _order(_partial_poll_case(2, _BA, _BA)) == []
+
+
+@case
+def test_order_per_context_word_needs_a_single_context():
+    a32 = {
+        _BA: 76,
+        "THCON_SEC0_REG3_Base_cntx1_address_ADDR32": 77,
+        "THCON_SEC0_REG5_Dest_cntx0_address_ADDR32": 84,
+        "THCON_SEC0_REG5_Dest_cntx1_address_ADDR32": 84,
+    }
+    assert registry.is_per_context_word(_BA, a32)
+    assert registry.is_per_context_word(
+        "THCON_SEC0_REG3_Base_cntx1_address_ADDR32", a32
+    )
+    # Dest_cntx0/1 share one word: not per-context
+    assert not registry.is_per_context_word(
+        "THCON_SEC0_REG5_Dest_cntx0_address_ADDR32", a32
+    )
+    assert not registry.is_per_context_word(_ZS, a32)
+
+
+@case
+def test_order_callers_mixing_full_and_partial_polls_keep_the_poll():
+    # every caller polls UNPACK_SYNC, one fully and one partially: the store is
+    # still behind a poll, graded partial.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    G = "tt_llk_blackhole/llk_lib/llk_unpack_AB.h"
+    facts = [
+        fn("wait_for_next_context", _FC, 160, 170),
+        call(
+            _FC,
+            165,
+            "semaphore_read",
+            func="wait_for_next_context",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+        fn("_llk_unpack_configure_addresses_", F, 360, 380),
+        pw(F, 368, "get_cfg_pointer", _BA, func="_llk_unpack_configure_addresses_"),
+        fn("a_", G, 10, 30),
+        call(G, 12, "wait_for_next_context", func="a_", arg0="1"),
+        call(G, 14, "_llk_unpack_configure_addresses_", func="a_"),
+        fn("b_", G, 40, 60),
+        call(G, 42, "wait_for_next_context", func="b_", arg0="2"),
+        call(G, 44, "_llk_unpack_configure_addresses_", func="b_"),
+        fn("_llk_unpack_writer_", G, 400, 440),
+        _wrcfg(410, "_llk_unpack_writer_", file=G, tok=_BA),
+        call(
+            G,
+            420,
+            "t6_semaphore_get",
+            func="_llk_unpack_writer_",
+            arg0="semaphore::UNPACK_SYNC",
+        ),
+    ]
+    assert _order(facts) == []  # per-context word: the partial poll orders it
+    shared = [
+        dict(f, index_text=_ZS) if f["family"] == "pointer_write" else f for f in facts
+    ]
+    shared = [
+        (
+            _wrcfg(410, "_llk_unpack_writer_", file=G, tok=_ZS)
+            if f.get("name") == "TTI_WRCFG"
+            else f
+        )
+        for f in shared
+    ]
+    out = _order(shared)
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_AFTER_RELEASE", out
+
+
+@case
+def test_order_evidence_names_caller_sites_for_diff_scoping():
+    # The Z-stride pair is decided by where _llk_unpack_A_ issues its SEMGET, so a
+    # diff touching only llk_unpack_A.h must keep the finding.
+    from llkaudit.cli import scope_to_changed
+
+    out = _order(_tile_done_case())
+    assert len(out) == 1, out
+    assert any(e.startswith("llk_unpack_A.h:") for e in out[0].evidence), out[
+        0
+    ].evidence
+    kept = scope_to_changed(
+        [out[0].__dict__], ["tt_llk_blackhole/llk_lib/llk_unpack_A.h"]
+    )
+    assert len(kept) == 1, kept
+
+
+@case
+def test_order_store_to_a_local_index_is_unresolved():
+    facts = _store_side() + [
+        fn("_llk_unpack_A_", _FA, 10, 60),
+        pw(_FA, 20, "get_cfg_pointer", "upk0_reg", func="_llk_unpack_A_"),
+    ]
+    out = [f for f in _order(facts) if f.function == "_llk_unpack_A_"]
+    assert len(out) == 1 and out[0].hint == "UNRESOLVED_TARGET", out
+    # a generic MMIO pointer (MOP template) is not a config store
+    mop = {
+        **pw(
+            _FA,
+            30,
+            "volatile std::uint32_t* mop_cfg_base",
+            "1",
+            prov="cast",
+            func="_llk_unpack_A_",
+        )
+    }
+    assert registry.unresolved_store_ns(mop) is None
+
+
+@case
+def test_order_gpr_literal_offset_kept():
+    T = "p_gpr_pack::TILE_HEADER"
+    w = macro(_FC, 1, "TTI_SETDMAREG", f"TTI_SETDMAREG(0, 0, 0, LO_16({T}))")
+    w1 = macro(_FC, 2, "TTI_SETDMAREG", f"TTI_SETDMAREG(0, 0, 0, LO_16({T} + 0x1))")
+    assert registry.ordered_write_target(w) == ("gpr", T)
+    assert registry.ordered_write_target(w1) == ("gpr", f"{T}+1")
+    s0 = registry.risc_store_target(pw(_FC, 3, "get_regfile_pointer", f"{T} + 0"))
+    s1 = registry.risc_store_target(pw(_FC, 4, "get_regfile_pointer", f"{T} + 1"))
+    assert s0 == ("gpr", T, False) and s1 == ("gpr", f"{T}+1", False), (s0, s1)
+    assert not registry.same_register(T, s1[1], False, {})
+    assert registry.same_register(f"{T}+1", s1[1], False, {})
+
+
+@case
+def test_order_runtime_offset_store_end_to_end():
+    # a `FIELD_ADDR32 + i` store spans the words of its REG, so a same-REG writer
+    # issued after the release it waits for is reported; a fixed-index store is not.
+    w = "THCON_SEC0_REG2_Unpack_if_sel_cntx0_ADDR32"
+    s = "THCON_SEC0_REG2_Out_data_format_ADDR32"
+
+    def case_(index):
+        return [
+            dict(f, index_text=index) if f["family"] == "pointer_write" else f
+            for f in _tile_done_case()
+            if not (f.get("name") == "TTI_WRCFG")
+        ] + [_wrcfg(980, "unpack_to_dest_tile_done", tok=w)]
+
+    out = _order(case_(f"{s} + i"))
+    assert len(out) == 1 and out[0].hint == "TENSIX_WRITE_AFTER_RELEASE", out
+    assert _order(case_(s)) == []
 
 
 def main():

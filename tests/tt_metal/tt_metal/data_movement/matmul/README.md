@@ -525,4 +525,4 @@ In the 2D variant, both in0 and in1 have separate source and multicast output re
 - For single-column grids (C = 1), the in0 kernel uses a unicast self-write instead of multicast loopback due to a known hardware limitation. Similarly, for single-row grids (R = 1) in 2D, the in1 kernel uses a unicast self-write.
 - Tests that request a grid exceeding the device's compute grid are automatically skipped (not failed).
 - Barrier synchronization uses a coordinator-based polling pattern from `barrier_sync.hpp`, shared with other data movement test suites.
-- This test suite uses the TT-Metal Mesh Device API with `GenericMeshDeviceFixture`, running on single-device unit meshes. The Mesh Device API only supports fast dispatch mode.
+- This test suite uses the TT-Metal Mesh Device API with `UnitMeshFastDispatchFixture`, running on single-device unit meshes. The Mesh Device API only supports fast dispatch mode.

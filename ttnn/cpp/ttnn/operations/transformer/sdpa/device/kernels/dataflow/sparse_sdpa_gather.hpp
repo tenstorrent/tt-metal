@@ -8,7 +8,7 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 
 #include "block_cyclic_remap.hpp"  // tt::block_cyclic::logical_to_physical_page (invP remap, rows)

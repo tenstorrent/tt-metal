@@ -147,12 +147,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in1 = dfb::cb_in1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in1 CB pages are sized to match (see the program factory). The NOC reads the
-    // unpadded tile of data into each padded slot and tiles are laid out / multicast at the padded
-    // stride. No-op when already aligned. The sharded path keeps the natural (unpadded) stride.
-    constexpr uint32_t in1_aligned_tile_size_bytes =
-        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Interleaved tiles are laid out in L1 at their DRAM page stride rounded up to the NOC DRAM read alignment,
+    // the entry size the program factory set (get_interleaved_tile_stride): 576 B for a 544 B bfp8 32x16 tile on
+    // Blackhole, the tile size itself on Wormhole and on Quasar (whose NOC reads at any offset and whose unpacker
+    // walks the ring at the format's own stride, e.g. 1056 B for an 8-bit MX tile).
+    constexpr uint32_t in1_aligned_tile_size_bytes = (in1_single_tile_size_bytes + NOC_DRAM_READ_ALIGNMENT_BYTES - 1) /
+                                                     NOC_DRAM_READ_ALIGNMENT_BYTES * NOC_DRAM_READ_ALIGNMENT_BYTES;
 #if !defined(IN1_SHARDED)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else
@@ -184,16 +184,17 @@ void kernel_main() {
 
     //  WRITER
     // Used only when the output-write path below is compiled in (some mcast configs write via DFB
-    // instead), so mark maybe_unused to avoid -Wunused-but-set-variable, matching s_sparsity below.
+    // instead), so mark maybe_unused to avoid -Wunused-but-set-variable.
     [[maybe_unused]] const auto s = TensorAccessor(tensor::out);
 
     // sparsity accessor. cb_sparsity is an inert DMA-landing scratch used only when sparsity is
     // enabled (batchB > 0). As a single-kernel self-loop DFB (PRODUCER+CONSUMER) it is rejected by
     // the Metal 2.0 DM-kernel self-loop validator, so it is gated behind SPARSITY — never defined by
     // the non-sparse mcast factories that build this kernel (batchB is always 0 here). tensor::sparsity
-    // stays referenced so the factory's inert sparsity tensor binding remains valid.
-    [[maybe_unused]] const auto s_sparsity = TensorAccessor(tensor::sparsity);
+    // is gated with it: those factories declare no sparsity tensor binding, so the token only exists
+    // when a factory that defines SPARSITY also binds a real sparsity tensor.
 #ifdef SPARSITY
+    const auto s_sparsity = TensorAccessor(tensor::sparsity);
     constexpr uint32_t cb_id_sparsity = dfb::cb_sparsity;
     DataflowBuffer cb_sparsity(cb_id_sparsity);
 #endif
@@ -287,19 +288,17 @@ void kernel_main() {
                         // DEBUG: matmul mcast hang — reached iff all in1 acks received (first block).
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(static_cast<uint32_t>(in1_start_address)),
-                            mcast_dst,
+                            cb_in1,
                             in1_block_size_bytes,
                             in1_mcast_num_cores,
                             {},
                             {.noc_x_start = in1_mcast_dest_noc_start_x,
                              .noc_y_start = in1_mcast_dest_noc_start_y,
                              .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in1_start_address)},
+                             .noc_y_end = in1_mcast_dest_noc_end_y},
                             true);
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
@@ -362,18 +361,16 @@ void kernel_main() {
                         // If "SEND in1 acked" prints but this does not, the bias mcast handshake is the
                         // stuck point (receivers never reached the bias up() because in1 VALID didn't reach them).
 
-                        MulticastEndpoint mcast_dst;
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
-                            mcast_dst,
+                            cb_in3,
                             in3_block_size_bytes,
                             in1_mcast_num_cores,
                             {},
                             {.noc_x_start = in1_mcast_dest_noc_start_x,
                              .noc_y_start = in1_mcast_dest_noc_start_y,
                              .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in3_start_address)},
+                             .noc_y_end = in1_mcast_dest_noc_end_y},
                             true);
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
                         // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this
@@ -494,8 +491,14 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_out.wait_front(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    // The sharded output stays in place, so this kernel only waits for compute to finish it. Pop what it
+    // waited for so the buffer is left balanced.
+    // Compute pushes out_block_num_tiles tiles for each of the num_blocks_h_dim * num_blocks_w_dim output
+    // blocks per batch, so this kernel pops the same number.
+    constexpr uint32_t out_block_num_tiles = get_arg(args::out_block_num_tiles);
+    const uint32_t out_sharded_num_tiles = batch * num_blocks_h_dim * num_blocks_w_dim * out_block_num_tiles;
+    cb_out.wait_front(out_sharded_num_tiles);
+    cb_out.pop_front(out_sharded_num_tiles);
 #endif
     // [DEBUG #47797] Dump SW NoC issued-counters vs HW completion just before the drain. in1 hangs
     // in the nonposted-writes-sent wait (NIU_MST_NONPOSTED_WR_REQ_SENT == noc_nonposted_writes_num_issued).

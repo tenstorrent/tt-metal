@@ -8,8 +8,9 @@
 #include <filesystem>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_common.hpp"
@@ -19,7 +20,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_program_artifacts(
     const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value) {
@@ -28,9 +28,8 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_pro
     const auto& output = tensor_return_value;
     const uint32_t num_repeats = operation_attributes.m_num_repeats;
     // get datum size
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
-    IDevice* device = input.device();
+    MeshDevice* device = input.device();
     // Multi device pre-computation
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -47,8 +46,8 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_pro
         dest_page_size_bytes == output_log_shape[-1] * data_size,
         "Data size of output does not match requirement for repeat last dim");
     uint32_t read_start_page = 0;
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Per-core page count so read/write start on page boundaries.
     const uint32_t number_of_pages = input_log_shape[-2];
@@ -60,46 +59,39 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_pro
                                                                            : source_page_size_bytes * 16);
 
     // RM sharded -> rm_sharded; RM interleaved -> rm_interleaved (TILE uses higher-dim factory).
-    const bool src_sharded = src_buffer->buffer_distribution_spec().has_value();
-    const bool dst_sharded = dst_buffer->buffer_distribution_spec().has_value();
+    const bool src_sharded = src_buffer->device_local_config().sharding_args.buffer_distribution_spec().has_value();
+    const bool dst_sharded = dst_buffer->device_local_config().sharding_args.buffer_distribution_spec().has_value();
     const bool needs_alignment_cb = !src_sharded && !dst_sharded;
 
     // Metal 2.0 named resource ids. Declared function-local so the unity build (both repeat factory
     // .cpp files land in one translation unit) sees no duplicate anonymous-namespace symbols.
     const KernelSpecName READER{"reader"};
-    const DFBSpecName SRC0{"src0"};
-    const DFBSpecName SRC1{"src1"};
+    const ScratchpadSpecName SRC0{"src0"};
+    const ScratchpadSpecName SRC1{"src1"};
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
 
-    // Dataflow buffers: one page each. Each is a single-toucher scratchpad the reader fills and drains
-    // itself, so it self-loops (reader bound PRODUCER + CONSUMER).
-    Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.push_back(DataflowBufferSpec{
+    // One page each. Each is a reader-private scratchpad the reader fills and drains itself.
+    // (Formerly self-loop DFBs; a single DM kernel filled and drained each, so the FIFO synchronized
+    // nothing — a shape Quasar rejects.)
+    Group<ScratchpadSpec> scratchpads;
+    scratchpads.push_back(ScratchpadSpec{
         .unique_id = SRC0,
-        .entry_size = cb_size_bytes,
-        .num_entries = 1,
-        .data_format_metadata = cb_data_format,
+        .size_per_node = cb_size_bytes,  // entry_size * num_entries (1)
     });
     // Second buffer only for interleaved RM.
     if (needs_alignment_cb) {
-        dataflow_buffers.push_back(DataflowBufferSpec{
+        scratchpads.push_back(ScratchpadSpec{
             .unique_id = SRC1,
-            .entry_size = cb_size_bytes,
-            .num_entries = 1,
-            .data_format_metadata = cb_data_format,
+            .size_per_node = cb_size_bytes,
         });
     }
 
-    // Self-loop the DFBs: bind the reader as both PRODUCER and CONSUMER of each (one accessor name each).
-    Group<DFBBinding> dfb_bindings = {
-        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER}};
+    // The reader privately fills and drains each scratchpad (one accessor name each).
+    Group<ScratchpadBinding> scratchpad_bindings = {
+        ScratchpadBinding{.scratchpad_spec_name = SRC0, .accessor_name = "in0"}};
     if (needs_alignment_cb) {
-        dfb_bindings.push_back(
-            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
-        dfb_bindings.push_back(
-            DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
+        scratchpad_bindings.push_back(ScratchpadBinding{.scratchpad_spec_name = SRC1, .accessor_name = "in1"});
     }
 
     std::filesystem::path kernel_source;
@@ -113,13 +105,13 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_pro
     KernelSpec reader{
         .unique_id = READER,
         .source = kernel_source,
-        .dfb_bindings = dfb_bindings,
+        .scratchpad_bindings = scratchpad_bindings,
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
              TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = {{"original_page_size_bytes", source_page_size_bytes}, {"num_repeats", num_repeats}},
         .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "nop"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};
@@ -151,7 +143,7 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryLastDim::create_pro
     ProgramSpec spec{
         .name = "repeat_last_dim",
         .kernels = {reader},
-        .dataflow_buffers = dataflow_buffers,
+        .scratchpads = scratchpads,
         .tensor_parameters =
             {TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
              TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},

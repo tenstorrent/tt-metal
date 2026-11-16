@@ -188,11 +188,11 @@ public:
 private:
     uint64_t asic_id_;               // UMD chip_unique_id (for SHM naming)
     int device_id_;                  // Logical Metal device ID (for internal tracking)
-    int shm_fd_;                     // Shared memory file descriptor
-    DeviceMemoryRegion* region_;     // Mapped shared memory region
+    int shm_fd_ = -1;                // Shared memory file descriptor
+    DeviceMemoryRegion* region_ = nullptr;  // Mapped shared memory region
     bool per_pid_tracking_enabled_;  // Enable detailed per-PID tracking
     bool verbose_enabled_;           // Cached TT_METAL_SHM_VERBOSE flag (process-wide)
-    bool is_creator_;                // True if this process created the shared memory
+    bool is_creator_ = false;        // True if this process created the shared memory
 
     // Helper: Initialize shared memory region (first process only)
     void initialize_region();

@@ -6,14 +6,14 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/pcie/tlb_window.hpp>            // for tt::umd::TlbWindow
-#include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
+#include <tt-umd/io_window/io_window.hpp>  // for tt::umd::IoWindow
+#include <tt-umd/types/xy_pair.hpp>        // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
-#include "impl/context/context_types.hpp"
 
 using ChipId = int;
 
@@ -21,6 +21,7 @@ namespace tt::tt_metal {
 
 class Buffer;
 class MetalContext;
+class MetalEnvImpl;
 
 // True when the host can't pin D2H memory (no 64-bit PCIe addressing and no IOMMU).
 bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
@@ -28,8 +29,8 @@ bool d2h_uses_hugepage_fallback(const MetalContext& ctx);
 class SystemMemoryManager {
 public:
     // Create a SystemMemoryManager for accessing system memory accessible by the given device
-    // TODO: context_id will be removed in favor of directly passing around the MetalContext and MetalEnv reference.
-    SystemMemoryManager(ContextId context_id, ChipId device_id, uint8_t num_hw_cqs);
+    // The referenced MetalEnvImpl and MetalContext must outlive this SystemMemoryManager.
+    SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs);
 
     uint32_t get_next_event(uint8_t cq_id);
 
@@ -73,7 +74,9 @@ public:
 
     ChipId get_device_id() const;
 
-    ContextId get_context_id() const;
+    MetalEnvImpl& env_impl() const { return env_; }
+
+    MetalContext& metal_context() const { return ctx_; }
 
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
@@ -119,7 +122,8 @@ private:
 
     void init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel);
 
-    ContextId context_id;
+    MetalEnvImpl& env_;
+    MetalContext& ctx_;
     ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
@@ -130,10 +134,12 @@ private:
     std::vector<uint32_t> cq_to_last_completed_event;
     mutable std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
-    std::vector<tt::umd::TlbWindow*> prefetch_q_windows;
-    std::vector<tt::umd::TlbWindow*> completion_q_windows;
+    std::vector<std::unique_ptr<tt::umd::IoWindow>> prefetch_q_windows;
+    std::vector<std::unique_ptr<tt::umd::IoWindow>> completion_q_windows;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
+    // Phase bit value for the current lap of each fetch queue, used when the prefetcher polls it through its cache.
+    std::vector<uint32_t> prefetch_q_phases;
 
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;

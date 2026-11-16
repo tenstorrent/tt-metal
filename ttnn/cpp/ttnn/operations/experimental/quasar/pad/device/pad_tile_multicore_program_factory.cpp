@@ -11,15 +11,15 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 using ttnn::operations::data_movement::get_num_pages;
@@ -64,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     const auto& a_shape = a.logical_shape();
     uint32_t num_pages = get_num_pages(output);
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -76,10 +76,10 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer().page_size();
     uint32_t multi_buffering_size = 2;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
@@ -134,7 +134,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = {{"num_dims", num_dims}, {"page_size", page_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     reader_spec.advanced_options.num_runtime_varargs = 4 * num_dims;
 
@@ -153,7 +153,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
              {"pad_value", packed_pad_value},
              {"element_size", static_cast<uint32_t>(output.element_size())}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     writer_spec.advanced_options.num_runtime_varargs = 4 * num_dims;
 

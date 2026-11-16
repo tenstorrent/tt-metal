@@ -12,6 +12,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "internal/firmware_common.h"
+#include "tests/tt_metal/tt_metal/test_kernels/misc/watcher_test_helpers.h"
 #include "internal/hw_thread.h"
 #include "experimental/kernel_args.h"
 
@@ -62,6 +63,10 @@ void kernel_main() {
 #endif
 
     bool use_inline_dw_write = static_cast<bool>(get_arg(args::use_inline_dw_write));
+    // Address the destination as DRAM bank 0 instead of by coordinates (the ATT maps have no coordinate
+    // window for DRAM tiles, so a coordinate operand would trap in the address backend before the
+    // sanitizer sees it).
+    bool use_dram_bank_dst = static_cast<bool>(get_arg(args::use_dram_bank_dst));
     bool bad_linked_transaction = static_cast<bool>(get_arg(args::bad_linked_transaction));
     std::uint32_t l1_overflow_addr = get_arg(args::l1_overflow_addr);
     std::uint32_t eth_src_overflow_addr = get_arg(args::eth_src_overflow_addr);
@@ -69,7 +74,9 @@ void kernel_main() {
     bool use_multicast_semaphore_inc = static_cast<bool>(get_arg(args::use_multicast_semaphore_inc));
     std::uint32_t mcast_dst_end_x = get_arg(args::mcast_dst_end_x);
     std::uint32_t mcast_dst_end_y = get_arg(args::mcast_dst_end_y);
-    bool use_write_with_state = static_cast<bool>(get_arg(args::use_write_with_state));
+    // 0: plain async_write; 1: one-packet stateful write (size in AT_LEN); 2: any-length stateful
+    // write (size supplied per call, not held in cmd-buf state).
+    std::uint32_t use_write_with_state = get_arg(args::use_write_with_state);
     bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
     bool use_inline_dw_write_with_state = static_cast<bool>(get_arg(args::use_inline_dw_write_with_state));
     std::uint32_t invalid_txn_id = get_arg(args::invalid_txn_id);
@@ -78,14 +85,16 @@ void kernel_main() {
     // Need to signal completion to dispatcher before hanging so that
     // Dispatcher Kernel is able to finish.
     // Device::close() requires fast-dispatch kernels to finish.
-    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0].slot[0]);
     // SD enabled on all archs: notify completion via RUN_MSG_DONE to mailbox. FD notify path
     // posts to a dispatcher absent under SD and wedges the NOC.
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
     go_message_in->signal = RUN_MSG_DONE;
+#elif defined(FDS_SIGNALLING)
+    // Under FDS signalling the kernel sends no early done. The watcher error ends the host's wait, and the
+    // next device open resets the dispatch engines.
 #else
-    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-    notify_dispatch_core_done(dispatch_addr, noc_index);
+    signal_completion_before_hang();
 #endif
 
     if (invalid_txn_id) {
@@ -142,10 +151,14 @@ void kernel_main() {
     }
 
     UnicastEndpoint dst_unicast_endpoint;
-    if (use_inline_dw_write) {
+    if (use_inline_dw_write && use_dram_bank_dst) {
+        // Just write something to trigger the watcher assertion. Result data doesn't matter.
+        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+        noc.inline_dw_write(dram_bank, local_buffer[0], {.bank_id = 0, .addr = buffer_dst_addr});
+    } else if (use_inline_dw_write) {
         noc.inline_dw_write(
             dst_unicast_endpoint, local_buffer[0], {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
-    } else if (use_write_with_state) {
+    } else if (use_write_with_state == 1) {
         // Stateful write: the destination coordinate is programmed into NOC_RET_ADDR by set_async_write_state.
         // Exercises DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE, which must reconstruct the
         // destination from NOC_RET_ADDR (not the sender's own coordinate in NOC_TARG_ADDR). buffer_size is kept
@@ -153,6 +166,20 @@ void kernel_main() {
         noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             dst_unicast_endpoint, buffer_size, {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
         noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            local_buffer,
+            dst_unicast_endpoint,
+            buffer_size,
+            {},
+            {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
+        noc.async_write_barrier();
+    } else if (use_write_with_state == 2) {
+        // Any-length stateful write (default max_page_size): set_state only sticky-programs the target, the
+        // transfer size is passed to async_write_with_state. The sanitizer must use that size rather than
+        // reading AT_LEN back from the command buffer (which is not programmed on this path and reads 0 on
+        // Quasar RoCC), so the reported byte count below must be buffer_size, not 0.
+        noc.set_async_write_state(
+            dst_unicast_endpoint, buffer_size, {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
+        noc.async_write_with_state(
             local_buffer,
             dst_unicast_endpoint,
             buffer_size,

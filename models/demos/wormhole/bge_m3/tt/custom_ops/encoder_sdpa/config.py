@@ -59,6 +59,13 @@ class EncoderSDPAConfig:
     # Emit SDPA output directly in concat-heads layout [B,1,S,H*D]. This is
     # exact for the BGE head-fold contract and removes a DRAM reorder pass.
     direct_concat_heads: bool = False
+    # Read Q, K and V from the fused QKV projection output [B, 1, S, (NQH+2*NKH)*D]
+    # (sections Q | K | V, heads in order) instead of three head tensors. This
+    # removes the head-split op. Pass the same tensor as q, k and v.
+    fused_qkv_input: bool = False
+    # EXP_APPROX_MODE define. The stock streaming compute reads it; the local legacy
+    # compute does not. Stock SDPA on Blackhole runs the exact exp.
+    exp_approx_mode: bool = True
     # Reuse the dead previous-max CB for exp(previous_max-current_max), avoiding
     # a separate statistics-sized scratch allocation. Standard compute only.
     reuse_prev_max_for_exp: bool = False
@@ -88,6 +95,10 @@ class EncoderSDPAConfig:
     @property
     def kv_shape(self) -> tuple[int, int, int, int]:
         return (self.batch, self.num_kv_heads, self.kv_seq_len, self.head_dim)
+
+    @property
+    def fused_qkv_shape(self) -> tuple[int, int, int, int]:
+        return (self.batch, 1, self.q_seq_len, (self.num_q_heads + 2 * self.num_kv_heads) * self.head_dim)
 
     @property
     def output_shape(self) -> tuple[int, int, int, int]:
@@ -364,9 +375,14 @@ class EncoderSDPAPlan:
             raise ValueError("F4 shared alloc too small to hold one real V chunk")
 
     def global_q_range(self, core_id: int) -> tuple[int, int]:
+        # Balanced flat split: the first total % num_cores cores take one extra unit.
+        # When the work divides evenly this is the uniform split. The kernels take
+        # the range from runtime args, so cores may hold different counts.
         if not 0 <= core_id < self.num_cores:
             raise ValueError(f"invalid core_id={core_id}")
-        return core_id * self.q_work_per_core, self.q_work_per_core
+        base, extra = divmod(self.total_q_work, self.num_cores)
+        start = core_id * base + min(core_id, extra)
+        return start, base + (1 if core_id < extra else 0)
 
     def validate_static_contract(self) -> None:
         c = self.config
@@ -386,11 +402,10 @@ class EncoderSDPAPlan:
         # forwarding chains stay inactive because this exact model path never
         # enables them (is_chain_participant flags are always 0 in runtime args).
         # (At B6 this yields exactly 3 heads/core; B1/B3 give fractional heads,
-        #  which is fine for the flat scheduler.)
-        if self.total_q_work % self.num_cores != 0:
-            raise ValueError(
-                f"non-uniform Q work: total_q_work={self.total_q_work} not divisible " f"by num_cores={self.num_cores}"
-            )
+        #  which is fine for the flat scheduler.) An uneven split is allowed:
+        # global_q_range gives each core its own start and count.
+        if self.total_q_work < self.num_cores:
+            raise ValueError(f"total_q_work={self.total_q_work} leaves idle cores on {self.num_cores}")
 
 
 def _shape_tuple(tensor: ttnn.Tensor) -> tuple[int, ...]:
@@ -407,12 +422,20 @@ def validate_encoder_sdpa_inputs(
     plan.validate_static_contract()
     plan.validate_kv_alias_contract()
 
-    if _shape_tuple(q) != config.q_shape:
-        raise ValueError(f"expected Q shape {config.q_shape}, got {_shape_tuple(q)}")
-    if _shape_tuple(k) != config.kv_shape:
-        raise ValueError(f"expected K shape {config.kv_shape}, got {_shape_tuple(k)}")
-    if _shape_tuple(v) != config.kv_shape:
-        raise ValueError(f"expected V shape {config.kv_shape}, got {_shape_tuple(v)}")
+    if config.fused_qkv_input:
+        if config.q_seq_len != config.kv_seq_len:
+            raise ValueError("fused_qkv_input needs q_seq_len == kv_seq_len")
+        if not (q.buffer_address() == k.buffer_address() == v.buffer_address()):
+            raise ValueError("fused_qkv_input: pass the same QKV tensor as q, k and v")
+        if _shape_tuple(q) != config.fused_qkv_shape:
+            raise ValueError(f"expected fused QKV shape {config.fused_qkv_shape}, got {_shape_tuple(q)}")
+    else:
+        if _shape_tuple(q) != config.q_shape:
+            raise ValueError(f"expected Q shape {config.q_shape}, got {_shape_tuple(q)}")
+        if _shape_tuple(k) != config.kv_shape:
+            raise ValueError(f"expected K shape {config.kv_shape}, got {_shape_tuple(k)}")
+        if _shape_tuple(v) != config.kv_shape:
+            raise ValueError(f"expected V shape {config.kv_shape}, got {_shape_tuple(v)}")
     if q.layout != ttnn.TILE_LAYOUT or k.layout != ttnn.TILE_LAYOUT or v.layout != ttnn.TILE_LAYOUT:
         raise ValueError("encoder SDPA requires TILE_LAYOUT Q/K/V")
     if q.dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
@@ -424,9 +447,14 @@ def validate_encoder_sdpa_inputs(
     if q.device() != k.device() or q.device() != v.device():
         raise ValueError("Q/K/V must be on the same device")
 
+    # The descriptor builds its CoreRangeSet from the config, so the config may
+    # use a subset of the device. Check that it fits instead of demanding an
+    # exact match: a p150 reports 13x10 and the S8192 plan wants 8x8.
     grid = q.device().compute_with_storage_grid_size()
-    if (int(grid.x), int(grid.y)) != (config.grid_x, config.grid_y):
-        raise ValueError(f"expected {config.grid_x}x{config.grid_y} compute grid, got {int(grid.x)}x{int(grid.y)}")
+    if config.grid_x > int(grid.x) or config.grid_y > int(grid.y):
+        raise ValueError(
+            f"config grid {config.grid_x}x{config.grid_y} exceeds the device grid {int(grid.x)}x{int(grid.y)}"
+        )
     return plan
 
 

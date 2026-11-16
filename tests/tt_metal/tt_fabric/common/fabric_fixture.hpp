@@ -23,6 +23,8 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
 
+#include <unordered_map>
+
 namespace tt::tt_fabric::fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
@@ -43,6 +45,12 @@ class ControlPlaneFixture : public ::testing::Test {
        }
 
        void TearDown() override {
+           // Reset the process-wide fabric config to DISABLED so the next test starts clean. set_fabric_config is
+           // one-shot per process (metal_env.cpp: non-DISABLED -> non-DISABLED is a TT_FATAL), and tearing down to
+           // DISABLED is always allowed. Without this, a test that set e.g. FABRIC_2D would make a subsequent test
+           // that sets a different config (TORUS_Y / MGD_DEFAULT / per-mesh heterogeneous) abort with
+           // "Tried to override previous value of fabric config".
+           tt::tt_metal::MetalContext::instance().set_fabric_config(tt::tt_fabric::FabricConfig::DISABLED);
            tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
                tt::tt_fabric::FabricConfig::DISABLED);
        }
@@ -63,6 +71,9 @@ public:
     inline static std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_map_;
     inline static std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     inline static bool slow_dispatch_;
+
+    std::unordered_map<tt::tt_metal::distributed::MeshDevice*, std::vector<tt::tt_metal::distributed::MeshWorkload>>
+        pending_async_workloads_;
 
     const std::vector<std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& get_devices() const { return devices_; }
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_device(ChipId id) const {
@@ -104,6 +115,12 @@ public:
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        // Fabric cannot be run if we have < 2 devices
+        if (num_devices < 2) {
+            log_info(tt::LogTest, "Skipping fabric tests as fabric requires > 2 devices, but only saw {} devices", num_devices);
+            GTEST_SKIP();
+        }
+
         std::vector<ChipId> ids;
         ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
@@ -111,8 +128,7 @@ public:
         }
         tt::tt_fabric::SetFabricConfig(
             fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config, fabric_udm_mode);
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
             ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
         for (auto& [id, device] : devices_map_) {
@@ -136,12 +152,13 @@ public:
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void RunProgramNonblocking(
         const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device, tt::tt_metal::Program&& program) {
-        tt_metal::LaunchProgram(*device, std::move(program), /*wait_until_cores_done=*/false);
+        pending_async_workloads_[device.get()].push_back(tt_metal::LaunchProgramAsync(*device, std::move(program)));
     }
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void WaitForSingleProgramDone(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& device) {
         tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+        pending_async_workloads_.erase(device.get());
     }
 
     // Utility function reused across tests to get address params

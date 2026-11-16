@@ -46,7 +46,7 @@ jobs:
       caller-id: ${{ format('{0}/run-{1}/attempt-{2}', github.workflow, github.run_id, github.run_attempt) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
 
       - name: Install registry parser dependency
@@ -160,20 +160,13 @@ jobs:
     needs: inspect-trace-selection-registry
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
-      - name: Check budget
-        run: |
-          pip3 install PyYAML > /dev/null 2>&1
-          python3 .github/scripts/utils/verify_time_budget.py \
-            tests/pipeline_reorg/ttnn_sweep_validation_tests.yaml \
-            .github/time_budget.yaml \
-            sweep_validation
 
   run-model-trace-sweep-validation:
     name: Run model trace sweep validation

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <memory>
 #include "api/tt-metalium/distributed_context.hpp"
 
 namespace tt::tt_metal::distributed::multihost {
@@ -33,7 +32,6 @@ public:
 
     void abort(int error_code) const override;
 
-    /* --------------- the rest of the methods are unsupported and throw --------- */
     void barrier() const override;
 
     /* ---------------- point‑to‑point ------------------- */
