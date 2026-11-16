@@ -171,6 +171,24 @@ def test_two_tracers_over_one_weight_both_go_stale(executed: list[object], expec
             tracer()
 
 
+def test_a_capture_during_another_capture_raises(executed: list[object], expect_error: Callable) -> None:
+    weight = _parameter()
+    inner = _tracer(weight)
+
+    def outer_forward() -> None:
+        inner()
+
+    outer = Tracer(outer_forward, device=_Device(), prep_run=True)
+    with expect_error(RuntimeError, "^cannot capture the trace of .*forward while the trace of .*outer_forward is"):
+        outer()
+    assert executed == []
+    # The refused capture leaves nothing behind: each tracer captures alone afterwards.
+    inner()
+    weight.deallocate()
+    with expect_error(RuntimeError, _STALE + "deallocated"):
+        inner()
+
+
 def test_a_quant_typecast_after_capture_makes_the_trace_stale(
     executed: list[object],
     monkeypatch: pytest.MonkeyPatch,

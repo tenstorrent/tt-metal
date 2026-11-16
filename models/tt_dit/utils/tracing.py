@@ -273,12 +273,20 @@ class Tracer:
         self._args = _tree_map(self._tensor_to_device, args, path_label="args")
         self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
 
+        running = _module._capturing_tracer  # noqa: SLF001
+        if running is not None:
+            msg = (
+                f"cannot capture the trace of {self._name} while the trace of {running._name} is being "  # noqa: SLF001
+                "captured: a nested or concurrent capture is not supported"
+            )
+            raise RuntimeError(msg)
+
         self._unwatch()
-        _module._capturing_tracers.append(self)  # noqa: SLF001
+        _module._capturing_tracer = self  # noqa: SLF001
         try:
             self._capture_watched(cq_id=cq_id, blocking_execution=blocking_execution, execute=execute)
         finally:
-            _module._capturing_tracers.remove(self)  # noqa: SLF001
+            _module._capturing_tracer = None  # noqa: SLF001
 
     def _capture_watched(self, *, cq_id: int, blocking_execution: bool, execute: bool) -> None:
         if self._prep_run:
