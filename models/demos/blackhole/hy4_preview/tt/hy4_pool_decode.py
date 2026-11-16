@@ -46,6 +46,9 @@ _POOL_AG_LINKS = int(
 )  # links of the pool path's all_gather_async (q gather, key gather); see slot-diag/DIAG.md
 
 
+_XMC = {}  # B26: one compact exchange object per (mesh, S)
+
+
 class PoolCtx:
     """Process-wide state of the pool decode path: persistent per-step device tensors, the shared XMerge, the split-kernel module, the select-pipeline parameters."""
 
@@ -122,6 +125,15 @@ class PoolCtx:
         self.hm_compact = (
             self.compact and os.environ.get("HY4_ATTN_HM", "0") == "1" and S <= 16
         )  # HY4_ATTN_HM=1: head-major merge output (no post-merge layout glue)
+        # B26 (default OFF): HY4_B26_XCOMPACT=1: the compact verify layout goes through the fabric exchange + merge program (XMerge users=S) instead of all_to_all + A1 merge
+        self.xmc = None
+        if self.compact and self.hm_compact and int(os.environ.get("HY4_B26_XCOMPACT", "0")) == 1:
+            key = (id(md), S)
+            if key not in _XMC:
+                from models.demos.blackhole.hy4_preview.tt import hy4_xmerge
+
+                _XMC[key] = hy4_xmerge.XMerge(md, self.TR, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "8")), users=S)
+            self.xmc = _XMC[key]
         self.ids8 = {}  # index-source layer -> idx8 tensor of the current step
         self.ids8_dense = None
         self.step_pos = None
@@ -236,6 +248,8 @@ class PoolCtx:
         )
         ttnn.deallocate(qg)
         if self.compact and self.xm is None:
+            if self.xmc is not None:
+                return self.xmc(out, sink)  # head-major [1,8,S,512] TILE (persistent) from the exchange + merge program
             from models.demos.blackhole.hy4_preview.tt import hy4_merge
 
             TR = self.TR

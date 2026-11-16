@@ -26,6 +26,7 @@ void kernel_main() {
     const auto xa = TensorAccessor(x_args, x_addr, TILE_B);
     const auto sa = TensorAccessor(s_args, s_addr, TILE_B);
     CircularBuffer st(CB_ST), land(CB_LAND), one(CB_ONE);
+    DeviceZoneScopedN("XR_ALL");
     land.reserve_back(NC * LT);
     const uint32_t p = land.get_write_ptr();
     const uint32_t base = (c * S + s) * TPR;
@@ -48,6 +49,7 @@ void kernel_main() {
     st.push_back(1);
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gsem);
     if constexpr (DBG == 0) {
+        DeviceZoneScopedN("XR_WAIT");
         noc_semaphore_wait_min(sem, 7 * (TPC / 2 + 1));
         noc_semaphore_set(sem, 0);
     }

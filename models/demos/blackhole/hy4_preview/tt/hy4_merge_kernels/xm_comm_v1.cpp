@@ -45,25 +45,31 @@ void kernel_main() {
 
     const uint32_t pkt = get_write_ptr(CB_PKT);
     uint32_t k = 0;
-    for (uint32_t s = 0; s < S; ++s) {
-        for (uint32_t di = 0; di < ND; ++di) {
-            const uint32_t d = ND - di;  // farthest first
-            const uint32_t j = (DIR == 0) ? ((c + d) & (RING - 1)) : ((c + RING - d) & (RING - 1));
-            const uint32_t base = (j * S + s) * TPR;
-            for (uint32_t g = LK; g < NSPLIT; g += LINKS) {
-                for (uint32_t p = 0; p < TPC / 2; ++p) {
-                    noc_async_read(xa.get_noc_addr(base + g * TPC + 2 * p), pkt + k * PKT, TILE_B);
-                    noc_async_read(xa.get_noc_addr(base + g * TPC + 2 * p + 1), pkt + k * PKT + TILE_B, TILE_B);
+    {
+        DeviceZoneScopedN("XC_READ");
+        for (uint32_t s = 0; s < S; ++s) {
+            for (uint32_t di = 0; di < ND; ++di) {
+                const uint32_t d = ND - di;  // farthest first
+                const uint32_t j = (DIR == 0) ? ((c + d) & (RING - 1)) : ((c + RING - d) & (RING - 1));
+                const uint32_t base = (j * S + s) * TPR;
+                for (uint32_t g = LK; g < NSPLIT; g += LINKS) {
+                    for (uint32_t p = 0; p < TPC / 2; ++p) {
+                        noc_async_read(xa.get_noc_addr(base + g * TPC + 2 * p), pkt + k * PKT, TILE_B);
+                        noc_async_read(xa.get_noc_addr(base + g * TPC + 2 * p + 1), pkt + k * PKT + TILE_B, TILE_B);
+                        ++k;
+                    }
+                    noc_async_read(xa.get_noc_addr(base + 16), pkt + k * PKT, TILE_B);
+                    noc_async_read(xa.get_noc_addr(base + 17), pkt + k * PKT + TILE_B, TILE_B);
                     ++k;
                 }
-                noc_async_read(xa.get_noc_addr(base + 16), pkt + k * PKT, TILE_B);
-                noc_async_read(xa.get_noc_addr(base + 17), pkt + k * PKT + TILE_B, TILE_B);
-                ++k;
             }
         }
+        noc_async_read_barrier();
     }
-    noc_async_read_barrier();
-    mgr.open_finish();
+    {
+        DeviceZoneScopedN("XC_OPEN");
+        mgr.open_finish();
+    }
     if constexpr (DBG == 2) {
         mgr.close();
         noc_async_full_barrier();
@@ -71,32 +77,38 @@ void kernel_main() {
     }
     k = 0;
     uint32_t n = 0;
-    for (uint32_t s = 0; s < S; ++s) {
-        for (uint32_t di = 0; di < ND; ++di) {
-            const uint32_t d = ND - di;
-            for (uint32_t g = LK; g < NSPLIT; g += LINKS) {
-                const uint32_t m = s * NSPLIT + g;
-                const uint32_t mx = get_arg_val<uint32_t>(1 + 2 * m);
-                const uint32_t my = get_arg_val<uint32_t>(2 + 2 * m);
-                const uint64_t sem = get_noc_addr(mx, my, gsem);
-                for (uint32_t p = 0; p < TPC / 2 + 1; ++p) {
-                    const uint32_t tile = (p < TPC / 2) ? 2 * p : TPC;  // landing tile index within the slot
-                    const uint64_t dst = get_noc_addr(mx, my, land_base + (c * LT + tile) * TILE_B);
-                    volatile PACKET_HEADER_TYPE* h = (n & 1) ? hdr1 : hdr0;
-                    fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                        sender,
-                        h,
-                        pkt + k * PKT,
-                        PKT,
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem, 1, true},
-                        static_cast<uint8_t>(d));
-                    noc_async_writes_flushed();
-                    ++k;
-                    ++n;
+    {
+        DeviceZoneScopedN("XC_SEND");
+        for (uint32_t s = 0; s < S; ++s) {
+            for (uint32_t di = 0; di < ND; ++di) {
+                const uint32_t d = ND - di;
+                for (uint32_t g = LK; g < NSPLIT; g += LINKS) {
+                    const uint32_t m = s * NSPLIT + g;
+                    const uint32_t mx = get_arg_val<uint32_t>(1 + 2 * m);
+                    const uint32_t my = get_arg_val<uint32_t>(2 + 2 * m);
+                    const uint64_t sem = get_noc_addr(mx, my, gsem);
+                    for (uint32_t p = 0; p < TPC / 2 + 1; ++p) {
+                        const uint32_t tile = (p < TPC / 2) ? 2 * p : TPC;  // landing tile index within the slot
+                        const uint64_t dst = get_noc_addr(mx, my, land_base + (c * LT + tile) * TILE_B);
+                        volatile PACKET_HEADER_TYPE* h = (n & 1) ? hdr1 : hdr0;
+                        fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                            sender,
+                            h,
+                            pkt + k * PKT,
+                            PKT,
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst, sem, 1, true},
+                            static_cast<uint8_t>(d));
+                        noc_async_writes_flushed();
+                        ++k;
+                        ++n;
+                    }
                 }
             }
         }
     }
-    mgr.close();
-    noc_async_full_barrier();
+    {
+        DeviceZoneScopedN("XC_CLOSE");
+        mgr.close();
+        noc_async_full_barrier();
+    }
 }

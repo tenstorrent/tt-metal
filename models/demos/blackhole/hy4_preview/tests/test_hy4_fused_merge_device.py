@@ -1,6 +1,5 @@
 """fuse-sparse-merge stage A1: fused JIT merge kernel vs the 8-op merge3 and the torch full-softmax reference, 1x8 row. Run: run_fsm.sh <tag> tests.test_hy4_fused_merge_device TEST=pcc|lat [CASES=tag,..]
 (module form: dm_block/dk_dev resolve through sys.path inserts below)"""
-import json
 import os
 import sys
 
@@ -11,9 +10,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "tt"))
 import test_hy4_decode_merge_device as DM
 from dk_dev import pcc, timed_traced
-from dm_block import NC, Block, close_row, from_mesh, open_row
-
-import ttnn
+from dm_block import close_row, open_row
 
 emit = DM.emit
 CASES = [
@@ -90,7 +87,15 @@ def run_xchg_pcc(md):
                 outs.append(blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
             got = [DM.result_to_heads(md, o, S, True) for o in outs]
             ps = [round(pcc(g, c.ref), 6) for g in got]
-            emit({"test": "xchg_pcc", "case": tag, "pcc_per_call": ps, "finite": bool(all(torch.isfinite(g).all() for g in got)), "pass": bool(min(ps) >= DM.GATE)})
+            emit(
+                {
+                    "test": "xchg_pcc",
+                    "case": tag,
+                    "pcc_per_call": ps,
+                    "finite": bool(all(torch.isfinite(g).all() for g in got)),
+                    "pass": bool(min(ps) >= DM.GATE),
+                }
+            )
             c.free()
         except Exception as e:
             import traceback
@@ -113,12 +118,22 @@ def run_x2_pcc(md):
         outs = [blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev) for _ in range(3)]
         got = [DM.result_to_heads(md, o, S, True) for o in outs]
         ps = [round(pcc(g, c.ref), 6) for g in got]
-        emit({"test": "xchg2_pcc", "case": tag, "pcc_per_call": ps, "finite": bool(all(torch.isfinite(g).all() for g in got)), "pass": bool(min(ps) >= DM.GATE)})
+        emit(
+            {
+                "test": "xchg2_pcc",
+                "case": tag,
+                "pcc_per_call": ps,
+                "finite": bool(all(torch.isfinite(g).all() for g in got)),
+                "pass": bool(min(ps) >= DM.GATE),
+            }
+        )
         c.free()
 
 
 def run_x2_lat(md):
-    v = os.environ.get("X2V", "a2b")  # one variant per process: the persistent L1 buffers of the variants stack at the top of L1
+    v = os.environ.get(
+        "X2V", "a2b"
+    )  # one variant per process: the persistent L1 buffers of the variants stack at the top of L1
     for fmt in os.environ.get("X2F", "bf16,scaled").split(","):
         for S in (1, 2):
             c = DM.Case(md, "random", 65536, S, fmt, seed=5)
@@ -133,9 +148,48 @@ def run_x2_lat(md):
             blk.xm = blk.xm2 = None
 
 
+def run_xcmp(md):
+    """B26: bitwise comparison of the stock exchange (HY4_XM_V4=0 HALF=0) against the env variant given by CMP_ENV (k=v,k=v) on identical inputs, repeated calls"""
+    sel = os.environ.get("CASES")
+    cmp_env = dict(kv.split("=") for kv in os.environ.get("CMP_ENV", "HY4_XM_HALF=1").split(",") if kv)
+    keys = list(cmp_env) + ["HY4_XM_V4", "HY4_XM_HALF"]
+    saved = {k: os.environ.get(k) for k in keys}
+    for kind, ctx, S, fmt in CASES:
+        tag = f"{kind}_{ctx}_S{S}_{fmt}"
+        if sel and tag not in sel.split(","):
+            continue
+        c = DM.Case(md, kind, ctx, S, fmt, seed=3)
+        for k in keys:
+            os.environ.pop(k, None)
+        a = DM.mk_block(md, S, fuse=True, xchg=True)
+        os.environ.update(cmp_env)
+        b = DM.mk_block(md, S, fuse=True, xchg=True)
+        for k in keys:
+            os.environ.pop(k, None)
+        idx8 = a.idx_rows(c.idx_dev)
+        eq = []
+        for rep in range(4):
+            oa = DM.result_to_heads(md, a.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev), S, True).clone()
+            ob = DM.result_to_heads(md, b.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev), S, True).clone()
+            eq.append(bool(torch.equal(oa, ob)))
+        emit(
+            {
+                "test": "xcmp",
+                "case": tag,
+                "bit_equal_per_call": eq,
+                "finite": bool(torch.isfinite(oa).all() and torch.isfinite(ob).all()),
+                "pcc_vs_ref": round(pcc(ob, c.ref), 6),
+            }
+        )
+        c.free()
+    for k, v in saved.items():
+        if v is not None:
+            os.environ[k] = v
+
+
 def run_xchg_lat(md):
-    for fmt in ("bf16", "scaled"):
-        for S in (1, 2):
+    for fmt in os.environ.get("FMTS", "bf16,scaled").split(","):
+        for S in [int(v) for v in os.environ.get("SS", "1,2").split(",")]:
             c = DM.Case(md, "random", 65536, S, fmt, seed=5)
             base = DM.mk_block(md, S, fuse=True, xchg=False)
             xb = DM.mk_block(md, S, fuse=True, xchg=True)
@@ -143,7 +197,18 @@ def run_xchg_lat(md):
             a = timed_traced(md, lambda: base.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
             b = timed_traced(md, lambda: xb.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
             q2 = timed_traced(md, lambda: xb.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev, upto=2))
-            emit({"test": "xchg_lat", "fmt": fmt, "S": S, "block_a1_us": a, "block_a2_us": b, "qg_plus_kernel_us": q2, "xm_stage_us": round(b - q2, 1), "dbg": os.environ.get("HY4_XM_DBG", "0")})
+            emit(
+                {
+                    "test": "xchg_lat",
+                    "fmt": fmt,
+                    "S": S,
+                    "block_a1_us": a,
+                    "block_a2_us": b,
+                    "qg_plus_kernel_us": q2,
+                    "xm_stage_us": round(b - q2, 1),
+                    "dbg": os.environ.get("HY4_XM_DBG", "0"),
+                }
+            )
             c.free()
 
 
@@ -166,14 +231,31 @@ def run_lat(md):
             fb = DM.mk_block(md, S, fuse=True)
             tot = timed_traced(md, lambda: fb.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
             sb = timed_traced(md, lambda: base.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
-            emit({"test": "fused_merge_lat", "fmt": fmt, "S": S, "variant": "block_total", "stock_us": sb, "fused_us": tot})
+            emit(
+                {
+                    "test": "fused_merge_lat",
+                    "fmt": fmt,
+                    "S": S,
+                    "variant": "block_total",
+                    "stock_us": sb,
+                    "fused_us": tot,
+                }
+            )
             c.free()
 
 
 if __name__ == "__main__":
     full, md = open_row()
     try:
-        for name, fn in [("pcc", run_pcc), ("lat", run_lat), ("xpcc", run_xchg_pcc), ("xlat", run_xchg_lat), ("x2pcc", run_x2_pcc), ("x2lat", run_x2_lat)]:
+        for name, fn in [
+            ("pcc", run_pcc),
+            ("lat", run_lat),
+            ("xpcc", run_xchg_pcc),
+            ("xcmp", run_xcmp),
+            ("xlat", run_xchg_lat),
+            ("x2pcc", run_x2_pcc),
+            ("x2lat", run_x2_lat),
+        ]:
             if os.environ.get("TEST", "pcc") in (name, "all"):
                 fn(md)
     finally:

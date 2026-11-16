@@ -22,6 +22,23 @@ def _acc(t):
 _HM_OUT = {}
 
 
+def hm_out(md, hm_users):
+    """the PERSISTENT head-major merge output [1,8,hm_users,512] (shared by all layers and by the A1 merge / the B26 compact exchange)"""
+    import torch
+
+    key = (id(md), hm_users)
+    if key not in _HM_OUT:
+        _HM_OUT[key] = ttnn.from_torch(
+            torch.zeros(1, 8, hm_users, 512, dtype=torch.bfloat16),
+            device=md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )
+    return _HM_OUT[key]
+
+
 def merge_fused(x, sink, S, nsplit=None, out=None, full=False, hm_users=0):
     """hm_users > 0 (HY4_ATTN_HM=1, compact verify rows): S = tile rows TR, the writer scatters into the PERSISTENT head-major tensor [1,8,hm_users,512] (shared by all layers; the caller must not deallocate it)."""
     md = x.device()

@@ -48,6 +48,10 @@ def pick_split(S, grid_cores=120):
     """
     R = 8 * S
     G = max(1, min(8 if S == 1 else 4, grid_cores // R))
+    if (
+        S == 1 and int(os.environ.get("HY4_B26_KC", "0")) > 0
+    ):  # B26 (default OFF): k_chunk 64 at S=1 (G=8): -4.8 us on gather + split in the unit block; 8 chunks x 64 cover 512 keys per column
+        return G, int(os.environ["HY4_B26_KC"])
     if G == 2:
         return 2, 256
     return G, 128

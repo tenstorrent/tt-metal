@@ -73,6 +73,77 @@ def cmp_run(md, blk, c, S):
     return heads.reshape(64, S, 512)
 
 
+_XMC = {}
+
+
+def xmc_run(md, blk, c, S):
+    """B26: compact path with the fabric exchange + merge program (XMerge users=S) instead of a2a + A1 merge -> host heads [64,S,512]"""
+    from hy4_xmerge import XMerge
+
+    TR = (S + 3) // 4
+    if S not in _XMC:
+        _XMC[S] = XMerge(md, TR, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "8")), users=S)
+    qg = blk.gather_q(c.q_dev)
+    idx8 = blk.idx_rows(c.idx_dev)
+    out = blk.mod.sparse_sdpa_split(
+        qg, c.kv_dev, idx8, 512, DM.SCALE, blk.kc, blk.G, blk.ckc, None, emit_stats=3, owner_s=S, compact=True
+    )
+    sk = torch.zeros(8, TR, 32, 1)
+    for cc in range(8):
+        for b in range(4):
+            sk[cc, :, 8 * b : 8 * b + 8, 0] = c.sl[8 * cc : 8 * cc + 8][None, :]
+    skd = DM.to_mesh(md, sk, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    res = _XMC[S](out, skd)
+    return DM.from_mesh(md, res).float().reshape(64, S, 512)
+
+
+def run_xmclat(md):
+    """B26: traced latency of the compact S>1 block: gather+split | + a2a + A1 merge | + XMerge(users) exchange (stage us = diff)"""
+    import hy4_merge
+    from hy4_xmerge import XMerge
+
+    for S in [int(x) for x in os.environ.get("SS", "4").split(",")]:
+        c = DM.Case(md, "random", 65536, S, "scaled", seed=5)
+        blk = DM.mk_block(md, S, fuse=True, xchg=False)
+        TR = (S + 3) // 4
+        xmc = XMerge(md, TR, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "8")), users=S)
+        idx8 = blk.idx_rows(c.idx_dev)
+        sk = torch.zeros(8, TR, 32, 1)
+        for cc in range(8):
+            for b in range(4):
+                sk[cc, :, 8 * b : 8 * b + 8, 0] = c.sl[8 * cc : 8 * cc + 8][None, :]
+        skd = DM.to_mesh(md, sk, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+
+        def split():
+            qg = blk.gather_q(c.q_dev)
+            return blk.mod.sparse_sdpa_split(
+                qg, c.kv_dev, idx8, 512, DM.SCALE, blk.kc, blk.G, blk.ckc, None, emit_stats=3, owner_s=S, compact=True
+            )
+
+        def a1():
+            out = split()
+            x = ttnn.experimental.all_to_all_async_generic(
+                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+            )
+            return hy4_merge.merge_fused(x, skd, TR, full=S > 2, hm_users=S)
+
+        t0 = timed_traced(md, split)
+        t1 = timed_traced(md, a1)
+        t2 = timed_traced(md, lambda: xmc(split(), skd))
+        emit(
+            {
+                "test": "xmc_lat",
+                "S": S,
+                "gather_split_us": t0,
+                "a1_total_us": t1,
+                "xmc_total_us": t2,
+                "a1_stage_us": round(t1 - t0, 1),
+                "xmc_stage_us": round(t2 - t0, 1),
+            }
+        )
+        c.free()
+
+
 def run_pcc(md):
     var = os.environ.get("VAR", "a1")
     SS = [int(x) for x in os.environ.get("SS", "1,2,3,4,5,6,7,8").split(",")]
@@ -86,9 +157,9 @@ def run_pcc(md):
             name = f"{tag}_S{S}_{var}"
             try:
                 c = DM.Case(md, kind, ctx, S, "scaled", seed=3, skew=skew)
-                if var == "cmp":
+                if var in ("cmp", "xmc"):
                     blk = DM.mk_block(md, S, fuse=True, xchg=False)
-                    got = [cmp_run(md, blk, c, S) for _ in range(reps)]
+                    got = [(cmp_run if var == "cmp" else xmc_run)(md, blk, c, S) for _ in range(reps)]
                     ps = [round(pcc(g, c.ref), 6) for g in got]
                     rows = [round(min(pcc(g[:, s], c.ref[:, s]) for s in range(S)), 6) for g in got]
                     emit(
@@ -203,7 +274,7 @@ def run_lat(md):
 if __name__ == "__main__":
     full, md = open_row()
     try:
-        for name, fn in [("pcc", run_pcc), ("lat", run_lat)]:
+        for name, fn in [("pcc", run_pcc), ("lat", run_lat), ("xmclat", run_xmclat)]:
             if os.environ.get("TEST", "pcc") in (name, "all"):
                 fn(md)
     finally:
