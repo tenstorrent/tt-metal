@@ -11,7 +11,12 @@ import ttml
 
 
 class SliceLastDim(ttml.autograd.Function):
-    """Differentiable truncation of the last dimension: ``y = x[..., :width]``."""
+    """Slice ``x[..., :width]`` with gradient zero-padded back to the full width.
+
+    Used to drop padded logit columns in the TP LM head — the padding rows are
+    never looked up as embeddings and never appear as labels, so a zero grad
+    for those positions is the correct upstream signal.
+    """
 
     @staticmethod
     def forward(ctx, x, width):
