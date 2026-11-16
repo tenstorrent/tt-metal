@@ -265,11 +265,11 @@ Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_con
     if (detail::_hw_statistic_fits_one_program(y)) {
         return ttnn::var(y, ttsl::SmallVector<int>{-2, -1}, true, output_mem_config, std::nullopt, 1.0f, false);
     }
-    // scale^2 * mean((d / scale)^2). The square of the scale rides on the multiply.
+    // (mean((d / scale)^2) * scale) * scale. Both products are exact, since the scale is a power of two, and neither
+    // overflows unless the variance does. scale^2 on its own can: one 1e20 in a 512x512 plane of zeros has a scale of
+    // 2^66, whose square is above FLT_MAX, while the variance is 3.8e34.
     const auto [mean_square, scale] = detail::_mean_squared_deviation_hw(y);
-    const std::array square_of_scale = {
-        operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::SQUARE}};
-    return ttnn::multiply(mean_square, scale, std::nullopt, output_mem_config, std::nullopt, {}, {}, square_of_scale);
+    return ttnn::multiply(ttnn::multiply(mean_square, scale), scale, std::nullopt, output_mem_config);
 }
 
 // Function std
