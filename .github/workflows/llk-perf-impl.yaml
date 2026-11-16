@@ -251,6 +251,66 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Nightly only: build the sentinel kernels in two build paths; the ELFs must match (reproducible build), and the
+  # nightly health check compares their TILE_LOOP code and placement with the last nightly.
+  llk-build-check:
+    needs: [build-images]
+    if: ${{ inputs.shadow-compile-runner != '' && github.event_name == 'schedule' && inputs.architecture != 'quasar' }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(inputs.architecture == 'all' && '["wormhole", "blackhole"]' || format('["{0}"]', inputs.architecture)) }}
+    name: "Build check: sentinel ELFs, ${{ matrix.arch }}"
+    runs-on: ${{ inputs.shadow-compile-runner }}
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm"
+    steps:
+      - name: Checkout code
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: ./setup_testing_env.sh
+      - name: Build twice and compare
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          CHIP_ARCH: ${{ matrix.arch }}
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_DEBUG_SYMBOLS: ${{ inputs.debug-symbols }}
+          TT_LLK_DISABLE_ASSERTS: "1"
+          LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          WORKERS: ${{ inputs.shadow-compile-workers }}
+        run: |
+          NODES="$PWD/perf/toolchain_check_nodes.txt"
+          ARGS=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=60 --compile-producer -n "$WORKERS" --node-list="$NODES")
+          if [[ "$SPEED_OF_LIGHT" == true ]]; then ARGS+=(--speed-of-light); fi
+          if [[ "$LLK_PERF_DEBUG_SYMBOLS" == false ]]; then ARGS+=(--no-debug-symbols); fi
+          # Collect only the listed files: collecting the whole suite is most of a session's time.
+          FILES=()
+          for f in $(cut -d: -f1 "$NODES" | sort -u); do
+            if [[ -f "tests/python_tests/$f" ]]; then FILES+=("$f"); fi
+          done
+          # Two build paths of different length: only the debug sections may differ.
+          for SIDE in a longer-path-b; do
+            (cd tests/python_tests && RUNNER_TEMP="$RUNNER_TEMP/$SIDE" pytest "${ARGS[@]}" "${FILES[@]}") \
+              || echo "::warning::Some sentinel kernels did not compile in build $SIDE."
+          done
+          python3 perf/toolchain_check.py elfs --a "$RUNNER_TEMP/a/tt-llk-build" --b "$RUNNER_TEMP/longer-path-b/tt-llk-build" \
+            --objdump tests/sfpi/compiler/bin/riscv-tt-elf-objdump --out "$RUNNER_TEMP/build-check/build_check.json"
+      - name: Upload the result
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-build-check-${{ matrix.arch }}${{ inputs.artifact-suffix }}
+          path: ${{ runner.temp }}/build-check/build_check.json
+          retention-days: 14
+
   stage2-baseline:
     name: "Stage 2: read the merge baseline"
     if: ${{ inputs.stage2-baseline-ref != '' }}
@@ -341,6 +401,21 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
+      # The nightly health check compares this with the pin and with the last nightly.
+      - name: Record the toolchain
+        id: toolchain
+        if: ${{ inputs.shadow-compile-runner != '' && github.event_name == 'schedule' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        run: python3 tt_metal/tt-llk/perf/toolchain_check.py toolchain --out "$RUNNER_TEMP/toolchain/toolchain.json"
+      - name: Upload the toolchain record
+        if: ${{ steps.toolchain.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-toolchain-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}${{ inputs.artifact-suffix }}
+          path: ${{ runner.temp }}/toolchain/toolchain.json
+          retention-days: 14
       - name: Download the node list
         if: ${{ inputs.node-list-artifact != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
