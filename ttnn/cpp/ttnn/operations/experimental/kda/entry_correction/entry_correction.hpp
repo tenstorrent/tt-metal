@@ -17,7 +17,7 @@ namespace ttnn::experimental::kda {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
     const ttnn::Tensor& terms,
-    const ttnn::Tensor& final_a,
+    const ttnn::Tensor& final_e,
     const ttnn::Tensor& final_b,
     const ttnn::Tensor& entry,
     const ttnn::Tensor& tail_entry,

@@ -25,7 +25,7 @@ from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     build_reference,
 )
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig
-from tests.scripts.common import get_updated_device_params
+from tt_py_test_utils_common.device_params import get_updated_device_params
 
 
 TESTS_DIR = Path(__file__).parent

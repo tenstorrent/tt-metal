@@ -11,6 +11,13 @@ import ttnn
 from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 TILE_HEIGHT = 32
 
@@ -710,3 +717,41 @@ def test_gather_rank1_nd_sharded_input(device):
     output = ttnn.gather(tt_input, 0, index=tt_index, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     assert_equal(torch.gather(torch_input, 0, torch_index.long()), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.gather))
+@pytest.mark.parametrize(
+    "dtype, layout", docstring_dtype_layout_params(ttnn.gather, "Supported dtypes and layouts for input tensor values")
+)
+def test_gather_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every input dtype, layout and interleaved buffer type the ttnn.gather docstring lists."""
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((64, 128), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    index = torch.randint(0, 128, (32, 96), dtype=torch.int64)
+    index_tensor = ttnn.from_torch(
+        index.to(torch.int32), dtype=ttnn.uint32, layout=layout, device=device, memory_config=memory_config
+    )
+    output = ttnn.gather(input_tensor, -1, index=index_tensor, memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(torch.gather(ttnn.to_torch(input_tensor).to(torch.float64), -1, index), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "index_dtype, layout",
+    docstring_dtype_layout_params(ttnn.gather, "Supported dtypes and layouts for index tensor values"),
+)
+def test_gather_docstring_supported_index_inputs(index_dtype, layout, device):
+    """Runs every index dtype and layout the ttnn.gather docstring lists."""
+    check_readable(index_dtype, layout)
+    input_tensor = ttnn.from_torch(full_range_input((64, 128), ttnn.bfloat16), layout=layout, device=device)
+    index = torch.randint(0, 128, (32, 96), dtype=torch.int64)
+    index_tensor = ttnn.from_torch(index.to(torch.int32), dtype=index_dtype, layout=layout, device=device)
+    output = ttnn.gather(input_tensor, -1, index=index_tensor)
+
+    assert_exact(torch.gather(ttnn.to_torch(input_tensor), -1, index), ttnn.to_torch(output))
