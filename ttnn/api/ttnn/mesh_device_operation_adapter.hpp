@@ -1356,18 +1356,23 @@ public:
     //
     // Per-device run args. A factory whose devices differ only in a few named kernel run args declares
     // `static constexpr bool uses_per_device_run_args = true`, lists each device's values in
-    // PerCoordProgram::per_device_run_params, and overrides with
-    // `static RangeRunArgs override_runtime_arguments(attrs, args, ret, range)` (base run args plus per-device
-    // values). Each range then runs:
+    // PerCoordProgram::per_device_run_params. Each range then runs:
     // - merged: one program with per-device run args (experimental::UpdateProgramRunArgsForDevice), when the range has
     //   several devices and ArePerDeviceRuntimeArgsSupported holds;
     // - split: otherwise, one program per coordinate, each with the base run args overlaid with its device's values.
-    // The choice is made at the cache miss from the declaration, not from the miss's values. Every call's base run
-    // args must list every arg (on every node) that this call or the previous one set per device; that is checked
-    // on every call, so a device, core or arg no longer set per device falls back to the base value. Keep the base
-    // values under per-device args constant across calls: a changed base word under a per-device arg rebuilds the
-    // per-device commands at the next enqueue. A merged entry cannot be hit during light-metal capture (clear the
-    // program cache first); entries built during capture stay split.
+    // The choice is made at the cache miss from the declaration, not from the miss's values. A merged entry cannot be
+    // hit during light-metal capture (clear the program cache first); entries built during capture stay split. Every
+    // arg you ever set per device also goes in the base run args, on every call (checked at the miss, and on every
+    // hit against what the previous call set).
+    //
+    // The cache-hit override is optional:
+    // - Without one, the per-device values are set once, at the cache miss, and a hit only refreshes the tensor
+    //   bindings (UpdateTensorArgs keeps per-device values). For values that depend only on the device's coordinate
+    //   and the op's hashed attributes (a rank, a fabric route).
+    // - With `static RangeRunArgs override_runtime_arguments(attrs, args, ret, range)`, each hit returns the base run
+    //   args plus the per-device values. For values that change between calls (a seed). Keep the base values under
+    //   per-device args constant across calls: a changed base word under a per-device arg rebuilds the per-device
+    //   commands at the next enqueue.
     // -----------------------------------------------------------------------
     template <MeshWorkloadSpecFactoryConcept WorkloadSpecFactory>
     struct MeshWorkloadSpecFactoryAdapter : SpecBindingSupport {
@@ -1406,11 +1411,20 @@ public:
                 return false;
             }
         }
+        // Per-device values set once, at the cache miss: a per-device factory without an override.
+        static consteval bool fixed_per_device_run_args() {
+            return uses_per_device_run_args() && !requires { &WorkloadSpecFactory::override_runtime_arguments; };
+        }
+        // Otherwise an override with a wrong signature would make the factory one without an override.
         static_assert(
-            uses_per_device_run_args() == detail::HasRangeRunArgsOverride<WorkloadSpecFactory>,
-            "A factory with `uses_per_device_run_args = true` overrides with "
-            "`static RangeRunArgs override_runtime_arguments(..., const MeshCoordinateRange&)`, and only such a "
-            "factory does.");
+            !uses_per_device_run_args() || !requires { &WorkloadSpecFactory::override_runtime_arguments; } ||
+                (detail::HasRangeRunArgsOverride<WorkloadSpecFactory> && has_override_runtime_arguments()),
+            "A factory with `uses_per_device_run_args = true` overrides, if at all, with "
+            "`static RangeRunArgs override_runtime_arguments(attrs, args, ret, const MeshCoordinateRange&)`.");
+        static_assert(
+            !detail::HasRangeRunArgsOverride<WorkloadSpecFactory> || uses_per_device_run_args(),
+            "Only a factory with `uses_per_device_run_args = true` overrides with "
+            "`static RangeRunArgs override_runtime_arguments(..., const MeshCoordinateRange&)`.");
 
         // Per-device run args: realises the factory's programs into a workload, merged or split per range.
         static cached_mesh_workload_t create_per_device_mesh_workload(
@@ -1495,8 +1509,37 @@ public:
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
-        // Per-device run args, cache hit: one override call per factory range; the adapter's checks (devices, kinds,
-        // coverage, support) run on every result before any program changes.
+        // A merged entry needs per-device run args now; checked on every hit, before any program changes.
+        template <typename State>
+        static void check_merged_entry_usable(const State& state, tt::tt_metal::distributed::MeshDevice& mesh_device) {
+            TT_FATAL(
+                !state.merged || !per_device_run_args::force_split(),
+                "A forced split (per_device_run_args::ScopedForceSplit) hit a merged program cache entry");
+            TT_FATAL(
+                !state.merged ||
+                    tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(mesh_device, state.factory_range),
+                "This program cache entry runs range {} as one program with per-device run args, which are not "
+                "supported now (light-metal capture?): clear the program cache first",
+                state.factory_range);
+        }
+
+        // Per-device run args without an override, cache hit: the per-device values set at the miss stay; only the
+        // tensor bindings are refreshed (UpdateTensorArgs keeps per-device values).
+        static void apply_fixed_per_device_run_args(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            auto* mesh_device = SpecBindingSupport::source_mesh_device(tensor_args, tensor_return_value);
+            for (const auto& [coordinate_range, sv] : cached_workload.shared_variables) {
+                check_merged_entry_usable(*sv.per_device, *mesh_device);
+            }
+            SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);
+            SpecBindingSupport::refresh_tensor_args(cached_workload, tensor_args, tensor_return_value);
+        }
+
+        // Per-device run args with an override, cache hit: one override call per factory range; the adapter's checks
+        // (devices, kinds, coverage, support) run on every result before any program changes.
         static void apply_per_device_run_args(
             cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& attrs,
@@ -1517,15 +1560,7 @@ public:
                 if (coordinate_range != state.program_ranges.front()) {
                     continue;  // the range's first program stands for all of them
                 }
-                TT_FATAL(
-                    !state.merged || !pd::force_split(),
-                    "A forced split (per_device_run_args::ScopedForceSplit) hit a merged program cache entry");
-                TT_FATAL(
-                    !state.merged ||
-                        tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(*mesh_device, state.factory_range),
-                    "This program cache entry runs range {} as one program with per-device run args, which are not "
-                    "supported now (light-metal capture?): clear the program cache first",
-                    state.factory_range);
+                check_merged_entry_usable(state, *mesh_device);
                 auto run_args = WorkloadSpecFactory::override_runtime_arguments(
                     attrs, tensor_args, tensor_return_value, state.factory_range);
                 auto keys = pd::validate_and_collect_keys(state.factory_range, run_args.per_device, state.schema);
@@ -1637,7 +1672,9 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            if constexpr (uses_per_device_run_args()) {
+            if constexpr (fixed_per_device_run_args()) {
+                apply_fixed_per_device_run_args(cached_workload, attrs, tensor_args, tensor_return_value);
+            } else if constexpr (uses_per_device_run_args()) {
                 apply_per_device_run_args(cached_workload, attrs, tensor_args, tensor_return_value);
             } else {
                 SpecBindingSupport::refresh_prefetcher_pipe_args(cached_workload, attrs);

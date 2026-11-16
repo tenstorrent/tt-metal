@@ -96,6 +96,7 @@ struct PerDeviceRunArgsOp {
         bool base_omits_arr = false;               // likewise for the array
         std::optional<uint32_t> skip_device;       // this device (row-major index) gets no per-device values
         std::optional<uint32_t> bad_array_device;  // this device's array has the wrong length
+        std::optional<uint32_t> duplicate_kernel_device;  // this device lists the main kernel twice
         bool misspelled_arg = false;  // the base and every device also set an arg the kernel does not declare
         bool bad_base_row = false;    // on a hit, row 1's base sets an undeclared arg (metal rejects it as it applies)
         // Hashed: the program's shape.
@@ -209,6 +210,9 @@ struct PerDeviceRunArgsOp {
                 continue;  // no per-device values: no entry (a call can leave the list empty)
             }
             m2::ProgramRunArgs values;
+            if (attrs.duplicate_kernel_device == index) {
+                values.kernel_run_args.push_back(main);
+            }
             values.kernel_run_args.push_back(std::move(main));
             if (attrs.with_extra && attrs.salt_per_device) {
                 m2::ProgramRunArgs::KernelRunArgs extra{.kernel = m2::KernelSpecName{kExtra}};
@@ -277,6 +281,18 @@ struct PerDeviceRunArgsOp {
                 .per_device = per_device(attrs, range, tensor_args.input.device()->shape())};
         }
     };
+    // Without an override: the per-device values of the cache miss stay on every hit.
+    struct FixedFactory {
+        static constexpr bool uses_per_device_run_args = true;
+
+        static MeshWorkloadArtifacts create_mesh_workload_artifacts(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+            return Factory::create_mesh_workload_artifacts(attrs, tensor_args, output, tensor_coords);
+        }
+    };
     using program_factory_t = std::variant<Factory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {}
@@ -292,8 +308,15 @@ struct PerDeviceRunArgsOp {
     }
 };
 
+struct FixedPerDeviceRunArgsOp : PerDeviceRunArgsOp {
+    using program_factory_t = std::variant<PerDeviceRunArgsOp::FixedFactory>;
+};
+
 using MeshOp = ttnn::device_operation::MeshDeviceOperationAdapter<PerDeviceRunArgsOp>;
 using Adapter = MeshOp::MeshWorkloadSpecFactoryAdapter<PerDeviceRunArgsOp::Factory>;
+using FixedMeshOp = ttnn::device_operation::MeshDeviceOperationAdapter<FixedPerDeviceRunArgsOp>;
+using FixedAdapter = FixedMeshOp::MeshWorkloadSpecFactoryAdapter<PerDeviceRunArgsOp::FixedFactory>;
+static_assert(!Adapter::fixed_per_device_run_args() && FixedAdapter::fixed_per_device_run_args());
 
 class SpecPerDeviceRunArgsTest : public tt::tt_metal::MeshDeviceFixtureBase {
 protected:
@@ -406,6 +429,7 @@ protected:
         launch(first);
         EXPECT_ANY_THROW(launch(Attrs{.call = 1, .bias_cores = {}, .array_per_device = true, .bad_array_device = 3}));
         EXPECT_ANY_THROW(launch(Attrs{.call = 2, .bias_cores = {1}, .misspelled_arg = true}));
+        EXPECT_ANY_THROW(launch(Attrs{.call = 4, .bias_cores = {1}, .duplicate_kernel_device = 5}));
         clear_l1();
         enqueue_cached(first);
         expect_values(first);
@@ -414,6 +438,36 @@ protected:
         clear_l1();
         launch(without_array);
         expect_values(without_array);
+    }
+
+    // A factory without an override: the miss sets the per-device values, and a hit (whose attributes would set
+    // others) keeps them.
+    void run_fixed(uint32_t ranges, size_t expected_programs) {
+        using Attrs = PerDeviceRunArgsOp::operation_attributes_t;
+        const Attrs miss{.call = 0, .bias_cores = {1}, .array_per_device = true, .with_extra = true, .ranges = ranges};
+        clear_l1();
+        (void)ttnn::device_operation::launch<FixedPerDeviceRunArgsOp>(miss, input());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        expect_values(miss);
+        Attrs hit = miss;
+        hit.call = 1;
+        hit.bias_cores = {0};
+        clear_l1();
+        (void)ttnn::device_operation::launch<FixedPerDeviceRunArgsOp>(hit, input());
+        tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        expect_values(miss);
+        EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1u);
+        const auto args = input();
+        const auto lookup =
+            ttnn::device_operation::detail::look_up_program_cache<FixedMeshOp>(hit, args, mesh_device_.get());
+        ASSERT_TRUE(lookup.hit);
+        EXPECT_EQ(
+            mesh_device_->get_program_cache()
+                .get(lookup.key)
+                .cached_program.template get<FixedAdapter::cached_mesh_workload_t>()
+                .workload.get_programs()
+                .size(),
+            expected_programs);
     }
 
     // A sequence of calls on one cache entry: per-device values change, a core and an array start and stop being set
@@ -466,9 +520,20 @@ TEST_F(SpecPerDeviceRunArgsTest, BaseMustListWhatThePreviousCallSetPerDevice) {
     expect_values(next);
 }
 
+// Without an override, a hit keeps the cache miss's per-device values, merged or split.
+TEST_F(SpecPerDeviceRunArgsTest, WithoutOverrideHitKeepsMissValues) {
+    run_fixed(/*ranges=*/2, /*expected_programs=*/3);
+}
+
+TEST_F(SpecPerDeviceRunArgsTest, WithoutOverrideSplitKeepsMissValues) {
+    ttnn::device_operation::per_device_run_args::ScopedForceSplit split(*mesh_device_);
+    run_fixed(/*ranges=*/0, /*expected_programs=*/mesh_device_->shape().mesh_size());
+}
+
 // Per-device values metal would reject (an array of the wrong length on one device, an arg the kernel does not
-// declare) are rejected before anything changes, so a hit cannot fail part-way on them and leaves no trace: the
-// cached workload still holds the previous call's values, and later calls are unconstrained by the rejected args.
+// declare, a kernel listed twice) are rejected before anything changes, so a hit cannot fail part-way on them and
+// leaves no trace: the cached workload still holds the previous call's values, and later calls are unconstrained by the
+// rejected args.
 TEST_F(SpecPerDeviceRunArgsTest, BadPerDeviceValuesAreRejectedBeforeAnyChange) { bad_values_rejected(); }
 
 // A hit can still fail part-way on something the adapter does not check (here: row 1's base sets an undeclared

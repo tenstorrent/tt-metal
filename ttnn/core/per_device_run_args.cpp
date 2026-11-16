@@ -106,8 +106,16 @@ KeySet validate_and_collect_keys(
             "Per-device run args of device {} hold named kernel run args only (no tensor args, DFB overrides or "
             "advanced program args)",
             device);
-        for (const auto& kernel_args : values.kernel_run_args) {
+        for (size_t k = 0; k < values.kernel_run_args.size(); ++k) {
+            const auto& kernel_args = values.kernel_run_args[k];
             const std::string& kernel = kernel_args.kernel.get();
+            for (size_t l = 0; l < k; ++l) {
+                TT_FATAL(
+                    values.kernel_run_args[l].kernel != kernel_args.kernel,
+                    "Per-device run args of device {}: kernel '{}' is listed twice",
+                    device,
+                    kernel);
+            }
             const auto declared_it = schema.find(kernel);
             TT_FATAL(declared_it != schema.end(), "Per-device run args of device {}: no kernel '{}'", device, kernel);
             const auto& declared = declared_it->second;
