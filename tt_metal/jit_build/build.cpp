@@ -425,6 +425,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DPROFILE_RISCV_PMC=1 ";
         this->defines_ += "-DPROFILE_RISCV_PMC_EV3=" + std::to_string(rtoptions.get_profiler_riscv_pmc_event3()) + "u ";
         this->defines_ += "-DPROFILE_RISCV_PMC_EV4=" + std::to_string(rtoptions.get_profiler_riscv_pmc_event4()) + "u ";
+        this->defines_ +=
+            "-DPROFILE_RISCV_PMC_DM_EV3=" + std::to_string(rtoptions.get_profiler_riscv_pmc_dm_event3()) + "u ";
+        this->defines_ +=
+            "-DPROFILE_RISCV_PMC_DM_EV4=" + std::to_string(rtoptions.get_profiler_riscv_pmc_dm_event4()) + "u ";
     }
 
     if (rtoptions.get_watcher_enabled()) {
