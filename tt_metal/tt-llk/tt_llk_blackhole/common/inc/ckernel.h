@@ -116,8 +116,8 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
     // - memory clobber
     //     - prevents the COMPILER from reordering memory accesses across this boundary
 
-    volatile char *dstc       = reinterpret_cast<volatile char *>(dst);
-    const volatile char *srcc = reinterpret_cast<const volatile char *>(src);
+    volatile char *dstc       = static_cast<volatile char *>(dst);
+    const volatile char *srcc = static_cast<const volatile char *>(src);
 
     for (std::size_t i = 0; i < len; i++)
     {

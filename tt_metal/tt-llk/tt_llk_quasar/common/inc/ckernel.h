@@ -43,16 +43,16 @@ constexpr std::uint8_t PARAM_ITERATIONS             = 0;
 constexpr std::uint8_t TENSIX_PACK_STREAM_SEMAPHORE = p_stall::SEMAPHORE_6;
 constexpr std::uint8_t PACK_STREAM_SEMAPHORE        = 6;
 
-volatile std::uint32_t *const reg_base        = (volatile std::uint32_t *)0xFFB10000;
-volatile std::uint32_t *const pc_buf_base     = (volatile std::uint32_t *)PC_BUF_BASE;
-volatile std::uint32_t *const regfile         = (volatile std::uint32_t *)REGFILE_BASE;
-volatile std::uint32_t *const instrn_buffer   = (volatile std::uint32_t *)INSTRN_BUF_BASE;
+volatile std::uint32_t *const reg_base        = reinterpret_cast<volatile std::uint32_t *>(0xFFB10000);
+volatile std::uint32_t *const pc_buf_base     = reinterpret_cast<volatile std::uint32_t *>(PC_BUF_BASE);
+volatile std::uint32_t *const regfile         = reinterpret_cast<volatile std::uint32_t *>(REGFILE_BASE);
+volatile std::uint32_t *const instrn_buffer   = reinterpret_cast<volatile std::uint32_t *>(INSTRN_BUF_BASE);
 volatile std::uint32_t *const mailbox_base[4] = {
-    (volatile std::uint32_t *)TENSIX_MAILBOX0_BASE,
-    (volatile std::uint32_t *)TENSIX_MAILBOX1_BASE,
-    (volatile std::uint32_t *)TENSIX_MAILBOX2_BASE,
-    (volatile std::uint32_t *)TENSIX_MAILBOX3_BASE};
-volatile std::uint32_t *const replay_mmap = (std::uint32_t volatile *)(INSTRN_BUF_BASE + (1 << 10));
+    reinterpret_cast<volatile std::uint32_t *>(TENSIX_MAILBOX0_BASE),
+    reinterpret_cast<volatile std::uint32_t *>(TENSIX_MAILBOX1_BASE),
+    reinterpret_cast<volatile std::uint32_t *>(TENSIX_MAILBOX2_BASE),
+    reinterpret_cast<volatile std::uint32_t *>(TENSIX_MAILBOX3_BASE)};
+volatile std::uint32_t *const replay_mmap = reinterpret_cast<std::uint32_t volatile *>(INSTRN_BUF_BASE + (1 << 10));
 
 inline void mmio_register_write(register_space_e space, std::uint32_t addr, std::uint32_t data)
 {
@@ -698,7 +698,7 @@ inline void wait_bstatus_low(std::uint32_t val)
 [[maybe_unused]]
 static void time_waster(int num_iters)
 {
-    std::uint32_t volatile *some_random_l1_address = (std::uint32_t volatile *)0x14FFE;
+    std::uint32_t volatile *some_random_l1_address = reinterpret_cast<std::uint32_t volatile *>(0x14FFE);
     std::uint32_t dont_optimize_me_away;
 
     for (int i = 0; i < num_iters; i++)
@@ -771,7 +771,7 @@ void set_up_dest_dvalid_per_thread(dest_dvalid_client const (&clients)[N])
     static_assert(N > 1, "Doesn't make sense to set dvalid control if you only have one client");
     static_assert(N <= 4, "We only support up to 3 producer-consumer pairs");
 
-    auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+    auto cfg = reinterpret_cast<std::uint32_t volatile *>(TENSIX_CFG_BASE);
 
     if (CURR_CLIENT == clients[0])
     {
@@ -800,7 +800,7 @@ inline void init_prng_seed(const std::uint32_t seed)
     constexpr std::uint32_t PRNG_SFPU_NUM_CIDS  = 64;
     // All ones is the XNOR-LFSR lock-up state.
     constexpr std::uint32_t PRNG_LFSR_LOCKUP_SEED = 0xFFFFFFFF;
-    auto cfg                                      = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+    auto cfg                                      = reinterpret_cast<std::uint32_t volatile *>(TENSIX_CFG_BASE);
     for (std::uint32_t i = 0; i < PRNG_SFPU_NUM_CIDS; i++)
     {
         // murmur3 fmix32 of seed + i * golden ratio, so neighbouring lanes get unrelated seeds.
@@ -961,8 +961,8 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
     // - memory clobber
     //     - prevents the COMPILER from reordering memory accesses across this boundary
 
-    volatile char *dstc       = reinterpret_cast<volatile char *>(dst);
-    const volatile char *srcc = reinterpret_cast<const volatile char *>(src);
+    volatile char *dstc       = static_cast<volatile char *>(dst);
+    const volatile char *srcc = static_cast<const volatile char *>(src);
 
     for (std::size_t i = 0; i < len; i++)
     {

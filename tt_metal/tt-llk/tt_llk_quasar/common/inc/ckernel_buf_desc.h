@@ -47,7 +47,7 @@ enum class BfdResource : std::uint8_t
 };
 
 // Points to the config space
-std::uint32_t volatile* const cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+std::uint32_t volatile* const cfg = reinterpret_cast<std::uint32_t volatile*>(TENSIX_CFG_BASE);
 // Points to the buffer table
 buffer_descriptor_u volatile* const bd_table = (buffer_descriptor_u volatile* const)(cfg + BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_ADDR32);
 
