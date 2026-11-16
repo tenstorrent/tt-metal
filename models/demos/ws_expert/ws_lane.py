@@ -62,7 +62,8 @@ class LCfg:
     gather: bool = True  # token rows gathered from DRAM; False (WG_NO_GATHER, a diagnostic): x staged unread
     mux_noc1: bool = False  # the fabric mux kernels on NOC1 (BRISC, writer NoC) instead of NOC0
     # NOC0 for the group multicasts only (all from the BRISCs) and NOC1 for every DRAM read (moved to the NCRISCs) and
-    # the muxes, so nothing enters a group rectangle from outside on its multicasts' NoC (WL_NOC_SPLIT)
+    # the muxes, so nothing enters a group rectangle from outside on its multicasts' NoC (WL_NOC_SPLIT); with bcast,
+    # core 0's BRISC (NOC0's start corner) multicasts both the x blocks and the h rows, fed on NOC1
     noc_split: bool = False
 
 
@@ -222,7 +223,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     xflags = w16(NX)
     xprog = w16(GC)
     assert not (lc.bcast and lc.mc_noc1), "bcast and mc_noc1 place the multicasts differently"
-    assert not (lc.noc_split and (lc.bcast or lc.mc_noc1)), "noc_split places every multicast on NOC0"
+    assert not (lc.noc_split and lc.mc_noc1), "noc_split places every multicast on NOC0"
     hcnt = w16(NS) if lc.bcast else None  # core 19's h tiles arrived a ring slot (WL_BCAST)
     # core 0's x funnel slots and their filled flags (WL_XIN, WL_XINF)
     xin = sharded_l1(mesh, C, [lc.xf * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT) if lc.bcast else None

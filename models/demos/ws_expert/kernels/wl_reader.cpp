@@ -673,7 +673,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t harr = get_semaphore(SEM_HARR);
     const uint32_t hscr_addr = get_semaphore(SEM_SCRH);
     volatile tt_l1_ptr uint32_t* hscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hscr_addr);
-#ifdef WL_BCAST
+#if defined(WL_BCAST) && !defined(WL_NOC_SPLIT)
     // core GC - 1 (NOC1's multicast start corner): row q once its GC tiles are in ring slot q % NS (the slot's count,
     // GC a use) and row q - 1's last flag has landed here (one h multicast in flight). The row goes to the other cores
     // only (it is already in place here, and a loopback copy could land after a producer's next tile for the slot),
@@ -735,6 +735,51 @@ void kernel_main() {
         return true;
     };
 #endif
+    // ---- Q2 (WL_BCAST with WL_NOC_SPLIT): this core's tile of h row hs into core 0's ring slot hs % NS on NOC1
+    // (west / north, inside the group), with its own transaction id; once acknowledged, the slot's arrival count at
+    // core 0 + 1 and the tile freed. The slot holds row hs - NS until that row's multicast has left core 0: its last
+    // flag landing here shows it.
+#if defined(WL_BCAST) && defined(WL_NOC_SPLIT)
+    constexpr uint32_t h_cb = tt::CBIndex::c_16;
+    constexpr uint32_t H_TRID = 0xE;  // (own chunk reads use 1..D)
+    static_assert(D < H_TRID);
+    uint32_t hs = 0;
+    bool hs_wait = false;
+    auto q2 = [&]() -> bool {
+        if (hs_wait) {
+            if (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, H_TRID)) {
+                return false;
+            }
+            noc_semaphore_inc(get_noc_addr(cxs[0], ny0, WL_BCAST + (hs % NS) * 16), 1);
+            cb_pop_front(h_cb, 1);
+            ++hs;
+            hs_wait = false;
+            return true;
+        }
+        if (hs >= total_rows || !cb_pages_available_at_front(h_cb, 1)) {
+            return false;
+        }
+        if (hs >= NS) {
+            invalidate_l1_cache();
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hflags + ((hs % NS) * 2 + 1) * 16) <
+                hs - NS + 1) {
+                return false;
+            }
+        }
+        noc_async_write_one_packet_with_trid(
+            get_read_ptr(h_cb),
+            get_noc_addr(cxs[0], ny0, hring + ((hs % NS) * KTD + C * HALF + Y) * htile),
+            htile,
+            H_TRID);
+        noc_async_write_set_trid(0);
+        hs_wait = true;
+        return true;
+    };
+#else
+    const uint32_t hs = total_rows;
+    const bool hs_wait = false;
+    auto q2 = []() -> bool { return false; };
+#endif
 #ifdef WG_Y_NCRISC
     // ---- QY: down outputs (CB 17) to DRAM, on NOC1 (the BRISC's NOC0 keeps the DRAM reads): the group's last
     // expert's rows at tile row g ORMAX, or (WL_OUT_ALL) every expert's, packed in order from g ORMAX
@@ -783,7 +828,7 @@ void kernel_main() {
             invalidate_l1_cache();
             a = qw() | qf() | qr();
         }
-        const bool r = q1() | qo();
+        const bool r = q1() | qo() | q2();
         const uint32_t t1 = wall();
         const bool b = qa();
         const uint32_t t2 = wall();
@@ -797,6 +842,7 @@ void kernel_main() {
             mx[i] = dd[i] > mx[i] ? dd[i] : mx[i];
         }
         if (!y && !l && !a && !b && !c && !d && !r && g_n >= nexp_g && g_state == 0 && qo_done() &&
+            hs >= total_rows && !hs_wait &&
             drained >= total_rows && (!mch || lq >= total_rows) && w_n >= nexp_g &&
             w_dn >= nexp_g && freed >= nexp_g && slots_done() && (a_n >= nexp_g || !mcx) &&
             b_s >= total_x && x_credited >= total_x && h_q >= total_rows) {

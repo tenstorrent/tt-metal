@@ -38,6 +38,10 @@ constexpr uint32_t K = WL_K;  // weight slots a core
 // funnel slots (WL_XIN, WL_XF slots, filled flags at WL_XINF), and core 0's BRISC multicasts every block on NOC0 in
 // stream order, one at a time. h: every core sends its tile of a row on NOC0 (east / south) to core GC - 1, whose
 // NCRISC multicasts the whole row on NOC1, one at a time. WL_BCAST: NS per-slot h arrival counters (16 B apart).
+// WL_BCAST with WL_NOC_SPLIT: core 0's BRISC (NOC0's multicast start corner) is the group's only multicaster, of the x
+// blocks (QX) and of the h rows (QM); the producers send their x blocks and h tiles to core 0 on NOC1 from their
+// NCRISCs (west / north, inside the group), so NOC0 carries nothing but core 0's multicasts, which never leave the
+// rectangle, and NOC1 carries no multicast.
 constexpr uint32_t X_COLS = 0, H_COLS = 0;
 #elif defined(WL_MC_NOC1)
 constexpr uint32_t X_COLS = 0, H_COLS = 0;  // (column 0's multicasts go out from its NCRISC on NOC1)
@@ -273,6 +277,9 @@ void kernel_main() {
     };
     // ---- Q2: h tile -> column leader (WL_BCAST: -> core 0, counted in the row's ring slot)
     uint32_t sent = 0;
+#if defined(WL_BCAST) && defined(WL_NOC_SPLIT)
+    sent = total_rows;  // (the NCRISC sends this core's h tiles to core 0 on NOC1)
+#endif
     const uint32_t harr = get_semaphore(SEM_HARR);
     auto q2 = [&]() -> bool {
         if (sent >= total_rows || !cb_pages_available_at_front(h_cb, 1)) {
@@ -326,6 +333,44 @@ void kernel_main() {
         lq += HALF;
         return true;
     };
+    // ---- QM (WL_BCAST with WL_NOC_SPLIT, core 0): h row q once its GC tiles are in ring slot q % NS (the
+    // slot's arrival count, GC a use) and row q - 1's last flag has landed here (one h multicast in flight). The
+    // row goes to the other cores only (it is already in place here, and a loopback copy could land after a
+    // producer's next tile for the slot), unlinked; then both column flags to every core including this one, from
+    // the same command buffer, so each lands after the row.
+#if defined(WL_BCAST) && defined(WL_NOC_SPLIT)
+    const bool hm = J == 0;
+    uint32_t hq = 0;
+    auto qm = [&]() -> bool {
+        if (!hm || hq >= total_rows) {
+            return false;
+        }
+        invalidate_l1_cache();
+        if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_BCAST + (hq % NS) * 16) < GC * (hq / NS + 1)) {
+            return false;
+        }
+        if (hq > 0 &&
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hflags + (((hq - 1) % NS) * 2 + 1) * 16) < hq) {
+            return false;
+        }
+        const uint32_t row = hring + (hq % NS) * KTD * htile;
+        *scr = hq + 1;
+        noc_async_write_multicast(
+            row, get_noc_multicast_addr(gx0, gy0, gx1, gy1, row), KTD * htile, ngroup - 1, false);
+        for (uint32_t c = 0; c < 2; ++c) {
+            noc_async_write_multicast_loopback_src(
+                scr_addr, get_noc_multicast_addr(gx0, gy0, gx1, gy1, hflags + ((hq % NS) * 2 + c) * 16), 4, ngroup,
+                false);
+        }
+        noc_async_writes_flushed();
+        ++hq;
+        return true;
+    };
+#else
+    const bool hm = false;
+    const uint32_t hq = total_rows;
+    auto qm = []() -> bool { return false; };
+#endif
     // ---- Q4: down outputs
 #ifdef WG_Y_NCRISC
     // (the down outputs go to DRAM from the NCRISC on NOC1: this RISC's NOC0 only reads DRAM)
@@ -492,7 +537,7 @@ void kernel_main() {
         uint32_t t3 = wall();
         const bool c = q3();
         uint32_t t4 = wall();
-        const bool d = q4();
+        const bool d = q4() | qm();
         uint32_t t5 = wall();
         tq[0] += t1 - t0;
         tq[1] += t2 - t1;
@@ -505,7 +550,7 @@ void kernel_main() {
         }
         const bool mch = (H_COLS >> C) & 1;
         if (!o && !x && !a && !b && !c && !d && g_n >= nexp_g && sent >= total_rows && (!mch || lq >= total_rows) &&
-            drained >= total_rows && x_done() && g_state == 0 && qo_done()) {
+            drained >= total_rows && x_done() && g_state == 0 && qo_done() && (!hm || hq >= total_rows)) {
             break;
         }
     }
