@@ -16,6 +16,10 @@ be rejected), so every count from 1 to K + 1, a rejection at every draft positio
 EOS or length cut (a count below the matched drafts) occur. The block ids follow the plugin's rule
 (tests/spec_block_helpers.py) in mamba_cache_mode "none" and "align".
 
+A device-sampled verify of the live rows 0 .. n-1 replays the verify row bucket of b >= n users and its sampler trace;
+the same verify on the full-width traces gives the live rows the same draws, argmax ids, logits shard, drafter feed
+rows and GDN states, bit for bit, on every device.
+
     MESH_DEVICE=P150x8 HF_MODEL=<Qwen3.8-27B dir> pytest models/demos/blackhole/qwen36/tests/test_mtp_gdn_blocks.py
 """
 
@@ -44,6 +48,8 @@ from models.demos.blackhole.qwen36.tests.test_gdn_block_state import (
     _prompts,
 )
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.spec_engine import verify_write_table
+from models.demos.blackhole.qwen36.tt.spec_sample import sampling_plan
 
 LOGIT_PCC = 0.99
 
@@ -548,3 +554,95 @@ def test_device_sampled_verify_draws_from_the_target(mesh_device, K, monkeypatch
     )
     for v, a in steps:
         pair.verify({1: (v, a), 3: (v, a)}, "argmax_ids", sampling)
+
+
+def _replica_rows(t, rows):
+    """Per device, the first ``rows`` rows of the [1, 1, R, W] device tensor ``t`` as torch."""
+    import ttnn
+
+    return [ttnn.to_torch(d).reshape(-1, int(t.shape[-1]))[:rows].clone() for d in ttnn.get_device_tensors(t)]
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize
+def test_a_sampled_bucket_verify_draws_what_the_full_width_verify_draws(
+    mesh_device, monkeypatch, reset_seeds, ensure_gc
+):
+    """B = 8, K = 3, device sampling. Live rows {0}, {0, 1} and {0, 1, 2} (buckets 1, 2, 4), rows 0 and 1 seeded
+    sampled (top-k 32 and top-k 20 top-p 0.95), row 2 greedy, 4 steps each. Every step runs the same verify twice on
+    the same start blocks, first on the bucket's verify and sampler traces, then on the full-width ones
+    (Qwen36Model.verify_traced with and without ``bucket``): the live rows' ids (draws for the sampled rows), the
+    sampled rows' raw draws, the live rows' vocab shard of the logits and drafter feed rows, and the GDN state after
+    every verify column are equal bit for bit on every device. The step then commits one token."""
+    K, B = 3, 8
+    T = K + 1
+    pair = Pair(mesh_device, monkeypatch, K, "none", bmax=B, spec_sample=True)
+    model = pair.spec_model
+    assert sorted(model._vfy_bucket_sample_traces) == [1, 2, 4], "the bucket sampler traces are captured"
+    prompts = _prompts(3, 800, seed=47)
+    nxt = {}
+    for r, n in zip(range(3), (650, 410, 530)):
+        nxt[r] = int(pair.prefill(r, prompts[r][:n].tolist()).argmax())
+    params = SimpleNamespace(
+        temperature=[1.0, 0.8, 0.0] + [0.0] * (B - 3),
+        top_k=[32, 20, 1] + [1] * (B - 3),
+        top_p=[1.0, 0.95, 1.0] + [1.0] * (B - 3),
+        seed=[1234, 2**40 + 7, None] + [None] * (B - 3),
+    )
+    compared = 0
+    for live, bucket in (((0,), 1), ((0, 1), 2), ((0, 1, 2), 4)):
+        for step in range(4):
+            tokens = [[0] * T for _ in range(B)]
+            positions = [0] * B
+            sel = {}
+            for r in live:
+                req = pair.rows[r]
+                tokens[r] = [nxt[r]] + prompts[r][req["n"] : req["n"] + K].tolist()
+                positions[r] = req["n"]
+                sel[r] = pair.spec_blocks.decode(r, req["n"], T)
+            state = pair.spec_blocks.state(sel, B)
+            inactive = [u not in live for u in range(B)]
+            nv = torch.tensor([K if u in live else 0 for u in range(B)])
+            pt = verify_write_table(pair.table(live), torch.tensor(positions), nv, pair.bs)
+            plan = sampling_plan(params, [p if u in live else -1 for u, p in enumerate(positions)], T)
+            assert plan.any_sampled
+            rows = torch.tensor([r * T + j for r in live for j in range(T)])
+            drawn = torch.tensor([r for r in range(bucket * T) if plan.sampled[r]])
+            runs = []
+            for b in (bucket, None):
+                model.gdn_blocks.set_verify_blocks(state)
+                ids, feed, _ = model.verify_traced(
+                    tokens, positions, [0] * B, page_tables=pt, inactive=inactive, rope_deltas=[0] * B,
+                    sample_plan=plan, bucket=b,
+                )  # fmt: skip
+                shard = model._vfy_shard_out if b is None else model._vfy_bucket_shards[b]
+                runs.append(
+                    dict(
+                        ids=[ids[r] for r in rows.tolist()],
+                        draws=model._vfy_sampler.read()[drawn],
+                        shard=[x[rows] for x in _replica_rows(shard, bucket * T)],
+                        feed=[x[rows] for x in _replica_rows(feed, bucket * T)],
+                        gdn={(r, j): pair.state(model, [w[j] for w in sel[r][0]]) for r in live for j in range(T)},
+                    )
+                )
+            got, want = runs
+            where = f"live rows {live}, step {step}"
+            assert got["ids"] == want["ids"], f"{where}: ids {got['ids']} against {want['ids']}"
+            assert torch.equal(got["draws"], want["draws"]), f"{where}: draws"
+            for d, (x, y) in enumerate(zip(got["shard"], want["shard"])):
+                assert torch.equal(x.view(torch.int16), y.view(torch.int16)), f"{where}: logits shard on device {d}"
+            for d, (x, y) in enumerate(zip(got["feed"], want["feed"])):
+                assert torch.equal(x, y), f"{where}: drafter feed rows on device {d}"
+            for key, layers in got["gdn"].items():
+                for layer, per_device in layers.items():
+                    for d, ((rec_g, hist_g), (rec_w, hist_w)) in enumerate(zip(per_device, want["gdn"][key][layer])):
+                        same = torch.equal(rec_g, rec_w) and torch.equal(hist_g, hist_w)
+                        assert same, f"{where}: GDN state of (row, column) {key}, layer {layer}, device {d}"
+            compared += len(drawn)
+            for i, r in enumerate(live):
+                pair.spec_blocks.commit(r, 1)
+                nxt[r] = int(got["ids"][i * T])
+                pair.rows[r]["n"] += 1
+            logger.info(f"{where}: bucket {bucket} equals the full-width verify (column-0 ids {got['ids'][::T]})")
+    assert compared == 4 * T * (1 + 2 + 2)

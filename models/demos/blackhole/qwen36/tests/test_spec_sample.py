@@ -12,7 +12,9 @@ verify, whose seeds the chain program writes (spec_chain.ChainInputs).
 
 The sampler takes the top-32 of its four vocabulary chunks in one ttnn.topk call over the chunks stacked as rows. Next
 to the sampler with one call per chunk (tests/spec_op_graphs.py ChunkedVerifySampler), on logits full of exact ties,
-it hands ttnn.sampling the same values and ids in the same order and draws the same tokens, on every device.
+it hands ttnn.sampling the same values and ids in the same order and draws the same tokens, on every device. A verify
+row bucket's sampler trace, over the bucket's first b*T rows of logits, draws those rows' tokens as the full-width
+sampler trace does.
 
     pytest models/demos/blackhole/qwen36/tests/test_spec_sample.py    (Blackhole, up to 2 chips)
 """
@@ -398,3 +400,69 @@ def test_the_stacked_sampler_draws_what_the_per_chunk_sampler_draws(mesh_device,
         s1.release()
         s0.release()
     assert compared >= 4 * 25 * T
+
+
+@_parametrize
+def test_a_bucket_sampler_draws_what_the_full_width_sampler_draws(mesh_device):
+    """One sampler of B = 8 users x T = 4 with the inputs of the bucket row counts 4, 8 and 16 (prepare_rows), captured
+    over the full-width logits and over each bucket's own logits buffer holding the first b*T rows of the same logits,
+    as the model captures its bucket sampler traces. For tie-heavy logits and 15 plans per bucket (live users below b:
+    seeded rows, unseeded rows with fresh seeds, a greedy row), the bucket trace draws its rows' tokens exactly as the
+    full-width trace does, on every device."""
+    B, T = 8, 4
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+    s = _Sampler(mesh_device, B, T, capture=False)
+    bucket_logits = {
+        b: ttnn.from_torch(
+            torch.zeros(1, 1, b * T, VOCAB), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device,
+            mesh_mapper=rep,
+        )
+        for b in (1, 2, 4)
+    }  # fmt: skip
+    for b in bucket_logits:
+        s.sampler.prepare_rows(b * T)
+    for b, logits in bucket_logits.items():  # compiles every program, allocates nothing that outlives it
+        s.sampler.body(logits)
+    s.capture()
+    traces = {}
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        for b, logits in bucket_logits.items():
+            traces[b] = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            s.sampler.body(logits)
+            ttnn.end_trace_capture(mesh_device, traces[b], cq_id=0)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    rng = random.Random(9)
+    users = [(1.0, 32, 1.0, 700), (0.8, 20, 0.95, None), (0.0, 1, 1.0, None), (1.2, 5, 1.0, 702)]
+    params = SimpleNamespace(
+        **{k: [users[u % 4][i] for u in range(B)] for i, k in enumerate(("temperature", "top_k", "top_p", "seed"))}
+    )
+    compared = 0
+    try:
+        for i, kind in enumerate(("coarse", "bf16")):
+            logits = _tie_logits(kind, B * T, VOCAB, seed=300 + i)
+            s.stage_logits(logits)
+            for b, buf in bucket_logits.items():
+                h = ttnn.from_torch(
+                    logits[: b * T].reshape(1, 1, b * T, VOCAB), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=rep,
+                )  # fmt: skip
+                ttnn.copy_host_to_device_tensor(h, buf)
+                for step in range(15):
+                    positions = [60 + 3 * u + step if u < b else -1 for u in range(B)]
+                    plan = sampling_plan(params, positions, T, lambda: rng.randrange(1, 10**6))
+                    full = s.draw(plan)[:, : b * T]
+                    ttnn.execute_trace(mesh_device, traces[b], cq_id=0, blocking=False)
+                    ttnn.synchronize_device(mesh_device)
+                    got = torch.stack(
+                        [ttnn.to_torch(t).reshape(-1)[: b * T].to(torch.int64)
+                         for t in ttnn.get_device_tensors(s.sampler.draws)]
+                    )  # fmt: skip
+                    assert torch.equal(got, full), f"{kind}, bucket {b}, step {step}: the draws differ"
+                    compared += sum(plan.sampled[: b * T])
+    finally:
+        s.release()
+        for trace in traces.values():
+            ttnn.release_trace(mesh_device, trace)
+    assert compared == 2 * 15 * (1 + 2 + 3) * T
