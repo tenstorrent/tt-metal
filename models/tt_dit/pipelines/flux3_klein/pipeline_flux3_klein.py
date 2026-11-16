@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -49,6 +51,9 @@ from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
 from .vae_flux3_klein import Flux3KleinVae
 from .weights_flux3_klein import checkpoint_id, resolve_weights_dir
 
+# Klein's q / k norms split their work by (row, head): bit-identical, faster. The program factory reads it at compile time.
+os.environ.setdefault("TT_DIT_RMSNORM_HEAD_SPLIT", "1")
+
 # The first release serves fixed shapes (width, height), all warmed up at startup, and at most one reference image,
 # center-cropped and resized to 1 MP as in BFL's multi-reference sizing, or to 4 MP at the 4096 shapes.
 SIZES = (1024, 2048, 4096)
@@ -90,9 +95,10 @@ def layout_buckets(buckets: tuple[int, ...], width: int, height: int, references
 
 
 def make_noise(seed: int, h: int, w: int) -> torch.Tensor:
+    """The reference's draw: [1, C, h, w] in fp32, rounded to bf16, one row per latent pixel."""
     generator = torch.Generator().manual_seed(seed)
-    noise = torch.randn((h * w, IN_CHANNELS["image"]), generator=generator)
-    return noise.to(torch.bfloat16).float()
+    noise = torch.randn((1, IN_CHANNELS["image"], h, w), generator=generator)
+    return noise.to(torch.bfloat16).flatten(2).transpose(1, 2)[0].float().contiguous()
 
 
 def caption_seed(caption: str) -> int:
@@ -176,6 +182,12 @@ class Flux3KleinPipeline:
         self._tp_axis = tp_axis
         mesh_shape = tuple(mesh_device.shape)
         shared = next(iter(snapshots.values()))
+        if ttnn.using_distributed_env():
+            # the TP collectives stay on one host: each host holds whole TP columns, the SP axis spans the hosts
+            view = mesh_device.get_view()
+            local = [c for c in itertools.product(*map(range, mesh_shape)) if view.is_local(ttnn.MeshCoordinate(*c))]
+            if len({c[tp_axis] for c in local}) != mesh_shape[tp_axis]:
+                raise ValueError(f"this host does not hold whole TP columns (axis {tp_axis}) of the {mesh_shape} mesh")
 
         encoder_parallel = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis)
