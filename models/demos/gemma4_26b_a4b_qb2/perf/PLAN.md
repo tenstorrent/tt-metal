@@ -18,7 +18,7 @@ batch 1 **53.8 tok/s/user** (18.6 ms); batches 8 / 16 / 32 step 129 / 255 / 501 
 | WS6 | A | MTP speculative decoding (port from `models/demos/gemma4`, #62806) | B1 ×1.5-2 effective |
 
 Machines: **A** = qb2-120-p01t07 (lead Claude, terminal `qb2-120-p01t07/t21`),
-**B** = qb2-49-14 / qb2-120-p04t04 (stage agent). Each agent uses **only its own QB2's chips**.
+**B** = qb2-120-p04t04 (Herdr address qb2-120-p04t04/gemma26-b; ssh alias qb2-49-14) (stage agent). Each agent uses **only its own QB2's chips**.
 
 ## Code ownership (to keep stages from colliding)
 
@@ -34,8 +34,20 @@ All work happens in `models/demos/gemma4_26b_a4b_qb2/` (plus new op dirs for WS4
 | WS5 | new `tt/fused_decode/` package + kernels; then the decode-layer switch | the non-fused path |
 | WS6 | new `tt/mtp/` + vLLM adapter hooks | decode internals |
 
-If a stage needs to change code another stage owns, message the other agent first (`hc send`) and agree
-who makes the change. Do not keep private copies of shared helpers: put shared tools in `perf/tools/`.
+If a stage needs to change code another stage owns, tell the other agent (`hc send`) what and why, then keep
+going: make the smallest change your stage needs, keep it in its own commit, and let whoever lands second
+reconcile it at merge. Do not keep private copies of shared helpers: put shared tools in `perf/tools/`.
+
+## No waiting
+
+Each machine runs its own chain (A: WS1 → WS3 → WS6, B: WS2 → WS4 → WS5) and never waits for the other.
+No stage needs a stage from the other machine.
+- Start each stage from `hub/integration`. If the other machine landed nothing new, that is simply your own
+  last landed stage; continue from it.
+- Never idle on a message, an answer or the other machine's progress. Questions are notices, not gates.
+- Integration points follow whatever is on `integration` when you get there. Example: WS4 plugs `moe_decode`
+  into the MoE decode path as it exists then (the tensor-parallel experts if WS1 has not landed, WS1's
+  32-experts-per-chip path if it has). Whoever lands second adapts their change to the other's.
 
 ## Git: one hub, one integration branch
 
