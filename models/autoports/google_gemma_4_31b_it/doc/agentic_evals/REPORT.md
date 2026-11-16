@@ -122,3 +122,18 @@ P19’s fixed 108 current-Q32 panel completed in 3,342.184 s and all required ca
 Two targeted full-BF16/HiFi4 Q32 controls emitted valid bash protocol on exact indices54/seed42 and89/seed44; these cover only those sampled continuations. The separate all-group full-BF16/HiFi4 fixed108 panel and all cap extensions are root-reviewed:90 normal,18 native motifs,0 other,0 inconclusive. Rows105/107 are valid open thought-channel continuations, without HF-equivalence claims. Both two-case arms are terminal: KV-only BFP8 passed both sampled controls; down BFP8 plus LoFi produced a malformed Sympy opener and valid Sphinx protocol. The latter changes dtype and fidelity together, so it does not isolate either factor. These are diagnostics, not policy selection or broad acceptance. Current serving/list gates remain outstanding and need a new authorized window. No policy, score, score bound or serving-rate change is claimed. P19 Q32 resume/broad acceptance results and old Q128 metrics do not substitute for full-BF16 validation. All diagnostic replay rates remain distinct from serving throughput.
 
 The [stage-12 natural-512 precision Pareto table and plots](setup/precision-pareto/stage12-natural512-pareto.md) compare diagnostic traced teacher-forcing rates. These are historical measurements before the HiFi4 Q32 correction, not post-fix validation or vLLM rates. Q geometry varies by policy; P19 remains unselected.
+
+## Stage usage
+
+| row | sessions | input tokens | cached input | uncached input | output tokens | reasoning output | model(s) |
+|---|---|---|---|---|---|---|---|
+| main | 1 | 923,869,224 | 914,317,184 | 9,552,040 | 1,946,514 | 482,813 | gpt-6-astra |
+| sub-agents (188) | 188 | 1,439,589,546 | 1,405,810,176 | 33,779,370 | 7,096,927 | 2,423,363 | gpt-6-astra, gpt-6-luna |
+| remediation/review rounds | 0 | 0 | 0 | 0 | 0 | 0 | - |
+| total | 189 | 2,363,458,770 | 2,320,127,360 | 43,331,410 | 9,043,441 | 2,906,176 | gpt-6-astra, gpt-6-luna |
+
+Stage 2026-11-13T23:15:25Z to 2026-11-16T00:02:39Z (UTC), 48.79 wall hours, terminal status blocked, remediation rounds 0.
+
+Counted by thread family (the stage's main thread, its sub-agents, and the remediation/review threads the runner started, with their sub-agents) from the Codex sessions in /home/mvasiljevic/v5-agentic/codex-home; 23 other session(s) in that home are not counted; other homes on the same account are not included.
+
+Device (device_timeline.jsonl, checked every 15 s, ran on qb2-120-p04t04, as uid 6002, pid namespace pid:[4026532779]; view incomplete (unreadable fds, a gap or a missing start)): held 32.41 h, idle 16.38 h, unknown 0.00 h, of 48.79 wall hours; held by other holders 0.00 h (separate). Held, not busy: an idle server counts as held.

@@ -1,0 +1,204 @@
+{"t": 1794611725, "held": 0, "of": 4, "by": "", "other": false, "event": "stage_start", "host": "qb2-120-p04t04", "uid": 6002, "runner_pid": 7, "pidns": "pid:[4026532779]", "interval": 15}
+{"t": 1794612025, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false}
+{"t": 1794612385, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794612415, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false}
+{"t": 1794623607, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794623637, "held": 4, "of": 4, "by": "python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/goog", "other": false}
+{"t": 1794623967, "held": 4, "of": 4, "by": "python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/goog", "other": false, "unreadable": 1}
+{"t": 1794623982, "held": 4, "of": 4, "by": "python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precision_repro_probe.py --case models/autoports/goog", "other": false}
+{"t": 1794624237, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794624477, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794625482, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794625497, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794625587, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794625662, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794625737, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794626217, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794626367, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false, "unreadable": 1}
+{"t": 1794626382, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794626412, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false, "unreadable": 1}
+{"t": 1794626427, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794626472, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false, "unreadable": 1}
+{"t": 1794626487, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794626532, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794626682, "held": 4, "of": 4, "by": "python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/probe_bf16_minimal_matmul.py --out models/autoports/g", "other": false}
+{"t": 1794626697, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794626727, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794628437, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794628557, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794628812, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794628857, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794629367, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794629412, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_prefill_resume_check --model", "other": false}
+{"t": 1794629712, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794629727, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794629967, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794629982, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.gen", "other": false}
+{"t": 1794630222, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794630462, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false}
+{"t": 1794640529, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794640559, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794640949, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794640979, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794641504, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794648270, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794648796, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794648901, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794649471, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794649681, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794650191, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794650236, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794650806, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794655068, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false}
+{"t": 1794661623, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794661714, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794662674, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794662749, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/precis", "other": false}
+{"t": 1794664489, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794674061, "held": null, "of": 4, "by": "", "other": false, "unreadable": 1}
+{"t": 1794674076, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794678667, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false}
+{"t": 1794678922, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794679027, "held": 4, "of": 4, "by": "VLLM::EngineCore", "other": false}
+{"t": 1794692410, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794692485, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794692695, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794692710, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794692860, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794693040, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794709256, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794709271, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794710292, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794710307, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794717522, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794717537, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794718257, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794718272, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794719832, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794719847, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794720342, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794720432, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794721243, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794721348, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794721753, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794722023, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794724033, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794724438, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794724753, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794724768, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794727228, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794727528, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794727708, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794727738, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794727903, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794728413, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794728623, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794728848, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794729013, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794729028, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794729148, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794739545, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794739695, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794739770, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794739920, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794740116, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794742246, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794742291, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794742441, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794742531, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794742621, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794742816, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794743326, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794746626, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794747076, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794747346, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794747436, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794747587, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794748067, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794748277, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794748787, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794749267, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794751607, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794751847, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794752417, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794752537, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794753077, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794753197, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794753392, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794753482, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794753617, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794753797, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794753992, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794754037, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794754202, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794754367, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794754547, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794754607, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794754772, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794754817, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794755027, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794755087, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794755267, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794755327, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794755507, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794755567, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794755747, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794755792, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794755942, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false, "unreadable": 1}
+{"t": 1794755957, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794756062, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794756107, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794756362, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794756422, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794756587, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794756707, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794756872, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794756932, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794757112, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794757307, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794760893, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794761133, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794761643, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794765529, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794766594, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794766639, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_prefill_resume_check --model", "other": false}
+{"t": 1794766984, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794767059, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794767254, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794767524, "held": 4, "of": 4, "by": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.probe_resume_ccl_p19_bf16 --config models/autoport", "other": false}
+{"t": 1794767614, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794767734, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794768019, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794768529, "held": 4, "of": 4, "by": "python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.probe_resume_stages_p19 --starts 32,64,256 --confi", "other": false}
+{"t": 1794768559, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794768694, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794768814, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794768919, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.pro", "other": false}
+{"t": 1794768949, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794768979, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/mode", "other": false}
+{"t": 1794769249, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794772610, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_prefill_resume_check --model", "other": false}
+{"t": 1794772895, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794772985, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794773960, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794774095, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794777440, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794777605, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794777950, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794778205, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794778355, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794778835, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794782826, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794783036, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794783591, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794783921, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794784101, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794784146, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794784281, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794784341, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tools.pre", "other": false}
+{"t": 1794784506, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794784536, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m readiness_check.run_prefill_resume_check --model", "other": false}
+{"t": 1794784851, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794784941, "held": 4, "of": 4, "by": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run", "other": false}
+{"t": 1794786276, "held": 0, "of": 4, "by": "", "other": false}
+{"t": 1794787359, "held": 0, "of": 4, "by": "", "other": false, "event": "stage_end"}
