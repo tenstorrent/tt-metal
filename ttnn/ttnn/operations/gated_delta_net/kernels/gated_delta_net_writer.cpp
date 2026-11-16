@@ -179,7 +179,14 @@ FORCE_INLINE void push_chunk_coefs(
         const uint32_t e = elem_index(p, 0);
         coef[e] = valid ? gates[elem_index(p, gate_col)] : 0u;
         coef[TILE_WORDS + e] = valid ? gates[TILE_WORDS + elem_index(p, gate_col)] : 0u;
-        if constexpr (GDN_CHUNK_COEF_PAGES > 2) {
+        if constexpr (GDN_PREP_M_BETA != 0) {
+            // diag(beta) (PREP_M_BETA; the page is zero elsewhere, see prep_writer), up by the mean loss of the FPU's
+            // truncations in quarter units of the last operand bit. Zero, denormal, inf and NaN stay as they are.
+            const uint32_t b = coef[TILE_WORDS + e];
+            const bool normal = (b >> 23) - 1 < 0xfd;
+            coef[2 * TILE_WORDS + elem_index(p, p)] =
+                normal ? b + ((((b & 0x7fffffu) | 0x800000u) * GDN_M_BETA_UNBIAS_Q) >> 12) : b;
+        } else if constexpr (GDN_CHUNK_COEF_PAGES > 2) {
             coef[2 * TILE_WORDS + e] = coef[TILE_WORDS + e] ^ 0x80000000u;  // -beta (STATE_FUSED_RHS)
         }
     }
@@ -227,6 +234,13 @@ void prep_writer(
     const uint32_t vec_base = region + GDN_OFFSET_IN_VEC;
 
     Noc noc;
+    if constexpr (GDN_PREP_M_BETA != 0) {
+        // The diag(beta) pages hold zeros off the diagonal: zeroed once, push_chunk_coefs stores only the diagonal.
+        CircularBuffer coef_buf(cb_tok_coef);
+        noc.async_write_zeros(
+            coef_buf, GDN_CHUNK_COEF_PAGES * GDN_TOK_COEF_DEPTH * STATE_TILE_BYTES, {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
+    }
     Semaphore<> granted(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS);
     Semaphore<> o_landed(GDN_LANDED_FIRST_SEM_ID + INBOX_SLOTS + 1);
     constexpr uint32_t O_PAGES = RATIO * Vt;  // o of one tile row: the r heads' V columns, head-major
@@ -283,9 +297,11 @@ void prep_writer(
     };
     auto wait_send = [&](uint32_t pages) {
         if constexpr (NORM_SPLIT) {
-            while (!cb_pages_available_at_front(cb_prep_send, pages)) {
+            // At least once per part: a row's sends take long where many rows land at once, and compute may be
+            // waiting for an o (norm_mid).
+            do {
                 serve_norms();
-            }
+            } while (!cb_pages_available_at_front(cb_prep_send, pages));
         }
         cb_wait_front(cb_prep_send, pages);
     };
@@ -296,9 +312,20 @@ void prep_writer(
         const uint32_t base_row = tr * TILE_ROWS;
         const uint32_t lo = row_lo(tr);
         const uint32_t hi = row_hi(tr);
+        // NORM_SPLIT: compute may be in a norm unit ahead of this row's heads (norm_mid), which needs its o landed.
+        if constexpr (NORM_SPLIT) {
+            while (!cb_pages_available_at_front(cb_gates, 2)) {
+                serve_norms();
+            }
+        }
         cb_wait_front(cb_gates, 2);
         volatile tt_l1_ptr uint32_t* gates = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_gates));
         for (uint32_t j = 0; j < RATIO; ++j) {
+            if constexpr (NORM_SPLIT) {
+                while (!cb_pages_reservable_at_back(cb_tok_coef, GDN_CHUNK_COEF_PAGES)) {
+                    serve_norms();
+                }
+            }
             push_chunk_coefs(gates, (head0 + j) % TILE_ROWS, base_row, lo, hi);
         }
         cb_pop_front(cb_gates, 2);
@@ -319,6 +346,7 @@ void prep_writer(
             }
         }
         granted.wait_min((sent + 1) * GROUP);
+        GDN_MARK("m_wr_granted");
         // The row's o slot is free (compute has normalized the row that used it), so the row may be sent.
         // NORM_SPLIT: a norm core's cb_o_in holds every row it normalizes (host), so no row waits for a slot.
         if constexpr (!NORM_SPLIT) {
@@ -350,11 +378,13 @@ void prep_writer(
             }
             noc_async_write_barrier();
             cb_pop_front(cb_prep_send, HEAD_PAGES);
+            GDN_MARK("m_wr_head");
         }
         for (uint32_t c = 0; c < GROUP; ++c) {
             Semaphore<> landed(GDN_LANDED_FIRST_SEM_ID + slot);
             landed.up(noc, cons_x[c], cons_y[c], 1);
         }
+        GDN_MARK("m_wr_row_up");
     }
     if constexpr (NORM_SPLIT) {
         while (stored_units < norm_units) {

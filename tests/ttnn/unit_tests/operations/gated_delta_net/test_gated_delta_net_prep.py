@@ -83,6 +83,55 @@ def test_prep_scale_fpu(device, monkeypatch, inputs, mask):
     check_call(returned, expected, inputs)
 
 
+@pytest.mark.parametrize("m_beta", [False, True], ids=["beta_rhs", "beta_m"])
+@pytest.mark.parametrize("fused", [True, False], ids=["fused", "split"])
+@pytest.mark.parametrize("poison", [None, float("inf")], ids=["clean", "inf_padding"])
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 2, 256), (1, 3, 32, 64)), id="t2"),
+        pytest.param(((1, 200, 256), (1, 3, 32, 64)), id="t200"),
+        pytest.param(((1, 70, 2560), (1, 12, 128, 128)), id="chip_t70"),
+    ],
+)
+def test_prep_m_beta(device, monkeypatch, inputs, poison, fused, m_beta):
+    """Refinement 28: beta in the rhs of M or folded into M (PREP_M_BETA), with and without the fused rhs, against
+    the reference."""
+    monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
+    monkeypatch.setattr(gdn_pd, "PREP_M_BETA", m_beta)
+    monkeypatch.setattr(gdn_pd, "STATE_FUSED_RHS", fused)
+    torch.manual_seed(11)
+    tensors = make_inputs(inputs)
+    expected = reference(*(tensors[name] for name in ORDER))
+    returned = gated_delta_net(*to_device(tensors, device, poison=poison), compute_kernel_config=compute_config())
+    check_call(returned, expected, inputs)
+
+
+@pytest.mark.parametrize("mid", [0, 1], ids=["norms_last", "norm_mid"])
+@pytest.mark.parametrize("hold", [True, False], ids=["hold", "unpack"])
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        pytest.param(((1, 200, 256), (1, 3, 32, 64)), id="t200"),
+        pytest.param(((1, 20, 2560), (1, 12, 128, 128)), id="chip_t20"),
+        pytest.param(((1, 70, 2560), (1, 12, 128, 128)), id="chip_t70"),
+        pytest.param(((1, 1344, 2560), (1, 12, 128, 128)), id="chip_t1344"),
+    ],
+)
+def test_prep_hold_mid(device, monkeypatch, inputs, hold, mid):
+    """Refinement 28: STATE_HOLD (the upper update batch of a state core stays in DEST; chip_t20 is one step, first
+    and last) and PREP_NORM_MID (chip_t1344: 42 tile rows on 21 prep cores, so the cores past the inbox depth
+    normalize a unit ahead of the heads of their second row), each on and off, against the reference."""
+    monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)
+    monkeypatch.setattr(gdn_pd, "STATE_HOLD", hold)
+    monkeypatch.setattr(gdn_pd, "PREP_NORM_MID", mid)
+    torch.manual_seed(23)
+    tensors = make_inputs(inputs)
+    expected = reference(*(tensors[name] for name in ORDER))
+    returned = gated_delta_net(*to_device(tensors, device), compute_kernel_config=compute_config())
+    check_call(returned, expected, inputs)
+
+
 def test_prep_state_carry(device, monkeypatch):
     """Two R-PREP calls (T = 100, 40) then a decode call, each from the previous call's states."""
     monkeypatch.setattr(gdn_pd, "PREP_MIN_TILE_ROWS", 1)

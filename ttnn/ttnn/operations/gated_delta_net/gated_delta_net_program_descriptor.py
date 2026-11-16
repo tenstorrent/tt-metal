@@ -167,10 +167,18 @@ PREP_SEND_HEADS = None  # R-PREP: head blocks a prep core holds for its writer; 
 # and PREP_NORM_MAX_ROWS tile rows' worth.
 PREP_NORM_SPLIT = True
 PREP_NORM_MAX_ROWS = 4
+# PREP_NORM_SPLIT: a prep core whose stride position is past the inbox depth sends a row only when the state cores
+# have freed its slot, and its next row's head blocks wait for that send. It normalizes this many of its norm units
+# between the conv and the heads of each later row (the time it would wait), where their o precedes its own rows.
+PREP_NORM_MID = 1
 # R-PREP state step: the prep core sends -(beta exp(c)) (*) kn, so the state core accumulates the k read onto beta V in
 # DEST (the rhs of M in one window: no packed reads, no subtraction window) and starts the output's window with the q
 # read. Same operands and fp32 accumulation as the separate read.
 STATE_FUSED_RHS = True
+# R-PREP state core with two update batches per step (its piece of the state is the whole fp32 DEST, one batch per
+# half): the upper batch stays in its DEST half from step to step, so only the lower batch is unpacked per step
+# (4 of the 8 tile loads at Vb = 2). Needs STATE_FUSED_RHS (the step's other windows are counted) and half-sync DEST.
+STATE_HOLD = True
 # R-PREP head block: row scalings as FPU products (ELWMUL) instead of fp32 SFPU products; the scaling vector then
 # passes the 19-bit operands like kn / qn themselves. A mask: 1 beta exp(c) (*) kn, 2 exp(c) (*) qn,
 # 4 kn^T (*) exp(c_last - c)^T.
@@ -180,6 +188,14 @@ PREP_SCALE_FPU = 7
 # truncations on the way to the state (the vector, its product, the product as the state core's operand).
 # 1 + 1.5 * 2^-10; state_carry_one_call_f32 relative RMS 1.45e-3 (SFPU) / 1.90e-3 (factor 1) / 0.90e-3.
 PREP_FPU_UNBIAS_BITS = 0x3F803000
+# R-PREP head block: beta folded into M (the inverse is solved on diag(beta) instead of the identity), so a head needs
+# neither beta exp(c) (one exp tile and a broadcast product) nor beta (*) v (an SFPU window): the state core gets v as
+# it is and exp(c) (*) kn. Same operand count through the FPU; beta reaches U through M's truncation instead of rhs's.
+PREP_M_BETA = True
+# M's unit diagonal passed the FPU exactly; beta on it is truncated to 10 mantissa bits like rhs, the other operand of
+# U = M x rhs. The writer's diag(beta) page is scaled up by the mean loss of those two truncations (0.36 units in the
+# last place each), in quarter units: 3 is a factor of 1 + 0.75 * 2^-10.
+PREP_M_BETA_UNBIAS_Q = 3
 ROW_DEPTH = 2  # tile rows of gate / z / output tiles in flight
 # Per-unit inputs (S0, conv / gate / norm weights) in flight on a core that runs several units: the next unit's reads
 # overlap this unit's compute instead of waiting for its last pop (decode B=16: 2 units on most cores).
@@ -422,6 +438,7 @@ def _kernel_defines():
         "TOK_COEF_PAGES",
         "D_PAGES",
         "CHUNK_COEF_PAGES",
+        "TOK_COEF_DEPTH",
         "CHUNK_VEC_PAGES",
         "CHUNK_MAT_PAGES",
         "QK_OWN",
@@ -615,7 +632,8 @@ def _prep_cb_plan(Kt, Vt, heads, conv_on_fpu, pieces, inbox, shared=False, norm_
     prep[CB_V_PREP] = heads * Vt
     prep[CB_PREP_SEND] = (PREP_SEND_HEADS or heads) * _head_block_pages(Kt, Vt)
     prep[CB_O_IN] = norm_units * Vt if norm_units else O_IN_DEPTH * heads * Vt  # PREP_NORM_SPLIT: per norm unit
-    prep[CB_TOK_COEF] = (CHUNK_COEF_PAGES + int(STATE_FUSED_RHS)) * TOK_COEF_DEPTH  # STATE_FUSED_RHS: -beta too
+    # STATE_FUSED_RHS: -beta too; PREP_M_BETA: diag(beta) in its place
+    prep[CB_TOK_COEF] = (CHUNK_COEF_PAGES + int(STATE_FUSED_RHS or PREP_M_BETA)) * TOK_COEF_DEPTH
     prep[CB_NORM_W] = Vt
     prep[CB_RINV_O] = heads * TOKEN_TILE_ROWS_PER_BLOCK
     prep[CB_ZW] = 2 * heads * Vt  # row k's, made before row k - 1's RMS norm, which takes row k - 1's
@@ -1676,6 +1694,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             extra = seq_rows % stride if norm_split else 0
             norm = [q - extra if q >= extra else seq_rows * heads, stride - extra]
             norm_rows = len(range(norm[0], seq_rows * heads, norm[1]))
+            # PREP_NORM_MID: unit m (before row m // mid + 1's heads) must not wait for a row this core still holds.
+            mid = PREP_NORM_MID if norm_split and q >= inbox else 0
+            mid_rows = [((norm[0] + m * norm[1]) // heads, q + (m // mid) * stride) for m in range(mid * (my_rows - 1))]
+            if any(m >= norm_rows or unit_row >= held_row for m, (unit_row, held_row) in enumerate(mid_rows)):
+                mid = 0
             consumers = [c for u in range(heads * pieces) for c in unit_noc[group_first + u]]
             # A head block goes to the head's pieces: one multicast per row run.
             for j in range(heads):
@@ -1683,11 +1706,11 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
                 consumers += _mcast_rects(device, unit_cores[first : first + pieces])
             qk_src = prep_qk_src.get((core.x, core.y), [])
             rts[0][core.x, core.y] = (
-                [group_first, 1, tokens, prep_qk_role, zero_slots] + rows + norm + qk_src + cs_args(core)
+                [group_first, 1, tokens, prep_qk_role, zero_slots] + rows + norm + [mid] + qk_src + cs_args(core)
             )
             rts[1][core.x, core.y] = [group_first, 1, tokens, prep_qk_role, zero_slots, zero_slot_bytes] + rows + norm
             rts[1][core.x, core.y] += consumers
-            rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, prep_qk_role] + rows + [norm_rows]
+            rts[2][core.x, core.y] = [group_first, 1, tokens, v_eps_bits, prep_qk_role] + rows + [norm_rows, mid]
             dsts = [unit_noc[group_first + u] for u in range(heads * pieces)]
             prep_send_noc0[core.x, core.y] = send_noc0(core, dsts)
         roles[ROLE_PREP] = (prep_cores, *rts)
@@ -1760,13 +1783,16 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
             ("GDN_STATE_FUSED_RHS", str(int(prep is not None and STATE_FUSED_RHS))),
             ("GDN_PREP_SCALE_FPU", str(int(PREP_SCALE_FPU) if prep is not None else 0)),
             ("GDN_FPU_UNBIAS_BITS", f"{PREP_FPU_UNBIAS_BITS:#x}u"),
+            ("GDN_PREP_M_BETA", str(int(prep is not None and PREP_M_BETA))),
+            ("GDN_STATE_HOLD", str(int(prep is not None and STATE_HOLD and STATE_FUSED_RHS and not DST_FULL_SYNC))),
+            ("GDN_M_BETA_UNBIAS_Q", str(int(PREP_M_BETA_UNBIAS_Q))),
         ]
     )
     if packed:
         packed_tiles = -(-int(mixed_qkv.shape[2]) // TILE)
         defines += [("GDN_PACKED_TILES", str(packed_tiles)), ("GDN_PACKED_GATE_TILE", str(Ct + value_heads * Vt))]
     program_values = {}
-    if prep is not None and STATE_FUSED_RHS:
+    if prep is not None and (STATE_FUSED_RHS or PREP_M_BETA):
         program_values["GDN_CHUNK_COEF_PAGES"] = CHUNK_COEF_PAGES + 1
     defines = [(name, str(program_values.get(name, value))) for name, value in defines]
     # R-PREP: offsets of the other role's remotely written buffers from its CB region base (see STATE_REMOTE_CBS).

@@ -14,6 +14,7 @@ namespace {
 // accumulates onto beta V in DEST (the rhs in one window) and its q read is the start of the output's window.
 // The writer then adds a coefficient page with -beta.
 constexpr bool FUSED_RHS = GDN_STATE_FUSED_RHS != 0;
+static_assert(!HOLD || FUSED_RHS, "STATE_HOLD counts the fused step's windows");
 constexpr uint32_t CHUNK_BEC_BETA = PREP && FUSED_RHS ? 2 : CHUNK_BETA;
 // Host PREP_SCALE_FPU, a mask: 1 beta exp(c) (*) kn, 2 exp(c) (*) qn, 4 kn^T (*) exp(c_last - c)^T as FPU products.
 constexpr uint32_t SCALE_FPU = PREP ? GDN_PREP_SCALE_FPU : 0;
@@ -22,6 +23,12 @@ constexpr bool FPU_QN = SCALE_FPU / 2 % 2 == 1;
 constexpr bool FPU_KNT = SCALE_FPU / 4 % 2 == 1;
 // Host PREP_FPU_UNBIAS_BITS: the mean truncation loss of the FPU operands on the way to the state, scaled back in.
 constexpr uint32_t FPU_UNBIAS_BITS = GDN_FPU_UNBIAS_BITS;
+// Host PREP_M_BETA: beta as the columns of M (the solve runs on the writer's diag(beta) page), so v and kn go to the
+// state core without their beta scaling (U = M diag(beta) (V - exp(c) Rk)): the vector for kn is exp(c) with
+// FUSED_RHS's sign.
+constexpr uint32_t CHUNK_DIAG_BETA = 2;
+constexpr bool M_BETA = PREP && GDN_PREP_M_BETA != 0;
+constexpr uint32_t KN_SCALE_BITS = (FPU_KN ? FPU_UNBIAS_BITS : ONE_BITS) | (FUSED_RHS ? 0x80000000u : 0u);
 
 // ---------------------------------------------------------------- one chunk step (R-CHUNK)
 // [Kn Kn^T; Qn Kn^T] -> cb_gram (2 tiles, left waited for head_prep); per key head, shared by its value heads.
@@ -87,19 +94,28 @@ ALWI void head_prep_vectors(uint32_t row_last) {
     begin_loads(cb_chunk_vec);
     load(cb_chunk_vec, CV_C, 0);
     load(cb_chunk_vec, CV_C, 1);
-    load(cb_tok_coef, CHUNK_BEC_BETA, 2);
-    load(cb_chunk_vec, CV_C, 3);
+    if constexpr (!M_BETA) {
+        load(cb_tok_coef, CHUNK_BEC_BETA, 2);
+        load(cb_chunk_vec, CV_C, 3);
+    }
     binop_with_scalar_tile_init();
     rsub_unary_tile(1, c_last_bits);  // c_last - c[s] (<= 0 on token rows)
     exp_tile_init<false>();
     exp_tile<false>(0);  // exp(c)
     exp_tile<false>(1);  // exp(c_last - c)
-    exp_tile<false>(3);
-    sfpu_bcast_col_init();
-    sfpu_mul_bcast_col(3, 2);  // beta exp(c) (FUSED_RHS prep core: -beta exp(c))
-    if constexpr (FPU_KN) {
+    if constexpr (M_BETA) {
+        copy_dest_values_init();
+        copy_dest_values<DataFormat::Float32>(0, 3);
         binop_with_scalar_tile_init();
-        mul_unary_tile(3, FPU_UNBIAS_BITS);
+        mul_unary_tile(3, KN_SCALE_BITS);  // (-)exp(c)
+    } else {
+        exp_tile<false>(3);
+        sfpu_bcast_col_init();
+        sfpu_mul_bcast_col(3, 2);  // beta exp(c) (FUSED_RHS prep core: -beta exp(c))
+        if constexpr (FPU_KN) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(3, FPU_UNBIAS_BITS);
+        }
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -159,7 +175,11 @@ ALWI void head_block(uint32_t head) {
     cb_reserve_back(cb_chunk_vec, 1);
     tile_regs_acquire();
     begin_loads(cb_tri_mask);
-    load(cb_tri_mask, 1, 0);
+    if constexpr (M_BETA) {
+        load(cb_tok_coef, CHUNK_DIAG_BETA, 0);
+    } else {
+        load(cb_tri_mask, 1, 0);
+    }
     load(cb_chunk_vec, CV_W, 2);
     triangle_solve_tile_init();
     triangle_solve_tile<DataFormat::Float32>(cb_chunk_mat, CM_L, 0, 1);
@@ -279,17 +299,20 @@ ALWI void head_block(uint32_t head) {
     cb_push_back(cb_prep_send, Kt);
     GDN_MARK("m_hb_knt");
     cb_reserve_back(cb_prep_send, HEAD_V_TILES);
-    for (uint32_t vt0 = 0; vt0 < HEAD_V_TILES; vt0 += BATCH) {
-        const uint32_t n = (HEAD_V_TILES - vt0) < BATCH ? (HEAD_V_TILES - vt0) : BATCH;
+    constexpr uint32_t V_BATCH = M_BETA ? ckl::DEST_AUTO_LIMIT : BATCH;  // M_BETA: v as it is
+    for (uint32_t vt0 = 0; vt0 < HEAD_V_TILES; vt0 += V_BATCH) {
+        const uint32_t n = (HEAD_V_TILES - vt0) < V_BATCH ? (HEAD_V_TILES - vt0) : V_BATCH;
         tile_regs_acquire();
         begin_loads(cb_v_prep);
         for (uint32_t i = 0; i < n; ++i) {
             load(cb_v_prep, head * HEAD_V_TILES + vt0 + i, i);
         }
-        load(cb_tok_coef, CHUNK_BETA, BATCH);
-        sfpu_bcast_col_init();
-        for (uint32_t i = 0; i < n; ++i) {
-            sfpu_mul_bcast_col(i, BATCH);
+        if constexpr (!M_BETA) {
+            load(cb_tok_coef, CHUNK_BETA, BATCH);
+            sfpu_bcast_col_init();
+            for (uint32_t i = 0; i < n; ++i) {
+                sfpu_mul_bcast_col(i, BATCH);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -433,14 +456,22 @@ ALWI void chunk_state_prepped(Buffers& bufs, bool first_in_pair, bool last_in_pa
                 matmul_tiles(cb_in_kq, s_mm, kt, kt * Vb + vt0 + i, i);  // - beta exp(c) Rk onto beta V
             }
         }
-        tile_regs_commit();
+        if constexpr (HOLD) {
+            commit_stay();
+        } else {
+            tile_regs_commit();
+        }
         tile_regs_wait();
         pack_reconfig_data_format(cb_uw);
         pack_first(0, cb_uw, vt0);
         for (uint32_t i = 1; i < n; ++i) {
             pack_at(i, cb_uw, vt0 + i);
         }
-        tile_regs_release();
+        if constexpr (HOLD) {
+            release_stay();
+        } else {
+            tile_regs_release();
+        }
     }
     for (uint32_t vt0 = 0; !FUSED_RHS && vt0 < Vb; vt0 += PAIRS) {
         const uint32_t n = (Vb - vt0) < PAIRS ? (Vb - vt0) : PAIRS;
@@ -475,13 +506,21 @@ ALWI void chunk_state_prepped(Buffers& bufs, bool first_in_pair, bool last_in_pa
         for (uint32_t i = 0; i < n; ++i) {
             matmul_tiles(cb_in_mat, cb_uw, IN_MAT_M, vt0 + i, i);  // M x rhs
         }
-        tile_regs_commit();
+        if constexpr (HOLD) {
+            commit_stay();
+        } else {
+            tile_regs_commit();
+        }
         tile_regs_wait();
         pack_first(0, cb_u, vt0);
         for (uint32_t i = 1; i < n; ++i) {
             pack_at(i, cb_u, vt0 + i);
         }
-        tile_regs_release();
+        if constexpr (HOLD) {
+            release_stay();
+        } else {
+            tile_regs_release();
+        }
     }
     cb_pop_front(cb_uw, Vb);
     cb_push_back(cb_u, Vb);

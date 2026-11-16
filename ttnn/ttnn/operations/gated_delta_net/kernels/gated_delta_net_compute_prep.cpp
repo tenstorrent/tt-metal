@@ -44,7 +44,8 @@ ALWI void prep_main(
     uint32_t tr_offset,
     uint32_t tr_stride,
     uint32_t v_eps_bits,
-    uint32_t norm_rows) {
+    uint32_t norm_rows,
+    uint32_t norm_mid) {
     const UnitCols cols{0, PREP_SHARED_QK ? 0 : 2 * Kt};
     const uint32_t conv_w_pages = (CONV_ON_FPU ? 1 : GDN_CONV_TAPS) * cols.count();
     const uint32_t seq_lo = (first_unit / PIECES / Hv) * T;
@@ -56,27 +57,38 @@ ALWI void prep_main(
     cb_wait_front(cb_gate_w, 2);
     cb_wait_front(cb_norm_w, Vb / RATIO);
     // Pass k preps row k and normalizes row k - 1 (one call site each: the math thread's text budget is tight).
-    // NORM_SPLIT: every prep row first (nothing between two rows of the state cores' supply), then its norm units
-    // (one value head of a tile row each).
     constexpr bool NORM_SPLIT = GDN_PREP_NORM_SPLIT != 0;
     constexpr uint32_t NORM_HEADS = NORM_SPLIT ? 1 : RATIO;
     constexpr uint32_t NORM_TILES = NORM_HEADS * (Vb / RATIO);
     const uint32_t rows = first_tr + tr_offset <= last_tr ? (last_tr - first_tr - tr_offset) / tr_stride + 1 : 0;
-    const uint32_t passes = NORM_SPLIT ? rows + norm_rows : (rows != 0 ? rows + 1 : 0);
+    const uint32_t passes = NORM_SPLIT || rows != 0 ? rows + 1 : 0;
+    // NORM_SPLIT: row k's conv, then norm units (norm_mid of them before a later row's heads, where a row that waits
+    // for its grant leaves the time; the rest after the last row), then row k's heads. One call site per block.
+    uint32_t done = 0;
 #pragma GCC unroll 1
     for (uint32_t k = 0; k < passes; ++k) {
+        const uint32_t base_row = (first_tr + tr_offset + k * tr_stride) * TILE_ROWS;
+        const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
         if (k < rows) {
-            const uint32_t base_row = (first_tr + tr_offset + k * tr_stride) * TILE_ROWS;
-            const uint32_t hi = seq_hi < base_row + TILE_ROWS ? seq_hi : base_row + TILE_ROWS;
-            {
-                GDN_ZONE("gdn_prep");  // gates, conv
-                gates_block(full);
-                if constexpr (CONV_ON_FPU) {
-                    conv_block_fpu(full, cols, 0, cols.count());
-                } else {
-                    conv_block(full, cols, 0, cols.count());
-                }
+            GDN_ZONE("gdn_prep");  // gates, conv
+            gates_block(full);
+            if constexpr (CONV_ON_FPU) {
+                conv_block_fpu(full, cols, 0, cols.count());
+            } else {
+                conv_block(full, cols, 0, cols.count());
             }
+        }
+        if constexpr (NORM_SPLIT) {
+            uint32_t n = k == rows ? norm_rows : (k != 0 ? done + norm_mid : 0);
+            n = n < norm_rows ? n : norm_rows;
+#pragma GCC unroll 1
+            for (; done < n; ++done) {
+                zw_block<NORM_TILES>();
+                GDN_ZONE("gdn_rmsnorm");
+                rmsnorm_gate_block<cb_o_in, NORM_HEADS, false, NORM_TILES>(bufs, v_eps_bits, full);
+            }
+        }
+        if (k < rows) {
             cb_wait_front(cb_tri_mask, 2);  // writer-built once (mask, identity), held for the kernel
             cb_wait_front(cb_v_prep, Vb);
             {
@@ -103,12 +115,14 @@ ALWI void prep_main(
             cb_pop_front(cb_kq_rows, 2 * Kt);
             cb_pop_front(cb_knT, Kt);
         }
-        if (NORM_SPLIT ? k >= rows : k < rows) {
-            zw_block<NORM_TILES>();
-        }
-        if (NORM_SPLIT ? k >= rows : k > 0) {
-            GDN_ZONE("gdn_rmsnorm");
-            rmsnorm_gate_block<cb_o_in, NORM_HEADS, false, NORM_TILES>(bufs, v_eps_bits, full);
+        if constexpr (!NORM_SPLIT) {
+            if (k < rows) {
+                zw_block<NORM_TILES>();
+            }
+            if (k > 0) {
+                GDN_ZONE("gdn_rmsnorm");
+                rmsnorm_gate_block<cb_o_in, NORM_HEADS, false, NORM_TILES>(bufs, v_eps_bits, full);
+            }
         }
     }
     cb_pop_front(cb_norm_w, Vb / RATIO);
@@ -121,9 +135,10 @@ void kernel_main() {
     const uint32_t tr_offset = get_arg_val<uint32_t>(5);   // R-PREP: tile rows offset, + stride, ...
     const uint32_t tr_stride = get_arg_val<uint32_t>(6);
     const uint32_t norm_rows = get_arg_val<uint32_t>(8);  // NORM_SPLIT: norm units this core normalizes
+    const uint32_t norm_mid = get_arg_val<uint32_t>(9);   // of them, before the heads of each row after its first
 
     // R-PREP allocates each role only its own buffers: start up on buffers the role has.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_kq_rows, cb_knT, cb_gram);
     Buffers bufs;
-    prep_main(bufs, first_unit, T, tr_offset, tr_stride, v_eps_bits, norm_rows);
+    prep_main(bufs, first_unit, T, tr_offset, tr_stride, v_eps_bits, norm_rows, norm_mid);
 }
