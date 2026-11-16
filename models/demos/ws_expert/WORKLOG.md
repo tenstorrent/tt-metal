@@ -561,3 +561,24 @@ Rule from the repro: on a group's multicast NoC nothing may enter the group rect
     4 slots. The cores wait mostly on x (x waits about 20M cycles a launch on chip 0, weight waits 1.3-4M with 4 slots):
     core 0 multicasts every x block and h row of its group (about 3.3 MB an expert at M 586) and takes in the group's
     funnel and h tiles on NOC1, so its two NoC ports pace the group.
+- Single-chip proxy of the lane design (dd87aac97fb: LCfg.nofab / WL_NO_FABRIC, test_ws_lane_chip; hold 215516,
+  bh-glx-110-c10u20, chip 5 via TT_VISIBLE_DEVICES, no fabric): the no-hang layout (bcast + noc_split), every expert
+  the chip's own and read from DRAM into 4 slots of any kind (keep 0), nothing forwarded, G groups on the chip's
+  tokens at the Galaxy per-group load (160 experts a group, T 31250). Correctness: 64 experts G 4, M 586 (every
+  expert) / M 0 / M 5 PASS, PCC 0.99994. 20 warm-up + 5 measured, util tile median (min-max), cyc/expert of the chip,
+  UNPACK waits (K) tilize/x/weight/h:
+| case | proxy (one chip) | waits | fabric run |
+|---|---|---|---|
+| G 4, M 586 | 46.1% (45.8-46.3), 59.3K | [1107, 14334, 49, 1372] | torus 640: 33.8% (33.0-35.0), 82.6K, [1091, 20692, 1727, 1192] |
+| G 2, M 586 | 53.0% (53.0-53.0), 103.3K | [1092, 11256, 49, 633] | tray soak 320: 47.1% |
+| G 4, M 2048 | 53.5% (53.4-53.6), 172.1K | [3599, 38090, 159, 1205] | |
+| G 2, M 2048 | 55.0% (55.0-55.1), 335.0K | [3596, 35615, 159, 770] | |
+  AICLK: the tests read /sys/class/tenstorrent/tenstorrent!0/tt_aiclk, an idle chip (800 MHz) when only chip 5 is
+  open; the lane tests now read the first opened chip at the start and the end. Sampled at 4 Hz (ws/power/clog.py):
+  chip 5 starts at 1350 MHz and the firmware lowers it under load (measured windows 1087-1350, G 4 M 2048 the
+  lowest); the Galaxy run's 32 chips stay at 1350 for about 90% of the samples (min 1206). The first proxy pass
+  (reported as 800 MHz) gave the same numbers within 0.1 point.
+  Reading: G 2 -> G 4 on one chip costs 13% at M 586 (3% at M 2048); the fabric runs lose a further 11% (tray, G 2) and
+  27% (torus, G 4) against the proxy, with larger x waits and weight waits appearing on the torus. x waits dominate
+  everywhere. The proxy's slots are untyped (any x 4, keep 0) while the fabric runs use d0,d1,d0d1,any with keep 2, so
+  part of the fabric gap may be the typed-slot schedule rather than the links.
