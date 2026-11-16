@@ -470,3 +470,9 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
   cancelled the step and killed the container, and the node stopped answering (NOT_RESPONDING, ssh refused) - the
   same chain as the store-and-forward reboots. No measured 640 number with 4 slots. The flag reordering fix moved
   the hang from launch 4 to launch 21 but did not remove it; no triage was possible after the node went down.
+- Group multicasts unlinked by default since 66c08bbde38 (LCfg.mcast_linked / WL_MCAST_LINKED restores linked
+  payloads; flags from the payload's command buffer either way). Tray soak at the 640-expert lane load (ws_lane_s1,
+  hold 214106 after the reboot; 160 experts a lane, T 31250, M 586, 4 slots, G 2; about 60 ms a launch, util tile
+  55% a chip): with linked payloads the soak hung after about 600 launches (37 s; device timeout at 00:23:22), host
+  MMIO reads to device 2 timed out (4 B load 224 ms against 2 ms), and the watcher cancelled the test step and
+  killed the container; the node stayed up. The unlinked soak did not run (stopped at the MMIO timeout).
