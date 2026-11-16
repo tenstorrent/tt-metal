@@ -1,0 +1,152 @@
+{
+ "steps": 32,
+ "results": [
+  {
+   "batch": 1,
+   "prompt": 128,
+   "new_tokens": 128,
+   "metrics_warm": [
+    {
+     "ttft_ms": 92.17915199951676,
+     "trace_setup_ms": 0.10986800043610856,
+     "reused_request_trace": true,
+     "generation_wall_ms": 2454.0683279992663,
+     "decode_tps": 53.77061990492166,
+     "input_tokens": 128,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    },
+    {
+     "ttft_ms": 95.18533200025558,
+     "trace_setup_ms": 0.10776300041470677,
+     "reused_request_trace": true,
+     "generation_wall_ms": 2457.010217000061,
+     "decode_tps": 53.77207605649396,
+     "input_tokens": 128,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    }
+   ]
+  },
+  {
+   "batch": 1,
+   "prompt": 4096,
+   "new_tokens": 128,
+   "metrics_warm": [
+    {
+     "ttft_ms": 1715.216194000277,
+     "trace_setup_ms": 0.12985600005777087,
+     "reused_request_trace": true,
+     "generation_wall_ms": 4132.462816000043,
+     "decode_tps": 52.53922285379893,
+     "input_tokens": 4096,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    },
+    {
+     "ttft_ms": 1716.2373240007582,
+     "trace_setup_ms": 0.14717100020789076,
+     "reused_request_trace": true,
+     "generation_wall_ms": 4133.846839000398,
+     "decode_tps": 52.53133324955668,
+     "input_tokens": 4096,
+     "output_tokens": 128,
+     "batch": 1,
+     "source": "autoregressive",
+     "reduced_probe": false,
+     "host_sampling": false,
+     "buffered_token_output": true,
+     "counters": {
+      "model_replays": 127,
+      "sampling_replays": 127,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "cache_position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "token_readbacks": 1,
+      "full_logits_readbacks": 0,
+      "teacher_forcing_token_refreshes": 0,
+      "output_replays": 127
+     }
+    }
+   ]
+  },
+  {
+   "batch": 8,
+   "prompt": 127,
+   "step_ms_median": 129.4453434998104,
+   "step_ms_mean": 129.5187792187278,
+   "tok_s_user": 7.725268232622556,
+   "tok_s_total": 61.802145860980445
+  },
+  {
+   "batch": 16,
+   "prompt": 127,
+   "step_ms_median": 254.6909399998185,
+   "step_ms_mean": 254.78692253125246,
+   "tok_s_user": 3.9263273361852313,
+   "tok_s_total": 62.8212373789637
+  },
+  {
+   "batch": 32,
+   "prompt": 127,
+   "step_ms_median": 500.95699650000824,
+   "step_ms_mean": 501.04005324999434,
+   "tok_s_user": 1.9961793267418384,
+   "tok_s_total": 63.87773845573883
+  }
+ ],
+ "precision": "bfp8_release_selected"
+}

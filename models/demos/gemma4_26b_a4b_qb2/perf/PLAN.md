@@ -75,12 +75,39 @@ No stage needs a stage from the other machine.
 layers 0 and 5 against stored HF references at the stage's batch sizes; prints PCC per user, µs/layer and op count; fails on PCC drop or slowdown.
 Until it lands, use `pytest models/demos/gemma4_26b_a4b_qb2/tests/test_device_numerics.py -k test_checkpoint_decoder_numerics` (~3 min).
 
-**Stage gate, once per stage, ~1.5-2 h:**
-1. Accuracy: `test_device_numerics` passes; PCC per layer ≥ 0.995 vs HF and ≤ 0.0005 below the previous `integration`.
-2. Full-model timing: `python perf/tools/decode_timing.py --output <json>` (batch 1 at 128 and 4K, batches 8/16/32; ~10 min). Record it in `perf/WSN.md`.
-3. Agreement: greedy 128 tokens vs previous `integration`, top-1 ≥ 99%.
+**Stage gate, once per stage, ~1.5-2 h.** A stage lands only when every line below passes on the merged commit.
+
+Common to every stage (protects the other machine's work):
+1. Accuracy: `test_device_numerics` passes; every PCC ≥ 0.995 vs HF and at most 0.0005 below the previous `integration`.
+2. Full-model timing: `python perf/tools/decode_timing.py --output <json>` (batch 1 at 128 and 4K, batches 8/16/32; ~10 min).
+   **No regression:** batch-1 step and batch-32 step each at most 3% slower than the previous `integration`'s proof,
+   unless the stage's own target is that metric.
+3. Agreement: greedy 128 tokens vs the previous `integration`, top-1 agreement ≥ 99%.
 4. Serving and GPQA (CI is unavailable; run locally): `perf/tools/serve_bench.sh qb2port <out> perf,gpqa`.
-   GPQA-10 ≥ 8/10; serving 128/128 at 1 and 16 users completes.
+   GPQA-10 ≥ 8/10; serving 128/128 at 1 and 16 users completes with no failed requests.
+
+Stage-specific proof (target met = **done**; gate passes and the metric improves ≥ 20% but target missed = **landed partial**,
+stated as such in `perf/WSN.md` with the gap; less than that does not land):
+
+| Stage | Proof of success |
+|---|---|
+| WS1 | batch-32 native step ≤ 35 ms (WS0: 501); batched vs serialized per user PCC ≥ 0.999 at B 2/3/8/32 with mixed positions and pages; KV writes exact per slot; inactive slots untouched; 16-user serving tok/s/user ≥ 25 |
+| WS2 | batch-1 native step ≤ 11.5 ms (WS0: 18.6); ops per decode layer ≤ 50 in a 2-layer device profile (WS0: ~100) |
+| WS3 | batch-32 native step ≤ 20 ms; dense vs sparse expert output PCC ≥ 0.999 at B 16/32; switch batch chosen from a measured B 4/8/16/24/32 sweep |
+| WS4 | op unit tests pass vs torch for Gemma (H 2816, I 704, E 32/128, k 8, B 1/8/32) and gpt-oss (H 2880, I 2880, E 32, k 4, bias) shapes, BFP8 and BFP4; expert weight read ≥ 400 GB/s per chip; MoE block ≤ 35 µs per layer in the model |
+| WS5 | batch-1 native step ≤ 5 ms; 2-layer fused decode vs HF over 8 steps PCC ≥ 0.995 |
+| WS6 | greedy speculative output token-identical to plain greedy on 10 prompts; effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
+
+**Proof files:** commit the gate's evidence next to the report, in `perf/results/WSN/`: `decode_timing.json`,
+the numerics log lines (`DECODER_NUMERICS ...`), the agreement result, `gpqa/summary.json` and the serving summaries
+(small JSON only, no logs over 1 MB). `perf/WSN.md` quotes the numbers and states done or partial.
+
+**Merging someone else's code:** when resolving a conflict in code the other stage owns, keep their behaviour and
+rerun the quick check at their stage's batch size as well as yours. Never revert or rewrite the other stage's landed change;
+if it breaks yours, tell them and adapt on your side.
+
+The hub enforces part of this: `integration` only fast-forwards, `wsN-done` tags cannot move, and each machine can
+push only its own stage branches (A: ws0/ws1/ws3/ws6, B: ws2/ws4/ws5).
 
 Release cohort (Terminal/SWE) only at the end of the plan, run locally overnight on whichever machine is free.
 
