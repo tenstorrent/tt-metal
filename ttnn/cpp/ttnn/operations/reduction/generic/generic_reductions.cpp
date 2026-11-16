@@ -506,7 +506,9 @@ bool call_fast_nc(DataType dtype, float scalar) {
         // fast_reduce_nc scales with a float multiply, so an INT32 sum takes it only unscaled.
         return float_dtype || (dtype == DataType::INT32 && scalar == 1.0f);
     } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
-        return float_dtype;
+        // bf8_b mean keeps the transpose path: fast_reduce_nc rounds bf8_b partial sums to a shared exponent between
+        // stages.
+        return dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32;
     }
     return false;
 }

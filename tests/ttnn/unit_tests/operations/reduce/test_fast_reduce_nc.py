@@ -246,7 +246,8 @@ def test_fast_reduce_nc_float32_default_config(input_shape, device):
     torch.testing.assert_close(out, ref, rtol=1e-4, atol=1e-5)
 
 
-# fp32 sums on the SFPU at full precision unless fast mode is set or fp32_dest_acc_en is off; then the FPU sums tf32.
+# fp32 sums on the SFPU at full precision by default. Fast mode sums tf32 on the FPU; fp32_dest_acc_en off sums in a
+# 16-bit DEST.
 @pytest.mark.parametrize(
     "fast_and_approximate_mode, fp32_dest_acc_en",
     [(False, None), (False, False), (True, None)],
