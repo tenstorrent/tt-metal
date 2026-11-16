@@ -40,12 +40,12 @@ inline void check_device_tensor(
     TT_FATAL(tensor.is_allocated(), "{}: {} buffer is null", op, name);
     if (req.buffer_type.has_value()) {
         TT_FATAL(
-            tensor.buffer()->buffer_type() == *req.buffer_type,
+            tensor.memory_config().buffer_type() == *req.buffer_type,
             "{}: {} must be in {}. Got: {}",
             op,
             name,
             enchantum::to_string(*req.buffer_type),
-            enchantum::to_string(tensor.buffer()->buffer_type()));
+            enchantum::to_string(tensor.memory_config().buffer_type()));
     }
     TT_FATAL(
         tensor.layout() == req.layout,

@@ -72,10 +72,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Only the hardware valid handshake; with unpack_to_dest the data is taken as already in Dest.
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid<
+                _perf_unpack_stream_set_valid<
                     /* src A */ true,
-                    /* src B */ is_fp32_dest_acc_en>(
-                    /* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
+                    /* src B */ is_fp32_dest_acc_en,
+                    PERF_RUN_TYPE>(/* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1
@@ -138,7 +138,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream (perf.h)
+        {
+            _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -281,6 +285,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(
                             (block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
                         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
+                    }
+                    // Wormhole: release the dest section as production's tile_regs_release does
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
             }

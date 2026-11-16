@@ -26,6 +26,7 @@
     pytest --timeout 60 models/ttt_compat/tests/test_decode_output_rows.py
     pytest --timeout 60 models/ttt_compat/tests/test_generator_logprobs_single_device.py
     pytest --timeout 60 models/ttt_compat/tests/test_batched_prefill_slots.py
+    pytest --timeout 60 models/ttt_compat/tests/test_prefill_page_table.py
     pytest --timeout 300 models/ttt_compat/tests/test_batched_prefill_extract.py
     pytest --timeout 60 models/ttt_compat/tests/test_accuracy_precision_family.py
     pytest --timeout 60 models/ttt_compat/tests/test_minimal_prefill_matmul_blocks.py
@@ -50,6 +51,26 @@
       timeout: 18
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: unit
+
+- name: Llama 3.1-8B distributed prefill norm unit tests
+  cmd: |
+    export TT_METAL_WATCHER=15
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    # Opt-in path: dim 4096 runs the prefill RMSNorm distributed instead of gathering the full width.
+    export DISTRIBUTED_PREFILL_NORM=1
+    pytest --timeout 60 models/ttt_compat/tests/test_model_config_utils.py -k distributed_prefill_norm
+    pytest --timeout 300 models/ttt_compat/tests/test_rms_norm.py -k test_rms_norm_inference
+    # test_rms_norm builds RMSNorm without ccl_topology; the decoder covers DistributedNorm with it.
+    pytest --timeout 400 models/ttt_compat/tests/test_decoder_prefill.py
+  model: llama3.1-8b
+  model_family: Llama
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 2
+  owner_id: U0AQJ5137L4 # Jashan Pratap Singh
   team: models
   budget_type: unit
 
@@ -1011,7 +1032,7 @@
       timeout: 25
       tier: 2
     bh_p150:
-      timeout: 20
+      timeout: 30
       tier: 2
   owner_id: U09LNK7BT1Q # Andrija Cicovic
   team: models

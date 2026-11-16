@@ -42,7 +42,21 @@ constexpr uint32_t kSuperBlockExtra = 2;  // look-ahead windows beyond a super-b
 constexpr uint32_t kDepthHold = 2;        // fp32 hold slots when some entry lags
 constexpr uint32_t kZoneSets = 2;         // chunks' arrivals the zones hold at once
 constexpr uint32_t kMaxAutoChunks = 256;
-constexpr uint32_t kKbMax = 16;
+// Unchunked K-window cap. Fewer, larger windows mean fewer multicast handshakes per entry (QB2 1x4 ring, traced:
+// GLM-5.3 indexer wk 640x1536x128 28.0 -> 23.7 us at kb 24, Qwen3 down M=128 198 -> 152 us, K3 dense batched decode
+// 4-7% faster). A resident plan whose cores each hold >= kComputeBoundCoreTiles output tiles keeps kKbMaxSmall. Only
+// the streamed operand moves per window, and with that much matmul per K-tile the compute outpaces the window delivery:
+// the compute never waits for a window after the first block (K3 o_proj 640x3072x7168, 2x7 tiles per core, profiled),
+// so fewer handshakes save nothing there.
+// A larger window only lengthens the call's start: every core waits for its first window, the resident fill's DRAM
+// reads and multicasts at once, ~4 us + 0.4 us per K-tile, and nothing overlaps it. The 4 output blocks cannot make
+// that up: K3 o_proj ran 1% slower at 24 (first window 10.0 -> 13.8 us, blocks 2-4 0.5 us faster each), DSV3 MLP
+// prefill (3x7) 1%. A plan with less matmul per core waits on the window handshakes (GLM wk, 2x1: compute idle 51-56%
+// of every block) and gains from 24; a streaming plan moves both operands per window and gains too (K3 dense prefill,
+// 2x7: 4%).
+constexpr uint32_t kKbMax = 24;
+constexpr uint32_t kKbMaxSmall = 16;
+constexpr uint32_t kComputeBoundCoreTiles = 8;
 constexpr uint32_t kKbMaxChunked = 32;
 constexpr uint32_t kKbMinResident = 8;
 constexpr uint32_t kDestTilesFp32FullSync = 8;  // subblock area cap
@@ -244,11 +258,11 @@ KBlock choose_k_block(uint32_t Kt, uint64_t budget, uint32_t kb_max, const Geo& 
     throw L1Miss("matmul_reduce_scatter_prefill: even kb=1 exceeds the L1 budget (regime DRAM-landing is deferred)");
 }
 
-GridChoice choose_grid(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L) {
+GridChoice choose_grid(uint32_t gx, uint32_t gy, uint32_t block_m, uint32_t block_n, uint32_t L, bool column_major) {
     std::optional<std::pair<std::tuple<bool, uint64_t, int64_t, uint64_t, uint64_t, bool>, GridChoice>> best;
     for (Strip strip : {Strip::Row, Strip::Col}) {
         const uint32_t strip_len = strip == Strip::Row ? gx : gy;
-        if (2 * L > strip_len) {
+        if (2 * L > strip_len || (column_major && strip == Strip::Row)) {
             continue;
         }
         const uint32_t rx = strip == Strip::Row ? gx : gx - 1;
@@ -321,7 +335,7 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     pl.n_n = tt::div_up(in.block_n, pl.chunk_n);
     const uint32_t chunks = pl.n_m * pl.n_n;
     pl.zone_sets = chunks == 1 ? 1 : std::max(1u, std::min(kZoneSets, chunks));
-    pl.grid = choose_grid(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L);
+    pl.grid = choose_grid(in.gx, in.gy, pl.chunk_m, pl.chunk_n, in.L, in.column_major_ccl);
     const GridChoice& gd = pl.grid;
     if (in.kind == ScheduleKind::RingBalanced && gd.grid_m * gd.grid_n < 2) {
         throw GeometryMiss("matmul_reduce_scatter_prefill: a balanced ring needs >= 2 matmul cores (two halves)");
@@ -348,7 +362,14 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
         geo.hold_depths[r] = hold_depth(sched_of[r]);
         geo.slots[r] = sched_of[r].slots;
     }
-    const KBlock kblk = choose_k_block(in.Kt, in.budget, chunks == 1 ? kKbMax : kKbMaxChunked, geo);
+    const uint32_t kb_cap = chunks == 1 ? kKbMax : kKbMaxChunked;
+    KBlock kblk = choose_k_block(in.Kt, in.budget, kb_cap, geo);
+    if (chunks == 1 && kblk.resident && gd.core_m * gd.core_n >= kComputeBoundCoreTiles) {
+        const KBlock small = choose_k_block(in.Kt, in.budget, kKbMaxSmall, geo);
+        if (small.resident) {
+            kblk = small;
+        }
+    }
     pl.resident = kblk.resident;
     pl.kb = kblk.kb;
     // super_block_plan
@@ -553,10 +574,18 @@ uint32_t staging_tiles(const Plan& plan) {
 namespace {
 
 Plan solve_plan_uncached(const PlanInputs& in) {
-    if (auto unchunked = plan_if_fits(in)) {
-        return std::move(*unchunked);  // whatever fits unchunked keeps its plan
-    }
+    // Scatter on N: the unchunked plan (when it fits) competes with the chunk splits in chunk_cost_us (measured on 50
+    // prefill shapes, QB2 1x4 ring: an unchunked plan whose K-block shrank to fit loses to a chunked one by up to 1.8x,
+    // and the model never picked a split slower than the unchunked plan). Scatter on M keeps whatever fits unchunked:
+    // the model misranks it there.
     std::optional<std::pair<double, Plan>> best;
+    if (auto unchunked = plan_if_fits(in)) {
+        if (in.scatter_dim == -2) {
+            return std::move(*unchunked);
+        }
+        const double cost = chunk_cost_us(*unchunked, in);
+        best = std::make_pair(cost, std::move(*unchunked));
+    }
     for (const auto& [n_m, n_n] : chunk_candidates(in.block_m, in.block_n, in.scatter_dim)) {
         if (n_m * n_n == 1) {
             continue;
@@ -602,7 +631,8 @@ const Plan& solve_plan(const PlanInputs& in) {
         in.tA,
         in.tW,
         in.scatter_dim,
-        in.budget);
+        in.budget,
+        in.column_major_ccl);
     static std::mutex solved_mutex;
     static std::map<std::remove_const_t<decltype(key)>, Plan> solved;
     const std::lock_guard<std::mutex> lock(solved_mutex);

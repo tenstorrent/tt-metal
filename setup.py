@@ -336,9 +336,9 @@ class CMakeBuild(build_ext):
         ]
         ttnn_cpp_patterns = [
             "ttnn/kernel/**/*",
-            "ttnn/operations/**/kernels/**/*",
-            "ttnn/operations/**/kernels_ng/**/*",
-            "ttnn/operations/**/kernels_dfb/**/*",
+            # Every per-op kernel directory (kernels/, kernels_ng/, kernels_dfb/, kernels_qsr/, ...), as the Quasar
+            # ops' CMake kernels FILE_SET globs them: in a wheel, kernel includes resolve against this copy.
+            "ttnn/operations/**/kernels*/**/*",
             "ttnn/operations/**/shared_with_host/**/*",
             "ttnn/operations/**/hostdevcommon/**/*",
             "ttnn/operations/kernel_helper_functions/*",

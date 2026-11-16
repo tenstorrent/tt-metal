@@ -46,7 +46,7 @@ class DummyDualGlxModel(GenerativeTestModelBase):
         logger.info("Dummy prefill: running reduce scatter async test (for 8x8 MeshDevice)")
         # Import lazily so this test model can be imported/inspected by vLLM
         # without requiring the full test dependency stack.
-        from tests.nightly.tg.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
+        from tt_py_test_utils_common.minimal_reduce_scatter import run_reduce_scatter_impl
 
         run_reduce_scatter_impl(
             self.submesh_device,

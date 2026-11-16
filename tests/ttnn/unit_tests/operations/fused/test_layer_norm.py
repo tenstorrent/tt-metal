@@ -566,7 +566,13 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
 
 # Rows too wide for L1 with gamma and beta select the large-tensor kernel, which streams each row in blocks and
 # switches the packer between several output buffers. Issue #62517: on Quasar this hung with fp32_dest_acc_en.
-@pytest.mark.parametrize("h", [4096])
+# The row width alone selects the kernel; #62517 reproduced on a single tile row. Sanity runs h=32, the
+# original h=4096 runs nightly (#62486).
+LARGE_LAYER_NORM_WIDE_ROWS_HEIGHTS = [32, 4096]
+LARGE_LAYER_NORM_WIDE_ROWS_SANITY_HEIGHTS = [32]
+
+
+@pytest.mark.parametrize("h", LARGE_LAYER_NORM_WIDE_ROWS_SANITY_HEIGHTS)
 @pytest.mark.parametrize("w", [8192, 16384])
 def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
     torch.manual_seed(0)
@@ -605,13 +611,7 @@ def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
     assert torch.isfinite(output_tensor).all()
     assert output_tensor.count_nonzero() > 0
 
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        try:
-            assert_output_accuracy(torch_output_tensor, output_tensor)
-        except AssertionError:
-            pytest.xfail("Quasar REDUCE_ROW truncates the fp32 running sum on every tile (#60931)")
-    else:
-        assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])

@@ -56,51 +56,42 @@ FORCE_INLINE void drain(DFB& buffer) {
     buffer.pop_front(Rows * Vt);
 }
 
-// A slot without a valid segment holds the affine identity (I, 0): this value block writes its columns of I and of 0
-// into each such slot's packed [A | B] rows. One BF16 scratch tile is zeroed, written to every off-diagonal tile,
-// then given its diagonal and written to the diagonal tiles.
+// A slot without a valid segment holds the affine identity, which the complement form [E | B] writes as (0, 0):
+// this value block's columns of E and of B in each such slot are zero tiles.
 template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
 FORCE_INLINE void write_identity_slots(
-    const Accessor& packed, DFB& scratch, Noc& noc, const uint32_t* row_bases, uint32_t slots, uint32_t value_block) {
+    const Accessor& packed, DFB& zero_tile, Noc& noc, const uint32_t* row_bases, uint32_t slots, uint32_t value_block) {
     constexpr uint32_t row_stride = Kt + VtFull;
-    constexpr uint16_t bf16_one_bits = 0x3F80;
-    constexpr uint32_t face_rows = tt::constants::FACE_HEIGHT;
-    constexpr uint32_t face_cols = tt::constants::FACE_WIDTH;
-    constexpr uint32_t bottom_right_face_offset = (tt::constants::TILE_WIDTH / face_cols + 1) * tt::constants::FACE_HW;
     const uint32_t first_column = value_block * Vt;
 
-    scratch.reserve_back(1);
-    const uint32_t tile_bytes = scratch.get_entry_size();
-    noc.async_write_zeros(scratch, tile_bytes);
+    zero_tile.reserve_back(1);
+    const uint32_t tile_bytes = zero_tile.get_entry_size();
+    noc.async_write_zeros(zero_tile, tile_bytes);
     noc.write_zeros_l1_barrier();
     for (uint32_t slot = 0; slot < slots; ++slot) {
         for (uint32_t row = 0; row < Kt; ++row) {
             const uint32_t row_page = row_bases[slot] + row * row_stride;
             for (uint32_t column = first_column; column < first_column + Vt; ++column) {
-                noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_page + Kt + column});
-                if (row != column) {
-                    noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_page + column});
-                }
+                noc.async_write(zero_tile, packed, tile_bytes, {}, {.page_id = row_page + column});
+                noc.async_write(zero_tile, packed, tile_bytes, {}, {.page_id = row_page + Kt + column});
             }
-        }
-    }
-    noc.async_write_barrier();
-    auto* halfwords = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch.get_write_ptr());
-    for (uint32_t r = 0; r < face_rows; ++r) {
-        halfwords[r * face_cols + r] = bf16_one_bits;
-        halfwords[bottom_right_face_offset + r * face_cols + r] = bf16_one_bits;
-    }
-    for (uint32_t slot = 0; slot < slots; ++slot) {
-        for (uint32_t row = first_column; row < first_column + Vt; ++row) {
-            noc.async_write(scratch, packed, tile_bytes, {}, {.page_id = row_bases[slot] + row * row_stride + row});
         }
     }
     noc.async_write_barrier();
 }
 
 // The packed summary is [S, BH, K, K+V]: slot 0 holds head transforms and, with Tail, slot 1 holds tail transforms.
-// Each row holds [A | B]: A at column 0 and B at column Kt of a (Kt + VtFull)-tile row.
-template <uint32_t Kt, uint32_t Vt, uint32_t VtFull, uint32_t BatchHeads, bool Tail, bool Init>
+// Each row holds [E | B] (complement form, E = A - I): E at column 0 and B at column Kt of a (Kt + VtFull)-tile row.
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t VtFull,
+    uint32_t BatchHeads,
+    bool Tail,
+    bool Init,
+    bool EmitOutputs,
+    uint32_t EmitBlockChunks>
 FORCE_INLINE void write_summary(
     uint32_t head,
     uint32_t value_block,
@@ -108,7 +99,9 @@ FORCE_INLINE void write_summary(
     uint32_t split_group,
     uint32_t split_in_group,
     bool local_split,
-    bool has_valid_chunk) {
+    uint32_t num_chunks,
+    uint32_t valid_chunks,
+    uint32_t reset_chunk) {
     const auto packed = TensorAccessor(tensor::output);
     DataflowBuffer full_a(dfb::output);
     DataflowBuffer full_b(dfb::final_state);
@@ -124,11 +117,46 @@ FORCE_INLINE void write_summary(
     const uint32_t b_column = Kt + value_block * Vt;
 
     // Compute publishes nothing for a group without a valid chunk; neither of its slots has a valid segment.
+    const bool has_valid_chunk = valid_chunks != 0;
     const bool straddles = has_valid_chunk && local_split && split_in_group != 0 && group == split_group;
     const bool head_active = has_valid_chunk && (!local_split || group < split_group || straddles);
     const bool tail_active = has_valid_chunk && local_split && group >= split_group;
 
-    if (head_active) {
+    if constexpr (EmitOutputs) {
+        // Each chunk's [F(0) | F(I)] row pair as compute publishes it; the split head's rows follow the chunk before
+        // the restart, as compute publishes them there (a straddling group's reset chunk is its split chunk).
+        static_assert(Ct == 1, "one tile row per chunk");
+        // A block's F(0) rows, then its F(I) rows (RecurrentChunkScanParams::emit_outputs).
+        const auto terms = TensorAccessor(tensor::terms);
+        DataflowBuffer chunk_pair(dfb::chunk_base);
+        const uint32_t entry_size = chunk_pair.get_entry_size();
+        for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
+            const uint32_t row = head * num_chunks + chunk;
+            const uint32_t zero_row = row / EmitBlockChunks * 2 * EmitBlockChunks + row % EmitBlockChunks;
+            const uint32_t page = zero_row * VtFull + value_block * Vt;
+            const uint32_t identity_page = page + EmitBlockChunks * VtFull;
+            chunk_pair.wait_front(2 * Vt);
+            for (uint32_t t = 0; t < Vt; ++t) {
+                noc.async_write(chunk_pair, terms, entry_size, {.offset_bytes = t * entry_size}, {.page_id = page + t});
+                noc.async_write(
+                    chunk_pair,
+                    terms,
+                    entry_size,
+                    {.offset_bytes = (Vt + t) * entry_size},
+                    {.page_id = identity_page + t});
+            }
+            // The pair may be reused once its data has left L1; the final A and B writes complete the writes.
+            noc.async_writes_flushed();
+            chunk_pair.pop_front(2 * Vt);
+            if (straddles && chunk + 1 == reset_chunk) {
+                write_value_slice<Kt, Vt, row_stride, 1>(packed, split_head_a, noc, head_row_base, a_column);
+                write_value_slice<Kt, Vt, row_stride, 1>(packed, split_head_b, noc, head_row_base, b_column);
+            }
+        }
+    }
+
+    // The emitting writer has already drained a straddling group's split head between its chunks.
+    if (head_active && !(EmitOutputs && straddles)) {
         // Split-head buffers hold one tile-row each. Drain the same packets
         // compute publishes instead of waiting for a full matrix to fit.
         if (straddles) {
@@ -159,9 +187,20 @@ FORCE_INLINE void write_summary(
             identity_rows[identity_slots++] = tail_row_base;
         }
         if (identity_slots != 0) {
-            DataflowBuffer scratch(dfb::identity_scratch);
-            write_identity_slots<Kt, Vt, VtFull>(packed, scratch, noc, identity_rows, identity_slots, value_block);
+            DataflowBuffer zero_tile(dfb::zero_tile);
+            write_identity_slots<Kt, Vt, VtFull>(packed, zero_tile, noc, identity_rows, identity_slots, value_block);
         }
+    }
+
+    if (EmitOutputs && has_valid_chunk) {
+        // The last segment's transform in FP32, at this value block's columns of [BH, K, V]. Its write barrier also
+        // completes the chunk rows' writes.
+        DataflowBuffer final_e(dfb::final_e);
+        DataflowBuffer final_b(dfb::final_b);
+        const uint32_t state_row = head * Kt * VtFull;
+        write_value_slice<Kt, Vt, VtFull, Kt>(TensorAccessor(tensor::final_e), final_e, noc, state_row, a_column);
+        write_value_slice<Kt, Vt, VtFull, Kt>(
+            TensorAccessor(tensor::final_b), final_b, noc, state_row, value_block * Vt);
     }
 }
 
@@ -267,6 +306,8 @@ template <
     uint32_t summary,
     uint32_t tail,
     uint32_t init,
+    uint32_t emit_outputs,
+    uint32_t emit_block_chunks,
     uint32_t late_on_writer,
     uint32_t has_actual_end>
 TT_KERNEL void writer(
@@ -291,14 +332,16 @@ TT_KERNEL void writer(
         valid_chunks = topology.valid_chunks(group, groups);
     }
     if constexpr (summary) {
-        write_summary<Kt, Vt, Vt_full, batch_heads, tail != 0, init != 0>(
+        write_summary<Ct, Kt, Vt, Vt_full, batch_heads, tail != 0, init != 0, emit_outputs != 0, emit_block_chunks>(
             head,
             value_block,
             group,
             topology.split_group(groups),
             topology.split_in_group(groups),
             topology.has_valid_tail(),
-            valid_chunks != 0);
+            num_chunks,
+            valid_chunks,
+            topology.reset_chunk(group, groups));
     } else {
         if (valid_chunks == 0) {
             return;

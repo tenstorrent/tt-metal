@@ -19,6 +19,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import all_zero_bits, assert_bit_identical, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     build_layer,
     mla_row_permutation,
@@ -35,12 +36,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     deallocate_state,
     device_scalar,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import TtK3KdaAttention
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    all_zero_bits,
-    assert_bit_identical,
-    make_actual_start,
-)
 
 pytestmark = run_for_blackhole()
 
@@ -80,7 +77,16 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
     # head_dim 128, as Kimi-K3's, so the migration slabs' segment geometry applies and every commit exports.
     config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5)
     weights = random_weights(config)
-    layer = build_layer(mesh_device, config, weights, sp_axis, tp_axis, active_seq_len=capacity, summary_group_chunks=2)
+    layer = build_layer(
+        mesh_device,
+        config,
+        weights,
+        sp_axis,
+        tp_axis,
+        active_seq_len=capacity,
+        summary_group_chunks=2,
+        convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
+    )
     geometry = KdaContractGeometry.from_kda_config(config, mesh_shape=mesh_shape, sp_axis=sp_axis, tp_axis=tp_axis)
     slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(LAYER,), num_slots=NUM_SLOTS)
     scratch = allocate_native_state(mesh_device, geometry)

@@ -25,7 +25,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     device_protocol,
     group_summary_nd_sharded,
     host_protocol,
+    initial_state,
     pack_summary,
+    recurrent_oracle,
     run_summary,
     summary_oracle,
     to_device,
@@ -61,7 +63,8 @@ _REGRESSION_CASE = _PerformanceCase(
     batch_heads=8,
     num_chunks=4,
     dim=32,
-    expected_duration_ns={True: 15_585, False: 14_440},
+    # Complement-form [E | B] summary: measured on a P150b (12x10 grid) 2026-11-02.
+    expected_duration_ns={True: 15_900, False: 15_200},
 )
 # Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
 _PRODUCTION_CASE = _PerformanceCase(
@@ -353,7 +356,9 @@ def test_summarize_chunk_recurrence_tail_and_init_select_distinct_programs(
             nrmse_threshold=0.005,
         )
         if tail and init:
-            assert_bit_identical(identity.bfloat16(), host[1].bfloat16(), name="unsplit tail slots hold (I, 0)")
+            assert_bit_identical(
+                identity.bfloat16(), host[1].bfloat16(), name="unsplit tail slots hold the identity (0, 0)"
+            )
         ttnn.deallocate(summaries)
 
 
@@ -588,6 +593,72 @@ def test_summarize_chunk_recurrence_rejects_unsupported_output_sharding(
     unsupported = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "memory_config must use interleaved, height-sharded or ND-sharded memory"):
         run_summary(inputs, memory_config=unsupported, actual_start=zero_actual_start)
+
+
+@pytest.mark.parametrize(
+    ("batch_heads", "num_chunks", "dim", "bf16_names"),
+    [
+        pytest.param(2, 3, 32, frozenset(), id="three-chunk-fp32"),
+        pytest.param(4, 4, 128, _PRODUCTION_BF16, id="four-chunk-production-bf16"),
+    ],
+)
+def test_summarize_chunk_recurrence_emitted_outputs_reconstruct_scan(
+    zero_actual_start,
+    device: ttnn.Device,
+    batch_heads: int,
+    num_chunks: int,
+    dim: int,
+    bf16_names: frozenset[str],
+) -> None:
+    """Unsplit from the sequence start, every chunk enters at the entry state E: the emitted F(0) and F(I) must give
+    the recurrent scan's outputs as F(0) + (F(I) - F(0)) @ E, and the emitted final transform, in complement form
+    (E_A = A - I, B), its final state E + (E_A @ E + B)."""
+    host_inputs = host_protocol(batch_heads, num_chunks, dim, dim, bf16_names=bf16_names, seed=813)
+    entry = initial_state(batch_heads, dim, dim, seed=3142)
+    expected_output, expected_final = recurrent_oracle(host_inputs, entry)
+    expected_a, expected_b = summary_oracle(host_inputs)
+    inputs = device_protocol(host_inputs, device)
+
+    with ttnn.manage_config("throw_exception_on_fallback", True):
+        packed, terms, final_e, final_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+            *inputs, actual_start=zero_actual_start, emit_outputs=True
+        )
+    assert packed.dtype == ttnn.bfloat16
+    assert tuple(packed.shape) == (1, batch_heads, dim, 2 * dim)
+    for tensor, shape in (
+        # Interleaved, a terms block is a head's chunks: its F(0) rows, then its F(I) rows.
+        (terms, (batch_heads, 2, num_chunks * CHUNK_SIZE, dim)),
+        (final_e, (batch_heads, dim, dim)),
+        (final_b, (batch_heads, dim, dim)),
+    ):
+        assert tensor.dtype == ttnn.float32
+        assert tuple(tensor.shape) == shape
+    zero, identity = ttnn.to_torch(terms).reshape(batch_heads, 2, num_chunks, CHUNK_SIZE, dim).unbind(1)
+    e, b = (ttnn.to_torch(tensor) for tensor in (final_e, final_b))
+
+    assert_accurate(
+        expected_output.float(),
+        zero + torch.matmul(identity - zero, entry.unsqueeze(1)),
+        name="chunk outputs from the emitted terms",
+        nrmse_threshold=0.004,
+    )
+    assert_accurate(
+        expected_final,
+        entry + (torch.matmul(e, entry) + b),
+        name="final state from the emitted transform",
+        nrmse_threshold=0.004,
+    )
+    assert_outputs_accurate(
+        (expected_a - torch.eye(dim), expected_b),
+        (final_e, final_b),
+        names=("final_e", "final_b"),
+        context="emitted transform",
+        nrmse_threshold=0.004,
+    )
+    # The packed head is the same complement-form transform rounded to BFLOAT16.
+    packed_host = ttnn.to_torch(packed).float()[0]
+    assert_accurate(e, packed_host[:, :, :dim], name="packed head E", nrmse_threshold=0.004)
+    assert_accurate(b, packed_host[:, :, dim:], name="packed head B", nrmse_threshold=0.004)
 
 
 @pytest.mark.parametrize("host_index", range(7))

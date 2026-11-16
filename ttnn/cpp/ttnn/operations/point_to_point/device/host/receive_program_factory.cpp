@@ -142,7 +142,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
             page_idx_start,
             page_idx_end,
             num_pages_per_packet,
-            intermediate_tensor.buffer()->address(),  // placeholder, replaced via Buffer* below
+            intermediate_tensor.mesh_buffer().address(),  // placeholder, replaced via Buffer* below
             packet_size_bytes,
             output_page_size_bytes,
             num_page_segments,

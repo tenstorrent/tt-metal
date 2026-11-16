@@ -127,7 +127,7 @@ AllToAllStreamSchedule build_stream_schedule(
         TT_FATAL(connection_coord.has_value(), "No all-to-all target at device offset {}", device_offset);
         const auto connection_node = device->get_fabric_node_id(*connection_coord);
         const auto direction =
-            tt::tt_fabric::get_eth_forwarding_direction(sender_device_fabric_node_id, connection_node);
+            tt::tt_fabric::get_eth_forwarding_direction(*device, sender_device_fabric_node_id, connection_node);
         TT_FATAL(
             direction.has_value(),
             "No Fabric2D forwarding direction from all-to-all source {} to target {}",
@@ -412,10 +412,10 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id).num_cores();
     // A row-major input is tilized on the way: its row pages are fetched, and packets carry the output's tiles.
     const bool tilize_input = tensor_args.input_tensor.layout() == Layout::ROW_MAJOR;
-    const uint32_t page_size = tilize_input ? tensor_return_value.buffer()->page_size() : op_config.get_page_size();
+    const uint32_t page_size = tilize_input ? tensor_return_value.mesh_buffer().page_size() : op_config.get_page_size();
     // The row-major input's geometry (used only with tilize_input): tiles per tile row, and bytes per input row.
     const uint32_t tiles_per_row = input_shape[input_shape.size() - 1];
-    const uint32_t row_bytes = tensor_args.input_tensor.buffer()->page_size();
+    const uint32_t row_bytes = tensor_args.input_tensor.mesh_buffer().page_size();
     // Tile rows buffered between the reader, the tilize kernel and the writer, so each can work while the next waits.
     constexpr uint32_t buffered_tile_rows = 2;
     const uint32_t max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -431,9 +431,10 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     // A row-major input stays on the generic schedule: its tilize kernel converts whole tile rows in order.
     const bool use_bank_owned_schedule =
         !tilize_input && payload_capacity_pages > 4 &&
-        tensor_return_value.buffer()->buffer_type() == BufferType::DRAM &&
-        tensor_return_value.buffer()->buffer_layout() == TensorMemoryLayout::INTERLEAVED && num_dram_banks > 0 &&
-        num_blocks >= num_dram_banks;
+        tensor_return_value.memory_config().buffer_type() == BufferType::DRAM &&
+        tensor_return_value.mesh_buffer().device_local_config().sharding_args.buffer_layout() ==
+            TensorMemoryLayout::INTERLEAVED &&
+        num_dram_banks > 0 && num_blocks >= num_dram_banks;
     const uint32_t number_pages_per_packet =
         use_bank_owned_schedule ? payload_capacity_pages : std::min<uint32_t>(4, payload_capacity_pages);
     const uint32_t block_stride = use_bank_owned_schedule ? num_dram_banks : 1;
@@ -457,7 +458,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
                 tensor_args.input_tensor, source_coord, offset, effective_topology, operation_attributes.cluster_axis);
             TT_FATAL(connection_coord.has_value(), "No all-to-all target at device offset {}", offset);
             const auto connection_node = device->get_fabric_node_id(*connection_coord);
-            const auto direction = tt::tt_fabric::get_eth_forwarding_direction(source_node, connection_node);
+            const auto direction = tt::tt_fabric::get_eth_forwarding_direction(*device, source_node, connection_node);
             TT_FATAL(
                 direction.has_value(),
                 "No Fabric2D forwarding direction from all-to-all source {} to target {}",
@@ -526,7 +527,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     constexpr uint32_t ring_min_packets_per_lane = 4;
     const uint32_t min_packets_per_lane = is_ring ? ring_min_packets_per_lane : linear_min_packets_per_lane;
     const uint64_t packets_per_lane =
-        tensor_return_value.buffer()->num_pages() /
+        tensor_return_value.mesh_buffer().num_pages() /
         (static_cast<uint64_t>(routing.num_links) * max_useful_workers_per_direction * number_pages_per_packet);
     // The thresholds apply to two direction groups. Folded axes can require three or four physical egresses, each with
     // its own workers and mux, so scale the startup cost proportionally.
@@ -776,8 +777,8 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
             const auto target_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
                 tensor_args.input_tensor, mesh_coordinate, device_offset, effective_topology, cluster_axis);
             TT_FATAL(target_coord.has_value(), "No all-to-all target at device offset {}", device_offset);
-            const auto direction =
-                tt::tt_fabric::get_eth_forwarding_direction(self_node, device->get_fabric_node_id(*target_coord));
+            const auto direction = tt::tt_fabric::get_eth_forwarding_direction(
+                *device, self_node, device->get_fabric_node_id(*target_coord));
             TT_FATAL(
                 direction.has_value() && static_cast<uint32_t>(*direction) < num_cardinal_fabric_directions,
                 "No Fabric2D cardinal forwarding direction from all-to-all source {} to target {}",
@@ -853,7 +854,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
 
         const auto connection_node = device->get_fabric_node_id(*connection_coord);
         const auto direction =
-            tt::tt_fabric::get_eth_forwarding_direction(sender_device_fabric_node_id, connection_node);
+            tt::tt_fabric::get_eth_forwarding_direction(*device, sender_device_fabric_node_id, connection_node);
         TT_FATAL(
             direction.has_value(),
             "No Fabric2D forwarding direction from all-to-all source {} to target {}",
@@ -997,7 +998,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
                 return false;
             }
             const auto direction =
-                tt::tt_fabric::get_eth_forwarding_direction(self_node, device->get_fabric_node_id(*neighbor));
+                tt::tt_fabric::get_eth_forwarding_direction(*device, self_node, device->get_fabric_node_id(*neighbor));
             if (!direction.has_value() || static_cast<uint32_t>(*direction) >= num_cardinal_fabric_directions) {
                 return false;
             }
