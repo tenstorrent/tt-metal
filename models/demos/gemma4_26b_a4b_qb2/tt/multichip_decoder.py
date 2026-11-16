@@ -32,12 +32,15 @@ from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import dtype_name
 from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import fidelity as policy_fidelity
 from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import fidelity_name
 from models.demos.gemma4_26b_a4b_qb2.tt.routing_precision import Router
+from models.demos.gemma4_26b_a4b_qb2.tt.ws2_ops import qkv_heads_norm_rope_b1
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
 # WS2 glue cut (perf/WS2.md). Each switch defaults on; "0" restores the previous decode path for A/B runs.
 WS2_HEADS = os.environ.get("GEMMA4_26B_WS2_HEADS", "1") != "0"
 WS2_NORMS = os.environ.get("GEMMA4_26B_WS2_NORMS", "1") != "0"
 WS2_GEGLU = os.environ.get("GEMMA4_26B_WS2_GEGLU", "1") != "0"
+WS2_FUSED_CACHE = os.environ.get("GEMMA4_26B_WS2_FUSED_CACHE", "1") != "0"
+WS2_FOLD_SHARED = os.environ.get("GEMMA4_26B_WS2_FOLD_SHARED", "1") != "0"
 # Fabric links per decode all-reduce (QB2 Linear 1x4). 2 measured ~35% faster than 1 at decode-row sizes.
 WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
 
@@ -268,6 +271,25 @@ class _LocalAttention(OptimizedAttention):
         cfg = self.source.config
         qkv = self.source.weights.wqkv(hidden_states, dtype=ttnn.bfloat16)
         rope = DecodeRopeRows.gather(kwargs["rope_mats"], kwargs["position_idx"])
+        cache_pos, page_table = kwargs["position_idx_cache"], kwargs["page_table"]
+        k_cache, v_cache = kwargs["kv_cache"]
+        if WS2_FUSED_CACHE:
+            # v on its own core, so one program writes both caches.
+            q, k, v = qkv_heads_norm_rope_b1(
+                qkv,
+                cfg.num_attention_heads,
+                cfg.num_key_value_heads,
+                cfg.head_dim,
+                self.q_gamma,
+                self.k_gamma,
+                rope.cos,
+                rope.sin,
+                cfg.rms_norm_eps,
+            )
+            ttnn.experimental.paged_fused_update_cache(
+                k_cache, k, v_cache, v, update_idxs_tensor=cache_pos, page_table=page_table
+            )
+            return self._ws2_attend(q, k_cache, v_cache, cache_pos, page_table)
         q, k, v = QkvHeadsNormRope.op(
             qkv,
             cfg.num_attention_heads,
@@ -279,8 +301,6 @@ class _LocalAttention(OptimizedAttention):
             rope.sin,
             cfg.rms_norm_eps,
         )
-        cache_pos, page_table = kwargs["position_idx_cache"], kwargs["page_table"]
-        k_cache, v_cache = kwargs["kv_cache"]
         for cache, update in ((k_cache, k), (v_cache, v)):
             ttnn.experimental.paged_update_cache(
                 cache,
@@ -290,6 +310,10 @@ class _LocalAttention(OptimizedAttention):
                 block_size=cache.shape[-2],
                 num_kv_heads=cfg.num_key_value_heads,
             )
+        return self._ws2_attend(q, k_cache, v_cache, cache_pos, page_table)
+
+    def _ws2_attend(self, q, k_cache, v_cache, cache_pos, page_table):
+        cfg = self.source.config
         sdpa = self.decode_sdpa
         direct = self.output_program is not None and getattr(self, "decode_output_dram", None) is None
         direct = direct and not getattr(self, "output_input_bfp8", False)
@@ -429,6 +453,12 @@ class _SharedMLP:
         gate = state["mlp.gate_proj.weight"].transpose(-2, -1)
         up = state["mlp.up_proj.weight"].transpose(-2, -1)
         down = state["mlp.down_proj.weight"].transpose(-2, -1)
+        # Batch-1 decode feeds the normalized residual; pre_feedforward_layernorm's gamma scales the decode
+        # gate/up input rows instead of a separate multiply (prefill keeps its own weights and multiply).
+        self.input_gamma_folded = WS2_FOLD_SHARED and "pre_feedforward_layernorm.weight" in state
+        if self.input_gamma_folded:
+            gamma = state["pre_feedforward_layernorm.weight"].float()[:, None]
+            gate, up = gate.float() * gamma, up.float() * gamma
         padding = 4 * self.width - gate.shape[-1]
         gate, up = (torch.nn.functional.pad(t, (0, padding)) for t in (gate, up))
         down = torch.nn.functional.pad(down, (0, 0, 0, padding))
@@ -480,9 +510,11 @@ class _SharedMLP:
 
             self.decode_programs = (program(gate_grid, gate_n, gate_k), program((11, 4), 2, 17))
 
-    def __call__(self, x, *, reduce_output=True):
-        # Imported Gemma4 loader packs [up_i, gate_i] on each rank.
+    def __call__(self, x, *, reduce_output=True, normalized_input=False):
+        # Imported Gemma4 loader packs [up_i, gate_i] on each rank. With the input gamma folded into the decode
+        # weights, only callers passing the plain normalized row (normalized_input) may use them.
         decode = self.decode_weights is not None and x.shape[-2] == 1
+        decode = decode and (normalized_input or not getattr(self, "input_gamma_folded", False))
         return self._forward(x, decode=decode, reduce_output=reduce_output)
 
     def decode_batch(self, x, *, reduce_output=True):
@@ -1745,7 +1777,10 @@ class MultichipDecoder(OptimizedDecoder):
             if memory is not None:
                 expert_input = ttnn.to_memory_config(expert_input, ttnn.L1_MEMORY_CONFIG)
             routed_rows.append(self.layer.moe.experts(expert_input, routes))
-            shared_inputs.append(ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16))
+            if getattr(self.layer.shared_mlp, "input_gamma_folded", False):
+                shared_inputs.append(ttnn.typecast(normalized, ttnn.bfloat16))  # gamma is in the decode weights
+            else:
+                shared_inputs.append(ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16))
             residuals.append(residual)
         shared = self.layer.shared_mlp.decode_batch(
             ttnn.concat(shared_inputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG), reduce_output=False
@@ -1843,8 +1878,12 @@ class MultichipDecoder(OptimizedDecoder):
         expert_dtype = getattr(getattr(experts, "decode", experts), "decode_activation_dtype", None)
         expert_input = ttnn.mul(normalized, self.expert_norm_weight, dtype=expert_dtype or ttnn.bfloat16)
         routed = experts(expert_input, routes)
-        shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
-        shared = self.layer.shared_mlp(shared_input, reduce_output=False)
+        shared_mlp = self.layer.shared_mlp
+        if getattr(shared_mlp, "input_gamma_folded", False):
+            shared_input = normalized
+        else:
+            shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
+        shared = shared_mlp(shared_input, reduce_output=False, normalized_input=shared_input is normalized)
         # The reshard into the norm layout also restores bf16 from the BFP8 collective.
         shared, routed = self._reduce_moe_pair(shared, routed, keep_dtype=True)
         combined = norm(norm(shard(shared), "ff1"), "ff", residual=norm(shard(routed), "ff2"))
