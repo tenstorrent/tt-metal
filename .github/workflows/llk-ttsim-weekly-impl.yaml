@@ -122,7 +122,7 @@ jobs:
       options: "--label runner-mode=sim"
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: asattaurTT/tt-github-actions/.github/actions/cachew-checkout@66fab509e2c11f6d518f82d16d3409041432877c # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}

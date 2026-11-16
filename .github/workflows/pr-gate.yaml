@@ -217,7 +217,7 @@ jobs:
           git show FETCH_HEAD:.github/pipeline_cmd_lint_baseline.yaml > "${RUNNER_TEMP}/base_baseline.yaml" 2>/dev/null || : > "${RUNNER_TEMP}/base_baseline.yaml"
           python3 .github/scripts/utils/lint_pipeline_cmds.py --base-baseline "${RUNNER_TEMP}/base_baseline.yaml"
       - name: Verify test timeouts against team time budgets
-        uses: tenstorrent/tt-metal/.github/actions/verify-time-budget@main
+        uses: $/.github/actions/verify-time-budget
         with:
           # The action is pinned to @main so the check logic is always current, but that
           # means GITHUB_ACTION_PATH resolves inside a separate main-pinned checkout, not
