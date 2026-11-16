@@ -122,7 +122,7 @@ class Hy4MoeTp32Block:
         )
 
     # ------------------------------------------------------------------ forward
-    def forward_partial(self, tt_x_gate, tt_x_tokens=None, forced_routing=None, fold=None):
+    def forward_partial(self, tt_x_gate, tt_x_tokens=None, forced_routing=None, fold=None, defer_fold=False):
         """router + gathers + TP32 kernel + shared-expert fold -> the un-reduced [1,1,4T,HID] bf16 TILE partial of this chip (rows = the Tt tokens of the 4 mesh rows in row order)."""
         T, Tt = self.T, self.Tt
         route_all = None
@@ -151,7 +151,9 @@ class Hy4MoeTp32Block:
         part = self.tpe(x_all, route_all, Tt)  # [1,1,Tt,HID] bf16 TILE partial
         ttnn.deallocate(x_all)
         ttnn.deallocate(route_all)
-        if fold is not None:
+        if (
+            fold is not None and not defer_fold
+        ):  # defer_fold (HY4_BOUNDARY_FUSE=fold): the caller hands `fold` to the rows-reduce program
             fp = ttnn.matmul(
                 self.mask, fold, compute_kernel_config=self.ckc
             )  # [1,1,Tt,T] x fold [1,1,T,HID] -> [1,1,Tt,HID]

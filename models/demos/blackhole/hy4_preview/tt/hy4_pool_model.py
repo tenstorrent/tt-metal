@@ -370,8 +370,12 @@ class Hy4PoolDecoder(Hy4Decoder):
         blk = self._blks[i]
         if getattr(self, "rp_v", None) is not None and hasattr(blk, "forward_partial"):
             # HY4_TP32_TAIL=oneshot at the verify shape (verify-opt track): rows-phase reduce (packed T = S rows, nrp 24) + column all-reduce + the next iHC pre in ONE mesh program
+            from models.demos.blackhole.hy4_preview.tt.hy4_decode import bfuse
             from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import FusedPartial
 
+            if bfuse("fold"):
+                pt = blk.forward_partial(h, tok, fold=part, defer_fold=True)
+                return FusedPartial(pt, rp=self.rp_v, fold=part)
             pt = blk.forward_partial(h, tok, fold=part)
             if part is not None:
                 ttnn.deallocate(part)
