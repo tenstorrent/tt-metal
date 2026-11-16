@@ -898,6 +898,9 @@ class MTPSpecEngine:
         finally:
             self.mesh.set_program_cache_misses_allowed(True)
         self.captured = True
+        log_region = getattr(self.model, "_log_trace_region", None)
+        if log_region is not None:
+            log_region("the decode traces")
 
     def _capture_step(self):
         """Traces captured after the drafter's, inside capture_decode's scope (MTPBlockEngine's step trace)."""
