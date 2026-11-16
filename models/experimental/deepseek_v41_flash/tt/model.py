@@ -85,7 +85,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import (
     DeepSeekV41PersistentMoeDecoderLayer,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.engram import open_rows_sockets, rows_page_bytes
-from models.experimental.deepseek_v41_flash.tt.decode.dspark import DeepSeekV41DSpark, host_to_device
+from models.experimental.deepseek_v41_flash.tt.decode.dspark import DSPARK_BLOCK, DeepSeekV41DSpark, host_to_device
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.decode.step_context import StepContextBuilder, rope_table, term
 from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
@@ -3243,7 +3243,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             self.cache.file("lm_head"),
             dtype=self._lm_head_traced.weight.dtype,
         )
-        drafter_kwargs = {"use_prefetcher": self.use_prefetcher, **drafter_kwargs}
+        # The block verify reads verify_rows - 1 proposals: the greedy draft computes only those.
+        greedy_drafts = self.verify_rows - 1 if self._block_verify and DSPARK_BLOCK else None
+        drafter_kwargs = {"use_prefetcher": self.use_prefetcher, "greedy_drafts": greedy_drafts, **drafter_kwargs}
         self.dspark = DeepSeekV41DSpark(
             cfg,
             self.loader,
