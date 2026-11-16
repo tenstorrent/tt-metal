@@ -30,7 +30,10 @@ def _command(value, context):
         return None
     if not isinstance(value, list) or len(value) != 3:
         raise ValueError(f"{context}: command must be a one-hot list of 3 values")
-    return tuple(float(element) for element in value)
+    command = tuple(float(element) for element in value)
+    if sorted(command) != [0.0, 0.0, 1.0]:
+        raise ValueError(f"{context}: command must be a one-hot list of 3 values, got {value}")
+    return command
 
 
 @dataclass(frozen=True)
