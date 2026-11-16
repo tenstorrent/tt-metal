@@ -77,19 +77,32 @@ void kernel_main() {
                     key[f * 16u + 2u * w + 1u] = f32_order_key(pair & 0xFFFF0000u);
                 }
             }
-            for (uint32_t j = 0; j < top_k; ++j) {
-                uint32_t best = 0;
-                for (uint32_t i = 1; i < 32u; ++i) {
-                    if (key[i] > key[best]) {
-                        best = i;
-                    }
+            // One pass keeping the best top_k sorted: an expert goes after every held one of an equal or bigger key,
+            // so equal keys keep the lower expert first -- what picking the first maximum top_k times gives.
+            uint32_t best_key[top_k];
+            uint32_t best_at[top_k];
+            uint32_t held = 0;
+            for (uint32_t i = 0; i < 32u; ++i) {
+                const uint32_t k = key[i];
+                if (held == top_k && k <= best_key[top_k - 1u]) {
+                    continue;
                 }
+                uint32_t p = held < top_k ? held++ : top_k - 1u;
+                while (p > 0u && best_key[p - 1u] < k) {
+                    best_key[p] = best_key[p - 1u];
+                    best_at[p] = best_at[p - 1u];
+                    --p;
+                }
+                best_key[p] = k;
+                best_at[p] = i;
+            }
+            for (uint32_t j = 0; j < top_k; ++j) {
+                const uint32_t best = best_at[j];
                 const uint32_t pair = words[((best >> 4) * rows + r) * 8u + ((best & 15u) >> 1)];
                 const uint32_t at = 3u * (r * top_k + j);
-                cand[at] = key[best];
+                cand[at] = best_key[j];
                 cand[at + 1u] = my_chip * 32u + best;
                 cand[at + 2u] = (best & 1u) != 0u ? (pair & 0xFFFF0000u) : (pair << 16);
-                key[best] = 0u;
             }
         }
     };

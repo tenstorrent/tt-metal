@@ -411,18 +411,105 @@ void kernel_main() {
             }
             if constexpr (rank_from_router) {
                 constexpr uint32_t slot_words = router_cand_slot_bytes / 4u;
+#if defined(FE_ROUTER_SHARDED)
+                // The sharded router: merge each chip's slot as it lands, into a running top_k per row, so only the
+                // last slot's merge is left once every chip's candidates are in. A slot of a half that is not yet
+                // written holds a 0 key in its first triplet (cleared here after each merge and at launch: a real
+                // order key is never 0), so the slots with a nonzero key are the ones written or being written;
+                // when as many are tagged (in both halves: a chip can be a row ahead) as sem_router has counted
+                // past the previous iterations, every tagged one has landed whole. The merge is a strict total
+                // order (key, then the lower id), so merging the slots in arrival order picks exactly what the
+                // k-way merge in chip order picks, in the same order.
+                {
+                    DeviceZoneScopedN("FE_ROUTE_CAND_WAIT");
+                    constexpr uint32_t kRun = batch * top_k;
+                    uint32_t run_key[kRun];
+                    uint32_t run_id[kRun];
+                    uint32_t run_score[kRun];
+                    auto* sem_cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_router_id));
+                    auto* half_cur = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        FE_CAND_ADDR + (iter & 1u) * num_router_cores * router_cand_slot_bytes);
+                    auto* half_next = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        FE_CAND_ADDR + ((iter + 1u) & 1u) * num_router_cores * router_cand_slot_bytes);
+                    const uint32_t counted_before = num_router_cores * iter;
+                    uint32_t merged = 0;  // slots of the current half merged so far
+                    uint32_t merged_mask = 0;
+                    while (merged < num_router_cores) {
+                        invalidate_l1_cache();
+                        const uint32_t counted = *sem_cand - counted_before;
+                        uint32_t tagged_mask = 0;
+                        uint32_t tagged = 0;
+                        for (uint32_t c = 0; c < num_router_cores; ++c) {
+                            if (half_cur[c * slot_words] != 0u) {
+                                tagged_mask |= 1u << c;
+                                ++tagged;
+                            }
+                            if (half_next[c * slot_words] != 0u) {
+                                ++tagged;
+                            }
+                        }
+                        if (tagged != counted) {
+                            continue;
+                        }
+                        uint32_t fresh = tagged_mask & ~merged_mask;
+                        while (fresh != 0u) {
+                            const uint32_t c = static_cast<uint32_t>(__builtin_ctz(fresh));
+                            fresh &= fresh - 1u;
+                            const uint32_t base = c * slot_words;
+                            // Each row's slot list is best first, so its candidates enter the running top_k (an
+                            // insertion) only while they beat the running worst: a slot costs a compare or two per
+                            // row once the running lists are full.
+                            for (uint32_t b = 0; b < batch; ++b) {
+                                uint32_t* rk = run_key + b * top_k;
+                                uint32_t* ri = run_id + b * top_k;
+                                uint32_t* rs = run_score + b * top_k;
+                                const uint32_t sb = base + b * top_k * 3u;
+                                for (uint32_t j = 0; j < top_k; ++j) {
+                                    const uint32_t k = half_cur[sb + 3u * j];
+                                    const uint32_t id = half_cur[sb + 3u * j + 1u];
+                                    uint32_t p = merged == 0u ? j : top_k;
+                                    if (p == top_k) {
+                                        if (!(k > rk[top_k - 1u] || (k == rk[top_k - 1u] && id < ri[top_k - 1u]))) {
+                                            break;
+                                        }
+                                        p = top_k - 1u;
+                                        while (p > 0u && (k > rk[p - 1u] || (k == rk[p - 1u] && id < ri[p - 1u]))) {
+                                            rk[p] = rk[p - 1u];
+                                            ri[p] = ri[p - 1u];
+                                            rs[p] = rs[p - 1u];
+                                            --p;
+                                        }
+                                    }
+                                    rk[p] = k;
+                                    ri[p] = id;
+                                    rs[p] = half_cur[sb + 3u * j + 2u];
+                                }
+                            }
+                            merged_mask |= 1u << c;
+                            ++merged;
+                        }
+                    }
+                    for (uint32_t b = 0; b < batch; ++b) {
+                        for (uint32_t j = 0; j < top_k; ++j) {
+                            const uint16_t e = static_cast<uint16_t>(run_id[b * top_k + j]);
+                            router_score_bits[b * top_k + j] = run_score[b * top_k + j];
+                            sel_ids[b * top_k + j] = e;
+                            bitmap[e >> 5] |= 1u << (e & 31u);
+                        }
+                    }
+                    // This half is written next two iterations on, after this merge is done.
+                    for (uint32_t c = 0; c < num_router_cores; ++c) {
+                        half_cur[c * slot_words] = 0u;
+                    }
+                }
+#else
                 {
                     DeviceZoneScopedN("FE_ROUTE_CAND_WAIT");
                     Semaphore<>(sem_router_id).wait_min(num_router_cores * (iter + 1u));
                 }
-#if defined(FE_ROUTER_SHARDED)
-                // The sharded router: one slot per chip, written by its reducer (this chip's) or exchange sender
-                // (the others'), into alternate halves in alternate iterations -- a chip can be a row ahead.
-                CoreLocalMem<volatile uint32_t> cand(
-                    FE_CAND_ADDR + (iter & 1u) * num_router_cores * router_cand_slot_bytes);
-#else
-                CoreLocalMem<volatile uint32_t> cand(routing_l1 + router_cand_offset);
 #endif
+#if !defined(FE_ROUTER_SHARDED)
+                CoreLocalMem<volatile uint32_t> cand(routing_l1 + router_cand_offset);
                 // A slot holds each row's top_k in turn (router_reduce.cpp): row b's from triplet b * top_k. Each
                 // slot's current head (key, id) is held in registers, so a pick scans those and reloads one head.
                 constexpr uint32_t kSlots = num_router_cores > 0u ? num_router_cores : 1u;
@@ -454,6 +541,7 @@ void kernel_main() {
                         head_id[best_c] = cand[head[best_c] + 1u];
                     }
                 }
+#endif
             } else if constexpr (rank_from_scores) {
                 // On-device top-k over the ranking row: one ascending scan per token keeping a sorted
                 // k-entry running list of (score, id). The row is already resident in cb_routing -- the
@@ -800,6 +888,16 @@ void kernel_main() {
     };
 
 #if defined(FE_ROUTE_STAGE)
+#if defined(FE_ROUTER_SHARDED)
+    // Both halves' slots untagged (see the merge): the scratch comes uninitialized.
+    auto clear_cand_tags = [&]() {
+        auto* slots = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FE_CAND_ADDR);
+        for (uint32_t c = 0; c < 2u * num_router_cores; ++c) {
+            slots[c * (router_cand_slot_bytes / 4u)] = 0u;
+        }
+    };
+    clear_cand_tags();
+#endif
     // No input to consume and no writer: this kernel is past a row once its broadcast is out.
     for (uint32_t iter = 0;; ++iter) {
         if (iter > 0u) {
@@ -812,6 +910,9 @@ void kernel_main() {
         fe_rewind_cbs();
         iteration(iter);
     }
+#if defined(FE_ROUTER_SHARDED)
+    clear_cand_tags();
+#endif
 #elif defined(FE_PERSISTENT)
     for (uint32_t iter = 0; fe_begin_iteration(iter, cb_input_id, k_tiles, /*has_writer=*/true); ++iter) {
         iteration(iter);
