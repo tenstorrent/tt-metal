@@ -1415,6 +1415,21 @@ class MultichipDecoder(OptimizedDecoder):
             "fixed": fixed,
         }
         assert_precision_matches(summary, self.selected_precision, f"layer.{self.layer_idx}")
+        # Observed batch-1 decode dtypes of the WS2 path (perf/WS2.md); informational, not policy-controlled.
+        # The policy fields above still govern prefill and the batched (8-32 row) decode path.
+        if self.ws2_norm is not None:
+            pack_attention = getattr(attention, "ws2_pack_memory", None) is not None
+            summary["b1_decode"] = {
+                "residual_dtype": "bfloat16",
+                "norm_input_dtype": "bfloat16",
+                "qkv_input_dtype": "bfloat16",
+                "attention_ccl_dtype": "bfloat16" if pack_attention else dtype_name(self.attention_ccl_dtype),
+                "attention_ccl_form": "packed_rows" if pack_attention else "rs_ag",
+                "shared_input_dtype": "float32" if getattr(shared, "input_gamma_folded", False) else "bfloat16",
+                "moe_ccl_dtype": "bfloat16" if WS2_PACK_MOE else ("bfloat8_b" if self.moe_ccl_bfp8 else "bfloat16"),
+                "moe_ccl_form": "packed_rows" if WS2_PACK_MOE else "rs_ag_pair",
+                "ccl_links": self.ccl_links,
+            }
         return summary
 
     def _prefill_continuation(self, hidden_states, *, rope_mats, page_table, kv_cache, user_id, start_pos):
