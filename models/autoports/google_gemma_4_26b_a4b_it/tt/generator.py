@@ -11,15 +11,14 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.autoports.google_gemma_4_26b_a4b_it.tt.model import MODEL_ID, REVISION, Gemma4Model
-from models.common.modules.tt_ccl import get_tt_ccl
-from models.common.readiness_check.contract import Generator
 from models.common.sampling.generator import (
     SamplingGenerator,
     SamplingParams,
     _hash_request_seed_to_device_seed,
     format_sampling_params,
 )
+from models.common.tt_ccl import get_tt_ccl
+from models.autoports.google_gemma_4_26b_a4b_it.tt.model import MODEL_ID, REVISION, Gemma4Model
 
 
 class _Gemma4SamplingGenerator(SamplingGenerator):
@@ -41,16 +40,14 @@ class _Gemma4SamplingGenerator(SamplingGenerator):
             output_tensor=self._public_tokens,
         )
 
-    def _run_sampling(self, logits, *, penalties_on, tt_out_tok, count_tokens=True):
-        output = super()._run_sampling(
-            logits, penalties_on=penalties_on, tt_out_tok=tt_out_tok, count_tokens=count_tokens
-        )
+    def _run_sampling(self, logits, *, tt_out_tok=None, **sampling_kwargs):
+        output = super()._run_sampling(logits, tt_out_tok=tt_out_tok, **sampling_kwargs)
         if tt_out_tok is not None and tt_out_tok is self._feedback_tokens:
             self.format_public_tokens()
         return output
 
 
-class Gemma4Generator(Generator):
+class Gemma4Generator:
     def __init__(
         self,
         mesh_device,
@@ -97,21 +94,6 @@ class Gemma4Generator(Generator):
         self.prefill_prepared = None
         self.prefill_trace_id = None
         self.prefill_sampling_trace_id = None
-        print(f"PREFILL_TRACE_POLICY enabled={self.prefill_trace_enabled} max_length=1024 entries=1", flush=True)
-        policies = {
-            (
-                layer.layer.moe.experts.prefill.short_prefill_batch_tokens,
-                tuple(
-                    (rows, configs[0].in0_block_w, configs[1].in0_block_w, configs[1].per_core_N)
-                    for rows, configs in layer.layer.moe.experts.prefill.prefill_configs.items()
-                ),
-            )
-            for layer in self.model.layers
-        }
-        print(
-            f"PREFILL_EXPERT_POLICIES {sorted(policies)} fields=(rows,gateK,downK,downN) wider_rows=128..256",
-            flush=True,
-        )
         self._trace_returns_logits = False
         self.output_trace_id = None
         self.output_buffer = None
@@ -172,7 +154,7 @@ class Gemma4Generator(Generator):
             self._release_trace()
         temperatures = params.temperature if isinstance(params.temperature, list) else [params.temperature]
         self.sampled_mode = any(value != 0.0 for value in temperatures)
-        if getattr(self, "prefill_prepared", None) is not None and (
+        if self.prefill_prepared is not None and (
             self.host_sampling
             or self.sampled_mode
             or any(value != 0 for value in formatted.presence_penalty + formatted.frequency_penalty)
@@ -226,7 +208,7 @@ class Gemma4Generator(Generator):
 
     def _release_trace(self):
         for name in ("prefill_trace_id", "prefill_sampling_trace_id"):
-            if (trace := getattr(self, name, None)) is not None:
+            if (trace := getattr(self, name)) is not None:
                 ttnn.release_trace(self.mesh, trace)
                 setattr(self, name, None)
         if self.output_trace_id is not None:
@@ -407,16 +389,19 @@ class Gemma4Generator(Generator):
         # Prepared inputs/output predate decode warmup. Capture records the
         # already-warmed prefill graph without mutating the live decode cache.
         try:
-            for name, step in (
-                ("prefill_trace_id", self._prefill_trace_step),
-                ("prefill_sampling_trace_id", self._prefill_sampling_step),
-            ):
-                trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
-                setattr(self, name, trace)
-                try:
-                    step()
-                finally:
-                    ttnn.end_trace_capture(self.mesh, trace, cq_id=0)
+            trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self.prefill_trace_id = trace
+            try:
+                self._prefill_trace_step()
+            finally:
+                ttnn.end_trace_capture(self.mesh, trace, cq_id=0)
+
+            trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            self.prefill_sampling_trace_id = trace
+            try:
+                self._prefill_sampling_step()
+            finally:
+                ttnn.end_trace_capture(self.mesh, trace, cq_id=0)
         except BaseException:
             self._release_trace()
             raise
@@ -435,30 +420,71 @@ class Gemma4Generator(Generator):
         self.cache = self.owned_cache
         return self.owned_table
 
-    def prefill_forward(self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, slots=None):
-        if getattr(self, "prefill_prepared", None) is not None:
+    def prefill_forward(
+        self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False, slots=None, start_pos=None
+    ):
+        if self.prefill_prepared is not None:
             self._release_trace()
             self.prefill_prepared = None
         slots = list(range(len(prompt_lens))) if slots is None else list(slots)
         if len(slots) != len(prompt_lens) or tokens.shape[0] != len(slots):
             raise ValueError("Prompt, slot and batch dimensions differ")
+        starts = [0] * len(slots) if start_pos is None else torch.as_tensor(start_pos).reshape(-1).tolist()
+        if len(starts) != len(slots):
+            raise ValueError("Start-position and batch dimensions differ")
+        for start, length in zip(starts, prompt_lens):
+            if int(start) != start or not 0 <= start < length <= min(tokens.shape[1], self.model.max_seq_len):
+                raise ValueError("Invalid logical prefill interval")
         table = self._upload_page_tables(page_table)
         outputs = []
-        for row, (slot, length) in enumerate(zip(slots, prompt_lens)):
-            if not 1 <= length <= min(tokens.shape[1], self.model.max_seq_len):
-                raise ValueError("Invalid logical prompt length")
-            ids = self.model.upload(
-                tokens[row : row + 1, :length].reshape(1, 1, 1, length).int(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+        suffix_lengths = []
+        for row, (slot, start, length) in enumerate(zip(slots, starts, prompt_lens)):
+            start = int(start)
+            suffix_length = int(length) - start
+            suffix_lengths.append(suffix_length)
+            trace_suffix = (
+                os.getenv("GEMMA4_PREFIX_TRACE_SUFFIX") == "1"
+                and len(slots) == 1
+                and slot == 0
+                and start > 0
+                and suffix_length >= 8
+                and not return_all_logits
+                and all(isinstance(t, torch.Tensor) and t.shape[0] == 1 for t in self._tables(page_table))
             )
-            logits = self.model.prefill_forward(
-                ids, page_table=table, kv_cache=kv_cache, user_id=slot, return_all_logits=return_all_logits
-            )
+            if trace_suffix:
+                # Reuse the canonical logits-only trace: explicit input tokens
+                # and absolute positions, with no sampling or RNG advancement.
+                for position in range(start, int(length)):
+                    traced = self.decode_forward(
+                        tokens[:, position : position + 1],
+                        torch.tensor([position]),
+                        page_table=page_table,
+                        kv_cache=kv_cache,
+                        return_logits=True,
+                    )
+                # The trace owns padded output storage; retain an independent
+                # logical row across subsequent trace release/rebinding.
+                logits = ttnn.clone(traced[:, :, :1, :])
+            else:
+                ids = self.model.upload(
+                    tokens[row : row + 1, start:length].reshape(1, 1, 1, suffix_length).int(),
+                    ttnn.uint32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                )
+                logits = self.model.prefill_forward(
+                    ids,
+                    page_table=table,
+                    kv_cache=kv_cache,
+                    user_id=slot,
+                    return_all_logits=return_all_logits,
+                    start_pos=start,
+                )
             outputs.append(logits)
         if return_all_logits:
             # Logit compatibility boundary is explicit; token-out never uses it.
-            max_length = max(prompt_lens)
+            max_length = max(suffix_lengths)
             result = torch.zeros(len(outputs), max_length, self.model.config.vocab_size)
-            for row, (logits, length) in enumerate(zip(outputs, prompt_lens)):
+            for row, (logits, length) in enumerate(zip(outputs, suffix_lengths)):
                 result[row, :length] = self._read_logits(logits).reshape(length, -1)
             return result
         logits = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)

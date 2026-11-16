@@ -13,6 +13,10 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import ttnn
+from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.tt.experts.prefill import create_prefill_sparsity
+from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.autoports.google_gemma_4_26b_a4b_it.tt.fused_decoder import BroadcastRouter, FusedAttention, PackedExperts
 from models.autoports.google_gemma_4_26b_a4b_it.tt.optimized_decoder import (
     GeneralizedRouter,
@@ -28,15 +32,15 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import dtype
 from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import fidelity as policy_fidelity
 from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import fidelity_name
 from models.autoports.google_gemma_4_26b_a4b_it.tt.routing_precision import Router
-from models.demos.gemma4.config import MeshConfig, ModeConfig
-from models.demos.gemma4.tt.experts.weights import ExpertWeights
-from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
-from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
 
 class _MeshCCLManager(CCLManager):
     """Cover every worker that native CCL may choose on this mesh."""
+
+    def get_barrier_semaphore(self, axis=None):
+        # The shared Gemma4 collectives pass the cluster axis; this manager keeps one semaphore.
+        return super().get_barrier_semaphore()
 
     def _init_subdevice(self):
         grid = self.mesh_device.compute_with_storage_grid_size()
@@ -531,13 +535,12 @@ class _DramSharedMLP(_SharedMLP):
 class _ExpertParallelExperts(OptimizedExperts):
     """Own 32 complete experts per rank and scan only their routing mask."""
 
-    def __init__(self, state_dict, config, mesh_device, sliding, gate_dtype=None, down_dtype=ttnn.bfloat4_b):
+    def __init__(self, state_dict, config, mesh_device, sliding):
         import torch
 
         if config.num_experts != 128 or config.moe_intermediate_size != 704:
             raise ValueError("EP4 requires 128 experts with intermediate width 704")
         width = config.moe_intermediate_size
-        gate_dtype = gate_dtype if gate_dtype is not None else (ttnn.bfloat8_b if sliding else ttnn.bfloat4_b)
         mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
 
         def weight(value):
@@ -551,7 +554,7 @@ class _ExpertParallelExperts(OptimizedExperts):
             )
 
         fused = state_dict["experts.gate_up_proj"]
-        weights = ExpertWeights(
+        weights = SimpleNamespace(
             gate_proj=weight(fused[:, :width, :].transpose(-2, -1).unsqueeze(0)),
             up_proj=weight(fused[:, width:, :].transpose(-2, -1).unsqueeze(0)),
             down_proj=weight(state_dict["experts.down_proj"].transpose(-2, -1).unsqueeze(0)),
@@ -564,8 +567,8 @@ class _ExpertParallelExperts(OptimizedExperts):
         packed = PackedExperts(source, fused_gelu=True, prefill_batch_tokens=32, matmul_mix=True, mix_fp32=sliding)
         super().__init__(
             packed,
-            gate_dtype=gate_dtype,
-            down_dtype=down_dtype,
+            gate_dtype=ttnn.bfloat8_b if sliding else ttnn.bfloat4_b,
+            down_dtype=ttnn.bfloat4_b,
             block_w=22,
             gate_block_w=44,
             fidelity=ttnn.MathFidelity.LoFi,
@@ -574,8 +577,8 @@ class _ExpertParallelExperts(OptimizedExperts):
             down_grid=(11, 8),
             active_prefill=True,
             prefill_tokens=32,
-            prefill_dtype=gate_dtype,
-            prefill_down_dtype=down_dtype,
+            prefill_dtype=ttnn.bfloat8_b if sliding else ttnn.bfloat4_b,
+            prefill_down_dtype=ttnn.bfloat4_b,
             prefill_fidelity=ttnn.MathFidelity.LoFi,
             expert_fused_gelu=True,
             activation_dtype=None if sliding else ttnn.bfloat8_b,
@@ -644,8 +647,8 @@ class _ExpertParallelExperts(OptimizedExperts):
         if x.shape[-2] == 1:
             return self._chunk(x, routing, True)
         width = self.prefill_batch_tokens
-        # Wider batches are an explicit experiment override. Full-model S128
-        # selects32; keep tiny inputs and long chunks on that established path.
+        # S128-S256 uses at least the short-prefill width to amortize routing.
+        # Tiny inputs and longer chunks retain their configured width.
         if 128 <= x.shape[-2] <= 256:
             width = max(width, self.short_prefill_batch_tokens)
         outputs = [
@@ -692,6 +695,46 @@ class _ExpertParallelExperts(OptimizedExperts):
             program_config=self.mix_program,
             compute_kernel_config=self.mix_compute,
         )
+
+
+def _tensor_parallel_experts(source, state_dict, mesh_config):
+    """BF16 expert weights with every expert on every chip and the intermediate dim split over TP.
+
+    PackedExperts and the decode configs below expect this layout. The shared Gemma4 layer loads
+    whole experts per chip instead, so the decode experts are rebuilt from the checkpoint here.
+    """
+    import torch
+
+    mesh_device, config, tp = source.mesh_device, source.config, mesh_config.tp
+    width = -(-config.moe_intermediate_size // tp // 32) * 32
+    pad = width * tp - config.moe_intermediate_size
+    gate, up = state_dict["experts.gate_up_proj"].chunk(2, dim=-2)
+    gate, up = (torch.nn.functional.pad(t.transpose(-2, -1), (0, pad)).unsqueeze(0) for t in (gate, up))
+    down = torch.nn.functional.pad(state_dict["experts.down_proj"].transpose(-2, -1), (0, 0, 0, pad)).unsqueeze(0)
+
+    def weight(value, mapper):
+        return ttnn.from_torch(
+            value,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    column, row = mesh_config.column_parallel(mesh_device), mesh_config.row_parallel(mesh_device)
+    weights = SimpleNamespace(
+        gate_proj=weight(gate, column),
+        up_proj=weight(up, column),
+        down_proj=weight(down, row),
+        intermediate_size_per_device=width,
+    )
+    return SimpleNamespace(
+        config=config,
+        mesh_device=mesh_device,
+        weights=weights,
+        prefill_sparsity=create_prefill_sparsity(mesh_device, config.num_experts),
+    )
 
 
 class _HybridExperts:
@@ -990,7 +1033,11 @@ class MultichipDecoder(OptimizedDecoder):
         for name in ("bias", "indices", "output", "output_indices"):
             setattr(router, name, ttnn.to_memory_config(getattr(router, name), router.memory))
         packed = PackedExperts(
-            self.layer.moe.experts, fused_gelu=True, prefill_batch_tokens=32, matmul_mix=True, mix_fp32=sliding
+            _tensor_parallel_experts(self.layer.moe.experts, state_dict, self.mesh_config),
+            fused_gelu=True,
+            prefill_batch_tokens=32,
+            matmul_mix=True,
+            mix_fp32=sliding,
         )
         experts = OptimizedExperts(
             packed,
@@ -1069,24 +1116,14 @@ class MultichipDecoder(OptimizedDecoder):
         )
         experts.mix_memory = ttnn.L1_MEMORY_CONFIG
         experts.enable_indexed_decode(self.layer.moe.router)
-        prefill_weight_kwargs = (
-            {
-                "gate_dtype": policy_dtype(precision_config["prefill_expert_gate_dtype"]),
-                "down_dtype": policy_dtype(precision_config["prefill_expert_down_dtype"]),
-            }
-            if precision_config is not None and "prefill_expert_gate_dtype" in precision_config
-            else {}
-        )
         self.layer.moe.experts = (
-            _ExpertParallelExperts(state_dict, config, mesh_device, sliding, **prefill_weight_kwargs)
-            if expert_parallel
-            else experts
+            _ExpertParallelExperts(state_dict, config, mesh_device, sliding) if expert_parallel else experts
         )
         if hybrid_experts:
             if expert_parallel:
                 raise ValueError("Select EP-only or hybrid experts, not both")
             self.layer.moe.experts = _HybridExperts(
-                _ExpertParallelExperts(state_dict, config, mesh_device, sliding, **prefill_weight_kwargs), experts
+                _ExpertParallelExperts(state_dict, config, mesh_device, sliding), experts
             )
         self.hybrid_experts = hybrid_experts
         self.expert_parallel = expert_parallel
@@ -1184,9 +1221,6 @@ class MultichipDecoder(OptimizedDecoder):
             "kv_cache_dtype": dtype_name(self.kv_cache_dtype),
             "fixed": fixed,
         }
-        if "prefill_expert_gate_dtype" in self.selected_precision:
-            for key in ("prefill_expert_gate_dtype", "prefill_expert_down_dtype"):
-                summary[key] = fixed.pop(key)
         assert_precision_matches(summary, self.selected_precision, f"layer.{self.layer_idx}")
         return summary
 

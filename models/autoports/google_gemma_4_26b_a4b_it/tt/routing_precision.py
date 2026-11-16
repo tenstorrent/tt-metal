@@ -3,8 +3,8 @@
 """Preserve close router ranks through attention and router computation."""
 
 import ttnn
-from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import rms_norm
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import rms_norm
 
 
 class QKVLinear(DramShardedLinear):

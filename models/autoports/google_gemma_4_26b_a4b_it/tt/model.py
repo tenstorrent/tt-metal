@@ -12,6 +12,7 @@ from transformers import AutoConfig
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
 import ttnn
+from models.demos.gemma4.tt.model import _get_lm_head_program_config
 from models.autoports.google_gemma_4_26b_a4b_it.tt.multichip_decoder import CollectiveBufferPool, MultichipDecoder
 from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import rms_norm
 from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import assert_precision_matches
@@ -23,7 +24,6 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_policy import (
     layer_precision_config,
     resolve_precision_config,
 )
-from models.demos.gemma4.tt.model import _get_lm_head_program_config
 
 MODEL_ID = "google/gemma-4-26B-A4B-it"
 REVISION = "4d7ae4984b7db7de8f8457170b3f1a419ee76d52"
@@ -109,7 +109,8 @@ class Gemma4Model:
         self.head_program = _get_lm_head_program_config(
             mesh_device, 1, self.config.hidden_size, self.config.vocab_size // 4
         )
-        # BFP4/LoFi TP4 decode geometry; evidence: doc/tsu_optimization/work_log.md.
+        # The 22-tile TP4 hidden shard requires a one-tile K block for the
+        # validated BFP4/LoFi decode head.
         self.head_program.in0_block_w = 1
         self.rope_prefill, self.rope_decode = {}, {}
         extent = (self.max_seq_len + 1023) // 1024 * 1024
@@ -214,7 +215,7 @@ class Gemma4Model:
         self.precision_observations["logits_output"] = dtype_name(logits.dtype)
         return logits
 
-    def prefill_forward(self, tokens, *, page_table, kv_cache, user_id=0, return_all_logits=False):
+    def prefill_forward(self, tokens, *, page_table, kv_cache, user_id=0, return_all_logits=False, start_pos=0):
         if len(kv_cache) != len(self.layers):
             raise ValueError("KV cache must contain one pair per model layer")
         hidden = self.embed(tokens)
@@ -226,6 +227,7 @@ class Gemma4Model:
                 page_table=layer_table,
                 kv_cache=cache,
                 user_id=user_id,
+                start_pos=start_pos,
             )
         if not return_all_logits:
             hidden = hidden[:, :, -1:, :]

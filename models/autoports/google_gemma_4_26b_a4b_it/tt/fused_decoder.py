@@ -5,16 +5,16 @@
 from dataclasses import replace
 
 import ttnn
-from models.autoports.google_gemma_4_26b_a4b_it.tt.decode_attention import DecodeAttention
-from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import FunctionalDecoder
-from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import norm_weight, rms_norm, rotary
-from models.autoports.google_gemma_4_26b_a4b_it.tt.routing_precision import QKVLinear
 from models.demos.gemma4.tt.attention.operations import (
     chunked_prefill_sdpa,
     prefill_sdpa_program_config,
     split_qkv_heads_decode,
     split_qkv_heads_prefill,
 )
+from models.autoports.google_gemma_4_26b_a4b_it.tt.decode_attention import DecodeAttention
+from models.autoports.google_gemma_4_26b_a4b_it.tt.functional_decoder import FunctionalDecoder
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import norm_weight, rms_norm, rotary
+from models.autoports.google_gemma_4_26b_a4b_it.tt.routing_precision import QKVLinear
 
 
 class BroadcastQKV(QKVLinear):

@@ -3,8 +3,6 @@
 """Single-device attention with accurate paged cache generation and decode."""
 
 import ttnn
-from models.autoports.google_gemma_4_26b_a4b_it.tt.precise_attention import PrecisePagedAttention
-from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import norm_weight, rms_norm, rotary
 from models.demos.gemma4.tt.attention.operations import (
     chunked_prefill_sdpa,
     concat_heads,
@@ -12,6 +10,8 @@ from models.demos.gemma4.tt.attention.operations import (
     split_qkv_heads_decode,
     split_qkv_heads_prefill,
 )
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precise_attention import PrecisePagedAttention
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import norm_weight, rms_norm, rotary
 
 
 class DecodeAttention:

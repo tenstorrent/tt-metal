@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""vLLM interface for the selected Gemma4 autoport generator."""
+"""Translate vLLM scheduler updates into the Gemma 4 26B TP4 generator."""
 
 import os
 
@@ -10,14 +10,15 @@ import ttnn
 from models.autoports.google_gemma_4_26b_a4b_it.tt.generator import Gemma4Generator
 
 
-class AutoportGemma4ForCausalLM:
+class Gemma4ForCausalLM:
     model_capabilities = {
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": os.environ.get("GEMMA4_PREFIX_CACHING") == "1",
         "supports_sample_on_device": True,
         "supports_async_decode": True,
+        "max_device_top_k": 32,
+        "supports_device_penalties": False,
+        "fabric_config": {"config": ttnn.FabricConfig.FABRIC_1D},
     }
-    kv_cache_specs_use_local_heads = True
-    needs_sampling_output_counts = True
 
     def __init__(self, generator, max_batch_size, *, vllm_config=None):
         self.generator = generator
@@ -30,15 +31,7 @@ class AutoportGemma4ForCausalLM:
         self._eager_prefill_key = None
         self._eager_decode_trace_id = None
         self._pending_eager_prefill_key = None
-        self.allow_host_sampling = os.environ.get("GEMMA4_AUTOPORT_ALLOW_HOST_SAMPLING") == "1"
-        if os.environ.get("GEMMA4_AUTOPORT_TTFT_DIAGNOSTICS") == "1":
-            from models.autoports.google_gemma_4_26b_a4b_it.tools.ttft_diagnostics import install
-
-            install(self)
-        if control_path := os.environ.get("GEMMA4_BENCHMARK_CONTROL"):
-            from models.autoports.google_gemma_4_26b_a4b_it.tools.benchmark_runtime import install
-
-            install(self, control_path)
+        self.allow_host_sampling = os.environ.get("GEMMA4_26B_ALLOW_HOST_SAMPLING") == "1"
 
     def embed_input_ids(self, input_ids):
         return self.generator.model.embed(input_ids)
@@ -59,11 +52,14 @@ class AutoportGemma4ForCausalLM:
         tt_data_parallel=1,
         optimizations=None,
     ):
-        if tt_data_parallel != 1 or not 1 <= max_batch_size <= 32:
-            raise ValueError("Gemma4 autoport requires TP4, DP1 and at most 32 sequences")
-        probe = os.environ.get("GEMMA4_AUTOPORT_PROBE_LAYERS")
-        indices = tuple(int(v) for v in probe.split(",")) if probe else None
-        generator = Gemma4Generator(mesh_device, max_seq_len=max_seq_len, layer_indices=indices)
+        config = getattr(hf_config, "text_config", hf_config)
+        if tuple(mesh_device.shape) != (1, 4) or tt_data_parallel != 1:
+            raise ValueError("Gemma 4 26B QB2 requires a TP4 MeshShape(1,4) and DP1")
+        if not 1 <= max_batch_size <= 32 or not 1 <= max_seq_len <= 262144:
+            raise ValueError("Serving dimensions exceed the validated model contract")
+        if config.hidden_size != 2816 or config.num_hidden_layers != 30:
+            raise ValueError("Expected the Gemma 4 26B A4B checkpoint")
+        generator = Gemma4Generator(mesh_device, max_seq_len=max_seq_len)
         generator.model.precision_summary()
         return cls(generator, max_batch_size)
 
@@ -82,6 +78,11 @@ class AutoportGemma4ForCausalLM:
         config = getattr(config, "text_config", config)
         if vllm_config.cache_config.block_size != 32:
             raise ValueError("The selected precision policy requires 32-token KV pages")
+        # Charge both hybrid groups the same scheduler page size.  Their
+        # global specs differ in geometry even though TP4 makes their physical
+        # per-device pages equal; without this accounting pad vLLM doubles the
+        # full-attention block size while unifying the groups.
+        page_size_padded = 2 * 32 * config.num_key_value_heads * config.head_dim * 2
         result = {}
         for index, kind in enumerate(config.layer_types):
             sliding = kind == "sliding_attention"
@@ -91,7 +92,16 @@ class AutoportGemma4ForCausalLM:
                 else (config.num_global_key_value_heads or config.num_key_value_heads)
             )
             width = config.head_dim if sliding else (config.global_head_dim or config.head_dim)
-            common = dict(block_size=32, num_kv_heads=max(1, heads // 4), head_size=width, dtype=torch.bfloat16)
+            # The current TT vLLM runner converts these global head counts to
+            # per-device cache shapes.  Supplying local counts here would
+            # divide them by the TP degree twice.
+            common = dict(
+                block_size=32,
+                num_kv_heads=heads,
+                head_size=width,
+                dtype=torch.bfloat16,
+                page_size_padded=page_size_padded,
+            )
             spec = (
                 SlidingWindowSpec(**common, sliding_window=config.sliding_window)
                 if sliding
@@ -139,7 +149,7 @@ class AutoportGemma4ForCausalLM:
     def _select_sampling_mode(self, sampling_params):
         on_host = sampling_params is None
         if on_host and not self.allow_host_sampling:
-            raise ValueError("Host sampling requires explicit GEMMA4_AUTOPORT_ALLOW_HOST_SAMPLING=1 compatibility mode")
+            raise ValueError("Host sampling requires explicit GEMMA4_26B_ALLOW_HOST_SAMPLING=1 compatibility mode")
         if on_host != self._sampling_on_host:
             self.generator._release_trace()
             self._sampling_signature = None
@@ -244,8 +254,7 @@ class AutoportGemma4ForCausalLM:
         output_token_counts=None,
     ):
         on_host = self._select_sampling_mode(sampling_params)
-        if start_pos is not None and torch.any(torch.as_tensor(start_pos) != 0):
-            raise ValueError("Scheduler chunked prefill needs the low-level continuation contract")
+        continuation = start_pos is not None and bool(torch.any(torch.as_tensor(start_pos) != 0))
         gen = self.generator
         counts = None
         if not on_host:
@@ -256,7 +265,8 @@ class AutoportGemma4ForCausalLM:
         tables = self._tables(page_table, page_tables_per_layer)
         trace_prefill = (
             not on_host
-            and getattr(gen, "prefill_trace_enabled", False)
+            and not continuation
+            and gen.prefill_trace_enabled
             and gen.serving_prefill_eligible(sampling_params)
         )
         if trace_prefill:
@@ -267,7 +277,11 @@ class AutoportGemma4ForCausalLM:
         reuse_prefill = trace_prefill and gen.can_reuse_serving_prefill(
             tokens, page_table=tables, kv_cache=kv_cache, prompt_lens=prompt_lens
         )
-        eager_key = self._eager_prefill_signature(tokens, tables, kv_cache, prompt_lens, sampling_params, counts)
+        eager_key = (
+            None
+            if continuation
+            else self._eager_prefill_signature(tokens, tables, kv_cache, prompt_lens, sampling_params, counts)
+        )
         reuse_eager = (
             eager_key is not None
             and eager_key == self._eager_prefill_key
@@ -290,15 +304,23 @@ class AutoportGemma4ForCausalLM:
                 output_tokens = tokens.masked_fill(
                     (positions < original_prompt_lengths) | (positions >= prompt_lengths), -1
                 )
-                # Re-prefill rebuilds KV state but consumes the next sampling
-                # draw after the retained outputs; prefill does not increment.
                 gen.configure_sampling(
-                    sampling_params, prompt_tokens=prompt_tokens, seed_offsets=counts, _reuse_trace=reuse_request
+                    sampling_params,
+                    prompt_tokens=prompt_tokens,
+                    seed_offsets=prompt_lengths.flatten() - 1,
+                    _reuse_trace=reuse_request,
                 )
                 gen.sampler.reset_output_state(output_tokens)
             else:
                 prompt_tokens = tokens.masked_fill(positions >= prompt_lengths, -1)
-                gen.configure_sampling(sampling_params, prompt_tokens=prompt_tokens, _reuse_trace=reuse_request)
+                # Seed each sample by its absolute logit position. The pinned
+                # plugin supplies positions, but not generated-token counts.
+                gen.configure_sampling(
+                    sampling_params,
+                    prompt_tokens=prompt_tokens,
+                    seed_offsets=prompt_lengths.flatten() - 1,
+                    _reuse_trace=reuse_request,
+                )
         if trace_prefill:
             output = gen.serving_prefill_tokens(tokens, page_table=tables, kv_cache=kv_cache, prompt_lens=prompt_lens)
             self._sampling_signature = repr(sampling_params) if gen.prefill_prepared is not None else None
@@ -313,6 +335,7 @@ class AutoportGemma4ForCausalLM:
             page_table=tables,
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
+            start_pos=start_pos,
             # vLLM attention tables use compact request rows. empty_slots
             # addresses persistent recurrent state, which this model lacks.
         )
@@ -361,19 +384,15 @@ class AutoportGemma4ForCausalLM:
             return self._read_host_logits(logits, len(start_pos))
         signature = repr(sampling_params)
         if reset_batch or signature != self._sampling_signature:
-            if output_token_counts is None and output_tokens is not None:
-                output_token_counts = (output_tokens >= 0).sum(dim=-1)
-            seed_offsets = None
-            if output_token_counts is not None:
-                counts = self._output_counts(output_token_counts, tokens.shape[0])
-                # Prefill uses the base seed; _forward increments before each
-                # decode sample. The last generated token is this step's input.
-                seed_offsets = (counts - 1).clamp_min(0)
+            # _forward increments before sampling. Reanchor at position - 1
+            # when scheduler rows change; steady-state traces advance on device.
+            # This also handles preemption without per-request host RNG state.
+            seed_offsets = (torch.as_tensor(start_pos).flatten() - 1).clamp_min(0)
             if signature != self._sampling_signature:
                 eager_decode = self._has_eager_decode_trace()
-                reuse_trace = (
-                    getattr(gen, "prefill_prepared", None) is not None or eager_decode
-                ) and gen.can_reuse_serving_decode(sampling_params, allow_eager_prefill=eager_decode)
+                reuse_trace = (gen.prefill_prepared is not None or eager_decode) and gen.can_reuse_serving_decode(
+                    sampling_params, allow_eager_prefill=eager_decode
+                )
                 gen.configure_sampling(
                     sampling_params, prompt_tokens=prompt_tokens, seed_offsets=seed_offsets, _reuse_trace=reuse_trace
                 )

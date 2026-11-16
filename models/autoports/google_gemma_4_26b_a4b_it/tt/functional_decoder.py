@@ -6,20 +6,19 @@ Prefill accepts [1, 1, S, 2816] for one request slot and returns every logical
 row. It pads bounded chunks internally. Decode accepts [1, 1, B, 2816], a
 uint32 RoPE position tensor and an int32 cache position tensor. All tensors
 passed to forward methods are on the same 1x1 mesh. Setup and reference
-comparison are outside these methods. Validation evidence is in
-../doc/functional_decoder/README.md.
+comparison are outside these methods.
 """
 
 from dataclasses import replace
 
 import ttnn
-from models.autoports.google_gemma_4_26b_a4b_it.tt.decode_attention import DecodeAttention
-from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import norm_weight, rms_norm
-from models.autoports.google_gemma_4_26b_a4b_it.tt.routing_precision import QKVLinear, Router
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.autoports.google_gemma_4_26b_a4b_it.tt.decode_attention import DecodeAttention
+from models.autoports.google_gemma_4_26b_a4b_it.tt.precision_ops import norm_weight, rms_norm
+from models.autoports.google_gemma_4_26b_a4b_it.tt.routing_precision import QKVLinear, Router
 
 
 class FunctionalDecoder(LightweightModule):

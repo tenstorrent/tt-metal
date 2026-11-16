@@ -7,6 +7,12 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import ttnn
+from models.demos.gemma4.tt.attention.operations import (
+    PREFILL_CHUNK_SIZE,
+    chunked_prefill_sdpa,
+    effective_block_size,
+    prefill_sdpa_program_config,
+)
 from models.autoports.google_gemma_4_26b_a4b_it.tt.decode_attention import concat_heads
 from models.autoports.google_gemma_4_26b_a4b_it.tt.fused_decoder import (
     BroadcastQKV,
@@ -15,12 +21,6 @@ from models.autoports.google_gemma_4_26b_a4b_it.tt.fused_decoder import (
     FusedDecoder,
     PackedExperts,
     TiedQKV,
-)
-from models.demos.gemma4.tt.attention.operations import (
-    PREFILL_CHUNK_SIZE,
-    chunked_prefill_sdpa,
-    effective_block_size,
-    prefill_sdpa_program_config,
 )
 
 
