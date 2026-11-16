@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <type_traits>
+#include <utility>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -336,6 +337,13 @@ constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
 // the same output then writes nothing. Every other writer of the fields it writes forgets it; unread, its stores drop.
 [[maybe_unused]] static std::uint8_t pack_live_output = 0;
 #define LLK_PACK_LIVE_OUTPUT 1
+
+
+// The next default per-tile pack's destination, predicted by the compute API's per-tile pack; a half-sync release writes it
+// inside the packer drain and sets LLK_PACK_PRE_WRITTEN, and a pack to it then writes none. 0: none. Every pack, per tile or
+// block, replaces or clears it.
+[[maybe_unused]] static std::uint32_t pack_pre_next = 0;
+constexpr std::uint32_t LLK_PACK_PRE_WRITTEN        = 0x80000000u;
 inline void llk_pack_live_forget()
 {
     pack_live_output = 0;
@@ -837,6 +845,105 @@ constexpr std::uint32_t llk_pack_reconfig_skip_all(
 // A header that writes the pack address modes or X counter without the other-program mark specializes its tag.
 template <int tag>
 inline constexpr bool pack_init_writer = false;
+
+// No other pack program, stride or init writer linked. dep: a template argument of the caller, so the tags are read at its
+// instantiation.
+template <std::uint32_t dep, DstSync sync>
+constexpr bool llk_pack_only_default_program()
+{
+    constexpr int t = static_cast<int>(dep * 0);
+    return !(pack_fast_tilize_linked<sync> || pack_fast_untilize_linked<sync> || pack_strides_writer<t + 1> || pack_strides_writer<t + 2> ||
+             pack_strides_writer<t + 3> || pack_strides_writer<t + 4> || pack_strides_writer<t + 5> || pack_strides_writer<t + 6> ||
+             pack_strides_writer<t + 7> || pack_strides_writer<t + 8> || pack_strides_writer<t + 9> || pack_strides_writer<t + 10> ||
+             pack_init_writer<t + 1> || pack_init_writer<t + 2> || pack_init_writer<t + 3>);
+}
+
+// A block-float or 32-bit output: a 16-bit one drains too fast for the release to hide the write.
+constexpr bool llk_pack_pre_format(const unsigned char f)
+{
+    return llk_pack_out32(f) || IS_BFP_FORMAT(f);
+}
+
+// Marks the output CB of each compute API pack_tile call as the kernel is parsed (pack.h): completing llk_pack_out_set<N> makes
+// llk_pack_out_used(llk_pack_out_tag<N>) callable. N: the CB id when a constant, 0xFF for a run-time one, 0xFE for a pack_block.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnon-template-friend"
+template <int>
+struct llk_pack_out_tag
+{
+    friend auto llk_pack_out_used(llk_pack_out_tag);
+};
+#pragma GCC diagnostic pop
+template <int N>
+struct llk_pack_out_set
+{
+    friend auto llk_pack_out_used(llk_pack_out_tag<N>)
+    {
+        return true;
+    }
+};
+template <int N, std::uint32_t dep, typename = decltype(llk_pack_out_used(llk_pack_out_tag<N + 0 * dep>{}))>
+constexpr bool llk_pack_out_marked(int)
+{
+    return true;
+}
+template <int N, std::uint32_t dep>
+constexpr bool llk_pack_out_marked(...)
+{
+    return false;
+}
+template <std::uint32_t dep, int... n>
+constexpr int llk_pack_one_output_of(std::integer_sequence<int, n...>)
+{
+    constexpr bool m[] = {llk_pack_out_marked<n, dep>(0)...};
+    int found          = -1;
+    for (int i = 0; i < static_cast<int>(sizeof...(n)); i++)
+    {
+        if (m[i])
+        {
+            if (found >= 0)
+            {
+                return -1;
+            }
+            found = i;
+        }
+    }
+    return (llk_pack_out_marked<0xFF, dep>(0) || llk_pack_out_marked<0xFE, dep>(0)) ? -1 : found;
+}
+// The one output CB the kernel's pack_tile calls name, or -1 (none, several, a run-time one, or a pack_block). dep: a template
+// argument of the caller, so the marks of the whole kernel are read.
+template <std::uint32_t dep>
+constexpr int llk_pack_one_output()
+{
+    return llk_pack_one_output_of<dep>(std::make_integer_sequence<int, 64> {});
+}
+
+// Specialized where the kernel's formats are known (llk_pack_block_tile.h): whether output cb is block float or 32 bit.
+template <int api>
+struct llk_pack_pre_format_api
+{
+    static constexpr bool of(int)
+    {
+        return false;
+    }
+};
+
+// The kernel's one output (llk_pack_one_output) is block float or 32 bit.
+template <std::uint32_t dep>
+constexpr bool llk_pack_pre_output()
+{
+    constexpr int one = llk_pack_one_output<dep>();
+    return one >= 0 && llk_pack_pre_format_api<static_cast<int>(dep * 0 + 1)>::of(one);
+}
+
+// Half sync, no other pack program linked, not in size mode, one block-float or 32-bit output: the release may write the next
+// destination (pack_pre_next). Its callers add 16-bit DEST: with fp32 DEST no row gained and some paid (+1.4 to +2.8).
+template <DstSync sync>
+constexpr bool llk_pack_pre_dst_sync()
+{
+    return sync == DstSync::SyncHalf && !pack_size_mode<sync> && llk_pack_only_default_program<0, sync>() &&
+           llk_pack_pre_output<static_cast<std::uint32_t>(sync)>();
+}
 
 // No other writer of the default program's address modes, strides or X counter linked: hw_configure leaves the address
 // modes and X counter live, and a default init writes the strides only where they differ (llk_pack_width_single, else

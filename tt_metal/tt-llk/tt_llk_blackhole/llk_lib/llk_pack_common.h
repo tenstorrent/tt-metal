@@ -47,14 +47,20 @@ inline void _llk_packer_set_math_semaphore_()
     t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
 }
 
+inline void llk_pack_pre_dst_write();
+
 // One SyncHalf release with the half known at compile time: the ZEROACC and WRCFG words are fixed, so the RISC computes none.
-template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_first, bool offset_nops>
+template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_first, bool offset_nops, bool pre = false>
 inline void _llk_pack_dest_half_done_()
 {
     constexpr std::uint32_t next_half_gpr = half ? p_gpr_pack::DEST_OFFSET_LO : p_gpr_pack::DEST_OFFSET_HI;
     if constexpr (offset_first)
     {
         TTI_WRCFG(next_half_gpr, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        if constexpr (pre)
+        {
+            llk_pack_pre_dst_write();
+        }
     }
     if constexpr (clear_dest)
     {
@@ -108,11 +114,11 @@ inline void _llk_pack_dest_section_done_()
     {
         if (dest_offset_id == 0)
         {
-            _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 0, offset_first, offset_nops>();
+            _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 0, offset_first, offset_nops, !is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>()>();
         }
         else
         {
-            _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 1, offset_first, offset_nops>();
+            _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 1, offset_first, offset_nops, !is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>()>();
         }
         flip_packer_dest_offset_id();
     }
@@ -122,6 +128,10 @@ inline void _llk_pack_dest_section_done_()
         flip_packer_dest_offset_id();
         // Arithmetic pick of the next half's GPR: a branch on the parity here lets GCC duplicate the loop body per half
         TT_WRCFG(p_gpr_pack::DEST_OFFSET_HI - (p_gpr_pack::DEST_OFFSET_HI - p_gpr_pack::DEST_OFFSET_LO) * done_half, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        if constexpr (!is_fp32_dest_acc_en && ckernel::packer::llk_pack_pre_dst_sync<Dst>())
+        {
+            llk_pack_pre_dst_write();
+        }
         if constexpr (clear_dest)
         {
             TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
@@ -241,6 +251,19 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
     T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
+}
+
+// The predicted next destination and its tile 0, issued ahead of the release's drain wait so they run inside the packer drain.
+// The section's PACRs have all issued and each latched its address when it started, as for back-to-back per-tile packs.
+inline void llk_pack_pre_dst_write()
+{
+    const std::uint32_t next = ckernel::packer::pack_pre_next;
+    if (next != 0 && (next & ckernel::packer::LLK_PACK_PRE_WRITTEN) == 0)
+    {
+        ckernel::packer::program_packer_destination_t<false, true>(next);
+        set_dst_write_addr(0);
+        ckernel::packer::pack_pre_next = next | ckernel::packer::LLK_PACK_PRE_WRITTEN;
+    }
 }
 
 /**

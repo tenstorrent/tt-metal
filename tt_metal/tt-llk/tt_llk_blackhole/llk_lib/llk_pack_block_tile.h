@@ -38,6 +38,24 @@ inline constexpr bool llk_pack_rmw_per_tile =
     (DST_SYNC_MODE == DstSync::SyncFull ||
      !((is_fp32_dest_acc_en && llk_pack_u2d) || ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(pack_mode)>(is_fp32_dest_acc_en)));
 
+template <std::uint32_t dep>
+constexpr DstSync llk_pack_sync_of()
+{
+    return DST_SYNC_MODE;
+}
+
+namespace ckernel::packer
+{
+template <>
+struct llk_pack_pre_format_api<1>
+{
+    static constexpr bool of(const int cb)
+    {
+        return llk_pack_pre_format(pack_dst_format[cb]);
+    }
+};
+} // namespace ckernel::packer
+
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
 // already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
 // (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
@@ -133,6 +151,24 @@ inline void llk_pack_hw_configure_live(const std::uint32_t face_r_dim, const std
     }
 }
 
+// B3 (llk_pack_pre_dst_write) is on for this kernel's per-tile packs.
+template <bool is_fp32_dest_acc_en, PackMode pack_mode>
+constexpr bool llk_pack_pre_on()
+{
+    return !is_fp32_dest_acc_en && llk_pack_rmw_per_tile<is_fp32_dest_acc_en, pack_mode> &&
+           ckernel::packer::llk_pack_pre_dst_sync<llk_pack_sync_of<static_cast<std::uint32_t>(pack_mode)>()>();
+}
+
+// A block pack that writes its destination itself sets the next prediction: the tile after its last, or 0.
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_pre_set(const std::uint32_t next)
+{
+    if constexpr (llk_pack_pre_on<is_fp32_dest_acc_en, PackMode::Default>())
+    {
+        ckernel::packer::pack_pre_next = next;
+    }
+}
+
 // size: a kernel bound by the kernel config buffer (LLK_SIZE_MODE) takes main's destination write.
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool w_invalidate = true, bool size = false>
 inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr)
@@ -144,5 +180,17 @@ inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr
 template <bool is_fp32_dest_acc_en, PackMode pack_mode, bool w_invalidate = true, bool size = false>
 inline void llk_pack_tile_of_output(std::uint32_t tile_index, std::uint32_t pack_tile_addr, [[maybe_unused]] const std::uint8_t output_id)
 {
+    // The kernel's one output (llk_pack_one_output): its next tile follows this one, and a half-sync release writes it ahead
+    // (llk_pack_pre_dst_write).
+    if constexpr (llk_pack_pre_on<is_fp32_dest_acc_en, pack_mode>() && !size)
+    {
+        const std::uint32_t pre        = ckernel::packer::pack_pre_next;
+        ckernel::packer::pack_pre_next = pack_tile_addr + get_local_cb_interface(output_id).fifo_page_size;
+        if (tile_index == 0 && pre == (pack_tile_addr | ckernel::packer::LLK_PACK_PRE_WRITTEN))
+        {
+            ckernel::ckernel_template::run();
+            return;
+        }
+    }
     llk_pack_impl<is_fp32_dest_acc_en, pack_mode, w_invalidate, size>(tile_index, pack_tile_addr);
 }
