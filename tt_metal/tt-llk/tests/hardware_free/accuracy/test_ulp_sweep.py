@@ -46,13 +46,12 @@ from helpers.ulp_sweep import (
     SWEEP_FORMATS,
     EmitRefused,
     Floored,
+    Swept,
     Unmeasurable,
     _binade_index,
     _verdict,
     binade_maxima,
     cell_key,
-    claimed_lanes,
-    dest_holds,
     domain_figures,
     entry_readings,
     export_measured,
@@ -61,16 +60,12 @@ from helpers.ulp_sweep import (
     floored_profile,
     fp16_dest_unusable,
     golden_input,
-    measurable_mask,
     merge_measured,
     near_zero_floor,
-    nonfinite_failures,
     nonfinite_verdict,
     padding_lanes,
-    ranked_mask,
     record,
     record_unmeasurable,
-    stale_excuses,
     sweep_cells,
     sweep_spec,
     swept_value_count,
@@ -128,18 +123,14 @@ def _no_records():
     DOMAINS.clear()
 
 
-def _failures(op, src, golden, result, in_fmt, out_fmt, approx=NO, dest=D_YES, **kw):
-    return nonfinite_failures(
-        op,
-        src,
-        golden,
-        result,
-        in_fmt,
-        out_fmt,
-        approx_mode=approx,
-        dest_acc=dest,
-        **kw,
-    )
+def _swept(src, golden, result, in_fmt, out_fmt, dest=D_YES, op=_OP, approx=NO):
+    return Swept(src, golden, result, in_fmt, out_fmt, dest, op, approx)
+
+
+def _failures(op, src, golden, result, in_fmt, out_fmt, approx=NO, dest=D_YES):
+    return _swept(
+        src, golden, result, in_fmt, out_fmt, dest, op, approx
+    ).nonfinite_failures
 
 
 # ── The emitter ───────────────────────────────────────────────────────────────
@@ -627,7 +618,7 @@ def test_a_nonfinite_disagreement_is_reported_rather_than_only_masked_out():
     src = torch.tensor([1.0, 2.0, 3.0], dtype=torch.bfloat16)
     golden = torch.tensor([1.0, 2.0, 3.0], dtype=torch.bfloat16)
     result = torch.tensor([1.0, float("inf"), 3.0], dtype=torch.bfloat16)
-    assert measurable_mask(src, golden, result, F16B, F16B, D_YES).tolist() == [
+    assert _swept(src, golden, result, F16B, F16B, D_YES).measurable.tolist() == [
         True,
         False,
         True,
@@ -685,12 +676,12 @@ def test_the_unpack_format_bounds_which_inputs_count():
     src = torch.tensor([1e-6, 1.0, 1e6], dtype=torch.float32)
     golden = torch.tensor([1.0, 1.0, float("inf")], dtype=torch.float16)
     result = torch.tensor([0.0, 1.0, 11.8], dtype=torch.float16)
-    assert measurable_mask(src, golden, result, F32, F16, D_NO).tolist() == [
+    assert _swept(src, golden, result, F32, F16, D_NO).measurable.tolist() == [
         False,
         True,
         False,
     ]
-    assert measurable_mask(src, golden, result, F32, F16, D_YES)[0]
+    assert _swept(src, golden, result, F32, F16, D_YES).measurable[0]
     assert not _failures(_OP, src, golden, result, F32, F16, dest=D_NO).any()
     assert _failures(_OP, src, golden, result, F32, F16, dest=D_YES)[2]
     largest = torch.tensor(
@@ -698,7 +689,7 @@ def test_the_unpack_format_bounds_which_inputs_count():
     )
     assert float(largest[0]) > torch.finfo(torch.bfloat16).max
     same = largest.to(torch.bfloat16)
-    assert measurable_mask(largest, same, same, F32, F16B, D_NO).tolist() == [True]
+    assert _swept(largest, same, same, F32, F16B, D_NO).measurable.tolist() == [True]
 
 
 def test_an_fp16_pack_clamp_is_a_saturated_store():
@@ -731,7 +722,7 @@ def test_the_sweeps_own_zero_padding_is_not_data():
     assert not bool(pad[:swept].any()) and bool(pad[swept:].all())
     golden = torch.full_like(src, 1.0)
     result = torch.full_like(src, float("inf"))
-    assert not measurable_mask(src, golden, result, F16B, F16B, D_YES)[swept:].any()
+    assert not _swept(src, golden, result, F16B, F16B, D_YES).measurable[swept:].any()
     assert not _failures(_OP, src, golden, result, F16B, F16B)[swept:].any()
 
 
@@ -755,7 +746,7 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach():
     # The ranking mask keeps the claimed lanes and drops the rest.
     src = torch.tensor([3.0, 4.0, 60000.0, 70000.0], dtype=torch.bfloat16)
     zeros = torch.zeros(4, dtype=torch.bfloat16)
-    ranked = ranked_mask(op, src, zeros, zeros.clone(), F16B, F16B, D_NO)
+    ranked = _swept(src, zeros, zeros.clone(), F16B, F16B, D_NO, op=op).ranked
     assert ranked.tolist() == [True, True, True, False]
 
 
@@ -859,7 +850,7 @@ def test_a_known_nonfinite_lane_is_excused_on_its_cell_and_nowhere_else():
     ]
     assert _failures(celu, src, golden, result, F16, F16, YES, D_YES).all()
     assert _failures(_OP, src, golden, result, F16, F16, YES, D_NO).all()
-    assert measurable_mask(src, golden, golden.clone(), F16, F16, D_NO).all()
+    assert _swept(src, golden, golden.clone(), F16, F16, D_NO).measurable.all()
 
 
 def test_an_entry_no_lane_of_which_disagrees_is_stale():
@@ -867,20 +858,23 @@ def test_an_entry_no_lane_of_which_disagrees_is_stale():
     entry another exclusion already covers is stale too."""
     src = torch.tensor([65408.0, 65504.0], dtype=torch.float16)
     golden = src.clone()
-    cell = dict(approx_mode=NO, dest_acc=D_NO)
+    cell = dict(approx=NO, dest=D_NO)
     celu = MathOperation.Celu
     still_broken = torch.tensor([float("inf"), 65504.0], dtype=torch.float16)
-    assert stale_excuses(celu, src, golden, still_broken, F16, F16, **cell) == []
+    assert (
+        _swept(src, golden, still_broken, F16, F16, op=celu, **cell).stale_excuses == []
+    )
     fixed = golden.clone()
     assert [
-        e.issue for e in stale_excuses(celu, src, golden, fixed, F16, F16, **cell)
+        e.issue
+        for e in _swept(src, golden, fixed, F16, F16, op=celu, **cell).stale_excuses
     ] == [58607]
-    other = dict(approx_mode=NO, dest_acc=D_YES)
-    assert stale_excuses(celu, src, golden, fixed, F16, F16, **other) == []
+    other = dict(approx=NO, dest=D_YES)
+    assert _swept(src, golden, fixed, F16, F16, op=celu, **other).stale_excuses == []
     nan_golden = torch.full_like(golden, float("nan"))
-    assert stale_excuses(celu, src, nan_golden, still_broken, F16, F16, **cell) == [
-        _KNOWN_NONFINITE_LANES[celu][0]
-    ]
+    assert _swept(
+        src, nan_golden, still_broken, F16, F16, op=celu, **cell
+    ).stale_excuses == [_KNOWN_NONFINITE_LANES[celu][0]]
 
 
 def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
@@ -1172,7 +1166,9 @@ def test_the_claim_excludes_the_poles_of_the_gamma_family():
     """A pole at every non-positive integer, -0.0 included; -2.5 is not one; an op
     without the lattice keeps every lane."""
     src = torch.tensor([-3.0, -2.5, -0.0, 0.0, 0.5, 2.0], dtype=torch.float32)
-    assert claimed_lanes(MathOperation.Digamma, src, F32, F32, D_YES).tolist() == [
+    assert _swept(
+        src, src, src, F32, F32, D_YES, op=MathOperation.Digamma
+    ).claimed.tolist() == [
         False,
         True,
         False,
@@ -1180,7 +1176,7 @@ def test_the_claim_excludes_the_poles_of_the_gamma_family():
         True,
         True,
     ]
-    assert claimed_lanes(MathOperation.Abs, src, F32, F32, D_YES).all()
+    assert _swept(src, src, src, F32, F32, D_YES, op=MathOperation.Abs).claimed.all()
 
 
 def test_the_claim_judges_a_float32_input_as_the_16bit_dest_truncates_it():
@@ -1189,11 +1185,11 @@ def test_the_claim_judges_a_float32_input_as_the_16bit_dest_truncates_it():
     src = torch.tensor([-8326436.5, -2.5], dtype=torch.float32)
     op = MathOperation.Polygamma
     for out in (F16B, F32):
-        assert claimed_lanes(op, src, F32, out, D_NO).tolist() == [
+        assert _swept(src, src, src, F32, out, D_NO, op=op).claimed.tolist() == [
             False,
             True,
         ], out.name
-        assert claimed_lanes(op, src, F32, out, D_YES).all(), out.name
+        assert _swept(src, src, src, F32, out, D_YES, op=op).claimed.all(), out.name
 
 
 def test_the_polygamma_golden_is_the_pole_on_every_nonpositive_integer():
@@ -1228,12 +1224,12 @@ def test_a_lane_the_dest_lost_is_neither_ranked_nor_a_failure():
         dtype=torch.float32,
     )
     lost = [False] * 6 + [True, True]
-    assert dest_holds(golden, result, F16, F32, D_NO).tolist() == lost
-    assert dest_holds(golden, result, F16, F16, D_NO).all()
-    assert dest_holds(golden, result, F16B, F32, D_NO).all()
-    assert dest_holds(golden, result, F16, F32, D_YES).all()
+    assert _swept(golden, golden, result, F16, F32, D_NO).dest_holds.tolist() == lost
+    assert _swept(golden, golden, result, F16, F16, D_NO).dest_holds.all()
+    assert _swept(golden, golden, result, F16B, F32, D_NO).dest_holds.all()
+    assert _swept(golden, golden, result, F16, F32, D_YES).dest_holds.all()
     src = torch.full((8,), 2.0, dtype=torch.float16)
-    assert measurable_mask(src, golden, result, F16, F32, D_NO).tolist() == lost
+    assert _swept(src, golden, result, F16, F32, D_NO).measurable.tolist() == lost
     assert not _failures(
         MathOperation.Exp, src, golden, result, F16, F32, dest=D_NO
     ).any()
@@ -1251,9 +1247,9 @@ def test_an_answer_the_dest_did_not_saturate_to_stays_judged():
         [-1.0, -131008.0, 30000.0, 0.0, 3 * tiny, math.inf, -math.inf],
         dtype=torch.float32,
     )
-    assert dest_holds(golden, result, F16, F32, D_NO).all()
+    assert _swept(golden, golden, result, F16, F32, D_NO).dest_holds.all()
     src = torch.full((7,), 2.0, dtype=torch.float16)
-    assert measurable_mask(src, golden, result, F16, F32, D_NO).tolist() == (
+    assert _swept(src, golden, result, F16, F32, D_NO).measurable.tolist() == (
         [True] * 5 + [False, False]
     )
     assert _failures(

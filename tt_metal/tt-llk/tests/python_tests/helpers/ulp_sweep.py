@@ -12,7 +12,7 @@ computes in are swept.
 import math
 import pickle
 from dataclasses import dataclass, replace
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from pathlib import Path
 
 import torch
@@ -153,21 +153,6 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     return flat.reshape(src.shape)
 
 
-def received_inputs(
-    src: torch.Tensor,
-    input_format: DataFormat,
-    output_format: DataFormat,
-    dest_acc: DestAccumulation,
-) -> torch.Tensor:
-    """*src* as the op receives it: itself, except a Float32 input at ``dest_acc=No``,
-    which the unpack truncates to the 16-bit Dest (-8326436.5 arrives as the pole
-    -8323072)."""
-    if input_format != DataFormat.Float32 or _dest_acc_flag(dest_acc):
-        return src
-    width = _unpack_format(input_format, output_format, dest_acc)
-    return truncate_to_dest_width(src.detach().to(torch.float32), width)
-
-
 def golden_input(src: torch.Tensor, input_format: DataFormat, dest_acc) -> torch.Tensor:
     """*src* as the golden should see it: the walk's one data zero is -0.0, which the
     unpack hands on as +0.0 except on the unpack-to-dest path (``signbit`` would
@@ -177,116 +162,8 @@ def golden_input(src: torch.Tensor, input_format: DataFormat, dest_acc) -> torch
     return torch.where(src == 0, torch.zeros_like(src), src)
 
 
-def _unpack_format(
-    input_format: DataFormat, output_format: DataFormat, dest_acc: DestAccumulation
-) -> DataFormat:
-    """The format whose values the unpacker writes for this cell (a Float32 input into
-    a Float16 output at ``dest_acc=No`` lands in a Float16 Dest)."""
-    return infer_unpack_out(
-        input_format,
-        output_format,
-        dest_acc,
-        unpacking_to_dest=unpacks_to_dest(input_format, dest_acc),
-    )
-
-
-def _dest_dtype(input_format, output_format, dest_acc) -> torch.dtype | None:
-    """The float dtype of :func:`_unpack_format`'s format, or ``None``."""
-    dtype = format_dict.get(_unpack_format(input_format, output_format, dest_acc))
-    return dtype if dtype is not None and dtype.is_floating_point else None
-
-
-def dest_holds(
-    golden: torch.Tensor,
-    result: torch.Tensor,
-    input_format: DataFormat,
-    output_format: DataFormat,
-    dest_acc: DestAccumulation,
-) -> torch.Tensor:
-    """False on lanes an fp16 Dest (``dest_acc=No``) under a wider output lost: a golden
-    past 65504 answered by NaN or by the golden's sign in the Dest's top binade, or a
-    flush at the 2**-14 boundary. Any other answer is the op's."""
-    holds = torch.ones(golden.shape, dtype=torch.bool, device=golden.device)
-    if _dest_acc_flag(dest_acc):
-        return holds
-    if _dest_dtype(input_format, output_format, dest_acc) is not torch.float16:
-        return holds
-    dest = torch.finfo(torch.float16)
-    out = torch.finfo(format_dict[output_format])
-    if dest.max >= out.max and dest.tiny <= out.tiny:
-        return holds
-    g = golden.detach().to(torch.float32)
-    r = result.detach().to(torch.float32)
-    same_sign = torch.signbit(r) == torch.signbit(g)
-    # Past 65504 the golden is a stand-in (131008 for an fp16 inf), so an answer near
-    # the edge cannot be ranked against it.
-    top_binade = 2.0 ** (math.frexp(dest.max)[1] - 1)
-    overflowed = (g.abs() > dest.max) & (
-        torch.isnan(r) | (same_sign & (r.abs() >= top_binade))
-    )
-    flushed = ((g == 0) & (r != 0) & (r.abs() <= dest.tiny)) | (
-        (r == 0) & (g != 0) & (g.abs() <= dest.tiny)
-    )
-    return holds & ~overflowed & ~flushed
-
-
-def _normal_input(
-    src: torch.Tensor,
-    input_format: DataFormat,
-    output_format: DataFormat,
-    dest_acc: DestAccumulation,
-) -> torch.Tensor:
-    """Lanes whose input survives the unpack: zero, or at least the smallest normal of
-    the format the unpacker writes, and no larger than it can hold (a Float32 input
-    into a Float16 Dest flushes below 2**-14 and saturates past 65504)."""
-    fed = torch.finfo(format_dict[input_format])
-    cutoff, ceiling = fed.smallest_normal, math.inf
-    dtype = _dest_dtype(input_format, output_format, dest_acc)
-    if dtype is not None:
-        unpacked = torch.finfo(dtype)
-        cutoff = max(cutoff, unpacked.smallest_normal)
-        if math.frexp(unpacked.max)[1] < math.frexp(fed.max)[1]:
-            ceiling = float(unpacked.max)
-    # From `src` as generated, in float32: cast to a 16-bit golden dtype first, an fp16
-    # subnormal rounds up past the threshold.
-    magnitude = src.detach().to(torch.float32).abs()
-    return ((magnitude >= cutoff) | (magnitude == 0)) & (magnitude <= ceiling)
-
-
-def measurable_mask(
-    src: torch.Tensor,
-    golden: torch.Tensor,
-    result: torch.Tensor,
-    input_format: DataFormat,
-    output_format: DataFormat,
-    dest_acc: DestAccumulation,
-) -> torch.Tensor:
-    """Lanes a step count can describe: both sides finite and agreeing about it, the
-    input neither flushed nor saturated by the unpack, the answer not lost by an fp16
-    Dest, and not the sweep's zero padding. Op-agnostic: the claim is
-    :func:`ranked_mask`'s, and the non-finite disagreements dropped here are
-    :func:`nonfinite_failures`' to report."""
-    return (
-        ~(torch.isnan(golden) | torch.isnan(result))
-        & ~nonfinite_mismatches(golden, result)
-        & _normal_input(src, input_format, output_format, dest_acc)
-        & dest_holds(golden, result, input_format, output_format, dest_acc)
-        & ~padding_lanes(src, input_format)
-    )
-
-
-def ranked_mask(
-    op, src, golden, result, input_format, output_format, dest_acc
-) -> torch.Tensor:
-    """The lanes a sweep ranks: :func:`measurable_mask` within *op*'s
-    :func:`claimed_lanes`."""
-    return measurable_mask(
-        src, golden, result, input_format, output_format, dest_acc
-    ) & claimed_lanes(op, src, input_format, output_format, dest_acc)
-
-
 # Where Sin, Cos and Tan's range reduction breaks, per format the kernel is handed
-# (`_unpack_format`); fp16 ends there, so an fp16 input has no limit.
+# (`Swept.unpack_format`); fp16 ends there, so an fp16 input has no limit.
 _TRIG_LIMIT = {DataFormat.Float16_b: 65504.0, DataFormat.Float32: 65504.0}
 _CLAIM_LIMIT = {
     MathOperation.Sin: _TRIG_LIMIT,
@@ -295,55 +172,11 @@ _CLAIM_LIMIT = {
 }
 
 
-def claimed_lanes(
-    op,
-    src: torch.Tensor,
-    input_format: DataFormat,
-    output_format: DataFormat,
-    dest_acc: DestAccumulation,
-) -> torch.Tensor:
-    """Lanes where *op* claims an answer, judged on the input as received: all but its
-    singularities' undefined side, its poles, and anything past its claim limit."""
-    value = received_inputs(src, input_format, output_format, dest_acc).to(
-        torch.float32
-    )
-    claimed = torch.ones_like(value, dtype=torch.bool)
-    for point, side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
-        # The defined side keeps the point: sqrt(0) and acosh(1) are answers.
-        if side is SingularitySide.ABOVE:
-            claimed &= value >= point
-        elif side is SingularitySide.BELOW:
-            claimed &= value <= point
-        else:
-            claimed &= value != point
-    if op in _NONPOSITIVE_INTEGER_POLES:
-        # Every fp32 value of magnitude 2**23 or more is an integer: the whole negative
-        # tail past there is poles.
-        claimed &= ~((value <= 0) & (value == torch.floor(value)))
-    limit = _CLAIM_LIMIT.get(op, {}).get(
-        _unpack_format(input_format, output_format, dest_acc)
-    )
-    if limit is not None:
-        claimed &= value.abs() <= limit
-    return claimed
-
-
-def _at_a_singularity(op, src, input_format, output_format, dest_acc) -> torch.Tensor:
-    """Lanes received exactly on one of *op*'s singularity points."""
-    value = received_inputs(src, input_format, output_format, dest_acc).to(
-        torch.float32
-    )
-    on_point = torch.zeros_like(value, dtype=torch.bool)
-    for point, _side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
-        on_point |= value == point
-    return on_point
-
-
 @dataclass(frozen=True)
 class KnownNonfiniteLanes:
     """Inputs on which an op answers on the wrong side of infinity on one cell, tracked
     by an issue. Only the non-finite disagreement is excused, on that cell alone, and
-    :func:`stale_excuses` retires the entry once its lanes agree again."""
+    :attr:`Swept.stale_excuses` retires the entry once its lanes agree again."""
 
     issue: int
     input: DataFormat
@@ -470,97 +303,210 @@ _KNOWN_NONFINITE_LANES: dict[MathOperation, tuple[KnownNonfiniteLanes, ...]] = {
 }
 
 
-def known_nonfinite_lanes(
-    op, src, input_format, output_format, *, approx_mode, dest_acc
-) -> torch.Tensor:
-    """The lanes of *src* a :data:`_KNOWN_NONFINITE_LANES` entry names on this cell."""
-    received = received_inputs(src, input_format, output_format, dest_acc)
-    excused = torch.zeros(src.shape, dtype=torch.bool, device=src.device)
-    for entry in _KNOWN_NONFINITE_LANES.get(op, ()):
-        if entry.applies_to(input_format, output_format, approx_mode, dest_acc):
-            excused |= entry.lanes(received)
-    return excused
+@dataclass(frozen=True, eq=False)
+class Swept:
+    """One cell's lanes: the input as generated, the golden, the hardware's result and
+    the variant that ran. Every mask below is computed once. Without an *op* the claim
+    is every lane and no tracked lane is excused, which is what a second operand needs
+    of :attr:`measurable`."""
 
+    src: torch.Tensor
+    golden: torch.Tensor
+    result: torch.Tensor
+    input_format: DataFormat
+    output_format: DataFormat
+    dest_acc: DestAccumulation
+    op: MathOperation | None = None
+    approx_mode: ApproximationMode | None = None
 
-def stale_excuses(
-    op, src, golden, result, input_format, output_format, *, approx_mode, dest_acc
-) -> list[KnownNonfiniteLanes]:
-    """The entries that apply to this cell but excuse nothing, because their lanes agree
-    with the golden again or another exclusion already covers them."""
-    without = nonfinite_failures(
-        op,
-        src,
-        golden,
-        result,
-        input_format,
-        output_format,
-        approx_mode=approx_mode,
-        dest_acc=dest_acc,
-        known_lanes=False,
-    )
-    received = received_inputs(src, input_format, output_format, dest_acc)
-    return [
-        entry
-        for entry in _KNOWN_NONFINITE_LANES.get(op, ())
-        if entry.applies_to(input_format, output_format, approx_mode, dest_acc)
-        and not bool((entry.lanes(received) & without).any())
-    ]
-
-
-def nonfinite_failures(
-    op,
-    src: torch.Tensor,
-    golden: torch.Tensor,
-    result: torch.Tensor,
-    input_format: DataFormat,
-    output_format: DataFormat,
-    *,
-    approx_mode,
-    dest_acc,
-    known_lanes: bool = True,
-) -> torch.Tensor:
-    """The lanes :func:`measurable_mask` drops that are a *failure*: the two sides
-    disagreeing about being non-finite where the output could have held the answer.
-    The sweep ranks a distance rather than calling ``passed_test``, so without this a
-    hardware overflow would leave the statistics clean.
-
-    Excused: a flushed or saturated input (:func:`_normal_input`); a NaN golden; a
-    golden past the output range answered by a saturated store (NaN, an infinity of the
-    golden's sign, or on Float16 the pack's clamp to +-65504); an infinite golden on a
-    singularity point itself; the zero padding; an answer the Dest lost
-    (:func:`dest_holds`); an input the op makes no claim on (:func:`claimed_lanes`);
-    and, unless *known_lanes* is off, a lane a tracked issue names."""
-    normal_input = _normal_input(src, input_format, output_format, dest_acc)
-    output_max = torch.finfo(format_dict[output_format]).max
-    past_range = golden.detach().to(torch.float32).abs() > output_max
-    same_sign = torch.signbit(result) == torch.signbit(golden)
-    saturated = torch.isnan(result) | (torch.isinf(result) & same_sign)
-    if output_format == DataFormat.Float16:
-        saturated |= same_sign & (result.detach().to(torch.float32).abs() == output_max)
-    excused = torch.isnan(golden) | (
-        past_range
-        & (
-            saturated
-            | _at_a_singularity(op, src, input_format, output_format, dest_acc)
+    @cached_property
+    def unpack_format(self) -> DataFormat:
+        """The format whose values the unpacker writes (a Float32 input into a Float16
+        output at ``dest_acc=No`` lands in a Float16 Dest)."""
+        return infer_unpack_out(
+            self.input_format,
+            self.output_format,
+            self.dest_acc,
+            unpacking_to_dest=unpacks_to_dest(self.input_format, self.dest_acc),
         )
-    )
-    if known_lanes:
-        excused |= known_nonfinite_lanes(
-            op,
-            src,
-            input_format,
-            output_format,
-            approx_mode=approx_mode,
-            dest_acc=dest_acc,
+
+    @cached_property
+    def _dest_dtype(self) -> torch.dtype | None:
+        """The float dtype of :attr:`unpack_format`, or ``None``."""
+        dtype = format_dict.get(self.unpack_format)
+        return dtype if dtype is not None and dtype.is_floating_point else None
+
+    @cached_property
+    def received(self) -> torch.Tensor:
+        """*src* as the op receives it: itself, except a Float32 input at
+        ``dest_acc=No``, which the unpack truncates to the 16-bit Dest (-8326436.5
+        arrives as the pole -8323072)."""
+        if self.input_format != DataFormat.Float32 or _dest_acc_flag(self.dest_acc):
+            return self.src
+        return truncate_to_dest_width(
+            self.src.detach().to(torch.float32), self.unpack_format
         )
-    return (
-        nonfinite_mismatches(golden, result)
-        & normal_input
-        & dest_holds(golden, result, input_format, output_format, dest_acc)
-        & ~excused
-        & claimed_lanes(op, src, input_format, output_format, dest_acc)
-        & ~padding_lanes(src, input_format)
-    )
+
+    @cached_property
+    def padding(self) -> torch.Tensor:
+        return padding_lanes(self.src, self.input_format)
+
+    @cached_property
+    def normal_input(self) -> torch.Tensor:
+        """Lanes whose input survives the unpack: zero, or at least the smallest normal
+        of the format the unpacker writes, and no larger than it can hold (a Float32
+        input into a Float16 Dest flushes below 2**-14 and saturates past 65504)."""
+        fed = torch.finfo(format_dict[self.input_format])
+        cutoff, ceiling = fed.smallest_normal, math.inf
+        if self._dest_dtype is not None:
+            unpacked = torch.finfo(self._dest_dtype)
+            cutoff = max(cutoff, unpacked.smallest_normal)
+            if math.frexp(unpacked.max)[1] < math.frexp(fed.max)[1]:
+                ceiling = float(unpacked.max)
+        # From `src` as generated, in float32: cast to a 16-bit golden dtype first, an
+        # fp16 subnormal rounds up past the threshold.
+        magnitude = self.src.detach().to(torch.float32).abs()
+        return ((magnitude >= cutoff) | (magnitude == 0)) & (magnitude <= ceiling)
+
+    @cached_property
+    def dest_holds(self) -> torch.Tensor:
+        """False on lanes an fp16 Dest (``dest_acc=No``) under a wider output lost: a
+        golden past 65504 answered by NaN or by the golden's sign in the Dest's top
+        binade, or a flush at the 2**-14 boundary. Any other answer is the op's."""
+        golden, result = self.golden, self.result
+        holds = torch.ones(golden.shape, dtype=torch.bool, device=golden.device)
+        if _dest_acc_flag(self.dest_acc) or self._dest_dtype is not torch.float16:
+            return holds
+        dest = torch.finfo(torch.float16)
+        out = torch.finfo(format_dict[self.output_format])
+        if dest.max >= out.max and dest.tiny <= out.tiny:
+            return holds
+        g = golden.detach().to(torch.float32)
+        r = result.detach().to(torch.float32)
+        same_sign = torch.signbit(r) == torch.signbit(g)
+        # Past 65504 the golden is a stand-in (131008 for an fp16 inf), so an answer
+        # near the edge cannot be ranked against it.
+        top_binade = 2.0 ** (math.frexp(dest.max)[1] - 1)
+        overflowed = (g.abs() > dest.max) & (
+            torch.isnan(r) | (same_sign & (r.abs() >= top_binade))
+        )
+        flushed = ((g == 0) & (r != 0) & (r.abs() <= dest.tiny)) | (
+            (r == 0) & (g != 0) & (g.abs() <= dest.tiny)
+        )
+        return holds & ~overflowed & ~flushed
+
+    @cached_property
+    def measurable(self) -> torch.Tensor:
+        """Lanes a step count can describe: both sides finite and agreeing about it, the
+        input neither flushed nor saturated by the unpack, the answer not lost by an
+        fp16 Dest, and not the sweep's zero padding. Op-agnostic: the claim is
+        :attr:`ranked`'s, and the non-finite disagreements dropped here are
+        :attr:`nonfinite_failures`' to report."""
+        return (
+            ~(torch.isnan(self.golden) | torch.isnan(self.result))
+            & ~nonfinite_mismatches(self.golden, self.result)
+            & self.normal_input
+            & self.dest_holds
+            & ~self.padding
+        )
+
+    @cached_property
+    def _singularities(self) -> tuple:
+        return _OP_SINGULARITIES.get(self.op, {}).get(Operand.A, ())
+
+    @cached_property
+    def claimed(self) -> torch.Tensor:
+        """Lanes where the op claims an answer, judged on the input as received: all
+        but its singularities' undefined side, its poles, and anything past its claim
+        limit."""
+        value = self.received.to(torch.float32)
+        claimed = torch.ones_like(value, dtype=torch.bool)
+        for point, side in self._singularities:
+            # The defined side keeps the point: sqrt(0) and acosh(1) are answers.
+            if side is SingularitySide.ABOVE:
+                claimed &= value >= point
+            elif side is SingularitySide.BELOW:
+                claimed &= value <= point
+            else:
+                claimed &= value != point
+        if self.op in _NONPOSITIVE_INTEGER_POLES:
+            # Every fp32 value of magnitude 2**23 or more is an integer: the whole
+            # negative tail past there is poles.
+            claimed &= ~((value <= 0) & (value == torch.floor(value)))
+        limit = _CLAIM_LIMIT.get(self.op, {}).get(self.unpack_format)
+        if limit is not None:
+            claimed &= value.abs() <= limit
+        return claimed
+
+    @cached_property
+    def ranked(self) -> torch.Tensor:
+        """The lanes a sweep ranks: :attr:`measurable` within the op's claim."""
+        return self.measurable & self.claimed
+
+    @cached_property
+    def _known(self) -> tuple[KnownNonfiniteLanes, ...]:
+        """The :data:`_KNOWN_NONFINITE_LANES` entries that apply to this cell."""
+        return tuple(
+            entry
+            for entry in _KNOWN_NONFINITE_LANES.get(self.op, ())
+            if entry.applies_to(
+                self.input_format, self.output_format, self.approx_mode, self.dest_acc
+            )
+        )
+
+    @cached_property
+    def _unexcused(self) -> torch.Tensor:
+        """:attr:`nonfinite_failures` before any tracked issue's lanes are excused."""
+        golden, result = self.golden, self.result
+        output_max = torch.finfo(format_dict[self.output_format]).max
+        past_range = golden.detach().to(torch.float32).abs() > output_max
+        same_sign = torch.signbit(result) == torch.signbit(golden)
+        saturated = torch.isnan(result) | (torch.isinf(result) & same_sign)
+        if self.output_format == DataFormat.Float16:
+            saturated |= same_sign & (
+                result.detach().to(torch.float32).abs() == output_max
+            )
+        value = self.received.to(torch.float32)
+        on_a_singularity = torch.zeros_like(value, dtype=torch.bool)
+        for point, _side in self._singularities:
+            on_a_singularity |= value == point
+        excused = torch.isnan(golden) | (past_range & (saturated | on_a_singularity))
+        return (
+            nonfinite_mismatches(golden, result)
+            & self.normal_input
+            & self.dest_holds
+            & ~excused
+            & self.claimed
+            & ~self.padding
+        )
+
+    @cached_property
+    def nonfinite_failures(self) -> torch.Tensor:
+        """The lanes :attr:`measurable` drops that are a *failure*: the two sides
+        disagreeing about being non-finite where the output could have held the answer.
+        The sweep ranks a distance rather than calling ``passed_test``, so without this
+        a hardware overflow would leave the statistics clean.
+
+        Excused: a flushed or saturated input (:attr:`normal_input`); a NaN golden; a
+        golden past the output range answered by a saturated store (NaN, an infinity of
+        the golden's sign, or on Float16 the pack's clamp to +-65504); an infinite
+        golden on a singularity point itself; the zero padding; an answer the Dest lost
+        (:attr:`dest_holds`); an input the op makes no claim on (:attr:`claimed`); and
+        a lane a tracked issue names (:data:`_KNOWN_NONFINITE_LANES`)."""
+        known = torch.zeros_like(self._unexcused)
+        for entry in self._known:
+            known |= entry.lanes(self.received)
+        return self._unexcused & ~known
+
+    @cached_property
+    def stale_excuses(self) -> list[KnownNonfiniteLanes]:
+        """The entries that apply to this cell but excuse nothing, because their lanes
+        agree with the golden again or another exclusion already covers them."""
+        return [
+            entry
+            for entry in self._known
+            if not bool((entry.lanes(self.received) & self._unexcused).any())
+        ]
 
 
 # How many offending lanes a not-measurable note names: the row's `nonfinite` count says
