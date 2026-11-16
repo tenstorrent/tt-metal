@@ -63,6 +63,9 @@ class Box:
         return Box(tuple(offsets), tuple(sizes))
 
     def contains(self, other: "Box") -> bool:
+        """Whether ``other`` lies inside this box; a box of another rank never does."""
+        if other.ndim != self.ndim:
+            return False
         return all(lo <= o and o + s <= hi for lo, hi, o, s in zip(self.offsets, self.ends, other.offsets, other.sizes))
 
     def corresponding(self, inner: "Box", parent: "Box") -> "Box":
