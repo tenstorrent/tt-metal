@@ -190,6 +190,14 @@ bool is_gguf(DataType dtype) { return static_cast<int>(dtype) >= kFirstGguf && d
 
 const GgufTraits& gguf_traits(DataType dtype) { return gguf_format(dtype).traits; }
 
+uint32_t gguf_records_per_page(DataType dtype, uint64_t k) {
+    if (dtype != DataType::GGUF_Q4_0 && dtype != DataType::GGUF_Q4_1) {
+        return 1;
+    }
+    const uint64_t groups = k / gguf_traits(dtype).page_height();
+    return groups % 4 == 0 ? 4 : groups % 2 == 0 ? 2 : 1;
+}
+
 uint32_t GgufTraits::l1_page_bytes() const {
     return ckernel::gguf::page_layout(static_cast<ckernel::gguf::Format>(format_id)).rows * 64;
 }

@@ -12,11 +12,14 @@
 // (gguf_matmul_writer.cpp) on a request per record, the compute kernel the rest. GGUF_EXPANDED: the pages hold the
 // level codes already (gguf_host_packing.cpp), each K tile without its index words, and no lookups run. Compile args:
 // format id, c_0 pages, one-page groups per unit, staging slots, the lookup request, answer and page address
-// semaphores, reads in flight, then the weight's TensorAccessorArgs. Decode, one-page groups: once the writer of this
-// core streams (answer semaphore nonzero), it reads every other unit on its own NoC, so that a core's reads use both
-// NoC ports of their DRAM bank; this kernel reserves the unit's pages, grants it (page address semaphore: its first
-// record, request semaphore: the count of grants) and pushes it when the writer has landed it (answer semaphore: 1 +
-// units landed).
+// semaphores, reads in flight, records per DRAM page (gguf_records_per_page: page (g / R, n) holds K groups g of N tile
+// n consecutively), bytes per c_0 page (the decoder's L1 page, or one record when c_0 packs records), then the weight's
+// TensorAccessorArgs. Decode, one-page groups with packed c_0: a unit is the records of one DRAM page, at most
+// one-page-groups-per-unit of them, read with one transaction, never streamed. Decode, one-page groups: once the writer
+// of this core streams (answer semaphore nonzero), it reads every other unit on its own NoC, so that a core's reads use
+// both NoC ports of their DRAM bank; this kernel reserves the unit's pages, grants it (page address semaphore: its
+// first record, request semaphore: the count of grants) and pushes it when the writer has landed it (answer semaphore:
+// 1 + units landed).
 // Runtime args: weight address, N tiles, runs, then per run its N tile, first and end K group. With GGUF_PREFILL:
 // weight address, N tiles, first N tile, N tiles of this core, K groups, M chunks, first K group, N tiles per pass.
 
@@ -40,10 +43,11 @@ void kernel_main() {
     constexpr uint32_t address_sem = get_compile_time_arg_val(6);
     constexpr uint32_t in_flight = get_compile_time_arg_val(7);
     constexpr uint32_t writer_parts = GGUF_WRITER_PARTS;
-    constexpr auto weight_args = TensorAccessorArgs<8>();
+    constexpr uint32_t rpp = get_compile_time_arg_val(8);   // records per DRAM page
+    constexpr uint32_t page = get_compile_time_arg_val(9);  // bytes per c_0 page
+    constexpr auto weight_args = TensorAccessorArgs<10>();
     constexpr PageLayout L = page_layout<FMT>();
     constexpr uint32_t P = L.group_tiles / L.page_tiles;  // pages per group
-    constexpr uint32_t page = L.rows * 64;
     constexpr uint32_t scale_bytes = L.scale_rows * 64;
     // Expanded: per K tile the page's first `head` bytes (level codes, sign words), then `tail` bytes of the decoder's
     // that follow the index words (IQ1_S, IQ1_M, IQ2_S).
@@ -53,9 +57,15 @@ void kernel_main() {
     constexpr uint32_t tail = expanded ? expanded_tail<FMT>() : 0;
     constexpr uint32_t tile_bytes = expanded ? head + tail : L.code_bytes;
     constexpr uint32_t record = scale_bytes + P * tile_bytes;
+    constexpr bool packed = page == record && rpp > 1;  // c_0 pages hold records back to back
 
     const auto weights = TensorAccessor(weight_args, get_arg_val<uint32_t>(0));
     const uint32_t n_tiles = get_arg_val<uint32_t>(1);
+    struct Rec {
+        uint32_t g, n;  // K group, N tile
+    };
+    auto page_of = [&](Rec r) { return r.g / rpp * n_tiles + r.n; };
+    constexpr auto offset_of = [](Rec r) { return r.g % rpp * record; };
 #ifdef GGUF_PREFILL
     // Prefill (gguf_matmul_prefill_program_factory.cpp): N tiles [n0, n0 + nc) in passes of up to np; per pass, per M
     // chunk, per K group, the pass's records.
@@ -65,7 +75,7 @@ void kernel_main() {
     const uint32_t total = mchunks * groups * nc;
     uint32_t first = n0, width = nc < np ? nc : np, chunk = 0, group = 0, column = 0;  // first: the pass's first N tile
     auto next_record = [&]() {
-        const uint32_t id = (g0 + group) * n_tiles + first + column;
+        const Rec id{g0 + group, first + column};
         if (++column == width) {
             column = 0;
             if (++group == groups) {
@@ -85,10 +95,15 @@ void kernel_main() {
     for (uint32_t r = 0; r < runs; r++) {
         total += get_arg_val<uint32_t>(5 + 3 * r) - get_arg_val<uint32_t>(4 + 3 * r);
     }
-    // The page id of the next record to read: records are read in order.
+    // The next record to read: records are read in order.
     uint32_t run = 0, group = get_arg_val<uint32_t>(4);
+    // Records left in the current run's DRAM page, from the next one on.
+    auto page_left = [&]() {
+        const uint32_t end = get_arg_val<uint32_t>(5 + 3 * run), page_end = (group / rpp + 1) * rpp;
+        return (end < page_end ? end : page_end) - group;
+    };
     auto next_record = [&]() {
-        const uint32_t id = group * n_tiles + get_arg_val<uint32_t>(3 + 3 * run);
+        const Rec id{group, get_arg_val<uint32_t>(3 + 3 * run)};
         if (++group == get_arg_val<uint32_t>(5 + 3 * run) && ++run < runs) {
             group = get_arg_val<uint32_t>(4 + 3 * run);
         }
@@ -107,24 +122,32 @@ void kernel_main() {
 #ifdef GGUF_PREFILL
         constexpr bool stream = false;
 #else
-        constexpr bool stream = true;
+        constexpr bool stream = !packed;  // the factory does not stream packed weights
 #endif
         Semaphore grants(request_sem), first(address_sem), landed(answer_sem);
         uint32_t granted = 0;
         bool by_writer[in_flight];
         auto issue = [&]() {
-            const uint32_t n = total - issued < unit ? total - issued : unit;
+            uint32_t n = total - issued < unit ? total - issued : unit;
+#ifndef GGUF_PREFILL
+            if constexpr (packed) {
+                // One DRAM page's records, not across the end of the ring.
+                const uint32_t left = page_left(), to_end = ring - (pushed + pending) % ring;
+                n = n < left ? n : left;
+                n = n < to_end ? n : to_end;
+            }
+#endif
             pages.reserve_back(pending + n);
             const bool to_writer = stream && units_issued % 2 == 1 && landed.value() > 0;
             by_writer[units_issued % in_flight] = to_writer;
             for (uint32_t j = 0; j < n; j++) {
-                const uint32_t id = next_record();
-                if (!to_writer) {
+                const Rec r = next_record();
+                if (!to_writer && (!packed || j == 0)) {
                     noc.async_read<NocOptions::TXN_ID>(
                         weights,
                         pages,
-                        record,
-                        {.page_id = id},
+                        packed ? n * record : record,
+                        {.page_id = page_of(r), .offset_bytes = offset_of(r)},
                         {.offset_bytes = offset(pending + j)},
                         {.trid = 1 + units_issued % in_flight});
                 }
@@ -172,7 +195,7 @@ void kernel_main() {
                 weights,
                 stage,
                 record,
-                {.page_id = next_record()},
+                {.page_id = page_of(next_record())},
                 {.offset_bytes = (i % slots) * record},
                 {.trid = 1 + i % slots});
         };

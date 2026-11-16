@@ -961,6 +961,21 @@ std::pair<int64_t, int64_t> gguf_shape(const TensorSpec& spec) {
     return {K, N};
 }
 
+// Records in K-group-major order (record (g, nt) at g * n_tiles + nt, pack_pages) <-> the tensor's pages of
+// gguf_records_per_page records each: page (g / R, nt) holds records g of N tile nt consecutively.
+void group_records(DataType type, int64_t K, int64_t N, const uint8_t* in, uint8_t* out, bool to_pages) {
+    const GgufTraits& f = gguf_traits(type);
+    const int64_t R = gguf_records_per_page(type, K), groups = K / f.page_height(), n_tiles = N / 32;
+    const size_t record = f.page_bytes();
+    for (int64_t g = 0; g < groups; ++g) {
+        for (int64_t nt = 0; nt < n_tiles; ++nt) {
+            const size_t flat = size_t(g * n_tiles + nt) * record;
+            const size_t paged = (size_t((g / R) * n_tiles + nt) * R + g % R) * record;
+            std::memcpy(out + (to_pages ? paged : flat), in + (to_pages ? flat : paged), record);
+        }
+    }
+}
+
 }  // namespace
 
 HostTensor from_gguf(ttsl::Span<const std::byte> blocks, const TensorSpec& spec) {
@@ -980,7 +995,11 @@ HostTensor from_gguf(ttsl::Span<const std::byte> blocks, const TensorSpec& spec)
     const auto* in = reinterpret_cast<const uint8_t*>(blocks.data());
     std::vector<uint32_t> pages(spec.compute_packed_buffer_size_bytes() / sizeof(uint32_t));
     auto* out = reinterpret_cast<uint8_t*>(pages.data());
-    if (!is_gguf_expanded(type)) {
+    if (!is_gguf_expanded(type) && gguf_records_per_page(type, K) > 1) {
+        std::vector<uint8_t> flat(pages.size() * sizeof(uint32_t));
+        pack_pages(type, in, K, N, flat.data());
+        group_records(type, K, N, flat.data(), out, true);
+    } else if (!is_gguf_expanded(type)) {
         pack_pages(type, in, K, N, out);
     } else if (source == GGUF_TQ1_0) {
         const size_t count = bytes / 54;
@@ -1014,7 +1033,11 @@ std::vector<std::byte> to_gguf(const HostTensor& tensor) {
     std::vector<std::byte> blocks(size_t(N) * size_t(K / f.block_elems) * f.block_bytes);
     const auto* in = reinterpret_cast<const uint8_t*>(pages.data());
     auto* out = reinterpret_cast<uint8_t*>(blocks.data());
-    if (!is_gguf_expanded(type)) {
+    if (!is_gguf_expanded(type) && gguf_records_per_page(type, K) > 1) {
+        std::vector<uint8_t> flat(pages.size());
+        group_records(type, K, N, in, flat.data(), false);
+        unpack_pages(type, flat.data(), K, N, out);
+    } else if (!is_gguf_expanded(type)) {
         unpack_pages(type, in, K, N, out);
     } else if (source == GGUF_TQ1_0) {
         const size_t count = blocks.size() / 54;

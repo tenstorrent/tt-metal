@@ -132,9 +132,14 @@ void validate_alignment_rm(
 }
 
 Shape2D get_page_shape_tile(
-    const TilePageConfig& config, const Shape2D&, DataType dtype, const MemoryConfig&, const std::optional<Shape2D>&) {
+    const TilePageConfig& config,
+    const Shape2D& physical_size,
+    DataType dtype,
+    const MemoryConfig&,
+    const std::optional<Shape2D>&) {
     if (is_gguf(dtype)) {
-        return gguf_page_shape(config, dtype);
+        const Shape2D record = gguf_page_shape(config, dtype);
+        return Shape2D(record.height() * gguf_records_per_page(dtype, physical_size.height()), record.width());
     }
     return Shape2D(config.tile.get_height(), config.tile.get_width());
 }
@@ -168,7 +173,8 @@ Shape2D get_page_shape_rm(
 
 size_t get_page_size_bytes_tile(const TilePageConfig& config, const Shape2D& page_shape, DataType dtype) {
     if (is_gguf(dtype)) {
-        return gguf_traits(dtype).page_bytes();
+        const GgufTraits& f = gguf_traits(dtype);
+        return size_t(page_shape.height() / f.page_height()) * f.page_bytes();
     }
     const auto tiles_count =
         page_shape.height() / config.tile.get_height() * page_shape.width() / config.tile.get_width();

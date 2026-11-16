@@ -145,6 +145,11 @@ struct GgufTraits {
 
 const GgufTraits& gguf_traits(DataType dtype);
 
+// Records (K groups of one N tile) per page of a GGUF tensor with K rows: Q4_0 and Q4_1 store up to 4 consecutive K
+// groups of an N tile in one page (the largest of 4, 2, 1 that divides the groups), so that a page is one contiguous
+// read of several records; the other formats one.
+uint32_t gguf_records_per_page(DataType dtype, uint64_t k);
+
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
 

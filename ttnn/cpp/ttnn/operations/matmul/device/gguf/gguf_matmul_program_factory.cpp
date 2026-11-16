@@ -325,7 +325,7 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
             kScaleTiles,
             tt::tt_metal::Tile(one_row ? std::array<uint32_t, 2>{16, 32} : std::array<uint32_t, 2>{32, 32}));
     } else {
-        add_weight_reader_cbs(program, compute, f);
+        add_weight_reader_cbs(program, compute, f, packed_pages(weight));
     }
     add_cb(program, compute, tt::CBIndex::c_16, tt::DataFormat::Float16_b, 2048, 2);
     add_cb(program, compute, tt::CBIndex::c_17, tt::DataFormat::Float32, 4096, 1);
@@ -369,16 +369,18 @@ GgufMatmulProgramFactory::cached_program_t GgufMatmulProgramFactory::create(
 
     std::vector<uint32_t> reader_ct =
         tq2 ? std::vector<uint32_t>{kTq2Units * kTq2Unit, kTq2Unit, kTq2InFlight, window, kScaleTiles, scale_tile_bytes}
-            : weight_reader_args(weight, request_sem, answer_sem, address_sem);
+            : weight_reader_args(weight, request_sem, answer_sem, address_sem, packed_pages(weight));
     if (tq2) {
         TensorAccessorArgs(*weight.buffer()).append_to(reader_ct);
     }
     const uint32_t chunk = std::min(kInputChunk, band_tiles);
     // The writer streams the weight units the reader grants it when each N tile's records sit in at most two banks, for
     // the one-page formats where that was faster (measured): with records spread over more banks, and for Q8_0, IQ4_NL,
-    // NVFP4 and TQ1_0, the second NoC was slower or no faster.
+    // NVFP4 and TQ1_0, the second NoC was slower or no faster. Weights with several records per page do not stream: one
+    // read per unit already, and streaming them was slower (measured).
     const DataType dtype = weight.dtype();
-    const bool stream = (dtype == DataType::GGUF_Q4_0 || dtype == DataType::GGUF_Q4_1 || dtype == DataType::GGUF_Q5_0 ||
+    const bool stream = !packed_pages(weight) &&
+                        (dtype == DataType::GGUF_Q4_0 || dtype == DataType::GGUF_Q4_1 || dtype == DataType::GGUF_Q5_0 ||
                          dtype == DataType::GGUF_Q5_1) &&
                         n_tiles % std::max(banks / 2, 1u) == 0;
     std::vector<uint32_t> writer_ct = {

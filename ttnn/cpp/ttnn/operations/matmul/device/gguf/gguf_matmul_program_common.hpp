@@ -62,24 +62,41 @@ inline uint32_t weight_reader_l1_bytes(const GgufTraits& f) {
            (f.group_tiles / f.page_tiles > 1 ? kRecordSlots * f.page_bytes() : 0);
 }
 
-// The weight reader's circular buffers on `cores`: c_0, the decoder's L1 pages (UInt32 tiles of the page's size), and
-// for multi-page groups c_2, the staging ring.
-inline void add_weight_reader_cbs(Program& program, const CoreRangeSet& cores, const GgufTraits& f) {
+// Whether c_0 packs one-page-group records back to back (page = record) so that a read of several consecutive records
+// of a DRAM page lands in consecutive pages: decode with several records per DRAM page. The unpacker still reads a
+// decoder's L1 page from each page start; the bytes past the record (the next record, or L1 past c_0) are never used.
+inline bool packed_pages(const Tensor& weight) {
+    const GgufTraits& f = gguf_traits(weight.dtype());
+    return f.group_tiles == f.page_tiles && gguf_records_per_page(weight.dtype(), weight.logical_shape()[0]) > 1;
+}
+
+// The weight reader's circular buffers on `cores`: c_0, the decoder's L1 pages (UInt32 tiles of the page's size;
+// packed: pages of one record), and for multi-page groups c_2, the staging ring.
+inline void add_weight_reader_cbs(
+    Program& program, const CoreRangeSet& cores, const GgufTraits& f, bool packed = false) {
     const uint32_t l1_page = f.l1_page_bytes();
     const tt::tt_metal::Tile page_tile(
         l1_page == 1024   ? std::array<uint32_t, 2>{16, 16}
         : l1_page == 2048 ? std::array<uint32_t, 2>{16, 32}
                           : std::array<uint32_t, 2>{32, 32});
-    add_cb(program, cores, tt::CBIndex::c_0, tt::DataFormat::UInt32, l1_page, kPageUnits * reader_unit(f), page_tile);
+    add_cb(
+        program,
+        cores,
+        tt::CBIndex::c_0,
+        tt::DataFormat::UInt32,
+        packed ? f.page_bytes() : l1_page,
+        kPageUnits * reader_unit(f),
+        page_tile);
     if (f.group_tiles / f.page_tiles > 1) {
         add_cb(program, cores, tt::CBIndex::c_2, tt::DataFormat::UInt32, kRecordSlots * f.page_bytes(), 1);
     }
 }
 
 // The weight reader's compile args: format id, c_0 pages, one-page groups per unit, staging slots, the lookup request,
-// answer and page address semaphores, reads in flight, the weight's TensorAccessorArgs.
+// answer and page address semaphores, reads in flight, records per DRAM page, bytes per c_0 page, the weight's
+// TensorAccessorArgs.
 inline std::vector<uint32_t> weight_reader_args(
-    const Tensor& weight, uint32_t request_sem, uint32_t answer_sem, uint32_t address_sem) {
+    const Tensor& weight, uint32_t request_sem, uint32_t answer_sem, uint32_t address_sem, bool packed = false) {
     const GgufTraits& f = gguf_traits(weight.dtype());
     // Two reads in flight for Q4_0, Q4_1, MXFP4 and NVFP4, one for the others, which a second one slows down
     // (measured, decode).
@@ -94,7 +111,9 @@ inline std::vector<uint32_t> weight_reader_args(
         request_sem,
         answer_sem,
         address_sem,
-        two_in_flight ? 2u : 1u};
+        two_in_flight ? 2u : 1u,
+        gguf_records_per_page(dtype, weight.logical_shape()[0]),
+        packed ? f.page_bytes() : f.l1_page_bytes()};
     TensorAccessorArgs(*weight.buffer()).append_to(args);
     return args;
 }

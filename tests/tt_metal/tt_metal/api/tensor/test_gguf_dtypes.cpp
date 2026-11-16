@@ -67,18 +67,39 @@ TEST(GgufDtypesTest, FormatIdsInDataTypeOrder) {
     EXPECT_FALSE(is_gguf(DataType::INVALID));
 }
 
-TEST(GgufDtypesTest, PageIsOneGgufRecord) {
+TEST(GgufDtypesTest, PageIsWholeGgufRecords) {
     for (const DataType dtype : gguf_dtypes()) {
         SCOPED_TRACE(fmt::format("{}", dtype));
         const auto& f = gguf_traits(dtype);
         const uint32_t k = 2 * k_unit(dtype), n = 96;
         const auto spec = gguf_spec(dtype, k, n);
-        EXPECT_EQ(spec.compute_page_size_bytes(), f.page_bytes());
+        EXPECT_EQ(spec.compute_page_size_bytes(), gguf_records_per_page(dtype, k) * f.page_bytes());
         EXPECT_EQ(f.page_bytes(), gguf_bytes(dtype, f.page_height(), 32));
         EXPECT_EQ(f.page_bytes() % 64, 0u);
         EXPECT_EQ(spec.compute_packed_buffer_size_bytes(), gguf_bytes(dtype, k, n));
         EXPECT_EQ(spec.physical_shape(), Shape2D(k, n));
         EXPECT_EQ(datatype_to_dataformat_converter(dtype), tt::DataFormat::Invalid);
+    }
+}
+
+// Q4_0 and Q4_1 pages hold the largest of 4, 2, 1 records that divides the K groups; the other formats one.
+TEST(GgufDtypesTest, RecordsPerPage) {
+    for (const DataType dtype : gguf_dtypes()) {
+        SCOPED_TRACE(fmt::format("{}", dtype));
+        const bool grouped = dtype == DataType::GGUF_Q4_0 || dtype == DataType::GGUF_Q4_1;
+        EXPECT_EQ(gguf_records_per_page(dtype, 4 * k_unit(dtype)), grouped ? 4u : 1u);
+        EXPECT_EQ(gguf_records_per_page(dtype, 6 * k_unit(dtype)), grouped ? 2u : 1u);
+        EXPECT_EQ(gguf_records_per_page(dtype, 3 * k_unit(dtype)), 1u);
+    }
+    for (const DataType dtype : {DataType::GGUF_Q4_0, DataType::GGUF_Q4_1}) {
+        for (const uint32_t groups : {1u, 2u, 3u, 4u, 6u, 8u}) {
+            SCOPED_TRACE(fmt::format("{} K groups {}", dtype, groups));
+            const uint32_t k = 32 * groups, n = 96;
+            const auto blocks = random_blocks(gguf_bytes(dtype, k, n), groups);
+            const auto spec = gguf_spec(dtype, k, n);
+            EXPECT_EQ(spec.compute_packed_buffer_size_bytes(), gguf_bytes(dtype, k, n));
+            EXPECT_EQ(to_gguf(from_gguf(blocks, spec)), blocks);
+        }
     }
 }
 
@@ -151,6 +172,30 @@ TEST(GgufDtypesTest, PagesAreInKGroupMajorOrder) {
             set += bytes[page * page_bytes + i] != std::byte(0);
         }
         EXPECT_EQ(set != 0, page == g * n_tiles + nt) << "page " << page;
+    }
+}
+
+// With several records per page, page (g / R, nt) holds K groups g of N tile nt in order.
+TEST(GgufDtypesTest, GroupedPagesHoldConsecutiveKGroups) {
+    const DataType dtype = DataType::GGUF_Q4_0;  // 18-byte blocks, 576-byte records
+    const uint32_t k = 256, n = 96, nt = 1, g = 6, n_tiles = n / 32, row_blocks = k / 32, rpp = 4;
+    ASSERT_EQ(gguf_records_per_page(dtype, k), rpp);
+    std::vector<std::byte> blocks(gguf_bytes(dtype, k, n));
+    for (uint32_t col = 32 * nt; col < 32 * nt + 32; ++col) {
+        for (uint32_t i = 0; i < 18; ++i) {
+            blocks[(col * row_blocks + g) * 18 + i] = std::byte(0xA5);
+        }
+    }
+    const HostTensor tensor = from_gguf(blocks, gguf_spec(dtype, k, n));
+    const auto pages = host_buffer::get_host_buffer(tensor);
+    const auto bytes = pages.view_bytes();
+    const size_t record = gguf_traits(dtype).page_bytes();
+    for (size_t r = 0; r < bytes.size() / record; ++r) {
+        size_t set = 0;
+        for (size_t i = 0; i < record; ++i) {
+            set += bytes[r * record + i] != std::byte(0);
+        }
+        EXPECT_EQ(set != 0, r == (g / rpp * n_tiles + nt) * rpp + g % rpp) << "record " << r;
     }
 }
 
