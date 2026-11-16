@@ -1,0 +1,277 @@
+---
+# Checkout cost measurement (torrentci git-mirror checkout analysis, 2026-11-16).
+# The job's own workspace came from the checkout init; each job re-packs it
+# and times index-pack, the connectivity walk and checkout under musl
+# (alpine/git v2.47.2, today's checkout image) and glibc (Debian trixie git
+# 2.47.3) at the CPU limit given. No triggers: run it by hand.
+jobs:
+  - id: checkout-measure-musl-2cpu
+    description: Time index-pack and checkout of this workspace, musl git, 2 CPU
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/alpine/git@sha256:062a01ad7a0eb17cff382bc5e26086b4d710e56dfdfdf001109a49b6d9bd378c
+        resources:
+          requests: {cpu: '2', memory: 4Gi, ephemeral-storage: 6Gi}
+          limits: {cpu: '2', memory: 4Gi, ephemeral-storage: 8Gi}
+    steps:
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - |
+              export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="*"
+              echo "== env"
+              nproc; cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo no-cpu.max
+              git --version; (ldd --version 2>&1 || true) | head -1
+              grep -m1 'model name' /proc/cpuinfo; echo "host_cpus=$(grep -c ^processor /proc/cpuinfo)"
+              echo "host=$(hostname) pwd=$(pwd)"
+              echo "== source"
+              echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
+              git count-objects -v
+              echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              up() { awk '{print $1}' /proc/uptime; }
+              cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
+              measure() {
+                label=$1; shift
+                s=$(up); c0=$(cpu)
+                "$@"
+                e=$(up); c1=$(cpu)
+                echo "$c0 $c1" | awk -v l="$label" -v s="$s" -v e="$e" '{printf "M %s real=%.2f user=%.2f sys=%.2f\n", l, e-s, ($3-$1)/1e6, ($4-$2)/1e6}'
+              }
+              H=$(git rev-parse HEAD)
+              R=""
+              if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then R=refs/remotes/origin/main; fi
+              echo "== pack (HEAD $H plus ${R:-nothing})"
+              mkpack() { printf '%s\n%s\n' "$H" "$R" | git -c pack.threads=8 pack-objects --revs --stdout --include-tag --delta-base-offset -q > /tmp/clone.pack; }
+              measure pack-objects mkpack
+              ls -l /tmp/clone.pack
+              ip() { rm -rf /tmp/ip && git init -q --bare /tmp/ip && git -C /tmp/ip index-pack --threads="$1" --stdin < /tmp/clone.pack > /dev/null; }
+              echo "== index-pack"
+              for t in 1 2 2 2 4 4 4 8; do measure "index-pack t=$t" ip "$t"; done
+              echo "== connectivity (rev-list --objects of HEAD in the indexed repo)"
+              conn() { git -C /tmp/ip rev-list --objects --quiet "$H"; }
+              measure connectivity conn
+              rm -rf /tmp/ip /tmp/clone.pack
+              echo "== checkout"
+              co() { rm -rf /tmp/co; git -c checkout.workers="$1" -c submodule.recurse=false worktree add -q --detach /tmp/co "$H"; }
+              for w in 1 1 4 4; do measure "checkout workers=$w" co "$w"; git worktree remove --force /tmp/co; done
+              echo "== done"
+  - id: checkout-measure-glibc-2cpu
+    description: Time index-pack and checkout of this workspace, glibc git, 2 CPU
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/buildpack-deps@sha256:4f34e1d673fdb65371de9f88bdd32c4e30152fe692b35604aef5c0b3c0e6da10
+        resources:
+          requests: {cpu: '2', memory: 4Gi, ephemeral-storage: 6Gi}
+          limits: {cpu: '2', memory: 4Gi, ephemeral-storage: 8Gi}
+    steps:
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - |
+              export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="*"
+              echo "== env"
+              nproc; cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo no-cpu.max
+              git --version; (ldd --version 2>&1 || true) | head -1
+              grep -m1 'model name' /proc/cpuinfo; echo "host_cpus=$(grep -c ^processor /proc/cpuinfo)"
+              echo "host=$(hostname) pwd=$(pwd)"
+              echo "== source"
+              echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
+              git count-objects -v
+              echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              up() { awk '{print $1}' /proc/uptime; }
+              cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
+              measure() {
+                label=$1; shift
+                s=$(up); c0=$(cpu)
+                "$@"
+                e=$(up); c1=$(cpu)
+                echo "$c0 $c1" | awk -v l="$label" -v s="$s" -v e="$e" '{printf "M %s real=%.2f user=%.2f sys=%.2f\n", l, e-s, ($3-$1)/1e6, ($4-$2)/1e6}'
+              }
+              H=$(git rev-parse HEAD)
+              R=""
+              if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then R=refs/remotes/origin/main; fi
+              echo "== pack (HEAD $H plus ${R:-nothing})"
+              mkpack() { printf '%s\n%s\n' "$H" "$R" | git -c pack.threads=8 pack-objects --revs --stdout --include-tag --delta-base-offset -q > /tmp/clone.pack; }
+              measure pack-objects mkpack
+              ls -l /tmp/clone.pack
+              ip() { rm -rf /tmp/ip && git init -q --bare /tmp/ip && git -C /tmp/ip index-pack --threads="$1" --stdin < /tmp/clone.pack > /dev/null; }
+              echo "== index-pack"
+              for t in 1 2 2 2 4 4 4 8; do measure "index-pack t=$t" ip "$t"; done
+              echo "== connectivity (rev-list --objects of HEAD in the indexed repo)"
+              conn() { git -C /tmp/ip rev-list --objects --quiet "$H"; }
+              measure connectivity conn
+              rm -rf /tmp/ip /tmp/clone.pack
+              echo "== checkout"
+              co() { rm -rf /tmp/co; git -c checkout.workers="$1" -c submodule.recurse=false worktree add -q --detach /tmp/co "$H"; }
+              for w in 1 1 4 4; do measure "checkout workers=$w" co "$w"; git worktree remove --force /tmp/co; done
+              echo "== done"
+  - id: checkout-measure-glibc-4cpu
+    description: Time index-pack and checkout of this workspace, glibc git, 4 CPU
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/buildpack-deps@sha256:4f34e1d673fdb65371de9f88bdd32c4e30152fe692b35604aef5c0b3c0e6da10
+        resources:
+          requests: {cpu: '4', memory: 4Gi, ephemeral-storage: 6Gi}
+          limits: {cpu: '4', memory: 4Gi, ephemeral-storage: 8Gi}
+    steps:
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - |
+              export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="*"
+              echo "== env"
+              nproc; cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo no-cpu.max
+              git --version; (ldd --version 2>&1 || true) | head -1
+              grep -m1 'model name' /proc/cpuinfo; echo "host_cpus=$(grep -c ^processor /proc/cpuinfo)"
+              echo "host=$(hostname) pwd=$(pwd)"
+              echo "== source"
+              echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
+              git count-objects -v
+              echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              up() { awk '{print $1}' /proc/uptime; }
+              cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
+              measure() {
+                label=$1; shift
+                s=$(up); c0=$(cpu)
+                "$@"
+                e=$(up); c1=$(cpu)
+                echo "$c0 $c1" | awk -v l="$label" -v s="$s" -v e="$e" '{printf "M %s real=%.2f user=%.2f sys=%.2f\n", l, e-s, ($3-$1)/1e6, ($4-$2)/1e6}'
+              }
+              H=$(git rev-parse HEAD)
+              R=""
+              if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then R=refs/remotes/origin/main; fi
+              echo "== pack (HEAD $H plus ${R:-nothing})"
+              mkpack() { printf '%s\n%s\n' "$H" "$R" | git -c pack.threads=8 pack-objects --revs --stdout --include-tag --delta-base-offset -q > /tmp/clone.pack; }
+              measure pack-objects mkpack
+              ls -l /tmp/clone.pack
+              ip() { rm -rf /tmp/ip && git init -q --bare /tmp/ip && git -C /tmp/ip index-pack --threads="$1" --stdin < /tmp/clone.pack > /dev/null; }
+              echo "== index-pack"
+              for t in 1 2 2 2 4 4 4 8; do measure "index-pack t=$t" ip "$t"; done
+              echo "== connectivity (rev-list --objects of HEAD in the indexed repo)"
+              conn() { git -C /tmp/ip rev-list --objects --quiet "$H"; }
+              measure connectivity conn
+              rm -rf /tmp/ip /tmp/clone.pack
+              echo "== checkout"
+              co() { rm -rf /tmp/co; git -c checkout.workers="$1" -c submodule.recurse=false worktree add -q --detach /tmp/co "$H"; }
+              for w in 1 1 4 4; do measure "checkout workers=$w" co "$w"; git worktree remove --force /tmp/co; done
+              echo "== done"
+  - id: checkout-measure-musl-8cpu
+    description: Time index-pack and checkout of this workspace, musl git, 8 CPU
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/alpine/git@sha256:062a01ad7a0eb17cff382bc5e26086b4d710e56dfdfdf001109a49b6d9bd378c
+        resources:
+          requests: {cpu: '8', memory: 4Gi, ephemeral-storage: 6Gi}
+          limits: {cpu: '8', memory: 4Gi, ephemeral-storage: 8Gi}
+    steps:
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - |
+              export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="*"
+              echo "== env"
+              nproc; cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo no-cpu.max
+              git --version; (ldd --version 2>&1 || true) | head -1
+              grep -m1 'model name' /proc/cpuinfo; echo "host_cpus=$(grep -c ^processor /proc/cpuinfo)"
+              echo "host=$(hostname) pwd=$(pwd)"
+              echo "== source"
+              echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
+              git count-objects -v
+              echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              up() { awk '{print $1}' /proc/uptime; }
+              cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
+              measure() {
+                label=$1; shift
+                s=$(up); c0=$(cpu)
+                "$@"
+                e=$(up); c1=$(cpu)
+                echo "$c0 $c1" | awk -v l="$label" -v s="$s" -v e="$e" '{printf "M %s real=%.2f user=%.2f sys=%.2f\n", l, e-s, ($3-$1)/1e6, ($4-$2)/1e6}'
+              }
+              H=$(git rev-parse HEAD)
+              R=""
+              if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then R=refs/remotes/origin/main; fi
+              echo "== pack (HEAD $H plus ${R:-nothing})"
+              mkpack() { printf '%s\n%s\n' "$H" "$R" | git -c pack.threads=8 pack-objects --revs --stdout --include-tag --delta-base-offset -q > /tmp/clone.pack; }
+              measure pack-objects mkpack
+              ls -l /tmp/clone.pack
+              ip() { rm -rf /tmp/ip && git init -q --bare /tmp/ip && git -C /tmp/ip index-pack --threads="$1" --stdin < /tmp/clone.pack > /dev/null; }
+              echo "== index-pack"
+              for t in 1 2 2 2 4 4 4 8; do measure "index-pack t=$t" ip "$t"; done
+              echo "== connectivity (rev-list --objects of HEAD in the indexed repo)"
+              conn() { git -C /tmp/ip rev-list --objects --quiet "$H"; }
+              measure connectivity conn
+              rm -rf /tmp/ip /tmp/clone.pack
+              echo "== checkout"
+              co() { rm -rf /tmp/co; git -c checkout.workers="$1" -c submodule.recurse=false worktree add -q --detach /tmp/co "$H"; }
+              for w in 1 1 4 4; do measure "checkout workers=$w" co "$w"; git worktree remove --force /tmp/co; done
+              echo "== done"
+  - id: checkout-measure-glibc-8cpu
+    description: Time index-pack and checkout of this workspace, glibc git, 8 CPU
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/buildpack-deps@sha256:4f34e1d673fdb65371de9f88bdd32c4e30152fe692b35604aef5c0b3c0e6da10
+        resources:
+          requests: {cpu: '8', memory: 4Gi, ephemeral-storage: 6Gi}
+          limits: {cpu: '8', memory: 4Gi, ephemeral-storage: 8Gi}
+    steps:
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - |
+              export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="*"
+              echo "== env"
+              nproc; cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo no-cpu.max
+              git --version; (ldd --version 2>&1 || true) | head -1
+              grep -m1 'model name' /proc/cpuinfo; echo "host_cpus=$(grep -c ^processor /proc/cpuinfo)"
+              echo "host=$(hostname) pwd=$(pwd)"
+              echo "== source"
+              echo "fetch_head_source=$(cut -f3 .git/FETCH_HEAD 2>/dev/null | sed 's/.* of //' | sort -u | tr '\n' ' ')"
+              git count-objects -v
+              echo "refs=$(git for-each-ref | wc -l) commits=$(git rev-list --count HEAD)"
+              up() { awk '{print $1}' /proc/uptime; }
+              cpu() { awk '/^user_usec|^system_usec/{printf "%s ", $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null; }
+              measure() {
+                label=$1; shift
+                s=$(up); c0=$(cpu)
+                "$@"
+                e=$(up); c1=$(cpu)
+                echo "$c0 $c1" | awk -v l="$label" -v s="$s" -v e="$e" '{printf "M %s real=%.2f user=%.2f sys=%.2f\n", l, e-s, ($3-$1)/1e6, ($4-$2)/1e6}'
+              }
+              H=$(git rev-parse HEAD)
+              R=""
+              if git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then R=refs/remotes/origin/main; fi
+              echo "== pack (HEAD $H plus ${R:-nothing})"
+              mkpack() { printf '%s\n%s\n' "$H" "$R" | git -c pack.threads=8 pack-objects --revs --stdout --include-tag --delta-base-offset -q > /tmp/clone.pack; }
+              measure pack-objects mkpack
+              ls -l /tmp/clone.pack
+              ip() { rm -rf /tmp/ip && git init -q --bare /tmp/ip && git -C /tmp/ip index-pack --threads="$1" --stdin < /tmp/clone.pack > /dev/null; }
+              echo "== index-pack"
+              for t in 1 2 2 2 4 4 4 8; do measure "index-pack t=$t" ip "$t"; done
+              echo "== connectivity (rev-list --objects of HEAD in the indexed repo)"
+              conn() { git -C /tmp/ip rev-list --objects --quiet "$H"; }
+              measure connectivity conn
+              rm -rf /tmp/ip /tmp/clone.pack
+              echo "== checkout"
+              co() { rm -rf /tmp/co; git -c checkout.workers="$1" -c submodule.recurse=false worktree add -q --detach /tmp/co "$H"; }
+              for w in 1 1 4 4; do measure "checkout workers=$w" co "$w"; git worktree remove --force /tmp/co; done
+              echo "== done"
