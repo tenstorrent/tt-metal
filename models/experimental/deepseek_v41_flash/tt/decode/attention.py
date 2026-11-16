@@ -1833,11 +1833,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         width = self.local_num_heads * self.head_dim
         in_per_group = width // self.local_o_groups
         oa_dest = ttnn.CoreRangeSet({self.o_a_proj.b_core_grid().bounding_box()})
-        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(attn, oa_dest)
+        # The block's [R, groups * K] in (R, 32) tiles is groups runs of K / 32 tiles: the gather labels its replica
+        # as batched o_a's A, [1, groups, cores * R, K] with shard [groups * R, K] (same bytes).
+        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(attn, oa_dest, num_groups=self.local_o_groups)
         ttnn.deallocate(attn)
-        # The block's [R, groups * K] is groups tile rows of R rows each: batched o_a's [batch * R, K] A.
-        x = ttnn.experimental.view(gathered, [1, self.local_o_groups, oa_dest.num_cores() * rows, in_per_group])
-        y = self.o_a_proj(x)
+        assert gathered.shape[-1] == in_per_group and gathered.shape[1] == self.local_o_groups, gathered.shape
+        y = self.o_a_proj(gathered)
         ttnn.deallocate(gathered)
         y = ttnn.experimental.view(y, [1, 1, y.shape[-2], self.local_o_groups * self.o_lora_rank])
         out = self.o_b_proj(y)

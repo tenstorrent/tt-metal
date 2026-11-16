@@ -2082,8 +2082,11 @@ ProgramDescriptor build_program_descriptor(
                 writer_args.push_back(static_cast<uint32_t>(agg_noc.y));
                 // The routed split's peer: a producer's partner, or a partner's producer (the other column, same row).
                 const uint32_t local = parallel_experts ? idx % cores_per_expert : 0u;
-                const uint32_t peer_idx =
-                    local < num_producers ? idx + partner_base : (local >= partner_base ? idx - partner_base : idx);
+                // Only the 6-expert grid has partners; elsewhere idx + partner_base can fall off the grid (the serial
+                // grid's 80 cores: idx + 40 up to (14, 7)), so a core is its own (unused) peer.
+                const uint32_t peer_idx = !parallel_experts       ? idx
+                                          : local < num_producers ? idx + partner_base
+                                                                  : (local >= partner_base ? idx - partner_base : idx);
                 const auto peer_noc =
                     device->worker_core_from_logical_core(CoreCoord{peer_idx / GRID_Y, peer_idx % GRID_Y});
                 writer_args.push_back(static_cast<uint32_t>(peer_noc.x));
