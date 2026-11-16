@@ -115,15 +115,43 @@ def upload_rows_per_chip(mesh, per_chip):
     )
 
 
-def tp_expert_layouts(state, *, tp, banks, inter_pad, local_readers=3):
+def shared_virtual_experts(gate, up, down, *, tp, inter_chip):
+    """A dense MLP (``gate`` / ``up`` ``[I, H]``, ``down`` ``[H, I]``) as ``n`` virtual experts per chip of the
+    tensor-parallel expert layout: chip c's slice of the (zero padded) intermediate dimension, ``[c n, (c + 1) n)``
+    chunks of ``inter_chip``, so the experts' programs can run it as ``n`` always-routed slots with weight 1.
+    Returns per chip (gate ``[n, H, inter_chip]``, up, down ``[n, inter_chip, H]``)."""
+    inter, hidden = gate.shape
+    n = -(-inter // (tp * inter_chip))
+    pad = tp * n * inter_chip - inter
+    g, u = (torch.nn.functional.pad(w.float().t(), (0, pad)) for w in (gate, up))  # [H, I_pad]
+    d = torch.nn.functional.pad(down.float().t(), (0, 0, 0, pad))  # [I_pad, H]
+    out = []
+    for c in range(tp):
+        cols = slice(c * n * inter_chip, (c + 1) * n * inter_chip)
+        out.append(
+            (
+                g[:, cols].reshape(hidden, n, inter_chip).permute(1, 0, 2).contiguous(),
+                u[:, cols].reshape(hidden, n, inter_chip).permute(1, 0, 2).contiguous(),
+                d[cols].reshape(n, inter_chip, hidden).contiguous(),
+            )
+        )
+    return out
+
+
+def tp_expert_layouts(state, *, tp, banks, inter_pad, local_readers=3, extra=None):
     """Checkpoint experts (``experts.gate_up_proj [E, 2I, H]``, ``experts.down_proj [E, H, I]``) -> per chip, the
     tensor-parallel slice of the intermediate dimension (I padded to ``inter_pad``, split ``tp`` ways) in the
-    bank-sharded gate|up and down layouts."""
+    bank-sharded gate|up and down layouts. ``extra``: per chip (gate, up, down) of further experts appended after the
+    checkpoint's (``shared_virtual_experts``), ids E, E + 1, ..."""
     gate, up = state["experts.gate_up_proj"].chunk(2, dim=-2)
     pad = inter_pad - gate.shape[-2]
     gate, up = (torch.nn.functional.pad(t.transpose(-2, -1), (0, pad)) for t in (gate, up))  # [E, H, Ip]
     down = torch.nn.functional.pad(state["experts.down_proj"].transpose(-2, -1), (0, 0, 0, pad))  # [E, Ip, H]
     gates, ups, downs = gate.chunk(tp, dim=-1), up.chunk(tp, dim=-1), down.chunk(tp, dim=-2)
+    if extra is not None:
+        gates = [torch.cat([a, x[0].to(a.dtype)]) for a, x in zip(gates, extra)]
+        ups = [torch.cat([a, x[1].to(a.dtype)]) for a, x in zip(ups, extra)]
+        downs = [torch.cat([a, x[2].to(a.dtype)]) for a, x in zip(downs, extra)]
     gu = [gate_up_local_layout(g.contiguous(), u.contiguous(), banks, local_readers) for g, u in zip(gates, ups)]
     dn = [down_layout(d.contiguous(), banks) for d in downs]
     return gu, dn
@@ -143,10 +171,14 @@ class MoeDecodeB1:
         activation="geglu",
         swiglu_limit=7.0,
         swiglu_alpha=1.702,
+        split=None,
     ):
         """activation: "geglu" (Gemma: gelu(g) * u) or "swiglu" (gpt-oss: (clamp(u, -L, L) + 1) * g' sigmoid(alpha
-        g'), g' = min(g, L))."""
+        g'), g' = min(g, L)). split: the down program sums slots [0, split) and [split, k) into two outputs (routed
+        experts / a shared MLP run as always-routed virtual experts, which Gemma normalizes separately)."""
         assert hidden % TILE == 0 and inter_chip % TILE == 0 and 1 <= k <= 32
+        assert split is None or 0 < split < k
+        self.split = split
         assert activation in ("geglu", "swiglu")
         self.compute_defines = []
         if activation == "swiglu":
@@ -314,11 +346,14 @@ class MoeDecodeB1:
     def down(self, h, route, w_down, out=None, bias_row=None, flat_out=None):
         """``bias_row``: the down weights carry the experts' biases in this row (``down_layout(..., bias=...)``).
         ``flat_out`` = (tensor, byte offset): write the result as a flat BF16 vector (value h at byte offset + 2 h of a
-        one-core sharded tensor, fused_decode/boundary.py) instead of row 0 of a TILE tensor."""
+        one-core sharded tensor, fused_decode/boundary.py) instead of row 0 of a TILE tensor; with ``split``,
+        (tensor, offset of the first slots' sum, offset of the rest's)."""
         device = h.device()
-        flat_off = 0
+        flat_off = flat_off2 = 0
         if flat_out is not None:
-            out, flat_off = flat_out
+            out, flat_off = flat_out[:2]
+            flat_off2 = flat_out[2] if self.split else 0
+        assert not self.split or flat_out is not None, "split outputs are written flat"
         if out is None:
             out = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, 1, self.hidden]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
@@ -360,7 +395,7 @@ class MoeDecodeB1:
             self._cb(cb_route, ttnn.bfloat16, self.route_page, 1, core_set),
             self._cb(cb_scr, ttnn.bfloat16, self.route_page, 1, core_set),
             self._cb(cb_sync, ttnn.bfloat16, 32, 1, core_set),
-            self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 1, core_set, tiny=True),
+            self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 2 if self.split else 1, core_set, tiny=True),
         ]
         reader_ct = [
             cb_in0,
@@ -400,16 +435,19 @@ class MoeDecodeB1:
                 local,
                 cpb,
                 flat_off,
+                flat_off2,
             ]
         defines = [("HAS_BIAS", "1")] if bias_row is not None else []
         defines += [("OUT_FLAT", "1")] if flat_out is not None else []
+        defines += [("SPLIT_SLOTS", str(self.split))] if self.split else []
         kernels = self._kernels(
             "down",
             core_set,
             (reader_ct, reader_rt),
             (writer_ct, writer_rt),
-            [cb_in0, cb_w, cb_out, kt],
+            [cb_in0, cb_w, cb_out, kt, self.kts],
             defines=defines,
+            compute_defines=defines,
         )
         ttnn.generic_op([w_down, route, h, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
         return out

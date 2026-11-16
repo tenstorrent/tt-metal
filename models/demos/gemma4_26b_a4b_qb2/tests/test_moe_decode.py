@@ -110,6 +110,72 @@ def test_moe_decode_b1(qb2_mesh, shape, dtype):
         assert ok, f"{shape} {dtype} chip {chip}: PCC {pcc}"
 
 
+def test_moe_decode_split_flat(qb2_mesh):
+    """WS5 merged MoE: k = 8 routed + 3 always-routed slots (a shared MLP as virtual experts), flat x, the down
+    program's two sums (slots 0..7 / 8..10) written flat into one partial buffer (fused_decode/boundary.py)."""
+    from models.demos.gemma4_26b_a4b_qb2.tt.fused_decode.boundary import flat_from_tile_rows, flat_to_tile_rows
+
+    mesh = qb2_mesh
+    H, inter, E, k, split = 2816, 192, 131, 11, 8
+    dtype = ttnn.bfloat8_b
+    banks = mesh.dram_grid_size().x
+    torch.manual_seed(0)
+    gates = [(torch.randn(E, H, inter) / H**0.5).bfloat16() for _ in range(4)]
+    ups = [(torch.randn(E, H, inter) / H**0.5).bfloat16() for _ in range(4)]
+    downs = [(torch.randn(E, inter, H) / inter**0.5).bfloat16() for _ in range(4)]
+    w_gu = upload_per_chip(mesh, [gate_up_local_layout(g, u, banks, 3) for g, u in zip(gates, ups)], dtype)
+    w_down = upload_per_chip(mesh, [down_layout(d, banks) for d in downs], dtype)
+    T = -(-H // 1024)
+    rep = ttnn.ReplicateTensorToMesh(mesh)
+    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+
+    def flat_config(pages):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core, (32, 32 * pages), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    x = torch.randn(H).bfloat16()
+    tt_x = ttnn.from_torch(
+        flat_to_tile_rows(x.float(), T)[None, None].bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=flat_config(T),
+        mesh_mapper=rep,
+    )
+    part = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 32 * 2 * T),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=flat_config(2 * T),
+        mesh_mapper=rep,
+    )
+    ids = torch.cat([torch.randperm(128)[:split], torch.arange(128, 131)])
+    w = torch.cat([torch.softmax(torch.randn(split), 0), torch.ones(k - split)])
+    row = torch.zeros(1, 1, 32, 2 * k)
+    row[0, 0, 0, :k], row[0, 0, 0, k:] = w, ids.float()
+    tt_route = ttnn.from_torch(row, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=rep)
+    op = MoeDecodeB1(mesh, hidden=H, inter_chip=inter, k=k, weight_dtype=dtype, split=split)
+    op.local_readers = 3
+    op(tt_x, tt_route, w_gu, w_down, x_flat=True, flat_out=(part, T * 2048, 0))
+    xb, wb = x.float(), row[0, 0, 0, :k].bfloat16().float()
+    for chip, dev in enumerate(ttnn.get_device_tensors(part)):
+        flat = flat_from_tile_rows(ttnn.to_torch(dev).float()[0, 0], 2 * T * 1024)
+        got_shared, got_routed = flat[:H], flat[T * 1024 : T * 1024 + H]
+        refs = [torch.zeros(H), torch.zeros(H)]
+        for s in range(k):
+            e = int(ids[s])
+            g, u, d = (quantized(mesh, t[chip][e][None, None].float(), dtype)[0, 0] for t in (gates, ups, downs))
+            refs[s >= split] += wb[s] * (act(xb @ g, xb @ u, "geglu") @ d)
+        for name, ref, got in (("routed", refs[0], got_routed), ("shared", refs[1], got_shared)):
+            ok, pcc = comp_pcc(ref, got, 0.995)
+            print(f"MOE_DECODE split {name} chip={chip} pcc={pcc:.5f}", flush=True)
+            assert ok, f"split {name} chip {chip}: PCC {pcc}"
+
+
 def test_router_topk_b1(qb2_mesh):
     mesh = qb2_mesh
     rep = ttnn.ReplicateTensorToMesh(mesh)

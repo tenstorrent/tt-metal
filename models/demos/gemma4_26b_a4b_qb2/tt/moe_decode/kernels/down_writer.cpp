@@ -62,11 +62,21 @@ void kernel_main() {
 #ifdef OUT_FLAT
     // flat output (fused_decode/boundary.py partial buffer): the column's 32 values at byte flat_off + 64 col
     noc_async_write(src, s_o.get_noc_addr(0) + get_arg_val<uint32_t>(7) + col * 2 * row_bytes, 2 * row_bytes);
+#ifdef SPLIT_SLOTS
+    // the second sum (the slots from SPLIT_SLOTS on) at flat_off2
+    cb_wait_front(cb_out, 2);
+    noc_async_write(
+        src + 2 * row_bytes, s_o.get_noc_addr(0) + get_arg_val<uint32_t>(8) + col * 2 * row_bytes, 2 * row_bytes);
+#endif
 #else
     const uint64_t dst = s_o.get_noc_addr(col);
     noc_async_write(src, dst, row_bytes);
     noc_async_write(src + row_bytes, dst + face_bytes, row_bytes);
 #endif
     noc_async_write_barrier();
+#ifdef SPLIT_SLOTS
+    cb_pop_front(cb_out, 2);
+#else
     cb_pop_front(cb_out, 1);
+#endif
 }
