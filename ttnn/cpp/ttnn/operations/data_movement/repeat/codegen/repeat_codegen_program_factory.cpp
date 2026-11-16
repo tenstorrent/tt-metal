@@ -136,7 +136,10 @@ std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(
         2ull * kLastDimRmDoublingBatch * slot <= l1_budget;
     if (doubling) {
         return RepeatRmCbPlan{
-            .slot_bytes = slot, .batch = kLastDimRmDoublingBatch, .depth = 2 * kLastDimRmDoublingBatch};
+            .slot_bytes = slot,
+            .batch = kLastDimRmDoublingBatch,
+            .depth = 2 * kLastDimRmDoublingBatch,
+            .doubling = true};
     }
     return plan_rm_cb(slot, l1_budget);
 }
@@ -325,7 +328,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         reader_ct_args = {
             page_map.stick_size, in_aligned, slot_size, /*cb_id=*/0, operation_attributes.num_repeats, cb_batch};
         TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
-        reader_desc.kernel_source = cb_batch == kLastDimRmDoublingBatch ? kReaderLastDimRmDoubling : kReaderLastDimRm;
+        reader_desc.kernel_source = cb_plan->doubling ? kReaderLastDimRmDoubling : kReaderLastDimRm;
     } else {
         reader_ct_args = {
             in_aligned,

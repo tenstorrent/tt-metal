@@ -25,6 +25,7 @@ struct RepeatRmCbPlan {
     uint32_t slot_bytes = 0;
     uint32_t batch = 0;
     uint32_t depth = 0;
+    bool doubling = false;
 };
 
 // When only one slot fits, the reader and writer take turns on it.
