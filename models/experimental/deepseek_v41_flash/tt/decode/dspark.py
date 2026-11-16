@@ -123,6 +123,10 @@ DRAFT_PROB_PENALTY = 5e-5
 # through the block ops (fused_hyperconnection, matmul_decode, width_sharded_all_reduce) instead of per-row loops.
 BLOCK_ROWS = 8
 DSPARK_BLOCK = os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_OPS", "1") == "1"
+# The drafted block's rows (0: the checkpoint's dspark_block_size, 5). 4 by default: [token, noise x 3] for the 3 drafts a
+# 4-row verify reads accepts more per round than the trained 5-row block (TOK=300: 2.25 vs 2.15 tokens/round on the
+# default prompt, 3.25 vs 3.18 on gsm8k; 3 rows: 2.11), and fits the 4-row tiles and requests of the block ops.
+DSPARK_BLOCK_SIZE = int(os.environ.get("DEEPSEEK_V4_DSPARK_BLOCK_SIZE", "4"))
 # The routed experts' dtype: bfloat4_b by default (half the bytes fused_experts streams; the same tokens per round as
 # bfloat8_b at TOK=300 on both test prompts). Each dtype has
 # its own cache files (the dtype is in their name).
@@ -364,7 +368,9 @@ class DeepSeekV41DSparkStage(DeepSeekV4Module):
         )
         # Row r = t * local_heads + h of the folded scores: the sink of head h at the sink's key column.
         sink = _memo(weights["attn.attn_sink"])
-        sink_file = cache.file(f"attn.sink_bias.ring{ring_rows}" + tag)
+        sink_file = cache.file(
+            f"attn.sink_bias.ring{ring_rows}" + tag + (f".blk{self.block}" if DSPARK_BLOCK_SIZE else "")
+        )
 
         def sink_bias():
             bias = torch.zeros(tp, 1, self.block * self.local_heads, self.kv_rows)
@@ -808,6 +814,8 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         if (link is None) != (stash_device is device):
             raise ValueError("a stash on another device needs a link to the drafter's, and only then")
         cache = _as_cache(cache)
+        if DSPARK_BLOCK_SIZE and DSPARK_BLOCK_SIZE != config.dspark_block_size:
+            config = SimpleNamespace(**{**vars(config), "dspark_block_size": DSPARK_BLOCK_SIZE})
         # Every ring is private, so the mapping starts empty and the stages fill it as they are built.
         prefetch_buffers = {} if use_prefetcher else None
         self.config = config
@@ -834,6 +842,8 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         self.sessions = sessions
         # draft(greedy=True) runs the stages on (BLOCK_ROWS, 32) row blocks (forward_block).
         self.block_mode = bool(block_mode) and self.block <= BLOCK_ROWS
+        # The block's tile height: the smallest of 4 and 8 rows that holds it.
+        self.block_rows = 4 if self.block <= 4 else BLOCK_ROWS
         # What set_sampling last staged (the inputs start greedy).
         self.temperature = 0.0
         self.rope_dim = config.qk_rope_head_dim
@@ -872,7 +882,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
                     shared_dtype=shared_dtype,
                     use_prefetcher=use_prefetcher,
                     prefetch_buffers=prefetch_buffers,
-                    block_rows=BLOCK_ROWS if self.block_mode else 0,
+                    block_rows=self.block_rows if self.block_mode else 0,
                 )
             )
         first, last = weights[0], weights[-1]
@@ -1066,12 +1076,12 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
             one_hot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=replicate
         )
         if self.block_mode:
-            one_hot = torch.zeros(1, BLOCK_ROWS, 1, self.hc)
+            one_hot = torch.zeros(1, self.block_rows, 1, self.hc)
             one_hot[..., 0] = 1
             self.pre_mix_block = ttnn.from_torch(
                 one_hot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=replicate
             )
-            self.norm_blk = _gain_block(self.norm, BLOCK_ROWS, device)
+            self.norm_blk = _gain_block(self.norm, self.block_rows, device)
         if use_prefetcher:
             # The DRISC senders read a weight straight from DRAM when its request arrives, off the command
             # queue; a session that is already open only fenced the uploads queued before it started.
@@ -1442,13 +1452,14 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         block's ``T`` rows padded with zero rows, which stay zero. Each stage's FFN mix is folded into the next
         stage's attention HC, and the last one's into the head's collapse (one more block HC, its RMSNorm the head's
         norm, which un-tiles the rows)."""
-        t, rows, hc, d = self.block, BLOCK_ROWS, self.hc, self.hidden
+        t, rows, hc, d = self.block, self.block_rows, self.hc, self.hidden
         _, token, rope, bias_row = self._block_inputs(ids, pos, q_pos, frontier_slot, live, embed=False)
         first, last = self.stages[0], self.stages[-1]
         embedded = ttnn.reshape(
             ttnn.embedding(ids, self.embed.embedding_weight, layout=ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, d]
         )
-        embedded = ttnn.pad(embedded, [(0, 0), (0, 0), (0, rows - t), (0, 0)], 0.0)
+        if rows > t:
+            embedded = ttnn.pad(embedded, [(0, 0), (0, 0), (0, rows - t), (0, 0)], 0.0)
         stacked = ttnn.repeat(embedded, ttnn.Shape([1, 1, hc, 1]))
         streams = ttnn.tilize(stacked, tile=ttnn.Tile((rows, ttnn.TILE_SIZE)), memory_config=first.streams_config)
         ttnn.deallocate(stacked)
@@ -1458,7 +1469,7 @@ class DeepSeekV41DSpark(DeepSeekV4Module):
         for stage in self.stages:
             out_rows = k if stage is last else None
             streams, pre_mix, mix = stage.forward_block(streams, pre_mix, mix, rope, bias_row, t, ring_base, out_rows)
-        _, _, collapsed, _, _ = last.ffn_hc_blk(streams, pre_mix=pre_mix, mix=mix)
+        collapsed = last.ffn_hc_blk(streams, pre_mix=pre_mix, mix=mix)[2]
         normed = ttnn.to_layout(last._rows_normed(collapsed, self.norm_blk, k), ttnn.TILE_LAYOUT)
         self._debug_head(normed)
         ids, embeds = self._markov_greedy(normed, token)
