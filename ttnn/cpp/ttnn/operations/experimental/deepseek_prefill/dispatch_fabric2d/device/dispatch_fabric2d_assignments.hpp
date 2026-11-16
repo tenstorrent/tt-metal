@@ -9,7 +9,7 @@
 
 #include "dispatch_fabric2d_placement.hpp"
 #include "kernels/dataflow/dispatch_fabric2d_kernel_interface.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/fabric2d_assignments/fabric2d_assignments.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/fabric2d_common/fabric2d_assignments.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 

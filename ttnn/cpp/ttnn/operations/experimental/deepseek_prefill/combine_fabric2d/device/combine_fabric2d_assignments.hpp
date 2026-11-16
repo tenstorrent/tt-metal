@@ -10,7 +10,7 @@
 #include "combine_fabric2d_placement.hpp"
 #include "kernels/dataflow/combine_fabric2d_chunk.hpp"
 #include "kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/fabric2d_assignments/fabric2d_assignments.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/fabric2d_common/fabric2d_assignments.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
