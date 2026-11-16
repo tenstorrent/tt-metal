@@ -44,11 +44,11 @@
 #undef MATMUL_PROD_KEYS
 #define MATMUL_REUSE_DIR MATMUL_PROD_DIR
 #ifndef RUNTIME_FORMATS
-// matmul_api_reuse_dir's run-time direction (3) of a LoFi half-sync kernel with a 32-bit operand or output beside a fast format, as
+// matmul_api_reuse_dir's run-time direction (3) of a LoFi half-sync kernel with a 32-bit operand beside a fast one, as
 // matmul_api_runtime_dir resolves it for the key's operands (in1 is unpacker A, in0 unpacker B)
 #include "llk_matmul_forms.h"
 constexpr bool matmul_prod_runtime_dir = MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf &&
-                                         static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS, is_fp32_dest_acc_en);
+                                         static_cast<DataFormat>(PACK_OUT) != DataFormat::Float32 && ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS);
 #undef MATMUL_REUSE_DIR
 #define MATMUL_REUSE_DIR                                                                                                                        \
     (matmul_prod_runtime_dir ? ckernel::matmul_reuse_dir(ckernel::MathFidelity::LoFi, static_cast<DataFormat>(UNPACK_B_IN), static_cast<DataFormat>(UNPACK_A_IN), \

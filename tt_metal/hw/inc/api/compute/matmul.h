@@ -273,9 +273,8 @@ constexpr std::uint32_t matmul_api_reuse_dir() {
         } else if constexpr (row_mop || unpack_auto_ttsync != 0 || stream_z != 0 || kt_per_section != 0) {
             return 0;
         } else if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            // half sync: the run-time direction where a 32-bit operand sits beside a fast format; a Float32 partials CB alone or a
-            // Tf32 output is not one (matmul_kernel_lofi_mix)
-            return out_format != DataFormat::Float32 && matmul_kernel_lofi_mix(unpack_src_format, DST_ACCUM_MODE) ? 3 : 0;
+            // half sync: the run-time direction where a 32-bit operand sits beside a fast one (matmul_kernel_lofi_mix)
+            return out_format != DataFormat::Float32 && matmul_kernel_lofi_mix(unpack_src_format) ? 3 : 0;
         } else {
             return llk_matmul_kernel_mixes_32bit<MM_THROTTLE != 0>() ? 3 : 0;
         }
