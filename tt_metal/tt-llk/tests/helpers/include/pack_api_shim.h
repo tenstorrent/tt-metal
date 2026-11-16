@@ -140,6 +140,7 @@ struct llk_pack_matmul_api<1>
 {
     static constexpr bool value = true;
 };
+
 template <>
 struct llk_pack_lofi_api<1>
 {
