@@ -78,8 +78,10 @@ def bucket_engine(monkeypatch):
         _vfy_bucket_traces={1: "v1", 2: "v2", 4: "v4"},
     )
 
-    def verify_traced(tokens, positions, mi, **kw):
+    def verify_traced(tokens, positions, mi, after_enqueue=None, **kw):
         calls.append(kw)
+        if after_enqueue is not None:
+            after_enqueue()
         return [0] * (B * (K + 1)), "feed", (torch.zeros(B * (K + 1), 32) if kw.get("read_logits") else None)
 
     model.verify_traced = verify_traced

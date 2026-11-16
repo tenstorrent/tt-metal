@@ -2168,8 +2168,11 @@ class MTPBlockEngine(MTPSpecEngine):
         keep_pending=False,
     ):
         """Replay the verify trace over [B, T] tokens at start_pos[u] + j, every GDN layer on the blocks of
-        ``mamba_state``. A row's first verify after its prompt first writes the drafter KV of the prompt's last
-        position. ``accepted_counts`` selects no state. Returns (ids int32 [B, T], logits [B, T, vocab] or None).
+        ``mamba_state``. A row's first verify after its prompt also writes the drafter KV of the prompt's last position
+        (_warm_fresh_rows), enqueued after the verify replay, so that its host dispatch overlaps the replay: the verify
+        reads no drafter KV, and every drafter read (the step and drafter traces of a one-enqueue step, the next
+        propose) is enqueued after it. ``accepted_counts`` selects no state. Returns (ids int32 [B, T], logits
+        [B, T, vocab] or None).
         ``sample_plan`` (spec_sample.sampling_plan): each row it samples returns the device sampler's draws instead of
         its argmax ids. ``one_enqueue`` (argmax_ids only): run the step as a one-enqueue step when its next propose is
         decided before the verify (_one_enqueue_plan). ``defer`` (argmax_ids only): enqueue the reads without waiting
@@ -2206,15 +2209,10 @@ class MTPBlockEngine(MTPSpecEngine):
             self._last_cap_blocks, self.block_size
         ), "verify window past the paged KV capacity"
         fresh = {u: n for u, n in self._fresh.items() if active[u]}
-        if fresh:
-            self._stage_mtp_tables(pt)
-            for u, n in sorted(fresh.items()):
-                if int(start_pos[u]) != n:
-                    raise ValueError(f"slot {u}: first verify at {int(start_pos[u])}, its prompt has {n} tokens")
-                self._warm_mtp_last(
-                    self._last_hidden[u], int(tokens[u, 0]), n - 1, self._mtp_pt_rows[u], self._rope_deltas[u]
-                )
-                del self._fresh[u]
+        for u, n in sorted(fresh.items()):
+            if int(start_pos[u]) != n:
+                raise ValueError(f"slot {u}: first verify at {int(start_pos[u])}, its prompt has {n} tokens")
+        warm = (lambda: self._warm_fresh_rows(fresh, tokens, pt)) if fresh else None
         self.model.gdn_blocks.set_verify_blocks(mamba_state)
         args = (tokens.tolist(), start_pos.tolist(), [0] * B)
         kw = dict(
@@ -2247,14 +2245,18 @@ class MTPBlockEngine(MTPSpecEngine):
         step.tokens, step.p0 = tokens.clone(), torch.where(active, start_pos, 0)
         self._pending.append(step)
         if plan is not None:
-            self._verify_one_enqueue(args, kw, step)
+            self._verify_one_enqueue(args, kw, step, after_verify=warm)
             return (step if defer else step.result()), None
         if defer and not read_logits and not self._timing:
             self.model.verify_enqueue(*args, **{k: v for k, v in kw.items() if k != "read_logits"})
             draws = [] if sample_plan is None else [self.model._vfy_sampler.draws]
             step.reads = self._read_device0_async([self.model._vfy_ids_out, *draws])
             self._vfeed = self.model._vfy_rows_out
+            if warm is not None:
+                warm()
             return step, None
+        if warm is not None:
+            kw["after_enqueue"] = warm
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
         else:
@@ -2298,10 +2300,10 @@ class MTPBlockEngine(MTPSpecEngine):
         }
         return SimpleNamespace(rows=rows, p0=p0, declined=declined, keep=keep)
 
-    def _verify_one_enqueue(self, args, kw, step):
+    def _verify_one_enqueue(self, args, kw, step, after_verify=None):
         """Stage, enqueue the verify, [sampler], step and drafter traces, and enqueue the reads of the ids, the drafter
         pack and the drafts into ``step`` (a PendingVerify), which the caller waits on or defers; the drafts wait for
-        the next propose_draft_tokens."""
+        the next propose_draft_tokens. ``after_verify``: called between the verify and the step trace."""
         model, plan, T = self.model, step.plan, self.T
         self._stage_table(self._draft_table(self._last_pt, plan.declined), "_mtp_pt", "_mtp_pt_staged")
         pt_rows = self._last_pt.repeat_interleave(T, dim=0)
@@ -2310,7 +2312,20 @@ class MTPBlockEngine(MTPSpecEngine):
             self._acc_pt_staged = pt_rows
         kw = {k: v for k, v in kw.items() if k != "read_logits"}
         model.verify_enqueue(*args, accept_rows=plan.rows, **kw)
+        if after_verify is not None:
+            after_verify()
         self._enqueue_step_and_drafter(step)
+
+    def _warm_fresh_rows(self, fresh, tokens, pt):
+        """The drafter KV of each fresh row u's prompt's last position fresh[u] - 1, from the feed row the prefill kept
+        and the row's first generated token tokens[u, 0], over the row's own table pt[u]. Stages only these rows'
+        tables: every other reader of the drafter tables stages the ones it reads."""
+        for u, n in sorted(fresh.items()):
+            self._stage(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            self._warm_mtp_last(
+                self._last_hidden[u], int(tokens[u, 0]), n - 1, self._mtp_pt_rows[u], self._rope_deltas[u]
+            )
+            del self._fresh[u]
 
     def _enqueue_step_and_drafter(self, step):
         """Replay the step and drafter traces after a one-enqueue verify and enqueue its reads."""

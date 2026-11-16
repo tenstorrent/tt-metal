@@ -237,6 +237,56 @@ def test_a_greedy_step_runs_verify_acceptance_and_drafter_in_one_enqueue(step):
     assert bool(mtp[2].eq(eng._scratch_block).all()) and torch.equal(mtp[0], eng._last_pt[0]), "padding row on scratch"
 
 
+def _fresh_row(eng, row, prompt_len):
+    """Row ``row`` has just prefilled a prompt of ``prompt_len`` tokens, and its next verify is its first."""
+    eng._fresh[row] = prompt_len
+    eng._last_hidden = [f"h{u}" for u in range(eng.B)]
+    eng._mtp_pt_rows = [f"row{u}" for u in range(eng.B)]
+
+
+def test_a_fresh_rows_drafter_kv_is_written_between_the_verify_and_the_step_trace(step):
+    """A one-enqueue step with a row at its first verify: the drafter KV of the row's prompt's last position is
+    written after the verify is enqueued and before the step and drafter traces, which read it, over that row's own
+    drafter table only; the drafter table staged before the verify (padding rows on the scratch block) stays."""
+    eng, log, state = step
+    K = eng.K
+    _fresh_row(eng, 1, 200)
+    warms = []
+    eng._warm_mtp_last = lambda h, tok, pos, pt, delta=None: warms.append(
+        (h, tok, pos, pt, delta, len(log["enqueue"]), list(log["traces"]))
+    )
+    state["ids"] = torch.tensor([[7, 8, 9, 10], [11, 12, 13, 14], [0, 0, 0, 0], [21, 22, 23, 24]])
+    tokens = torch.tensor([[1, 7, 8, 5], [2, 0, 0, 0], [0, 0, 0, 0], [3, 9, 9, 9]])
+    starts, nv = [100, 200, -1, 300], [3, 0, 0, 2]
+    res = _verify(eng, tokens, starts, nv)
+    assert warms == [("h1", 2, 199, "row1", 0, 1, [])] and 1 not in eng._fresh
+    assert log["traces"] == ["step", "drafter"] and eng.one_enqueue_steps == 1
+    assert [buf for buf, _ in log["staged"]] == ["mtp_pt", "row1"]
+    assert torch.equal(log["staged"][1][1], eng._last_pt[1:2])
+    mtp = log["staged"][0][1]
+    assert bool(mtp[2].eq(eng._scratch_block).all()) and torch.equal(mtp[1], eng._last_pt[1])
+    out, counts = _walk_and_propose(eng, res, tokens, starts, nv)
+    assert counts.tolist() == [3, 1, 1, 1] and out.num_valid.tolist() == [K, K, 0, K]
+    _verify(eng, tokens, [s + 4 if s >= 0 else -1 for s in starts], nv)
+    assert len(warms) == 1, "only the first verify writes it"
+
+
+def test_a_deferred_verify_writes_a_fresh_rows_drafter_kv_after_its_reads(step):
+    """A deferred verify without the device drafter: the drafter KV of the fresh row is written after the verify and
+    its reads are enqueued, so the reads do not wait for it."""
+    eng, log, state = step
+    order = []
+    _fresh_row(eng, 0, 100)
+    eng._warm_mtp_last = lambda h, tok, pos, pt, delta=None: order.append(("warm", pos))
+    reads = eng._read_device0_async
+    eng._read_device0_async = lambda tensors: order.append(("reads", len(log["enqueue"]))) or reads(tensors)
+    state["ids"] = torch.tensor([[7, 8, 9, 10]] + [[0, 0, 0, 0]] * (eng.B - 1))
+    tokens = torch.tensor([[1, 0, 0, 0]] + [[0, 0, 0, 0]] * (eng.B - 1))
+    _verify(eng, tokens, [100] + [-1] * (eng.B - 1), [0] * eng.B, one_enqueue=False, defer=True)
+    assert order == [("reads", 1), ("warm", 99)] and not eng._fresh
+    assert log["traces"] == [] and log["traced"] == []
+
+
 def test_a_commit_the_device_did_not_accept_raises(step, expect_error):
     """A commit that is not a prefix of the device's walk (another token, or more tokens than the device accepted)
     means a wrong device acceptance: the propose raises instead of returning drafts of another commit."""
