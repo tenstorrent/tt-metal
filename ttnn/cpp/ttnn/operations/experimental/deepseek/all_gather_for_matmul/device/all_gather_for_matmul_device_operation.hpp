@@ -33,6 +33,7 @@ bool all_gather_for_matmul_row_tiles(const Tensor& input_tensor);
 Tensor all_gather_for_matmul(
     const Tensor& input_tensor,
     const tt::tt_metal::CoreRangeSet& output_core_range_set,
-    const std::optional<Tensor>& preallocated_output);
+    const std::optional<Tensor>& preallocated_output,
+    uint32_t num_groups = 1);
 
 }  // namespace ttnn::prim

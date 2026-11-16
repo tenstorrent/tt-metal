@@ -20,7 +20,7 @@ bool all_gather_for_matmul_row_tiles(const Tensor& input_tensor) {
 namespace {
 
 tt::tt_metal::TensorSpec make_output_spec(
-    const Tensor& input_tensor, const tt::tt_metal::CoreRangeSet& output_core_range_set) {
+    const Tensor& input_tensor, const tt::tt_metal::CoreRangeSet& output_core_range_set, uint32_t num_groups) {
     if (all_gather_for_matmul_row_tiles(input_tensor)) {
         // Row tiles (h x 32, h < 32) pass through untouched: the replica is the input's own tiles, so its
         // shard is [padded rows, K] in the input's tile and dtype (padding rows are replicated too).
@@ -32,7 +32,14 @@ tt::tt_metal::TensorSpec make_output_spec(
             output_shape[dim] = 1;
         }
         output_shape[-2] = rows * output_core_range_set.num_cores();
-        const ShardSpec shard{output_core_range_set, {rows, width}, ShardOrientation::ROW_MAJOR};
+        ShardSpec shard{output_core_range_set, {rows, width}, ShardOrientation::ROW_MAJOR};
+        if (num_groups > 1) {
+            // A row block [rows, groups * Kg] in (rows, 32) tiles is groups runs of Kg / 32 tiles: tile row g of a
+            // [groups * rows, Kg] tensor (batched matmul_decode's replicated A).
+            const uint32_t group_width = width / num_groups;
+            output_shape = ttnn::Shape({1, num_groups, rows * output_core_range_set.num_cores(), group_width});
+            shard = ShardSpec{output_core_range_set, {num_groups * rows, group_width}, ShardOrientation::ROW_MAJOR};
+        }
         return tt::tt_metal::TensorSpec(
             output_shape,
             TensorLayout(
@@ -186,8 +193,20 @@ void AllGatherForMatmulDeviceOperation::validate_on_program_cache_miss(
             input_shard.shape);
     }
 
+    TT_FATAL(args.num_groups >= 1, "num_groups must be at least 1");
+    if (args.num_groups > 1) {
+        TT_FATAL(
+            all_gather_for_matmul_row_tiles(input_tensor),
+            "num_groups > 1 is only supported for row-tile (h x 32, h < 32) inputs");
+        TT_FATAL(
+            padded_width % (args.num_groups * TILE_WIDTH) == 0,
+            "num_groups {} must split the width {} into whole {}-wide tiles",
+            args.num_groups,
+            padded_width,
+            TILE_WIDTH);
+    }
     if (tensor_args.preallocated_output.has_value()) {
-        const auto expected_spec = make_output_spec(input_tensor, args.output_core_range_set);
+        const auto expected_spec = make_output_spec(input_tensor, args.output_core_range_set, args.num_groups);
         TT_FATAL(
             tensor_args.preallocated_output->tensor_spec() == expected_spec,
             "Preallocated output tensor spec must match the inferred HEIGHT_SHARDED output spec");
@@ -200,7 +219,7 @@ tt::tt_metal::TensorSpec AllGatherForMatmulDeviceOperation::compute_output_specs
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    return make_output_spec(tensor_args.input, args.output_core_range_set);
+    return make_output_spec(tensor_args.input, args.output_core_range_set, args.num_groups);
 }
 
 Tensor AllGatherForMatmulDeviceOperation::create_output_tensors(
@@ -214,9 +233,10 @@ Tensor AllGatherForMatmulDeviceOperation::create_output_tensors(
 Tensor all_gather_for_matmul(
     const Tensor& input_tensor,
     const tt::tt_metal::CoreRangeSet& output_core_range_set,
-    const std::optional<Tensor>& preallocated_output) {
+    const std::optional<Tensor>& preallocated_output,
+    uint32_t num_groups) {
     return ttnn::device_operation::launch<AllGatherForMatmulDeviceOperation>(
-        AllGatherForMatmulParams{.output_core_range_set = output_core_range_set},
+        AllGatherForMatmulParams{.output_core_range_set = output_core_range_set, .num_groups = num_groups},
         AllGatherForMatmulInputs{.input = input_tensor, .preallocated_output = preallocated_output});
 }
 
