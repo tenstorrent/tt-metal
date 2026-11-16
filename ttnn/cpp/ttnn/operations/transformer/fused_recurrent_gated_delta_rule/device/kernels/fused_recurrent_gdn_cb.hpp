@@ -45,7 +45,7 @@
 // State CBs (S, s2, s3) are each one allocation under two ids (one CircularBufferConfig, two buffer indices), a
 // StateCb below. The `utd` id is UnpackToDestFp32 and owns all the flow control: it is reserved, pushed, waited on and
 // popped. The `mm` id is a format view for the read-pass matmul (a utd CB cannot be a matmul operand: the jit-build
-// gives it the Float32 unpack format and the matmul reads garbage from SrcA; measured in test_gdn_decode_math.cpp)
+// gives it the Float32 unpack format and the matmul reads garbage from SrcA; measured on Blackhole)
 // and is never reserved, pushed, waited on or popped. That is sound because a state CB holds exactly one state (kv
 // tiles, single-buffered) and every token produces and consumes it whole: the read and write pointers of both ids
 // start at the CB base and wrap back to it after kv tiles, so tile i sits at base + i tiles for every id, every token.

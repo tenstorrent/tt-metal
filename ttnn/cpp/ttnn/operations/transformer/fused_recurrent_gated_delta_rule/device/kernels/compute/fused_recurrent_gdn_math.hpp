@@ -24,7 +24,7 @@
 // Tile shapes live on the CBs (set_tile_dims / TileDescriptor): qk16, v16, bcol16, r16, craw16, u16, ebc16, out16 are
 // 16x32, kT16 is 32x16, everything else 32x32; all fp32. CBs read by copy_tile (gcol32, v16, bcol16, S, ecol32, r16,
 // ebc16) are UnpackToDestFp32 so the copies are exact. A utd CB cannot be a matmul operand (the jit-build gives it the
-// Float32 unpack format and the matmul then reads garbage from SrcA; measured in test_gdn_decode_math.cpp), so every
+// Float32 unpack format and the matmul then reads garbage from SrcA; measured on Blackhole), so every
 // state CB is a StateCb: two ids over one allocation, `utd` (UnpackToDestFp32, all the flow control, the exact seed
 // copies) and `mm` (a format view for the read-pass matmul in1 that is never pushed or popped). Why the view needs no
 // flow control of its own: ../fused_recurrent_gdn_cb.hpp.
