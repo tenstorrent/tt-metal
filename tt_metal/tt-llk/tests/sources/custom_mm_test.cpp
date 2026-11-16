@@ -111,7 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t in1_tile_size = TILE_SIZE_UNPACK_B / TILE_NUM_FACES * num_faces_B;
     // in0 is packed densely: per k-tile two [M, 16] Float16_b faces, 4 * M 16-byte words. The SrcB walk strides by
-    // this, and a kt_dim = 256 call starts its second walk 128 of these past the first.
+    // this, and a call longer than 255 k-tiles starts each later walk past the k-tiles the earlier walks read.
     const std::uint32_t in0_k_tile_size = 4 * in0_face_r_dim;
 
     {

@@ -23,7 +23,7 @@ using namespace ckernel::unpacker;
 // in1 tile shape: [32, 32] or [32, 16] ([16, 32] with transpose), giving [{1, 2, 4, 8}, 32] or [{1, 2, 4, 8}, 16] output tiles
 // rt_dim: 1
 // ct_dim: any integer from 1 to 34 (DEST capacity also bounds it, see llk_custom_mm_common.h)
-// kt_dim: any integer from 1 to 256 (inclusive)
+// kt_dim: any integer of 1 or more; all kt_dim x ct_dim in1 tiles must be in L1
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -47,7 +47,7 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     // Per k-tile the first face is read at (Y=k, Z=k) and the second at (Y=k, Z=k+1), so one walk
     // from a base reaches face 510 at most, i.e. 255 k-tiles: for k = 255 the second read would see
     // Z = 256, whose low byte is 0, and fetch face 255 instead of face 511.
-    // _llk_unpack_AB_custom_mm_run_ therefore unpacks kt_dim = 256 as two walks of 128 k-tiles.
+    // _llk_unpack_AB_custom_mm_run_ therefore splits a longer kt_dim into equal walks of at most 255 k-tiles.
     // For SrcB first unpack has to land at index 0 and second one at index 16,
     // increment from first to second is straightforward, but moving back to 0 after second requires us to exploit
     // counter overflow as CH1 counters only use low 6 bits and wrap at the number of rows in a Src reg (64)
@@ -240,10 +240,14 @@ constexpr std::uint32_t CUSTOM_MM_MAX_KT_PER_WALK = 255;
  * @brief Issue the SrcA/SrcB unpack of a kt_dim x ct_dim block with the MOP that @ref _llk_unpack_AB_custom_mm_init_
  *        recorded. Shared by @ref _llk_unpack_AB_custom_mm_ and @ref _llk_unpack_AB_sdpa_custom_mm_.
  *
- * kt_dim = 256 runs as two walks of 128 k-tiles. Between them it waits until the first walk's UNPACRs have issued,
- * resets the counters as a call does, and moves the SrcB base forward 128 k-tiles. SrcA needs nothing: the first
- * walk's CFGSHIFTMASKs have already moved its base to k-tile 128. The math thread sees one unbroken sequence of SrcA
- * and SrcB data valids, so it is unchanged. kt_dim <= 255 issues the same instructions as one walk always has.
+ * One SrcB face walk reads at most CUSTOM_MM_MAX_KT_PER_WALK (255) k-tiles from one base, so a longer kt_dim runs as
+ * ceil(kt_dim / 255) walks whose lengths differ by at most one (256 is 128 + 128, 511 is 171 + 170 + 170). Equal walks
+ * never leave a short last walk, which measured about 0.5% slower than an even split at kt_dim 256 and 511. Between
+ * walks it waits until the previous walk's UNPACRs have issued, resets the counters as a call does, and moves the SrcB
+ * base forward past the k-tiles already read.
+ * SrcA needs nothing: the CFGSHIFTMASKs have already moved its base to the next k-tile. The math thread sees one
+ * unbroken sequence of SrcA and SrcB data valids, so it is unchanged. kt_dim <= 255 is one walk, the same instructions
+ * as before walks were split.
  *
  * @param cfg: Config register pointer of the unpack thread.
  * @param address_a: L1 address of the first weight tile (SrcA), in 16-byte words.
@@ -253,7 +257,7 @@ constexpr std::uint32_t CUSTOM_MM_MAX_KT_PER_WALK = 255;
  *                     [{1, 2, 4, 8}, 32] non-BFP tile are both exactly this.
  * @param block_increment: SrcA address step to the next tile of a k-row, in 16-byte words.
  * @param inner_increment: SrcA address step from the last tile of a k-row to the next k-row, in 16-byte words.
- * @param kt_dim: Inner dimension in tiles, 1 to 256.
+ * @param kt_dim: Inner dimension in tiles, 1 or more.
  */
 inline void _llk_unpack_AB_custom_mm_run_(
     volatile std::uint32_t* cfg,
@@ -264,7 +268,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t inner_increment,
     const std::uint32_t kt_dim)
 {
-    LLK_ASSERT(kt_dim >= 1 && kt_dim <= CUSTOM_MM_MAX_KT_DIM, "custom_mm: kt_dim must be 1 to 256");
+    LLK_ASSERT(kt_dim >= 1, "custom_mm: kt_dim must be at least 1");
     // Program SrcA address once, its updated using CFGSHIFTMASK, which also carries it from one walk to the next
     cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a;
     // Setup CFGSHIFTMASK increments
@@ -276,14 +280,18 @@ inline void _llk_unpack_AB_custom_mm_run_(
     constexpr std::uint32_t mop_template_0 = 0;
     constexpr std::uint32_t no_skip_zmask  = 0;
 
-    const std::uint32_t num_walks = kt_dim > CUSTOM_MM_MAX_KT_PER_WALK ? 2 : 1;
-    const std::uint32_t first_kt  = kt_dim / num_walks;
-    std::uint32_t walk_address_b  = address_b;
-    std::uint32_t walk_kt         = first_kt;
-    for (std::uint32_t walk = 0; walk < num_walks; walk++)
+    // Walks of equal length to within one k-tile: the first kt_dim % num_walks walks take one extra.
+    const std::uint32_t num_walks  = (kt_dim + CUSTOM_MM_MAX_KT_PER_WALK - 1) / CUSTOM_MM_MAX_KT_PER_WALK;
+    const std::uint32_t base_kt    = kt_dim / num_walks;
+    const std::uint32_t long_walks = kt_dim % num_walks;
+    std::uint32_t walk_kt          = 0;
+    std::uint32_t walk             = 0;
+    for (std::uint32_t walk_start = 0; walk_start < kt_dim; walk_start += walk_kt, walk++)
     {
+        walk_kt = base_kt + (walk < long_walks ? 1 : 0);
+
         // Program SrcB address once per walk, its updated using counters for up to 255 k-tiles
-        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = walk_address_b;
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b + walk_start * tile_size_b;
 
         semaphore_post(semaphore::UNPACK_SYNC);
 
@@ -308,9 +316,6 @@ inline void _llk_unpack_AB_custom_mm_run_(
         // Reset counters at the end of each walk
         TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
         TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
-
-        walk_address_b += walk_kt * tile_size_b;
-        walk_kt = kt_dim - first_kt;
     }
 }
 
@@ -326,7 +331,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @param tile_size_a: Weight tile size, in 16-byte words.
  * @param tile_size_b: Activation tile size, in 16-byte words; also the k-tile stride of the SrcB walk (see
  *                     @ref _llk_unpack_AB_custom_mm_run_).
- * @param kt_dim: Inner dimension in tiles, 1 to 256.
+ * @param kt_dim: Inner dimension in tiles, 1 or more; all kt_dim x ct_dim weight tiles must be in L1.
  * @param ct_dim: Output width in tiles; must match the init, whose MOP bakes it in.
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_.

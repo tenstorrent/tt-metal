@@ -15,6 +15,7 @@ from test_custom_mm import (
     COMPACT_WIDE_BFP_CASES,
     CT_DIMS_16BIT,
     CT_DIMS_32BIT,
+    FACE_WALK_CASES,
     KT_DIMS,
     LONG_K_CASES,
     MULTI_CALL_CASES,
@@ -26,6 +27,7 @@ from test_custom_mm import (
     ODD_K_CASES,
     SPLIT_ACC_LAYOUTS,
     SUPPORTED_M,
+    _face_walk_operands,
     _run_compact_against_default,
     _run_custom_mm,
 )
@@ -145,6 +147,24 @@ def test_perf_custom_mm_split_acc_multi_call(
         DestAccumulation.No,
         CUSTOM_MM_CALLS(num_calls=4),
         layout=layout,
+        **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
+    )
+
+
+@pytest.mark.perf
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", FACE_WALK_CASES)
+@parametrize(**PERF_MEASUREMENT_AXES)
+def test_perf_custom_mm_face_walk(
+    perf_report, formats, M, kt, ct, run_types, loop_factor, is_perf
+):
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        operands=_face_walk_operands(M, kt, ct),
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
 

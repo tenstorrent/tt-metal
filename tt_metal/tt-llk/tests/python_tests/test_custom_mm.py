@@ -18,7 +18,7 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
   in1 (B)  -> SrcA, full ``[32,32]`` tiles, or 2-face ``[32,16]`` ones for N = 16 * ct_dim
               (``tile_c = 16``), which give ``[M,16]`` output tiles holding a single face.
-  rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim in [1,256], LoFi only.
+  rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim >= 1 (bounded by L1), LoFi only.
 
 The SplitAcc layouts accumulate the second k-face apart and finalize on the last call,
 merging it back; the other layouts need no finalization. Either way DEST ends up holding the
@@ -146,6 +146,10 @@ class CustomMMStimuliConfig(StimuliConfig):
         )
         self.packed_a = packed_a
         self.packed_b = packed_b
+        # tile_count_A = kt reserves a full [32, 32] tile per k-tile, but in0 is packed densely at 2 * M * 16 datums
+        # per k-tile. Reserve only the bytes written, so long-K cases fit L1.
+        self.tile_count_A = max(1, -(-len(packed_a) // self.tile_size_A_bytes))
+        self._calculate_tile_sizes()
 
     def write(self, location: str = "0,0"):
         from ttexalens.tt_exalens_lib import write_to_device
@@ -475,7 +479,8 @@ def test_custom_mm_split_acc_multi_call(layout, ct):
 
 
 # kt above CUSTOM_MM_MAX_MOP_ITERATIONS (128) splits the unpack over several TT_MOPs, with the one-slot MOP at ct = 1
-# and the four-slot one at ct = 4 (Bfp8_b weights keep that B within L1). 256 is the widest kt_dim.
+# and the four-slot one at ct = 4 (Bfp8_b weights keep that B within L1). test_custom_mm_face_walk_exact covers kt
+# past one SrcB face walk.
 LONG_K_CASES = [
     pytest.param(
         8,
@@ -510,29 +515,58 @@ def test_custom_mm_long_k(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
 
 
-def _face_walk_operands(M, kt, ct):
-    """Exact operands that tell the SrcB face walk's last face (511) from the face 256 below it (255).
+# Most k-tiles one SrcB face walk reads from one base; longer kt_dim runs as several walks (CUSTOM_MM_MAX_KT_PER_WALK in
+# llk_unpack_AB_custom_mm.h).
+CUSTOM_MM_MAX_KT_PER_WALK = 255
 
-    One walk reads faces 0..510; a single 256-k-tile walk would read face 511, the second face of k-tile 255, from
-    face 255, the second face of k-tile 127 (see _llk_unpack_AB_custom_mm_iter_insns). A carries -1 on face 255 and
-    +1 on face 511 (when kt reaches it), and 1 on the first face of k-tile 0, so every walk contributes; B holds small
-    integers. Every product and partial sum is an exact bf16 integer, so a face read from the wrong k-tile changes
-    the result by a whole B face sum instead of hiding inside a K-scaled tolerance.
+
+def _face_walk_starts(kt):
+    """First k-tile of each SrcB face walk: ceil(kt / 255) walks of equal length to within one k-tile, the first
+    kt % num_walks of them one longer (_llk_unpack_AB_custom_mm_run_)."""
+    num_walks = -(-kt // CUSTOM_MM_MAX_KT_PER_WALK)
+    base_kt, long_walks = divmod(kt, num_walks)
+    starts, start = [], 0
+    for walk in range(num_walks):
+        starts.append(start)
+        start += base_kt + (1 if walk < long_walks else 0)
+    return starts
+
+
+def _face_walk_operands(M, kt, ct):
+    """Exact operands that catch an in0 (SrcB) face read from the wrong L1 location at a face walk's edges.
+
+    in0 holds 2 * kt faces of [M, 16]. A is zero except one +-1 datum per sentinel face: the first and last two faces,
+    the two faces each side of every walk boundary, and every face 255 mod 256, which an 8-bit counter wrapping
+    inside a walk would alias (a one-walk kt = 256 read face 511 from face 255). Row m of face f carries its datum in
+    column (f + m) % 16, and its sign flips every 256 faces, so a face read 256 faces off changes sign rather than
+    matching. B holds nonzero integers in [-2, 2], so every misread moves the result. Every product and partial sum is
+    a small integer, exact in bf16, so the result is compared exactly instead of inside a K-scaled tolerance.
     """
     torch.manual_seed(0)
+    num_faces = 2 * kt
+    sentinels = {0, 1, num_faces - 2, num_faces - 1}
+    for walk_start in _face_walk_starts(kt)[1:]:
+        face = 2 * walk_start
+        sentinels |= {face - 2, face - 1, face, face + 1}
+    sentinels |= set(range(255, num_faces, 256))
+
     torch_a = torch.zeros((M, kt * DEFAULT_TILE_R_DIM), dtype=torch.float32)
-    torch_a[:, :FACE_C_DIM] = 1
-    torch_a[:, 255 * FACE_C_DIM : 256 * FACE_C_DIM] = -1
-    if kt == 256:
-        torch_a[:, 511 * FACE_C_DIM : 512 * FACE_C_DIM] = 1
-    torch_b = torch.randint(
-        -2, 3, (kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM)
-    ).to(torch.float32)
+    for face in sentinels:
+        value = 1.0 if (face // 256) % 2 == 0 else -1.0
+        for m in range(M):
+            torch_a[m, face * FACE_C_DIM + (face + m) % FACE_C_DIM] = value
+    shape = (kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM)
+    magnitude = torch.randint(1, 3, shape)
+    sign = torch.randint(0, 2, shape) * 2 - 1
+    torch_b = (magnitude * sign).to(torch.float32)
     return torch_a, torch_b
 
 
-# kt = 256 is unpacked as two face walks of 128 k-tiles; 255 is the longest single walk. Bfp8_b weights keep
-# kt = 256 x ct = 2 within L1, and its integers in [-2, 2] are exact.
+# 255 is one full walk. 256 and 300 run two walks (128 + 128, 150 + 150), 511 and 765 three (171 + 170 + 170 and
+# 3 x 255, full walks at every boundary). M = 1 at kt = 256 is left to LONG_K_CASES (k256-ct1), as the perf report
+# needs each configuration once. Bfp8_b and Bfp4_b weights keep the longer cases within L1 (Bfp4_b also selects the
+# post1 unpack tuning); their integers in [-2, 2] are exact. ct = 2 and 4 cross a walk boundary with the two- and
+# four-slot unpack MOPs.
 FACE_WALK_CASES = [
     pytest.param(
         M,
@@ -542,10 +576,12 @@ FACE_WALK_CASES = [
         id=f"m{M}-k{kt}-ct{ct}-{in1_format.name}",
     )
     for M, kt, ct, in1_format in (
-        (1, 256, 1, DataFormat.Float16_b),
+        (8, 255, 1, DataFormat.Float16_b),
         (8, 256, 1, DataFormat.Float16_b),
         (8, 256, 2, DataFormat.Bfp8_b),
-        (8, 255, 1, DataFormat.Float16_b),
+        (8, 300, 4, DataFormat.Bfp4_b),
+        (8, 511, 1, DataFormat.Bfp8_b),
+        (1, 765, 1, DataFormat.Bfp8_b),
     )
 ]
 
@@ -553,7 +589,7 @@ FACE_WALK_CASES = [
 @blackhole_only
 @pytest.mark.parametrize("M,kt,ct,formats", FACE_WALK_CASES)
 def test_custom_mm_face_walk_exact(formats, M, kt, ct):
-    """kt_dim at the face walk's reach, compared exactly: a one-walk kt = 256 reads face 511 from face 255."""
+    """kt_dim at and past one SrcB face walk, compared exactly against A @ B."""
     torch_a, torch_b = _face_walk_operands(M, kt, ct)
     res = _run_custom_mm(
         M, kt, ct, formats, DestAccumulation.No, operands=(torch_a, torch_b)
