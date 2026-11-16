@@ -299,6 +299,27 @@ def test_update_args_changes_input_and_scale(device, builder, command_lists, mas
 
 
 @skip_for_slow_dispatch()
+def test_update_args_moves_an_in_place_op_to_the_new_input(device, builder, command_lists, mask):
+    input_a = to_device(device, torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16))
+    torch_b = torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16)
+    input_b = to_device(device, torch_b)
+    expected_b = to_device(device, torch_b)
+    ttnn.scale_mask_softmax_in_place(expected_b, 0.5, mask)
+
+    x = ttnn.experimental.CmdListParam(input_a, "x")
+    with builder:
+        ttnn.scale_mask_softmax_in_place(input_tensor=x, scale=0.5, mask=mask)
+    command_list = builder.build()
+    command_lists.append(command_list)
+    a_before = ttnn.to_torch(input_a)
+
+    command_list.update_args({x: input_b})
+    command_list.enqueue(blocking=True)
+    assert torch.equal(ttnn.to_torch(input_b), ttnn.to_torch(expected_b))
+    assert torch.equal(ttnn.to_torch(input_a), a_before)
+
+
+@skip_for_slow_dispatch()
 def test_cmd_list_param_runs_with_its_default_outside_recording(device, mask):
     torch_input = torch.randn(SOFTMAX_SHAPE, dtype=torch.bfloat16)
     expected = ttnn.to_torch(ttnn.scale_mask_softmax(to_device(device, torch_input), 0.5, mask))
