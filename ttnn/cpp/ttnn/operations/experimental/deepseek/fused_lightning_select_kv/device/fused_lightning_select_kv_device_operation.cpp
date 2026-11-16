@@ -188,11 +188,18 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         kv_cache[0]);
 
     // query is a ROW_MAJOR HEIGHT_SHARDED L1 tensor with one full [Sq * Hi, D] replica per core, stacked
-    // along the batch axis, so its logical shape is [num_cores, Sq * Hi, 1, D].
+    // along the batch axis, so its logical shape is [num_cores, Sq * Hi, 1, D]. A shard of any shape holding the
+    // replica's Sq * Hi * D values row-major will do (e.g. all_gather_for_matmul's flat [1, Sq * Hi * D] rows), and so
+    // does a bfloat16 TILE of 1x32 tiles: the same bytes.
+    const auto row_major_bytes = [](const Tensor& t) {
+        return t.layout() == Layout::ROW_MAJOR || (t.layout() == Layout::TILE && t.dtype() == DataType::BFLOAT16 &&
+                                                   t.tensor_spec().tile().get_height() == 1 &&
+                                                   t.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH);
+    };
     const auto& query_tensor = tensor_args.query;
     TT_FATAL(
-        query_tensor.layout() == Layout::ROW_MAJOR,
-        "fused_lightning_select_kv: query must be ROW_MAJOR, got {}",
+        row_major_bytes(query_tensor),
+        "fused_lightning_select_kv: query must be ROW_MAJOR (or bfloat16 1x32 TILE), got {}",
         query_tensor.layout());
     TT_FATAL(
         query_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
@@ -208,8 +215,8 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         query_shard.orientation == ShardOrientation::ROW_MAJOR,
         "fused_lightning_select_kv: query requires ROW_MAJOR shard orientation");
     TT_FATAL(
-        query_shard.shape[0] == query[1] && query_shard.shape[1] == query[-1],
-        "fused_lightning_select_kv: query shard must be one full [Sq * Hi, D] = [{}, {}] replica per core, got [{}, "
+        query_shard.shape[0] * query_shard.shape[1] == query[1] * query[-1],
+        "fused_lightning_select_kv: query shard must hold one full [Sq * Hi, D] = [{}, {}] replica per core, got [{}, "
         "{}]",
         query[1],
         query[-1],
@@ -234,8 +241,8 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
     // its logical shape is [num_cores, 1, Sq, Hi].
     const auto& weights_tensor = tensor_args.head_weights;
     TT_FATAL(
-        weights_tensor.layout() == Layout::ROW_MAJOR,
-        "fused_lightning_select_kv: head_weights must be ROW_MAJOR, got {}",
+        row_major_bytes(weights_tensor),
+        "fused_lightning_select_kv: head_weights must be ROW_MAJOR (or bfloat16 1x32 TILE), got {}",
         weights_tensor.layout());
     TT_FATAL(
         weights_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
@@ -257,8 +264,8 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         weights_shard.grid.str(),
         query_shard.grid.str());
     TT_FATAL(
-        weights_shard.shape[0] == num_queries && weights_shard.shape[1] == num_heads,
-        "fused_lightning_select_kv: head_weights shard must be one full [Sq, Hi] = [{}, {}] replica per core, got "
+        weights_shard.shape[0] * weights_shard.shape[1] == num_queries * num_heads,
+        "fused_lightning_select_kv: head_weights shard must hold one full [Sq, Hi] = [{}, {}] replica per core, got "
         "[{}, {}]",
         num_queries,
         num_heads,

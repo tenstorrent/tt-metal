@@ -88,6 +88,11 @@ struct AttentionQkvDecodeDeviceOperation {
         // A block only: its kv rows also written ROW_MAJOR into commit_rows ([1, 1, h, head_dim] bfloat16, L1
         // HEIGHT_SHARDED on one core, shard [h, head_dim]): paged_update_cache's input for the ring commit.
         std::optional<Tensor> commit_rows;
+        // One row only: the q_b cores of its shard grid also write the gathered row's q_a * q_a_gamma (q_a before its
+        // RMSNorm's 1 / rms scale) into their shard, a ROW_MAJOR bfloat16 L1 HEIGHT_SHARDED [1, q_lora] replica per
+        // core: matmul_decode's replicated A for a scoring select's indexer wq_b, whose top-k a positive scale of
+        // its query does not change.
+        std::optional<Tensor> q_a_output;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -128,6 +133,7 @@ ttnn::Tensor attention_qkv_decode(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const std::optional<ttnn::Tensor>& w_comp,
     const std::optional<ttnn::Tensor>& comp_output,
-    const std::optional<ttnn::Tensor>& commit_rows = std::nullopt);
+    const std::optional<ttnn::Tensor>& commit_rows = std::nullopt,
+    const std::optional<ttnn::Tensor>& q_a_output = std::nullopt);
 
 }  // namespace ttnn::prim

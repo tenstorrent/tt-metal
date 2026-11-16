@@ -71,6 +71,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import (
     _SELECT_KV_RATE,
     CANDIDATE_SOURCE_KEY_SPLIT_CROSSOVER_KEYS,
     DENSE_SELECT,
+    fused_qkv_step,
     KEY_SPLIT_CROSSOVER_KEYS,
     DeepSeekV41LayerCache,
     _rows_on_one_core,
@@ -2336,13 +2337,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     attn = layer.self_attn
                     ratio = attn.compress_ratio
                     select = attn.is_index_source and (ratio == 1 or (ratio == 2 and r2_select))
-                    layer.prefetch_weights(one_row=self._decode_batch == 1, fused_qkv=not select or ratio in dense)
+                    layer.prefetch_weights(
+                        one_row=self._decode_batch == 1, fused_qkv=fused_qkv_step(select, ratio in dense)
+                    )
                 if not is_last and ids[li + 1] == stage:
                     nxt = self.layers[li + 1]
                     attn = nxt.self_attn
                     ratio = attn.compress_ratio
                     select = attn.is_index_source and (ratio == 1 or (ratio == 2 and r2_select))
-                    nxt.prefetch_weights(one_row=self._decode_batch == 1, fused_qkv=not select or ratio in dense)
+                    nxt.prefetch_weights(
+                        one_row=self._decode_batch == 1, fused_qkv=fused_qkv_step(select, ratio in dense)
+                    )
             if is_first:
                 pkt = sm["pkt"]
                 ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
@@ -4875,8 +4880,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     first_select = first_attn.is_index_source and first_count > 0
                     layer.prefetch_weights(
                         one_row=t == 1,
-                        fused_qkv=not first_select
-                        or (DENSE_SELECT and t == 1 and first_count <= first_attn.index_topk),
+                        fused_qkv=fused_qkv_step(
+                            first_select, DENSE_SELECT and t == 1 and first_count <= first_attn.index_topk
+                        ),
                     )
                 if li != layers[-1]:
                     nxt = self.layers[li + 1]
@@ -4886,7 +4892,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     next_select = next_attn.is_index_source and next_count > 0
                     nxt.prefetch_weights(
                         one_row=t == 1,
-                        fused_qkv=not next_select or (DENSE_SELECT and t == 1 and next_count <= next_attn.index_topk),
+                        fused_qkv=fused_qkv_step(
+                            next_select, DENSE_SELECT and t == 1 and next_count <= next_attn.index_topk
+                        ),
                     )
             if li in sm.get("taps", {}):
                 row = self._collapse_streams(streams, sm["tap_weights"])  # [1, T, 1, D]

@@ -69,6 +69,7 @@ Tensor attention_qkv_decode(
     const ttnn::PrefetcherPipeList& prefetcher_pipes = {},
     const std::optional<Tensor>& w_comp = std::nullopt,
     const std::optional<Tensor>& comp_output = std::nullopt,
-    const std::optional<Tensor>& commit_rows = std::nullopt);
+    const std::optional<Tensor>& commit_rows = std::nullopt,
+    const std::optional<Tensor>& q_a_output = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek

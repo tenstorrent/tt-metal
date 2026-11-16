@@ -164,6 +164,24 @@ void AttentionQkvDecodeDeviceOperation::validate_on_program_cache_miss(
             c.logical_shape(),
             c.memory_config());
     }
+    if (t.q_a_output.has_value()) {
+        const Tensor& o = *t.q_a_output;
+        TT_FATAL(rows == 1, "attention_qkv_decode: q_a_output is a one-row output");
+        TT_FATAL(
+            o.storage_type() == StorageType::DEVICE && o.layout() == Layout::ROW_MAJOR &&
+                o.dtype() == DataType::BFLOAT16 &&
+                o.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                o.buffer()->buffer_type() == BufferType::L1 && o.shard_spec().has_value() &&
+                o.shard_spec()->shape[0] == 1 && o.shard_spec()->shape[1] == q_lora &&
+                weight_role_cores(WeightRole::QB).contains(o.shard_spec()->grid) &&
+                o.logical_shape().volume() == o.shard_spec()->grid.num_cores() * q_lora,
+            "attention_qkv_decode: q_a_output must be ROW_MAJOR bfloat16 L1 HEIGHT_SHARDED, one [1, {}] row per core "
+            "of a grid within the q_b cores {}, got {} {}",
+            q_lora,
+            weight_role_cores(WeightRole::QB).str(),
+            o.logical_shape(),
+            o.memory_config());
+    }
     TT_FATAL(
         t.w_comp.has_value() == t.comp_output.has_value(),
         "attention_qkv_decode: w_comp and comp_output must be given together");
@@ -332,7 +350,8 @@ ttnn::Tensor attention_qkv_decode(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const std::optional<ttnn::Tensor>& w_comp,
     const std::optional<ttnn::Tensor>& comp_output,
-    const std::optional<ttnn::Tensor>& commit_rows) {
+    const std::optional<ttnn::Tensor>& commit_rows,
+    const std::optional<ttnn::Tensor>& q_a_output) {
     using OperationType =
         ttnn::operations::experimental::deepseek::attention_qkv_decode::AttentionQkvDecodeDeviceOperation;
     using namespace ttnn::operations::experimental::deepseek::attention_qkv_decode;
@@ -365,6 +384,7 @@ ttnn::Tensor attention_qkv_decode(
         .w_comp = w_comp,
         .comp_output = comp_output,
         .commit_rows = commit_rows,
+        .q_a_output = q_a_output,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

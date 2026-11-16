@@ -24,7 +24,8 @@ Tensor attention_qkv_decode(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const std::optional<Tensor>& w_comp,
     const std::optional<Tensor>& comp_output,
-    const std::optional<Tensor>& commit_rows) {
+    const std::optional<Tensor>& commit_rows,
+    const std::optional<Tensor>& q_a_output) {
     return ttnn::prim::attention_qkv_decode(
         tokens,
         w_q_a,
@@ -41,7 +42,8 @@ Tensor attention_qkv_decode(
         prefetcher_pipes,
         w_comp,
         comp_output,
-        commit_rows);
+        commit_rows,
+        q_a_output);
 }
 
 }  // namespace ttnn::experimental::deepseek

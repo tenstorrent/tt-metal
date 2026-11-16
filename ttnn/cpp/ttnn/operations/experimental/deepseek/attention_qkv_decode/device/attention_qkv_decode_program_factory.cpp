@@ -39,6 +39,7 @@ const TensorParamName Q{"q"};
 const TensorParamName W_COMP{"w_comp"};
 const TensorParamName COMP_OUT{"comp_output"};
 const TensorParamName COMMIT_ROWS{"commit_rows"};
+const TensorParamName Q_A_OUT{"q_a_output"};
 
 const DFBSpecName IN0_DFB{"in0"};
 const DFBSpecName W_PROJ_DFB{"w_proj"};
@@ -614,12 +615,39 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
         qb_writer.runtime_arg_schema.runtime_arg_names.push_back(is_block ? "comp_page" : "comp_col_bytes");
     }
 
+    // With q_a_output, every q_b core takes a qa_out_page: its row of q_a_output, or kNoQaOutPage off its grid.
+    const bool has_qa_out = t.q_a_output.has_value();
+    constexpr uint32_t kNoQaOutPage = 0xFFFFFFFF;
+    std::map<CoreCoord, uint32_t> qa_out_page;
+    if (has_qa_out) {
+        const auto& shard = *t.q_a_output->shard_spec();
+        const auto out_cores =
+            corerange_to_cores(shard.grid, std::nullopt, shard.orientation == ShardOrientation::ROW_MAJOR);
+        for (uint32_t p = 0; p < out_cores.size(); ++p) {
+            qa_out_page[out_cores[p]] = p;
+        }
+        qb_reader.compiler_options.defines.emplace("QA_OUT", "1");
+        qb_reader.tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = Q_A_OUT, .accessor_name = "q_a_output"});
+        qb_reader.compile_time_args.emplace("scaled_q_a_first", scaled_q_a_first);
+        qb_reader.compile_time_args.emplace("q_lora_tiles", q_lora_tiles);
+        qb_reader.compile_time_args.emplace("row_tile_bytes", row_tile_bytes);
+        qb_reader.runtime_arg_schema.runtime_arg_names.push_back("qa_out_page");
+    }
+
     KernelRunArgs qb_reader_run_args{.kernel = QB_READER};
     KernelRunArgs qb_compute_run_args{.kernel = QB_COMPUTE};
     KernelRunArgs qb_writer_run_args{.kernel = QB_WRITER};
     for (uint32_t i = 0; i < qb_cores.size(); ++i) {
         const uint32_t first_tile = i * nc_tiles;
         AddRuntimeArgsForNode(qb_reader_run_args.runtime_arg_values, qb_cores[i], {{"shard_id", i}});
+        if (has_qa_out) {
+            const auto it = qa_out_page.find(qb_cores[i]);
+            AddRuntimeArgsForNode(
+                qb_reader_run_args.runtime_arg_values,
+                qb_cores[i],
+                {{"qa_out_page", it == qa_out_page.end() ? kNoQaOutPage : it->second}});
+        }
         AddRuntimeArgsForNode(qb_compute_run_args.runtime_arg_values, qb_cores[i], {{"do_rope", qb_does_rope(i)}});
         AddRuntimeArgsForNode(
             qb_writer_run_args.runtime_arg_values,
@@ -686,6 +714,9 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
     }
     if (t.commit_rows.has_value()) {
         tensors.emplace_back(COMMIT_ROWS, &*t.commit_rows);
+    }
+    if (has_qa_out) {
+        tensors.emplace_back(Q_A_OUT, &*t.q_a_output);
     }
     Group<TensorParameter> tensor_parameters;
     for (const auto& [name, tensor] : tensors) {
