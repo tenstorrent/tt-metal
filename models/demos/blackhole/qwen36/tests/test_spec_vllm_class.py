@@ -657,6 +657,8 @@ def gen_eng(monkeypatch):
         layout=SimpleNamespace(block_size=BLOCK),
         restore=lambda state, b: eng.calls.append(("restore", tuple(b))),
         write_state=lambda state, b: eng.calls.append(("write", tuple(b))),
+        hold_replaced_tables=lambda hold: None,
+        release_held_tables=lambda: None,
     )
 
     def vision_rows(row_tokens, image=None, video=None):
@@ -670,6 +672,8 @@ def gen_eng(monkeypatch):
         prefill_traced_chunked=prefill,
         vision_rows=vision_rows,
         prefill_chunk_size=2048,
+        hold_masked_trace_inputs=lambda hold: None,
+        release_masked_trace_inputs=lambda: None,
     )
     gen = object.__new__(CLS)
     gen.model = [model]
@@ -677,6 +681,9 @@ def gen_eng(monkeypatch):
     monkeypatch.setattr(gen, "_engine", lambda: eng, raising=False)
     monkeypatch.setattr(gen, "_ensure_ready", lambda kv_cache=None: eng, raising=False)
     monkeypatch.setattr(ttnn, "to_torch", lambda t, **kw: t)
+    monkeypatch.setattr(ttnn, "from_device", lambda t, blocking=True: t)
+    monkeypatch.setattr(ttnn, "record_event", lambda mesh, cq_id: None)
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: None)
     monkeypatch.setattr(ttnn, "get_device_tensors", lambda t: [t])
     monkeypatch.setattr(ttnn, "ConcatMeshToTensor", lambda *a, **kw: None)
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
