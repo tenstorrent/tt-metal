@@ -354,6 +354,7 @@ def lcfg_from_env(**kw):
     for item in filter(None, os.environ.get("WS_LANE", "").split(";")):
         k, v = item.split("=")
         flags = ("out_all", "mcast_linked", "arr_write", "mc_noc1", "bcast", "own_read", "gather", "mux_noc1")
+        flags += ("noc_split",)
         kw[k] = bool(int(v)) if k in flags else (v if k == "slots" else int(v))
     return LCfg(**kw)
 

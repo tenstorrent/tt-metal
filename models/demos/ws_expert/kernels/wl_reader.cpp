@@ -20,13 +20,14 @@
 // order from word 16 (e | s << 16); occupant k of slot s: 4 words at offset_s + 4 k: e | kind << 16 | fwd << 18 |
 // next kind << 20 (kind: 1 own, 2 from direction 0, 3 from direction 1), s'0 | k'0 << 2, s'1 | k'1 << 2, own index.
 // RT: 0 j, 1 g, 2 order length, 3 col x NOC (c 0), 4 col x NOC (c 1), 5 row 0 y NOC, 6 stamps, 7 out addr, 8 mesh id,
-//     9 next chip direction 0, 10 next chip direction 1, 11 this core's xy, then the mux client RT args (17 words)
-//     of direction 0 and of direction 1
+//     9 next chip direction 0, 10 next chip direction 1, 11 this core's xy, 12 x addr, 13 idx addr, 14 counts addr,
+//     15 table addr, 16 own slices addr, then the mux client RT args (17 words) of direction 0 and of direction 1
 // CT: 0 KT, 1 BK, 2 KTD, 3 DCOLS, 4 GC, 5 G, 6 NS, 7 NX, 8 hflags, 9 xring, 10 xflags, 11 xprog, 12-15 group rect
 //     for NOC1, 16 x tile bytes, 17 counts L1, 18 table L1, 19 hring, 20 h tile bytes, 21 warr (arrivals a slot,
 //     16 B apart), 22 ORMAX (output tile rows a group), 23 HT, 24 wgu ring, 25 wd ring, 26 cred (2K words), 27 FREEW
 //     (K words), 28 CHT, 29 W tile bytes, 30-34 mux client CT args (buffers, buffer bytes, status, termination
-//     signal, clients), then TensorAccessorArgs(out)
+//     signal, clients), then TensorAccessorArgs(out), (x), (idx), (counts), (table), (own slices), then RMAX, x row
+//     bytes, NEXP, table page bytes, idx scratch L1, D (own chunk reads in flight)
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -39,6 +40,7 @@ constexpr uint32_t w_cb = tt::CBIndex::c_1;
 constexpr uint32_t hr_cb = tt::CBIndex::c_2;
 constexpr uint32_t wd_cb = tt::CBIndex::c_3;
 constexpr uint32_t xst_cb = tt::CBIndex::c_8;
+constexpr uint32_t xrm_cb = tt::CBIndex::c_7;
 constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 #ifndef WL_WPOLL
 #define WL_WPOLL 1
@@ -53,6 +55,11 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 constexpr uint32_t MC_COL_MASK = 0;  // (columns that multicast from this RISC: bit c)
 #elif defined(WL_MC_NOC1)
 constexpr uint32_t MC_COL_MASK = 3;
+#elif defined(WL_NOC_SPLIT)
+// WL_NOC_SPLIT: no multicasts here (the BRISC sends them all on NOC0); this RISC does every DRAM read of the core on
+// NOC1 instead: the counts and the slot table (counts word 0 then marks them loaded), the token-row gather (Q1) and
+// the own experts' weights (QO, transaction ids 1..D), see wl_writer.cpp
+constexpr uint32_t MC_COL_MASK = 0;
 #else
 constexpr uint32_t MC_COL_MASK = 2;
 #endif
@@ -66,6 +73,7 @@ static_assert(K >= 1 && K <= 4);  // (2-bit slot fields in the tables)
 // until the source's next write, and several sources multicast into a group's rectangle on each NoC
 // (WL_MCAST_LINKED links it, the flag then closing the path). Callers flush after each pair, so a core has at most
 // one multicast in its NoC's queue.
+#ifndef WL_NOC_SPLIT
 FORCE_INLINE void mcast_with_flag(
     uint32_t src, uint64_t dst, uint32_t bytes, uint32_t n, uint32_t flag_src, uint64_t flag_dst) {
 #ifdef WL_MCAST_LINKED
@@ -75,6 +83,7 @@ FORCE_INLINE void mcast_with_flag(
 #endif
     noc_async_write_multicast_loopback_src(flag_src, flag_dst, 4, n, false);
 }
+#endif
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
@@ -106,6 +115,16 @@ void kernel_main() {
     constexpr size_t mux_term = get_compile_time_arg_val(33);
     constexpr uint32_t mux_clients = get_compile_time_arg_val(34);
     constexpr auto oargs = TensorAccessorArgs<35>();
+    constexpr auto xargs = TensorAccessorArgs<oargs.next_compile_time_args_offset()>();
+    constexpr auto iargs = TensorAccessorArgs<xargs.next_compile_time_args_offset()>();
+    constexpr auto cargs = TensorAccessorArgs<iargs.next_compile_time_args_offset()>();
+    constexpr auto targs = TensorAccessorArgs<cargs.next_compile_time_args_offset()>();
+    constexpr auto wargs = TensorAccessorArgs<targs.next_compile_time_args_offset()>();
+    constexpr uint32_t RB = wargs.next_compile_time_args_offset();
+    [[maybe_unused]] constexpr uint32_t RMAX = get_compile_time_arg_val(RB), xrow = get_compile_time_arg_val(RB + 1);
+    [[maybe_unused]] constexpr uint32_t NEXP = get_compile_time_arg_val(RB + 2), TB = get_compile_time_arg_val(RB + 3);
+    [[maybe_unused]] constexpr uint32_t idx_l1 = get_compile_time_arg_val(RB + 4);
+    [[maybe_unused]] constexpr uint32_t D = get_compile_time_arg_val(RB + 5);
     constexpr uint32_t BPR = KT / BK, HALF = GC / 2;
     constexpr uint32_t WGU = KT * 2, WDN = KTD * DCOLS;
     constexpr uint32_t GU_PK = WGU / CHT, PK = (WGU + WDN) / CHT;  // packets of a slice (gate / up first)
@@ -120,6 +139,19 @@ void kernel_main() {
     const uint32_t mex = myxy & 0xFF, mey = myxy >> 8;
 
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
+#ifdef WL_NOC_SPLIT
+    const auto xs = TensorAccessor(xargs, get_arg_val<uint32_t>(12), xrow);
+    const auto is = TensorAccessor(iargs, get_arg_val<uint32_t>(13), RMAX * 32 * 4);
+    const auto ws = TensorAccessor(wargs, get_arg_val<uint32_t>(16), wtile);
+    {
+        const auto cs = TensorAccessor(cargs, get_arg_val<uint32_t>(14), NEXP * 4);
+        const auto ts = TensorAccessor(targs, get_arg_val<uint32_t>(15), TB);
+        noc_async_read_page(0, cs, counts_l1 + 64);
+        noc_async_read_page(g, ts, table_l1);
+        noc_async_read_barrier();
+        counts[0] = 1;
+    }
+#endif
     do {
         invalidate_l1_cache();
     } while (counts[0] == 0);
@@ -138,7 +170,7 @@ void kernel_main() {
     uint32_t term_sync[2], tmx[2], tmy[2];
     uint8_t muxx[2], muxy[2];
     for (uint32_t d = 0; d < 2; ++d) {
-        size_t a_ = 12 + 17 * d;
+        size_t a_ = 17 + 17 * d;
         a_++;  // connection valid
         master[d] = get_arg_val<uint32_t>(a_++) != 0;
         muxx[d] = get_arg_val<uint32_t>(a_++);
@@ -388,6 +420,9 @@ void kernel_main() {
         a_l += GC;
         return true;
     };
+#elif defined(WL_NOC_SPLIT)
+    const bool mcx = false;  // (the BRISC multicasts every x block on NOC0)
+    auto qa = []() -> bool { return false; };
 #else
     const bool mcx = (MC_COL_MASK >> (J / HALF)) & 1;
     auto qa = [&]() -> bool {
@@ -447,6 +482,129 @@ void kernel_main() {
         a_l += GC;
         return true;
     };
+#endif
+
+    // ---- Q1 (WL_NOC_SPLIT): the token-row gather on NOC1, a state machine (0 idle, 1 ids requested, 2 rows
+    // requested) so the fabric and x / h queues of this RISC never wait on a read barrier
+    uint32_t g_n = nexp_g, g_state = 0;
+    [[maybe_unused]] uint32_t g_l = L0;
+#ifdef WL_NOC_SPLIT
+    g_n = 0;
+    auto q1 = [&]() -> bool {
+        if (g_state == 1) {
+            if (!ncrisc_noc_reads_flushed(noc_index)) {
+                return false;
+            }
+            const uint32_t k = (g_l % BPR) * BK;
+            volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
+            cb_reserve_back(xrm_cb, BK);
+            uint32_t l1 = get_write_ptr(xrm_cb);
+            for (uint32_t i = 0; i < 32; ++i, l1 += BK * 64) {
+                noc_async_read(xs.get_noc_addr(idx[i]) + k * 64, l1, BK * 64);
+            }
+            g_state = 2;
+            return true;
+        }
+        if (g_state == 2) {
+            if (!ncrisc_noc_reads_flushed(noc_index)) {
+                return false;
+            }
+            cb_push_back(xrm_cb, BK);
+            g_l += GC;
+            g_state = 0;
+            return true;
+        }
+        while (g_n < nexp_g && g_l >= rows_of(g_n) * BPR) {
+            ++g_n;
+            g_l = L0;
+        }
+        if (g_n >= nexp_g || !cb_pages_reservable_at_back(xrm_cb, BK)) {
+            return false;
+        }
+#ifdef WG_NO_GATHER
+        cb_reserve_back(xrm_cb, BK);
+        cb_push_back(xrm_cb, BK);
+        g_l += GC;
+        return true;
+#endif
+        noc_async_read(is.get_noc_addr(order[g_n] & 0xFFFF) + (g_l / BPR) * 32 * 4, idx_l1, 32 * 4);
+        g_state = 1;
+        return true;
+    };
+#else
+    auto q1 = []() -> bool { return false; };
+#endif
+    // ---- QO (WL_NOC_SPLIT): the own experts' weights from DRAM into their slots on NOC1 (chunk reads with
+    // transaction ids 1..D, retired in order without a barrier); a slot's next own occupant is read once QR freed it
+    [[maybe_unused]] uint32_t o_s = 0, o_k[K] = {}, o_issued = 0, o_landed = 0, n_own = 0;
+    [[maybe_unused]] bool o_busy = false;
+#ifdef WL_NOC_SPLIT
+    auto entry = [&](uint32_t s, uint32_t k) { return tab + tab[1 + K + s] + 4 * k; };
+    auto next_own = [&]() {  // a slot whose next own occupant may be read now (its previous one freed), slots in turn
+        for (uint32_t t = 0; t < K; ++t) {
+            const uint32_t s = (o_s + t) % K;
+            while (o_k[s] < tab[1 + s] && ((entry(s, o_k[s])[0] >> 16) & 3) != 1) {
+                ++o_k[s];
+            }
+            if (o_k[s] < tab[1 + s] && freew[s * 4] >= o_k[s]) {
+                o_s = s;
+                return true;
+            }
+        }
+        return false;
+    };
+    auto qo = [&]() -> bool {
+        bool did = false;
+        if (!o_busy) {
+            if (!next_own()) {
+                return false;
+            }
+            o_busy = true;
+            o_issued = o_landed = 0;
+        }
+        const uint32_t s = o_s, k = o_k[s];
+#ifdef WL_NO_OWN_READ
+        o_issued = o_landed = PK;
+        warr[s * 4] = PK * k + PK;
+        did = true;
+#else
+        if (o_landed < o_issued) {
+            const uint32_t trid = 1 + o_landed % D;
+            if (ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
+                ++o_landed;
+                warr[s * 4] = PK * k + o_landed;
+                did = true;
+            }
+        }
+        if (o_issued < PK && o_issued - o_landed < D) {
+            const uint32_t u = o_issued;
+            const uint32_t q = (entry(s, k)[3] * GC + J) * PK + u;  // chunk q of the chip's own slices
+            noc_async_read_set_trid(1 + u % D);
+            noc_async_read(ws.get_noc_addr((q / 8) * CHT * 8 + q % 8), slot_addr(s, u), CHT * wtile);
+            noc_async_read_set_trid(0);
+            ++o_issued;
+            did = true;
+        }
+#endif
+        if (o_landed >= PK) {
+            o_busy = false;
+            ++o_k[s];
+            ++n_own;
+            o_s = (s + 1) % K;
+        }
+        return did;
+    };
+    auto qo_done = [&]() {
+        for (uint32_t s = 0; s < K; ++s) {
+            if (o_k[s] < tab[1 + s]) {
+                return false;
+            }
+        }
+        return !o_busy;
+    };
+#else
+    auto qo = []() -> bool { return false; };
+    auto qo_done = []() { return true; };
 #endif
     // ---- QB: x ring pushes + credits
     uint32_t b_s = 0, x_popped_pages = 0, x_credited = 0, w_e = 0, w_base = 0;
@@ -547,6 +705,10 @@ void kernel_main() {
         ++lq;
         return true;
     };
+#elif defined(WL_NOC_SPLIT)
+    const bool mch = false;  // (the BRISC multicasts every h row on NOC0)
+    const uint32_t lq = total_rows;
+    auto ql = []() -> bool { return false; };
 #else
     const bool mch = (MC_COL_MASK >> C) & 1;
     uint32_t led = 0, lq = Y;
@@ -621,6 +783,7 @@ void kernel_main() {
             invalidate_l1_cache();
             a = qw() | qf() | qr();
         }
+        const bool r = q1() | qo();
         const uint32_t t1 = wall();
         const bool b = qa();
         const uint32_t t2 = wall();
@@ -633,7 +796,8 @@ void kernel_main() {
             tot[i] += dd[i];
             mx[i] = dd[i] > mx[i] ? dd[i] : mx[i];
         }
-        if (!y && !l && !a && !b && !c && !d && drained >= total_rows && (!mch || lq >= total_rows) && w_n >= nexp_g &&
+        if (!y && !l && !a && !b && !c && !d && !r && g_n >= nexp_g && g_state == 0 && qo_done() &&
+            drained >= total_rows && (!mch || lq >= total_rows) && w_n >= nexp_g &&
             w_dn >= nexp_g && freed >= nexp_g && slots_done() && (a_n >= nexp_g || !mcx) &&
             b_s >= total_x && x_credited >= total_x && h_q >= total_rows) {
             break;
@@ -657,6 +821,9 @@ void kernel_main() {
     st[49] = t_empty;
     st[58] = n_fwd;
     st[59] = n_credit;
+#ifdef WL_NOC_SPLIT
+    st[56] = n_own;
+#endif
     for (uint32_t i = 0; i < 4; ++i) {
         st[470 + i] = tot[i];
         st[474 + i] = mx[i];

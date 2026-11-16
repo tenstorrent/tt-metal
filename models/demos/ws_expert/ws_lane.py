@@ -61,6 +61,9 @@ class LCfg:
     own_read: bool = True  # own experts read from DRAM into their slots; False (WL_NO_OWN_READ): marked arrived unread
     gather: bool = True  # token rows gathered from DRAM; False (WG_NO_GATHER, a diagnostic): x staged unread
     mux_noc1: bool = False  # the fabric mux kernels on NOC1 (BRISC, writer NoC) instead of NOC0
+    # NOC0 for the group multicasts only (all from the BRISCs) and NOC1 for every DRAM read (moved to the NCRISCs) and
+    # the muxes, so nothing enters a group rectangle from outside on its multicasts' NoC (WL_NOC_SPLIT)
+    noc_split: bool = False
 
 
 def lane_cores(g):
@@ -219,6 +222,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     xflags = w16(NX)
     xprog = w16(GC)
     assert not (lc.bcast and lc.mc_noc1), "bcast and mc_noc1 place the multicasts differently"
+    assert not (lc.noc_split and (lc.bcast or lc.mc_noc1)), "noc_split places every multicast on NOC0"
     hcnt = w16(NS) if lc.bcast else None  # core 19's h tiles arrived a ring slot (WL_BCAST)
     # core 0's x funnel slots and their filled flags (WL_XIN, WL_XINF)
     xin = sharded_l1(mesh, C, [lc.xf * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT) if lc.bcast else None
@@ -256,8 +260,10 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         ("EXPERT_ACTIVATION_LIMIT", "7.0f"),
         ("EXPERT_ACTIVATION_ALPHA", "1.702f"),
     ]
-    ydefs = [("WG_XORDER", str(1 if lc.mc_noc1 or lc.bcast else cfg.xorder)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
+    xord = 1 if lc.mc_noc1 or lc.bcast or lc.noc_split else cfg.xorder
+    ydefs = [("WG_XORDER", str(xord)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
     ydefs += [("WL_MC_NOC1", "1")] if lc.mc_noc1 else []
+    ydefs += [("WL_NOC_SPLIT", "1")] if lc.noc_split else []
     if lc.bcast:
         ydefs += [("WL_BCAST", str(hcnt.buffer_address())), ("WL_XIN", str(xin.buffer_address()))]
         ydefs += [("WL_XINF", str(xinf.buffer_address())), ("WL_XF", str(lc.xf))]
@@ -300,6 +306,11 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         nid[0],
                         nid[1],
                         xy[0] | xy[1] << 8,
+                        x_t.buffer_address(),
+                        idx_t.buffer_address(),
+                        counts_t.buffer_address(),
+                        tab_t.buffer_address(),
+                        ws_t.buffer_address(),
                     ]
                 kernels.append(
                     ttnn.KernelDescriptor(
@@ -334,7 +345,13 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                         + [out_rows, cfg.HT, wgu_ring.buffer_address(), wd_ring.buffer_address()]
                         + [cred.buffer_address(), freew.buffer_address(), lc.CHT, wtile]
                         + client_ct
-                        + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args()),
+                        + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(x_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(idx_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(counts_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
+                        + list(ttnn.TensorAccessorArgs(ws_t).get_compile_time_args())
+                        + [cfg.RMAX, cfg.H * 2, cfg.nexp, TLW * 4, idx_addr, lc.D],
                         runtime_args=rd_rt,
                         defines=ydefs
                         + FAB_DEFS
@@ -369,7 +386,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
                     defines=FAB_DEFS,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0,
-                        noc=ttnn.NOC.RISCV_1_default if lc.mux_noc1 else ttnn.NOC.RISCV_0_default,
+                        noc=ttnn.NOC.RISCV_1_default if lc.mux_noc1 or lc.noc_split else ttnn.NOC.RISCV_0_default,
                     ),
                     opt_level=fabric_mux.KernelBuildOptLevel.O3,
                 )

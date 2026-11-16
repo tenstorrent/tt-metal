@@ -41,6 +41,12 @@ constexpr uint32_t K = WL_K;  // weight slots a core
 constexpr uint32_t X_COLS = 0, H_COLS = 0;
 #elif defined(WL_MC_NOC1)
 constexpr uint32_t X_COLS = 0, H_COLS = 0;  // (column 0's multicasts go out from its NCRISC on NOC1)
+#elif defined(WL_NOC_SPLIT)
+// WL_NOC_SPLIT: every group multicast from this BRISC on NOC0 (both columns, x in stream order, WG_XORDER 1), and NOC0
+// carries nothing else into the group rectangle: no DRAM reads here (the NCRISC reads the counts, the slot table, the
+// token rows and the own experts' weights on NOC1), the fabric muxes on NOC1. A multicast into a rectangle deadlocks
+// with traffic entering the same cores from outside on the same NoC (DRAM read responses, router landing writes).
+constexpr uint32_t X_COLS = 3, H_COLS = 3;
 #else
 constexpr uint32_t X_COLS = 1, H_COLS = 1;
 #endif
@@ -118,10 +124,16 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
     volatile tt_l1_ptr uint32_t* tab = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
     volatile tt_l1_ptr uint32_t* order = tab + 16;
+#ifdef WL_NOC_SPLIT
+    do {  // (the NCRISC loads the counts and this group's slot table on NOC1)
+        invalidate_l1_cache();
+    } while (counts[0] == 0);
+#else
     noc_async_read_page(0, cs, counts_l1 + 64);
     noc_async_read_page(g, ts, table_l1);
     noc_async_read_barrier();
     counts[0] = 1;
+#endif
     auto rows_of = [&](uint32_t n) { return (counts[16 + (order[n] & 0xFFFF)] + 31) / 32; };
     uint32_t total_rows = 0;
     for (uint32_t n = 0; n < nexp_g; ++n) {
@@ -132,7 +144,13 @@ void kernel_main() {
     // multicasts this RISC also sends (column 1) - they went out 11-27K cycles late
     const uint32_t L0 = 2 * (J % HALF) + J / HALF;
     uint32_t g_n = 0, g_l = L0, g_state = 0;
+#ifdef WL_NOC_SPLIT
+    g_n = nexp_g;  // (the NCRISC gathers the token rows)
+#endif
     auto q1 = [&]() -> bool {
+#ifdef WL_NOC_SPLIT
+        return false;  // (the NCRISC gathers the token rows)
+#else
         if (g_state == 1) {
             if (!ncrisc_noc_reads_flushed(noc_index)) {
                 return false;
@@ -172,6 +190,7 @@ void kernel_main() {
         noc_async_read(is.get_noc_addr(order[g_n] & 0xFFFF) + (g_l / BPR) * 32 * 4, idx_l1, 32 * 4);
         g_state = 1;
         return true;
+#endif
     };
     // ---- QO: own experts' weights from DRAM into their slots (chunk reads with transaction ids 1..D, in order)
     volatile tt_l1_ptr uint32_t* warr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(warr_addr);
@@ -194,6 +213,9 @@ void kernel_main() {
         return false;
     };
     auto qo = [&]() -> bool {
+#ifdef WL_NOC_SPLIT
+        return false;  // (the NCRISC reads the own experts' weights)
+#else
         bool did = false;
         if (!o_busy) {
             if (!next_own()) {
@@ -236,8 +258,12 @@ void kernel_main() {
             o_s = (s + 1) % K;
         }
         return did;
+#endif
     };
     auto qo_done = [&]() {
+#ifdef WL_NOC_SPLIT
+        return true;
+#endif
         for (uint32_t s = 0; s < K; ++s) {
             if (o_k[s] < tab[1 + s]) {
                 return false;
@@ -489,5 +515,7 @@ void kernel_main() {
         st[50 + i] = tq[i];
         st[104 + i] = tmx[i];
     }
+#ifndef WL_NOC_SPLIT
     st[56] = n_own;
+#endif
 }
