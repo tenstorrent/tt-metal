@@ -27,7 +27,6 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -58,12 +57,14 @@ namespace detail {
 // Merges one ring step's attention result into the running result (online softmax).
 // O_i, l_i: this step's normalized output and logsumexp; O, L: the running ones.
 //   L' = logaddexp(L, l_i)
-//   w  = exp(l_i - L')            this step's share of the softmax mass, in [0, 1]
-//   O' = O + w * (O_i - O)        a lerp, since the usual weight on O, exp(L - L'), is 1 - w
+//   O' = O * exp(L - L') + O_i * exp(l_i - L')
+// The two weights are the shares of the softmax mass and sum to 1, so each product and their sum
+// stay within max(|O|, |O_i|) up to rounding. The equivalent lerp O + w * (O_i - O) forms
+// O_i - O, which overflows for large finite outputs of opposite sign.
 //
 // A logsumexp of -inf means no contribution: the first merge (L = -inf) gives O' = O_i, and a
 // step the causal schedule skips (l_i = -inf) leaves O and L unchanged. Both -inf would make the
-// row NaN (w = exp(-inf - (-inf))); the ring caller never passes that, since every device
+// row NaN (exp(-inf - (-inf))); the ring caller never passes that, since every device
 // computes its diagonal block at step 0.
 // O_i must be finite even on skipped steps (0 * inf = NaN). In the ring caller, step 0 writes
 // every row of the reused output buffer on every device, so a skipped step re-merges an
@@ -101,24 +102,29 @@ void online_softmax_merge(
     //    logaddexp(-inf, x) = x.
     ttnn::Tensor new_lse = ttnn::logaddexp(running_lse, lse_chunk);
 
-    // 3. w = exp(l_i - L'): subtract with exp fused as a post-activation (one kernel; 0.0f
-    //    selects the accurate exp, ttnn::exp's default).
+    // 3. The log-weights L - L' and l_i - L', (B, H, S, 1).
+    const ttnn::Tensor old_log_weight = ttnn::subtract(running_lse, new_lse);
+    const ttnn::Tensor new_log_weight = ttnn::subtract(lse_chunk, new_lse);
+
+    // 4. O' = O * exp(L - L') + O_i * exp(l_i - L'). Each multiply broadcasts its (B, H, S, 1)
+    //    log-weight along the head dim and applies exp to it as an input activation (0.0f selects
+    //    the accurate exp, ttnn::exp's default). Both run on the SFPU in FP32, and the bf16 step
+    //    output is unpacked exactly; its product is requested as FP32, so the combine stays FP32.
+    //    The FP32 accumulator matters: backward consumes the saved O in u = rowsum(dO * O).
     using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
     const EltwiseUnary exp_act{ttnn::operations::unary::UnaryOpType::EXP, 0.0F};
-    const ttnn::Tensor new_weight = ttnn::subtract(
-        lse_chunk,
-        new_lse,
-        /*output_dtype=*/std::nullopt,
-        /*memory_config=*/std::nullopt,
-        /*output=*/std::nullopt,
-        /*post_activations=*/ttsl::Span<const EltwiseUnary>(&exp_act, 1));
-
-    // 4. O' = O + w * (O_i - O). The ternary lerp kernel broadcasts the (B, H, S, 1) weight
-    //    along the head dim and takes the bf16 step output as is: every operand is unpacked
-    //    into an FP32 Dest (bf16 -> FP32 is exact) and the output takes the accumulator's FP32
-    //    dtype, so the whole combine stays FP32 without a separate typecast. The FP32
-    //    accumulator matters: backward consumes the saved O in u = rowsum(dO * O).
-    output_accum = ttnn::lerp(output_accum, step_output, new_weight);
+    const auto weighted = [&exp_act](const ttnn::Tensor& output, const ttnn::Tensor& log_weight) {
+        return ttnn::multiply(
+            output,
+            log_weight,
+            /*output_dtype=*/ttnn::DataType::FLOAT32,
+            /*memory_config=*/std::nullopt,
+            /*output=*/std::nullopt,
+            /*post_activations=*/{},
+            /*lhs_activations=*/{},
+            /*rhs_activations=*/ttsl::Span<const EltwiseUnary>(&exp_act, 1));
+    };
+    output_accum = ttnn::add(weighted(output_accum, old_log_weight), weighted(step_output, new_log_weight));
     running_lse = std::move(new_lse);
 }
 

@@ -55,7 +55,9 @@ autograd::TensorPtr ring_attention_sdpa(
 namespace detail {
 
 /**
- * Online-softmax merge of one ring step's partial attention result (exposed for testing).
+ * Online-softmax merge of one ring step's partial attention result (exposed for testing):
+ * L' = logaddexp(L, l_i), O' = O * exp(L - L') + O_i * exp(l_i - L'). The merged output stays
+ * within max(|O|, |O_i|) up to rounding, so large finite outputs of opposite sign cannot overflow.
  *
  * @param output_accum (B, H, S, D) FP32 accumulator, replaced by the merged result
  * @param running_lse (B, H, S, 1) FP32 running logsumexp (-inf = nothing merged yet), replaced by the merged one
@@ -64,8 +66,8 @@ namespace detail {
  * @param step_intermediates (B, H, S, 32) FP32 SDPA intermediates, logsumexp in column 0
  *             (-inf = the step contributes nothing)
  *
- * Either lse may be -inf in a row, but not both: logaddexp(-inf, -inf) is -inf, so the step weight
- * exp(-inf - (-inf)) is NaN and so is the merged row.
+ * Either lse may be -inf in a row, but not both: logaddexp(-inf, -inf) is -inf, so both weights
+ * exp(-inf - (-inf)) are NaN and so is the merged row.
  */
 void online_softmax_merge(
     ttnn::Tensor& output_accum,

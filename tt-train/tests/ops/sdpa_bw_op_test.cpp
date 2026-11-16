@@ -1745,7 +1745,7 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
 
             per_device_step_data[d][s] = {chunk_output_cpu, lse_chunk};
 
-            // logaddexp merge, host form (equivalent to the 4-op device merge in ring_attention_sdpa.cpp)
+            // logaddexp merge, host form of online_softmax_merge in ring_attention_sdpa.cpp
             xt::xarray<float> m = xt::maximum(global_lse, lse_chunk);
             xt::xarray<float> exp_global = xt::exp(global_lse - m);
             xt::xarray<float> exp_chunk = xt::exp(lse_chunk - m);
