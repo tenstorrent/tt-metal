@@ -151,7 +151,12 @@ class GreedyB1:
                 kernels=kernels, semaphores=sems, cbs=cbs
             )
         ttnn.generic_op([logits, self.classes, self.local], mesh_program)
+        return self.finish(tokens)
 
+    def finish(self, tokens):
+        """All-gather of the devices' (key, class, id) tiles and the pick into tokens[..., 0] (also used by
+        fused_decode/lmhead.py, whose LM-head program writes the per-device tile itself)."""
+        cb_scr = 0
         gathered = ttnn.all_gather(
             self.local,
             dim=3,
