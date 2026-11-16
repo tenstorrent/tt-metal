@@ -40,14 +40,14 @@ constexpr uint32_t FABRIC_UNICAST_2DEV_WORDS = 16;
 constexpr uint32_t FABRIC_UNICAST_2DEV_BYTES = FABRIC_UNICAST_2DEV_WORDS * sizeof(uint32_t);
 
 std::shared_ptr<distributed::MeshBuffer> fabric_unicast_2dev_l1_buffer(
-    distributed::MeshDevice& device, const CoreCoord& core = CoreCoord{0, 0}) {
+    distributed::MeshDevice& device, const CoreCoord& core = CoreCoord{0, 0}, bool bottom_up = true) {
     const ShardSpecBuffer shard_spec(
         CoreRangeSet(CoreRange(core, core)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     const distributed::DeviceLocalBufferConfig local_cfg{
         .page_size = FABRIC_UNICAST_2DEV_BYTES,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = true,
+        .bottom_up = bottom_up,
     };
     return distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = FABRIC_UNICAST_2DEV_BYTES}, local_cfg, &device);
@@ -89,13 +89,18 @@ void expect_fabric_unicast_write_with_checker(
     ChipId source,
     ChipId target,
     const CoreCoord& src_logical_core = CoreCoord{0, 0},
-    const CoreCoord& tgt_logical_core = CoreCoord{0, 0}) {
+    const CoreCoord& tgt_logical_core = CoreCoord{0, 0},
+    bool recv_in_upper_l1 = false) {
     auto& cluster = MetalContext::instance().get_cluster();
     distributed::MeshCommandQueue& src_cq = src_device.mesh_command_queue();
     distributed::MeshCommandQueue& tgt_cq = tgt_device.mesh_command_queue();
 
     auto src_buf = fabric_unicast_2dev_l1_buffer(src_device, src_logical_core);
-    auto recv_buf = fabric_unicast_2dev_l1_buffer(tgt_device, tgt_logical_core);
+    // Top-down allocation puts the receive buffer at the top of L1.
+    auto recv_buf = fabric_unicast_2dev_l1_buffer(tgt_device, tgt_logical_core, /*bottom_up=*/!recv_in_upper_l1);
+    if (recv_in_upper_l1) {
+        ASSERT_GE(recv_buf->address(), 1u << 20) << "the receive buffer must sit above L1's first 1 MB";
+    }
     auto result_buf = fabric_unicast_2dev_l1_buffer(tgt_device, tgt_logical_core);
 
     const uint32_t base_value = 0xC0DE0000u | (source << 12) | (target << 8);
@@ -224,4 +229,12 @@ TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteOwnDev
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }
     expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[0], 0, 0, {1, 0}, {1, 0});
+}
+
+// A tile's whole L1 sits behind its slot of flat addresses, not only the first 1 MB.
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteUpperL1) {
+    if (!fabric_unicast_2dev_available()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[1], 0, 1, {0, 0}, {0, 0}, true);
 }

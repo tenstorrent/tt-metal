@@ -64,9 +64,8 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     // flat_addr[mesh][dev_id][noc_x_within_dev][noc_y_within_dev]
     const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y] + local_offset;
 
-    // Horizon NoC communication can currently only reach the lower 1 MB of each
-    // Tensix core's L1; the NOC2AXI crossbar window is 1 MB per tile slot.
-    ASSERT(local_offset + size <= (1u << 20));
+    // A cross-chip entry is a tile's 4 MB slot of flat addresses, its whole L1.
+    ASSERT(local_offset + size <= (1u << 22));
     // Zero base means an unfilled routing table slot.
     ASSERT(remote_addr - local_offset != 0);
     noc_async_write(src_addr, remote_addr, size);
