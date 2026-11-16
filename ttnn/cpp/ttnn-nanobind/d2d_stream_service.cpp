@@ -256,6 +256,16 @@ void py_module_types(nb::module_& mod) {
             nb::arg("coord"),
             "L1 address of the metadata buffer on this coord's service core (metadata mode).")
         .def(
+            "get_output_counters",
+            &D2DStreamServiceSender::get_output_counters,
+            nb::arg("coord"),
+            R"doc(
+                This coord's output counters: produced is the data_ready counter (an inc from every worker per
+                transfer), pushed is consumed_sem on the first worker core (1 per drained transfer), forwarded is
+                the bytes_acked word in the socket config (1 per transfer the receiver consumed). In relay mode
+                the exit relay credits bytes_acked, and an exit chip's forwarded is its slot's cable_acked word.
+            )doc")
+        .def(
             "wait_for_fabric_links",
             &D2DStreamServiceSender::wait_for_fabric_links,
             R"doc(
@@ -322,6 +332,16 @@ void py_module_types(nb::module_& mod) {
             "get_metadata_addr",
             &D2DStreamServiceReceiver::get_metadata_addr,
             "L1 address of the metadata buffer on every worker core (metadata mode).")
+        .def(
+            "get_input_counters",
+            &D2DStreamServiceReceiver::get_input_counters,
+            nb::arg("coord"),
+            R"doc(
+                This coord's input counters: arrived is the bytes_sent word in the socket config (1 per landed
+                transfer from each sender lane), consumed is the consumed counter (an inc from every worker per
+                transfer). In relay mode the entry relay feeds bytes_sent, and an entry chip's arrived is its
+                slot's relay arrived word.
+            )doc")
         .def(
             "wait_for_fabric_links",
             &D2DStreamServiceReceiver::wait_for_fabric_links,
@@ -496,7 +516,8 @@ void py_module_types(nb::module_& mod) {
                const std::string& fabric_link_group,
                const std::optional<D2DStageGateConfig>& stage_gate,
                const nb::list& extra_tensors,
-               bool relay) {
+               bool relay,
+               bool reserve_links_for_later_service) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -510,6 +531,7 @@ void py_module_types(nb::module_& mod) {
                     stage_gate,
                     make_extra_tensors(*receiver_mesh, extra_tensors),
                     relay);
+                cfg.reserve_links_for_later_service = reserve_links_for_later_service;
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
                     .receiver_rank = Rank{receiver_rank},
@@ -531,6 +553,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("stage_gate") = nb::none(),
             nb::arg("extra_tensors") = nb::list(),
             nb::arg("relay") = false,
+            nb::arg("reserve_links_for_later_service") = true,
             R"doc(
                 Build the RECEIVER endpoint in this (receiver-rank) process. Must be called
                 on the rank equal to `receiver_rank`; the matching `create_sender` runs in
@@ -540,6 +563,11 @@ void py_module_types(nb::module_& mod) {
                 `extra_tensors` is a list of (global_spec, mapper) pairs carried on the same
                 socket after the primary tensor, one DRAM-interleaved backing tensor each, any dtype/layout.
                 Both endpoints must pass the same list.
+
+                `reserve_links_for_later_service` (relay mode): whether this process builds another
+                D2D service on this mesh after the receiver, e.g. a middle pipeline stage's outbound
+                sender. Then the entry relays leave one fabric link per direction free for it. A terminal
+                stage passes False so its entry relays use every link.
 
                 Returns:
                     D2DStreamServiceReceiver

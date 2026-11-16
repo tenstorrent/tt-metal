@@ -19,7 +19,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 ttnn::device_operation::ProgramArtifacts BcastMultiCoreWProgramFactory::create_program_artifacts(
