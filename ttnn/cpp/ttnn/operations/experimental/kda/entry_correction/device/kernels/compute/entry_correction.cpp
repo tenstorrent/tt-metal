@@ -3,14 +3,19 @@
 
 #include <cstdint>
 
+#include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
 // output_c = F0_c + (FI_c - F0_c) @ seed per chunk, accumulated in the FP32 DST on top of the copied F0, and this
@@ -18,7 +23,8 @@
 // The terms buffer holds a chunk row of F(0) at tile row, and of F(I) at fi_offset further: in place, the core's
 // whole shard (core_chunks rows of F(0), then of F(I)); streamed, one chunk at a time, each formed into its
 // difference just before its product.
-template <uint32_t kt, uint32_t core_chunks, uint32_t streamed>
+// norm: each chunk output x is written as x / sqrt(mean(x^2) + epsilon) * weight * sigmoid(gate), x still in FP32.
+template <uint32_t kt, uint32_t core_chunks, uint32_t streamed, uint32_t norm, uint32_t epsilon_bits>
 TT_KERNEL void compute() {
     constexpr uint32_t state_tiles = kt * kt;
     constexpr uint32_t fi_offset = (streamed ? 1 : core_chunks) * kt;
@@ -34,12 +40,25 @@ TT_KERNEL void compute() {
     DataflowBuffer seed_group_exact(dfb::seed_exact);
     DataflowBuffer seed_tail_exact(dfb::tail_exact);
     DataflowBuffer final_rows(dfb::final_rows);
+    DataflowBuffer gate(dfb::gate);
+    DataflowBuffer weight(dfb::weight);
+    DataflowBuffer gated_weight(dfb::gated_weight);
+    DataflowBuffer x(dfb::x);
+    DataflowBuffer square(dfb::square);
+    DataflowBuffer inv_rms(dfb::inv_rms);
+    DataflowBuffer scaler(dfb::scaler);
     const uint32_t terms_id = terms.get_id();
     const uint32_t diff_id = diff.get_id();
     const uint32_t out_id = out.get_id();
     const uint32_t e_id = e.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t final_id = final_rows.get_id();
+    const uint32_t gate_id = gate.get_id();
+    const uint32_t weight_id = weight.get_id();
+    const uint32_t gated_weight_id = gated_weight.get_id();
+    const uint32_t x_id = x.get_id();
+    const uint32_t square_id = square.get_id();
+    const uint32_t inv_rms_id = inv_rms.get_id();
     compute_kernel_hw_startup<SrcOrder::Reverse>(terms_id, seed_group.get_id(), out_id);
 
     uint32_t chunks;
@@ -81,6 +100,93 @@ TT_KERNEL void compute() {
             tile_regs_release();
         }
     };
+    // sigmoid(gate) * weight, the gate and its product in DST.
+    const auto gate_weight = [&]() {
+        gate.wait_front(kt);
+        gated_weight.reserve_back(kt);
+        pack_reconfig_data_format(gated_weight_id);
+        reconfig_data_format_srca(gate_id);
+        copy_init(gate_id);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < kt; ++j) {
+            copy_tile(gate_id, j, j);
+        }
+        sigmoid_tile_init();
+        for (uint32_t j = 0; j < kt; ++j) {
+            sigmoid_tile(j);
+        }
+        reconfig_data_format(weight_id, weight_id);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(weight_id);
+        for (uint32_t j = 0; j < kt; ++j) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(weight_id, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < kt; ++j) {
+            pack_tile(j, gated_weight_id);
+        }
+        tile_regs_release();
+        gated_weight.push_back(kt);
+        gate.pop_front(kt);
+    };
+    // The chunk output x (packed to x), normalized and gated into out.
+    const auto normalize = [&]() {
+        x.wait_front(kt);
+        square.reserve_back(kt);
+        pack_reconfig_data_format(square_id);
+        reconfig_data_format(x_id, x_id);
+        mul_init(x_id, x_id);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < kt; ++j) {
+            mul_tiles(x_id, x_id, j, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < kt; ++j) {
+            pack_tile(j, square_id);
+        }
+        tile_regs_release();
+        square.push_back(kt);
+        compute_kernel_lib::
+            reduce<ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW, dfb::square, dfb::scaler, dfb::inv_rms>(
+                square,
+                scaler,
+                inv_rms,
+                compute_kernel_lib::ReduceInputBlockShape::row(kt),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t dst) {
+                    binop_with_scalar_tile_init();
+                    add_unary_tile(dst, epsilon_bits);
+                    rsqrt_tile_init();
+                    rsqrt_tile(dst);
+                });
+        inv_rms.wait_front(1);
+        gated_weight.wait_front(kt);
+        out.reserve_back(kt);
+        pack_reconfig_data_format(out_id);
+        reconfig_data_format(x_id, inv_rms_id);
+        mul_bcast_cols_init(x_id, inv_rms_id);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < kt; ++j) {
+            mul_tiles_bcast_cols(x_id, inv_rms_id, j, 0, j);
+        }
+        reconfig_data_format(gated_weight_id, gated_weight_id);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(gated_weight_id);
+        for (uint32_t j = 0; j < kt; ++j) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(gated_weight_id, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < kt; ++j) {
+            pack_tile(j, out_id);
+        }
+        tile_regs_release();
+        out.push_back(kt);
+        x.pop_front(kt);
+        inv_rms.pop_front(1);
+        gated_weight.pop_front(kt);
+    };
     // The differences first, for all of this core's chunks (they need no seed, so they run while the seeds arrive);
     // then per chunk F0's row is copied into DST and the K-sum accumulates on top of it.
     if (!streamed && chunks != 0) {
@@ -89,7 +195,9 @@ TT_KERNEL void compute() {
         subtract(0, chunks * kt);
         diff.push_back(chunks * kt);
         diff.wait_front(chunks * kt);
-        pack_reconfig_data_format(out_id);
+    }
+    if constexpr (norm) {
+        weight.wait_front(kt);
     }
     if (need_group) {
         seed_group.wait_front(state_tiles);
@@ -111,9 +219,14 @@ TT_KERNEL void compute() {
             subtract(0, kt);
             diff.push_back(kt);
             diff.wait_front(kt);
-            pack_reconfig_data_format(out_id);
         }
-        out.reserve_back(kt);
+        const uint32_t result_id = norm ? x_id : out_id;
+        if constexpr (norm) {
+            gate_weight();
+            x.reserve_back(kt);
+        } else {
+            out.reserve_back(kt);
+        }
         tile_regs_acquire();
         reconfig_data_format_srca(terms_id);
         copy_init(terms_id);
@@ -127,11 +240,17 @@ TT_KERNEL void compute() {
         }
         tile_regs_commit();
         tile_regs_wait();
+        pack_reconfig_data_format(result_id);
         for (uint32_t j = 0; j < kt; ++j) {
-            pack_tile(j, out_id);
+            pack_tile(j, result_id);
         }
         tile_regs_release();
-        out.push_back(kt);
+        if constexpr (norm) {
+            x.push_back(kt);
+            normalize();
+        } else {
+            out.push_back(kt);
+        }
         if constexpr (streamed) {
             terms.pop_front(terms_tiles);
             diff.pop_front(kt);

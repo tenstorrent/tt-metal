@@ -8,8 +8,9 @@
 #include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
 
-// Writes this core's chunk outputs and its tile rows of the final state.
-template <uint32_t num_chunks, uint32_t kt>
+// Writes this core's chunk outputs and its tile rows of the final state. Normalized outputs are token-major
+// [B, T, H*K]: head h's tiles of chunk row c at row c, columns h * kt onwards.
+template <uint32_t num_chunks, uint32_t kt, uint32_t norm, uint32_t heads>
 TT_KERNEL void writer(uint32_t head, uint32_t first_chunk) {
     DataflowBuffer out(dfb::out);
     DataflowBuffer final_rows(dfb::final_rows);
@@ -35,7 +36,8 @@ TT_KERNEL void writer(uint32_t head, uint32_t first_chunk) {
     const uint32_t out_tile = out.get_entry_size();
     for (uint32_t c = first_chunk; c < first_chunk + chunks; ++c) {
         out.wait_front(kt);
-        const uint32_t row = (head * num_chunks + c) * kt;
+        const uint32_t row =
+            norm ? (((head / heads) * num_chunks + c) * heads + head % heads) * kt : (head * num_chunks + c) * kt;
         for (uint32_t j = 0; j < kt; ++j) {
             noc.async_write(out, output, out_tile, {.offset_bytes = j * out_tile}, {.page_id = row + j});
         }

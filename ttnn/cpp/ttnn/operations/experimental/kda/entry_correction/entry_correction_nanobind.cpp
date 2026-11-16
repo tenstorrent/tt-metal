@@ -52,10 +52,18 @@ void bind_entry_correction(nb::module_& mod) {
                 DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute-kernel configuration;
                 the products accumulate in DST. Defaults to HiFi2 with FP32 destination accumulation.
+            output_gate (ttnn.Tensor, optional): BFLOAT16 TILE-layout interleaved ``[B, local_rows, W]`` whose
+                columns ``[gate_column_offset, gate_column_offset + H*K)`` gate the outputs. With it each head's
+                output is ``rms_norm(output) * norm_weight * sigmoid(gate)``, written token-major.
+            norm_weight (ttnn.Tensor, optional): BFLOAT16 TILE-layout ``[K]`` RMSNorm weight, with ``output_gate``.
+            gate_column_offset (int, optional): Tile-aligned first gate column. Defaults to 0.
+            norm_epsilon (float, optional): RMSNorm epsilon. Defaults to ``1e-5``.
+            output_dtype (ttnn.DataType, optional): BFLOAT16 or FLOAT32 normalized output. Defaults to BFLOAT16.
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: BFLOAT16 TILE-layout ``[B*H, chunks, 32, K]`` chunk outputs and
-                the FLOAT32 TILE-layout ``[B*H, K, K]`` final state in DRAM.
+            tuple[ttnn.Tensor, ttnn.Tensor]: BFLOAT16 TILE-layout ``[B*H, chunks, 32, K]`` chunk outputs (with
+                ``output_gate``, ``[B, local_rows, H*K]`` in ``output_dtype``) and the FLOAT32 TILE-layout
+                ``[B*H, K, K]`` final state in DRAM.
 
         Note:
             Every state is ``K x K`` (``K == V``), with ``K`` positive, tile-aligned and at most the DST's
@@ -74,7 +82,12 @@ void bind_entry_correction(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("output_gate") = nb::none(),
+        nb::arg("norm_weight") = nb::none(),
+        nb::arg("gate_column_offset") = 0,
+        nb::arg("norm_epsilon") = 1e-5f,
+        nb::arg("output_dtype") = ttnn::DataType::BFLOAT16);
 }
 
 }  // namespace ttnn::operations::experimental::kda::entry_correction::detail

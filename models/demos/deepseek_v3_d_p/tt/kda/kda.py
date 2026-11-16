@@ -628,6 +628,17 @@ class ttKDA:
             gate_column_offset=output_gate_offset,
         )
 
+    def _output_norm(self, inputs: _ProjectedInputs) -> dict:
+        """The gated norm's arguments for the entry correction, which applies it to its outputs."""
+        return dict(
+            output_gate=inputs.projected,
+            norm_weight=self.weights.norm,
+            gate_column_offset=inputs.output_gate_offset,
+            norm_epsilon=self.config.norm_eps,
+            output_dtype=self.gated_rms_output_dtype,
+            memory_config=self.norm_output_memory_config,
+        )
+
     def _project_output(
         self,
         output: ttnn.Tensor,
@@ -730,9 +741,12 @@ class ttKDA:
             actual_start=actual_start,
             actual_end=actual_end,
             release_gate=True,
+            output_norm=self._output_norm(inputs) if self.recurrence.fuses_output_norm else None,
         )
-        output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
-        ttnn.deallocate(result.output)
+        output = result.output
+        if not self.recurrence.fuses_output_norm:
+            output = self._kda_rms_norm(output, inputs.projected, inputs.output_gate_offset)
+            ttnn.deallocate(result.output)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)

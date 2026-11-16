@@ -3,6 +3,7 @@
 
 #include "ttnn/operations/experimental/kda/entry_correction/device/entry_correction_program_factory.hpp"
 
+#include <bit>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -43,6 +44,9 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     const tt::tt_metal::CoreRangeSet cores = kda_factory_detail::merged_core_set(attrs.cores);
     // Sharded terms are read in place; interleaved ones stream a chunk row at a time.
     const bool streamed = !in.terms.memory_config().is_sharded();
+    // With an output gate the chunk outputs are normalized and gated per head before they are written.
+    const bool norm = in.output_gate.has_value();
+    const uint32_t heads = norm ? batch_heads / in.output_gate->logical_shape()[0] : batch_heads;
 
     const m2::KernelSpecName reader_kernel{"reader"};
     const m2::KernelSpecName writer_kernel{"writer"};
@@ -60,6 +64,13 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
     const m2::DFBSpecName final_dfb{"final_rows"};
     const m2::DFBSpecName ctl_dfb{"ctl"};
     const m2::DFBSpecName ctl_writer_dfb{"ctl_writer"};
+    const m2::DFBSpecName gate_dfb{"gate"};
+    const m2::DFBSpecName weight_dfb{"weight"};
+    const m2::DFBSpecName gated_weight_dfb{"gated_weight"};
+    const m2::DFBSpecName x_dfb{"x"};
+    const m2::DFBSpecName square_dfb{"square"};
+    const m2::DFBSpecName inv_rms_dfb{"inv_rms"};
+    const m2::DFBSpecName scaler_dfb{"scaler"};
     const m2::TensorParamName terms_name{"terms"};
     const m2::TensorParamName final_e_name{"final_e"};
     const m2::TensorParamName final_b_name{"final_b"};
@@ -102,12 +113,23 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         aliased(tail_exact_dfb, tail_dfb),
         std::move(terms_buffer),
         make_dfb(diff_dfb, (streamed ? 2 : per_core) * kt, fp32),
-        make_dfb(out_dfb, 2 * kt, tt::DataFormat::Float16_b),
+        make_dfb(
+            out_dfb,
+            2 * kt,
+            norm ? tt::tt_metal::datatype_to_dataformat_converter(attrs.output_dtype) : tt::DataFormat::Float16_b),
         make_dfb(e_dfb, kt, fp32),
         make_dfb(b_dfb, kt, fp32),
         make_dfb(final_dfb, 2 * kt, fp32),
         control(ctl_dfb),
         control(ctl_writer_dfb),
+        // The norm's buffers, a single entry each without it.
+        make_dfb(gate_dfb, norm ? 2 * kt : 1, tt::DataFormat::Float16_b),
+        make_dfb(weight_dfb, norm ? kt : 1, tt::DataFormat::Float16_b),
+        make_dfb(gated_weight_dfb, norm ? kt : 1, fp32),
+        make_dfb(x_dfb, norm ? kt : 1, fp32),
+        make_dfb(square_dfb, norm ? kt : 1, fp32),
+        make_dfb(inv_rms_dfb, 1, fp32),
+        make_dfb(scaler_dfb, 1, fp32),
     };
 
     m2::KernelSpec reader{
@@ -126,6 +148,9 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ProducerOf(tail_exact_dfb, "tail_exact"),
                 m2::ProducerOf(ctl_dfb, "ctl"),
                 m2::ProducerOf(ctl_writer_dfb, "ctl_writer"),
+                m2::ProducerOf(gate_dfb, "gate"),
+                m2::ProducerOf(weight_dfb, "weight"),
+                m2::ProducerOf(scaler_dfb, "scaler"),
             },
         .semaphore_bindings = {m2::SemaphoreBinding{seed_landed, "seed_landed"}},
         .tensor_bindings =
@@ -142,7 +167,12 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
              {"seed_receivers", cores_per_head - 1},
              {"core_chunks", per_core},
              {"final_stride", cores_per_head},
-             {"streamed", static_cast<uint32_t>(streamed)}},
+             {"streamed", static_cast<uint32_t>(streamed)},
+             {"norm", static_cast<uint32_t>(norm)},
+             {"heads", heads},
+             {"gate_row_tiles",
+              norm ? static_cast<uint32_t>(in.output_gate->padded_shape()[-1]) / tt::constants::TILE_WIDTH : 0},
+             {"gate_offset_tiles", attrs.gate_column_offset / tt::constants::TILE_WIDTH}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "first_chunk", "last_chunk", "final_row", "seed_sender"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
@@ -163,12 +193,23 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::TensorBinding{output_name, "output"},
                 m2::TensorBinding{final_state_name, "final_state"},
             },
-        .compile_time_args = {{"num_chunks", num_chunks}, {"kt", kt}},
+        .compile_time_args =
+            {{"num_chunks", num_chunks}, {"kt", kt}, {"norm", static_cast<uint32_t>(norm)}, {"heads", heads}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "first_chunk"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
     auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
-    for (const auto& name : {seed_dfb, tail_dfb, terms_dfb, diff_dfb, e_dfb}) {
+    for (const auto& name :
+         {seed_dfb,
+          tail_dfb,
+          terms_dfb,
+          diff_dfb,
+          e_dfb,
+          gated_weight_dfb,
+          x_dfb,
+          square_dfb,
+          inv_rms_dfb,
+          scaler_dfb}) {
         compute_hw.unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     // The final state's B and seed are only copied into DST, exactly: only E @ seed passes through a source register.
@@ -195,8 +236,24 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
                 m2::ConsumerOf(tail_exact_dfb, "tail_exact"),
                 m2::ProducerOf(final_dfb, "final_rows"),
                 m2::ConsumerOf(ctl_dfb, "ctl"),
+                m2::ConsumerOf(gate_dfb, "gate"),
+                m2::ConsumerOf(weight_dfb, "weight"),
+                m2::ProducerOf(gated_weight_dfb, "gated_weight"),
+                m2::ConsumerOf(gated_weight_dfb, "gated_weight"),
+                m2::ProducerOf(x_dfb, "x"),
+                m2::ConsumerOf(x_dfb, "x"),
+                m2::ProducerOf(square_dfb, "square"),
+                m2::ConsumerOf(square_dfb, "square"),
+                m2::ProducerOf(inv_rms_dfb, "inv_rms"),
+                m2::ConsumerOf(inv_rms_dfb, "inv_rms"),
+                m2::ConsumerOf(scaler_dfb, "scaler"),
             },
-        .compile_time_args = {{"kt", kt}, {"core_chunks", per_core}, {"streamed", static_cast<uint32_t>(streamed)}},
+        .compile_time_args =
+            {{"kt", kt},
+             {"core_chunks", per_core},
+             {"streamed", static_cast<uint32_t>(streamed)},
+             {"norm", static_cast<uint32_t>(norm)},
+             {"epsilon_bits", std::bit_cast<uint32_t>(attrs.norm_epsilon)}},
         .hw_config = std::move(compute_hw),
     };
 
@@ -269,6 +326,15 @@ ttnn::device_operation::MeshWorkloadArtifacts EntryCorrectionProgramFactory::cre
         {final_state_name, final_state},
     };
     kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, reader);
+    if (norm) {
+        for (const auto& [name, tensor] :
+             {std::pair{m2::TensorParamName{"output_gate"}, &*in.output_gate},
+              std::pair{m2::TensorParamName{"norm_weight"}, &*in.norm_weight}}) {
+            spec.tensor_parameters.push_back({.unique_id = name, .spec = tensor->mesh_tensor().tensor_spec()});
+            run_args.tensor_args.emplace(name, tensor->mesh_tensor());
+            reader.tensor_bindings.push_back({name, name.get()});
+        }
+    }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},

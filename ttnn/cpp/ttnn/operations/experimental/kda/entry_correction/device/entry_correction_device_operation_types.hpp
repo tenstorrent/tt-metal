@@ -21,6 +21,11 @@ struct EntryCorrectionParams {
     std::vector<tt::tt_metal::CoreCoord> cores;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // With an output gate: the output columns of head h from gate_column_offset + h * K, the norm's epsilon, and the
+    // normalized output's dtype.
+    uint32_t gate_column_offset;
+    float norm_epsilon;
+    tt::tt_metal::DataType output_dtype;
 };
 
 struct EntryCorrectionInputs {
@@ -35,6 +40,10 @@ struct EntryCorrectionInputs {
     Tensor tail_entry;
     Tensor actual_start;
     std::optional<Tensor> actual_end;
+    // Optional epilogue: RMSNorm(output) * norm_weight * sigmoid(output_gate) per head, written token-major [B, T,
+    // H*K].
+    std::optional<Tensor> output_gate;
+    std::optional<Tensor> norm_weight;
 };
 
 }  // namespace ttnn::experimental::prim

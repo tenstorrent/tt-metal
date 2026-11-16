@@ -18,6 +18,7 @@ from loguru import logger
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
 from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.entry_correction import EntryCorrection
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
@@ -196,6 +197,42 @@ def test_entry_correction_streams_terms_over_the_l1_budget(device: ttnn.Device) 
     _assert_matches(expected, results[0], "streamed")
     assert_bit_identical(results[0][0], results[1][0], name="streamed output repeat")
     assert_bit_identical(results[0][1], results[1][1], name="streamed final repeat")
+
+
+@pytest.mark.parametrize("rows", [_ROWS, 2560], ids=["in-place", "streamed"])
+def test_entry_correction_gated_norm(device: ttnn.Device, rows: int) -> None:
+    """The gated-norm epilogue matches rms_norm(output) * weight * sigmoid(gate), read from a fused projection's
+    columns and written token-major [1, T, H*K]."""
+    correction = _correction(device, _PRODUCTION_FIDELITY, rows)
+    host = _host_inputs(seed=rows + 1, chunks=rows // _CHUNK)
+    inputs = _device_inputs(device, correction, host)
+    generator = torch.Generator().manual_seed(rows)
+    offset, width = 64, _HEADS * _KEY
+    gate = torch.randn(1, rows, offset + width + 32, generator=generator).bfloat16()
+    weight = (1 + 0.1 * torch.randn(_KEY, generator=generator)).bfloat16()
+    zero, identity, _, _, entry, _ = (tensor.double() for tensor in host)
+    output = (zero + (identity - zero) @ entry.unsqueeze(1)).reshape(_HEADS, rows, _KEY).transpose(0, 1)
+    expected = sigmoid_gated_rms_norm_reference(
+        output, gate[0, :, offset : offset + width].reshape(rows, _HEADS, _KEY), weight, 1e-5, dtype=torch.float64
+    ).reshape(1, rows, width)
+
+    def to_device(tensor):
+        return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    got, final = correction(
+        *inputs,
+        make_actual_start(device, 0),
+        None,
+        output_gate=to_device(gate),
+        norm_weight=to_device(weight),
+        gate_column_offset=offset,
+        norm_epsilon=1e-5,
+    )
+    assert_accurate(
+        expected.float(), ttnn.to_torch(got).float(), name="gated norm", pcc_threshold=0.9999, nrmse_threshold=0.01
+    )
+    ttnn.deallocate(got)
+    ttnn.deallocate(final)
 
 
 def test_entry_correction_cache_hit_reads_new_interval(device: ttnn.Device, isolated_program_cache: None) -> None:

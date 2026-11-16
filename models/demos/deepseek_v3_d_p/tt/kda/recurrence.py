@@ -337,6 +337,7 @@ def _scan_sp_chunks(
     affine_relay: RelayAffinePrefix,
     final_carry: _RelayFinalCarry,
     correction: EntryCorrection,
+    output_norm: dict | None,
 ) -> RecurrenceResult:
     """One group per head: the summary writes the packed transform the relay carries (the identity for a rank without a
     head) and each chunk's output terms, from which the entry correction forms the outputs once the relay has delivered
@@ -359,7 +360,9 @@ def _scan_sp_chunks(
     for tensor in grouped.as_kernel_args():
         ttnn.deallocate(tensor)
     entry_states, prefix_final_state = affine_relay(packed, initial_state, actual_start)
-    output, rank_final = correction(*emitted, entry_states, prefix_final_state, actual_start, actual_end)
+    output, rank_final = correction(
+        *emitted, entry_states, prefix_final_state, actual_start, actual_end, **(output_norm or {})
+    )
     for tensor in (*emitted, entry_states):
         ttnn.deallocate(tensor)
     # The relay leaves the prefix's final state on the first and last chronological ranks only: without a split tail
@@ -593,8 +596,12 @@ class KDARecurrence:
         return prepared, state, geometry
 
     @staticmethod
-    def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry) -> RecurrenceResult:
-        output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
+    def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry, normalized: bool) -> RecurrenceResult:
+        output = (
+            scan.output
+            if normalized
+            else ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
+        )
         final_state = ttnn.reshape(
             scan.final_state, (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
         )
@@ -613,14 +620,18 @@ class KDARecurrence:
         initial_state: ttnn.Tensor,
         beta_logits_column_offset: int,
         release_gate: bool = False,
+        output_norm: dict | None = None,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
         ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
         pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
         With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
-        read it.
+        read it. ``output_norm`` (only when ``fuses_output_norm``) holds entry_correction's gated-norm arguments:
+        the output is then normalized and token-major ``[B, T, H*V]``.
         """
+        if output_norm is not None and not self.fuses_output_norm:
+            raise ValueError("only the sequence-parallel recurrence applies the output norm")
         # A no-op when the layer already reserved the landing buffer (reserve_affine_relay).
         self.reserve_affine_relay()
         prepared, state, geometry = self._prepare(
@@ -635,13 +646,16 @@ class KDARecurrence:
             beta_logits_column_offset=beta_logits_column_offset,
             release_gate=release_gate,
         )
-        result = self._execute(prepared, state, actual_start, actual_end)
+        if output_norm is None:
+            result = self._execute(prepared, state, actual_start, actual_end)
+        else:
+            result = self._run_sp(prepared, state, actual_start, actual_end, output_norm)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory (the
         # summary already released them when the entry correction runs).
         for tensor in prepared.as_kernel_args():
             if tensor.is_allocated():
                 ttnn.deallocate(tensor)
-        return self._finish(result, geometry)
+        return self._finish(result, geometry, output_norm is not None)
 
     def _run_direct(
         self,
@@ -688,12 +702,18 @@ class KDARecurrence:
         if self._affine_relay is not None:
             self._affine_relay.reserve()
 
+    @property
+    def fuses_output_norm(self) -> bool:
+        """Whether the entry correction can apply the gated output norm (sequence parallelism)."""
+        return self._entry_correction is not None
+
     def _run_sp(
         self,
         prepared: _PreparedChunks,
         state: ttnn.Tensor,
         actual_start: ttnn.Tensor,
         actual_end: ttnn.Tensor | None,
+        output_norm: dict | None = None,
     ) -> RecurrenceResult:
         return _scan_sp_chunks(
             prepared,
@@ -706,4 +726,5 @@ class KDARecurrence:
             affine_relay=self._affine_relay,
             final_carry=self._relay_final_carry,
             correction=self._entry_correction,
+            output_norm=output_norm,
         )

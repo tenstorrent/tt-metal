@@ -10,12 +10,14 @@
 #include "api/dataflow/noc.h"
 #include "api/semaphore.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 // Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds, and the
 // rows of E = A - I and B this core forms the final state of.
 // final_stride: a head's cores each form every final_stride-th tile row of the final state.
 // streamed: interleaved terms, read a chunk row of F(0) and F(I) at a time; otherwise they are in place in the shard.
 // seed_receivers: the head's other cores, which the head's first core writes the seeds to (varargs: NoC x | y << 16).
+// norm: also each chunk's output gate rows, the norm weight broadcast down its tiles' rows, and the mean's scaler.
 template <
     uint32_t kt,
     uint32_t seed_receivers,
@@ -25,7 +27,11 @@ template <
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
-    uint32_t has_actual_end>
+    uint32_t has_actual_end,
+    uint32_t norm,
+    uint32_t heads,
+    uint32_t gate_row_tiles,
+    uint32_t gate_offset_tiles>
 TT_KERNEL void reader(
     uint32_t head, uint32_t first_chunk, uint32_t last_chunk, uint32_t final_row, uint32_t seed_sender) {
     constexpr uint32_t state_tiles = kt * kt;
@@ -95,6 +101,34 @@ TT_KERNEL void reader(
     ctl_writer.push_back(1);
     ctl.push_back(1);
 
+    if constexpr (norm) {
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            dfb::scaler,
+            ckernel::PoolType::AVG,
+            ckernel::ReduceDim::REDUCE_ROW,
+            kt * 32>();
+        DataflowBuffer weight(dfb::weight);
+        const auto weights = TensorAccessor(*tensor::get_token_if_present<"norm_weight">());
+        const uint32_t tile = weight.get_entry_size();
+        weight.reserve_back(kt);
+        for (uint32_t j = 0; j < kt; ++j) {
+            noc.async_read(weights, weight, tile, {.page_id = j}, {.offset_bytes = j * tile});
+        }
+        noc.async_read_barrier();
+        // Row 0 of each BF16 tile into every row: face f's rows from row 0 of face f % 2 (16 values, 8 words).
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weight.get_write_ptr());
+        for (uint32_t j = 0; j < kt; ++j, words += tile / sizeof(uint32_t)) {
+            for (uint32_t face = 0; face < 4; ++face) {
+                for (uint32_t row = face < 2 ? 1 : 0; row < 16; ++row) {
+                    for (uint32_t w = 0; w < 8; ++w) {
+                        words[face * 128 + row * 8 + w] = words[(face % 2) * 128 + w];
+                    }
+                }
+            }
+        }
+        weight.push_back(kt);
+    }
+
     // The head's first core reads the head's seeds and writes them to the head's other cores, at the same buffer
     // address on each. Every core reading its own copy instead makes the K3 layer 17 us slower on Galaxy.
     Semaphore landed(sem::seed_landed);
@@ -148,13 +182,18 @@ TT_KERNEL void reader(
         tail_exact.reserve_back(state_tiles);
         tail_exact.push_back(state_tiles);
     }
-    if constexpr (streamed) {
-        // Head h's F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
-        // Each chunk's F(0) row then its F(I) row go to the terms buffer together.
-        constexpr uint32_t num_chunks = local_rows / 32;
-        const auto accessor = TensorAccessor(tensor::terms);
-        const uint32_t tile = terms.get_entry_size();
-        for (uint32_t c = 0; c < chunks; ++c) {
+    if (!streamed && chunks != 0) {
+        // This core's chunk rows are in place in its shard of the emitted terms.
+        terms.reserve_back(2 * core_chunks * kt);
+        terms.push_back(2 * core_chunks * kt);
+    }
+    // Streamed, each chunk's F(0) row then its F(I) row: head h's F(0) rows are tile rows h * 2 * num_chunks + chunk
+    // of the terms, its F(I) rows num_chunks further. With the norm, each chunk's gate row too.
+    constexpr uint32_t num_chunks = local_rows / 32;
+    for (uint32_t c = 0; c < chunks && (streamed || norm); ++c) {
+        if constexpr (streamed) {
+            const auto accessor = TensorAccessor(tensor::terms);
+            const uint32_t tile = terms.get_entry_size();
             const uint32_t zero_page = (head * 2 * num_chunks + first_chunk + c) * kt;
             terms.reserve_back(2 * kt);
             for (uint32_t j = 0; j < kt; ++j) {
@@ -169,10 +208,19 @@ TT_KERNEL void reader(
             noc.async_read_barrier();
             terms.push_back(2 * kt);
         }
-    } else if (chunks != 0) {
-        // This core's chunk rows are in place in its shard of the emitted terms.
-        terms.reserve_back(2 * core_chunks * kt);
-        terms.push_back(2 * core_chunks * kt);
+        if constexpr (norm) {
+            DataflowBuffer gate(dfb::gate);
+            const auto gates = TensorAccessor(*tensor::get_token_if_present<"output_gate">());
+            const uint32_t tile = gate.get_entry_size();
+            const uint32_t page = ((head / heads) * num_chunks + first_chunk + c) * gate_row_tiles + gate_offset_tiles +
+                                  (head % heads) * kt;
+            gate.reserve_back(kt);
+            for (uint32_t j = 0; j < kt; ++j) {
+                noc.async_read(gates, gate, tile, {.page_id = page + j}, {.offset_bytes = j * tile});
+            }
+            noc.async_read_barrier();
+            gate.push_back(kt);
+        }
     }
     if (final) {
         // Tile rows of E and of B: each row of the final state is seed[row] + (E[row] @ seed + B[row]).

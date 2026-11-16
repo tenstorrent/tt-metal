@@ -65,8 +65,9 @@ class EntryCorrection:
         self.memory_config = ttnn.L1_MEMORY_CONFIG
         self.output_memory_config = ttnn.DRAM_MEMORY_CONFIG if streamed else ttnn.L1_MEMORY_CONFIG
 
-    def __call__(self, terms, final_e, final_b, entry, tail_entry, actual_start, actual_end):
-        """Return (output [BH, NC, 32, V] BF16, final state [BH, K, V] FP32)."""
+    def __call__(self, terms, final_e, final_b, entry, tail_entry, actual_start, actual_end, **output_norm):
+        """Return (output [BH, NC, 32, V] BF16, final state [BH, K, V] FP32); with output_norm (output_gate,
+        norm_weight, ... and its memory_config), the gated-norm output [B, T, H*V]."""
         return ttnn.experimental.kda.entry_correction(
             terms,
             final_e,
@@ -78,6 +79,6 @@ class EntryCorrection:
             cores=self.cores,
             actual_end=actual_end,
             sequence_parallel_axis=self.axis,
-            memory_config=self.output_memory_config,
             compute_kernel_config=self.compute_config,
+            **{"memory_config": self.output_memory_config, **output_norm},
         )

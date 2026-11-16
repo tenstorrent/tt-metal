@@ -27,6 +27,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
     const std::optional<ttnn::Tensor>& actual_end = std::nullopt,
     uint32_t sequence_parallel_axis = 0,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& output_gate = std::nullopt,
+    const std::optional<ttnn::Tensor>& norm_weight = std::nullopt,
+    uint32_t gate_column_offset = 0,
+    float norm_epsilon = 1e-5f,
+    tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT16);
 
 }  // namespace ttnn::experimental::kda

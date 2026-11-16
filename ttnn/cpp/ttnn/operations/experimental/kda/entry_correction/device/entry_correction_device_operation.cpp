@@ -4,6 +4,7 @@
 #include "entry_correction_device_operation.hpp"
 
 #include <array>
+#include <cmath>
 #include <set>
 #include <utility>
 
@@ -14,6 +15,49 @@
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+void validate_norm(const EntryCorrectionParams& attrs, const EntryCorrectionInputs& in) {
+    constexpr std::string_view operation_name = "entry_correction";
+    TT_FATAL(
+        in.output_gate.has_value() == in.norm_weight.has_value(),
+        "{}: output_gate and norm_weight go together",
+        operation_name);
+    if (!in.output_gate) {
+        return;
+    }
+    const auto& gate = *in.output_gate;
+    const auto& weight = *in.norm_weight;
+    for (const auto& [tensor, name] : {std::pair{&gate, "output_gate"}, std::pair{&weight, "norm_weight"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
+        kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::BFLOAT16, operation_name, name);
+        kda_factory_detail::check_interleaved(*tensor, operation_name, name);
+        kda_factory_detail::check_same_device(in.final_b, *tensor, operation_name, name);
+    }
+    const auto& state = in.final_b.logical_shape();
+    const auto& gate_shape = gate.logical_shape();
+    TT_FATAL(
+        gate_shape.rank() == 3 && gate_shape[0] > 0 && state[0] % gate_shape[0] == 0 &&
+            gate_shape[1] == attrs.local_rows && attrs.gate_column_offset % tt::constants::TILE_WIDTH == 0 &&
+            gate_shape[2] >= attrs.gate_column_offset + state[0] / gate_shape[0] * state[2],
+        "{}: output_gate {} must be [B, local_rows, W] with H*K columns from the tile-aligned gate_column_offset {}",
+        operation_name,
+        gate_shape,
+        attrs.gate_column_offset);
+    TT_FATAL(weight.logical_volume() == state[2], "{}: norm_weight must hold K values", operation_name);
+    TT_FATAL(
+        std::isfinite(attrs.norm_epsilon) && attrs.norm_epsilon > 0.0f,
+        "{}: norm_epsilon must be finite and positive",
+        operation_name);
+    TT_FATAL(
+        attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 || attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
+        "{}: output_dtype must be BFLOAT16 or FLOAT32",
+        operation_name);
+}
+
+}  // namespace
 
 EntryCorrectionOperation::program_factory_t EntryCorrectionOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -30,7 +74,9 @@ void EntryCorrectionOperation::validate_on_program_cache_hit(const operation_att
         {&in.entry, "entry"},
         {&in.tail_entry, "tail_entry"},
         {&in.actual_start, "actual_start"},
-        {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}};
+        {in.actual_end ? &*in.actual_end : nullptr, "actual_end"},
+        {in.output_gate ? &*in.output_gate : nullptr, "output_gate"},
+        {in.norm_weight ? &*in.norm_weight : nullptr, "norm_weight"}};
     kda_factory_detail::check_allocated_on_device(in.terms, tensors, operation_name);
     kda_factory_detail::check_distinct_buffers(tensors, operation_name);
 }
@@ -71,7 +117,9 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
          {&in.entry, "entry"},
          {&in.tail_entry, "tail_entry"},
          {&in.actual_start, "actual_start"},
-         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"},
+         {in.output_gate ? &*in.output_gate : nullptr, "output_gate"},
+         {in.norm_weight ? &*in.norm_weight : nullptr, "norm_weight"}},
         operation_name);
     const auto& state = in.final_b.logical_shape();
     // The kernels read every state and chunk row as K tiles: V must equal K.
@@ -126,6 +174,7 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
             operation_name);
         TT_FATAL(
             attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
+        validate_norm(attrs, in);
         return;
     }
     TT_FATAL(
@@ -162,6 +211,7 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
         key_tiles,
         dst_tiles);
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
+    validate_norm(attrs, in);
 }
 
 EntryCorrectionOperation::spec_return_value_t EntryCorrectionOperation::compute_output_specs(
@@ -171,15 +221,21 @@ EntryCorrectionOperation::spec_return_value_t EntryCorrectionOperation::compute_
             return tt::tt_metal::TensorSpec(
                 shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory));
         };
-    // The chunk outputs are [B*H, chunks, 32, K].
+    // The chunk outputs are [B*H, chunks, 32, K]; normalized, token-major [B, T, H*K].
     const auto& state = in.final_b.logical_shape();
     const uint32_t chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
-    return {
-        spec(
-            Shape({state[0], chunks, tt::constants::TILE_HEIGHT, state[2]}),
-            tt::tt_metal::DataType::BFLOAT16,
-            attrs.output_mem_config),
-        spec(state, tt::tt_metal::DataType::FLOAT32, ttnn::DRAM_MEMORY_CONFIG)};
+    const auto output = in.output_gate ? spec(
+                                             Shape(
+                                                 {in.output_gate->logical_shape()[0],
+                                                  attrs.local_rows,
+                                                  state[0] / in.output_gate->logical_shape()[0] * state[2]}),
+                                             attrs.output_dtype,
+                                             attrs.output_mem_config)
+                                       : spec(
+                                             Shape({state[0], chunks, tt::constants::TILE_HEIGHT, state[2]}),
+                                             tt::tt_metal::DataType::BFLOAT16,
+                                             attrs.output_mem_config);
+    return {output, spec(state, tt::tt_metal::DataType::FLOAT32, ttnn::DRAM_MEMORY_CONFIG)};
 }
 
 EntryCorrectionOperation::tensor_return_value_t EntryCorrectionOperation::create_output_tensors(
@@ -221,14 +277,22 @@ std::tuple<Tensor, Tensor> entry_correction(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const std::vector<tt::tt_metal::CoreCoord>& cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<Tensor>& output_gate,
+    const std::optional<Tensor>& norm_weight,
+    uint32_t gate_column_offset,
+    float norm_epsilon,
+    tt::tt_metal::DataType output_dtype) {
     auto outputs = ttnn::device_operation::launch<EntryCorrectionOperation>(
         EntryCorrectionParams{
             .sequence_parallel_axis = sequence_parallel_axis,
             .local_rows = local_rows,
             .cores = cores,
             .output_mem_config = memory_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .gate_column_offset = gate_column_offset,
+            .norm_epsilon = norm_epsilon,
+            .output_dtype = output_dtype},
         EntryCorrectionInputs{
             .terms = terms,
             .final_e = final_e,
@@ -236,7 +300,9 @@ std::tuple<Tensor, Tensor> entry_correction(
             .entry = entry,
             .tail_entry = tail_entry,
             .actual_start = actual_start,
-            .actual_end = actual_end});
+            .actual_end = actual_end,
+            .output_gate = output_gate,
+            .norm_weight = norm_weight});
     return {outputs[0], outputs[1]};
 }
 
