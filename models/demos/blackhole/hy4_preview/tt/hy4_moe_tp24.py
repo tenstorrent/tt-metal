@@ -20,6 +20,9 @@ def pick_cores(md, banks):
     g = md.compute_with_storage_grid_size()
     used = {(c.x, c.y) for c in banks}
     ov = [e for e in os.environ.get("HY4_TP24_EXTRA", "").split("/") if e]
+    # SKEW track (default off): HY4_TP24_PLACE=east -> extras of every bank core go to the free cores on its +x side only
+    # (default order 1,-1,2,... puts the 2nd extra of the east banks (x=6) at x=5); NL=16 trace-only -40 us (RESULT_SKEW.md)
+    dxs = (1, 2, 3, 4, 5, 6) if os.environ.get("HY4_TP24_PLACE", "") == "east" else (1, -1, 2, -2, 3, -3, 4, -4)
     out = []
     for b, c in enumerate(banks):
         out.append(ttnn.CoreCoord(c.x, c.y))
@@ -28,7 +31,7 @@ def pick_cores(md, banks):
                 x, y = map(int, ov[2 * b + i].split("."))
             else:
                 x = y = None
-                for dx in (1, -1, 2, -2, 3, -3, 4, -4):
+                for dx in dxs:
                     cx = c.x + dx
                     if 0 <= cx < g.x and (cx, c.y) not in used:
                         x, y = cx, c.y
