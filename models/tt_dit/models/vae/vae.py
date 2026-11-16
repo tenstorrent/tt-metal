@@ -594,6 +594,8 @@ class VaeAttention(Module):
         k = _all_gather_tokens(self._ctx, k)
         v = _all_gather_tokens(self._ctx, v)
 
+        # The token counts change with the image size; with runtime_seq_len a new size builds its
+        # program from the compiled kernels.
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -601,6 +603,7 @@ class VaeAttention(Module):
             is_causal=False,
             program_config=self._sdpa_program_config,
             compute_kernel_config=self._sdpa_compute_kernel_config,
+            runtime_seq_len=True,
         )
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
