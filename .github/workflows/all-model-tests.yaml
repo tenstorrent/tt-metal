@@ -79,7 +79,7 @@ on:
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
-        description: "Platform for the vLLM tests. A second build runs when it differs from platform."
+        description: "Platform for the vLLM tests. A second build runs when it differs from platform. vllm-tt-plugin on vLLM 0.32 or later needs Ubuntu 24.04 (Python 3.12)."
       build-type:
         required: false
         type: choice
@@ -617,6 +617,10 @@ jobs:
   # Aggregates per-leg ai-job-summary artifacts into one run-level report.
   ai-run-summary:
     needs:
+      # The build jobs are listed so a failed build-artifact-vllm cannot leave a
+      # run whose test jobs all passed or were skipped reported as success.
+      - build-artifact
+      - build-artifact-vllm
       - t1-unit-tests
       - t1-e2e-tests
       - t1-sweep-tests
