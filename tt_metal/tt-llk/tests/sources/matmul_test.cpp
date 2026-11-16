@@ -189,9 +189,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // a plain call's kernel rule, the function llk_unpack_AB_matmul_kernel_ttsync calls, and on a polling class the block rule of a
     // call with constant keys (matmul_fe_ttsync_cell; in1 is the test's A operand, in0 its B)
     constexpr std::uint32_t unpack_auto_ttsync =
-        matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) && matmul_reuse_dir_k == 0 ? 1
-        : MATMUL_TTSYNC_BLOCK_PROD                                                                                                                         ? 3
-                                                                                                                                                           : 0;
+        matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS) && matmul_reuse_dir_k == 0 &&
+                !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && MATMUL_PK_RT >= 2 && MATMUL_PK_CT >= 2)
+            ? 1
+        : MATMUL_TTSYNC_BLOCK_PROD ? 3
+                                   : 0;
 #else
 #ifdef MATMUL_UNPACK_TTSYNC_EXCL
     constexpr std::uint32_t unpack_ttsync_req = 2;
