@@ -5,7 +5,7 @@ import torch
 import ttnn
 import pytest
 from loguru import logger
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 from models.experimental.transfuser.reference.topdown import TopDown
 from models.experimental.transfuser.tt.topdown import TtTopDown
 from ttnn.model_preprocessing import preprocess_model_parameters

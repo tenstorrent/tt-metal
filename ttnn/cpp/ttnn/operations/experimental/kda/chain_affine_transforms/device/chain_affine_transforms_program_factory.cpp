@@ -8,11 +8,11 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -25,7 +25,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ChainAffineTransformsProgramFactor
     const ChainAffineTransformsInputs& in,
     std::vector<ttnn::Tensor>& outputs,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
-    namespace m2 = tt::tt_metal::experimental;
+    namespace m2 = tt::tt_metal;
     const auto& transforms = in.transforms.mesh_tensor();
     const auto& initial_state = in.initial_state.mesh_tensor();
     const auto& entry_state = outputs[0].mesh_tensor();
