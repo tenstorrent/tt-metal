@@ -10,6 +10,7 @@
 //      each, ws_fab.slice_layout over the chip's own experts) into the slot, setting the slot's arrival word to
 //      PK k + chunks landed as they complete (no fabric arrival can be in flight for the slot meanwhile: the slot's
 //      next occupant's sender waits for its credit, sent only after this one is computed and forwarded).
+//      WL_NO_OWN_READ (a diagnostic): no reads, each own occupant's slot is marked arrived unread.
 //   Q1 x gather, Q2 h out, Q3 column 0 leader multicasts, QX column 0 x multicasts: as in wg_writer.cpp, the experts
 //      taken in the order table's order (the down outputs go to DRAM from the NCRISC).
 // RT: 0 j, 1 g, 2 order length, 3 col x NOC (c 0), 4 col x NOC (c 1), 5 row 0 y NOC, 6 out addr, 7 x addr, 8 idx addr,
@@ -202,6 +203,12 @@ void kernel_main() {
             o_issued = o_landed = 0;
         }
         const uint32_t s = o_s, k = o_k[s];
+#ifdef WL_NO_OWN_READ
+        // (no DRAM read: the slot's chunks count as landed with whatever the slot holds)
+        o_issued = o_landed = PK;
+        warr[s * 4] = PK * k + PK;
+        did = true;
+#else
         if (o_landed < o_issued) {  // (retired only once done: a barrier would stall this RISC's x / h queues)
             const uint32_t trid = 1 + o_landed % D;
             if (ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
@@ -221,6 +228,7 @@ void kernel_main() {
             ++o_issued;
             did = true;
         }
+#endif
         if (o_landed >= PK) {
             o_busy = false;
             ++o_k[s];

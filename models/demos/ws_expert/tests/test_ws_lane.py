@@ -353,7 +353,7 @@ def lcfg_from_env(**kw):
     """LCfg with overrides from WS_LANE (e.g. "nbuf=3;D=4;out_all=1;slots=d0,d1,d0d1,any")."""
     for item in filter(None, os.environ.get("WS_LANE", "").split(";")):
         k, v = item.split("=")
-        flags = ("out_all", "mcast_linked", "arr_write", "mc_noc1", "bcast")
+        flags = ("out_all", "mcast_linked", "arr_write", "mc_noc1", "bcast", "own_read")
         kw[k] = bool(int(v)) if k in flags else (v if k == "slots" else int(v))
     return LCfg(**kw)
 

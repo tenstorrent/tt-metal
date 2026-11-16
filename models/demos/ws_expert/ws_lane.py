@@ -58,6 +58,7 @@ class LCfg:
     # multicast from its BRISC on NOC0, h rows gathered on core 19 and multicast from its NCRISC on NOC1, one at a time
     bcast: bool = False
     xf: int = 2  # funnel slots of x blocks on core 0 (WL_XF)
+    own_read: bool = True  # own experts read from DRAM into their slots; False (WL_NO_OWN_READ): marked arrived unread
 
 
 def lane_cores(g):
@@ -260,6 +261,7 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         ydefs += [("WL_XINF", str(xinf.buffer_address())), ("WL_XF", str(lc.xf))]
     ydefs += [("WL_OUT_ALL", "1")] if lc.out_all else []
     ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
+    ydefs += [] if lc.own_read else [("WL_NO_OWN_READ", "1")]
     # x staging blocks a core; with the funnel (bcast), core 0's lc.xf funnel slots take two of them on every core
     XST = -(-cfg.LOOK // GC) + (2 if lc.bcast else 4)
     mpd = ttnn.MeshProgramDescriptor()
