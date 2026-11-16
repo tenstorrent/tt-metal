@@ -13,6 +13,10 @@ from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_extra_seql
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
 LINE_AG = os.environ.get("LINE_AG", "0") == "1"
 
+# Prefill WO all-reduce: up to this seqlen it is an all-gather on dim 0 plus a local sum (buffer key
+# "WO_AG"); above it, a reduce-scatter plus all-gather (buffer key "WO"). Default 4096 is the original split.
+WO_AG_MAX = int(os.environ.get("LLAMA_GALAXY_WO_AG_MAX", "4096"))
+
 # If set, use line for those AG ops in prefill, otherwise use ring if available
 USE_LINE_AG = {
     # "QKV",
@@ -852,9 +856,10 @@ class TT_CCL:
             for key, shape in buffers_dict.items():
                 if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2",):
                     continue
-                # Attention uses WO_AG only up to 4096 (llama_attention.forward_prefill); above that the
-                # WO all-reduce takes buffer key "WO", so this (8, 1, seqlen, 2048) buffer would go unused.
-                if key == "WO_AG" and seqlen > 4096:
+                # Attention uses WO_AG only up to WO_AG_MAX, and for batched prefill at 4096
+                # (llama_attention.forward_prefill); above that the WO all-reduce takes buffer key "WO",
+                # so this (8, 1, seqlen, 2048) buffer would go unused.
+                if key == "WO_AG" and seqlen > max(WO_AG_MAX, 4096):
                     continue
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),

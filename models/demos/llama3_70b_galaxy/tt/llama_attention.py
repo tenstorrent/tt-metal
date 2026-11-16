@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import WO_AG_MAX
 
 
 class TtLlamaAttention(LightweightModule):
@@ -1378,7 +1379,8 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=0,
             num_links=prefill_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="WO_AG" if seq_len <= 4096 else "WO",
+            # Batched prefill (32 x 128 rows) stays on WO_AG: its persistent buffer exists at 4096.
+            buffer_key="WO_AG" if seq_len <= WO_AG_MAX or batch_size > 1 else "WO",
         )
         output_11SH.deallocate()
 
