@@ -84,16 +84,17 @@ constexpr bool matmul_format_is_32bit(const DataFormat f)
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
 }
 
-// lofi_wide of matmul_plain_row_form over the kernel's CB formats
+// lofi_wide of matmul_plain_row_form over the kernel's CB formats (unpack_src_format) and their DEST-side formats (unpack_dst_format,
+// where a CB packed as Tf32 shows, as minimal_matmul's partials)
 template <std::size_t N>
-constexpr bool matmul_kernel_lofi_wide(const std::uint8_t (&formats)[N])
+constexpr bool matmul_kernel_lofi_wide(const std::uint8_t (&formats)[N], const std::uint8_t (&dst_formats)[N])
 {
     std::uint32_t f32 = 0;
     bool tf32         = false;
-    for (const std::uint8_t f : formats)
+    for (std::size_t i = 0; i < N; i++)
     {
-        f32 += f == static_cast<std::uint8_t>(DataFormat::Float32);
-        tf32 = tf32 || f == static_cast<std::uint8_t>(DataFormat::Tf32);
+        f32 += formats[i] == static_cast<std::uint8_t>(DataFormat::Float32);
+        tf32 = tf32 || formats[i] == static_cast<std::uint8_t>(DataFormat::Tf32) || dst_formats[i] == static_cast<std::uint8_t>(DataFormat::Tf32);
     }
     return tf32 || f32 >= 2;
 }

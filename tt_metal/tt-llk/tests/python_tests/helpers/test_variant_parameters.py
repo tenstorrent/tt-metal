@@ -241,7 +241,13 @@ class MATMUL_PRODUCTION(TemplateParameter):
             f"#define MATMUL_PRODUCTION\nconstexpr std::uint32_t MATMUL_PROD_DIR = {self.prod_dir};"
             + "\nconstexpr std::uint8_t MATMUL_KERNEL_FORMATS[] = {"
             + ", ".join(
-                f"static_cast<std::uint8_t>(DataFormat::{f})"
+                f"static_cast<std::uint8_t>(DataFormat::{f.split('/')[0]})"
+                for f in (self.kernel_formats or ("Invalid",))
+            )
+            + "};"
+            + "\nconstexpr std::uint8_t MATMUL_KERNEL_DST_FORMATS[] = {"
+            + ", ".join(
+                f"static_cast<std::uint8_t>(DataFormat::{f.split('/')[-1]})"
                 for f in (self.kernel_formats or ("Invalid",))
             )
             + "};"
@@ -307,10 +313,20 @@ class MATMUL_PRODUCTION(TemplateParameter):
                 r["ct"],
                 r["kt"],
             ) == key:
+                # a CB's pack format stands for its unpack_dst_format (the same array in the descriptors): "src/dst" where they differ
+                pack = dict(
+                    c.split(":", 1)
+                    for c in r.get("pack_cb_formats", "").split("|")[0].split()
+                    if ":" in c
+                )
                 cbs = tuple(
-                    c.split(":", 1)[1]
-                    for c in r["unpack_cb_formats"].split("|")[0].split()
-                    if ":" in c and c.split(":", 1)[1] in DataFormat.__members__
+                    f + ("/" + pack[k] if pack.get(k, f) != f and pack[k] in DataFormat.__members__ else "")
+                    for k, f in (
+                        c.split(":", 1)
+                        for c in r["unpack_cb_formats"].split("|")[0].split()
+                        if ":" in c
+                    )
+                    if f in DataFormat.__members__
                 )
                 return (cbs or own + (partials,)) + extra
         return own + (partials,) + extra
