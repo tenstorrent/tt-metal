@@ -531,6 +531,13 @@ if [[ "$PROFILE_MODE" == true ]]; then
         echo "SAFE_PYTEST: Ensure a Tracy-enabled build and tracy deps (e.g. 'pip install websockets')"
         exit 3
     fi
+    # DPRINT and the device profiler share the same L1 buffer, so they cannot run together. Drop every
+    # TT_METAL_DPRINT_* (and TT_METAL_DEVICE_PRINT) here instead of relying on callers to unset them.
+    _dprint_vars=$(compgen -e | grep -E '^(TT_METAL_DPRINT_|TT_METAL_DEVICE_PRINT$)' || true)
+    if [[ -n "$_dprint_vars" ]]; then
+        echo "SAFE_PYTEST: --profile: ignoring $(echo $_dprint_vars) (device print cannot share a run with the profiler)"
+        unset $_dprint_vars
+    fi
 fi
 
 # --- Pre-flight: pytest-xdist required for sim parallelism (SIM_WORKERS > 1) ---
