@@ -23,9 +23,12 @@
 // that peer's partial for row n before it can finish row n), so the parity slots never collide.
 // The semaphore counts cumulatively (row n is ready at (n + 1) * k): no reset round trip.
 //
-// The data writes and the semaphore increment go to the same destination on the same NoC and the
-// same unicast-write VC, which delivers them in order, so a flush (writes have left this core),
-// not a full barrier (writes acknowledged), is enough before signalling.
+// The partials are fenced with a full write barrier (writes acknowledged) before the semaphore
+// increments. A flush (writes have left this Tensix core) is NOT enough here, although the data
+// writes and the increment go to the same destination on the same NoC: with a flush, the R_t = 16,
+// Wt = 64, k = 16 cell of the sweep (8 groups of 16 members, 2 tile-rows each, BH p150b 13x10)
+// returned wrong row means in 3 of 40 sweep runs (and in 0 of 600 launches of that cell alone);
+// with the barrier, 0 of 108 sweep runs.
 //
 // WS_ROW_MAJOR (Layout::ROW_MAJOR output): the combine is unchanged; the output of a tile-row is
 // the untilized slice (S tile-sized pages = 32 rows x slice_bytes) written back as 32 stick pieces
@@ -89,7 +92,7 @@ void kernel_main() {
                     noc_async_write(
                         src + 2 * face_bytes, get_noc_addr(x, y, slot + 2 * face_bytes), face_bytes);  // face 2
                 }
-                noc_async_writes_flushed();
+                noc_async_write_barrier();
                 for (uint32_t q = 0; q < k; ++q) {
                     arrived.up(noc, get_arg_val<uint32_t>(9 + 2 * q), get_arg_val<uint32_t>(10 + 2 * q), 1);
                 }

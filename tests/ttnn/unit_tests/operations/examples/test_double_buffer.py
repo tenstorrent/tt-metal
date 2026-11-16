@@ -204,7 +204,8 @@ _LEVER_CFG = dict(variant="double_buffered", block=4)
 # (regime id, shape, Tensix cores, kind, measured speedup per arch)
 _REGIMES = [
     ("helps_1core_256tiles", (512, 512), 1, "helps", {"wh": 2.63, "bh": 2.95}),
-    ("helps_8cores_512tiles_per_core", (2048, 2048), 8, "helps", {"wh": 2.73, "bh": 2.77}),
+    # BH: 2.77x is the README's board; bh-50 (BH p150b, 13x10 grid), 20 passes, 2026-11-14: 2.20x (2.196-2.209).
+    ("helps_8cores_512tiles_per_core", (2048, 2048), 8, "helps", {"wh": 2.73, "bh": (2.20, 2.77)}),
     # at most a small gain once DRAM is near saturation
     ("small_64cores_64tiles_per_core", (2048, 2048), 64, "does_not_help", {"wh": 0.98, "bh": 1.08}),
 ]

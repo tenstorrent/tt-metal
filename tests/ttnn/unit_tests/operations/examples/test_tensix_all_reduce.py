@@ -301,7 +301,8 @@ _FLUSH_REGIMES = [
         1,
         32,
         "does_not_help",
-        {"bh": 1.00},
+        # median 1.00x; single passes ranged 0.95-1.08x on bh-50 (BH p150b, 13x10 grid), 20 passes, 2026-11-14
+        {"bh": (1.00, 1.08)},
         _PULL,
         _PULL + "_flush",
         1,
