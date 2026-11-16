@@ -6,7 +6,6 @@ import ast
 import gc
 
 import pytest
-import torchvision.transforms as transforms
 from PIL import Image
 
 
@@ -16,7 +15,6 @@ def ensure_gc():
 
 
 import pytest
-import torchvision.transforms as transforms
 from PIL import Image
 
 
@@ -34,6 +32,8 @@ def imagenet_sample_input():
 
     im = Image.open(path)
     im = im.resize((224, 224))
+    import torchvision.transforms as transforms  # lazy: no torchvision wheels on some hosts (e.g. riscv64)
+
     return transforms.ToTensor()(im).unsqueeze(0)
 
 
