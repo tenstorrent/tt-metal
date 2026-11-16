@@ -39,8 +39,8 @@ class CharTokenizer:
 
 def config(**overrides):
     fields = {
-        "dataset": {"id": "sst2"},
         "model": {"name": "m"},
+        "dataset": {"id": "sst2"},
         "optimizer": {"lr": 1e-4},
         "batch_size": 2,
         "max_length": 32,

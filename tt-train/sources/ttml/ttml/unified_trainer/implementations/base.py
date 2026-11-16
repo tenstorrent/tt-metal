@@ -23,7 +23,7 @@ from ..managers.logging import TrainingLogger
 
 
 class Trainer(ABC):
-    """The training loop: callbacks, gradient accumulation, validation scheduling and the run lifecycle.
+    """The training loop: callbacks, gradient accumulation and clipping, validation scheduling and the run lifecycle.
 
     Holds no tensors and imports no framework; everything that does is an abstract method a subclass such
     as ``SFTTrainer`` implements. A host builds the trainer once with its callbacks and runs any number of
@@ -141,6 +141,9 @@ class Trainer(ABC):
                     if accumulation_step == accumulation_steps:
                         window_loss, self.step_loss = self.step_loss, None
                         self.callback_handler("on_optimizer_step_start")
+                        # On the gradients of the whole window, which the hook above still sees unclipped.
+                        if self.config.max_grad_norm > 0:
+                            self._clip_gradients(self.config.max_grad_norm)
                         self._optimizer_step()
                         self.callback_handler("on_optimizer_step_end", window_loss)
 
@@ -282,8 +285,15 @@ class Trainer(ABC):
         """Release per-batch graph state, after a training batch's backward and after each validation batch."""
 
     @abstractmethod
+    def _clip_gradients(self, max_norm: float) -> None:
+        """Scale the gradients of the trainable weights so that their global L2 norm is at most ``max_norm``.
+
+        Runs before ``_optimizer_step``, on the gradients a window accumulated, if ``config.max_grad_norm`` is set.
+        """
+
+    @abstractmethod
     def _optimizer_step(self) -> None:
-        """Step the optimizer and zero the gradients."""
+        """Step the optimizer and zero the gradients. The gradients are already clipped."""
 
     @abstractmethod
     def _zero_grad(self) -> None:

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The training loop of ``ttml.unified_trainer.Trainer``: hook order, gradient accumulation, validation
+"""The training loop of ``ttml.unified_trainer.Trainer``: hook order, gradient accumulation and clipping, validation
 scheduling, the stopping criteria, failures and cleanup. Device-free."""
 
 import pytest
@@ -58,6 +58,43 @@ def test_window_loss_is_the_mean_of_its_micro_batches():
     run(FakeTrainer([recorder]), gradient_accumulation_steps=2)
     assert recorder.args("on_optimizer_step_end") == [(3.5,), (1.5,)]
     assert recorder.args("on_step_end") == [(1,), (2,)]
+
+
+class ClippedAt:
+    """Records how many times the trainer had clipped at each call of ``hook``."""
+
+    def __init__(self, hook: str) -> None:
+        self.hook, self.counts = hook, []
+
+    def __getattr__(self, name: str):
+        if name != self.hook:
+            raise AttributeError(name)
+        return lambda trainer, *args: self.counts.append(len(trainer.clipped))
+
+
+def test_gradients_are_clipped_once_per_optimizer_step_before_it():
+    before, after = ClippedAt("on_optimizer_step_start"), ClippedAt("on_optimizer_step_end")
+    trainer = FakeTrainer([before, after])
+    trainer.setup(make_config(gradient_accumulation_steps=2, max_grad_norm=0.5))
+    try:
+        trainer.train()
+        # Two steps of two batches each: one clipping per step, on what its window accumulated, before the
+        # optimizer steps.
+        assert trainer.clipped == [(0, 0.5), (1, 0.5)]
+    finally:
+        trainer.cleanup()
+    # `on_optimizer_step_start` still sees the gradients unclipped.
+    assert (before.counts, after.counts) == ([0, 1], [1, 2])
+
+
+def test_gradients_are_not_clipped_without_max_grad_norm():
+    trainer = FakeTrainer()
+    trainer.setup(make_config())
+    try:
+        trainer.train()
+        assert trainer.optimizer.steps == 4 and trainer.clipped == []
+    finally:
+        trainer.cleanup()
 
 
 def test_validation_runs_before_training_and_every_steps_freq_steps():

@@ -21,7 +21,7 @@ from ttml.unified_trainer.implementations.base import Trainer
 
 
 def make_config(**overrides: Any) -> TrainerConfig:
-    fields = {"dataset": {"id": "sst2"}, "model": {"name": "fake"}, "optimizer": {"lr": 0.1}, "batch_size": 1}
+    fields = {"model": {"name": "fake"}, "dataset": {"id": "sst2"}, "optimizer": {"lr": 0.1}, "batch_size": 1}
     return TrainerConfig.model_validate({**fields, **overrides})
 
 
@@ -59,6 +59,8 @@ class FakeTrainer(Trainer):
         self.val_losses = None if val_losses is None else list(val_losses)
         self.fail_in = fail_in
         self.events: list[str] = []
+        # The optimizer steps made before each clipping, and the norm it clipped to.
+        self.clipped: list[tuple[int, float]] = []
         self.saved: dict[str, Optional[dict]] = {}
         self.loaded: list[str] = []
 
@@ -100,6 +102,9 @@ class FakeTrainer(Trainer):
 
     def _accumulate_loss(self, running, loss):
         return loss if running is None else running + loss
+
+    def _clip_gradients(self, max_norm: float) -> None:
+        self.clipped.append((self.optimizer.steps, max_norm))
 
     def _optimizer_step(self) -> None:
         self.optimizer.steps += 1

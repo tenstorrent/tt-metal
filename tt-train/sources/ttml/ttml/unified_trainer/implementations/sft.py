@@ -141,9 +141,11 @@ class SFTTrainer(Trainer):
         # Drops this batch's autograd graph; gradients stay on the parameters until zero_grad.
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
+    def _clip_gradients(self, max_norm: float) -> None:
+        # The L2 norm over every gradient; a non-finite norm is not an error.
+        ttml.core.clip_grad_norm(self.model.parameters(), max_norm, 2.0, False)
+
     def _optimizer_step(self) -> None:
-        if self.config.max_grad_norm > 0:
-            ttml.core.clip_grad_norm(self.model.parameters(), self.config.max_grad_norm, 2.0, False)
         self.optimizer.step()
         self._zero_grad()
 

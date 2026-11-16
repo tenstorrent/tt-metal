@@ -23,21 +23,20 @@ dataset:
     val_dataset_path: data/val.jsonl
     template: alpaca
 
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  weight_decay: 0.01
+
 device:
   mesh: [1, 1]
 
 max_length: 256
 batch_size: 4
 seed: 0
-
 stopping_criteria:
   type: epoch
   limit: 1
-
-optimizer:
-  type: adamw
-  lr: 1.0e-4
-  weight_decay: 0.01
 
 metrics:
   train:

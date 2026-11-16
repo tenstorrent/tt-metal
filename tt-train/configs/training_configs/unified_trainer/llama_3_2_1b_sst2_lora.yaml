@@ -15,20 +15,19 @@ model:
 dataset:
   id: sst2
 
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+
 device:
   mesh: [1, 1]
 
 max_length: 64
 batch_size: 8
 seed: 0
-
 stopping_criteria:
   type: step
   limit: 500
-
-optimizer:
-  type: adamw
-  lr: 1.0e-4
 
 metrics:
   train:

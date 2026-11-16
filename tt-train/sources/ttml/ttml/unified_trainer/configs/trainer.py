@@ -19,22 +19,24 @@ class TrainerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    dataset: DatasetConfig
     model: ModelConfig
-    device: DeviceConfig = Field(default_factory=DeviceConfig)
-    dtype: str = "bfloat16"
-
+    dataset: DatasetConfig
     # One optimizer, or a list of them that each train the weights their `modules` match. Every trainable weight
     # must get an optimizer. `type` picks one (see ``OPTIMIZERS``), and with it the other fields it takes.
     optimizer: OptimizerConfigs
+    device: DeviceConfig = Field(default_factory=DeviceConfig)
+    dtype: str = "bfloat16"
+
     batch_size: int = Field(gt=0)
     gradient_accumulation_steps: int = Field(default=1, gt=0)
+    # Clip the global gradient norm to this before every optimizer step; 0 disables clipping.
+    max_grad_norm: float = Field(default=0.0, ge=0.0)
+    seed: int = Field(default=0, ge=0)
     # When the run ends: after a number of epochs or of optimizer steps. One epoch unless set.
     stopping_criteria: StoppingCriteria = Field(default_factory=lambda: StoppingCriteria(type="epoch", limit=1))
-    seed: int = Field(default=0, ge=0)
 
-    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
 
     @model_validator(mode="after")
@@ -54,5 +56,3 @@ class SFTTrainerConfig(TrainerConfig):
 
     # Every batch is padded to this many tokens; longer examples are dropped.
     max_length: int = Field(gt=0)
-    # Clip the global gradient norm to this; 0 disables clipping.
-    max_grad_norm: float = Field(default=0.0, ge=0.0)

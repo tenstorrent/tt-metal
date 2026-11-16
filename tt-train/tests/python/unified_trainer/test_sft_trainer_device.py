@@ -42,6 +42,9 @@ from ttml.unified_trainer.utils import (
 
 safetensors_numpy = pytest.importorskip("safetensors.numpy")
 
+# Well under the gradient norm of a step on the tiny model, so clipping to it scales the gradients.
+MAX_GRAD_NORM = 0.01
+
 N_LAYERS, N_HEADS, N_KV_HEADS, HIDDEN, INTERMEDIATE = 2, 4, 2, 128, 128
 # Covers CharTokenizer's ids.
 VOCAB = 256
@@ -138,6 +141,11 @@ def sft_config(
 ):
     rows = rows or [{"instruction": "Say the word.", "output": "tenstorrent"}] * 16
     fields = {
+        "model": {
+            "name": str(model_dir),
+            "lora": lora,
+            "gradient_checkpointing": gradient_checkpointing,
+        },
         "dataset": {
             "id": "custom",
             "custom_options": {
@@ -146,13 +154,8 @@ def sft_config(
                 "val_dataset_path": write_jsonl(tmp_path / "val.jsonl", rows[:4]),
             },
         },
-        "model": {
-            "name": str(model_dir),
-            "lora": lora,
-            "gradient_checkpointing": gradient_checkpointing,
-        },
-        "max_length": MAX_LENGTH,
         "optimizer": {"lr": 1e-2},
+        "max_length": MAX_LENGTH,
         "batch_size": 2,
         "stopping_criteria": {"type": "step", "limit": max_steps},
         "metrics": {"train": {"steps_freq": 1}, "validation": {"steps_freq": validation_steps_freq}},
@@ -358,6 +361,66 @@ def test_a_gradient_checkpointed_run_trains_as_one_that_keeps_its_activations(
     assert len(checkpointed) == 8 and checkpointed[-1] < checkpointed[0]
     # The recomputed activations are the ones the forward pass made, so the gradients are the same.
     np.testing.assert_allclose(checkpointed, default, rtol=1e-3)
+
+
+def gradient_norm(model):
+    """The global L2 norm of the gradients of the trainable weights."""
+    squares = 0.0
+    for tensor in model.parameters().values():
+        if tensor.get_requires_grad() and tensor.is_grad_initialized():
+            gradient = tensor.get_grad_tensor().to_numpy(ttnn.DataType.FLOAT32).astype(np.float64)
+            squares += float((gradient**2).sum())
+    return squares**0.5
+
+
+class GradientNorms:
+    """The gradient norm before each optimizer step, as the callbacks see it and as the optimizer gets it."""
+
+    def __init__(self):
+        self.unclipped, self.stepped = [], []
+
+    def on_train_start(self, trainer):
+        step = trainer.optimizer.step
+
+        def record_and_step():
+            self.stepped.append(gradient_norm(trainer.model))
+            step()
+
+        trainer.optimizer.step = record_and_step
+
+    def on_optimizer_step_start(self, trainer):
+        self.unclipped.append(gradient_norm(trainer.model))
+
+
+@pytest.mark.parametrize("max_grad_norm", [MAX_GRAD_NORM, 0.0], ids=["clipped", "unclipped"])
+def test_the_optimizer_steps_on_gradients_clipped_to_max_grad_norm(
+    tiny_llama, tmp_path, no_open_device, char_tokenizer, max_grad_norm
+):
+    norms = GradientNorms()
+    trainer = SFTTrainer(callbacks=[norms])
+    try:
+        trainer.setup(
+            sft_config(
+                tiny_llama,
+                tmp_path,
+                checkpoint={"save_strategy": {"type": "none"}},
+                lora=lora(),
+                gradient_accumulation_steps=2,
+                max_grad_norm=max_grad_norm,
+                max_steps=2,
+                validation_steps_freq=0,
+            )
+        )
+        trainer.train()
+    finally:
+        trainer.cleanup()
+
+    # The gradients of a window are well over the limit, so clipping has to scale them.
+    assert len(norms.unclipped) == 2 and min(norms.unclipped) > 2 * MAX_GRAD_NORM
+    if max_grad_norm:
+        np.testing.assert_allclose(norms.stepped, MAX_GRAD_NORM, rtol=0.05)
+    else:
+        np.testing.assert_allclose(norms.stepped, norms.unclipped, rtol=1e-6)
 
 
 def test_init_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_tokenizer):

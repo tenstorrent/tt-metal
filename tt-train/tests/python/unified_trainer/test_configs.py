@@ -7,6 +7,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from ttml.unified_trainer import (
@@ -17,6 +18,7 @@ from ttml.unified_trainer import (
     SFTTrainerConfig,
     StepSave,
     StoppingCriteria,
+    TrainerConfig,
     load_config,
 )
 from ttml.unified_trainer.configs import apply_override
@@ -24,8 +26,8 @@ from ttml.unified_trainer.configs import apply_override
 RECIPES = Path(__file__).resolve().parents[3] / "configs" / "training_configs" / "unified_trainer"
 
 MINIMAL = {
-    "dataset": {"id": "sst2"},
     "model": {"name": "meta-llama/Llama-3.2-1B"},
+    "dataset": {"id": "sst2"},
     "optimizer": {"lr": 1e-4},
     "batch_size": 8,
 }
@@ -33,6 +35,46 @@ MINIMAL = {
 
 def sft(**overrides):
     return SFTTrainerConfig.model_validate({**MINIMAL, "max_length": 64, **overrides})
+
+
+def test_the_sections_are_listed_in_one_order():
+    # The order of a dumped config, and the one the recipes and the docs follow. The fields of one trainer come after
+    # those every trainer reads.
+    assert list(TrainerConfig.model_fields) == [
+        "model",
+        "dataset",
+        "optimizer",
+        "device",
+        "dtype",
+        "batch_size",
+        "gradient_accumulation_steps",
+        "max_grad_norm",
+        "seed",
+        "stopping_criteria",
+        "metrics",
+        "logging",
+        "checkpoint",
+    ]
+    assert list(SFTTrainerConfig.model_fields)[len(TrainerConfig.model_fields) :] == ["max_length"]
+    assert list(sft().model_dump()) == list(SFTTrainerConfig.model_fields)
+
+
+@pytest.mark.parametrize("recipe", sorted(RECIPES.glob("*.yaml")), ids=lambda path: path.stem)
+def test_every_recipe_lists_its_sections_in_that_order(recipe):
+    order = [
+        "model",
+        "dataset",
+        "optimizer",
+        "device",
+        "max_length",
+        "batch_size",
+        "seed",
+        "stopping_criteria",
+        "metrics",
+        "checkpoint",
+    ]
+    sections = list(yaml.safe_load(recipe.read_text()))
+    assert sections == [section for section in order if section in sections]
 
 
 def test_defaults_name_no_lora_and_save_no_checkpoints():
@@ -136,6 +178,7 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
         ({"optimizer": {"lr": 1e-4, "modules": []}}, "optimizer.0.modules"),
         ({"max_length": 0}, "max_length"),
         ({"gradient_accumulation_steps": 0}, "gradient_accumulation_steps"),
+        ({"max_grad_norm": -1.0}, "max_grad_norm"),
         ({"stopping_criteria": 100}, "stopping_criteria"),
         ({"stopping_criteria": {"limit": 100}}, "stopping_criteria.type"),
         ({"stopping_criteria": {"type": "step"}}, "stopping_criteria.limit"),
@@ -353,7 +396,7 @@ def test_apply_override_rejects_malformed_overrides(override, error, expect_erro
 def test_load_config_applies_overrides(tmp_path):
     recipe = tmp_path / "recipe.yaml"
     recipe.write_text(
-        "dataset:\n  id: sst2\nmodel:\n  name: m\noptimizer:\n  lr: 1.0e-4\nbatch_size: 8\nmax_length: 64\n"
+        "model:\n  name: m\ndataset:\n  id: sst2\noptimizer:\n  lr: 1.0e-4\nmax_length: 64\nbatch_size: 8\n"
     )
     config = load_config(
         recipe,
