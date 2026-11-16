@@ -41,6 +41,7 @@ WS2_NORMS = os.environ.get("GEMMA4_26B_WS2_NORMS", "1") != "0"
 WS2_GEGLU = os.environ.get("GEMMA4_26B_WS2_GEGLU", "1") != "0"
 WS2_FUSED_CACHE = os.environ.get("GEMMA4_26B_WS2_FUSED_CACHE", "1") != "0"
 WS2_FOLD_SHARED = os.environ.get("GEMMA4_26B_WS2_FOLD_SHARED", "1") != "0"
+WS2_GATHER_SHARDED = os.environ.get("GEMMA4_26B_WS2_GATHER_SHARDED", "1") != "0"
 # Fabric links per decode all-reduce (QB2 Linear 1x4). 2 measured ~35% faster than 1 at decode-row sizes.
 WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
 
@@ -344,7 +345,7 @@ class _LocalAttention(OptimizedAttention):
             compute_kernel_config=self.output_compute,
             memory_config=self.output_memory,
         )
-        return self.allreduce(projected, role="attention")
+        return self.allreduce(projected, role="attention", output_memory=self.ws2_gather_memory)
 
     def rotary(self, value, cos, sin, *, decode=False):
         if not decode or not getattr(self, "sharded_decode_rope", False):
@@ -510,12 +511,12 @@ class _SharedMLP:
 
             self.decode_programs = (program(gate_grid, gate_n, gate_k), program((11, 4), 2, 17))
 
-    def __call__(self, x, *, reduce_output=True, normalized_input=False):
+    def __call__(self, x, *, reduce_output=True, normalized_input=False, output_dtype=ttnn.bfloat16):
         # Imported Gemma4 loader packs [up_i, gate_i] on each rank. With the input gamma folded into the decode
         # weights, only callers passing the plain normalized row (normalized_input) may use them.
         decode = self.decode_weights is not None and x.shape[-2] == 1
         decode = decode and (normalized_input or not getattr(self, "input_gamma_folded", False))
-        return self._forward(x, decode=decode, reduce_output=reduce_output)
+        return self._forward(x, decode=decode, reduce_output=reduce_output, output_dtype=output_dtype)
 
     def decode_batch(self, x, *, reduce_output=True):
         """Use the selected decode precision for up to one logical token tile."""
@@ -523,7 +524,7 @@ class _SharedMLP:
             raise ValueError("Batched shared decode requires selected weights and at most 32 rows")
         return self._forward(x, decode=True, reduce_output=reduce_output)
 
-    def _forward(self, x, *, decode, reduce_output):
+    def _forward(self, x, *, decode, reduce_output, output_dtype=ttnn.bfloat16):
         if decode and getattr(self, "input_bfp8", False):
             x = ttnn.typecast(x, ttnn.bfloat8_b)
         gu = (
@@ -551,7 +552,7 @@ class _SharedMLP:
             ttnn.linear(
                 hidden,
                 self.decode_weights[1],
-                dtype=ttnn.bfloat16,
+                dtype=output_dtype,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.decode_compute,
                 program_config=self.decode_programs[1],
@@ -1176,6 +1177,13 @@ class MultichipDecoder(OptimizedDecoder):
             )
         attention.reduce = self._reduce_attention
         attention.allreduce, attention.collective_dtype = self.allreduce, self.attention_ccl_dtype
+        # With a bf16 attention collective the all-gather lands in the batch-1 norm layout (no reshard
+        # before the post-attention norm).
+        attention.ws2_gather_memory = (
+            self.ws2_norm.memory
+            if self.ws2_norm is not None and self.attention_ccl_dtype == ttnn.bfloat16 and WS2_GATHER_SHARDED
+            else None
+        )
         self.layer.self_attn = attention
         router = BroadcastRouter(Router(self.layer.moe.router, config.rms_norm_eps), self.normalize)
         self.layer.moe.router = GeneralizedRouter(
@@ -1283,6 +1291,9 @@ class MultichipDecoder(OptimizedDecoder):
             mcast_in0=True,
         )
         experts.mix_memory = ttnn.L1_MEMORY_CONFIG
+        if self.ws2_norm is not None and self.moe_ccl_bfp8:
+            # The routed partial goes straight into the BFP8 MoE collective (no typecast after the concat).
+            experts.decode_output_dtype = ttnn.bfloat8_b
         experts.enable_indexed_decode(self.layer.moe.router)
         self.layer.moe.experts = (
             _ExpertParallelExperts(state_dict, config, mesh_device, sliding) if expert_parallel else experts
@@ -1513,8 +1524,10 @@ class MultichipDecoder(OptimizedDecoder):
         return result if result.shape[-2] == length else result[:, :, :length, :]
 
     def _reduce_moe_pair(self, shared, routed, *, keep_dtype=False):
-        if shared.dtype != ttnn.bfloat16 or routed.dtype != ttnn.bfloat16:
-            raise ValueError("Grouped MoE reduction requires BF16 local outputs")
+        target = ttnn.bfloat8_b if getattr(self, "moe_ccl_bfp8", False) else ttnn.bfloat16
+        for value in (shared, routed):
+            if value.dtype not in (ttnn.bfloat16, target):
+                raise ValueError("Grouped MoE reduction takes BF16 or collective-dtype local outputs")
         if tuple(shared.shape) != tuple(routed.shape) or tuple(shared.shape)[:2] != (1, 1):
             raise ValueError("Grouped MoE outputs must share shape [1,1,S,H]")
         memory = (
@@ -1522,9 +1535,13 @@ class MultichipDecoder(OptimizedDecoder):
             if shared.shape[-2] == 1
             else ttnn.DRAM_MEMORY_CONFIG
         )
-        paired = ttnn.concat((shared, routed), dim=1, memory_config=memory)
-        if getattr(self, "moe_ccl_bfp8", False):
-            paired = ttnn.typecast(paired, ttnn.bfloat8_b)
+        if shared.dtype == routed.dtype:
+            paired = ttnn.concat((shared, routed), dim=1, memory_config=memory)
+            if paired.dtype != target:
+                paired = ttnn.typecast(paired, target)
+        else:
+            shared, routed = (v if v.dtype == target else ttnn.typecast(v, target) for v in (shared, routed))
+            paired = ttnn.concat((shared, routed), dim=1, memory_config=memory)
         reduced = self.allreduce(paired, role="moe_pair")
         if reduced.dtype != ttnn.bfloat16 and not keep_dtype:
             reduced = ttnn.typecast(reduced, ttnn.bfloat16)
@@ -1533,30 +1550,32 @@ class MultichipDecoder(OptimizedDecoder):
     def _reduce_attention(self, value):
         return self.allreduce(ttnn.typecast(value, self.attention_ccl_dtype), role="attention")
 
-    def allreduce(self, value, *, role="shared"):
+    def allreduce(self, value, *, role="shared", output_memory=None):
+        """``output_memory`` (one row, persistent CCL only): the all-gather writes this layout directly."""
         memory = (
             getattr(self, "collective_memory", ttnn.DRAM_MEMORY_CONFIG)
             if value.shape[-2] == 1
             else ttnn.DRAM_MEMORY_CONFIG
         )
         value = ttnn.to_memory_config(value, memory)
+        gather_memory = output_memory if output_memory is not None and self.persistent_ccl else memory
         if self.persistent_ccl and value.shape[-2] == 1:
-            key = (role, tuple(value.shape), tuple(value.padded_shape), value.dtype, str(memory))
+            key = (role, tuple(value.shape), tuple(value.padded_shape), value.dtype, str(memory), str(gather_memory))
             if key not in self._collective_buffers:
                 output_shape = list(value.shape)
                 output_shape[-1] //= 4
 
-                def allocate(shape):
+                def allocate(shape, memory_config=memory):
                     return ttnn.empty(
                         shape,
                         dtype=value.dtype,
                         layout=ttnn.TILE_LAYOUT,
                         device=self.mesh_device,
-                        memory_config=memory,
+                        memory_config=memory_config,
                     )
 
                 scattered = allocate(output_shape)
-                gathered = allocate(value.shape)
+                gathered = allocate(value.shape, gather_memory)
                 if self.topology == ttnn.Topology.Ring:
                     staging = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
                         value,
@@ -1598,7 +1617,7 @@ class MultichipDecoder(OptimizedDecoder):
                 multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
                 barrier_semaphore=self.ccl.get_barrier_semaphore(),
                 num_links=getattr(self, "ccl_links", 1),
-                memory_config=memory,
+                memory_config=gather_memory,
                 **getattr(self, "ccl_tuning", {}),
             )
         return self.mesh_config.allreduce(value, self.ccl, memory_config=memory, axis=1)
@@ -1871,7 +1890,8 @@ class MultichipDecoder(OptimizedDecoder):
             x = shard(x)
         normed = self._ws2_input_norm(x)
         attention = self.layer.self_attn(normed, **attention_kwargs)
-        residual = ttnn.add(x, norm(shard(attention), "post_attention"), memory_config=cfg.memory)
+        attention = attention if attention.is_sharded() else shard(attention)
+        residual = ttnn.add(x, norm(attention, "post_attention"), memory_config=cfg.memory)
         normalized = ttnn.sharded_to_interleaved(norm(residual, None), ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.float32)
         routes = self.layer.moe.router(residual, normalized=normalized)
         experts = self.layer.moe.experts
@@ -1883,7 +1903,10 @@ class MultichipDecoder(OptimizedDecoder):
             shared_input = normalized
         else:
             shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
-        shared = shared_mlp(shared_input, reduce_output=False, normalized_input=shared_input is normalized)
+        collective = ttnn.bfloat8_b if self.moe_ccl_bfp8 else ttnn.bfloat16
+        shared = shared_mlp(
+            shared_input, reduce_output=False, normalized_input=shared_input is normalized, output_dtype=collective
+        )
         # The reshard into the norm layout also restores bf16 from the BFP8 collective.
         shared, routed = self._reduce_moe_pair(shared, routed, keep_dtype=True)
         combined = norm(norm(shard(shared), "ff1"), "ff", residual=norm(shard(routed), "ff2"))
