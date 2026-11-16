@@ -204,7 +204,7 @@ def tuned_projection_matmul_configs(
         per_core_M=per_core_m,
         per_core_N=input_per_core_n,
         transpose_mcast=False,
-        fused_activation=fused_activation,
+        fused_activation=None,
         fuse_batch=True,
     )
     output_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -298,6 +298,6 @@ def decay_projection_program_config(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=None,
+        fused_activation=fused_activation,
         fuse_batch=True,
     )
