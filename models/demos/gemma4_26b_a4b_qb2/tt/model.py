@@ -271,7 +271,9 @@ class Gemma4Model:
         for layer_number, (layer, cache, index) in enumerate(zip(self.layers, kv_cache, self.layer_indices)):
             layer_table = page_table[layer_number] if isinstance(page_table, (tuple, list)) else page_table
             kind = self.config.layer_types[index]
-            if kind not in rope_rows:
+            if getattr(layer.layer.self_attn, "heads_b1", None) is not None:
+                rope_rows[kind] = self.rope_decode[kind]  # HeadsB1 reads the position's rows from the tables
+            elif kind not in rope_rows:
                 rope_rows[kind] = DecodeRopeRows.gather(self.rope_decode[kind], current_pos)
             x = layer.fused_decode(
                 x,

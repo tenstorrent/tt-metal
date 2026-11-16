@@ -291,17 +291,22 @@ class _LocalAttention(OptimizedAttention):
         qkv = self.source.weights.wqkv(
             hidden_states, dtype=ttnn.bfloat16, **({"decode_rows": True} if rows > 1 else {})
         )
-        rope = DecodeRopeRows.gather(kwargs["rope_mats"], kwargs["position_idx"])
         cache_pos, page_table = kwargs["position_idx_cache"], kwargs["page_table"]
         k_cache, v_cache = kwargs["kv_cache"]
         heads_b1 = getattr(self, "heads_b1", None)
         if WS2_FUSED_CACHE and rows == 1 and heads_b1 is not None and getattr(self, "fused_partial", False):
-            # WS5: one head per core (fused_decode/heads.py), same outputs as qkv_heads_norm_rope_b1
-            q, k, v = heads_b1(qkv, rope.cos, rope.sin)
+            # WS5: one head per core (fused_decode/heads.py), same outputs as qkv_heads_norm_rope_b1; given the raw
+            # [context, D] tables it reads the position's cos / sin rows itself (no per-step gather)
+            tables = kwargs["rope_mats"]
+            if isinstance(tables, DecodeRopeRows):
+                q, k, v = heads_b1(qkv, tables.cos, tables.sin)
+            else:
+                q, k, v = heads_b1(qkv, tables[0], tables[1], kwargs["position_idx"])
             ttnn.experimental.paged_fused_update_cache(
                 k_cache, k, v_cache, v, update_idxs_tensor=cache_pos, page_table=page_table
             )
             return self._ws2_attend(q, k_cache, v_cache, cache_pos, page_table)
+        rope = DecodeRopeRows.gather(kwargs["rope_mats"], kwargs["position_idx"])
         if WS2_FUSED_CACHE and rows == 1:
             # v on its own core, so one program writes both caches.
             q, k, v = qkv_heads_norm_rope_b1(
