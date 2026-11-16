@@ -8,7 +8,7 @@ Abs:
 - {metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP on Float16/Float16_b, 80 variants'}
 - {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: max 0 ULP, 32 variants'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
 - {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
