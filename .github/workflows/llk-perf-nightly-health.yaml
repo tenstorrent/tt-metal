@@ -37,6 +37,20 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install pyyaml
+      - name: Merge-gate audit
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DAY: ${{ inputs.date }}
+        run: |
+          D=${DAY:0:10}
+          AUDIT_DAY=$(date -u -d "${D:-today} 1 day ago" +%F)
+          # A week of main, trees only, so the day's first commit has its parent after a quiet weekend.
+          # The audit reads the few blobs it needs on demand.
+          git fetch --no-tags --filter=blob:none --shallow-since="$(date -u -d "$AUDIT_DAY 7 days ago" +%F)" \
+            origin +refs/heads/main:refs/remotes/origin/main
+          python3 tt_metal/tt-llk/perf/merge_gate_audit.py --repo "$GITHUB_REPOSITORY" --day "$AUDIT_DAY"
       - name: Check and send
         env:
           GH_TOKEN: ${{ github.token }}
