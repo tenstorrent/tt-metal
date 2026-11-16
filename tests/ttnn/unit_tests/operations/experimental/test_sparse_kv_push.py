@@ -87,10 +87,6 @@ def _mesh(mesh_device, submesh):
     return mesh_device.create_submesh(ttnn.MeshShape(*shape), ttnn.MeshCoordinate(*offset))
 
 
-def _num_devices(mesh_device):
-    return mesh_device.get_num_devices()
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 # Cache, buffers and the plan + push
 # ----------------------------------------------------------------------------------------------------------------------
@@ -113,7 +109,7 @@ def _owner_of_rank(mesh_device, sp_axis):
 def _cache(mesh_device, slots, max_rows, sc, width):
     """Block-cyclic cache: global row n lives on owner (n / sc) % N at local row (n / sc / N) * sc + n % sc, and the
     owner's chip is the one holding that stripe (see _owner_of_rank)."""
-    num_chips = _num_devices(mesh_device)
+    num_chips = mesh_device.get_num_devices()
     per_chip = max_rows // num_chips
     p = np.arange(max_rows)
     rank, local = p // per_chip, p % per_chip
@@ -169,8 +165,10 @@ class Push:
     """One plan for `idx`, its all-gathered tables, and pushes from `cache` into compact buffers."""
 
     def __init__(self, mesh_device, cache, idx, *, max_rows, sc, page_bytes, chunk_start, links=2, start_tensor=True):
+        # The model's only gate between the push and the dense gather: every push a test runs must pass it.
+        assert ttnn.experimental.is_sparse_kv_push_supported(mesh_device, sc, max_rows, links)
         self.mesh_device, self.cache, self.idx = mesh_device, cache, idx
-        self.n = _num_devices(mesh_device)
+        self.n = mesh_device.get_num_devices()
         self.max_rows, self.sc, self.links = max_rows, sc, links
         self.width = page_bytes // 4
         p, banks = packet_shape(mesh_device, page_bytes)
@@ -276,7 +274,7 @@ def _lay_out(row_sets, queries, rng):
     return idx
 
 
-def _pattern(name, rng, *, sc, end, start, shape=(8, 4), owner_of_rank=None):
+def _pattern(name, rng, *, sc, end, start, shape, owner_of_rank=None):
     """Row sets per chip of a `shape` mesh (in row-major rank order) for the synthetic pattern `name`; rows are below
     `end` (the populated cache). `owner_of_rank` maps a rank to the stripe its chip holds (the rank itself when
     omitted)."""
@@ -373,7 +371,7 @@ def _run_parts(mesh_device, push, *, slot, chunk_start, tag, **slot_args):
 def _run_pattern(mesh_device, pattern, max_rows, offset):
     sc, page_bytes = 160, 704
     rng = np.random.default_rng(zlib.crc32(pattern.encode()))
-    start = max_rows - sc * _num_devices(mesh_device) + offset
+    start = max_rows - sc * mesh_device.get_num_devices() + offset
     rows = _pattern(
         "random" if pattern == "unaligned_start" else pattern,
         rng,
@@ -412,7 +410,7 @@ def _config_id(page_bytes, sc, links, slot_tensor):
 def _run_config(mesh_device, page_bytes, sc, links, slot_tensor):
     max_rows = 92160
     rng = np.random.default_rng(sc * 7 + links)
-    start = max_rows - sc * _num_devices(mesh_device)
+    start = max_rows - sc * mesh_device.get_num_devices()
     rows = _pattern("clustered", rng, sc=sc, end=max_rows, start=start, shape=tuple(mesh_device.shape))
     idx = _mask(_lay_out(rows, sc, rng), rng)
     cache = _cache(mesh_device, 4, max_rows, sc, page_bytes // 4)
@@ -485,13 +483,14 @@ _PERF_SAMPLES = 7
 _RING_RING_4X4_PERF_DEVICE_PARAMS = {**_device_params(), "require_exact_physical_num_devices": True}
 
 
-def _stage_topk(source, n=16):
+def _stage_topk(source, n):
     """[16, 160, TOPK] indices into the stage cache: the synthetic "random" pattern, or one layer of the staged GLM-5.3
     1M top-k (the first 2560 of the trace's 5120 query rows, whose rows all lie below the chunk's end)."""
     sc = 160
     if source == "random":
         rng = np.random.default_rng(7)
-        return _lay_out(_pattern("random", rng, sc=sc, end=_STAGE_CACHE_ROWS, start=_STAGE_CHUNK_START, shape=(4, 4)), sc, rng)
+        rows = _pattern("random", rng, sc=sc, end=_STAGE_CACHE_ROWS, start=_STAGE_CHUNK_START, shape=(4, 4))
+        return _lay_out(rows, sc, rng)
     from safetensors.numpy import load_file
 
     f = _GLM_1M_TRACE / "dsa" / f"dsa_topk_indices_layer_{source}" / "rows_00000000_00005120.safetensors"
@@ -527,7 +526,7 @@ _RING_RING_4X4_PERF_CEILING_US = {
 def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source, ceilings_us):
     monkeypatch.setitem(globals(), "SP_AXIS", sp_axis)
     sc, page_bytes = 160, 704
-    idx = _stage_topk(source, _num_devices(mesh_device))
+    idx = _stage_topk(source, mesh_device.get_num_devices())
     cache = _cache(mesh_device, 2, _STAGE_CACHE_ROWS, sc, page_bytes // 4)
     push = Push(
         mesh_device,
@@ -593,7 +592,7 @@ def test_sparse_kv_push_worst_case_union(mesh_device):
     queries x top-k distinct rows (that many plus one unit per owner) must hold it. 32 queries keep it cheap; the bound
     is the same for the model's 160."""
     sc, page_bytes, queries = 160, 64, 32
-    n = _num_devices(mesh_device)
+    n = mesh_device.get_num_devices()
     distinct = queries * TOPK
     max_rows = -(-distinct // (sc * n)) * sc * n
     idx = np.stack([np.random.default_rng(d).permutation(distinct).reshape(queries, TOPK) for d in range(n)])
@@ -611,11 +610,12 @@ def test_sparse_kv_push_worst_case_union(mesh_device):
 def test_sparse_kv_push_traced(mesh_device):
     """Plan + table gather + push captured once, replayed with new indices, chunk start and user slot in place."""
     sc, page_bytes, max_rows = 160, 704, 92160
-    n = _num_devices(mesh_device)
+    n = mesh_device.get_num_devices()
     rng = np.random.default_rng(3)
     first, second = max_rows - sc * n, max_rows - 2 * sc * n
-    idx_a = _lay_out(_pattern("clustered", rng, sc=sc, end=max_rows, start=first), sc, rng)
-    idx_b = _lay_out(_pattern("random", rng, sc=sc, end=second + sc * n, start=second), sc, rng)
+    shape = tuple(mesh_device.shape)
+    idx_a = _lay_out(_pattern("clustered", rng, sc=sc, end=max_rows, start=first, shape=shape), sc, rng)
+    idx_b = _lay_out(_pattern("random", rng, sc=sc, end=second + sc * n, start=second, shape=shape), sc, rng)
     cache = _cache(mesh_device, 4, max_rows, sc, page_bytes // 4)
     # Size the buffer for either set of indices: the capture fixes its address.
     unit = np.prod(packet_shape(mesh_device, page_bytes))
@@ -695,7 +695,7 @@ def _run_determinism(mesh_device):
     """The prefix push then the rest, repeated on one plan, fill every referenced slot bit-identically. Compared on
     device, one buffer reused across runs; only referenced slots count, since the rest of a packet is undefined."""
     sc, page_bytes, max_rows, runs = 160, 704, 92160, 5
-    n = _num_devices(mesh_device)
+    n = mesh_device.get_num_devices()
     rng = np.random.default_rng(11)
     start = max_rows - sc * n
     rows = _pattern("clustered", rng, sc=sc, end=max_rows, start=start, shape=tuple(mesh_device.shape))
@@ -754,9 +754,7 @@ FABRIC_CONFIGS = [(1152, 64, 1, True)]
 @other_fabrics
 @pytest.mark.parametrize("pattern, max_rows, offset", FABRIC_PATTERNS, ids=[p[0] for p in FABRIC_PATTERNS])
 def test_sparse_kv_push_fabric_patterns(mesh_device, submesh, pattern, max_rows, offset):
-    mesh = _mesh(mesh_device, submesh)
-    assert ttnn.experimental.is_sparse_kv_push_supported(mesh, 160, max_rows)
-    _run_pattern(mesh, pattern, max_rows, offset)
+    _run_pattern(_mesh(mesh_device, submesh), pattern, max_rows, offset)
 
 
 @other_fabrics
@@ -770,3 +768,41 @@ def test_sparse_kv_push_fabric_configs(mesh_device, submesh, page_bytes, sc, lin
 @other_fabrics
 def test_sparse_kv_push_fabric_determinism(mesh_device, submesh):
     _run_determinism(_mesh(mesh_device, submesh))
+
+
+# Meshes the push cannot serve, as (id, fabric config, submesh or None, links, the op's error): the support check must
+# say so, and the op must raise on the host before it dispatches anything.
+UNSUPPORTED = [
+    ("1d-8x4", ttnn.FabricConfig.FABRIC_1D, None, 2, "needs a 2D fabric"),
+    # Rows 0-5 of the 8-row torus: the fabric's shortest route from row 0 to row 5 wraps through rows 7 and 6, outside
+    # the submesh, where it has no channel.
+    ("torus_xy-6x4", ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ((6, 4), (0, 0)), 2, "no channel on the fabric's route"),
+    ("torus_xy-8x4-3link", ttnn.FabricConfig.FABRIC_2D_TORUS_XY, None, 3, "supports 1 or 2 links"),
+]
+
+
+@pytest.mark.parametrize(
+    "device_params, mesh_device, submesh, links, error",
+    [(_device_params(config), (8, 4), submesh, links, error) for _, config, submesh, links, error in UNSUPPORTED],
+    ids=[case[0] for case in UNSUPPORTED],
+    indirect=["device_params", "mesh_device"],
+)
+def test_sparse_kv_push_unsupported(mesh_device, submesh, links, error):
+    mesh = _mesh(mesh_device, submesh)
+    sc, page_bytes = 160, 704
+    max_rows = sc * mesh.get_num_devices() * 4
+    assert not ttnn.experimental.is_sparse_kv_push_supported(mesh, sc, max_rows, links)
+    # The routing checks run before the table's, so a placeholder table reaches them.
+    width = page_bytes // 4
+    sems = _semaphores(mesh)
+    with pytest.raises(RuntimeError, match=error):
+        ttnn.experimental.sparse_kv_push(
+            _cache(mesh, 1, max_rows, sc, width),
+            output_tensor=_filled_buffer(mesh, 64, width),
+            table=_scalar(mesh, 0),
+            stripe_chunk=sc,
+            max_rows=max_rows,
+            num_links=links,
+            ready_semaphore=sems[0],
+            done_semaphore=sems[1],
+        )

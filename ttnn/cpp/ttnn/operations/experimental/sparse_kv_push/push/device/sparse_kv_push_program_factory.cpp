@@ -120,44 +120,6 @@ tt::tt_metal::KernelDescriptor::Defines kernel_defines(tt::tt_metal::distributed
     };
 }
 
-// The chip's fabric directions. The kernels send each requester's rows, and their completion counts, on the channel of
-// the fabric's first hop towards it, so every first hop must be one of them, or that requester would wait forever. The
-// directions must also differ: two neighbours the fabric reaches the same way mean the topology was misread (e.g. a
-// line taken for a ring).
-std::vector<FabricDirection> checked_directions(
-    const Tensor& tensor, const tt::tt_metal::distributed::MeshCoordinate& coord) {
-    auto* mesh_device = tensor.device();
-    auto directions = fabric_directions(tensor, coord);
-    for (size_t i = 0; i < directions.size(); ++i) {
-        for (size_t j = i + 1; j < directions.size(); ++j) {
-            TT_FATAL(
-                directions[i].eth_direction != directions[j].eth_direction,
-                "the sparse KV push from chip {} reaches neighbours {} and {} in the same fabric direction",
-                coord,
-                directions[i].neighbor,
-                directions[j].neighbor);
-        }
-    }
-    const auto my_node = mesh_device->get_fabric_node_id(coord);
-    for (const auto& other : tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape())) {
-        if (other == coord) {
-            continue;
-        }
-        const auto first_hop =
-            tt::tt_fabric::get_eth_forwarding_direction(my_node, mesh_device->get_fabric_node_id(other));
-        TT_FATAL(
-            first_hop.has_value() &&
-                std::any_of(
-                    directions.begin(),
-                    directions.end(),
-                    [&](const FabricDirection& d) { return d.eth_direction == static_cast<uint32_t>(*first_hop); }),
-            "the sparse KV push from chip {} has no channel on the fabric's route to chip {}",
-            coord,
-            other);
-    }
-    return directions;
-}
-
 std::vector<uint32_t> reader_compile_args(
     const SparseKvPushParams& params,
     const SparseKvPushInputs& tensor_args,
@@ -288,7 +250,7 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     // The plan owns block b on owner b % num_devices; the cache stripes blocks along sp_axis first.
     const uint32_t my_owner = params.sp_axis == 0 ? my_rank : coord[1] * mesh_view.shape()[0] + coord[0];
     const auto layout =
-        core_layout(params.core_grid, params.num_links, checked_directions(tensor_args.input_tensor, coord));
+        core_layout(params.core_grid, params.num_links, fabric_directions(mesh_device, coord, params.num_links));
     const auto mux = mux_config(mesh_device, desc, layout);
     const auto defines = kernel_defines(mesh_device);
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();

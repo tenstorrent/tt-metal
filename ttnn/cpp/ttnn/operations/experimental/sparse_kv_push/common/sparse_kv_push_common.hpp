@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
@@ -32,18 +33,31 @@ struct FabricDirection {
     std::vector<uint32_t> links;
 };
 
-// Whether the push can route on this mesh: a 2D fabric (FABRIC_2D or a torus on either or both axes) on a 2D mesh of at
-// least 2 chips. Which links exist is discovered per chip (fabric_directions), so no axis needs to wrap.
+// Whether the fabric config and mesh shape allow the push at all: a 2D fabric (FABRIC_2D or a torus on either or both
+// axes) on a 2D mesh of at least 2 chips. Whether it can route there is fabric_routes' question.
 bool fabric_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
-// The directions the chip at `coord` of `tensor`'s mesh has fabric neighbours in, in E, W, N, S order: both ways along
+// Every chip's fabric directions, chips in row-major order, and why the push cannot route on them with num_links links
+// (empty when it can). A chip sends in the directions it has fabric neighbours in, in E, W, N, S order: both ways along
 // an axis the fabric closes into a ring, only the existing ones along a line (none at the far end), none along an axis
-// of one chip.
-std::vector<FabricDirection> fabric_directions(
-    const Tensor& tensor, const tt::tt_metal::distributed::MeshCoordinate& coord);
+// of one chip. The push can route when the fabric is supported, every direction forwards on num_links links, a chip's
+// directions differ (else the topology was misread, e.g. a line taken for a ring), and the fabric's first hop from
+// every chip to every other is one of them (the kernels send each requester's rows on that hop's channel).
+struct FabricRoutes {
+    std::vector<std::vector<FabricDirection>> chips;  // empty when problem is set
+    std::string problem;
 
-// The most directions any chip of `tensor`'s mesh sends in; the push's core grid is sized for it.
-uint32_t max_fabric_directions(const Tensor& tensor);
+    bool ok() const { return problem.empty(); }
+    uint32_t max_directions() const;  // the push's core grid is sized for the chip with the most
+};
+FabricRoutes fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t num_links);
+
+// One chip's directions, for building its program once fabric_routes has passed; raises with fabric_routes' reason
+// otherwise.
+std::vector<FabricDirection> fabric_directions(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
+    uint32_t num_links);
 
 // Rows travel in packets of pages_per_packet rows, dealt round robin over the DRAM banks. The plan lays out the
 // compact slots and the push writes them, so both take the shape from here.
