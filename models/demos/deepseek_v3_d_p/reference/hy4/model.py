@@ -26,7 +26,6 @@ Per layer, the sink receives exactly what the device writes for that layer:
 
 from __future__ import annotations
 
-import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -386,9 +385,3 @@ class Hy4PrefillReference:
             for row, p in enumerate(positions):
                 sink.on_final(logits=logits[row], position=p)
         return x4
-
-
-def expected_runtime_note(seq_len: int) -> str:
-    """Rough CPU cost, for the CLI's log line (fp32, ~1.5 TFLOP/s effective, ~0.35 GB/s weight reads)."""
-    tflop = 5.0 * seq_len / 4096 * 78 + 21 * 2 * 32 * 128 * seq_len**2 / 2 / 1e12
-    return f"~{tflop:.0f} TFLOP of fp32 compute + ~1.5 TB of weight reads ({math.ceil(tflop / 1.5 / 60)} min compute)"
