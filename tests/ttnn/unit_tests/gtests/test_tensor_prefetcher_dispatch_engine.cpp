@@ -76,13 +76,22 @@ protected:
     }
 };
 
+// How a case leaves its weight's write. to_device only enqueues it, and a prefetch request is not ordered against
+// the command queue, so the reader could stage DRAM the write has not reached yet. Most tests finish the queue
+// first; a test of a device-side ordering (a CQ fence, an op signal raised behind the write) leaves the write in
+// flight so that the ordering is what protects the weight.
+enum class WeightWrite { Finished, InFlight };
+
 // A receiver-contiguous weight -- one (K, N / receivers) slab per receiver, round-robin over the DRAM banks --
 // and the PrefetcherPipes that deliver it to `receivers_per_bank` receivers of every bank, `ring_entries`
 // blocks deep per receiver. A dispatch engine holds one sender endpoint per bank, so each bank's
 // receivers share one pipe.
 struct ReceiverContiguousCase {
     ReceiverContiguousCase(
-        tt::tt_metal::distributed::MeshDevice* device, uint32_t receivers_per_bank, uint32_t ring_entries) {
+        tt::tt_metal::distributed::MeshDevice* device,
+        uint32_t receivers_per_bank,
+        uint32_t ring_entries,
+        WeightWrite weight_write = WeightWrite::Finished) {
         const uint32_t num_banks = device->dram_grid_size().x;
         const uint32_t num_receivers = receivers_per_bank * num_banks;
         const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -135,9 +144,9 @@ struct ReceiverContiguousCase {
             ttnn::Shape({1, 1, k, n}),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), weight_memory_config));
         weight = Tensor::from_vector(std::move(values), weight_spec).to_device(device);
-        // to_device only enqueues the write, and a prefetch request is not ordered against the command queue:
-        // without this the reader can stage DRAM the write has not reached yet.
-        tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+        if (weight_write == WeightWrite::Finished) {
+            tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+        }
     }
 
     std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> pipe_refs() const {
@@ -213,7 +222,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverC
 // dispatcher writes into the dispatch engine's own L1 that every kernel waits on.
 TEST_F(DispatchEngineTensorPrefetcherFixture, FencesRequestsAgainstCommandQueue) {
     metal_exp::StartTensorPrefetcher(*device_, {});
-    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2);
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, WeightWrite::InFlight);
     metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(), std::nullopt);
     queue_layers(device_, prefetch, /*num_layers=*/1);
     validate_layers(device_, prefetch, /*num_layers=*/1);
@@ -224,7 +233,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, FencesRequestsAgainstCommandQueue)
 // after the signalling op gets every block intact only if every kernel held at the wait.
 TEST_F(DispatchEngineTensorPrefetcherFixture, ServesRequestAfterOpSignal) {
     constexpr uint32_t kSignalId = 1;
-    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2);
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2, WeightWrite::InFlight);
     metal_exp::StartTensorPrefetcher(*device_, {});
     for (uint32_t layer = 0; layer < 2; ++layer) {
         metal_exp::QueueTensorPrefetcherWaitForSignal(*device_, kSignalId, /*trace_capture_cq=*/nullptr);
