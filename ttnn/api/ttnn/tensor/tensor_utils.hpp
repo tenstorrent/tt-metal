@@ -11,7 +11,6 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 // Exports symbols
-#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 
 namespace ttnn {
@@ -84,5 +83,16 @@ tt::tt_metal::CBDescriptor cb_descriptor_from_sharded_tensor(
  * no buffer is set. TT_FATALs if a per-core-allocated buffer's address differs across the CB's cores.
  */
 uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc);
+
+// Returns the mesh topology of a tensor reshaped from `old_shape` to `new_shape`.
+// Requires equal total volume (`old_shape.volume() == new_shape.volume()`).
+// Each Shard placement whose outer prefix (zero count and non-zero extent product before `d`)
+// matches the unique outermost dimension `d'` in `new_shape` with `new_shape[d'] != 1`
+// (or `old_shape[d] == 1`) moves to `d'`, preserving negative dim spelling and zero-sized
+// sharded dimensions. Returns std::nullopt when shapes match, volumes differ, or no Shard changes.
+std::optional<tt::tt_metal::TensorTopology> reshaped_tensor_topology(
+    const tt::tt_metal::TensorTopology& topology,
+    const tt::tt_metal::Shape& old_shape,
+    const tt::tt_metal::Shape& new_shape);
 
 }  // namespace ttnn

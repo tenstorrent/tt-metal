@@ -17,6 +17,7 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -40,7 +41,6 @@
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <internal/mesh_device.hpp>
-#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::tensor_impl {
 
@@ -449,16 +449,19 @@ tt::tt_metal::HostTensor view(
 
     auto new_spec = tt::tt_metal::TensorSpec(
         new_logical_shape,
-        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             tensor.dtype(),
             tensor.tensor_spec().page_config(),
             output_memory_config,
             new_logical_shape,
             new_padded_shape));
 
-    // TODO (#25340): Review tensor topology logic for reshape
+    const auto& input_topology = tt::tt_metal::get_tensor_topology(tensor);
+    const auto output_topology =
+        ttnn::reshaped_tensor_topology(input_topology, tensor.logical_shape(), new_logical_shape)
+            .value_or(input_topology);
     const auto& buffer = tensor.buffer();
-    return host_tensor_from_buffer_with_topology(buffer, new_spec, tt::tt_metal::get_tensor_topology(tensor));
+    return host_tensor_from_buffer_with_topology(buffer, new_spec, output_topology);
 }
 
 // ======================================================================================

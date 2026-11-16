@@ -34,7 +34,6 @@
 #include "reshape_force.hpp"
 #include "codegen/reshape_codegen_device_operation.hpp"
 #include "codegen/reshape_codegen_supported.hpp"
-#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -450,7 +449,7 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig interleaved_output_mem_config{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
             auto interleaved_output_spec = tt::tt_metal::TensorSpec(
                 requested_shape_3d,
-                tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+                tt::tt_metal::TensorLayout::fromPaddedShape(
                     tensor3d.dtype(),
                     tensor3d.tensor_spec().page_config(),
                     interleaved_output_mem_config,
@@ -514,7 +513,7 @@ ttnn::Tensor reshape_tiled(
         // passed here ends up baked into the layout's alignment, so synthetic_spec.physical_shape()
         // exactly matches the requested padded shape, even if compute_padded_shape ever produced
         // dimensions that exceed tile alignment (e.g., due to shard-aware padding).
-        auto synthetic_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
+        auto synthetic_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
             tensor3d.dtype(),
             tensor3d.tensor_spec().page_config(),
             MemoryConfig(updated_mem_config.buffer_type()),
@@ -685,135 +684,146 @@ ttnn::Tensor reshape_dispatch(
         }
     }
 
-    // A config normalized from an NdShardSpec carries both specs, and buffer creation always prefers
-    // the nd one, so a shape-changing reshape must drop the spec sized for the old shape or
-    // allocation aborts on its rank. Done here, at the one choke point every shape-changing path
-    // flows through, rather than in each: the explicit-config override below returns the caller's
-    // config verbatim, and the ND branch forwards it verbatim too. Deliberately after both no-op
-    // gates above -- stripping earlier would make a provenance-sensitive operator== report a
-    // difference and turn a free same-shape call into a reshard.
-    mem_config = operations::data_movement::drop_normalized_nd_shard_spec(mem_config);
+    auto output = [&]() -> ttnn::Tensor {
+        // A config normalized from an NdShardSpec carries both specs, and buffer creation always prefers
+        // the nd one, so a shape-changing reshape must drop the spec sized for the old shape or
+        // allocation aborts on its rank. Done here, at the one choke point every shape-changing path
+        // flows through, rather than in each: the explicit-config override below returns the caller's
+        // config verbatim, and the ND branch forwards it verbatim too. Deliberately after both no-op
+        // gates above -- stripping earlier would make a provenance-sensitive operator== report a
+        // difference and turn a free same-shape call into a reshard.
+        mem_config = operations::data_movement::drop_normalized_nd_shard_spec(mem_config);
 
-    // ND-sharded input or output (shape-changing only; same-shape is handled above). The 2D sharded
-    // paths can't express an ND spec, and view_device rejects an ND input outright, so reshape through
-    // a DRAM interleaved intermediate and lay out the result via to_memory_config. Keying on both ends
-    // keeps them symmetric: an ND input reaches an explicit non-ND output the same way an ND output is
-    // reached, rather than aborting in PerformView. DRAM staging (not the L1 output's buffer type)
-    // avoids OOMing an L1-only ND output.
-    const bool nd_output = operations::data_movement::is_nd_sharded_memory_config(mem_config);
-    const bool nd_input = operations::data_movement::is_nd_sharded_memory_config(tensor.memory_config());
+        // ND-sharded input or output (shape-changing only; same-shape is handled above). The 2D sharded
+        // paths can't express an ND spec, and view_device rejects an ND input outright, so reshape through
+        // a DRAM interleaved intermediate and lay out the result via to_memory_config. Keying on both ends
+        // keeps them symmetric: an ND input reaches an explicit non-ND output the same way an ND output is
+        // reached, rather than aborting in PerformView. DRAM staging (not the L1 output's buffer type)
+        // avoids OOMing an L1-only ND output.
+        const bool nd_output = operations::data_movement::is_nd_sharded_memory_config(mem_config);
+        const bool nd_input = operations::data_movement::is_nd_sharded_memory_config(tensor.memory_config());
 
-    // view_device does a logical-only update (padded shape unchanged) on an ND tensor zero-copy, so
-    // don't spend an L1->DRAM->L1 round trip on it. Compared against the padded shape PerformView
-    // would actually view with, not the requested one: for a TILE tensor whose logical inner dims
-    // are not tile multiples it substitutes compute_padded_shape, so comparing padded_shape here
-    // misses the common reduction output [N, C, 1, W] and sends a free view through the staging
-    // path instead. The last dim must match too, as this_is_view requires below: an equal padded
-    // shape alone does not make this a reinterpretation, and a view would return stale values.
-    const ttnn::Shape effective_view_padded_shape =
-        (tensor.layout() == ttnn::TILE_LAYOUT && logical_shape.rank() >= 2 &&
-         (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0))
-            ? operations::data_movement::compute_padded_shape(logical_shape, tile_first_dim, tile_second_dim)
-            : padded_shape;
-    if (nd_input && !output_config_differs && logical_shape.rank() > 1 &&
-        tensor.memory_config().nd_shard_spec().has_value() && effective_view_padded_shape == tensor.padded_shape() &&
-        shape_last_dim == tensor_shape_last_dim) {
-        return operations::data_movement::PerformView(
-            tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
-    }
-
-    if (nd_output || nd_input) {
-        // A genuinely ND-sharded input is first moved to interleaved so the intermediate reshape's
-        // rank-normalizing view accepts it.
-        Tensor working = tensor;
-        if (nd_input) {
-            working = ttnn::to_memory_config(tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+        // view_device does a logical-only update (padded shape unchanged) on an ND tensor zero-copy, so
+        // don't spend an L1->DRAM->L1 round trip on it. Compared against the padded shape PerformView
+        // would actually view with, not the requested one: for a TILE tensor whose logical inner dims
+        // are not tile multiples it substitutes compute_padded_shape, so comparing padded_shape here
+        // misses the common reduction output [N, C, 1, W] and sends a free view through the staging
+        // path instead. The last dim must match too, as this_is_view requires below: an equal padded
+        // shape alone does not make this a reinterpretation, and a view would return stale values.
+        const ttnn::Shape effective_view_padded_shape =
+            (tensor.layout() == ttnn::TILE_LAYOUT && logical_shape.rank() >= 2 &&
+             (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0))
+                ? operations::data_movement::compute_padded_shape(logical_shape, tile_first_dim, tile_second_dim)
+                : padded_shape;
+        if (nd_input && !output_config_differs && logical_shape.rank() > 1 &&
+            tensor.memory_config().nd_shard_spec().has_value() &&
+            effective_view_padded_shape == tensor.padded_shape() && shape_last_dim == tensor_shape_last_dim) {
+            return operations::data_movement::PerformView(
+                tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
         }
-        MemoryConfig interleaved_mem_config{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-        auto interleaved_result = reshape_dispatch(
-            working,
-            logical_input_shape,
-            padded_input_shape,
-            interleaved_mem_config,
-            pad_value,
-            reshape_map_mode,
-            sub_core_grid,
-            skip_padding_fill,
-            impl);
 
-        // Explicit config: honor the caller's exact ND spec. Inherited config: re-derive a spec for
-        // the output shape rather than reusing the input's literal per-core shard (which over-pads).
-        MemoryConfig output_mem_config = mem_config;
-        if (!explicit_memory_config && mem_config.nd_shard_spec().has_value()) {
-            output_mem_config = operations::data_movement::derive_nd_shard_spec_for_reshaped_output(
+        if (nd_output || nd_input) {
+            // A genuinely ND-sharded input is first moved to interleaved so the intermediate reshape's
+            // rank-normalizing view accepts it.
+            Tensor working = tensor;
+            if (nd_input) {
+                working =
+                    ttnn::to_memory_config(tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+            }
+            MemoryConfig interleaved_mem_config{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+            auto interleaved_result = reshape_dispatch(
+                working,
+                logical_input_shape,
+                padded_input_shape,
+                interleaved_mem_config,
+                pad_value,
+                reshape_map_mode,
+                sub_core_grid,
+                skip_padding_fill,
+                impl);
+
+            // Explicit config: honor the caller's exact ND spec. Inherited config: re-derive a spec for
+            // the output shape rather than reusing the input's literal per-core shard (which over-pads).
+            MemoryConfig output_mem_config = mem_config;
+            if (!explicit_memory_config && mem_config.nd_shard_spec().has_value()) {
+                output_mem_config = operations::data_movement::derive_nd_shard_spec_for_reshaped_output(
+                    mem_config,
+                    tensor.padded_shape(),
+                    interleaved_result.padded_shape(),
+                    tensor.layout() == ttnn::TILE_LAYOUT);
+            }
+            return ttnn::to_memory_config(interleaved_result, output_mem_config);
+        }
+
+        // A metadata-only view keeps the input's buffer, so it only needs matching sharded-ness and
+        // L1/DRAM placement. Full MemoryConfig equality is deliberately avoided: operator== is
+        // provenance-sensitive and would force needless reshards on functionally-identical configs.
+        bool this_is_view =
+            (tensor_shape_last_dim == shape_last_dim) &&
+            (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
+            (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
+            ((tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) ||              // Its row major
+             (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
+             (shape_second_last_dim % tile_second_dim == 0 &&
+              tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
+
+        if (this_is_view) {
+            return operations::data_movement::PerformView(
+                tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
+        }
+        if (impl == ReshapeImpl::ROUTED) {
+            if (auto plan =
+                    routed_codegen_plan(tensor, logical_shape, padded_shape, pad_value, mem_config, sub_core_grid)) {
+                return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*plan));
+            }
+        }
+        if (logical_shape.volume() != tensor.logical_volume()) {
+            // This is completely incorrect but it is due to issue 15137 or issue 15558
+            const auto& tile = tensor.tensor_spec().tile();
+            bool tile_tensor_view_reshape_possible =
+                (layout == ttnn::Layout::TILE and padded_shape.rank() >= 2 and
+                 padded_shape[-2] % tile.get_height() == 0 and padded_shape[-1] % tile.get_width() == 0 and
+                 tensor.padded_shape()[-1] == padded_shape[-1]);
+
+            if (tile_tensor_view_reshape_possible) {
+                // This case has been allowed in the past though it means introducing padding values to the data
+                return ttnn::experimental::view(tensor, logical_shape, padded_shape);
+            }
+            // This is a completely incorrect test but it is due to issue 15558
+            TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
+        }
+
+        // Do the reshape in row-major
+        if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+            return operations::data_movement::detail::reshape_rm(
+                tensor,
+                logical_shape,
+                padded_shape,
+                tile_first_dim,
+                tile_second_dim,
                 mem_config,
-                tensor.padded_shape(),
-                interleaved_result.padded_shape(),
-                tensor.layout() == ttnn::TILE_LAYOUT);
+                pad_value.value_or(default_pad_value),
+                sub_core_grid);
         }
-        return ttnn::to_memory_config(interleaved_result, output_mem_config);
-    }
-
-    // A metadata-only view keeps the input's buffer, so it only needs matching sharded-ness and
-    // L1/DRAM placement. Full MemoryConfig equality is deliberately avoided: operator== is
-    // provenance-sensitive and would force needless reshards on functionally-identical configs.
-    bool this_is_view =
-        (tensor_shape_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
-        (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
-        ((tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) ||              // Its row major
-         (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
-         (shape_second_last_dim % tile_second_dim == 0 &&
-          tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
-
-    if (this_is_view) {
-        return operations::data_movement::PerformView(
-            tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
-    }
-    if (impl == ReshapeImpl::ROUTED) {
-        if (auto plan =
-                routed_codegen_plan(tensor, logical_shape, padded_shape, pad_value, mem_config, sub_core_grid)) {
-            return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*plan));
-        }
-    }
-    if (logical_shape.volume() != tensor.logical_volume()) {
-        // This is completely incorrect but it is due to issue 15137 or issue 15558
-        const auto& tile = tensor.tensor_spec().tile();
-        bool tile_tensor_view_reshape_possible =
-            (layout == ttnn::Layout::TILE and padded_shape.rank() >= 2 and padded_shape[-2] % tile.get_height() == 0 and
-             padded_shape[-1] % tile.get_width() == 0 and tensor.padded_shape()[-1] == padded_shape[-1]);
-
-        if (tile_tensor_view_reshape_possible) {
-            // This case has been allowed in the past though it means introducing padding values to the data
-            return ttnn::experimental::view(tensor, logical_shape, padded_shape);
-        }
-        // This is a completely incorrect test but it is due to issue 15558
-        TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
-    }
-    // Do the reshape in row-major
-    if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        return operations::data_movement::detail::reshape_rm(
+        // Preserve whether the caller explicitly passed pad_value. value_or(default_pad_value) below
+        // collapses that signal, but reshape_tiled needs it to gate the default-off fill for non-BF8.
+        const bool pad_value_explicit = pad_value.has_value();
+        return operations::data_movement::reshape_tiled(
             tensor,
             logical_shape,
-            padded_shape,
-            tile_first_dim,
-            tile_second_dim,
             mem_config,
             pad_value.value_or(default_pad_value),
-            sub_core_grid);
-    }
-    // Preserve whether the caller explicitly passed pad_value. value_or(default_pad_value) below
-    // collapses that signal, but reshape_tiled needs it to gate the default-off fill for non-BF8.
-    const bool pad_value_explicit = pad_value.has_value();
-    return operations::data_movement::reshape_tiled(
-        tensor,
-        logical_shape,
-        mem_config,
-        pad_value.value_or(default_pad_value),
-        reshape_map_mode == TileReshapeMapMode::RECREATE,
-        sub_core_grid,
-        explicit_memory_config,
-        skip_padding_fill,
-        pad_value_explicit);
+            reshape_map_mode == TileReshapeMapMode::RECREATE,
+            sub_core_grid,
+            explicit_memory_config,
+            skip_padding_fill,
+            pad_value_explicit);
+    }();
+
+    output.update_tensor_topology(
+        ttnn::reshaped_tensor_topology(tensor.tensor_topology(), tensor_shape, logical_shape)
+            .value_or(tensor.tensor_topology()));
+    return output;
 }
 
 }  // namespace
