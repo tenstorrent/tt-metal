@@ -82,6 +82,7 @@ DB_SCHEMA = [
     Column("acc_to_dest", "bool", True, "configuration"),
     Column("alpha_bits", "int64", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
+    Column("bcast_preserve", "bool", True, "configuration"),
     Column("beta_bits", "int64", True, "configuration"),
     Column("binary_init_before_ema", "bool", True, "configuration"),
     Column("binop_mathop", "string", True, "configuration"),
