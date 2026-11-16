@@ -433,6 +433,22 @@ def pcie(v, l):
     return True
 
 
+def drop(v, l):
+    """A chip or tray drop (fl_find's '(CHIP|POWER) DROP tray N (k chips lost: <BDFs>) <when>'): a fault naming every chip
+    it lists by tray, ASIC and BDF, one per line (one line per tray), even when a reset brought the chips back."""
+    m = re.match(r"^(CHIP|POWER) DROP tray ([1-4]) \((\d+) chips lost(.*?)\) ((?:in|after|at) .*)$", l)
+    if not m:
+        return False
+    t, bs = m.group(2), list(dict.fromkeys(re.findall(BDF, m.group(4))))
+    v.fault(
+        ("drop", l[:120]),
+        f"{'chip' if m.group(1) == 'CHIP' else 'tray power'} drop: {m.group(3)} chips lost on tray {t} {m.group(5)[:120]}",
+        "; ".join(chip(b) for b in bs) or f"tray {t}",
+        f"see the Repair recommendation line (tray {t})",
+    )
+    return True
+
+
 def link(v, l):
     m = re.match(
         rf"^LINK (FAIL|HANG) ({BDF}) \(tray [1-4]\) e([0-9,]+) <-> ({BDF}) \(tray [1-4]\) e([0-9,]+): (.*)$", l
@@ -575,7 +591,7 @@ def verdict(rc, vtext="", findings="", result="", commit="?", mode=""):
         # tray 3 finding was pinned to tray 1 or read as a hang. Parse without it, shown beside where (as tray_why.untag)
         g = AFTER.search(l)
         l, v.tag = (l[: g.start()], g.group(1)) if g else (l, "")
-        for f in (eth, eth_more, preflight, chunk, numeric, aer, pcie, link, thermal, hsc_peak):
+        for f in (eth, eth_more, preflight, chunk, numeric, aer, pcie, drop, link, thermal, hsc_peak):
             if f(v, l):
                 break
         else:

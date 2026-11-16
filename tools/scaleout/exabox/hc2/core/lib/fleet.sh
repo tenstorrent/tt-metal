@@ -67,7 +67,7 @@ if [ -n "${HC_BROKER_YIELD:-}" ]; then . "$HC_BROKER_YIELD"; else hc_broker_yiel
 . "$FL_DIR/../lib/power_policy.sh"   # pp_tag: power_policy on the run summary line
 declare -F rk_can_glx > /dev/null || . "$FL_DIR/../lib/glxcan.sh"   # run.sh defines it; tests source fleet.sh alone
 FL_STOP=""; FL_BB_INC=""; FL_BB_TRY=0 FL_BB_NJ=0 FL_BB_RAN=0 FL_C7_NJ=""; FL_C7_BAD=""; FL_HANG_PIN=""; FL_FABSTALL=""; FL_FAB_HIT=""; FL_FAB_RETRY=""; FL_C3STOP=""; FL_C3STOP_CHIPS=""; FL_C3_RC=""; FL_PGDROP=""; FL_NORESET=""; FL_HUNG=""; FL_LINKS_DOWN=""; FL_BB_HUNG_OK=""; FL_SUSPECT=(); FL_SKIPPED=(); FL_C8_PID=""; FL_PW_PID=""; FL_AER_PID=""; FL_RESET_SKIPPED=(); FL_LEFT_HUNG=""; FL_LEFT_WHY=""; FL_RESULT=""; FL_PIN=""; FL_SWEEP_HP=""; FL_SWEPT=(); FL_C5_INC=(); FL_C2_NONE=""
-FL_PV_SKIP=""; FL_PV_TTXHIT=""; FL_PV_REPL=""; FL_SETUP_INC=""; FL_AF_INC=""; FL_LINKA_INC=""; FL_AF_LINE=""; FL_LINKA_LINE=""   # INCOMPLETE causes: one left in the environment or from an earlier run would grade a clean run rc 9
+FL_PV_SKIP=""; FL_PV_NOTRUN=""; FL_PV_TTXHIT=""; FL_PV_REPL=""; FL_SETUP_INC=""; FL_AF_INC=""; FL_LINKA_INC=""; FL_AF_LINE=""; FL_LINKA_LINE=""   # INCOMPLETE causes: one left in the environment or from an earlier run would grade a clean run rc 9
 # phase | what | quick s | full s   (plan section 3; stage numbers and names: fleet/stages.tsv)
 # Stage list (results/t822/stage-table.md):
 # every mode opens with the bus-bar stage right after C2 (FLEET_BUSBAR_ORDER, default qb,mix,step,heavy in every mode): first two
@@ -138,7 +138,7 @@ fl_bb_plan() {  # the bus-bar stage's parts in FLEET_BUSBAR_ORDER order, for the
     code) o="$o${o:+, then }code readback (exalens, no load: each core's firmware and kernel code in L1 by strong-majority vote across chips, then a re-read; ${FL_BB_CODE_B} s budget, $FL_BB_CODE_SCOPE scope${FLEET_CODE_ELF_DIR:+, ELF compare}, $([ "$FL_BB_CODE_SCOPE" = smoke ] && echo "2 Tensix + 1 ETH cores per chip" || echo "the next run carries on from the last core read"))" ;;
     maxutil) o="$o${o:+, then }max-util (tt-metal unit_tests_didt_max_util, FPU 92 % DRAM 92 % duty 100 % on every chip, prebuilt archive fleet/maxutil.pin): $FL_BB_MU_LOAD s ($FL_BB_MU_MODE) after ${FL_BB_MU_SETUP} s setup, then ${FL_BB_MU_CRC} s per-core output CRC vote" ;;
     pv) if [ "${FL_PV_SWAP:-}" = maxutil ]; then o="$o${o:+, then }max-util in place of the power virus (FLEET_PV_SWAP=maxutil: this box failed the power virus repeatedly): $FL_BB_MU_LOAD s ($FL_BB_MU_MODE)"
-        else o="$o${o:+, then }the power virus (${FL_PV_RUNNER:-run-ttx}${FL_PV_AUTO:+, or run-ttx-kmdtlb beside a telemetry collector it cannot stop (auto)} single-core-matrix-pv-fp32-noc.ttx broadcast on $([ -n "$FL_PV_CHIPS" ] && echo "chips $FL_PV_CHIPS only" || echo "every chip"), fleet/pv.pin; a load only, no numeric check; --tdp does not cap it): $FL_BB_PV_LOAD s, stopped early at a brick >= $FL_PV_BRICK_C C or a feed > $FL_PV_FEED_A A (chips' power never stops it), then a glx_reset and recount (tt-smi -glx_reset with its root-port rescan) before C5 and every later tt-metal step"; fi ;; esac; done; echo "$o"
+        else o="$o${o:+, then }the power virus (${FL_PV_RUNNER:-run-ttx} single-core-matrix-pv-fp32-noc.ttx broadcast on $([ -n "$FL_PV_CHIPS" ] && echo "chips $FL_PV_CHIPS only" || echo "every chip"), fleet/pv.pin; a load only, no numeric check; --tdp does not cap it): $FL_BB_PV_LOAD s, stopped early at a brick >= $FL_PV_BRICK_C C or a feed > $FL_PV_FEED_A A (chips' power never stops it), then a glx_reset and recount (tt-smi -glx_reset with its root-port rescan) before C5 and every later tt-metal step"; fi ;; esac; done; echo "$o"
 }
 fl_numeric() { grep -q -- '--numeric-every' ./ub0_repro.py 2>/dev/null; }
 # --mode=smoke: run.sh maps it to FLEET=quick with FL_SMOKE=1, so it runs plain run.sh's
@@ -242,11 +242,11 @@ fl_init() {  # FLEET (quick|full|repro-linka|repro-abortfab) and FL_DRY set by r
   # galaxy (11-13, 242 of 240 s, ~168 W per chip); fl_pv_guard keeps it off any box where another process holds a device, or stops
   # a root telemetry collector service for it. run-ttx-kmdtlb is run-ttx with fleet/pv/kmdtlb.py: every TLB window
   # it uses comes from the driver, so fl_pv_guard lets it run beside the telemetry collector (no stop) and still skips it for any
-  # other holder. auto (default, so the power virus runs in every mode on every box; run-ttx-kmdtlb ran all 32 chips beside
-  # a live collector with no sudo): run-ttx and its collector stop where that works; where the guard
-  # would skip it and the holders are only telemetry collectors, the tt-metrics-exporter or the fabric-manager agent (a pod, or a
-  # root service with no sudo to stop it), run-ttx-kmdtlb beside them (fl_pv_guard). pv_umd was removed (it hung all 32 chips on
-  # its first device run)
+  # other holder. auto (default, every mode, smoke included): stock run-ttx only, its collector stopped where that works; where the
+  # guard would skip it the power virus is skipped with the WARNING (how to opt in) and the summary says NOT RUN. auto never picks
+  # run-ttx-kmdtlb (11-16: it dropped a chip on b03u02 and a09u08 and left about 2 GB of host memory per run on
+  # shared exabox nodes); FLEET_PV_RUNNER=run-ttx-kmdtlb still runs it. pv_umd was removed (it hung all 32 chips on its first
+  # device run)
   FL_PV_RUNNER=${FLEET_PV_RUNNER:-auto}; FL_PV_AUTO=""
   case $FL_PV_RUNNER in run-ttx|run-ttx-kmdtlb) ;; auto) FL_PV_AUTO=1; FL_PV_RUNNER=run-ttx ;;
     *) echo "FLEET_PV_RUNNER takes run-ttx, run-ttx-kmdtlb or auto (got '$FL_PV_RUNNER'; pv_umd was removed)" >&2; exit 1 ;; esac
@@ -2768,10 +2768,9 @@ fl_pv_guard() {  # $1 the part's name: 0 when no other process holds a Tenstorre
   # With FL_PV_RUNNER run-ttx-kmdtlb both scans take --beside-collector: the telemetry collector (its process or pod), the
   # tt-metrics-exporter and the fabric-manager agent (by comm) hold no window that runner touches, so they no longer skip the
   # virus (one line names them) and are never stopped; every other holder does
-  # FL_PV_AUTO (FLEET_PV_RUNNER=auto): each guard starts with run-ttx; where it would skip that, a second guard with
-  # run-ttx-kmdtlb ($2 kmd) runs it beside the telemetry collector, or skips it with that runner's WARNING
+  # FL_PV_AUTO (FLEET_PV_RUNNER=auto): stock run-ttx only, never run-ttx-kmdtlb; where the guard skips
+  # it, its WARNING adds that the power virus is NOT RUN and how to opt in to run-ttx-kmdtlb
   local o rc s=() sf=() w i n=${FLEET_PV_SCANS:-5} ex="" trust="" no nrc bc=()
-  [ -n "${FL_PV_AUTO:-}" ] && [ "${2:-}" != kmd ] && FL_PV_RUNNER=run-ttx
   [ "${FL_PV_RUNNER:-run-ttx}" = run-ttx-kmdtlb ] && bc=(--beside-collector)
   [ "$(id -u)" = 0 ] || { [ "${FLEET_PV_SUDO:-1}" = 1 ] && sudo_all && { s=(sudo -n); sf=(--sudo); }; }
   FL_PV_SCAN=("${s[@]}" python3 "$FL_DIR/pv_holders.py" --self "$$" --proc "${FLEET_PROC:-/proc}" --glob "${FLEET_DEVD:-/dev/tenstorrent}*"
@@ -2810,16 +2809,13 @@ fl_pv_guard() {  # $1 the part's name: 0 when no other process holds a Tenstorre
     fi
     o="$o; $FL_PV_PAUSE_WHY"
   fi
-  if [ ${#bc[@]} = 0 ] && [ -n "${FL_PV_AUTO:-}" ] && [ -z "${FL_PV_PAUSED:-}" ]; then   # a holder back after a collector stop is no collector: skip
-    say "$1: run-ttx cannot run here ($o); the auto runner tries run-ttx-kmdtlb, which takes every TLB window from the driver and runs beside a telemetry collector only"
-    FL_PV_RUNNER=run-ttx-kmdtlb; fl_pv_guard "$1" kmd; return
-  fi
   if [ ${#bc[@]} -gt 0 ]; then
     w="WARNING power virus SKIPPED: $o: the power virus runner run-ttx-kmdtlb runs beside the telemetry collector, the tt-metrics-exporter and the fabric-manager agent only, never beside another device user"
   else
     w="WARNING power virus SKIPPED: $o: the power virus runner ${FL_PV_RUNNER:-run-ttx} is not device-tested beside another TLB user (run-ttx programs fixed TLB windows itself and hung chips there)"
+    [ -n "${FL_PV_AUTO:-}" ] && w="$w; power virus NOT RUN: the default runner (auto) never picks run-ttx-kmdtlb (it dropped chips and left host memory behind on two exabox nodes, 11-16), so this run has no power virus coverage; set FLEET_PV_RUNNER=run-ttx-kmdtlb to run it beside a telemetry collector"
   fi
-  say "$w"; FL_PV_SKIP=${FL_PV_SKIP:+$FL_PV_SKIP$'\n'}$w; return 1
+  say "$w"; FL_PV_SKIP=${FL_PV_SKIP:+$FL_PV_SKIP$'\n'}$w; FL_PV_NOTRUN=1; return 1   # FL_PV_NOTRUN: the guard's skip, the only RESULT 'NOT RUN'
 }
 fl_pv_pause() {  # $1 the part's name: 0 once the telemetry collector services that alone hold the devices (pv_holders.py
   # --units: root, cgroup /system.slice/<unit>, a tt-telemetry or telemetry-collector unit or comm) are stopped, each one with
@@ -2952,7 +2948,7 @@ fl_bb_pv_run() {  # the bus-bar stage's power virus part: fleet/pv.py, FL_PV_RUN
   # this box's FAIL on the next run (pvc_check: stage, seconds into the leg, BERT/MCE)
   # Then tt-smi -glx_reset with its rescan and recount (never tt-smi -r), so the virus kernels end and later steps open clean;
   # where glx_reset cannot run it says so plainly. A chip missing after it is a POWER DROP or CHIP DROP by tray and BDF
-  local nm="${FL_PV_NM:-bus-bar stage power virus}" d=${FL_PV_OUT:-$FL_OUT/busbar/pv} t0 el l af lost all ub g ga bd hf="" pg st w s0 pre n
+  local nm="${FL_PV_NM:-bus-bar stage power virus}" d=${FL_PV_OUT:-$FL_OUT/busbar/pv} t0 el l af lost all ub g ga bd hf="" pg st w s0 pre n late
   : "${FL_PV_RUNNER:=run-ttx}"   # fl_init sets it (FLEET_PV_RUNNER, auto by default); a caller without fl_init gets stock run-ttx
   # just before the runner starts, no other process may hold a device node, else the chunk load in its place
   FL_PV_REPL=""
@@ -3034,7 +3030,22 @@ fl_bb_pv_run() {  # the bus-bar stage's power virus part: fleet/pv.py, FL_PV_RUN
   local lb="tt-smi -glx_reset after the power virus" aw named ok=1 gs=""; af=""
   # the fleet gate first, as before C9 (gate.sh): another process on the chips now means no reset under it (FL_STOP, GATE BUSY)
   if [ -n "${FL_STOP:-}" ] || ! fl_gate PV; then say "$nm: no glx_reset after it ($FL_STOP); later steps open the chips as the virus left them"; pvc_close; return 0; fi
-  RK_BEFORE=$(rk_snap); RK_STEP=PV rk_reset "$d/reset.log"   # PV: the hook step (PV-glx), gated again like C9 (fl_regate): no reset under another process
+  RK_BEFORE=$(rk_snap); RK_GLX_MISS=""; RK_STEP=PV rk_reset "$d/reset.log"   # PV: the hook step (PV-glx), gated again like C9 (fl_regate): no reset under another process
+  # the recount right before the glx_reset (rk_glx_evidence's, seconds after the one above) is the drop list: a chip it
+  # finds missing that the lines above do not name (job 215577: 84:00.0 tray 4, only c3:00.0 named) gets its DROP line
+  # here, one per tray, and is in the loss (chips, Chips dropped:) whether or not the reset brings it back
+  late=$(echo "$RK_GLX_MISS" | sed -n 's/^chip \([^ ]*\) (\([^,]*\), tray .*/\2 \1/p' | awk 'NR == FNR { ok[$1]; next } NF && ($1 in ok)' <(echo "$s0") - |
+    while read -r l n; do echo "$(rk_tray "$l") ${l#0000:} $n"; done | awk 'NR == FNR { if (NF) p[$2]; next } NF && !($2 in p)' <(echo "$pre") -)
+  if [ -n "$late" ]; then
+    [ -n "$pre" ] || fl_lost "$nm at $el s" > /dev/null || { seen=1; at="$nm at $el s"; }   # back by now: fl_lost's loss mark
+    chips="$chips $(echo "$late" | awk '$3 ~ /^[0-9]+$/ { printf "%s ", $3 }')"
+    for ub in $(echo "$late" | awk 'NF { print $1 }' | sort -u); do
+      g=$(echo "$late" | awk -v u="$ub" '$1 == u' | grep -c .); ga=$(( g + $(echo "$pre" | awk -v u="$ub" '$1 == u' | grep -c .) ))
+      bd=$(echo "$late" | awk -v u="$ub" '$1 == u { printf "%s%s", (n++ ? " " : ""), $2 }')
+      fl_find "$([ "$ga" -ge 8 ] && echo POWER || echo CHIP) DROP tray $ub ($g chips lost: $bd) in the $nm ($FL_BB_PV_LOAD s $FL_PV_RUNNER load), missing before its glx_reset"
+    done
+    pre=$(printf '%s\n%s\n' "$pre" "$(echo "$late" | cut -d' ' -f1,2)" | grep -a .)   # no second DROP line after the reset
+  fi
   if [ "$RK_RESET_STAT" != OK ] && [ "$RK_RESET_STAT" != FAILED ]; then
     say "$nm: no reset after it (${RK_RESET_WHY:-glx_reset did not run}); later steps open the chips as the virus left them"; pvc_close; return 0; fi
   [ "$RK_RESET_STAT" = OK ] || { ok=0; say "$nm: glx_reset after it FAILED ($RK_RESET_WHY; see $RK_RESET_LOG)"; }

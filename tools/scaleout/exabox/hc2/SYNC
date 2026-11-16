@@ -1,7 +1,7 @@
 # hc2 SYNC manifest, written by hc2_sync.sh export in the source repo; do not edit by hand.
 source: tenstorrent/tray-test
 path: traytest/hc
-commit: 0513b8bdb3c1003770ee2741a8010f00bf561ec8
+commit: 987ddea492323b052f3afc85c55cb00b05aac019
 exclude: fleet/pv/run-ttx (binary; the glue sets HC_RUN_TTX)
 exclude: h3/requirements-wheel.txt (pip pins of the tray-test wheel route; the glue uses the checkout's python_env)
 # sha256  file (relative to core/)
@@ -23,7 +23,7 @@ b0d33b5537698103d0aa648988c29786062ba65cb60a2a12ca3ed2c2f5e878a8  fleet/eth_map_
 7f92c39e5526b181b501436b6de7923939f0a79b17a99b408431bd17d429abd4  fleet/ethmask.py
 633905033b01854b9bd83e802abbcc03f949bd94dfb42629a804247a782d9598  fleet/fabric_open.py
 e46b5f00c56cd77fbb06265eed9a75a9aee3bda19c4c64b8855d9e77215f0100  fleet/fabric_repro.py
-803bf43ee79f729ccba82ac40ccaa26ba464ff5661cf1e42096ed12ea5f07bbc  fleet/final_verdict.py
+415e3e2e313d116ca95bb9c95fcd35135a4641837035014f6e068286b144cf4a  fleet/final_verdict.py
 0f3b5a1d12e95b21a20ff0ae13d06ea6ea41b54040836ec6e94a4d753b550edd  fleet/fleet_py.py
 887254ab8142d55f66d497fa19d7ab688c6840ee3608c4e9a692403791f6a798  fleet/fw_reads.py
 994f33e675ac2c04dfd1180b605c1931bc2f31a0bfa2e643965562fa175291da  fleet/gate.sh
@@ -92,7 +92,7 @@ b04e8eefa5e49c6006d57daf671f87a3ae646fccc3a6c8d0549d0825e7c78ec3  l1_march.py
 b6d87bda17fc7ebcb430efb46f803bb822937e112b1db94620e2d9f071c356ab  lib/ethctr.py
 b11f1200bed82e0a3462d1f83057ccdf88408e6ddc0094eeeca716b0d7656fb9  lib/exalens_probe.py
 122a3220d60b43a507944de1580de055c344f09c011fa513a4323843e83a0b38  lib/fault_capture.sh
-a29772ca40afdb9b28d1c5a6268d890bfa73218521792e4ea2c82181382727d8  lib/fleet.sh
+c76e6ca945ec3707dbfb032129c28dd6a6d249a06c6a6f0b720c2bf546dc4ea9  lib/fleet.sh
 32bbc0cfddaf5b308724b2b2da0e90852a2796c08cee525ee813000f5589780d  lib/fw_check.sh
 b1bbfb0be971d12be004c851acc0f1d99cf3e6a8187d43043be483fa22916219  lib/gddr.sh
 032c1f42bff0cdb5e243dd1b11ecbc2a4dba449e8eca06204f41cec4f152c9e3  lib/gddr_telem.py
@@ -139,6 +139,6 @@ d7629ab44463341388fe6e330cbc6da5659684b5a2f6cec9752b87e2d61bafbc  pinpoint_load.
 7d48928e84ff01640a37a0ee7f4e6ff894a04f64a316db8b35c0e5064099e6ac  quiet_clock.py
 804a2fed71e43f6f7cf32ec44e394fef27515e2a91526a1d71a5e65369d86cb7  repro.sh
 20ae00b7ab358a51ef287f7139f70290ba8ac8e3f2e65603e6e6bb50bc2aa7f0  rf_walk.py
-d8ed66bb62fb432a404ec3319a2558bc9aa8d22b1410a125aa8adace4a2a4944  run.sh
+4fa6591870d9d50859b32891aa9fdfb407e100e5daa84bf83ed54046a566c004  run.sh
 976d0988bb58e268e1e3b7cacad1bd79e81642b86bc50305a14c6fb782fb5f6c  run_repro.sh
 b07c9283cc014d717fd9ee3bf371f14f99cdf49a422d08b18514dbbd36677eb3  ub0_repro.py
