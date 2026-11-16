@@ -104,6 +104,8 @@ NEAR_TIE = float(os.environ.get("DEEPSEEK_V4_SPEC_NEAR_TIE", "1.5"))
 ALIGN_CONTROL = os.environ.get("DEEPSEEK_V4_SPEC_ALIGN_CONTROL", "0") == "1"
 # Block verify: the bitwise rollback check (rejected rows leave no trace), before the spec runs.
 ROLLBACK_CHECK = os.environ.get("DEEPSEEK_V4_SPEC_ROLLBACK_CHECK", "0") == "1"
+# DEEPSEEK_V4_SPEC_PROFILE=n: profile n plain and n verify steps after the greedy baseline, then stop (see _profile_steps).
+PROFILE_STEPS = int(os.environ.get("DEEPSEEK_V4_SPEC_PROFILE", "0"))
 # Progress lines: the spec rounds' and rows', each prefill / extend / end of sentence, the greedy loop every 200
 # steps and every run's text. Off: one summary line per run (see the module docstring).
 _VERBOSE = os.environ.get("DEEPSEEK_V4_SPEC_VERBOSE", "0") not in ("0", "", "false", "False")
@@ -324,6 +326,53 @@ def test_dspark_spec_decode(mesh_device, monkeypatch):
             logger.info("\n".join(lines))
 
 
+def _profile_steps(model, baseline: list[int], n_prompt: int, rows: int) -> None:
+    """``DEEPSEEK_V4_SPEC_PROFILE=n``: ``n`` plain traced steps, then ``n`` block verify steps (after a warmup one),
+    each between device profiler reads of the stage and the drafter (run under tracy with ``-r``), and the host-side
+    timing of each. The verify steps feed the greedy stream, so every row is accepted."""
+    from tracy import signpost
+
+    devices = [model.submeshes_io[0]["device"]] + ([model.dspark.device] if model.dspark is not None else [])
+
+    def read_profiler():
+        for device in devices:
+            ttnn.ReadDeviceProfiler(device)
+
+    read_profiler()
+    plain_ms = []
+    for i in range(PROFILE_STEPS):
+        pos = n_prompt + len(baseline) - 1
+        signpost(f"PLAIN_{i}")
+        t0 = time.perf_counter()
+        out = model.decode_traced(baseline[-1], pos)
+        plain_ms.append(1000 * (time.perf_counter() - t0))
+        baseline.append(int(out.reshape(-1)[0]))
+        read_profiler()
+    pos = n_prompt + len(baseline) - 1
+    stream = [baseline[-1]] * rows
+    model.decode_verify_block(stream, pos)  # the server switch to block requests, outside the profile
+    model.spec_fixup(list(range(pos, pos + rows)))
+    model.spec_fixup([])
+    read_profiler()
+    model._verify_timing = []
+    verify_ms = []
+    for i in range(PROFILE_STEPS):
+        signpost(f"VERIFY_{i}")
+        t0 = time.perf_counter()
+        model.decode_verify_block(stream, pos)
+        verify_ms.append(1000 * (time.perf_counter() - t0))
+        read_profiler()
+        model.spec_fixup(list(range(pos, pos + rows)))
+        model.spec_fixup([])
+        read_profiler()
+    logger.info(f"[profile] plain step ms {[round(x, 2) for x in plain_ms]}")
+    logger.info(f"[profile] verify step ms {[round(x, 2) for x in verify_ms]}")
+    logger.info(
+        f"[profile] verify host timing {[{k: round(1000 * v, 2) for k, v in d.items()} for d in model._verify_timing]}"
+    )
+    model._verify_timing = None
+
+
 def _block_spec_decode(mesh_device) -> None:
     """The block-verify mode of :func:`test_dspark_spec_decode`.
 
@@ -344,6 +393,16 @@ def _block_spec_decode(mesh_device) -> None:
     follow-up turns.
     """
     rows, drafts = BLOCK_ROWS, BLOCK_ROWS - 1
+    if PROFILE_STEPS:
+        # The modules' own mid-forward profiler reads sync the stage, which can deadlock a compile step waiting on its
+        # packet: only _profile_steps reads.
+        import sys
+
+        from models.experimental.deepseek_v4_flash.tt import common as v4_common
+
+        for module in list(sys.modules.values()):
+            if getattr(module, "_profile", None) is v4_common._profile:
+                module._profile = lambda device: None
     loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     config = load_config(loader.snapshot_dir)
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
@@ -487,6 +546,10 @@ def _block_spec_decode(mesh_device) -> None:
                         f"the kept rows' own logits differ by {kdiff}"
                     )
                     assert same[0], f"rollback at p={p}, m={m}: the block path is not deterministic"
+
+        if PROFILE_STEPS:
+            _profile_steps(model, baseline, len(prompt), rows)
+            return
 
         if ROLLBACK_CHECK:
             rollback_check()

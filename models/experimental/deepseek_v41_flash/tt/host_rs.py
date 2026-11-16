@@ -43,6 +43,17 @@ def enabled() -> bool:
     return os.environ.get("DEEPSEEK_V41_RUST_HOST", "1") not in ("0", "", "false", "False")
 
 
+def engram_enabled() -> bool:
+    """Whether the Engram host lookup is :class:`RustEngramLookup`: with the runtime on, or with it off
+    (``DEEPSEEK_V41_RUST_HOST=0``, the Python dispatch) while the extension is built, unless
+    ``DEEPSEEK_V41_RUST_ENGRAM=0``. Its lookup is bit-exact with the Python one."""
+    if enabled():
+        return True
+    if os.environ.get("DEEPSEEK_V41_RUST_ENGRAM", "1") in ("0", "", "false", "False"):
+        return False
+    return _EXTENSION.is_file()
+
+
 def build() -> None:
     """Build the extension with ``host_rs/build.sh`` (incremental: a no-op when it is up to date), against this
     interpreter. Raises if the build fails or leaves no extension behind."""
