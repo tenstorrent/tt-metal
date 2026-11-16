@@ -6,8 +6,9 @@
 The MoE blocks of every layer it serves are loaded TP12 on ``moe_mesh`` (a 3x4 submesh), each the usual
 :class:`~.moe.DeepSeekV41SparseMoeBlock` with the router and shared expert fused into ``fused_experts``. The op
 is launched once, on the first layer's tensors (every layer shares their layouts), and loops on the device: it
-takes one ``[64-byte header | bf16 row]`` request page at a time from each requester in strict turn, the
-header's first word naming a row of the layer table, runs that layer's whole MoE in its three-stage pipeline,
+takes ``[64-byte header | bf16 row]`` request pages from its requesters in any order (each MoE chip routes whichever
+requester's page is in; chips may differ in order, see the kernels' persistent.h), the header's first word naming a
+row of the layer table, runs that layer's whole MoE in its three-stage pipeline,
 and every MoE chip sends its partial row straight to every chip of the requester, which sums the twelve partials
 itself (``persistent_moe_request``), so a request's output is replicated over the requester's mesh.
 
@@ -480,9 +481,10 @@ class PersistentMoE:
     all the MoE chips -- one multicast, for a requester mesh right above the MoE -- instead of each chip down its
     own column, so the MoE chips start each row together (see the sharded router).
 
-    The op takes requests in strict turn (requester 0, 1, ..., then 0 again), so with several requesters each
-    sends its next request only after the others have sent theirs. Use :meth:`request` (or :meth:`upload` and
-    :meth:`request` for a host row), and :meth:`stop` once to end the kernels.
+    The op takes requests in any order: each requester has one request in flight at a time and sends whenever it
+    likes, however many requests the others send (``TT_FE_FIXED_ORDER=1`` at launch restores the old strict turn,
+    requester 0, 1, ..., then 0 again, with ``on_demand``). Use :meth:`request` (or :meth:`upload` and :meth:`request`
+    for a host row), and :meth:`stop` once to end the kernels.
 
     ``rows`` (1, 2 or 4) makes every request a block of that many token rows -- DSpark's verify block -- each
     routed on its own, through one pass of the op: the union of the rows' top-k is fetched once and applied to every
@@ -508,8 +510,9 @@ class PersistentMoE:
     ):
         if not isinstance(moes, Mapping):
             moes = dict(enumerate(moes))
-        # Requesters served whenever they send rather than in turn (the DSpark drafter): see fe_ctrl.cpp. Each may send
-        # only while no other requester has a request outstanding.
+        # Under TT_FE_FIXED_ORDER=1 (strict turn), requesters served whenever they send rather than in turn (the DSpark
+        # drafter): see fe_ctrl.cpp. Each may send only while no other requester has a request outstanding. In any
+        # order (the default) every requester is served whenever it sends.
         self._on_demand_mask = sum(1 << k for k in on_demand)
         if not moes:
             raise ValueError("the persistent MoE needs at least one layer")

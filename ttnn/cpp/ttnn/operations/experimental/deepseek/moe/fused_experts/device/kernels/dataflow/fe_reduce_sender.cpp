@@ -27,11 +27,13 @@
 // the staging half a row is sent from is refilled only after it has left.
 //
 // The link-0 sender also carries the sharded router's candidate exchange (router_reduce.cpp, num_exchange_routes >
-// 0): the reducer leaves this chip's candidates of each iteration in its slot of the candidate slots here and bumps
-// the ready count; whenever this kernel waits, it forwards every candidate slot it has not yet forwarded, in order,
-// along the whole-mesh branches to the same slot of every other chip's route merge core, each slot one fused
-// write + increment of that core's sem_router per branch, then bumps the reducer's forwarded count. The router stage
-// runs a row ahead of the grid and this stage a row behind it, so it is idle on its own work when candidates come.
+// 0): the reducer leaves this chip's candidates of each routed row in its slot of the row's requester's candidate
+// slots here and bumps the ready count; whenever this kernel waits, it forwards every candidate slot it has not yet
+// forwarded -- the slots of this chip tagged here (a nonzero first word), once as many are tagged as the ready count
+// says have landed -- along the whole-mesh branches to the same slot of every other chip's route merge core, each slot
+// one fused write + increment of that core's sem_router per branch, then untags it and bumps the reducer's forwarded
+// count. The router stage runs ahead of the grid and this stage a row behind it, so it is idle on its own work when
+// candidates come.
 //
 // Compile-time args:
 //   0: my_chip (this chip's slot in the requesters' partials buffers)   1: part_bytes (this link's part of a
@@ -145,15 +147,41 @@ void kernel_main() {
             cand_slot_bytes);
     }
 
+    // This chip's slot of requester k's candidates, here as on the route merges.
+    auto own_slot = [&](uint32_t k) { return cand_addr + (k * num_slots + my_chip) * cand_slot_bytes; };
+    if (num_exchange_routes > 0u) {
+        // Untagged: the scratch comes uninitialized.
+        for (uint32_t k = 0; k < num_requesters; ++k) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_slot(k)) = 0u;
+        }
+    }
     // Forwards every candidate slot the reducer has left here and this kernel has not yet forwarded.
     uint32_t num_forwarded = 0;
     auto pump = [&]() {
         if (num_exchange_routes > 0u) {
             invalidate_l1_cache();
             const uint32_t ready = *cand_ready;
-            while (num_forwarded < ready) {
+            if (ready == num_forwarded) {
+                return;
+            }
+            // The tagged slots are the ones written or being written; once as many are tagged as have been counted
+            // past the forwarded ones, every tagged one has landed whole.
+            uint32_t tagged_mask = 0;
+            uint32_t tagged = 0;
+            for (uint32_t k = 0; k < num_requesters; ++k) {
+                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own_slot(k)) != 0u) {
+                    tagged_mask |= 1u << k;
+                    ++tagged;
+                }
+            }
+            if (tagged != ready - num_forwarded) {
+                return;
+            }
+            while (tagged_mask != 0u) {
                 DeviceZoneScopedN("FE_RED_EXCHANGE");
-                const uint32_t slot = cand_addr + ((num_forwarded & 1u) * num_slots + my_chip) * cand_slot_bytes;
+                const uint32_t k = static_cast<uint32_t>(__builtin_ctz(tagged_mask));
+                tagged_mask &= tagged_mask - 1u;
+                const uint32_t slot = own_slot(k);
                 // The headers are rewritten in place, so the previous forward's (and the partials') must have left.
                 noc_async_writes_flushed();
                 for (uint32_t r = 0; r < num_exchange_routes; ++r) {
@@ -165,8 +193,9 @@ void kernel_main() {
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                             safe_get_noc_addr(merge_x, merge_y, slot, 0), 0, 0, false});
                 }
-                // The slot's bytes have left before the reducer may refill it (two forwards on).
+                // The slot's bytes have left; untagged here, it waits for the requester's next row.
                 noc_async_writes_flushed();
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot) = 0u;
                 ++num_forwarded;
                 noc_semaphore_inc(get_noc_addr(reducer_x, reducer_y, forwarded_addr), 1);
                 noc_async_atomic_barrier();

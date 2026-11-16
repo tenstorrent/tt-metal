@@ -12,6 +12,13 @@
 #include "fetch_gate_up.h"
 #include "../persistent.h"
 
+// The persistent op's header address (persistent.h), for the merge's header reads; 0 without it (unused).
+#if defined(FE_HDR_ADDR)
+#define FE_HDR_ADDR_OR_ZERO FE_HDR_ADDR
+#else
+#define FE_HDR_ADDR_OR_ZERO 0u
+#endif
+
 // Expert-id sender + activation-gather leader kernel (runs on core {0,0}).
 //
 // 1. Reads the routing input -- either the router's k selected expert ids per token plus the score
@@ -134,12 +141,14 @@
 // in cb_bcast (gate_up at num_weights + num_active * batch, down num_active past it).
 //
 // FE_ROUTER_SHARDED (persistent): the candidates come from the chips' sharded routers, one slot per chip at
-// FE_CAND_ADDR (see router_reduce.cpp), in alternate halves.
+// FE_CAND_ADDR (see router_reduce.cpp), one set of slots per requester (FE_NUM_REQUESTERS).
 //
-// FE_ROUTE_STAGE (persistent, in-op router): the route merge of the router stage, on a router core's
-// free DM processor -- 1.-3. only, a row ahead of the worker grid, which runs every reader loop (core
-// {0,0} as a plain hub0). The grid still reads the previous row's cb_bcast, so the broadcast waits for
-// the control core's FE_SEM_EXPERT_GO bump, one per row that it has started the grid on.
+// FE_ROUTE_STAGE (persistent, in-op router): the route merge, on a router core's free DM processor -- 1.-3.
+// only, ahead of the worker grid, which runs every reader loop (core {0,0} as a plain hub0). It takes the rows the
+// control core routes, in order, from the merge ring at FE_MERGE_RING_ADDR (each row's header, kFeHdrRequester naming
+// its candidate set), one FE_SEM_MERGE_GO bump per row; it reports no stage ready, so the router row runs on while
+// this merge waits for other chips' candidates. The grid still reads the previous row's cb_bcast, so the broadcast
+// waits for the control core's FE_SEM_EXPERT_GO bump, one per row that it has started the grid on.
 
 namespace {
 
@@ -320,20 +329,27 @@ void kernel_main() {
     CircularBuffer cb_routing(cb_routing_id);
     CircularBuffer cb_bcast(cb_bcast_id);
 
+    // The row's header: the merge ring entry's in the route merge (FE_ROUTE_STAGE), the core's own otherwise.
+    uint32_t hdr_l1 = FE_HDR_ADDR_OR_ZERO;
+    auto hdr = [&](uint32_t word) {
+        invalidate_l1_cache();
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hdr_l1)[word];
+    };
+    (void)hdr;
     auto iteration = [&](uint32_t iter) {
         // ---- 1. Read the routing input + compute expert ids into cb_bcast. ----
         // Pages are placed at the buffer's aligned page stride so each read's L1 destination shares the
         // alignment of the DRAM page it comes from.
         cb_routing.reserve_back(1);
 #if defined(FE_PERSISTENT)
-        shared.gate_up_addr = fe_header(kFeHdrSharedGateUp);
-        shared.down_addr = fe_header(kFeHdrSharedDown);
+        shared.gate_up_addr = hdr(kFeHdrSharedGateUp);
+        shared.down_addr = hdr(kFeHdrSharedDown);
         // The layer's expert addresses; the route read's barrier below covers this read too.
         noc.async_read(
             layer_table,
             cb_routing,
             2u * num_weights * 4u,
-            {.page_id = fe_header(kFeHdrLayer), .offset_bytes = kLayerAddrsOffsetBytes},
+            {.page_id = hdr(kFeHdrLayer), .offset_bytes = kLayerAddrsOffsetBytes},
             {.offset_bytes = addr_table_offset});
 #endif
         {
@@ -427,10 +443,10 @@ void kernel_main() {
                     uint32_t run_id[kRun];
                     uint32_t run_score[kRun];
                     auto* sem_cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_router_id));
-                    auto* half_cur = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        FE_CAND_ADDR + (iter & 1u) * num_router_cores * router_cand_slot_bytes);
-                    auto* half_next = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        FE_CAND_ADDR + ((iter + 1u) & 1u) * num_router_cores * router_cand_slot_bytes);
+                    // This row's requester's set of slots; the others' may be filling too (chips route rows in
+                    // their own orders), and count like this one's.
+                    auto* all_sets = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FE_CAND_ADDR);
+                    auto* half_cur = all_sets + hdr(kFeHdrRequester) * num_router_cores * slot_words;
                     const uint32_t counted_before = num_router_cores * iter;
                     uint32_t merged = 0;  // slots of the current half merged so far
                     uint32_t merged_mask = 0;
@@ -442,9 +458,10 @@ void kernel_main() {
                         for (uint32_t c = 0; c < num_router_cores; ++c) {
                             if (half_cur[c * slot_words] != 0u) {
                                 tagged_mask |= 1u << c;
-                                ++tagged;
                             }
-                            if (half_next[c * slot_words] != 0u) {
+                        }
+                        for (uint32_t c = 0; c < FE_NUM_REQUESTERS * num_router_cores; ++c) {
+                            if (all_sets[c * slot_words] != 0u) {
                                 ++tagged;
                             }
                         }
@@ -493,7 +510,7 @@ void kernel_main() {
                     // drafter's top-3): the rest of each row's list is parked on the sentinel, which the weight
                     // pass skips, so it neither runs nor enters the row's weight normalization.
                     invalidate_l1_cache();
-                    const uint32_t layer_k = fe_header(kFeHdrTopK);
+                    const uint32_t layer_k = hdr(kFeHdrTopK);
                     const uint32_t row_k = layer_k != 0u && layer_k < top_k ? layer_k : top_k;
                     for (uint32_t b = 0; b < batch; ++b) {
                         for (uint32_t j = 0; j < top_k; ++j) {
@@ -507,7 +524,8 @@ void kernel_main() {
                             }
                         }
                     }
-                    // This half is written next two iterations on, after this merge is done.
+                    // This requester's set is written next for its next row, which every chip's partials of this
+                    // one have to be back for.
                     for (uint32_t c = 0; c < num_router_cores; ++c) {
                         half_cur[c * slot_words] = 0u;
                     }
@@ -751,10 +769,10 @@ void kernel_main() {
         {
             DeviceZoneScopedN("FE_ROUTE_IDS_MCAST");
 #if FE_GROUP_EXPERTS > 1
-            // The hit count, for every grid RISC's loops (persistent.h kFeHdrHits): staged in this core's own header
-            // word (its router-row header, which the next route go rewrites only after this iteration).
+            // The hit count, for every grid RISC's loops (persistent.h kFeHdrHits): staged in this row's merge ring
+            // entry (its own, until the ring comes round), multicast to the grid's header word.
             {
-                const uint32_t hits_l1 = FE_HDR_ADDR + kFeHdrHits * 4u;
+                const uint32_t hits_l1 = hdr_l1 + kFeHdrHits * 4u;
                 // At least one per group: a union smaller than the 6 groups (a top-3 drafter block of alike rows)
                 // runs its padding slots -- expert 0 at a zero weight, exact zeros in the fold -- rather than
                 // leaving a group without an expert, which the grid's loops do not expect.
@@ -772,7 +790,7 @@ void kernel_main() {
                      .noc_y_start = mcast_start_y,
                      .noc_x_end = mcast_end_x,
                      .noc_y_end = mcast_end_y,
-                     .addr = hits_l1},
+                     .addr = FE_HDR_ADDR + kFeHdrHits * 4u},
                     /*linked=*/false);
             }
 #endif
@@ -904,27 +922,33 @@ void kernel_main() {
 
 #if defined(FE_ROUTE_STAGE)
 #if defined(FE_ROUTER_SHARDED)
-    // Both halves' slots untagged (see the merge): the scratch comes uninitialized.
+    // Every requester's slots untagged (see the merge): the scratch comes uninitialized.
     auto clear_cand_tags = [&]() {
         auto* slots = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FE_CAND_ADDR);
-        for (uint32_t c = 0; c < 2u * num_router_cores; ++c) {
+        for (uint32_t c = 0; c < FE_NUM_REQUESTERS * num_router_cores; ++c) {
             slots[c * (router_cand_slot_bytes / 4u)] = 0u;
         }
     };
     clear_cand_tags();
 #endif
-    // No input to consume and no writer: this kernel is past a row once its broadcast is out.
-    for (uint32_t iter = 0;; ++iter) {
-        if (iter > 0u) {
-            noc_semaphore_inc(get_noc_addr(FE_CTRL_X, FE_CTRL_Y, get_semaphore(FE_SEM_READY)), 1);
-            noc_async_atomic_barrier();
+    // The rows the control core routes, one merge ring entry and one FE_SEM_MERGE_GO bump each; the stop is an entry
+    // whose layer word is kFeStopLayerWord. No input to consume, no writer and no stage ready to report.
+    auto* merge_go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(FE_SEM_MERGE_GO));
+    uint32_t iter = 0;
+    for (;; ++iter) {
+        {
+            DeviceZoneScopedN("FE_ROUTE_GO_WAIT");
+            noc_semaphore_wait_min(merge_go, iter + 1u);
         }
-        if (!fe_wait_go(iter)) {
+        hdr_l1 = FE_MERGE_RING_ADDR + (iter % kFeSourceRing) * kFeHdrWords * 4u;
+        if (hdr(kFeHdrLayer) == kFeStopLayerWord) {
             break;
         }
         fe_rewind_cbs();
         iteration(iter);
     }
+    // The count starts at zero next launch.
+    *merge_go = 0;
 #if defined(FE_ROUTER_SHARDED)
     clear_cand_tags();
 #endif
