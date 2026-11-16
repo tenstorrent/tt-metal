@@ -30,9 +30,8 @@ def gate(label, results, trace_pcc=None, correctness=()):
     bands = []
     for mode, (samples, measured, target, margin) in results.items():
         band = f"target {target} ms ±{margin:.0%}" if target is not None else "no target (report only)"
-        print(
-            f"{label} {mode}: {measured:.3f} ms (max {max(samples):.3f}); {band}; samples {' '.join(f'{x:.3f}' for x in samples)}"
-        )
+        samples_txt = " ".join(f"{x:.3f}" for x in samples)
+        print(f"{label} {mode}: {measured:.3f} ms (max {max(samples):.3f}); {band}; samples {samples_txt}")
         if failure := band_failure(mode, measured, target, margin):
             bands.append(failure)
     correctness = [c for c in correctness if c]

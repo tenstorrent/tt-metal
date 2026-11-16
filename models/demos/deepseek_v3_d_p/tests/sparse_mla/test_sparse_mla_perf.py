@@ -14,10 +14,10 @@ Boxes and gate cases: perf_cases.py.
 
 test_sparse_mla_perf: the CI gate. Warm and long with the production scaled-FP8 KVPE cache (SPxTP-sharded), for
 GATE_CASES, each at its model's fabric packet size: K3.1 (last DSA layer's slot of 24), GLM-5.3 (last full indexer
-layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of 10 after 10
-warm-up (tests/measure). Traced: one timed replay of the captured trace. Each (case, box, scenario, mode)
-is gated two-sided against PERF_TARGETS_MS ± MARGIN[mode] (a case without targets only reports), and the traced
-output must match the untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no
+layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of 10 after 10 warm-up
+(tests/measure). Traced: one timed replay of the captured trace. Each (case, box, scenario, mode) is gated two-sided
+against PERF_TARGETS_MS ± MARGIN[mode] (a case without targets only reports), and the traced output must match the
+untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no
 next-layer KV prefetch overlapped with its attention); the shared layer reuses its push plan, as it would inside a
 stage.
 
