@@ -152,6 +152,8 @@ class PrefillModelAdapter(ABC):
     # Stored drafter K layout used when comparing against half-split HF goldens.
     dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
+    # The runtime's prefill_forward / prefill_chunk take media_refs on the first rank (PREFILL_MEDIA_MAX_REFS > 0).
+    supports_media: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False
     # The runtime implements prefill_forward; without it a forward of several chunks runs prefill_chunk per chunk.

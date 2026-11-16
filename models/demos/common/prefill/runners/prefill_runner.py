@@ -8,7 +8,7 @@ import json
 import os
 import signal
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from typing import Optional
 
 import torch
@@ -23,11 +23,14 @@ from models.demos.common.prefill.prefill_chunk import WARMUP_WORD as WARMUP_META
 from models.demos.common.prefill.prefill_chunk import (
     check_packed_forward_support,
     decode_forward_metadata,
+    decode_media_refs,
     forward_metadata_words,
+    media_refs_capacity,
     metadata_size_bytes,
     packed_forward_capabilities,
     sentinel_words,
     validate_chunks,
+    validate_media_refs,
 )
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
@@ -148,6 +151,11 @@ NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
 CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
+# Most media items the first rank's H2D metadata lists per forward; the engine must use the same value. Only that
+# metadata grows: D2D records, D2H acks and the indices channel keep their sizes.
+MEDIA_MAX_REFS = int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0))
+assert MEDIA_MAX_REFS >= 0, f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS} must be >= 0"
+H2D_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS, MEDIA_MAX_REFS)
 
 D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 # The D2D FIFO must hold the L1-aligned metadata: 256 B, grown in 256 B steps for a wide packed forward.
@@ -186,6 +194,15 @@ def _sparse_kv_cache_format():
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
 
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
+assert (
+    not MEDIA_MAX_REFS or ADAPTER.supports_media
+), f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: model {ADAPTER.name!r} does not take media refs"
+assert not (MEDIA_MAX_REFS and USE_TRACE), "PREFILL_MEDIA_MAX_REFS>0 does not support PREFILL_USE_TRACE=1 yet"
+_H2D_PAGE_BYTES = int(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS).shape[-1]) * TOKEN_ID_BYTES
+assert MEDIA_MAX_REFS <= media_refs_capacity(FORWARD_CHUNKS, _H2D_PAGE_BYTES), (
+    f"PREFILL_MEDIA_MAX_REFS={MEDIA_MAX_REFS}: the H2D metadata must fit one {_H2D_PAGE_BYTES} B socket page, "
+    f"which holds at most {media_refs_capacity(FORWARD_CHUNKS, _H2D_PAGE_BYTES)} refs"
+)
 
 check_packed_forward_support(
     FORWARD_CHUNKS,
@@ -225,11 +242,16 @@ def _meta_from_words(words) -> dict:
     return {"slot_id": head.slot_id, "actual_start": head.actual_start, "actual_end": head.actual_end, "chunks": chunks}
 
 
-def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
-    # One D2H read; the word after the chunk metadata is MTP provided_levels.
+def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False, with_media: bool = False) -> dict:
+    """The forward's metadata from one D2H read: the word after the chunk metadata is MTP provided_levels on D2D,
+    the media refs on H2D. A malformed ref is a protocol error and stops the runner. A missing or wrong-size
+    embedding also stops it: failing only that request needs a per-request error path to the engine."""
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     n = CHUNK_METADATA_SIZE_BYTES // 4
     meta = _meta_from_words(m[:n].tolist())
+    if with_media and not meta["chunks"][0].is_sentinel:
+        meta["media_refs"] = decode_media_refs(m.numpy().tobytes(), FORWARD_CHUNKS, MEDIA_MAX_REFS)
+        validate_media_refs(meta["media_refs"], meta["chunks"])
     # Mirror _metadata_record_words: that word exists only when MTP is on.
     if with_provided_levels and m.numel() > n:
         meta["provided_levels"] = max(0, int(m[n]))
@@ -324,7 +346,7 @@ def _layer_ack_fifo_bytes(rank_record_count: int, use_trace: bool) -> int:
 def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
     return ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service,
-        metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+        metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
         overhang_size_bytes=n_mtp * TOKEN_ID_BYTES,
         metadata_out=sockets.persistent_metadata(),
         tokens_out=sockets.tokens,
@@ -335,11 +357,11 @@ def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
 def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
-        return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata)
+        return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata, with_media=bool(MEDIA_MAX_REFS))
     outs = _h2d_drain_op(h2d_service, sockets, n_mtp)
     tokens, overhang = (outs[0], outs[1]) if n_mtp else (outs[0], None)
     sockets.metadata = outs[-1]
-    return tokens, overhang, _decode_metadata(sockets.metadata)
+    return tokens, overhang, _decode_metadata(sockets.metadata, with_media=bool(MEDIA_MAX_REFS))
 
 
 # Fabric lease groups (D2DStreamConfig::fabric_link_group). A rank's two inbound services (activations,
@@ -539,6 +561,20 @@ def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
     return _device_record(_metadata_record_words(meta), outbound.get_backing_tensor().device())
 
 
+def _ack_metadata(runtime, sockets, meta: dict, d2h_service) -> ttnn.Tensor:
+    """Metadata sent back in the D2H ack. Normally this is the metadata the rank received. On the first rank with
+    media refs, the received metadata also carries the refs and is too long for the ack, so send only the chunk
+    records, rebuilt every forward."""
+    if not (MEDIA_MAX_REFS and d2h_service is not None and runtime.config.is_first_rank):
+        return sockets.metadata
+    words = torch.tensor(forward_metadata_words(meta["chunks"], FORWARD_CHUNKS), dtype=torch.int32).reshape(1, 1, 1, -1)
+    if sockets.ack_record is not None and sockets.ack_record.is_allocated():
+        _fill_record(sockets.ack_record, words)
+    else:
+        sockets.ack_record = _device_record(words, runtime.mesh_device)
+    return sockets.ack_record
+
+
 def _fill_record(record: ttnn.Tensor, words: torch.Tensor) -> None:
     src = ttnn.from_torch(
         words,
@@ -651,6 +687,7 @@ class SocketBuffers:
         self.tokens = tokens
         self.overhang = overhang
         self.send_record = send_record
+        self.ack_record = None
         self.per_chunk = PerChunkBuffers()
         self.drain_trace = None
         self.send_trace = None
@@ -792,16 +829,25 @@ def _write_chunk(bufs: PerChunkBuffers, act: ttnn.Tensor, k: int, rows: int, for
 
 
 def _prefill_chunks(
-    runtime, kv_caches, inp, chunks: list, request_id: int, bufs: PerChunkBuffers, d2h_service=None, free_input=True
+    runtime,
+    kv_caches,
+    inp,
+    chunks: list,
+    request_id: int,
+    bufs: PerChunkBuffers,
+    d2h_service=None,
+    free_input=True,
+    media_refs=(),
 ):
-    """A packed forward run one non-empty chunk at a time through prefill_chunk, chunk k as request_id + k.
-    Returns None on the last rank, else ``bufs.out``: the activation in the packed layout, empty chunks as
-    zero rows. ``bufs.out`` is rewritten by the next forward, so the caller must not free it."""
+    """A packed forward run one non-empty chunk at a time through prefill_chunk, chunk k as request_id + k, with
+    its own media refs as chunk 0. Returns None on the last rank, else ``bufs.out``: the activation in the packed
+    layout, empty chunks as zero rows. ``bufs.out`` is rewritten by the next forward, so the caller must not free it."""
     rows = CHUNK_SIZE // _sp
     dev = inp.device()
     last = runtime.config.is_last_rank
     real = [c for c in chunks if not c.is_empty]
     for k, chunk in enumerate(real):
+        refs = [replace(r, chunk_index=0) for r in media_refs if r.chunk_index == k]
         out = runtime.prefill_chunk(
             _chunk_rows(inp, k, rows),
             kv_caches,
@@ -811,6 +857,7 @@ def _prefill_chunks(
             request_id=request_id + k,
             d2h_service=d2h_service,
             metadata_msg=_chunk_record(bufs, k, chunk, dev),
+            **({"media_refs": refs} if refs else {}),
         )
         if last:
             assert out is None, f"the last rank's prefill_chunk returned an activation for chunk {k}"
@@ -852,6 +899,8 @@ def _compute_and_send(
         f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
     )
 
+    ack_md = _ack_metadata(runtime, sockets, meta, d2h_service)
+    media_kwargs = {"media_refs": meta["media_refs"]} if meta.get("media_refs") else {}
     with _with_hang_timeout(runtime.mesh_device):
         if PER_CHUNK_FORWARDS:
             out = _prefill_chunks(
@@ -863,12 +912,19 @@ def _compute_and_send(
                 sockets.per_chunk,
                 d2h_service=d2h_service,
                 free_input=sockets.tokens is None,
+                media_refs=meta.get("media_refs", ()),
             )
             if sockets.persistent_metadata() is None:
                 ttnn.deallocate(sockets.metadata)
         elif FORWARD_CHUNKS > 1:
             out = runtime.prefill_forward(
-                inp, kv_caches, meta["chunks"], request_id=c, d2h_service=d2h_service, metadata_msg=sockets.metadata
+                inp,
+                kv_caches,
+                meta["chunks"],
+                request_id=c,
+                d2h_service=d2h_service,
+                metadata_msg=ack_md,
+                **media_kwargs,
             )
         else:
             mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
@@ -880,8 +936,9 @@ def _compute_and_send(
                 actual_end=meta["actual_end"],
                 request_id=c,
                 d2h_service=d2h_service,
-                metadata_msg=sockets.metadata,
+                metadata_msg=ack_md,
                 **mtp_kwargs,
+                **media_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
             )
     if SYNC_PER_CHUNK:
@@ -1067,6 +1124,7 @@ def _print_config() -> None:
         ),
         ("PREFILL_MTP_LEVELS", f"{MTP_LEVELS} (adapter.supports_mtp={ADAPTER.supports_mtp})"),
         ("PREFILL_MTP_DECODE_LEVELS", str(MTP_DECODE_LEVELS)),
+        ("PREFILL_MEDIA_MAX_REFS", f"{MEDIA_MAX_REFS} (H2D metadata {H2D_METADATA_SIZE_BYTES} B)"),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_HYBRID_PAGE_POOL_V2", str(int(HYBRID_PAGE_POOL_V2))),
@@ -1263,7 +1321,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 global_spec=global_spec,
                 mapper_config=H2D_MAPPER_CONFIG,
                 worker_cores=SYNC_WORKER_CORES,
-                metadata_size_bytes=CHUNK_METADATA_SIZE_BYTES,
+                metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
             )
             path = service.export_descriptor(name)
             logger.info(
@@ -1416,7 +1474,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # message, so a drain-allocated one would outlive the capture and be live across the replay.
         metadata=(
             _make_socket_metadata_buffer(
-                mesh_device, CHUNK_METADATA_SIZE_BYTES if is_first_rank else D2D_METADATA_SIZE_BYTES
+                mesh_device, H2D_METADATA_SIZE_BYTES if is_first_rank else D2D_METADATA_SIZE_BYTES
             )
             if _claim_input is not None
             else None
