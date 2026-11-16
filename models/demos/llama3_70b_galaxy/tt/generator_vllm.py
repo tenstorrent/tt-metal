@@ -5,7 +5,7 @@
 import ttnn
 import torch
 from tqdm import tqdm
-from models.demos.llama3_70b_galaxy.tt.generator import Generator
+from models.demos.llama3_70b_galaxy.tt.generator import CHUNKED_PREFILL, Generator
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
@@ -170,6 +170,7 @@ class LlamaForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        "supports_chunked_prefill": CHUNKED_PREFILL,
     }
 
     def __init__(self, *args, **kwargs):

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections import defaultdict
 from dataclasses import fields, replace
 from typing import List
@@ -35,6 +36,10 @@ from models.tt_transformers.tt.common import (
 # LlamaModel.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
 # Used to refresh only the page-table trace input when KV blocks are reallocated.
 DECODE_PAGE_TABLE_INPUT_IDX = 3
+
+# A chunked-prefill continuation arrives like a prefix-cache hit: start_pos is the
+# tokens computed by earlier chunks and prompt_lens is this chunk's end.
+CHUNKED_PREFILL = os.environ.get("LLAMA_GALAXY_CHUNKED_PREFILL", "0") == "1"
 
 
 def _as_list(value):
@@ -514,7 +519,9 @@ class Generator(WarmupForwardMixin):
         # replication).  Overwriting cached KV blocks with identical data is
         # harmless, so this is functionally safe.
         # Skip during warmup so we record all sp1 traces regardless.
-        if not self.warming_up_prefill:
+        # With chunked prefill the generator cannot tell a chunk resume from a cache
+        # hit, and resetting a resume to 0 would recompute every earlier chunk.
+        if not self.warming_up_prefill and not CHUNKED_PREFILL:
             for idx, seq_len in enumerate(prompt_lens):
                 if _should_skip_prefix_caching(int(seq_len), num_cached_tokens_list[idx]):
                     logger.info(
@@ -532,7 +539,9 @@ class Generator(WarmupForwardMixin):
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
             block_size = get_block_size(kv_cache)
-            if start_pos is not None:
+            # A chunk can end mid-block; the SDPA floor above already recomputes from an
+            # aligned start, overwriting those KV rows with the same values.
+            if start_pos is not None and not CHUNKED_PREFILL:
                 assert all(
                     start_pos[idx] % block_size == 0 for idx in range(batch)
                 ), "start_pos must be aligned to block_size"
