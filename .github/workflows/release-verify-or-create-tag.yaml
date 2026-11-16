@@ -37,13 +37,12 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       version: ${{ steps.calculate-version.outputs.final_version }}
-    # The built-in token is enough here. Tag creation only needs the caller's
-    # `contents: write`, nothing in this repo triggers on tag pushes (upstream-tests
-    # is dispatched explicitly below), and no ruleset protects release tags. The
-    # TT_METAL_RELEASE_TOKEN PAT used before (#28015) tied every release to one
-    # person's credentials and broke the release when it disappeared.
+    # github.token cannot create a tag on a commit whose workflow files differ
+    # from main (GitHub requires the `workflows` permission, which the built-in
+    # token never has), so rc/prod tags on stable need TT_METAL_RELEASE_TOKEN.
+    # Nightly dev tags on main fall back to github.token if the secret is unset.
     env:
-      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN || github.token }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -68,7 +67,7 @@ jobs:
         if: ${{ !inputs.dry-run }}
         uses: actions/github-script@v7.0.1
         with:
-          github-token: ${{ github.token }}
+          github-token: ${{ secrets.TT_METAL_RELEASE_TOKEN || github.token }}
           script: |
             const owner = "${{ github.repository_owner }}";
             const repo = "${{ github.repository }}".split('/')[1];
