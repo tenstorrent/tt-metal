@@ -17,6 +17,7 @@ and its CRC. Readers reject a higher major version and ignore unknown fields.
 from __future__ import annotations
 
 import datetime
+import errno
 import json
 import os
 import re
@@ -328,16 +329,18 @@ def begin_staging(final_dir: str) -> tuple[str, int]:
 def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> None:
     """Rename the staging directory to its final name after fsyncing it, then fsync the parent.
 
-    With ``overwrite`` an existing final directory is first moved aside to ``<final>.replaced-<nonce>`` and deleted
-    once the new one is in place; if it cannot be deleted (busy files on NFS), a warning names it. If moving the new
-    one in fails, the old one is moved back before the error is raised, so a failed overwrite leaves the previous
-    checkpoint where it was."""
+    Without ``overwrite``, a final directory that exists is refused, and the rename that commits the checkpoint is
+    itself the last check: renaming onto a directory that is not empty fails, so a checkpoint another save commits
+    meanwhile is refused here rather than replaced. With ``overwrite`` an existing final directory is first moved aside
+    to ``<final>.replaced-<nonce>`` and deleted once the new one is in place; if it cannot be deleted (busy files on
+    NFS), a warning names it. If moving the new one in fails, the old one is moved back before the error is raised, so
+    a failed overwrite leaves the previous checkpoint where it was."""
     final_dir = final_dir.rstrip("/")
     if os.path.exists(final_dir) and not overwrite:
         raise CheckpointError(f"{final_dir} already exists; pass overwrite=True to replace it")
     _fsync_dir(staging)
     replaced = None
-    if os.path.exists(final_dir):
+    if overwrite and os.path.exists(final_dir):
         replaced = f"{final_dir}{REPLACED_MARK}{secrets.randbits(31)}"
         os.rename(final_dir, replaced)
     try:
@@ -351,6 +354,8 @@ def finalize_staging(staging: str, final_dir: str, overwrite: bool = False) -> N
                     f"could not move {staging} to {final_dir} ({err}), nor move the previous checkpoint back from "
                     f"{replaced} ({rollback}); rename it back by hand"
                 ) from err
+        if not overwrite and isinstance(err, OSError) and err.errno in (errno.EEXIST, errno.ENOTEMPTY, errno.ENOTDIR):
+            raise CheckpointError(f"{final_dir} already exists; pass overwrite=True to replace it") from err
         raise
     _fsync_dir(os.path.dirname(final_dir) or ".")
     if replaced is not None:

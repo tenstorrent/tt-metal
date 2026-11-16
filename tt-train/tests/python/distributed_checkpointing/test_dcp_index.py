@@ -11,6 +11,7 @@ import shutil
 import pytest
 
 
+from ttml.distributed_checkpointing import _index as index_module
 from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import (
     CheckpointError,
@@ -295,6 +296,32 @@ def test_only_bool_int_float_and_str_scalars_are_stored(expect_error):
     index.scalars["optimizer/betas"] = (0.9, 0.999)
     with expect_error(CheckpointError, "scalar of type tuple cannot be stored in the index"):
         index.to_json()
+
+
+def test_without_overwrite_a_checkpoint_committed_during_finalize_is_refused_not_replaced(
+    tmp_path, monkeypatch, expect_error
+):
+    final = str(tmp_path / "step_0000010")
+    staging, _ = begin_staging(final)
+    write_index(staging, _index())
+    other, _ = begin_staging(final)
+    other_index = _index()
+    other_index.checkpoint_id = "the other save"
+    write_index(other, other_index)
+    real_fsync_dir = index_module._fsync_dir
+
+    def fsync_while_another_save_commits(path):  # the other save commits between the first check and the rename
+        real_fsync_dir(path)
+        if path == staging:
+            finalize_staging(other, final)
+
+    monkeypatch.setattr(index_module, "_fsync_dir", fsync_while_another_save_commits)
+    with expect_error(CheckpointError, "already exists; pass overwrite=True"):
+        finalize_staging(staging, final)
+    monkeypatch.setattr(index_module, "_fsync_dir", real_fsync_dir)
+
+    assert read_index(final).checkpoint_id == "the other save", "the committed checkpoint is kept"
+    assert not [n for n in os.listdir(tmp_path) if ".replaced-" in n], "nothing was moved aside"
 
 
 def test_a_failed_overwrite_puts_the_previous_checkpoint_back(tmp_path, monkeypatch, expect_error):
