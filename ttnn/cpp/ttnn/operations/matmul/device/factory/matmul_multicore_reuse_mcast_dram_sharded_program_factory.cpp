@@ -1938,7 +1938,9 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_art
             const auto workers = dram_sharded_helpers::get_dram_bank_workers(device, noc, coord);
             cores.insert(cores.end(), workers.begin(), workers.end());
         }
-        if (program_config.num_workers_per_dram_bank > 1) {
+        // The extra readers of 2..3 workers per bank are chosen by hop distance from the primary reader on this chip.
+        // More workers per bank run the multicore pipeline, which places its cores around the primary readers only.
+        if (program_config.num_workers_per_dram_bank > 1 && program_config.num_workers_per_dram_bank <= 3) {
             for (const auto& reader : dram_sharded_helpers::get_dram_bank_reader_assignments(
                      device,
                      tt::tt_metal::NOC::NOC_0,
@@ -1952,7 +1954,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_art
     };
     const auto coords = tensor_coords.coords();
     const bool shared =
-        coords.empty() || device.arch() == tt::ARCH::QUASAR ||
+        coords.size() <= 1 || device.arch() == tt::ARCH::QUASAR ||
         std::all_of(coords.begin(), coords.end(), [&, first = placement(coords.front())](const auto& coord) {
             return placement(coord) == first;
         });
