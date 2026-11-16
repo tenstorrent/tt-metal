@@ -172,13 +172,27 @@ Tensor from_local_host_shards(
             mesh_shape);
     }
 
-    // The buffer spans the whole mesh; only this host's coordinates are local and may hold a shard.
+    // The buffer spans the whole mesh. The label decides where the tensor lives, which can be part of the mesh (a
+    // mapper's mesh_shape_override, say): every coordinate it lists on this host needs a shard, and a shard goes only
+    // to a coordinate of this host. A shard at a coordinate the label does not list is refused by
+    // verify_shards_match_topology below.
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_view);
-    for (const auto& coord : mesh_range) {
-        const bool local = distributed_host_buffer.is_local(coord);
-        const bool given = shards.contains(coord);
-        TT_FATAL(!given || local, "from_local_host_shards: coordinate {} is not local to this host", coord);
-        TT_FATAL(given || !local, "from_local_host_shards: no shard was given for local coordinate {}", coord);
+    for (const auto& coord : topology.mesh_coords()) {
+        TT_FATAL(
+            coord.dims() == mesh_shape.dims() && mesh_range.contains(coord),
+            "from_local_host_shards: the topology lists coordinate {}, which is not inside the mesh of shape {}",
+            coord,
+            mesh_shape);
+        TT_FATAL(
+            shards.contains(coord) || !distributed_host_buffer.is_local(coord),
+            "from_local_host_shards: no shard was given for local coordinate {}",
+            coord);
+    }
+    for (const auto& [coord, shard] : shards) {
+        TT_FATAL(
+            distributed_host_buffer.is_local(coord),
+            "from_local_host_shards: coordinate {} is not local to this host",
+            coord);
     }
     for (const auto& [coord, shard] : shards) {
         HostBuffer buffer = host_buffer::get_host_buffer(shard);

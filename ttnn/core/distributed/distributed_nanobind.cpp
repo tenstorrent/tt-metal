@@ -1110,12 +1110,14 @@ void py_module(nb::module_& mod) {
             Creates a multi-device host tensor from the shards this host holds, labelled exactly as given.
 
             Unlike ``from_host_shards``, which needs one shard per coordinate of the whole mesh and spells a 1-D
-            label of its own, this takes one host shard per coordinate local to this host (every coordinate on a
-            single-host mesh) and the ``TensorTopology`` the tensor should carry. Coordinates that belong to other
-            hosts of a multi-host mesh stay unpopulated, so the result can be moved to the device with ``to``.
+            label of its own, this takes the ``TensorTopology`` the tensor should carry and one host shard per
+            coordinate it lists on this host (on a single-host mesh, every coordinate it lists). Coordinates that
+            belong to other hosts of a multi-host mesh, or that the label does not list (a tensor can live on part
+            of the mesh), stay unpopulated, so the result can be moved to the device with ``to``.
 
             Args:
-                shards (Dict[MeshCoordinate, Tensor]): One host shard per local coordinate; all with the same spec.
+                shards (Dict[MeshCoordinate, Tensor]): One host shard per local coordinate the topology lists; all
+                    with the same spec.
                 mesh_device (MeshDevice): The mesh the tensor is destined for; decides which coordinates are local.
                 topology (TensorTopology): The label the tensor carries, as the live tensor it will be placed into has it.
 
