@@ -197,7 +197,7 @@ def test_kimi_k3_layer0_dev_run(mesh_device: ttnn.MeshDevice, tensor_parallel_ax
     (run_dir / "run.json").write_text(json.dumps(meta, indent=1))
 
     # Perf first, on a fresh layer: median traced-replay wall of one 5,120-token call at start 0.
-    samples_ms, _ = _trace_wall_samples_ms(
+    samples_ms = _trace_wall_samples_ms(
         mesh_device, layer, first_hidden_tt, _PERF_REPETITIONS, actual_start=0, actual_end=_CALL
     )
     median_ms = statistics.median(samples_ms)

@@ -577,7 +577,4 @@ def test_mla_chunked_perf(request, mesh_device, device_params, scenario, variant
                 f"Kimi-K3 MLA {box} {scenario} host ({mode})",
                 {"box": box, "scenario": scenario, "mode": mode, "samples_ms": samples, "target_ms": target},
             )
-        pcc_failure = (
-            f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}" if trace_pcc < 0.9999 else None
-        )
-        gate(f"kimi_k3 MLA {box} {scenario} host", host, [pcc_failure])
+        gate(f"kimi_k3 MLA {box} {scenario} host", host, trace_pcc)

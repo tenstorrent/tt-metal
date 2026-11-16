@@ -247,9 +247,4 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
             f"{case.label} moe {mesh_tag} {mode} ({case.shape_note}) perf",
             {"mesh": mesh_tag, "mode": mode, "samples_ms": samples, "measured_ms": measured, "target_ms": target},
         )
-    pcc = trace_info["pcc"]
-    gate(
-        f"{case.label} moe {mesh_tag}",
-        results,
-        [f"traced output differs from untraced: min per-device PCC {pcc:.6f}" if pcc < 0.9999 else None],
-    )
+    gate(f"{case.label} moe {mesh_tag}", results, trace_info["pcc"])

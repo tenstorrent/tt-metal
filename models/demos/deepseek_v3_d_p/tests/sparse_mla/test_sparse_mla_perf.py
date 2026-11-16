@@ -14,8 +14,8 @@ Boxes and gate cases: perf_cases.py.
 
 test_sparse_mla_perf: the CI gate. Warm and long with the production scaled-FP8 KVPE cache (SPxTP-sharded), for
 GATE_CASES, each at its model's fabric packet size: K3.1 (last DSA layer's slot of 24), GLM-5.3 (last full indexer
-layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of SAMPLES calls after
-WARMUP discarded ones (tests/measure). Traced: one timed replay of the captured trace. Each (case, box, scenario, mode)
+layer) and a GLM-5.3 shared layer (no indexer; reuses that layer's top-k). Untraced: fastest of 10 after 10
+warm-up (tests/measure). Traced: one timed replay of the captured trace. Each (case, box, scenario, mode)
 is gated two-sided against PERF_TARGETS_MS ± MARGIN[mode] (a case without targets only reports), and the traced
 output must match the untraced one (one extra untimed run of each, for triage). Each layer runs standalone (no
 next-layer KV prefetch overlapped with its attention); the shared layer reuses its push plan, as it would inside a
@@ -54,7 +54,6 @@ from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_m
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 
-# Untraced: discarded calls (the first compiles), then timed calls, each through sync; the gate takes the fastest.
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
@@ -202,7 +201,7 @@ def test_sparse_mla_perf(request, mesh_device, device_params, variant, case_name
             f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f} (eager vs eager "
             f"{min_pcc(eager_repeat[0], eager_out):.6f}, replay vs replay {min_pcc(traced_repeat[0], traced_out):.6f})"
         )
-    gate(label, results, correctness)
+    gate(label, results, correctness=correctness)
 
 
 # ============================================================================

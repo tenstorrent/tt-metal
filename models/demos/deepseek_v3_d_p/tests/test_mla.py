@@ -523,7 +523,8 @@ ROTATED_VALID_LISTS = [
 ]
 ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial", "multislab", "allfull"]
 
-# Host-time targets (ms), untraced and traced (tests/measure): 3 runs on one Galaxy.
+# Host-time targets (ms), untraced and traced (tests/measure): 3 runs on one Galaxy. The same layer and sizes as
+# kimi_k3/test_mla_perf.py warm, through this file's chunked-prefill driver: a different set-up, with its own targets.
 K3_CHUNKED_HOST_TARGETS_MS = {"untraced": 11.649, "traced": 10.006}
 # The determinism check and the host-time gate replay a captured forward, so these meshes reserve a trace region.
 _CHUNKED_DEVICE_PARAMS = {"l1_small_size": 1152, "trace_region_size": 16 * 1024 * 1024}
@@ -1498,9 +1499,4 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
             f"Kimi-K3 MLA chunked 50k+5k perf (torus-xy 8x4, {mode})",
             {"prefill_len": 50 * 1024, "chunk": 5120, "mode": mode, "samples_ms": host[mode], "target_ms": target},
         )
-    pcc = host["trace_pcc"]
-    gate(
-        "kimi_k3 MLA chunked 50k+5k",
-        results,
-        [f"traced output differs from untraced: min per-device PCC {pcc:.6f}" if pcc < 0.9999 else None],
-    )
+    gate("kimi_k3 MLA chunked 50k+5k", results, host["trace_pcc"])

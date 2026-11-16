@@ -17,8 +17,6 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, tp_axis_is_wrapped
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
-    KIMI_K3_CONVOLUTION_NRMSE,
-    LayerNrmseThresholds,
     deallocate_state,
     kda_device_params,
     make_kimi_k3_device_case,
@@ -171,30 +169,17 @@ def _trace_wall_samples_ms(
     layer: ttKDA,
     hidden: ttnn.Tensor,
     repetitions: int,
-    validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
     actual_start: int = 0,
     actual_end: int | None = None,
-    slots: _Slots | None = None,
-) -> tuple[list[float], dict[str, float] | None]:
-    """Host ms per traced call: _TIMING_SAMPLES samples of `repetitions` back-to-back replays through one sync, after
-    one warm-up call, the capture and one replay (validated if asked)."""
-    step, state = _layer_step(mesh_device, layer, hidden, actual_start, actual_end, slots)
+) -> list[float]:
+    """Host ms per traced call, for the dev and state-adapter tools: _TIMING_SAMPLES samples of `repetitions`
+    back-to-back replays through one sync, after one warm-up call, the capture and one replay."""
+    step, state = _layer_step(mesh_device, layer, hidden, actual_start, actual_end)
     try:
         with TracedStep(mesh_device, step) as traced:
             traced.capture()
             traced.replay()
-            output, next_state = traced.output
-            validation = (
-                validate_first_replay(
-                    next_state,
-                    output,
-                    nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
-                )
-                if validate_first_replay is not None
-                else None
-            )
-            samples = _block_samples_ms(mesh_device, lambda: traced.replay(sync=False), repetitions)
-        return samples, validation
+            return _block_samples_ms(mesh_device, lambda: traced.replay(sync=False), repetitions)
     finally:
         deallocate_state(state)
 
@@ -308,7 +293,4 @@ def test_synthetic_kimi_k3_perf(
                 "margin_pct": MARGIN[mode] * 100.0,
             },
         )
-    pcc_failure = (
-        f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}" if trace_pcc < 0.9999 else None
-    )
-    gate(f"kimi_k3 KDA layer {layout}", results, [pcc_failure])
+    gate(f"kimi_k3 KDA layer {layout}", results, trace_pcc)

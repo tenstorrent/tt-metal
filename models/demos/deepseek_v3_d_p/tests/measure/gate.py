@@ -23,19 +23,21 @@ def band_failure(what, measured, target, margin, unit="ms"):
     )
 
 
-def gate(label, results, correctness=()):
+def gate(label, results, trace_pcc=None, correctness=()):
     """`results`: {mode: (samples_ms, measured_ms, target_ms or None, margin)}. Prints each mode (print, not logger:
-    CI runs perf jobs at LOGURU_LEVEL=ERROR), asserts correctness failures, then the bands (PerfGateFailure). A mode
-    without a target only reports."""
+    CI runs perf jobs at LOGURU_LEVEL=ERROR), asserts correctness failures (incl. traced vs untraced output below PCC
+    0.9999), then the bands (PerfGateFailure). A mode without a target only reports."""
     bands = []
     for mode, (samples, measured, target, margin) in results.items():
+        band = f"target {target} ms ±{margin:.0%}" if target is not None else "no target (report only)"
         print(
-            f"{label} {mode}: {measured:.3f} ms (max {max(samples):.3f}); target {target} ms ±{margin:.0%}; "
-            f"samples {' '.join(f'{x:.3f}' for x in samples)}"
+            f"{label} {mode}: {measured:.3f} ms (max {max(samples):.3f}); {band}; samples {' '.join(f'{x:.3f}' for x in samples)}"
         )
         if failure := band_failure(mode, measured, target, margin):
             bands.append(failure)
     correctness = [c for c in correctness if c]
+    if trace_pcc is not None and trace_pcc < 0.9999:
+        correctness.append(f"traced output differs from untraced: min per-device PCC {trace_pcc:.6f}")
     if correctness:
         raise AssertionError(f"{label}: " + "; ".join(correctness + bands))
     assert_perf_gate(not bands, f"{label}: " + "; ".join(bands))
