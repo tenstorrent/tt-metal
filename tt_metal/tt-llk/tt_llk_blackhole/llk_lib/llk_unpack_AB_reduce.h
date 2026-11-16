@@ -62,17 +62,17 @@ inline bool _llk_unpack_AB_reduce_scaler_whole_tile_(const ckernel::TensorShape 
 /**
  * @brief Configures the unpacker MOP for reduction operations.
  *
- * The data is unpacked face by face, or in one UNPACR for a 4-face SUM/AVG REDUCE_ROW. The scaler gives the first
- * row of one of its faces per data face, cycling through its faces when it has fewer than the data. The swapped
- * path can read scaler faces whole (see @ref _llk_unpack_AB_reduce_scaler_row_only_).
+ * One SrcA/SrcB handoff per tile. Full-height data is unpacked in one UNPACR; faces shorter than 16 rows are
+ * unpacked face by face, each into its own 16-row slot of the bank. The scaler gives its first face, or, for a
+ * 4-face SUM/AVG REDUCE_ROW, its first two faces into the SrcA faces MVMUL reads (or the whole 32x32 scaler in one
+ * UNPACR). The swapped path can read scaler faces whole (see @ref _llk_unpack_AB_reduce_scaler_row_only_).
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param tensor_shape: Shape of the data operand.
  * @param tensor_shape_scaler: Shape of the scaler operand.
  *
- * @note For faces shorter than 16 rows, the data bank is cleared before each face.
- * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
+ * @note For faces shorter than 16 rows, the data bank is cleared once per tile before the data is unpacked.
  * @note With a short scaler on the swapped path, the unpacker's own SrcA bank is zeroed before each scaler unpack.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
@@ -82,71 +82,39 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_mop_config_", tensor_shape_scaler);
 
     constexpr bool is_max        = pool_type == PoolType::MAX;
-    constexpr bool is_scalar     = reduce_dim == ReduceDim::REDUCE_SCALAR;
     constexpr bool swap_operands = _llk_unpack_AB_reduce_swaps_operands_<pool_type, reduce_dim>();
 
     constexpr std::uint32_t data_unpacker  = swap_operands ? Srcs::SrcB : Srcs::SrcA;
-    constexpr std::uint32_t scaler_adc     = swap_operands ? p_setadc::UNP_A : p_setadc::UNP_B;
     constexpr std::uint32_t data_clear_val = is_max ? p_unpacr_nop::CLR_SRC_NEGINF : p_unpacr_nop::CLR_SRC_0;
 
-    const std::uint32_t num_faces        = tensor_shape.total_num_faces();
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
+    const bool is_tiny            = tensor_shape.face_r_dim < FACE_R_DIM;
+
+    // MVMUL reads two scaler faces only for 4-face data; every other path reads scaler face 0 alone.
+    const bool two_scaler_faces = swap_operands && num_faces == MAX_NUM_FACES && !_llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler);
+    LLK_ASSERT(
+        !two_scaler_faces || tensor_shape_scaler.num_faces_c_dim == tensor_shape.num_faces_c_dim, "The scaler needs a face for every column of data faces");
+
+    const bool clear_data   = is_tiny;
+    const bool clear_scaler = swap_operands && _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler);
+
+    constexpr bool per_face_scaler       = reduce_dim == ReduceDim::REDUCE_COL;
     const std::uint32_t num_scaler_faces = tensor_shape_scaler.total_num_faces();
-
-    if (swap_operands && num_faces == MAX_NUM_FACES)
-    {
-        // One handoff per tile: the whole data tile, and scaler faces 0 and 1 into the SrcA faces MVMUL reads.
-        LLK_ASSERT(tensor_shape_scaler.num_faces_c_dim == tensor_shape.num_faces_c_dim, "The scaler needs a face for every column of data faces");
-        const bool clear_scaler = _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler);
-        if (_llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler))
-        {
-            constexpr std::uint32_t whole_tile_replay_len = 2;
-            load_replay_buf(
-                0,
-                whole_tile_replay_len,
-                []
-                {
-                    TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                    TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                });
-            ckernel_template tmp(1, 1, lltt::replay_insn(0, whole_tile_replay_len));
-            tmp.program();
-            return;
-        }
-        const std::uint32_t replay_len = (clear_scaler ? 1 : 0) + 3;
-        load_replay_buf(
-            0,
-            replay_len,
-            [clear_scaler]
-            {
-                if (clear_scaler)
-                {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
-                }
-                TTI_UNPACR(SrcA, 0b00010001 /*ch0_z+=1, ch1_z+=1*/, 0, 0, 0, 1, 0 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            });
-
-        ckernel_template tmp(1, 1, lltt::replay_insn(0, replay_len));
-        tmp.program();
-        return;
-    }
-
-    // One handoff per data face; the scaler wraps when it has fewer faces.
-    const bool wrap_scaler = num_scaler_faces < num_faces;
+    const bool wrap_scaler               = per_face_scaler && num_scaler_faces < num_faces;
     LLK_ASSERT(
         !wrap_scaler || tensor_shape_scaler.num_faces_c_dim == tensor_shape.num_faces_c_dim,
         "A scaler with fewer faces than the data needs a face for every column of data faces");
-    const std::uint32_t outerloop = wrap_scaler ? num_faces / num_scaler_faces : 1;
-    const std::uint32_t innerloop = wrap_scaler ? num_scaler_faces : num_faces;
-    const bool clear_data         = is_scalar || tensor_shape.face_r_dim < FACE_R_DIM;
-    const bool clear_scaler       = swap_operands && _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler);
 
-    const std::uint32_t replay_len = (clear_data ? 1 : 0) + (clear_scaler ? 1 : 0) + 2;
+    const bool whole_scaler = tensor_shape_scaler.total_num_faces() == tensor_shape.total_num_faces() && tensor_shape_scaler.face_r_dim == FACE_R_DIM;
+    const std::uint32_t data_unpacrs   = is_tiny ? num_faces : 1;
+    const std::uint32_t scaler_unpacrs = (per_face_scaler && !whole_scaler) ? num_faces : (two_scaler_faces ? 2 : 1);
+    const std::uint32_t scaler_wraps   = wrap_scaler ? num_faces / num_scaler_faces - 1 : 0;
+    const std::uint32_t replay_len     = (clear_data ? 1 : 0) + (clear_scaler ? 1 : 0) + data_unpacrs + scaler_unpacrs + scaler_wraps;
+
     load_replay_buf(
         0,
         replay_len,
-        [clear_data, clear_scaler]
+        [clear_data, clear_scaler, data_unpacrs, scaler_unpacrs, num_scaler_faces, wrap_scaler]
         {
             if (clear_data)
             {
@@ -156,15 +124,43 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
             {
                 TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
             }
-            TTI_UNPACR(SrcA, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            TTI_UNPACR(SrcB, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+            const auto unpack_data = [data_unpacrs]
+            {
+                // Short faces go one by one into consecutive 16-row slots; dvalid only once the whole tile is in the bank.
+                for (std::uint32_t face = 0; face + 1 < data_unpacrs; face++)
+                {
+                    TTI_UNPACR(data_unpacker, 0b00010001 /*ch0_z+=1, ch1_z+=1*/, 0, 0, 0, 1, 0 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                }
+                TTI_UNPACR(data_unpacker, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            };
+            const auto unpack_scaler = [scaler_unpacrs, num_scaler_faces, wrap_scaler]
+            {
+                constexpr std::uint32_t scaler_unpacker = swap_operands ? Srcs::SrcA : Srcs::SrcB;
+                for (std::uint32_t face = 0; face + 1 < scaler_unpacrs; face++)
+                {
+                    TTI_UNPACR(scaler_unpacker, 0b00010001 /*ch0_z+=1, ch1_z+=1*/, 0, 0, 0, 1, 0 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    if (wrap_scaler && (face + 1) % num_scaler_faces == 0)
+                    {
+                        TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001 /*ch0_z=0*/);
+                    }
+                }
+                TTI_UNPACR(scaler_unpacker, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            };
+
+            if constexpr (swap_operands)
+            {
+                unpack_scaler();
+                unpack_data();
+            }
+            else
+            {
+                unpack_data();
+                unpack_scaler();
+            }
         });
 
-    ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_len));
-    if (wrap_scaler)
-    {
-        tmp.set_end_op(TT_OP_SETADCZW(scaler_adc, 0, 0, 0, 0, 0b0001));
-    }
+    ckernel_template tmp(1, 1, lltt::replay_insn(0, replay_len));
     tmp.program();
 }
 
@@ -203,18 +199,21 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape,
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>((reduce_dim == ReduceDim::REDUCE_ROW));
 
-    if (swap_operands && tensor_shape.total_num_faces() == MAX_NUM_FACES)
-    {
-        TT_SETADCXX(data_adc, MAX_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
-    }
-    else
-    {
-        config_unpacker_x_end<data_adc>(tensor_shape.face_r_dim);
-    }
+    // Full-height data is read whole in one UNPACR; short faces are read one face at a time.
+    const bool is_tiny            = tensor_shape.face_r_dim < FACE_R_DIM;
+    const std::uint32_t data_rows = is_tiny ? tensor_shape.face_r_dim : tensor_shape.total_num_faces() * FACE_R_DIM;
+    TT_SETADCXX(data_adc, data_rows * FACE_C_DIM - 1, 0x0);
+
+    const bool whole_scaler = tensor_shape_scaler.total_num_faces() == tensor_shape.total_num_faces() && tensor_shape_scaler.face_r_dim == FACE_R_DIM;
+
     // The scaler reads one row per face, unless the swapped path reads it whole.
     if (swap_operands && _llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler))
     {
         TT_SETADCXX(scaler_adc, MAX_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    }
+    else if (reduce_dim == ReduceDim::REDUCE_COL && whole_scaler)
+    {
+        TT_SETADCXX(scaler_adc, tensor_shape.total_num_faces() * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
     }
     else
     {

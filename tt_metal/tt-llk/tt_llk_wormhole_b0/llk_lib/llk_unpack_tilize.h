@@ -300,7 +300,9 @@ inline void _llk_unpack_tilize_(
  *
  * Programs the MOP that unpacks the SrcA tilize rows and the SrcB faces of one run: two faces of
  * each for a full-width tile with two or four faces, one for a narrow or single-face tile.
- * @ref _llk_unpack_tilizeA_B_ sets the SrcA L1 address before each run.
+ * @ref _llk_unpack_tilizeA_B_ sets the SrcA L1 address before each run. For a reduce (@p neginf_srcA
+ * or @p zero_srcA_reduce), the MOP is one native-tilize SrcA face unpack and data-valid is deferred to
+ * the execute path.
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
@@ -316,6 +318,14 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4,
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(!(zero_srcA && narrow_tile && num_faces > 1), "tilizeA_B with zero_srcA supports a narrow tile only when it has a single face");
+    if constexpr (neginf_srcA || zero_srcA_reduce)
+    {
+        // Advance both the native tilizer's face selector and the source-bank face slot.
+        ckernel_template tmp(1, 1, TT_OP_UNPACR(SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1));
+        tmp.program();
+        return;
+    }
+
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, (zero_srcA ? 0b010001 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(
@@ -331,9 +341,8 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4,
         0,
         0,
         0,
-        1); // Skip face ptr inc if same face is reloaded into srcB
-    static constexpr std::uint32_t unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
-    static constexpr std::uint32_t unpack_zero_srca   = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);   // Needed for dot product
+        1);                                                                                              // Skip face ptr inc if same face is reloaded into srcB
+    static constexpr std::uint32_t unpack_zero_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC); // Needed for dot product
     static constexpr std::uint32_t unpack_srcb_2_face =
         TT_OP_UNPACR(SrcB, 0b100010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
     static constexpr std::uint32_t unpack_srca_dat_valid =
@@ -346,15 +355,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4,
     // The execute runs the MOP once per face-row for full-width tiles and once per face for narrow ones.
     const std::uint32_t outerloop = (zero_srcA || narrow_tile) ? 1 : (num_faces > 2) ? num_faces / 2 : num_faces;
     ckernel_template tmp(outerloop, innerloop, unpack_srca, ((zero_srcA && num_faces == 2) ? unpack_srcb_2_face : unpack_srcb));
-    if constexpr (neginf_srcA)
-    {
-        tmp.set_start_op(unpack_neginf_srca);
-    }
-    else if constexpr (zero_srcA_reduce)
-    {
-        tmp.set_start_op(unpack_zero_srca);
-    }
-    else if constexpr (zero_srcA)
+    if constexpr (zero_srcA)
     {
         if (num_faces < 4)
         {
@@ -431,13 +432,18 @@ inline void _llk_unpack_tilizeA_B_init_(
 }
 
 /**
- * @brief Tilize operand A and unpack operand B, face by face, into SrcA and SrcB.
+ * @brief Tilize operand A and unpack operand B into SrcA and SrcB.
  *
- * Loops over the faces, computing each face's SrcA L1 address, optionally clearing SrcA to
- * zero, unpacking the SrcB face, then unpacking the face's rows into SrcA (row by row via the MOP)
- * and setting data-valid, synchronizing through the unpack semaphore each iteration.
+ * Loops over the rows of faces, computing each row's SrcA L1 address and running the native tilize
+ * MOP over the row's faces, synchronizing through the unpack semaphore each iteration. For a reduce
+ * (@p neginf_srcA or @p zero_srcA_reduce), SrcA is cleared to the pool identity once, every face lands
+ * at its own 16-row slot of one source bank, and data-valid is set only after the last face. This
+ * matches @ref _llk_math_reduce_, which clears SrcA/SrcB data-valid once per tile.
  *
  * @tparam zero_srcA: Clear SrcA to zero before unpacking.
+ * @tparam neginf_srcA: Clear SrcA to negative infinity once per tile (e.g. for max-reduce).
+ * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
+ * @tparam zero_srcA_reduce: Clear SrcA to zero once per tile for a reduce fused with tilize.
  * @param unpA_src_format: Source data format of operand A in L1.
  * @param face_r_dim: Rows per face.
  * @param narrow_tile: Whether the tile is narrow (single column of faces).
@@ -449,7 +455,7 @@ inline void _llk_unpack_tilizeA_B_init_(
  * @note Call @ref _llk_unpack_tilizeA_B_init_ with matching template args before this function, and
  *       @ref _llk_unpack_tilizeA_B_uninit_ after it to restore modified state.
  */
-template <bool zero_srcA = false>
+template <bool zero_srcA = false, bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_(
     std::uint32_t unpA_src_format,
     std::uint32_t face_r_dim,
@@ -461,7 +467,12 @@ inline void _llk_unpack_tilizeA_B_(
     std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << (narrow_tile ? 0 : 1);
+    constexpr bool is_reduce = neginf_srcA || zero_srcA_reduce;
+
+    const std::uint32_t faces_c_dim = (narrow_tile || (num_faces == 1)) ? 1 : 2;
+
+    std::uint32_t top_face_offset_address =
+        is_reduce ? SCALE_DATUM_SIZE(unpA_src_format, tile_index_a * faces_c_dim) : SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << (narrow_tile ? 0 : 1);
 
     // Each iteration unpacks 2 face_r_dimx16 faces (1st 0,1 2nd 2,3 unless tile is <=16x32)
     // For narrow tile we unpack 1 face in each iteration
@@ -472,11 +483,31 @@ inline void _llk_unpack_tilizeA_B_(
     std::uint32_t bot_face_offset_address = SCALE_DATUM_SIZE(unpA_src_format, face_r_dim * block_c_dim_16B); //*N rows / 16 to get 16B word aligned address
 
     // Program srcA and srcB base addresses
-    // One loop for a 1-face tile, two single-face loops for a narrow tile, num_faces / 2 face-row loops otherwise.
-    std::uint32_t num_loops = (num_faces == 1) ? 1 : (narrow_tile ? 2 : num_faces / 2);
+    // Reduce: one loop per row of faces. Otherwise one loop for a 1-face tile, two single-face loops for a narrow
+    // tile, num_faces / 2 face-row loops otherwise.
+    const std::uint32_t num_loops = is_reduce ? num_faces / faces_c_dim : ((num_faces == 1) ? 1 : (narrow_tile ? 2 : num_faces / 2));
 
-    // Clear z/w start counters for SrcB
-    TTI_SETADCZW(UNP1, 0, 0, 0, 0, 0b1111);
+    if constexpr (is_reduce)
+    {
+        // Clear z/w start counters for SrcA/B
+        TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
+
+        // Pre-fill the whole SrcA bank once per tile. All faces land in this bank (dvalid is set once, after
+        // the last face), so rows past face_r_dim in every face carry the pool identity (-inf for MAX, 0 otherwise).
+        if constexpr (neginf_srcA)
+        {
+            TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC);
+        }
+        else
+        {
+            TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
+        }
+    }
+    else
+    {
+        // Clear z/w start counters for SrcB
+        TTI_SETADCZW(UNP1, 0, 0, 0, 0, 0b1111);
+    }
 
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
@@ -486,7 +517,12 @@ inline void _llk_unpack_tilizeA_B_(
         std::uint32_t address_a = base_address_a + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
         // Clear z/w start counters
-        if constexpr (zero_srcA)
+        if constexpr (is_reduce)
+        {
+            // Restart the L1 face selector (CH0) for each row; CH1_Z keeps stepping through the SrcA face slots
+            TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0011);
+        }
+        else if constexpr (zero_srcA)
         {
             if (num_faces == 4 && n == 1)
             {
@@ -515,7 +551,34 @@ inline void _llk_unpack_tilizeA_B_(
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         // Run MOP
-        if constexpr (zero_srcA)
+        if constexpr (is_reduce)
+        {
+            for (std::uint32_t f = 0; f < faces_c_dim; f++)
+            {
+                const bool last_face = (n == num_loops - 1) && (f == faces_c_dim - 1);
+
+                constexpr std::uint32_t srcB_incr = reload_srcB ? 0b00010000 /*CH1_Z+=1*/ : 0b00010001 /*CH0_Z+=1, CH1_Z+=1*/;
+                if (last_face)
+                {
+                    TTI_UNPACR(SrcB, srcB_incr, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                }
+                else
+                {
+                    TTI_UNPACR(SrcB, srcB_incr, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                }
+
+                if (last_face)
+                {
+                    // Set dvalid on the final SrcA unpack; UNP_SET_DVALID would overwrite source data
+                    TTI_UNPACR(SrcA, 0b00010001 /*CH0_Z+=1, CH1_Z+=1*/, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                }
+                else
+                {
+                    ckernel::ckernel_template::run();
+                }
+            }
+        }
+        else if constexpr (zero_srcA)
         {
             if (num_faces == 4 && n == 0)
             {
