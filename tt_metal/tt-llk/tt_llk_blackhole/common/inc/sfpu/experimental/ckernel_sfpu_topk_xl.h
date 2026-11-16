@@ -1116,7 +1116,8 @@ inline void program_sequences_and_misc()
  *
  * @ref loadmacro_configure without its 8 or so config writes and two NOPs, for a caller whose Sequence words are already
  * in place. The unfused merge and rebuild use it: `topk_mop_config<false>` programs their Sequence words, so every
- * unfused init and post-copy reinit must run before them.
+ * unfused init and post-copy reinit must run before them. So does the split column-pair pass, whose Sequence words come
+ * from `_topk_xl_split_sfpu_init_`.
  *
  * @tparam STRIDE: Distance between compared elements, values = <FOUR/EIGHT/SIXTEEN>
  * @tparam WINDOW_SIZE: Length of one sorted window, values = <EIGHT/SIXTEEN/THIRTY_TWO>
@@ -3565,7 +3566,7 @@ inline void _topk_xl_split_column_pairs_(const std::uint32_t tile_offset, const 
         // sort_len == 4 is deliberately absent: its dispatch issues an SFPTRANSP before the sort, so
         // the first thing after the load is a transpose and there is no swap for a macro to host.
         constexpr int stores_at = topk_xl_fused_macro::column_pair_len16_loads_len;
-        loadmacro_configure<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::Yes>(dir);
+        loadmacro_program_templates<detail::Stride::EIGHT, detail::WindowSize::THIRTY_TWO, detail::Fused::Yes>(dir);
         topk_xl_fused_macro::record_column_pair_len16_loads(dir);
         window_sort<detail::WindowSize::THIRTY_TWO, detail::Stride::FOUR, detail::Stride::ONE>(dir);
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
@@ -3576,7 +3577,7 @@ inline void _topk_xl_split_column_pairs_(const std::uint32_t tile_offset, const 
             lltt::replay(stores_at, 8);
         }
         // Put the step-group configuration back for the later step groups.
-        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
+        loadmacro_program_templates<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
     else if constexpr (macros && sort_len == 8)
     {
@@ -3585,7 +3586,7 @@ inline void _topk_xl_split_column_pairs_(const std::uint32_t tile_offset, const 
         // load left to attach a macro to. See `column_pair_len8_loads` for the two encoding facts it
         // needs, and note the templates must be put back before the next `step_group` runs.
         constexpr int stores_at = topk_xl_fused_macro::column_pair_len8_loads_len;
-        loadmacro_configure<detail::Stride::FOUR, detail::WindowSize::EIGHT, detail::Fused::Yes>(dir);
+        loadmacro_program_templates<detail::Stride::FOUR, detail::WindowSize::EIGHT, detail::Fused::Yes>(dir);
         topk_xl_fused_macro::record_column_pair_len8_loads(dir);
         window_sort<detail::WindowSize::EIGHT, detail::Stride::TWO, detail::Stride::ONE>(dir);
         load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, detail::DstAdvance::ONE_FACE>(); });
@@ -3596,7 +3597,7 @@ inline void _topk_xl_split_column_pairs_(const std::uint32_t tile_offset, const 
             lltt::replay(stores_at, 8);
         }
         // Put the step-group configuration back for the later step groups.
-        loadmacro_configure<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
+        loadmacro_program_templates<detail::Stride::SIXTEEN, detail::WindowSize::THIRTY_TWO, detail::Order::DESCENDING, detail::Fused::Yes>();
     }
     else
 #endif
