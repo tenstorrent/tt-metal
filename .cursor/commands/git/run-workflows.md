@@ -11,9 +11,16 @@ Analyze branch changes to determine affected build products, trace which tests/s
 2. **Decide whether to use sanity-tests.yaml**
 
    `sanity-tests.yaml` encapsulates these workflows:
-   - `ttnn-post-commit.yaml`
+   - `ttnn-sanity-tests-impl.yaml`
    - `t3000-sanity-tests-impl.yaml`
-   - `ops-post-commit.yaml`
+   - `fabric-sanity-tests-impl.yaml`
+   - `umd-sanity-tests-impl.yaml`
+   - `ttsim-sanity-tests-impl.yaml`
+   - `runtime-sanity-tests-impl.yaml`
+   - `blackhole-multi-card-sanity-tests-impl.yaml`
+   - `models-sanity-tests-impl.yaml`
+   - `llk-smoke-impl.yaml`
+   - `llk-ttsim-pr-gate-impl.yaml`
 
    **Run `sanity-tests.yaml` instead of the above individual workflows when:**
    - `conftest.py` changed (affects all pytest-based tests)
@@ -31,7 +38,7 @@ Analyze branch changes to determine affected build products, trace which tests/s
    - Galaxy tests (`galaxy-*.yaml`)
    - T3000 e2e/integration/unit tests (`t3000-tests.yaml`)
    - Blackhole tests (`blackhole-*.yaml`)
-   - Nightly tests (`*-nightly-*.yaml`)
+   - Nightly tests (`*nightly*.yaml`)
    - Code analysis (`code-analysis.yaml`)
 
 3. **Determine affected build products** (only if changes are targeted)
@@ -78,7 +85,7 @@ Build Product (e.g., libtt_metal.so, _ttnn.so Python extension)
     ↓
 Test/Script that uses it (e.g., tests/tt_metal/test_device.py, test_*.cpp)
     ↓
-Workflow that runs those tests (e.g., cpp-post-commit.yaml, build-and-unit-tests.yaml)
+Workflow that runs those tests (e.g., t3000-sanity-tests-impl.yaml, tt-metal-l2-nightly.yaml)
 ```
 
 ### Key places to search for tracing:
@@ -107,11 +114,11 @@ grep -rl "pytest tests/ttnn" .github/workflows/
 grep -rl "test_device" .github/workflows/
 
 # Trigger workflow
-gh workflow run build-and-unit-tests.yaml --ref $(git branch --show-current)
+gh workflow run tt-metal-l2-nightly.yaml --ref $(git branch --show-current)
 
 # Get latest run URL
 sleep 5  # Wait for run to register
-gh run list --workflow=build-and-unit-tests.yaml --branch=$(git branch --show-current) --limit=1 --json url -q '.[0].url'
+gh run list --workflow=tt-metal-l2-nightly.yaml --branch=$(git branch --show-current) --limit=1 --json url -q '.[0].url'
 
 # Post PR comment
 gh pr comment --body "## 🚀 Triggered Workflows
