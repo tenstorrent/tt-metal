@@ -4,8 +4,8 @@
 
 #include "add_integers_hang_op.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -13,7 +13,6 @@ namespace triage_hang_apps {
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 
@@ -121,7 +120,7 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
             .runtime_arg_values = {{"rt_marker", {{NodeCoord{0, 0}, 0x9abc}}}},
             .common_runtime_arg_values =
                 {{"incremented_semaphore", operation_attributes.incremented_semaphore_address}},
-            .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{NodeCoord{0, 0}, {0x1234}}}},
+            .advanced_options = experimental::AdvancedKernelRunArgs{.runtime_varargs = {{NodeCoord{0, 0}, {0x1234}}}},
         },
     };
     run_args.tensor_args = {
