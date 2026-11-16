@@ -443,3 +443,30 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
 - 4 weight slots (types d0, d1, d0|d1, any; owner keep 2) in the lane model: lock-step 0.767 / 0.777, random timing
   0.664 / 0.698 (tray E 16 / torus E 160) against 0.563 / 0.557 and 0.516 / 0.482 with 3 slots - the model becomes
   compute-bound (C 9 of 7 useful). The 4th slot (207 KB) needs the remaining L1 beside BK 20 / NX 9.
+- 4 weight slots on the tray (ws_lane_t5; LCfg slots d0,d1,d0d1,any, keep 2): the 4th 207 KB slot fits beside the
+  BK 20 / NX 9 token-row ring without shrinking anything. Every expert PCC 0.99994 on all 8 chips; 20 warm-up + 5
+  measured: M 586 51.2% (46.4-54.8; chip 0 53.5%), M 2048 70.1%; dynamic M (every expert of chips 1 and 0) min PCC
+  0.99992. Weight waits a core at M 586 fell from 0.55 M to 0.30 M cycles; x waits 0.76 M remain.
+- Whole Galaxy, 4 slots (ws_lane_c): 128 experts M 586, 1 launch: PCC 0.99994 on all 32 chips, util 47.2% (cold, 32
+  experts a lane; 31.4% with 3 slots). 640 experts: hang 6 at warm-up launch 4 - device 18, group 2's column-0 core
+  (7,9) BRISC in noc_async_writes_flushed after an x multicast (wl_writer QX), NOC0: 3 multicast writes issued but not
+  sent, 60 acks missing - the signature of store-and-forward hangs 2, 4 and 5, here with no NOC0 landing writes at all
+  (routers land on NOC1). The group program's multicasts were linked, with the flag multicast issued right after the
+  payload; on this architecture the two go through different command buffers that are not sent in issue order (the
+  matmul readers flush between payload and flag multicasts for this reason), so a linked payload can be left as a
+  source's last multicast with its path reserved. Reset exit 0, no MMIO timeout. Fix, at all four group multicast
+  sites: the flag as a 4-byte multicast write through the payload's own command buffer, so it always follows (and
+  closes) the linked payload. Variants on the tray (4 slots, 20 + 5, util median M 586 / M 2048):
+| group multicast | M 586 | M 2048 |
+|---|---|---|
+| linked payload, flag via noc_semaphore_set_multicast (before) | 51.2% | 70.1% |
+| unlinked payload, flush, then the flag (8cfb3bed18f) | 48.7% | 61.6% |
+| unlinked payload, flag from the same command buffer | 49.1% | 62.3% |
+| linked payload, flag from the same command buffer (20bf7889aa5, kept) | 50.8% | 70.1% |
+  All PCC 0.99994, dynamic M min PCC 0.99992. The cost of the first two is the unlinked payload, not the flush.
+- Whole Galaxy, 4 slots with the same-buffer flags (ws_lane_c2): 128 experts 1 launch PCC 0.99994 on all 32 chips,
+  util 46.6% (cold). 640 experts: warm-up launches 1-20 clean, then hang 7 in launch 21 (the first measured one,
+  device timeout at 00:10:09), host MMIO reads to device 29 timed out (4 B load 222 ms against 2 ms), the watcher
+  cancelled the step and killed the container, and the node stopped answering (NOT_RESPONDING, ssh refused) - the
+  same chain as the store-and-forward reboots. No measured 640 number with 4 slots. The flag reordering fix moved
+  the hang from launch 4 to launch 21 but did not remove it; no triage was possible after the node went down.
