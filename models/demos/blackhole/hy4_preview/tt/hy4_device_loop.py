@@ -139,7 +139,9 @@ class DeviceLoop:
             cp(ttnn.reshape(self._i(p, ttnn.int32), [1]), dec.upd)
             cp(ttnn.reshape(ids_i, [1, 1, 1, K]), dec.ids)
             return
-        c128 = ttnn.concat([self.ones64, cosb] if self.first else [cosb, self.ones64], dim=3)
+        c128 = ttnn.concat(
+            [cosb, self.ones64] if self.first else [self.ones64, cosb], dim=3
+        )  # product9 fix: same order as hy4_indexer / hy4_attn_opt / Hy4PoolDecoder.set_inputs (was flipped: cos on the non-rotated half)
         s128 = ttnn.concat([sinb, self.zeros64] if self.first else [self.zeros64, sinb], dim=3)
         cp(c128, dec.c128)
         cp(s128, dec.s128)

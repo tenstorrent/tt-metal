@@ -90,7 +90,9 @@ class SpecDerive:
         cosb, sinb = ttnn.typecast(cos, ttnn.bfloat16), ttnn.typecast(sin, ttnn.bfloat16)
         cp(cosb, self.cos)
         cp(sinb, self.sin)
-        cp(ttnn.concat([self.ones, cosb] if self.first else [cosb, self.ones], dim=3), self.c128)
+        cp(
+            ttnn.concat([cosb, self.ones] if self.first else [self.ones, cosb], dim=3), self.c128
+        )  # product9 fix: order as hy4_indexer (was flipped)
         cp(ttnn.concat([sinb, self.zeros] if self.first else [self.zeros, sinb], dim=3), self.s128)
         # --- KV geometry of the S appended tokens (vector over j)
         h5 = ttnn.floor(ttnn.multiply(pv, 1.0 / CH))
