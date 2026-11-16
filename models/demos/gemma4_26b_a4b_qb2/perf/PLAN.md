@@ -96,7 +96,7 @@ stated as such in `perf/WSN.md` with the gap; less than that does not land):
 | WS3 | stopped (see "WS3 decision") |
 | WS4 | `moe_decode` is the **batch-1** MoE op (batch 2-32 stays on WS1's expert-parallel path, already ~490-500 GB/s); op unit tests pass vs torch at B=1 for Gemma (H 2816, I 704, E 128, k 8) and gpt-oss (H 2880, I 2880, E 32, k 4, bias) shapes, BFP8 and BFP4; expert weight read ≥ 400 GB/s per chip; MoE block ≤ 35 µs per layer in the model |
 | WS5 | batch-1 native step ≤ 5 ms; 2-layer fused decode vs HF over 8 steps PCC ≥ 0.995 |
-| WS6 | greedy speculative output token-identical to plain greedy on 10 prompts; effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
+| WS6 | greedy speculative output token-identical on 10 prompts to plain greedy decoded with the verify's numerics (the WS1 batched path, one token per step); teacher-forced top-1 agreement of the batched path vs batch-1 `integration` ≥ 99 % (batch-1 and batched decode differ only at near ties); effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
 
 **Combined check** once WS1 and WS2 have both landed: ≤ 50 device programs per sliding decode layer at batch 1.
 
