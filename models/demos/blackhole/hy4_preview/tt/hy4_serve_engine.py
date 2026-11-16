@@ -359,6 +359,74 @@ class Hy4Engine:
             f"HY4 dram[{tag}]: alloc {v['alloc_per_bank'] / 1e6:.0f} MB/bank, free {v['free_per_bank'] / 1e6:.0f} MB/bank, largest free {v['largest_free_per_bank'] / 1e6:.0f} MB"
         )
 
+    # B22fix: the L1 scratch of the traces vs lazily created persistent L1 buffers. L1 buffers are allocated TOP-DOWN, so a persistent buffer created after the captures (the GlobalSemaphores of an all_broadcast /
+    # composite all_gather workload for a prompt shape the warm-up did not run, cached for the life of the program cache) is placed in the highest free hole = exactly where the trace intermediates lived, and the
+    # next trace replay overwrites it (decode replays, then the next prefill hangs on that semaphore: found with HY4_NORM_FUSE=1, whose L1 outputs sit at the very top and shifted onto them).
+    # HY4_TRACE_L1_GUARD_KB=N: after the captures allocate a persistent N KB/bank L1 block in the highest free hole = over the trace scratch (extent measured below); later persistent L1 buffers are then
+    # placed under it. (A guard HELD DURING the captures instead, "stash", made the first capture hang in MoE selective_reduce_combine: tried, rejected.)
+    def _l1_guard(self):
+        kb = int(os.environ.get("HY4_TRACE_L1_GUARD_KB", "0"))
+        self._l1_log("after captures, before guard")
+        pr = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.md, ttnn.L1_MEMORY_CONFIG
+        )
+        logger.info(
+            f"HY4 L1 probe after captures: a new persistent L1 buffer would be placed at addr {pr.buffer_address()}"
+        )
+        ttnn.deallocate(pr)
+        if kb <= 0:
+            return
+        g = self.md.compute_with_storage_grid_size()
+        tiles = (
+            g.x * g.y * max(kb // 2, 1)
+        )  # one 2 KB tile page per bank per 2 KB (pages go round-robin over the L1 banks)
+        self._guard = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 32, 32 * tiles]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.md, ttnn.L1_MEMORY_CONFIG
+        )
+        logger.info(f"HY4 L1 guard {kb} KB/bank held at addr {self._guard.buffer_address()}")
+        self._l1_log("after guard")
+
+    def _l1_peak(self, fn, tag):
+        """run fn (an eager round body) while a sampler thread polls the L1 allocator: the peak per-bank L1 use of the body (= the extent of its trace scratch, a lower bound: the polling can miss short peaks)."""
+        import threading
+
+        if os.environ.get("HY4_L1_PEAK", "0") != "1":
+            fn()
+            return
+        peak = [0, 1 << 60]
+        stop = threading.Event()
+
+        def poll():
+            while not stop.is_set():
+                try:
+                    v = ttnn.get_memory_view(self.md, ttnn.BufferType.L1)
+                    peak[0] = max(peak[0], v.total_bytes_allocated_per_bank)
+                    peak[1] = min(peak[1], v.largest_contiguous_bytes_free_per_bank)
+                except Exception:  # noqa: BLE001
+                    pass
+                time.sleep(0.001)
+
+        th = threading.Thread(target=poll, daemon=True)
+        th.start()
+        try:
+            fn()
+            ttnn.synchronize_device(self.md)
+        finally:
+            stop.set()
+            th.join()
+        logger.info(
+            f"HY4 L1 peak during eager body {tag}: allocated {peak[0]} B/bank (sampled max), smallest largest-free {peak[1]} B/bank"
+        )
+
+    def _l1_log(self, tag):
+        try:
+            v = ttnn.get_memory_view(self.md, ttnn.BufferType.L1)
+            logger.info(
+                f"HY4 L1[{tag}]: banks {v.num_banks} total {v.total_bytes_per_bank} alloc {v.total_bytes_allocated_per_bank} free {v.total_bytes_free_per_bank} largest_free {v.largest_contiguous_bytes_free_per_bank}"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.info(f"HY4 L1[{tag}]: view failed {e!r}")
+
     def warm(self):
         """synthetic 4 x 3072-token prefill (compiles every PF / MTP chunk program, creates every lazily cached persistent tensor: PF constants, dense-id tables) -> seed -> eager round -> trace capture(s)."""
         if self.warm_done:
@@ -383,10 +451,10 @@ class Hy4Engine:
                 self.runner.load([PAD] * ROWS, [cpos] * ROWS, [[-1] * self.K for _ in range(ROWS)], cap=[0] * ROWS)
                 self.runner.set_park([0] * ROWS)
                 logger.info(f"HY4 warm-up: capture position {cpos}")
-            self.runner.body("G")
+            self._l1_peak(lambda: self.runner.body("G"), "G")
             ttnn.synchronize_device(self.md)
             if self.sampled:
-                self.runner.body("S")
+                self._l1_peak(lambda: self.runner.body("S"), "S")
                 ttnn.synchronize_device(self.md)
             self._dram("after eager bodies")
             self.runner.capture("G")
@@ -394,6 +462,7 @@ class Hy4Engine:
             if self.sampled:
                 self.runner.capture("S")
                 self._dram("after S capture")
+            self._l1_guard()
             logger.info(f"HY4 warm-up: spec traces captured ({list(self.runner.traces)})")
         else:
             self.dl.capture(self.loop_variants)

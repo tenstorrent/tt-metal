@@ -459,6 +459,12 @@ def fused_norms(qa_g, kv, qw, kvw, eps, mc_q=None):
     prog.custom_program_hash = (0x3B4 << 40) | (
         hash((S, x0, y0, tuple(tuple(_acc(t)) for t in (qa_g, kv, qw, kvw, qa, lat, kpe)))) & ((1 << 40) - 1)
     )
+    if os.environ.get("HY4_NORM_DBG", "") == "1" and not getattr(fused_norms, "_dbg", 0) > 6:
+        fused_norms._dbg = getattr(fused_norms, "_dbg", 0) + 1
+        print(
+            f"HY4 NF out addrs qa={qa.buffer_address()} lat={lat.buffer_address()} kpe={kpe.buffer_address()} mq={mq}",
+            flush=True,
+        )
     ttnn.generic_op([qa_g, kv, qw, kvw, qa, lat, kpe], prog)
     return qa, lat, kpe
 
