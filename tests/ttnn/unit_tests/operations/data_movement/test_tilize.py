@@ -1355,3 +1355,18 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, de
         assert list(output.tile.tile_shape) == [tile_height, 32]
         assert output.memory_config() == memory_config
         assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
+@pytest.mark.parametrize("shape", [(1, 1, 0, 32), (1, 1, 32, 32)], ids=["empty", "non_empty"])
+def test_tilize_rejects_deallocated_input(shape, layout, device, expect_error):
+    """A deallocated input raises the device op's error instead of crashing.
+
+    Its device() is null, and the zero-volume branch and the buffer sizing both read it before the op launches.
+    """
+    tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
+    )
+    ttnn.deallocate(tensor)
+    with expect_error(RuntimeError, "Operands to tilize need to be allocated in buffers on device"):
+        ttnn.tilize(tensor)
