@@ -23,7 +23,7 @@ using namespace ckernel::unpacker;
 // in1 tile shape: [32, 32] or [32, 16] ([16, 32] with transpose), giving [{1, 2, 4, 8}, 32] or [{1, 2, 4, 8}, 16] output tiles
 // rt_dim: 1
 // ct_dim: any integer from 1 to 34 (DEST capacity also bounds it, see llk_custom_mm_common.h)
-// kt_dim: any integer of 1 or more; all kt_dim x ct_dim in1 tiles must be in L1
+// kt_dim: any integer of 1 or more
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -317,7 +317,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @param tile_index_b: First activation tile to read.
  * @param tile_size_a: Weight tile size, in 16-byte words.
  * @param tile_size_b: L1 stride between activation k-tiles, in 16-byte words.
- * @param kt_dim: Inner dimension in tiles, 1 or more; all kt_dim x ct_dim weight tiles must be in L1.
+ * @param kt_dim: Inner dimension in tiles, 1 or more.
  * @param ct_dim: Output width in tiles; must match the init, whose MOP bakes it in.
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_.

@@ -18,7 +18,7 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
   in1 (B)  -> SrcA, full ``[32,32]`` tiles, or 2-face ``[32,16]`` ones for N = 16 * ct_dim
               (``tile_c = 16``), which give ``[M,16]`` output tiles holding a single face.
-  rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim >= 1 (bounded by L1), LoFi only.
+  rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim >= 1, LoFi only.
 
 The SplitAcc layouts accumulate the second k-face apart and finalize on the last call,
 merging it back; the other layouts need no finalization. Either way DEST ends up holding the

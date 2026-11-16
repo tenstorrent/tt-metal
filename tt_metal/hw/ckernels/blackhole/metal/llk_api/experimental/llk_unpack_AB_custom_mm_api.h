@@ -16,7 +16,7 @@
  *                 output tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34 (DEST capacity also bounds it, see llk_math_custom_mm_api.h)
- * kt_dim: any integer of 1 or more; all kt_dim x ct_dim in1 tiles must be in L1
+ * kt_dim: any integer of 1 or more
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -63,7 +63,7 @@ inline void llk_unpack_AB_custom_mm_init(
  * @param operand1: CB of the weights; its read pointer is the SrcA base.
  * @param tile_index_0: First activation tile, relative to operand0's read pointer.
  * @param tile_index_1: First weight tile, relative to operand1's read pointer.
- * @param kt_dim: Inner dimension in tiles, 1 or more; all kt_dim x ct_dim weight tiles must be in L1.
+ * @param kt_dim: Inner dimension in tiles, 1 or more.
  * @param ct_dim: Output width in tiles, 1 to 34.
  * @note Call @ref llk_unpack_AB_custom_mm_init first.
  * @note On the math thread, pair with @ref llk_math_custom_mm.
