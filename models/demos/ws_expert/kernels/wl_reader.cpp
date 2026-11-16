@@ -803,7 +803,20 @@ void kernel_main() {
     const uint32_t obytes = get_tile_size(y_cb);
     const auto os = TensorAccessor(oargs, get_arg_val<uint32_t>(7), obytes);
     uint32_t drained = 0, d_n = 0, d_r = 0, d_base = 0;
+    bool y_sent = false;  // a row's writes issued, its CB 17 pages still held
     auto qy = [&]() -> bool {
+        if (y_sent) {
+            // the row's pages are freed once the NoC has read them out; no wait for the DRAM acks, so this RISC's
+            // other queues keep running while the writes complete
+            if (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
+                return false;
+            }
+            y_sent = false;
+            cb_pop_front(y_cb, DCOLS);
+            ++d_r;
+            ++drained;
+            return true;
+        }
         if (drained >= total_rows || !cb_pages_available_at_front(y_cb, DCOLS)) {
             return false;
         }
@@ -823,7 +836,8 @@ void kernel_main() {
             for (uint32_t t = 0; t < DCOLS; ++t, l1 += obytes) {
                 noc_async_write_page(row * HT + J * DCOLS + t, os, l1);
             }
-            noc_async_write_barrier();
+            y_sent = true;
+            return true;
         }
         cb_pop_front(y_cb, DCOLS);
         ++d_r;
