@@ -139,6 +139,29 @@ def _read_frames(paths):
     return frames
 
 
+def _duplicate_keys(frames):
+    out = {}
+    for f in frames:
+        key = [c for c in ["marker", *_config_cols(f.columns)] if c in f.columns]
+        n = int(f.duplicated(subset=key).sum())
+        if n:
+            module = f[MODULE_COL].iloc[0]
+            out[module] = out.get(module, 0) + n
+    return out
+
+
+def _not_compared(result):
+    rows = {}
+    for what, modules in (
+        ("compared", [r[MODULE_COL] for r in result["records"]]),
+        ("new", [p[MODULE_COL] for p in result["new_points"]]),
+        ("missing", result.get("missing_points", [])),
+    ):
+        for m in modules:
+            rows.setdefault(m, {"compared": 0, "new": 0, "missing": 0})[what] += 1
+    return {m: r for m, r in sorted(rows.items()) if r["new"] or r["missing"]}
+
+
 def compare_runs(
     current_csvs,
     baseline_csvs,
@@ -162,7 +185,9 @@ def compare_runs(
     If ``run_types`` is specified (comma-separated, e.g. "L1_TO_L1,MATH_ISOLATE"),
     only compare metrics for those run types.
     """
-    cur = _medians(_read_frames(current_csvs))
+    frames = _read_frames(current_csvs)
+    duplicates = _duplicate_keys(frames)
+    cur = _medians(frames)
     base = _medians(_read_frames(baseline_csvs))
 
     if run_types:
@@ -173,6 +198,7 @@ def compare_runs(
         base = _filter_run_types(base, allowed)
 
     records, regressions, improvements, new_points = [], [], [], []
+    measured = {_run_type_of(col) for _, col in cur}
     noise_filtered = 0
     for (key, mean_col), cval in cur.items():
         marker, config = key
@@ -212,6 +238,12 @@ def compare_runs(
         "regressions": regressions,
         "improvements": improvements,
         "new_points": new_points,
+        "missing_points": [
+            dict(key[1]).get(MODULE_COL, "")
+            for key, col in base
+            if (key, col) not in cur and _run_type_of(col) in measured
+        ],
+        "duplicates": duplicates,
         "noise_filtered": noise_filtered,
     }
 
@@ -389,12 +421,32 @@ def render_report(
         details = "<details open>" if what == "regression" else "<details>"
         lines += [details, f"<summary>{summary}</summary>", ""]
         lines += table[2:] + ["", "</details>", ""]
-    if result["new_points"]:
+    not_compared = _not_compared(result)
+    if not_compared:
+        lines += [
+            "## Not compared",
+            "",
+            f"**NOTE:** {len(result['new_points'])} point(s) have no baseline, and "
+            f"{len(result.get('missing_points', []))} baseline point(s) were not measured. "
+            "The gate does not judge them.",
+            "",
+            "| test | compared | no baseline | not measured | note |",
+            "|---|--:|--:|--:|---|",
+        ]
+        for m, r in not_compared.items():
+            note = (
+                "key changed: no point matches the baseline"
+                if r["new"] and r["missing"] and not r["compared"]
+                else ""
+            )
+            lines.append(
+                f"| {m} | {r['compared']} | {r['new']} | {r['missing']} | {note} |"
+            )
+        lines.append("")
+    for m, n in sorted(result.get("duplicates", {}).items()):
         lines.append(
-            f"## New points ({len(result['new_points'])}) — no baseline, not counted as regressions"
-        )
-        lines.append(
-            "_These configs/markers exist at the current commit but not at the baseline commit._"
+            f"**NOTE:** {m} has {n} row(s) with the same key in one file. "
+            "The gate takes their median, so one of them is hidden."
         )
     return "\n".join(lines)
 
