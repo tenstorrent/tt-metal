@@ -742,3 +742,61 @@ the expert-id-ordered outputs (out_eord) are gone.
 - Head exactness: exact in every run (counts, token lists, destination lists).
 - Every token, one chip at T 31250: the result buffer read twice around a device sync is identical. y against the
   host's sum of the rows as read: worst token 0.0038 relative, none over 2e-2.
+
+## Stage 12: the shared expert as one single-chip op (ws_shared.py, kernels wsh_*.cpp)
+- What it computes: y = (silu(x W1) * (x W3)) W2 for every one of a chip's T tokens (H 3840, I 2944), written
+  row-major into the result buffer's row t S + K (the end pass adds it with weight 1). Weights are replicated and
+  resident in L1 (bfp4, LoFi); x is the stream's row-major bf16 x.
+- Layout, from the column clusters of ws_cluster / ws_dyn:
+  - 2 clusters, each a rectangle of 5 logical columns x 10 rows: 46 compute cores plus 4 without weights.
+  - Core j owns gate/up pairs 2j, 2j + 1 (92 = 46 x 2) and 2 or 3 down columns (28 x 3 + 18 x 2 = 120).
+  - Row tiles go round-robin to the clusters, so no row is split and no partials cross clusters.
+  - Per row tile a core runs its pairs' gate/up over the whole x row, then the previous row's down over the whole h
+    row (K 92), pack-untilized; its 32 rows x DC columns go out as posted writes, fenced at the end.
+  - The hub (the rectangle's NOC1 multicast start corner, no weights) is the cluster's only multicaster:
+    - It reads each row tile's 32 whole token rows (NOC0) and tilizes the 120 tiles to bfp8, double-buffered.
+    - It multicasts them in BK-tile blocks into every core's x ring in stream order, credit-gated by every core's
+      popped count.
+    - The cores send their h tiles into the hub's h ring slot (acknowledged write, then the slot's arrival count +1).
+      Once a row's tiles are all in, the hub multicasts the whole h row.
+    - The h ring needs no slot credits: with NX <= 2 KT / BK - 1, a core producing h row i means every core is past
+      the down of row i - 3 (NS 3).
+  - NoCs: NOC0 carries only DRAM reads (weight preload, x). NOC1 carries the multicasts, in-cluster unicasts and the
+    posted row writes, so nothing from outside a cluster enters its multicast NoC.
+- M limits: none. The schedule is static (no on-device planner; ws_dyn's MAXOWN 40 rows an expert does not apply),
+  489 row tiles a cluster at T 31250.
+- bfp8 weights do not fit: 522 KB gate/up + 300 KB down a core next to the rings; static CBs end at 1,056,192 B.
+- One chip, T 31250, bfp4 LoFi, 20 warm-up + 5 measured launches, device time (compute start to end stamps). Floor:
+  2 T 3840 2944 3 = 2.12 TFLOP is 3.48 ms at the 110-core LoFi SOL, 4.17 ms on 92 cores.
+| version | device ms | % 110-core SOL | % of the 92 cores | pcc |
+|---|---|---|---|---|
+| lane units (5 slices x 4 chunks, stage 10) | 10.3 | 33.9 | 50.8 (of 80) | 0.99994 |
+| v1: every core multicasts its own h tiles, x blocks from 10 cores | 55.9 | 6.2 | 7.5 | 0.99994 |
+| v2: one hub: x gathered as 768-B row pieces (320 reads a row tile), tilized per block | 7.32 | 47.6 | 56.9 | 0.99989 |
+| v2, the hub's tilize with fp32 DEST (back to the reference's bfp8 rounding) | 7.48 | 46.6 | 55.7 | 0.99994 |
+| v3: 4 x feeders a cluster (whole rows, every 4th row tile each), own multicasts | 8.11 | 42.9 | 51.4 | 0.99994 |
+| v4: v3 with the x multicasts in stream order (block s once s - 2 landed) | 7.83 | 44.5 | 53.2 | 0.99994 |
+| one hub, whole-row reads (32 a row tile), one tilized row staged | 8.85 | 39.4 | 47.1 | 0.99994 |
+| same, tilized staging double-buffered | 7.54 | 46.2 | 55.3 | 0.99994 |
+| + BK 24 / NX 9 (bf16 h) | 6.38 | 54.6 | 65.3 | 0.99994 |
+| + bfp8 h (default) | 4.97 | 70.2 | 83.9 | 0.99988 |
+| BK 40 / NX 5, bfp8 h | 4.96 | 70.3 | 84.0 | 0.99988 |
+| BK 40 / NX 5, bf16 h | 6.08 | 57.3 | 68.5 | 0.99994 |
+- What each step found (per-role counters on the hub):
+  - v1's 46 multicast sources into one rectangle serialize: about 112 multicasts a row, ~114 us a row.
+  - v2's hub issued 320 reads of 768 B a row tile (busy 62%), and its tilize waited for input.
+  - v3 / v4's extra feeders put more multicast sources into the rectangle (credit waits 58-68%).
+  - Whole-row reads fixed the gather (busy 5%). With one tilized row staged, though, the next row's tilize waited
+    until all of the current row's multicasts had left; double-buffering the staging fixed that.
+  - Larger x blocks (BK 24) halve the x multicast count, cutting the cluster cores' x waits from 3.7 M to 0.3 M
+    cycles.
+  - bfp8 h halves the h multicast: h waits 1.75 M -> 0.35 M cycles.
+  - Every case, T 2048: every token checked, all PCC >= 0.99988.
+- Bug on the way: pack_untilize_uninit leaves the packer at the output's format. With bfp8 h, the next GLU pack wrote
+  h in bf16 format (PCC 0). The down row now reconfigures the packer to h's format after it.
+- The deepseek_prefill unified routed expert op as the shared expert, for comparison (tests/test_ws_unified.py: one
+  expert, count 31250, x row-major, grid 11 x 8, wall time):
+  - bfp4 LoFi: 9.34 ms with ND-sharded weights, 9.42 ms interleaved (37% of SOL). bfp8 LoFi: 10.79 ms.
+  - Output bfp8 TILE (PCC 0.99964 / 0.99944). It runs LoFi only and needs math_approx_mode False.
+  - Its reader reads DRAM and multicasts on NoC 0, and its writer reads the up weights and writes the output on
+    NoC 1, which breaks the layer's NoC rules.
