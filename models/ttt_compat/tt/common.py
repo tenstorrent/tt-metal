@@ -576,6 +576,7 @@ def get_single_rot_mat(
     on_host=False,
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
+    freqs = freqs_unscaled
     if scale_factor is not None:
         freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len, rope_type="llama3")
     rot_matrix = torch.zeros(dhead, dhead)
@@ -865,7 +866,7 @@ def get_hf_model_name(model_path: str) -> str:
 
     # HF cache path
     pattern = r".*/?models--(?P<model_provider>[^/]+?)--(?P<model_name>[^/]+)/?"
-    match = pattern.search(pattern, model_path)
+    match = re.search(pattern, model_path)
     if match:
         model_provider = match.group("model_provider")
         model_name = match.group("model_name")
