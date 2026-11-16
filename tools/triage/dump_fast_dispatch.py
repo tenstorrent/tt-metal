@@ -338,7 +338,7 @@ def run(args, context: Context):
             continue
 
         device = run_checks.get_device_by_unique_id(chip_unique_id)
-        # No device: tt-exalens left the chip out, or --dev didn't select it
+        # No device: it is unhealthy, or --dev didn't select it
         if device is None:
             continue
         # Create OnChipCoordinate for this dispatcher core location

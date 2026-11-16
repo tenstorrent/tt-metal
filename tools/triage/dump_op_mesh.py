@@ -20,8 +20,7 @@ Description:
     `host_assigned_id`, sorted ascending. A device this process opened but
     that has no live ops shows `(idle)`; a device on this host that this
     process never opened shows `(unused)`; cross-host chips show `(remote)`.
-    A chip tt-exalens left out as unhealthy shows `(unhealthy)`; any other
-    chip it has no device for shows `(no exalens map)`.
+    An unhealthy device shows `(unhealthy)`.
 
     A leading `[!] ` on an op line marks that op as a *straggler* - its
     `host_assigned_id` is strictly less than the highest live id in the
