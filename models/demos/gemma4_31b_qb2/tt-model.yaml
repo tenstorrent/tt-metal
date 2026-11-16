@@ -1,23 +1,27 @@
 # tt-model.yaml — google/gemma-4-31B-it on a QuietBox 2 (P300x2: 2x P300 boards = 4 Blackhole chips, (1, 4) mesh, TP4)
-# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update2/{tt-model.yaml,card.md} by
-# render_manifest_u2.py.
+# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update3/{tt-model.yaml,card_v4.md} by
+# render_manifest_u3_v2.py.
 #
 #   single-user          DEFAULT: one user on the resident persistent-kernel decode engine (resident_m3_2) with
 #                        DFlash2 speculative decoding (RedHatAI/gemma-4-31B-it-speculator.dflash2, block 8, R=8 verify),
 #                        262,144-token context. = stage-2 regression config D (M2 adapter + M2 delta), with update 2's
 #                        paged-bucket prefill (PB3: tt/generator_resident_spec_vllm_pb3.py; LEAD_DECISIONS_PKG P34, P37).
-#   batch                up to 32 users on the stock ttnn batched decode path with the E1-E4 env knobs.
-#                        = regression config B32 (bench/regression/session_B32), with the paged-bucket prefill
-#                        (B32-PB: tt/generator_vllm_pb.py; P36, P37).
-#   (multi-user resident profile: a later update, not in this package.)
+#   batch                update 3: up to 32 users on the resident batch engine (resident_m5_11) through the S3.2
+#                        adapter with the paged-bucket prefill (S3-PB: tt/generator_resident_multi_s3_2_pb_vllm.py),
+#                        option S (decode width R = 1 / 8 / 32 by live rows), no speculation, 262,144-token context.
+#                        = option A's evidence config (bench/resident/s1 H6-H9, the S3-PB subset and L3-only holds;
+#                        update3/UPDATE3_PLAN.md section 3); LEAD_DECISIONS_PKG P48, P49.
+#   batch-b32            update 2's `batch`, verbatim, kept for one release as a fallback (P49.2: the user decides):
+#                        up to 32 users on the stock ttnn batched decode path with the E1-E4 env knobs = regression
+#                        config B32 with the paged-bucket prefill (B32-PB: tt/generator_vllm_pb.py; P36, P37).
 #
 # Update 2 (2026-11-15; LEAD_DECISIONS_PKG P36-P38): the paged-bucket prefill (tt/prefill_paged.py) on both profiles.
 # Prefill programs are keyed by a fixed bucket set built at boot, so serving many distinct prompt lengths no longer
 # pins device DRAM per novel exact length (update 1: ~0.24 MB per chip per novel length, no eviction). Its runtime
 # switches stay at the code defaults, as every PB gate ran them (GEMMA4_PB_* unset): GEMMA4_PB_GUARD=retire,
 # GEMMA4_PB_SDPA_FLEX=1, GEMMA4_PB_EMBED_ZERO=mul, GEMMA4_PREFILL_WARM_CONT=0 (lazy: a first-seen continuation key
-# builds its programs at first use; =1 pre-builds all of them at boot on `batch` only (generator_vllm_pb.py), ~8 min,
-# see the card; single-user does not read it).
+# builds its programs at first use; =1 pre-builds all of them at boot on `batch-b32` only (generator_vllm_pb.py), ~8
+# min, see the card; single-user does not read it, and update 3's `batch` (S3-PB) refuses to start with it).
 #
 #   tt-model package --container models/demos/gemma4_31b_qb2/tt-model.yaml --out /home/ttuser/experiments/gemma4/tt-model-builds
 #   tt-model serve   <builds>/gemma4-31b-it-dflash/tt_kernel_manifest.json [--profile batch]
@@ -44,9 +48,11 @@ source:
     - models/demos/gemma4_31b_qb2/__init__.py
     - models/demos/gemma4_31b_qb2/README.md
     - models/demos/gemma4_31b_qb2/tt               # ttnn model (prefill + batch32 decode), adapters, drafters, taps, PB prefill
-    - models/demos/gemma4_31b_qb2/resident_m3_2    # the engine stage-2 D validated (frozen SUMS 4677ca02)
-    - models/demos/gemma4_31b_qb2/vllm_models      # this package's EXTRA_MODELS_DIR (four bundles; the profiles use qb2_pb
-                                                   # and resident_spec_pb3, update 1's qb2 and resident_spec stay)
+    - models/demos/gemma4_31b_qb2/resident_m3_2    # the engine stage-2 D validated (frozen SUMS 4677ca02): single-user
+    - models/demos/gemma4_31b_qb2/resident_m5_11   # update 3: the batch engine (frozen SUMS b128d3df, D43 isolation)
+    - models/demos/gemma4_31b_qb2/vllm_models      # this package's EXTRA_MODELS_DIR (five bundles; the profiles use
+                                                   # resident_spec_pb3, resident_multi_s3pb and qb2_pb; update 1's qb2 and
+                                                   # resident_spec stay)
     - models/demos/gemma4/__init__.py              # spec_policy (generator_resident_spec_vllm.py imports it)
     - models/demos/gemma4/tt/__init__.py
     - models/demos/gemma4/tt/spec_policy.py
@@ -131,7 +137,47 @@ serve_profiles:
       - --no-async-scheduling                         # the custom_class drafter requires sync scheduling
       - [--speculative-config, '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter","num_speculative_tokens":7}']
   - name: batch
-    description: Up to 32 concurrent users on the stock ttnn batched decode path (E1-E4 on), 262K context, paged-bucket prefill.
+    description: Up to 32 concurrent users on the resident batch engine (option S, R = 1 / 8 / 32), 262K context, paged-bucket prefill.
+    max_num_seqs: 32
+    capabilities:
+      reasoning_parser: gemma4                        # as every A hold ran: no tool parser
+    env:
+      GEMMA4_QB2_HF_DECODE_ROPE: "1"                  # E1-E4: kept, as in every A hold (the ttnn prefill model reads them)
+      GEMMA4_QB2_HOIST_DECODE_ROPE: "1"
+      GEMMA4_QB2_SLIDING_SDPA_GRID: 11x10
+      GEMMA4_QB2_SMALL_PREFILL_1D_ROWS: "128"
+      OMP_NUM_THREADS: "8"                            # host-sampled steps, as update 1 (and as every A hold)
+      # Option A's RES set (bench/resident/s1/run_s3_h6_v2.sh; the S3-PB subset and L3-only specs), verbatim:
+      GEMMA4_RESIDENT_ENGINE_PACKAGE: resident_m5_11
+      GEMMA4_RESIDENT_SPEC_POLICY: never
+      GEMMA4_RESIDENT_ENGINE_TAPS: "0"
+      GEMMA4_RESIDENT_ENGINE_BLOCKS: "1"
+      GEMMA4_RESIDENT_KV_POOL: b32
+      GEMMA4_RESIDENT_BF8_PARTIALS: "1"
+      GEMMA4_RESIDENT_R_DOWN_STEPS: "32"
+      GEMMA4_RESIDENT_R_IDLE_RESET: "1"
+      # GRES_ISO / GRES_ISO_SKIPFOLD stay unset: m5_11's safe defaults (1 / 0), checked by the validator's iso pin.
+      # The converted weights, in the /tensor-cache mount: package_boot keys a cache by engine package and engine tree,
+      # so this profile has its own directory (sharing single-user's would reconvert on every profile switch).
+      # vllm_models/resident_multi_s3pb names tt/package_boot_s3pb.py:Gemma4ResidentMultiS32PBPackaged, which converts
+      # them on the first start and checks them on every start.
+      GRES_CACHE: /tensor-cache/gemma4_resident_raw_bf4_m5_11
+      GEMMA4_RESIDENT_PRECISION: bf4                  # must match the converter's dtypes (refused otherwise)
+    args:
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentMultiS32PBForCausalLM"]}']   # update 3: S3-PB (vllm_models/resident_multi_s3pb)
+      - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
+      - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
+      - [--max-num-batched-tokens, "8192"]
+      - --enable-chunked-prefill
+      - --no-enable-prefix-caching
+      - [--max-logprobs, "-1"]
+      - [--override-generation-config, '{"top_k": 20}']
+      - [--default-chat-template-kwargs, '{"enable_thinking":true}']
+      - [--seed, "9472"]
+      - [--max-log-len, "32"]
+      - --async-scheduling
+  - name: batch-b32
+    description: Fallback for one release (update 2's batch). Up to 32 users on the stock ttnn batched decode path (E1-E4 on), 262K context, paged-bucket prefill.
     max_num_seqs: 32
     capabilities:
       reasoning_parser: gemma4                        # as B32 ran: no tool parser (lead: ship validated configs only)
@@ -162,14 +208,14 @@ default_profile: single-user          # lead 2026-11-11 (qwen v2 names); multi-u
 
 card:
   description: |
-    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on the stock ttnn decode path. Both profiles use a paged-bucket prefill: a fixed set of prefill programs built at start-up, so device memory no longer grows with the number of distinct prompt lengths served.
+    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on a resident batch engine that keeps per-user decode fast at long context, up to 262K; `batch-b32` keeps the earlier ttnn batch path for one release. All profiles use a paged-bucket prefill: a fixed set of prefill programs built at start-up, so device memory no longer grows with the number of distinct prompt lengths served.
   quickstart: |
     ### At a glance
     - Weights: [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) @ `842da37`; drafter
       [RedHatAI/gemma-4-31B-it-speculator.dflash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) @ `b0cd01b`
     - Hardware: P300x2 (QuietBox 2), one (1, 4) Blackhole mesh, tensor-parallel over 4 chips
-    - Profiles: `single-user` (default), `batch`
-    - Context: 262,144 tokens on both profiles
+    - Profiles: `single-user` (default), `batch`, `batch-b32`
+    - Context: 262,144 tokens on every profile
     - Weights on device: BF4 (bfloat4_b) projections, BF8 LM head and KV cache, as validated
     - Thinking is on by default. Turn it off per request with `"chat_template_kwargs": {"enable_thinking": false}`.
     - Default sampling: the model's generation config (temperature 1.0, top_p 0.95) with top_k 20. Pass `"temperature": 0` for greedy.
@@ -177,9 +223,11 @@ card:
       are served without speculation. Speculative output can differ from plain decoding at near-ties.
     - `single-user` refuses (HTTP 400) what its speculative path cannot apply: logprobs, structured outputs
       (`response_format`, guided decoding), `bad_words`, `allowed_token_ids`, `min_tokens`, `logit_bias`, `min_p`.
-      `batch` serves logprobs.
-    - Tool calling: `single-user` parses tool calls (vLLM's `gemma4` parser, `tool_choice: "auto"`). `batch` has no tool
-      calling.
+      `batch` and `batch-b32` serve logprobs (on the host-sampled step; see Known limitations).
+    - Tool calling: `single-user` parses tool calls (vLLM's `gemma4` parser, `tool_choice: "auto"`). `batch` and
+      `batch-b32` have no tool calling.
+    - `batch` (update 3): the resident batch engine. It picks its decode width by the number of live users (R = 1 / 8 /
+      32) and does not speculate.
 
     ### Update 2: paged-bucket prefill
     - Both profiles now build their prefill programs for a fixed set of length buckets at start-up. Update 1 compiled a
@@ -190,14 +238,85 @@ card:
       `single-user`, which also pre-builds the drafter's seed programs (about 6.5 MB per chip). The extra compile time on a
       first start has not been measured yet.
     - A prompt longer than one 8,192-token chunk builds a few programs the first time a new continuation length class is
-      seen (lazy, the default on both profiles). On `batch` only, `GEMMA4_PREFILL_WARM_CONT=1` builds all of them at
+      seen (lazy, the default on every profile). On `batch-b32` only, `GEMMA4_PREFILL_WARM_CONT=1` builds all of them at
       start-up instead: start-up takes about 8 min longer (485.7 s measured) and uses about 8.8 MB more per chip.
-      `single-user` ignores the variable: its continuation programs are always built on first use, and its drafter seed
-      pre-warm is always on.
+      `single-user` ignores the variable (its continuation programs are always built on first use, and its drafter seed
+      pre-warm is always on); `batch` refuses to start with it set.
+    - Measured first-sight cost of a new continuation length class, on a fresh kernel cache: about +1.05 s TTFT on
+      `single-user` (kernel compilation, once per host per class) and about +0.2 s on `batch-b32`; about 10 ms once the
+      kernels are on disk. Not measured on `batch`.
+
+    ### Update 3: the resident batch engine (`batch`)
+    `--profile batch` now selects the resident batch engine. The previous `batch` (the ttnn batch path) is `batch-b32`.
+
+    **Long-context sweep.** Per-user decode time of `batch`'s engine against the ttnn batch path, 262K context. Chat
+    prompts rendered with the chat template (thinking on), sent as token ids to `/v1/completions`; greedy, `ignore_eos`, 128
+    output tokens (the short users in the last row: 512):
+
+    | Load | Token source | resident ÷ ttnn, decode time per token |
+    |---|---|---|
+    | 1 user at 32K context | realprompt 32K set¹ | 0.31× (12.25 vs 40.09 ms)² |
+    | 1 user at 65K | two builder prompts at 65,536¹ | 0.25× |
+    | 1 user at 131K | realprompt 131K set¹ | 0.19× |
+    | 1 user at 262K | realprompt 262K set¹ | **0.125×** (13.9 vs 111.6 ms) |
+    | 3 users at 65K | the 65K prompts¹, cycled | 0.80×³ |
+    | 7 users at 32K | the 32K set¹, cycled | 0.89×³ |
+    | 15 users at 16K | one builder prompt¹ ×15 | 0.97×³ |
+    | 32 users, 128 in / 128 out | random token ids, sampled⁴ | 0.96×³ |
+    | 31 short users (1K in, 512 out) while one 259K-token request runs | builder 1K prompts¹ + the 262K prompt cut to 259,000 | +6.9 ms per step (ttnn path: +83.9 ms) |
+
+    - First-token time at 32K, 1 user: 5.61 s vs 5.62 s (ratio 0.998)².
+    - ¹ Prompts from the real-prompt builder (a real context from tt-metal code, Paul Graham essays or MATH-500 / GSM8K
+      plus a real task, cut to the exact length), rendered with the chat template and sent as token ids.
+    - ² Measured on the shipped classes: `batch` (with the paged-bucket prefill) against `batch-b32`'s engine (the L3-only
+      run, 2026-11-16). The other rows were measured on the same resident engine without the paged-bucket prefill against
+      the ttnn path without it (2026-11-15). The paged-bucket prefill leaves the resident engine's outputs bitwise unchanged
+      (65K–262K) and the ttnn path's decode time within ±1% up to 32K; from 65K up the transfer holds by construction only.
+    - ³ Not exposure-matched: every leg of this sweep had 17–54% of its decode samples below 1,323 MHz on its worst chip,
+      the resident legs as much as or more than the ttnn legs. The 1-user rows' margins are large; rows near 1 are
+      indicative only.
+    - ⁴ Random token ids at ISL 128, sampled (temperature 1.0, top_k 20, top_p 0.95); not real text.
+    - Start-up: about 100 s to ready in the evidence runs (warm caches, outside the package container). A first start
+      converts `batch`'s own copy of the engine weights once (about 60 s *(est.)*, 22 GB more disk) and compiles kernels
+      (time not on this card). `single-user`'s weight copy is untouched.
+    - `batch` serves logprobs, repetition / presence / frequency penalties and logit_bias on its host-sampled step, each
+      alone and alongside 31 greedy users (checked in this release's proof); see Known limitations.
+    - Reliability: 0 hangs in 491,520 long-context launches (≤ 6.1e-6 per launch, 95%), in a 6.5 h soak of `batch`'s
+      engine at 262K context.
+
+    **Real prompts, `batch` against `batch-b32`.** `vllm bench serve` (tt-inference-server's client) with the real-prompt
+    builder's chat prompts: a coding, writing or math task after a real context, cut so the chat template renders it to
+    exactly the stated length; thinking on (the server default), greedy, 256 output tokens, warm-ups = concurrency. Three
+    sessions on one host, `batch-b32` / `batch` / `batch-b32`; the `batch-b32` column is the mean of its two sessions. Times
+    are as measured; points where chip clocks dropped during decode carry a footnote with the per-chip share of decode time
+    below 1,323 MHz.
+
+    | ISL | Concurrency | `batch` TPOT (ms) | `batch-b32` TPOT (ms) | `batch` ÷ `batch-b32` | `batch` TTFT (ms) | `batch-b32` TTFT (ms) |
+    |---|---|---|---|---|---|---|
+    | 128 | 1 | 10.2 | 26.4 | 0.38 | 64 | 69 |
+    | 128 | 8 | 14.3 | 26.6 | 0.54 | 392 | 400 |
+    | 128 | 32 | 26.8 | 29.0 | 0.92 | 1,465 | 1,476 |
+    | 1,024 | 1 | 11.4 | 29.8 | 0.38 | 145 | 151 |
+    | 1,024 | 8 | 16.7[1] | 30.1 | 0.56 | 1,054 | 1,057 |
+    | 1,024 | 32 | 38.0[2] | 42.7 | 0.89 | 2,905 | 2,909 |
+    | 8,192 | 1 | 11.7[3] | 32.1 | 0.36 | 1,181 | 1,179 |
+    | 32,768 | 1 | 12.4[4] | 40.2 | 0.31 | 5,635 | 5,643 |
+
+    - [1] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): `batch` 10.48 / 10.48 / 0.04 / 10.48; `batch-b32` session 1: 7.52 / 7.52 / 0 / 1.42; session 2: 9.41 / 6.1 / 6.1 / 6.1. Times as measured, not corrected.
+    - [2] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): `batch` 14.17 / 17.48 / 0 / 17.48; `batch-b32` session 1: 15.24 / 15.81 / 0 / 7.91; session 2: 9.92 / 17.83 / 7.91 / 7.91. Times as measured, not corrected.
+    - [3] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): `batch` 0 / 17.64 / 26.46 / 17.64; `batch-b32` session 1: 0 / 3.71 / 7.42 / 0; session 2: 3.71 / 4.18 / 3.71 / 11.13. Times as measured, not corrected.
+    - [4] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): `batch` 14.95 / 34.24 / 28.94 / 24.11; `batch-b32` session 1: 9.52 / 0.24 / 7.38 / 9.76; session 2: 15.49 / 11.89 / 2.38 / 7.14. Times as measured, not corrected.
+    - The clock footnotes cover the decode windows (TPOT) only.
+
+    Measured 2026-11-16 09:18–09:40 (KST).
+
+    - Measured outside the package container on the same files (byte-identical engine and adapter code); this release's
+      proof measures the packaged image at the same points.
 
     ### Which profile
     - One user: `single-user`.
-    - 2 to 32 concurrent users: `batch`.
+    - 2 to 32 concurrent users, or several users at long context: `batch`.
+    - `batch-b32`: the update-2 ttnn batch path, kept for one release as a fallback.
 
     ### Get the drafter (`single-user`)
     ```bash
@@ -208,15 +327,18 @@ card:
     ```bash
     tt-model serve changh95/gemma4-31b-it-dflash                    # default profile: single-user
     tt-model serve changh95/gemma4-31b-it-dflash --profile batch
+    tt-model serve changh95/gemma4-31b-it-dflash --profile batch-b32
     tt-model profiles changh95/gemma4-31b-it-dflash
     ```
     - First start on a host (`single-user`): about 12.5 min to ready. It converts the resident engine's weights once
       (about 70 s: 22 GB from the 59 GB checkpoint) and compiles kernels once (about 9.5 min).
     - Later starts: about 2.5 min, including a sha256 check of the converted weights (seconds when they are in the page cache).
       `batch` then starts in about 2 min.
-    - These start times were measured on update 1. Update 2 adds its prefill warm-up (see above).
-    - Disk: about 31 GB under `~/.cache/tt-model/gemma4-31b-it-dflash` (22 GB converted weights, 9 GB compiled kernels).
-      A package update that changes the engine converts again.
+    - These start times were measured on update 1 (`batch` there is today's `batch-b32`). Update 2 adds its prefill
+      warm-up (see above); `batch`'s start-up is in the update 3 section.
+    - Disk: about 31 GB under `~/.cache/tt-model/gemma4-31b-it-dflash` (22 GB converted weights, 9 GB compiled kernels),
+      plus 22 GB for `batch`'s own weight copy once it has started. A package update that changes an engine converts that
+      engine's copy again; `single-user`'s copy is unchanged by update 3.
 
     ### How to query
     ```bash
@@ -237,13 +359,30 @@ card:
         until the 512-token limit.
       - Long thinking traces repeat more often: 12.8% vs 8.8% are degenerate.
       - GSM8K, IFEval, MMLU-Pro, MATH-500 and RULER (8K) are within noise.
-    - **Host-sampled requests in `batch`.** A request that needs CPU sampling (repetition, presence or frequency penalties,
+    - **Host-sampled requests in `batch` and `batch-b32`.** A request that needs CPU sampling (repetition, presence or frequency penalties,
       logprobs, or top_k above the device limit of 32) moves sampling for every concurrent request to the CPU while it is
       active.
-      - At 32 users a decode step goes from about 29 ms to about 274 ms with `OMP_NUM_THREADS=8`, which this package sets
-        (about 605 ms without it).
+      - At 32 users on `batch-b32` a decode step goes from about 29 ms to about 274 ms with `OMP_NUM_THREADS=8`, which
+        this package sets (about 605 ms without it). `batch` takes a host-sampled step for the same requests; its cost is
+        recorded in this release's proof, not on this card.
       - Greedy requests and the default device sampling are unaffected.
       - The full fix belongs in the vLLM TT plugin.
+    - **`batch`: greedy text depends on load.** The engine changes its decode width (R = 1 / 8 / 32) as users join and
+      leave, and the same greedy prompt can produce different text depending on how many other requests are running.
+      At a fixed width, greedy text was bitwise stable under co-tenant churn for prompts that prefill in one step. As on
+      the ttnn path, a prompt that is chunked alongside others can see small differences.
+    - **`batch`: prefix caching is off** (as on every profile): repeated prefixes are recomputed.
+    - **Device memory.** Lowest free DRAM per chip measured on `batch`: 2.85 GB, briefly, right after a burst of 1K-prompt
+      prefills at up to 32 users with a 200K-token request live (a 6.5 h, 491K-launch soak). At steady state about 6.3 GB,
+      flat over the soak. On `batch-b32`, each in-flight
+      request holds a sliding-window history tail until its first decode step, so a burst of short prompts at 32 users is
+      its worst case: at least 1.5 GB free at 32 users and 1K prompts.
+    - **Thermal clock dips.** On a QuietBox 2 chip 1 can lower its clock after about 20 s of sustained fast decode, raising
+      per-token time by up to about 1.3–1.45× while it lasts (measured on earlier builds). The update 3 sweep above was
+      taken with such dips present (see its footnote ³).
+    - **`batch`: host decode guard.** The engine refuses a decode mix whose conservative attention bound exceeds 40 units
+      per core. With its KV pool (4,320 blocks, about 553K positions) no reachable mix comes near it (at most 25 of 40); it
+      would matter only with a pool about 4.5 times larger (above 19,648 blocks).
     - **Update 2 evidence scope.** The paged-bucket prefill's runtime guard and its gating runs check program-cache growth
       and outputs; they did not record device buffer addresses. The drafter seed pre-warm's first-start (cold kernel
       cache) time is not measured.
@@ -281,7 +420,7 @@ card:
 
     Run 2026-11-11 23:20–23:50 (KST), tt-inference-server 0.26.1 `--workflow benchmarks --spec-decode`: SPEED-Bench prompts (AIPerf; the requests carry no sampling fields, so the server's defaults apply: temperature 1.0, top_p 0.95, top_k 20, thinking on). Each answer runs to its natural end (throughput sets capped at 8,192 tokens). One of the QuietBox's two fans was dead during the run; chip 1 throttled during coding 0.2% of decode; throughput_32k 0.6% of decode, 75% of prefill at a mild clock dip.
 
-    #### `batch`
+    #### `batch-b32` (the ttnn batch path; `batch` in updates 1 and 2)
     | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
     |---|---|---|---|---|---|---|---|
     | 128 | 128 | 1 | 8 | 69.0 | 26.1 | 38.2 | 37.8 |
@@ -320,7 +459,11 @@ verify:
   # update 2: the classes the two profiles name (vllm_models/resident_spec_pb3, vllm_models/qb2_pb) and their PB base
   - "from models.demos.gemma4_31b_qb2.tt.package_boot_pb3 import Gemma4ResidentSpecPB3Packaged as P; from models.demos.gemma4_31b_qb2.tt.generator_resident_spec_vllm_pb3 import Gemma4ResidentSpecPB3ForCausalLM as B; assert issubclass(P, B)"
   - "from models.demos.gemma4_31b_qb2.tt.generator_vllm_pb import Gemma4ForCausalLMPB; from models.demos.gemma4_31b_qb2.tt.generator_vllm import Gemma4ForCausalLM; assert issubclass(Gemma4ForCausalLMPB, Gemma4ForCausalLM)"
-  - "import json, os, models.demos.gemma4_31b_qb2 as q; d = os.path.join(os.path.dirname(q.__file__), 'vllm_models'); got = {json.load(open(os.path.join(d, b, 'vllm_metadata.json')))['arch'] for b in os.listdir(d)}; assert {'Gemma4QB2PBForCausalLM', 'Gemma4QB2ResidentSpecPB3ForCausalLM'} <= got, got"
+  - "import json, os, models.demos.gemma4_31b_qb2 as q; d = os.path.join(os.path.dirname(q.__file__), 'vllm_models'); got = {json.load(open(os.path.join(d, b, 'vllm_metadata.json')))['arch'] for b in os.listdir(d)}; assert {'Gemma4QB2PBForCausalLM', 'Gemma4QB2ResidentSpecPB3ForCausalLM', 'Gemma4QB2ResidentMultiS32PBForCausalLM'} <= got, got"
+  # update 3: the batch class (vllm_models/resident_multi_s3pb), its S3-PB base, and the m5_11 engine with its kernels
+  - "from models.demos.gemma4_31b_qb2.tt.package_boot_s3pb import Gemma4ResidentMultiS32PBPackaged as P; from models.demos.gemma4_31b_qb2.tt.generator_resident_multi_s3_2_pb_vllm import Gemma4ResidentMultiS32PBForCausalLM as B; assert issubclass(P, B)"
+  - "from models.demos.gemma4_31b_qb2.tt import package_boot as pb; import inspect, importlib; c = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.weights').convert; assert set(pb.CONVERT_ARGS) <= set(inspect.signature(c).parameters)"
+  - "import os, importlib; e = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.engine'); [importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.' + m) for m in ('model', 'k2a', 'k2a_sched', 'weights')]; from models.demos.gemma4_31b_qb2.resident_m5_11 import PKG_DIR; ks = ('attn_common.hpp', 'attn_compute.cpp', 'attn_reader.cpp', 'attn_writer.cpp', 'hub_dm.cpp', 'k2a_common.hpp', 'k2a_harness_streamer.cpp', 'k2a_head_compute.cpp', 'k2a_head_reader.cpp', 'k2a_head_writer.cpp', 'k2a_unit_compute.cpp', 'k2a_unit_reader.cpp', 'k2a_unit_writer.cpp', 'm1l0_reader.cpp', 'slice_compute.cpp', 'slice_dm.cpp', 'slice_mc.cpp', 'streamer_common.hpp', 'streamer_compute.cpp', 'streamer_reader.cpp', 'streamer_writer.cpp', 'table_scatter.cpp'); missing = [k for k in ks if not os.path.isfile(os.path.join(PKG_DIR, 'kernels', k))]; assert not missing and e.ResidentEngine, missing"
   # the engine is imported lazily by package name: import it here, and check its kernel sources shipped beside it
   - "import os, importlib; e = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.engine'); importlib.import_module('models.demos.gemma4_31b_qb2.resident_m3_2.model'); from models.demos.gemma4_31b_qb2.resident_m3_2 import PKG_DIR; ks = ('streamer_reader.cpp', 'streamer_writer.cpp', 'streamer_compute.cpp', 'hub_dm.cpp', 'slice_dm.cpp', 'slice_mc.cpp', 'slice_compute.cpp', 'attn_reader.cpp', 'attn_writer.cpp', 'attn_compute.cpp'); missing = [k for k in ks if not os.path.isfile(os.path.join(PKG_DIR, 'kernels', k))]; assert not missing and e.ResidentEngine, missing"
   - "from models.demos.gemma4_31b_qb2.tt.dflash2 import DFlash2Drafter; assert DFlash2Drafter.REVISION == 'b0cd01b4918aae6b6388272950c4f9851734674b'"
