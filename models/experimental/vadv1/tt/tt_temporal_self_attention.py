@@ -80,6 +80,8 @@ class TtTemporalSelfAttention:
         stacked per sample, (bs * num_bev_queue, Q, C), or None without a previous BEV."""
         params = self.params
         assert self.num_bev_queue == 2
+        if key_padding_mask is not None:
+            raise NotImplementedError("the temporal self-attention takes no key padding mask")
         if identity is None:
             identity = query
         if not self.batch_first:
