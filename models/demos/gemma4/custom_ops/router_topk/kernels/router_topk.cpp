@@ -123,26 +123,30 @@ void kernel_main() {
         volatile tt_l1_ptr uint16_t* pes = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + OFF_PES);
         const uint32_t base = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + OFF_BASE);
         // my row of the logits: element (me, j) of tile j/32 sits in face (me/16)*2 + (j%32)/16
-        uint32_t key[E];
+        // One pass keeping the top K sorted by key, descending; on equal keys the earlier index stays ahead (a new
+        // entry goes after every kept entry with key >= its own), which is the order of K repeated arg-max scans
+        // with first-index ties. ~E compares plus rare inserts instead of K * E * K.
+        uint32_t sel[K];
+        uint32_t skey[K];
+        uint32_t filled = 0;
         for (uint32_t j = 0; j < E; ++j) {
             const uint32_t t = j >> 5, cj = j & 31;
             const uint32_t idx = t * 1024 + ((me >> 4) * 2 + (cj >> 4)) * 256 + (me & 15) * 16 + (cj & 15);
-            key[j] = fkey(uint32_t(lg[idx]) << 16);
-        }
-        uint32_t sel[K];
-        for (uint32_t s = 0; s < K; ++s) {
-            uint32_t best = 0xFFFFFFFFu, bkey = 0;
-            for (uint32_t j = 0; j < E; ++j) {
-                bool taken = false;
-                for (uint32_t q = 0; q < s; ++q) {
-                    taken |= (sel[q] == j);
-                }
-                if (!taken && (best == 0xFFFFFFFFu || key[j] > bkey)) {
-                    best = j;
-                    bkey = key[j];
-                }
+            const uint32_t kj = fkey(uint32_t(lg[idx]) << 16);
+            if (filled == K && kj <= skey[K - 1]) {
+                continue;
             }
-            sel[s] = best;
+            uint32_t pos = filled < K ? filled : K - 1;
+            while (pos > 0 && skey[pos - 1] < kj) {
+                skey[pos] = skey[pos - 1];
+                sel[pos] = sel[pos - 1];
+                --pos;
+            }
+            skey[pos] = kj;
+            sel[pos] = j;
+            if (filled < K) {
+                ++filled;
+            }
         }
         // softmax over the selected (the max is sel[0]), normalized by their sum, times the per-expert scale
         float p[K];
