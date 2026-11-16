@@ -345,9 +345,9 @@ not pipeline-stalled.
 - **Tensix instruction back-pressure is a store stall.** A Tensix instruction is a write to the
   instruction buffer address (`MEM_INS_BUF_WRITE`). When the Tensix cannot take it, the write is not
   granted: look at `MEM_STALL_ANY`, `LS_STALL_STORE_BUF_FULL` and `LS_STALL_ANY`, not at DE or EX.
-- **Semaphore and circular-buffer waits retire instructions.** A wait loop retires at full rate: high
-  `minstret` per `mcycle`, high `LS_LOAD_OP`, few stalls. IPC near 1 with no stalls over a long window
-  is a spinning core.
+- **Semaphore and circular-buffer waits retire instructions.** A wait is a loop of L1 loads. On
+  Blackhole BRISC and NCRISC it retires about 0.3 to 0.4 instructions per cycle, the same band as data
+  movement work, and no event marks a wait. IPC alone cannot tell a waiting core from a working one.
 - **`DE_STALL_SYNC` is a load-queue drain, not a Tensix wait.**
 - **Normalize by work, not by cycles.** Per-cycle fractions of different cores share a denominator and
   correlate with each other by construction. Compare counts per Tensix instruction pushed, armed in the
