@@ -167,7 +167,8 @@ class Hy4Decoder:
         ch = self.ch
         if ly.spec.mlp == DENSE:
             return D.allreduce_cols(self.mlp[i].forward(h))
-        part = self.mlp[i].forward(h)
+        _bt = getattr(ly, "blk_tp", None)
+        part = None if (_bt is not None and getattr(_bt, "shared_fuse", None) is not None) else self.mlp[i].forward(h)
         tok = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         tok = ttnn.reshape(tok, [1, 1, 1, HID])
         if (
@@ -179,10 +180,12 @@ class Hy4Decoder:
                 from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import FusedPartial
 
                 pt = ly.blk_tp.forward_partial(h, tok, fold=part)
-                ttnn.deallocate(part)
+                if part is not None:
+                    ttnn.deallocate(part)
                 return FusedPartial(pt, rp=self.rp)
             out = ly.blk_tp.forward(h, tok, fold=part)
-            ttnn.deallocate(part)
+            if part is not None:
+                ttnn.deallocate(part)
             out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
             y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
             ttnn.deallocate(out)

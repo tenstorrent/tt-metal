@@ -323,6 +323,11 @@ class Hy4ChainLayer:
                 self.blk_tp = Hy4MoeTp32Block(
                     md, ch.ccl, self.blk.gate, tpe, int(os.environ.get("HY4_MOE_TP32_T", "1"))
                 )
+                if os.environ.get("HY4_MOE_FUSE", "0") == "1" and hasattr(tpe, "shared_cores"):
+                    # B19: shared expert beside the tp24 kernel in one program: w2 scaled by 1/4 (all 4 mesh rows compute all Tt tokens, the row reduction sums them back to 1x)
+                    from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyShared
+
+                    self.blk_tp.shared_fuse = SkinnyShared(md, sw[0], sw[1], sw[2] * 0.25, limit=D.NO_CLAMP)
                 self.blk_pf = None
                 if (
                     os.environ.get("HY4_TP32_PF", "0") == "1"

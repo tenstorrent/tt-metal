@@ -349,7 +349,7 @@ class Hy4PoolDecoder(Hy4Decoder):
         ch, S = self.ch, self.S
         if ly.spec.mlp == DENSE:
             return D.allreduce_cols(self.mlp[i].forward(h))
-        part = self.mlp[i].forward(h)
+        part = None if getattr(self._blks[i], "shared_fuse", None) is not None else self.mlp[i].forward(h)
         if (
             os.environ.get("HY4_VERIFY_MOE_SPLIT", "0") == "1"
         ):  # diagnostic: S separate T=1-shaped MoE calls (the plain decode shape) instead of one T=S call
@@ -373,10 +373,12 @@ class Hy4PoolDecoder(Hy4Decoder):
             from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import FusedPartial
 
             pt = blk.forward_partial(h, tok, fold=part)
-            ttnn.deallocate(part)
+            if part is not None:
+                ttnn.deallocate(part)
             return FusedPartial(pt, rp=self.rp_v)
         out = blk.forward(h, tok, fold=part)
-        ttnn.deallocate(part)
+        if part is not None:
+            ttnn.deallocate(part)
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
         ttnn.deallocate(out)
@@ -409,6 +411,8 @@ class Hy4PoolDecoder(Hy4Decoder):
                 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32_block import Hy4MoeTp32Block
 
                 assert self.S * int(self.md.shape[0]) <= 16, "TP32 verify block: S * 4 <= 16 tokens"
-                self._blks.append(Hy4MoeTp32Block(self.md, self.ch.ccl, nb.gate, ly.blk_tp.tpe, self.S))
+                _b = Hy4MoeTp32Block(self.md, self.ch.ccl, nb.gate, ly.blk_tp.tpe, self.S)
+                _b.shared_fuse = ly.blk_tp.shared_fuse
+                self._blks.append(_b)
                 continue
             self._blks.append(nb)

@@ -119,8 +119,24 @@ class SkinnyShared:
             and self.ring % self.sbk2 == 0
         )
 
+    def relocate(self, cores):
+        """B19: run on `cores` (8 logical cores, entry b serves DRAM bank b) instead of the bank cores: used by the MoE fusion (shared expert beside the tp24 kernel in ONE program)."""
+        self.cores = list(cores)
+        self.vcs = SK._vcs(self.cores)
+        self.phys = [self.md.worker_core_from_logical_core(ttnn.CoreCoord(c.x, c.y)) for c in self.cores]
+
     def __call__(self, h, T, out=None):
         """h: std tile tensor [1,1,T,6144] bf16 (DRAM or L1); -> out [1,1,T,6144] bf16 TILE (the same tensor the stock make_shared forward returns)."""
+        out, kernels, sems, cbs, hp = self.build(h, T, out)
+        prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+        prog.custom_program_hash = _hash(0x7B1, *hp)
+        ttnn.generic_op([h, self.w01, self.w2, out], prog)
+        return out
+
+    def build(self, h, T, out=None, leaders=None):
+        """-> (out, kernels, semaphores, cbs, hash parts) of the program (B19: also embedded into the tp24 program).
+        leaders: 8 physical (x, y) of the tp24 leader cores (entry b = bank b): the output tiles are then NoC-written into slot 2 of that leader's landing buffer (no DRAM output, `out` unused).
+        """
         assert T <= 16
         MT = 1 if T <= 8 else 2
         R = 8 if (MT == 2 or not self.tiny) else (2 if T <= 2 else 4 if T <= 4 else 8)  # rows of the in0 tiles
@@ -174,13 +190,17 @@ class SkinnyShared:
             SBWC -= 1
         rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for i, cc in enumerate(cores):
-            rt_w[cc.x][cc.y] = [i, i * self.NCOL]
+            rt_w[cc.x][cc.y] = [i, i * self.NCOL] + ([leaders[i][0], leaders[i][1]] if leaders else [])
             rt_c[cc.x][cc.y] = [i]
         common_w = [h.buffer_address(), out.buffer_address()]
         for p in self.phys:
             common_w += [p.x, p.y]
         writer = ttnn.KernelDescriptor(
-            kernel_source=f"{KDIR}/hsk_sh_writer.cpp",
+            kernel_source=(
+                os.path.join(os.path.dirname(KDIR), "tp32_kernels", "sh_writer_fused.cpp")
+                if leaders
+                else f"{KDIR}/hsk_sh_writer.cpp"
+            ),
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_set,
             compile_time_args=[
@@ -200,7 +220,7 @@ class SkinnyShared:
                 RA,
             ]
             + _acc(h)
-            + _acc(out),
+            + ([] if leaders else _acc(out)),
             runtime_args=rt_w,
             common_runtime_args=common_w,
             config=ttnn.WriterConfigDescriptor(),
@@ -244,13 +264,11 @@ class SkinnyShared:
                 math_approx_mode=bool(self.approx),
             ),
         )
-        prog = ttnn.ProgramDescriptor(
-            kernels=readers + [writer, compute],
-            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(3)],
-            cbs=cbs,
-        )
-        prog.custom_program_hash = _hash(
-            0x7B1,
+        sems = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(4 if leaders else 3)
+        ]
+        hp = (
+            bool(leaders),
             MT,
             R,
             RA,
@@ -265,9 +283,9 @@ class SkinnyShared:
             self.w2.buffer_address(),
             tuple(_acc(h)),
             tuple(_acc(out)),
+            tuple((c.x, c.y) for c in cores),
         )
-        ttnn.generic_op([h, self.w01, self.w2, out], prog)
-        return out
+        return out, readers + [writer, compute], sems, cbs, hp
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------

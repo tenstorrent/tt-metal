@@ -46,6 +46,8 @@ void kernel_main() {
     constexpr uint32_t cb_lnd16 = get_compile_time_arg_val(21);
     constexpr uint32_t cb_fin = get_compile_time_arg_val(22);
     constexpr uint32_t cb_fin16 = get_compile_time_arg_val(23);
+    constexpr bool SHARED =
+        get_compile_time_arg_val(24) != 0;  // B19: third landed partial (slot 2) = the shared expert
     constexpr bool down_fp32 = (MT == 1);  // MT = 2: bf16 dest (8 tiles)
 
     deepseek_compute_kernel_init();
@@ -132,7 +134,7 @@ void kernel_main() {
     cb_pop_front(cb_meta, 1);
     if constexpr (leader) {
         cb_wait_front(cb_o, 24 * MT);
-        cb_wait_front(cb_lnd, 48 * MT);
+        cb_wait_front(cb_lnd, (SHARED ? 72 : 48) * MT);
         reconfig_full_operand(cb_o16, cb_lnd16);
         pack_reconfig_data_format<true>(cb_fin16);
         cb_reserve_back(cb_fin, 24 * MT);
@@ -144,6 +146,12 @@ void kernel_main() {
             copy_tile(cb_lnd16, 24 * MT + t, 1);
             add_binary_tile_init();
             add_binary_tile(0, 1, 0);
+            if constexpr (SHARED) {
+                copy_init<DST_ACCUM_MODE>(cb_lnd16);
+                copy_tile(cb_lnd16, 48 * MT + t, 2);
+                add_binary_tile_init();
+                add_binary_tile(0, 2, 0);
+            }
             tile_regs_commit();
             tile_regs_wait();
             pack_tile<true>(0, cb_fin16, t);
@@ -151,6 +159,6 @@ void kernel_main() {
         }
         cb_push_back(cb_fin, 24 * MT);
         cb_pop_front(cb_o, 24 * MT);
-        cb_pop_front(cb_lnd, 48 * MT);
+        cb_pop_front(cb_lnd, (SHARED ? 72 : 48) * MT);
     }
 }

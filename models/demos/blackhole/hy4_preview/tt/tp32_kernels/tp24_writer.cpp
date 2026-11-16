@@ -45,6 +45,9 @@ void kernel_main() {
     constexpr auto x_args = TensorAccessorArgs<14>();
     constexpr auto r_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto o_args = TensorAccessorArgs<r_args.next_compile_time_args_offset()>();
+    constexpr uint32_t SHARED = get_compile_time_arg_val(
+        o_args.next_compile_time_args_offset());  // B19: 1 = a shared-expert core of bank b NoC-writes a third partial
+                                                  // (slot 2) into the leader's landing buffer
 
     const uint32_t me = get_arg_val<uint32_t>(0);
     const uint32_t ocol0 = get_arg_val<uint32_t>(1);
@@ -77,9 +80,19 @@ void kernel_main() {
     const uint32_t pr_base = cbpr.get_write_ptr();
     const uint32_t act_base = cbact.get_write_ptr();
     if (grp == 0) {
-        cblnd.reserve_back(48 * MT);
+        cblnd.reserve_back((SHARED ? 72 : 48) * MT);
     }
     const uint32_t lnd_base = cblnd.get_write_ptr();  // identical on every core (same CB layout)
+    if constexpr (SHARED) {
+        if (grp == 0) {  // tell the shared-expert core of this bank where to land (its semaphore 3)
+            volatile tt_l1_ptr uint32_t* hs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(3));
+            *hs = lnd_base;
+            const uint32_t sx = get_common_arg_val<uint32_t>(3 + 2 * 24 + 2 * me);
+            const uint32_t sy = get_common_arg_val<uint32_t>(4 + 2 * 24 + 2 * me);
+            noc_async_write(get_semaphore(3), get_noc_addr(sx, sy, get_semaphore(3)), 4);
+            noc_async_write_barrier();
+        }
+    }
 
     // route, plan
     uint16_t active[128];
@@ -207,9 +220,9 @@ void kernel_main() {
         cbo.pop_front(24 * MT);
         return;
     }
-    noc_semaphore_wait(sem_l, 2);
+    noc_semaphore_wait(sem_l, 2 + SHARED);
     *sem_l = 0;
-    cblnd.push_back(48 * MT);
+    cblnd.push_back((SHARED ? 72 : 48) * MT);
     // output (leader): compute sums cb_o + the two landed partials into cb_fin
     cbfin.wait_front(24 * MT);
     for (uint32_t s = 0; s < 6; ++s) {
