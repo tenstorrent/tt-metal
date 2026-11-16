@@ -7,18 +7,21 @@ bucket b of spec_engine.verify_buckets(B) (1, 2, 4 at B = 8) replays the verify 
 (Qwen36Model._verify_bucket_body), which hands its ids and drafter feed rows to the B-user outputs. Covered here:
 
 * the bucket of a step is the smallest that holds its highest live row, chosen from that step's rows alone (it grows
-  and drops at once), and a step that reads logits (logits verify, device sampler) replays the B-user trace;
+  and drops at once), and a step that reads logits (logits verify) replays the B-user trace;
+* a device-sampled step, chained or not, takes the bucket of its rows when the bucket has a sampler trace, and the
+  B-user trace otherwise;
 * rows join, finish, move (slot_remap) and are preempted across buckets; a chained verify takes the bucket of its own
   rows, also below its predecessor's, and both proposes still check out;
-* Qwen36Model replays the bucket's trace, and refuses before it stages anything a bucket that would leave a live user
-  out, a bucket under the device sampler and a bucket whose logits are read;
-* the bucket body runs on the first rows of the B-user page tables, makes no logits, and hands the ids lanes and the
-  feed rows over with zero rows past the bucket; the GDN verify of b users reads its rows of the B-user ctrl page
-  (gdn_spec_step max_users), which holds each user's start pages at 1 + B + u*Nv + h;
+* Qwen36Model replays the bucket's trace, and with device draws the bucket's sampler trace after it, and refuses before
+  it stages anything a bucket that would leave a live user out, device draws on a bucket without a sampler trace and a
+  bucket whose logits are read;
+* the bucket body runs on the first rows of the B-user page tables and hands the ids lanes and the feed rows over with
+  zero rows past the bucket; it keeps its vocab shard only for a sampler; the GDN verify of b users reads its rows of
+  the B-user ctrl page (gdn_spec_step max_users), which holds each user's start pages at 1 + B + u*Nv + h;
 * a bucket keeps the full-width verify's SDPA core split (spec_sdpa_split_users), so its rows reduce their KV range
   as in the full-width verify;
-* warmup runs every bucket body into the warm outputs, capture records one trace per bucket after the B-user trace,
-  and release frees them.
+* warmup runs every bucket body (and sampler body) into the warm outputs, capture records one trace per bucket (and
+  one sampler trace) after the B-user trace, and release frees them.
 """
 
 from types import SimpleNamespace
@@ -131,8 +134,9 @@ def test_each_step_takes_the_bucket_of_its_own_rows_up_and_down_at_once(bucket_e
 
 
 def test_a_step_that_reads_logits_replays_the_full_width_trace(bucket_engine):
-    """A bucket trace makes no logits: a logits verify (a host-sampled or narrow step) and a verify whose rows the
-    device sampler draws replay the B-user trace, whatever their rows."""
+    """A bucket trace makes no logits to read: a logits verify (a host-sampled or narrow step) replays the B-user trace,
+    whatever its rows, and so does a verify whose rows the device sampler draws when the buckets have no sampler
+    trace."""
     eng, calls = bucket_engine
     eng._active = set(range(eng.B))
     _step(eng, [100] + [None] * (eng.B - 1), spec_mode="logits")
@@ -145,6 +149,33 @@ def test_a_step_that_reads_logits_replays_the_full_width_trace(bucket_engine):
     eng.verify(torch.zeros(eng.B, eng.T), torch.tensor([100] + [0] * 7), None, pt, active=active, mamba_state="s")
     assert calls[-1]["bucket"] == 1
     assert eng.verify_bucket_steps == {1: 1, 8: 2}
+
+
+def test_a_device_sampled_step_takes_the_bucket_that_has_a_sampler_trace(bucket_engine):
+    """With the buckets' sampler traces, a verify whose rows the device sampler draws takes the bucket of its rows; a
+    logits verify (a narrow step that asks for logprobs) stays on the B-user trace, and so do rows that fit only a
+    bucket without a sampler trace."""
+    eng, calls = bucket_engine
+    eng._active = set(range(eng.B))
+    eng.model._vfy_bucket_sample_traces = {1: "s1", 2: "s2", 4: "s4"}
+    pt = torch.ones(eng.B, eng.nb, dtype=torch.int32)
+    plan = SimpleNamespace(sampled=[True] * 32)
+
+    def verify(live, **kw):
+        active = torch.tensor([u in live for u in range(eng.B)])
+        starts = torch.tensor([100 + u if u in live else 0 for u in range(eng.B)])
+        eng.verify(torch.zeros(eng.B, eng.T), starts, None, pt, active=active, mamba_state="s", **kw)
+        return calls[-1].get("bucket")
+
+    assert verify({0}, sample_plan=plan) == 1 and calls[-1]["sample_plan"] is plan
+    assert verify({0, 1}, sample_plan=plan) == 2
+    assert verify({0, 3}, sample_plan=plan) == 4
+    assert verify({0, 5}, sample_plan=plan) is None
+    assert verify({0}, sample_plan=plan, read_logits=True) is None
+    eng.model._vfy_bucket_sample_traces = {1: "s1"}
+    assert verify({0, 1}, sample_plan=plan) is None, "bucket 2 has no sampler trace"
+    assert verify({0, 1}) == 2, "a step without draws takes every bucket"
+    assert eng.verify_bucket_steps == {1: 1, 2: 2, 4: 1, 8: 3}
 
 
 def test_rows_join_finish_move_and_resume_across_buckets(bucket_engine):
@@ -217,8 +248,8 @@ def test_a_chained_verify_takes_the_bucket_of_its_own_rows(chained):
 
 
 def test_a_sampled_chained_verify_replays_the_full_width_trace(chained):
-    """A device-sampled chained verify draws from logits, which a bucket trace does not make: it replays the B-user
-    trace even when its live rows (0 and 1) fit the captured bucket 2."""
+    """A device-sampled chained verify on buckets without sampler traces replays the B-user trace even when its live
+    rows (0 and 1) fit the captured bucket 2."""
     eng, log, state = chained
     B, T, K = eng.B, eng.T, eng.K
     eng.model._vfy_bucket_traces = {1: "v1", 2: "v2"}
@@ -231,6 +262,28 @@ def test_a_sampled_chained_verify_replays_the_full_width_trace(chained):
     e = log["enqueue"][-1]
     assert e.kw["step_staged"] is True and e.kw["sample_plan"] is not None and "bucket" not in e.kw
     assert eng.chained_steps == 1 and eng.verify_bucket_steps == {B: 2}
+
+
+def test_a_sampled_chained_verify_takes_the_bucket_of_its_rows_with_its_sampler_trace(chained):
+    """With the buckets' sampler traces, a device-sampled one-enqueue predecessor over rows 0, 1 and 3 replays the
+    B-user trace, and its chained verify over rows 0 and 1 takes bucket 2: it carries its chained plan (seeds from the
+    chain program) and the bucket together, and the chain program, the step trace and the drafter still run at B
+    users."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    eng.model._vfy_bucket_traces = {1: "v1", 2: "v2"}
+    eng.model._vfy_bucket_sample_traces = {1: "s1", 2: "s2"}
+    res0, tokens0, starts0, nv0 = _sampled_predecessor(eng, state)
+    assert "bucket" not in log["enqueue"][-1].kw and log["enqueue"][-1].kw["sample_plan"] is not None
+    state["ids"] += [torch.zeros(B, T, dtype=torch.int64)]
+    state["draws"] += [torch.zeros(B * T, dtype=torch.int64)]
+    upper = [s + T if s >= 0 else -1 for s in starts0]
+    _chained_verify(eng, res0, upper, [K] * B, rows=[True, True, False, False], sampling=_sampling())
+    e = log["enqueue"][-1]
+    assert e.kw["step_staged"] is True and e.kw["bucket"] == 2
+    assert e.kw["sample_plan"] is not None and e.kw["sample_plan"].seeds is None
+    assert log["traces"][-3:] == ["chain", "step", "drafter"]
+    assert eng.chained_steps == 1 and eng.verify_bucket_steps == {2: 1, B: 1}
 
 
 def test_the_engine_prepares_the_buckets_below_its_width(bucket_engine):
@@ -275,7 +328,7 @@ def test_the_model_refuses_a_bucket_that_leaves_a_live_user_or_logits_out(replay
         (dict(inactive=[False, False, True, True], bucket=1), "leaves out a live user at or past row 1"),
         (dict(inactive=None, bucket=2), "leaves out a live user at or past row 2"),
         (dict(inactive=[False, True, True, True], bucket=8), r"no verify row bucket of 8 users \(captured: \[1, 2\]\)"),
-        (dict(inactive=[False, True, True, True], bucket=1, sample_plan=plan), "no logits for the device sampler"),
+        (dict(inactive=[False, True, True, True], bucket=1, sample_plan=plan), "has no sampler trace"),
         (dict(inactive=[False, True, True, True], bucket=1, read_logits=True), "makes no logits to read"),
     ]:
         with expect_error(ValueError, msg):
@@ -283,6 +336,22 @@ def test_the_model_refuses_a_bucket_that_leaves_a_live_user_or_logits_out(replay
     with expect_error(ValueError, "makes no logits to read"):
         m.verify_traced(tokens, [10, 0, 0, 0], [0] * 4, read_logits=True, inactive=[False, True, True, True], bucket=1)
     assert copies == [] and traces == []
+
+
+def test_the_model_replays_the_buckets_sampler_trace_after_its_verify_trace(replays):
+    """With device draws a bucket replays its verify trace, then its own sampler trace, with the plan staged into the
+    B-user sampler; the B-user gather and sampler traces do not run. Without draws only the bucket's verify trace."""
+    m, copies, traces = replays
+    m._vfy_bucket_sample_traces = {1: "s1", 2: "s2"}
+    m._vfy_gather_trace_id, m._vfy_sample_trace_id = "gather", "sample"
+    tokens, pt = [[5, 6, 7, 8]] * 4, torch.ones(4, 4, dtype=torch.int32)
+    plan = SimpleNamespace(any_sampled=True)
+    m.verify_enqueue(tokens, [10, 20, 0, 0], [0] * 4, page_tables=pt, inactive=[False, False, True, True], bucket=2,
+                     sample_plan=plan)  # fmt: skip
+    assert traces == ["v2", "s2"] and m._vfy_sampler.stage.call_args.args == (plan,)
+    m.verify_enqueue(tokens, [10, 0, 0, 0], [0] * 4, page_tables=pt, inactive=[False, True, True, True], bucket=1)
+    m.verify_enqueue(tokens, [10, 20, 30, 0], [0] * 4, page_tables=pt, inactive=[False] * 4, sample_plan=plan)
+    assert traces == ["v2", "s2", "v1", "trace", "gather", "sample"]
 
 
 # ----------------------------------------------------------------------------------------- the bucket body
@@ -306,6 +375,7 @@ def _body_model(B=8, T=4, groups=None):
     m._vfy_kvpt_users = FT((B, 16), "pt_users")
     m._vfy_kvpt1_buf = FT((m._vfy_spec_groups, 16), "pt_groups")
     m.device = "mesh"
+    m._vfy_sampler = None
     return m
 
 
@@ -348,6 +418,33 @@ def test_the_bucket_body_runs_the_first_rows_and_hands_over_zero_padded_outputs(
         ("free", "feed"),
         ("free", "full"),
     ]
+
+
+def test_with_a_sampler_the_bucket_body_keeps_its_vocab_shard_and_its_sampler_body_draws_from_it(monkeypatch):
+    """With a device sampler the bucket body runs the verify with logits and returns the bucket's vocab shard after the
+    same hand-over; the bucket's sampler body all-gathers a copy of that shard (the shard stays for the next replay)
+    and runs the sampler over the b*T rows of logits, then frees them."""
+    log = []
+    monkeypatch.setattr(ttnn, "slice", lambda t, s, e: FT(e, f"{t.name}[:{e[0]}]"))
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: log.append(("free", t.name)))
+    monkeypatch.setattr(ttnn, "copy", lambda src, dst: log.append(("copy", src.name, dst.name)))
+    monkeypatch.setattr(ttnn, "concat", lambda ts, dim, memory_config: FT((1, 1, 32, 640), "full"))
+    m = _body_model()
+    m._vfy_bucket_zeros = {2: FT((1, 1, 24, 640), "zeros2")}
+    m._vfy_sampler = SimpleNamespace(body=lambda logits: log.append(("sampler", logits.name)))
+    m._verify_logits = lambda shard: log.append(("gather", shard.name)) or FT((1, 1, 8, 248320), "logits8")
+
+    def body(n_users, tables=None, logits=True):
+        log.append(("body", n_users, logits))
+        return FT((1, 1, 8, 31040), "shard8"), FT((1, 1, 8, 640), "feed"), FT((1, 1, 1, 32), "ids"), None
+
+    m._forward_verify_bucket_tp = body
+    shard = m._verify_bucket_body(2, FT((1, 1, 1, 32), "ids_out"), FT((1, 1, 32, 640), "rows_out"))
+    assert shard.name == "shard8" and ("body", 2, True) in log and ("free", "shard8") not in log
+    assert [e for e in log if e[0] == "copy"] == [("copy", "ids", "ids_out"), ("copy", "full", "rows_out")]
+    log.clear()
+    m._bucket_sample_body(shard)
+    assert log == [("gather", "shard8"), ("sampler", "logits8"), ("free", "logits8")]
 
 
 def test_the_bucket_body_never_slices_a_table_whole(monkeypatch):
@@ -508,6 +605,24 @@ def test_warmup_runs_every_bucket_body_into_the_warm_outputs(monkeypatch, expect
             m._warm_verify_buckets(bad, ids, rows)
 
 
+def test_with_a_sampler_warmup_prepares_the_sampler_rows_and_runs_every_bucket_sampler_body(monkeypatch):
+    """Before any capture the sampler gets the inputs of each bucket's b*T rows (VerifySampler.prepare_rows), and each
+    bucket's sampler body runs once over the warm bucket body's shard, which is then freed."""
+    events = []
+    monkeypatch.setattr(ttnn, "zeros", lambda shape, dtype, layout, device, memory_config: "z")
+    monkeypatch.setattr(ttnn, "deallocate", lambda t: events.append(("free", t)))
+    m = _body_model(B=8, T=4)
+    m._vfy_sampler = SimpleNamespace(prepare_rows=lambda rows: events.append(("rows", rows)))
+    m._verify_bucket_body = lambda b, ids, rows: events.append(("bucket", b)) or f"shard{b}"
+    m._bucket_sample_body = lambda shard: events.append(("sample", shard))
+    m._warm_verify_buckets((1, 2, 4), FT((1, 1, 1, 32), "ids", "u32"), FT((1, 1, 32, 640), "rows"))
+    assert events == [
+        ("rows", 4), ("bucket", 1), ("sample", "shard1"), ("free", "shard1"),
+        ("rows", 8), ("bucket", 2), ("sample", "shard2"), ("free", "shard2"),
+        ("rows", 16), ("bucket", 4), ("sample", "shard4"), ("free", "shard4"),
+    ]  # fmt: skip
+
+
 @pytest.mark.parametrize("lanes", [True, False])
 def test_the_warm_pass_prepares_buckets_only_with_the_shard_argmax_lanes(monkeypatch, lanes):
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
@@ -551,6 +666,39 @@ def test_capture_records_one_trace_per_bucket_after_the_full_width_trace_and_rel
     m.release_verify_trace()
     assert events == [("release", "t0"), ("release", "t1"), ("release", "t2"), ("release", "t3")]
     assert m._vfy_trace_id is None and m._vfy_bucket_traces == {}
+
+
+def test_with_a_sampler_capture_records_each_buckets_sampler_trace_after_its_verify_trace(monkeypatch):
+    """Each bucket's sampler trace is captured right after the bucket's verify trace, over the vocab shard that verify
+    trace keeps allocated; release frees both kinds of traces and drops the shards."""
+    events, n = [], iter(range(100))
+    monkeypatch.setattr(ttnn, "begin_trace_capture", lambda dev, cq_id: events.append("begin") or f"t{next(n)}")
+    monkeypatch.setattr(ttnn, "end_trace_capture", lambda dev, tid, cq_id: events.append(("end", tid)))
+    monkeypatch.setattr(ttnn, "release_trace", lambda dev, tid: events.append(("release", tid)))
+    m = _body_model(B=8, T=4)
+    m.mesh_device, m._vfy_kv_grouped, m._vfy_prepared_key, m._vfy_trace_id = "mesh", True, "key", None
+    m._vfy_sampler = SimpleNamespace(body=lambda logits: events.append(("sampler", logits)))
+    m._vfy_buckets = (1, 2)
+    m._vfy_att0 = SimpleNamespace(
+        spec_sdpa_enabled=lambda T: True, _spec_pack_heads=lambda tiles: 3, _forward_verify_ok=lambda *a: True
+    )
+    m._log_trace_region = lambda label: events.append(("region", label))
+    m._forward_verify_bucket_tp = lambda n_users: ("lg", "rows", "ids", "rm")
+    m._verify_bucket_body = lambda b, ids, rows: events.append(("bucket", b)) or f"shard{b}"
+    m._bucket_sample_body = lambda shard: events.append(("sample", shard))
+    m.record_verify_trace()
+    assert events == [
+        "begin", ("end", "t0"), "begin", ("sampler", "lg"), ("end", "t1"), ("region", "the verify trace"),
+        "begin", ("bucket", 1), ("end", "t2"), "begin", ("sample", "shard1"), ("end", "t3"),
+        "begin", ("bucket", 2), ("end", "t4"), "begin", ("sample", "shard2"), ("end", "t5"),
+        ("region", "the verify row bucket traces and their sampler traces"),
+    ]  # fmt: skip
+    assert m._vfy_bucket_traces == {1: "t2", 2: "t4"} and m._vfy_bucket_sample_traces == {1: "t3", 2: "t5"}
+    assert m._vfy_bucket_shards == {1: "shard1", 2: "shard2"}
+    events.clear()
+    m.release_verify_trace()
+    assert events == [("release", t) for t in ("t0", "t1", "t2", "t4", "t3", "t5")]
+    assert m._vfy_bucket_traces == m._vfy_bucket_sample_traces == m._vfy_bucket_shards == {}
 
 
 # ----------------------------------------------------------------------------------------- SDPA core split, prepare

@@ -10,6 +10,12 @@ fresh ``sampling_plan`` per verify. Each sampled row's draws are checked against
 top-k 1 and padding rows draw nothing; a seeded row draws the same token for the same position, also on a chained
 verify, whose seeds the chain program writes (spec_chain.ChainInputs).
 
+The sampler takes the top-32 of its four vocabulary chunks in one ttnn.topk call over the chunks stacked as rows. Next
+to the sampler with one call per chunk (tests/spec_op_graphs.py ChunkedVerifySampler), on logits full of exact ties,
+it hands ttnn.sampling the same values and ids in the same order and draws the same tokens, on every device. A verify
+row bucket's sampler trace, over the bucket's first b*T rows of logits, draws those rows' tokens as the full-width
+sampler trace does.
+
     pytest models/demos/blackhole/qwen36/tests/test_spec_sample.py    (Blackhole, up to 2 chips)
 """
 
@@ -23,7 +29,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tests.sampling_reference import chi_square_p, target_probs
+from models.demos.blackhole.qwen36.tests.spec_op_graphs import ChunkedVerifySampler
 from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape
+from models.demos.blackhole.qwen36.tests.test_spec_sample_topk_host import _logits as _tie_logits
 from models.demos.blackhole.qwen36.tt.spec_sample import VerifySampler, chained_sampling_plan, sampling_plan
 
 VOCAB = 248320
@@ -45,16 +53,18 @@ class _Sampler:
     ``capture=False`` the caller captures once every device buffer that the replays run next to exists: a buffer
     allocated after the capture and alive at a replay can sit where the trace writes."""
 
-    def __init__(self, mesh, B, T, capture=True):
+    def __init__(self, mesh, B, T, capture=True, cls=VerifySampler, logits=None):
         self.mesh, self.B, self.T = mesh, B, T
-        self.logits = ttnn.from_torch(
-            torch.zeros(1, 1, B * T, VOCAB),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
-        )
-        self.sampler = VerifySampler(mesh, B, T, VOCAB)
+        self.logits = logits
+        if logits is None:
+            self.logits = ttnn.from_torch(
+                torch.zeros(1, 1, B * T, VOCAB),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+        self.sampler = cls(mesh, B, T, VOCAB)
         self.trace = None
         if capture:
             self.capture()
@@ -291,23 +301,168 @@ def test_a_chained_seeded_row_draws_what_an_unchained_verify_draws(mesh_device):
 
 
 @_parametrize
-def test_verify_sampler_device_time(mesh_device):
-    B, T, N = 8, 4, 200
-    s = _Sampler(mesh_device, B, T)
-    plan = sampling_plan(_params(B), [100] * (B - 1) + [-1], T)
-    try:
-        s.sampler.stage(plan)
-        ttnn.execute_trace(mesh_device, s.trace, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.perf_counter()
-        for _ in range(N):
-            ttnn.execute_trace(mesh_device, s.trace, cq_id=0, blocking=False)
-        ttnn.synchronize_device(mesh_device)
-        us = (time.perf_counter() - t0) / N * 1e6
-        t0 = time.perf_counter()
-        for _ in range(N):
+@pytest.mark.parametrize("B", [8, 4, 2, 1])
+def test_verify_sampler_device_time(mesh_device, B):
+    """Replay time of the sampler (one top-k call over the stacked chunks) and of the per-chunk sampler, at the row
+    counts of the verify row buckets (T = 4)."""
+    T, N = 4, 200
+    times = {}
+    for name, cls in (("stacked", VerifySampler), ("per-chunk", ChunkedVerifySampler)):
+        s = _Sampler(mesh_device, B, T, cls=cls)
+        plan = sampling_plan(_params(B), [100] * (B - 1) + [-1], T)
+        try:
             s.sampler.stage(plan)
-        stage_us = (time.perf_counter() - t0) / N * 1e6
+            ttnn.execute_trace(mesh_device, s.trace, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            for _ in range(N):
+                ttnn.execute_trace(mesh_device, s.trace, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            times[name] = (time.perf_counter() - t0) / N * 1e6
+            t0 = time.perf_counter()
+            for _ in range(N):
+                s.sampler.stage(plan)
+            stage_us = (time.perf_counter() - t0) / N * 1e6
+        finally:
+            s.release()
+        logger.info(
+            f"verify sampler ({name}), B={B} T={T} V={VOCAB}: {times[name]:.1f} us per replay, "
+            f"staging a plan {stage_us:.1f} us"
+        )
+    logger.info(
+        f"verify sampler, {B * T} rows: stacked {times['stacked']:.1f} us, per-chunk {times['per-chunk']:.1f} us"
+    )
+
+
+TIE_KINDS = ("coarse", "plateau", "bf16", "zeros")
+
+
+def _device_rows(t, rows):
+    """Per device, the first ``rows`` rows of ``t`` as torch."""
+    return [ttnn.to_torch(d).reshape(-1, int(t.shape[-1]))[:rows] for d in ttnn.get_device_tensors(t)]
+
+
+@_parametrize
+@pytest.mark.parametrize("B, T", [(8, 4), (4, 4), (2, 4), (1, 4), (2, 12)])
+def test_the_stacked_top_k_hands_the_sampler_the_per_chunk_candidates(mesh_device, B, T):
+    """Eager, on logits with thousands of equal maxima per chunk (coarse), 40 equal maxima at chunk ends (plateau),
+    random bfloat16 logits (bf16) and +0.0 / -0.0 maxima (zeros): the stacked sampler's values and global ids equal
+    the per-chunk sampler's bit for bit, position for position, on every device. At B * T = 32 the stacked call has
+    128 rows: on a 110-core worker grid some cores reduce two rows."""
+    rows = B * T
+    s1 = _Sampler(mesh_device, B, T, capture=False)
+    s0 = _Sampler(mesh_device, B, T, capture=False, cls=ChunkedVerifySampler, logits=s1.logits)
+    for i, kind in enumerate(TIE_KINDS):
+        s1.stage_logits(_tie_logits(kind, rows, VOCAB, seed=100 + i))
+        got, want = s1.sampler.candidates(s1.logits), s0.sampler.candidates(s1.logits)
+        for a, b, what in zip(got, want, ("values", "global ids")):
+            for d, (x, y) in enumerate(zip(_device_rows(a, rows), _device_rows(b, rows))):
+                if what == "values":
+                    x, y = x.view(torch.int16), y.view(torch.int16)  # bit patterns: -0.0 is not +0.0
+                assert torch.equal(x, y), f"{kind}: {what} differ on device {d}"
+        for t in (*got, *want):
+            ttnn.deallocate(t)
+
+
+@_parametrize
+@pytest.mark.parametrize("B, T", [(8, 4), (1, 4)])
+def test_the_stacked_sampler_draws_what_the_per_chunk_sampler_draws(mesh_device, B, T):
+    """Both samplers captured as the model captures its sampler, over one logits buffer: for every tie-heavy logits
+    kind, 25 plans (seeded rows at advancing positions and unseeded rows with fresh seeds, top-k 32 and top-k 20
+    top-p 0.95, a greedy row) staged into both give the same draws on every device."""
+    rows = B * T
+    s1 = _Sampler(mesh_device, B, T, capture=False)
+    s0 = _Sampler(mesh_device, B, T, capture=False, cls=ChunkedVerifySampler, logits=s1.logits)
+    s1.sampler.body(s1.logits)  # both compiled and every buffer allocated before either capture
+    s0.sampler.body(s1.logits)
+    s1.capture()
+    s0.capture()
+    rng = random.Random(7)
+    users = [(1.0, 32, 1.0, 900 + u) if u % 3 == 0 else (1.0, 20, 0.95, None) for u in range(B)]
+    if B > 2:
+        users[2] = (0.0, 1, 1.0, None)
+    params = SimpleNamespace(
+        **{k: [row[i] for row in users] for i, k in enumerate(("temperature", "top_k", "top_p", "seed"))}
+    )
+    compared = 0
+    try:
+        for i, kind in enumerate(TIE_KINDS):
+            s1.stage_logits(_tie_logits(kind, rows, VOCAB, seed=200 + i))
+            for step in range(25):
+                plan = sampling_plan(
+                    params, [40 + 5 * u + step for u in range(B)], T, lambda: rng.randrange(1, 10**6)
+                )
+                d1, d0 = s1.draw(plan), s0.draw(plan)
+                assert torch.equal(d1, d0), f"{kind} step {step}: the draws differ"
+                assert bool((d1 == d1[0]).all()), "devices of the mesh drew different tokens"
+                compared += sum(plan.sampled[:rows])
+    finally:
+        s1.release()
+        s0.release()
+    assert compared >= 4 * 25 * T
+
+
+@_parametrize
+def test_a_bucket_sampler_draws_what_the_full_width_sampler_draws(mesh_device):
+    """One sampler of B = 8 users x T = 4 with the inputs of the bucket row counts 4, 8 and 16 (prepare_rows), captured
+    over the full-width logits and over each bucket's own logits buffer holding the first b*T rows of the same logits,
+    as the model captures its bucket sampler traces. For tie-heavy logits and 15 plans per bucket (live users below b:
+    seeded rows, unseeded rows with fresh seeds, a greedy row), the bucket trace draws its rows' tokens exactly as the
+    full-width trace does, on every device."""
+    B, T = 8, 4
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+    s = _Sampler(mesh_device, B, T, capture=False)
+    bucket_logits = {
+        b: ttnn.from_torch(
+            torch.zeros(1, 1, b * T, VOCAB), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device,
+            mesh_mapper=rep,
+        )
+        for b in (1, 2, 4)
+    }  # fmt: skip
+    for b in bucket_logits:
+        s.sampler.prepare_rows(b * T)
+    for b, logits in bucket_logits.items():  # compiles every program, allocates nothing that outlives it
+        s.sampler.body(logits)
+    s.capture()
+    traces = {}
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        for b, logits in bucket_logits.items():
+            traces[b] = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            s.sampler.body(logits)
+            ttnn.end_trace_capture(mesh_device, traces[b], cq_id=0)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    rng = random.Random(9)
+    users = [(1.0, 32, 1.0, 700), (0.8, 20, 0.95, None), (0.0, 1, 1.0, None), (1.2, 5, 1.0, 702)]
+    params = SimpleNamespace(
+        **{k: [users[u % 4][i] for u in range(B)] for i, k in enumerate(("temperature", "top_k", "top_p", "seed"))}
+    )
+    compared = 0
+    try:
+        for i, kind in enumerate(("coarse", "bf16")):
+            logits = _tie_logits(kind, B * T, VOCAB, seed=300 + i)
+            s.stage_logits(logits)
+            for b, buf in bucket_logits.items():
+                h = ttnn.from_torch(
+                    logits[: b * T].reshape(1, 1, b * T, VOCAB), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=rep,
+                )  # fmt: skip
+                ttnn.copy_host_to_device_tensor(h, buf)
+                for step in range(15):
+                    positions = [60 + 3 * u + step if u < b else -1 for u in range(B)]
+                    plan = sampling_plan(params, positions, T, lambda: rng.randrange(1, 10**6))
+                    full = s.draw(plan)[:, : b * T]
+                    ttnn.execute_trace(mesh_device, traces[b], cq_id=0, blocking=False)
+                    ttnn.synchronize_device(mesh_device)
+                    got = torch.stack(
+                        [ttnn.to_torch(t).reshape(-1)[: b * T].to(torch.int64)
+                         for t in ttnn.get_device_tensors(s.sampler.draws)]
+                    )  # fmt: skip
+                    assert torch.equal(got, full), f"{kind}, bucket {b}, step {step}: the draws differ"
+                    compared += sum(plan.sampled[: b * T])
     finally:
         s.release()
-    logger.info(f"verify sampler, B={B} T={T} V={VOCAB}: {us:.1f} us per replay, staging a plan {stage_us:.1f} us")
+        for trace in traces.values():
+            ttnn.release_trace(mesh_device, trace)
+    assert compared == 2 * 15 * (1 + 2 + 3) * T
