@@ -7,6 +7,7 @@
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/device_operation_detail.hpp"
 
@@ -14,15 +15,156 @@ using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceO
 
 namespace ttnn::experimental::prim {
 
+namespace {
+
+template <typename OptionalTensor>
+ttsl::hash::hash_t full_spec(const OptionalTensor& tensor) {
+    return tensor.has_value() ? ttsl::hash::hash_objects_with_default_seed(true, tensor->tensor_spec())
+                              : ttsl::hash::hash_objects_with_default_seed(false);
+}
+
+// Spec hash of an optional tensor minus its row count (shape[-2]); presence is part of the hash. A sharded
+// tensor keeps its full spec: its accessor / shard args compile the page count and the grid in.
+template <typename OptionalTensor>
+ttsl::hash::hash_t spec_without_rows(const OptionalTensor& tensor) {
+    if (!tensor.has_value()) {
+        return ttsl::hash::hash_objects_with_default_seed(false);
+    }
+    return tensor->is_sharded() ? full_spec(tensor) : operations::common::hash_spec_without_rows(tensor->tensor_spec());
+}
+
+// Shared by the miss and hit validators so a call that built the program is never refused on a
+// later hit. Folded tile rows: rows past M are never read, so a and a full b may be taller.
+void validate_addcmul_rows(uint32_t M, const Tensor& a, const Tensor& b) {
+    const uint32_t a_rows = operations::common::folded_rows(a);
+    const uint32_t b_rows = operations::common::folded_rows(b);
+    TT_FATAL(
+        a_rows >= M,
+        "addcmul_input_tensor1 must hold M={} rows with its upper dims folded in, got {} (shape {})",
+        M,
+        a_rows,
+        a.logical_shape());
+    if (b.logical_shape()[-2] <= 1) {
+        // A [..., 1, N] gate is broadcast from tile row 0 (ADDCMUL_B_BROADCAST), so it cannot carry one per batch.
+        TT_FATAL(
+            b_rows == tt::constants::TILE_HEIGHT,
+            "addcmul_input_tensor2 broadcasts over the rows only when every upper dim is 1, got shape {}",
+            b.logical_shape());
+    } else {
+        TT_FATAL(
+            b_rows >= M,
+            "addcmul_input_tensor2 must hold M={} rows with its upper dims folded in, got {} (shape {})",
+            M,
+            b_rows,
+            b.logical_shape());
+    }
+}
+
+// Every supplied tensor the kernels address must sit on the input's device: the hash carries no device
+// identity, so the miss and the hit validator both run this.
+void validate_operands_on_device(const MinimalMatmulStridedReduceScatterAsyncInputs& tensor_args) {
+    const auto& input = tensor_args.input_tensor;
+    const auto check = [&input](const Tensor& tensor, const char* name) {
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "MMRS {} must be on device", name);
+        TT_FATAL(tensor.is_allocated(), "MMRS {} must be allocated in a device buffer", name);
+        TT_FATAL(tensor.device() == input.device(), "MMRS {} must be on the same device as the input tensor", name);
+    };
+    const auto check_optional = [&check](const auto& tensor, const char* name) {
+        if (tensor.has_value()) {
+            check(*tensor, name);
+        }
+    };
+    check(input, "input_tensor");
+    check(tensor_args.weight_tensor, "weight_tensor");
+    check_optional(tensor_args.bias, "bias");
+    check_optional(tensor_args.mm_optional_input_tensor, "mm_optional_input_tensor");
+    check_optional(tensor_args.addcmul_input_tensor1, "addcmul_input_tensor1");
+    check_optional(tensor_args.addcmul_input_tensor2, "addcmul_input_tensor2");
+    check_optional(tensor_args.optional_rs_intermediate_tensor, "optional_rs_intermediate_tensor");
+    check_optional(tensor_args.optional_rs_output_tensor, "optional_rs_output_tensor");
+    check_optional(tensor_args.mm_progress_counters, "mm_progress_counters");
+    check_optional(tensor_args.mm_credit_counters, "mm_credit_counters");
+}
+
+}  // namespace
+
 MinimalMatmulStridedReduceScatterAsync::program_factory_t
 MinimalMatmulStridedReduceScatterAsync::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return MinimalMatmulStridedReduceScatterAsyncProgramFactory{};
 }
 
+ttsl::hash::hash_t MinimalMatmulStridedReduceScatterAsync::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // The default worker count is sized from the input bytes, so only an explicit count lets the
+    // program be shared across row counts. A sharded tensor's accessor / shard args compile its page count
+    // and grid in, so a sharded input, or a sharded op-created buffer (MM output, RS intermediate, RS
+    // output) whose shape follows M, keeps the rows in the key too.
+    const auto& input = tensor_args.input_tensor;
+    const bool created_buffer_sharded =
+        attributes.matmul_struct.output_mem_config.value_or(input.memory_config()).is_sharded() ||
+        (attributes.rs_intermediate_mem_config.has_value() && attributes.rs_intermediate_mem_config->is_sharded()) ||
+        attributes.rs_output_mem_config.is_sharded();
+    const bool rows_free =
+        attributes.num_workers_per_link.has_value() && !input.is_sharded() && !created_buffer_sharded;
+    const auto& b = tensor_args.addcmul_input_tensor2;
+    const bool b_broadcast = b.has_value() && b->logical_shape()[-2] <= 1;
+    return ttsl::hash::hash_objects_with_default_seed(
+        attributes,
+        rows_free ? operations::common::hash_spec_without_rows(input)
+                  : ttsl::hash::hash_objects_with_default_seed(input.tensor_spec()),
+        tensor_args.weight_tensor.tensor_spec(),
+        spec_without_rows(tensor_args.optional_rs_intermediate_tensor),
+        spec_without_rows(tensor_args.optional_rs_output_tensor),
+        spec_without_rows(tensor_args.bias),
+        spec_without_rows(tensor_args.addcmul_input_tensor1),
+        spec_without_rows(tensor_args.addcmul_input_tensor2),
+        b_broadcast,
+        attributes.fused_ternary_scalar.has_value(),
+        spec_without_rows(tensor_args.mm_optional_input_tensor),
+        full_spec(tensor_args.mm_progress_counters),
+        full_spec(tensor_args.mm_credit_counters));
+}
+
+// The invariants the hash does not cover: device affinity and the row-dependent checks; everything else
+// was checked on the miss that built the program.
 void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(attributes, tensor_args);
+    validate_operands_on_device(tensor_args);
+    const auto& input = tensor_args.input_tensor;
+    const uint32_t M = operations::common::folded_rows(input);
+    TT_FATAL(M > 0 && M % tt::constants::TILE_HEIGHT == 0, "MMRS activation rows ({}) must be a multiple of 32", M);
+    if (tensor_args.mm_optional_input_tensor.has_value()) {
+        // Logical rows as on the miss path: two sources that only agree once padded would feed the
+        // suffix's padding to live activation rows.
+        const auto& second_input = *tensor_args.mm_optional_input_tensor;
+        TT_FATAL(
+            second_input.logical_shape()[-2] == input.logical_shape()[-2] &&
+                operations::common::folded_rows(second_input) == M,
+            "MMRS fused-concat second input rows ({} logical, {} padded) must match the activation rows ({} logical, "
+            "{} padded)",
+            second_input.logical_shape()[-2],
+            second_input.padded_shape()[-2],
+            input.logical_shape()[-2],
+            M);
+    }
+    if (tensor_args.optional_rs_intermediate_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_rs_intermediate_tensor->padded_shape()[-2] >= M,
+            "MMRS rs_intermediate rows ({}) must hold the activation rows ({})",
+            tensor_args.optional_rs_intermediate_tensor->padded_shape()[-2],
+            M);
+    }
+    if (tensor_args.optional_rs_output_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.optional_rs_output_tensor->padded_shape()[-2] >= M,
+            "MMRS rs_output rows ({}) must hold the activation rows ({})",
+            tensor_args.optional_rs_output_tensor->padded_shape()[-2],
+            M);
+    }
+    if (attributes.fused_ternary_scalar.has_value()) {
+        validate_addcmul_rows(M, tensor_args.addcmul_input_tensor1.value(), tensor_args.addcmul_input_tensor2.value());
+    }
 }
 
 void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
@@ -35,6 +177,7 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.topology == ttnn::ccl::Topology::Ring,
         "MinimalMatmulStridedReduceScatterAsync only supports Ring topology.");
+    validate_operands_on_device(tensor_args);
 
     // Delegate matmul validation (dtype, layout, shape, tile alignment, config/subblock
     // constraints, etc.) — but NOT the ternary checks, because the ternary inputs belong to
@@ -77,42 +220,57 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
                    dt == DataType::FLOAT32;
         };
 
-        TT_FATAL(ta.storage_type() == StorageType::DEVICE, "addcmul_input_tensor1 must be on device");
-        TT_FATAL(tb.storage_type() == StorageType::DEVICE, "addcmul_input_tensor2 must be on device");
-        TT_FATAL(
-            ta.device() == tensor_args.input_tensor.device(), "addcmul_input_tensor1 must be on same device as input");
-        TT_FATAL(
-            tb.device() == tensor_args.input_tensor.device(), "addcmul_input_tensor2 must be on same device as input");
-        TT_FATAL(ta.is_allocated(), "addcmul_input_tensor1 must be allocated");
-        TT_FATAL(tb.is_allocated(), "addcmul_input_tensor2 must be allocated");
         TT_FATAL(ta.layout() == Layout::TILE, "addcmul_input_tensor1 must be TILE layout");
         TT_FATAL(tb.layout() == Layout::TILE, "addcmul_input_tensor2 must be TILE layout");
         TT_FATAL(
             dtype_supported(ta.dtype()) && dtype_supported(tb.dtype()),
             "addcmul tensors must have supported dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32)");
 
-        const uint32_t M = tensor_args.input_tensor.padded_shape()[-2];
+        const uint32_t M = operations::common::folded_rows(tensor_args.input_tensor);
         const uint32_t N_rs = tensor_args.weight_tensor.padded_shape()[-1] / attributes.ring_size;
 
-        const auto& ta_shape = ta.logical_shape();
-        const auto& tb_shape = tb.logical_shape();
+        // The addcmul inputs match the RS output width N/ring_size, not the matmul's N.
+        TT_FATAL(
+            ta.logical_shape()[-1] == N_rs,
+            "addcmul_input_tensor1 width ({}) must match the RS output width N/ring_size ({})",
+            ta.logical_shape()[-1],
+            N_rs);
+        TT_FATAL(
+            tb.logical_shape()[-1] == N_rs,
+            "addcmul_input_tensor2 width ({}) must match the RS output width N/ring_size ({})",
+            tb.logical_shape()[-1],
+            N_rs);
+        validate_addcmul_rows(M, ta, tb);
+    }
 
-        TT_FATAL(
-            ta_shape[-2] == M && ta_shape[-1] == N_rs,
-            "addcmul_input_tensor1 shape must match RS output [M={}, N/ring_size={}], got [{}, {}]",
-            M,
-            N_rs,
-            ta_shape[-2],
-            ta_shape[-1]);
-        TT_FATAL(
-            (tb_shape[-2] == 1 || tb_shape[-2] == M) && tb_shape[-1] == N_rs,
-            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}] or full [M={}, N/ring_size={}], got "
-            "[{}, {}]",
-            N_rs,
-            M,
-            N_rs,
-            tb_shape[-2],
-            tb_shape[-1]);
+    // Caller-owned RS buffers: same width/dtype/layout as the op would allocate, at least M rows
+    // (rows beyond M are never touched, so a capacity-sized persistent pair may be reused).
+    {
+        const uint32_t M = operations::common::folded_rows(tensor_args.input_tensor);
+        const uint32_t N = tensor_args.weight_tensor.padded_shape()[-1];
+        const auto check_rs_buffer = [&](const std::optional<Tensor>& t, uint32_t width, const char* name) {
+            if (!t.has_value()) {
+                return;
+            }
+            TT_FATAL(t->layout() == Layout::TILE, "{} must be TILE layout", name);
+            // The writer strides batches by the live M, not by the buffer height, so a taller buffer may not
+            // carry its rows in upper dims.
+            TT_FATAL(
+                operations::common::folded_rows(*t) == t->padded_shape()[-2],
+                "{} must have every upper dim equal to 1, got shape {}",
+                name,
+                t->padded_shape());
+            TT_FATAL(
+                t->padded_shape()[-1] == width && t->padded_shape()[-2] >= M,
+                "{} must be [>= {} rows, {} cols], got [{}, {}]",
+                name,
+                M,
+                width,
+                t->padded_shape()[-2],
+                t->padded_shape()[-1]);
+        };
+        check_rs_buffer(tensor_args.optional_rs_intermediate_tensor, N, "optional_rs_intermediate_tensor");
+        check_rs_buffer(tensor_args.optional_rs_output_tensor, N / attributes.ring_size, "optional_rs_output_tensor");
     }
 
     // An L1 MM output opts into the L1 handoff (see compute_output_specs). Unwindowed, the
@@ -171,7 +329,7 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         // need build-time information (resolved worker count, chosen core placement); these cover
         // what validation can know.
         const auto validate_counter_array = [&tensor_args](const Tensor& t, const char* name, uint32_t min_row_slots) {
-            // The factory embeds t.buffer()->address() into kernels running on the input's device;
+            // The factory embeds t.mesh_buffer().address() into kernels running on the input's device;
             // a counter allocated on a different device would pass the layout checks below while
             // pointing the kernels at an unrelated local L1 address.
             TT_FATAL(

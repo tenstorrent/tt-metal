@@ -18,6 +18,32 @@ struct TileDescriptor;
 
 namespace ttnn::operations::data_movement {
 
+// 32-bit Dest covers true 32-bit datums and the 8-bit integer formats BH reconstructs via int-FPU.
+inline bool requires_32bit_dest(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Float32 || fmt == tt::DataFormat::Int32 ||
+           fmt == tt::DataFormat::UInt32 || fmt == tt::DataFormat::UInt8 || fmt == tt::DataFormat::Int8;
+}
+inline bool requires_32bit_dest(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::INT32 ||
+           dtype == tt::tt_metal::DataType::UINT32 || dtype == tt::tt_metal::DataType::UINT8 ||
+           dtype == tt::tt_metal::DataType::INT8;
+}
+
+// UnpackMode::UnpackToDest lowers to UnpackToDestFp32 which bypasses SrcA; only 32-bit formats
+// are safe. 8-bit integer formats must stay on the SrcA/int-FPU path.
+inline bool requires_unpack_to_dest(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Float32 || fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::UInt32;
+}
+inline bool requires_unpack_to_dest(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::INT32 ||
+           dtype == tt::tt_metal::DataType::UINT32;
+}
+
+// Deprecated: use requires_unpack_to_dest(fmt) directly. Kept until all callers migrate.
+inline bool needs_fp32_unpack_to_dest(bool fp32_dest_acc_en, tt::tt_metal::DataType dtype) {
+    return fp32_dest_acc_en && requires_unpack_to_dest(dtype);
+}
+
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
@@ -281,6 +307,10 @@ uint32_t wrap_index(int index, int size);
 uint16_t float_to_uint16(float f);
 
 uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s);
+
+// Packs `value` as `dtype` into a 32-bit word; 16-bit types fill both halves, UINT8 fills all four bytes,
+// UINT8 and 32-bit integers truncate, integer types saturate.
+uint32_t pack_scalar_into_uint32(DataType dtype, float value);
 
 template <typename OpOutputType, typename... OpInputTypes>
 struct MassagedOperationParams {

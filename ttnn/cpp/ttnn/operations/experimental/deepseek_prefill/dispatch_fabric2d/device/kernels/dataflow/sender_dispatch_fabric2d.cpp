@@ -8,7 +8,8 @@
 // sent on from there.
 //
 // The last hop is a two-part scatter write out of one entry: the token to its page and the metadata words
-// behind it to the metadata page. A forward hop is a plain write.
+// behind it to the metadata page. A forward hop is a plain write. A token too big for one packet with its
+// fwd_meta goes as two (dspf2d::first_packet_bytes): a plain write of its first part, then the rest as above.
 //
 // Entries are claimed and released in batches to amortise the counter signals and the source flush. The
 // flush is needed because a payload send reads L1 asynchronously, so an entry cannot go back to the
@@ -36,30 +37,37 @@
 constexpr uint32_t FWD_SIGNAL_CAP = 32;
 constexpr dspf2d::SenderCtArgs ct{};
 
-// A batch comparable to the channel's depth is the trap this op's own forwarding region used to avoid by
-// bumping on a chunk's last page: fill 32 pages of a 34-page channel before announcing any and the consumer
-// sits idle while the producer stalls for credits it is the only source of. Capacity is a free parameter
-// now, so every constant measured in pages has to scale with it -- a quarter of the channel, exactly as the
-// reader's credit return does.
+// A batch comparable to the channel's depth starves both sides: fill 32 pages of a 34-page channel before
+// announcing any and the consumer sits idle while the producer stalls for credits it is the only source of.
+// Every constant measured in pages has to scale with the depth -- a quarter of the channel, as the reader's
+// credit return does.
 constexpr uint32_t fwd_signal_at() {
     const uint32_t quarter = ct.vc_pages / 4;
     return quarter < 1 ? 1u : (quarter < FWD_SIGNAL_CAP ? quarter : FWD_SIGNAL_CAP);
 }
 static_assert(ct.batch <= ct.queue_depth / 2, "the sender must be able to drain one batch while the next is read");
 
-// One prebuilt header per queue entry. The route is constant, so only the write address changes per
-// token. A single shared header could be rewritten while a previous non-blocking send still reads it.
-volatile PACKET_HEADER_TYPE* entry_hdr(uint32_t entry) {
-    return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_queue_addr + entry * sizeof(PACKET_HEADER_TYPE));
+// One prebuilt header per packet of each queue entry. The route is constant, so only the write address changes
+// per token. A single shared header could be rewritten while a previous non-blocking send still reads it.
+volatile PACKET_HEADER_TYPE* entry_hdr(uint32_t entry, uint32_t packet = 0) {
+    return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+        ct.pkt_hdr_queue_addr + (entry * ct.packets_per_token() + packet) * sizeof(PACKET_HEADER_TYPE));
 }
+
+// The second part of a split token: what follows the first packet.
+constexpr uint32_t SECOND_PART_BYTES = ct.token_size_bytes - ct.first_packet_bytes;
+static_assert(
+    ct.packets_per_token() == 1 || ct.first_packet_bytes % 64u == 0u, "a split must keep both parts DRAM-aligned");
 
 volatile tt_l1_ptr dspf2d::FwdMetadata* entry_meta(uint32_t entry) {
     return reinterpret_cast<volatile tt_l1_ptr dspf2d::FwdMetadata*>(
         ct.queue_addr + entry * ct.entry_stride() + ct.token_size_bytes);
 }
 
-// The bytes a last-hop delivery carries: the token and the metadata words behind it.
-constexpr uint32_t TOKEN_PLUS_META_BYTES = ct.token_size_bytes + dspf2d::METADATA_WIRE_BYTES;
+// The bytes a last-hop delivery's scatter packet carries: the token, or the second part of a split one, and the
+// metadata words behind it.
+constexpr uint32_t SCATTER_TOKEN_BYTES = ct.packets_per_token() == 1 ? ct.token_size_bytes : SECOND_PART_BYTES;
+constexpr uint32_t TOKEN_PLUS_META_BYTES = SCATTER_TOKEN_BYTES + dspf2d::METADATA_WIRE_BYTES;
 
 // A token and its metadata leave as one fabric packet: a scatter write whose first scatter part is the token
 // and whose second scatter part is the metadata words behind it. The parts land on different pages but use
@@ -70,10 +78,10 @@ void build_token_meta_header(volatile PACKET_HEADER_TYPE* hdr, uint64_t payload_
     // Only the first scatter part's size is given; the router takes the rest of the payload as the second
     // scatter part, sourced at payload base + token size. A NoC write whose source and destination differ
     // modulo 16 arrives shifted by a word.
-    static_assert(ct.token_size_bytes % 16u == 0u, "the second scatter part is sourced at payload base + token size");
+    static_assert(SCATTER_TOKEN_BYTES % 16u == 0u, "the second scatter part is sourced at payload base + token size");
     hdr->to_noc_unicast_scatter_write(
         tt::tt_fabric::NocUnicastScatterCommandHeader{
-            {payload_addr, meta_addr}, {static_cast<uint16_t>(ct.token_size_bytes)}},
+            {payload_addr, meta_addr}, {static_cast<uint16_t>(SCATTER_TOKEN_BYTES)}},
         TOKEN_PLUS_META_BYTES);
 }
 
@@ -91,10 +99,12 @@ void send_token_with_inline_meta(
 
 void prebuild_routes() {
     for (uint32_t entry = 0; entry < ct.queue_depth; entry++) {
-        fabric_set_unicast_route(
-            (volatile tt::tt_fabric::HybridMeshPacketHeader*)entry_hdr(entry),
-            ct.downstream_chip_id,
-            ct.downstream_mesh_id);
+        for (uint32_t packet = 0; packet < ct.packets_per_token(); packet++) {
+            fabric_set_unicast_route(
+                (volatile tt::tt_fabric::HybridMeshPacketHeader*)entry_hdr(entry, packet),
+                ct.downstream_chip_id,
+                ct.downstream_mesh_id);
+        }
     }
     // pkt_hdr_signal is used by grant_launch_credit before the send loop, by bump_downstream during it and
     // by drain_fabric after it. Setting the command fields later leaves this route in place.
@@ -204,14 +214,10 @@ uint32_t wait_for_filled(FabricSender& fabric, uint32_t sent, uint32_t* fwd_sinc
         if (avail > 0) {
             return avail;
         }
-        // Nothing of ours to send, so announce what we already sent. A channel is only vc_pages deep while
-        // the bump batch is fwd_signal_at(), so a producer that fills a channel without completing a batch
-        // would never tell the consumer those pages are there -- and that consumer is the only source of the
-        // credits the producer is now waiting on. Deadlock, and exactly the one a chunk-ending forward used
-        // to rule out by forcing a signal on a chunk's last page. Channels have no chunk ends, so this
-        // announce is what rules it out instead.
-        //
-        // Once per idle spell rather than per spin, or announcing becomes the busy-wait.
+        // Nothing of ours to send, so announce what we already sent. A producer that fills a channel without
+        // completing a bump batch would never tell the consumer those pages are there -- and that consumer is
+        // the only source of the credits the producer is then waiting on. This announce is what rules out
+        // that deadlock. Once per idle spell rather than per spin, or announcing becomes the busy-wait.
         if (!announced) {
             for (uint32_t v = 0; v < ct.num_vcs; v++) {
                 if (fwd_since_signal[v] > 0) {
@@ -248,15 +254,21 @@ uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t* fwd_since_si
         return cmd;
     }
     const uint32_t entry_base = ct.queue_addr + entry * ct.entry_stride();
-    volatile PACKET_HEADER_TYPE* hdr = entry_hdr(entry);
     if (cmd == dspf2d::CMD_FORWARD) {
-        // One write of the token and its whole fwd_meta into a forwarding page on the next chip.
+        // The token and its whole fwd_meta into a forwarding page on the next chip, in one write or two.
         const uint32_t payload_bytes = ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES;
-        // Header first, then wait for the EDM slot, as in send_token_with_inline_meta.
-        hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{metadata->this_addr}, payload_bytes);
-        fabric.wait_for_empty_write_slot();
-        fabric.send_payload_without_header_non_blocking_from_address(entry_base, payload_bytes);
-        fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+        const uint64_t dst = metadata->this_addr;
+        uint32_t offset = 0;
+        for (uint32_t packet = 0; packet < ct.packets_per_token(); packet++) {
+            const uint32_t bytes = packet + 1 < ct.packets_per_token() ? ct.first_packet_bytes : payload_bytes - offset;
+            volatile PACKET_HEADER_TYPE* hdr = entry_hdr(entry, packet);
+            // Header first, then wait for the EDM slot, as in send_token_with_inline_meta.
+            hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst + offset}, bytes);
+            fabric.wait_for_empty_write_slot();
+            fabric.send_payload_without_header_non_blocking_from_address(entry_base + offset, bytes);
+            fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+            offset += bytes;
+        }
 
         // Per channel, because the downstream reader waits on each channel separately -- that is what lets
         // it serve a channel it can drain while another is blocked.
@@ -269,7 +281,20 @@ uint64_t send_entry(FabricSender& fabric, uint32_t entry, uint32_t* fwd_since_si
     } else {
         // Last hop. Both addresses were computed on the token's source chip and came with it, so this hop
         // needs no address generator.
-        send_token_with_inline_meta(fabric, metadata->final_payload_addr, metadata->final_meta_addr, entry_base, hdr);
+        uint64_t payload_addr = metadata->final_payload_addr;
+        uint32_t src = entry_base;
+        if constexpr (ct.packets_per_token() == 2) {
+            // The first part alone; the scatter below carries the rest and the metadata words behind it.
+            volatile PACKET_HEADER_TYPE* first = entry_hdr(entry, 0);
+            first->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{payload_addr}, ct.first_packet_bytes);
+            fabric.wait_for_empty_write_slot();
+            fabric.send_payload_without_header_non_blocking_from_address(src, ct.first_packet_bytes);
+            fabric.send_payload_flush_non_blocking_from_address((uint32_t)first, sizeof(PACKET_HEADER_TYPE));
+            payload_addr += ct.first_packet_bytes;
+            src += ct.first_packet_bytes;
+        }
+        send_token_with_inline_meta(
+            fabric, payload_addr, metadata->final_meta_addr, src, entry_hdr(entry, ct.packets_per_token() - 1));
         finals_sent++;
     }
     return cmd;

@@ -46,12 +46,15 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
 
 // The existing native implementation, unconditionally. Calls the native prim directly rather than
 // re-entering ttnn::untilize, so a call that has already been routed to native cannot be routed a
-// second time and land on codegen partway through.
+// second time and land on codegen partway through. `runtime_rows` reaches only the multi-core
+// interleaved program: a padded input (unpadding), a sharded input and the single-core / L1 routes
+// keep their own, height-keyed programs, and so does a rank-4 input whose upper dims change.
 ttnn::Tensor untilize_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_rows = false) {
     // If the input tensor is not sharded, and logical shape != padded shape, then unpad the input tensor.
     // conv op_slicing logic requires the padding information to be present in the input tensor.
     if (!input_tensor.is_sharded() && input_tensor.logical_shape() != input_tensor.padded_shape()) {
@@ -63,8 +66,8 @@ ttnn::Tensor untilize_native(
         return ttnn::untilize_with_unpadding(
             input_tensor, output_tensor_end, memory_config, use_multicore, sub_core_grids);
     }
-    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
-                            input_tensor.dtype() == DataType::FLOAT32;
+    // UInt8 needs 32-bit Dest on WH/BH.
+    bool fp32_dest_acc_en = operations::data_movement::requires_32bit_dest(input_tensor.dtype());
     // The native prim emits BFLOAT16 for a BFLOAT8_B input (UntilizeDeviceOperation::compute_output_specs),
     // so size the output CB estimate and the pending output buffer by the output dtype: sizing them by the
     // input's 1088 B tile under-reserves a 2048 B/tile output and can keep enough_space_height true for a row
@@ -107,7 +110,8 @@ ttnn::Tensor untilize_native(
             fp32_dest_acc_en,
             sub_core_grids,
             enough_space_height,
-            pf_type);
+            pf_type,
+            runtime_rows);
     };
 
     return operations::data_movement::build_ndiml_untilize(base_untilize)(input_tensor);
@@ -119,8 +123,9 @@ ttnn::Tensor untilize_force_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return untilize_native(input_tensor, memory_config, use_multicore, sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool runtime_rows) {
+    return untilize_native(input_tensor, memory_config, use_multicore, sub_core_grids, runtime_rows);
 }
 
 ttnn::Tensor untilize_force_codegen(
@@ -205,17 +210,22 @@ ttnn::Tensor untilize(
     // is_demoted / the codegen dispatch itself on the raw, un-squeezed tensor, while the native
     // path's equivalent decisions run on the squeezed 4D tensor.
     //
-    // Four gates, in order: architecture (codegen_supported_on_arch), static scope
-    // (supported_by_codegen), perf ledger (is_demoted), and the live-L1 gate (codegen_cb_plan_fits_live_l1) -- the last
-    // is the codegen op's own CB planner run ahead of dispatch, so a case for which no codegen CB plan fits the L1 free
-    // right now takes the native path as a whole (untilize_native -> prim::untilize or untilize_with_unpadding,
-    // deriving fp32_dest_acc_en / enough_space_height / pf_type exactly as any other native call) instead of the
-    // codegen op building a native program itself.
+    // Three gates, in order: static scope (supported_by_codegen), perf ledger (is_demoted), and
+    // the live-L1 gate (codegen_cb_plan_fits_live_l1) -- the last is the codegen op's own CB
+    // planner run ahead of dispatch, so a case for which no codegen CB plan fits the L1 free right
+    // now takes the native path as a whole (untilize_native -> prim::untilize or
+    // untilize_with_unpadding, deriving fp32_dest_acc_en / enough_space_height / pf_type exactly
+    // as any other native call) instead of the codegen op building a native program itself.
     auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
         const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
 
-        if (operations::data_movement::codegen_supported_on_arch(normalized_input) && controls_ok &&
-            supported_by_codegen(normalized_input, output_mem_config) &&
+        // The codegen untilize path is not supported on Quasar (its kernels build Gen1 DataMovementKernels,
+        // which Quasar rejects) and only the native path has been validated there, so always take native on
+        // Quasar. device() is null for host/unallocated tensors -- guard it so those still fall through to the
+        // native op (which reports the established validation error) instead of dereferencing null here.
+        const auto* device = normalized_input.device();
+        const bool is_quasar = device != nullptr && device->arch() == tt::ARCH::QUASAR;
+        if (!is_quasar && controls_ok && supported_by_codegen(normalized_input, output_mem_config) &&
             !is_demoted(normalized_input, output_mem_config) &&
             codegen_cb_plan_fits_live_l1(normalized_input, output_mem_config)) {
             return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);

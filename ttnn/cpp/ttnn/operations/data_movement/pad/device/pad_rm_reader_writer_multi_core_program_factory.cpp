@@ -4,13 +4,12 @@
 
 #include "pad_rm_reader_writer_multi_core_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
@@ -238,7 +237,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
 
     uint32_t dfb_npages = 16;  // multibuffering for perf
     // uint32_t dfb_npages = 1; // multibuffering for perf
-    uint32_t dfb_page_alignment = std::max(tt::constants::TILE_WIDTH, a.buffer()->alignment());
+    uint32_t dfb_page_alignment = std::max(tt::constants::TILE_WIDTH, a.mesh_buffer().alignment());
     uint32_t dfb_pagesize =
         static_cast<uint32_t>(std::ceil((float)dst_nbytes_per_core_w / dfb_page_alignment)) * dfb_page_alignment;
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());

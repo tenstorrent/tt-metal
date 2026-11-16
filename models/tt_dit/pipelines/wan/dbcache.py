@@ -13,10 +13,8 @@ tracers for the three pieces, and the CFG combination.
 
 from __future__ import annotations
 
-import math
 import os
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -25,6 +23,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.utils.dbcache import DBCacheConfig, DBCacheContext
+from models.tt_dit.utils.dbcache_runner import ResidualForecaster
 from models.tt_dit.utils.tensor import from_torch
 from models.tt_dit.utils.tracing import Tracer
 
@@ -95,64 +94,6 @@ class WanDBCacheConfig:
 
     def for_expert(self, idx: int) -> DBCacheConfig:
         return (self.high_noise, self.low_noise)[idx]
-
-
-class ResidualForecaster:
-    """Stores the Bn residual of computed steps and predicts it for cached steps.
-
-    ``order == 0`` reuses the last computed residual unchanged (plain DBCache). ``order == k``
-    is TaylorSeer with ``k`` finite-difference derivatives, mirroring cache-dit's
-    ``TaylorSeerState``::
-
-        update(Y, t):   dY[0] = Y;  dY[i+1] = (dY[i] - dY_prev[i]) / (t - t_prev)
-        predict(t):     sum_i dY[i] * (t - t_last)^i / i!
-
-    All buffers are allocated up front (``alloc``) so they never overlap trace scratch memory.
-    """
-
-    def __init__(self, order: int, alloc: Callable[[], ttnn.Tensor]) -> None:
-        self.order = order
-        self.cur = [alloc() for _ in range(order + 1)]
-        self.prev = [alloc() for _ in range(order + 1)]
-        self.reset()
-
-    def reset(self) -> None:
-        self.valid_cur = 0  # number of valid entries in `cur` (0 = nothing cached yet)
-        self.valid_prev = 0
-        self.last_step: int | None = None
-
-    @property
-    def has_data(self) -> bool:
-        return self.valid_cur > 0
-
-    def update(self, residual: ttnn.Tensor, step: int) -> None:
-        """Record the residual of a computed step and refresh the derivative ladder."""
-        self.cur, self.prev = self.prev, self.cur
-        self.valid_prev = self.valid_cur
-        ttnn.copy(residual, self.cur[0])
-        valid = 1
-        window = step - self.last_step if self.last_step is not None else 0
-        for i in range(self.order):
-            # cache-dit only forms the i-th derivative once the previous ladder has it.
-            if self.valid_prev <= i or window <= 0 or step <= 1:
-                break
-            d = ttnn.multiply(ttnn.subtract(self.cur[i], self.prev[i]), 1.0 / window)
-            ttnn.copy(d, self.cur[i + 1])
-            ttnn.deallocate(d)
-            valid = i + 2
-        self.valid_cur = valid
-        self.last_step = step
-
-    def apply(self, spatial: ttnn.Tensor, step: int) -> ttnn.Tensor:
-        """Return ``spatial + predicted_residual(step)``."""
-        assert self.has_data and self.last_step is not None
-        elapsed = step - self.last_step
-        out = ttnn.add(spatial, self.cur[0])
-        for i in range(1, self.valid_cur):
-            term = ttnn.multiply(self.cur[i], float(elapsed**i) / math.factorial(i))
-            out = ttnn.add(out, term)
-            ttnn.deallocate(term)
-        return out
 
 
 class ExpertCacheRunner:

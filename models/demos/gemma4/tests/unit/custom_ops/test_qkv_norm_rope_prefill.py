@@ -252,14 +252,15 @@ def test_never_on_a_wormhole_device(monkeypatch, env, shape, moe, profile_blackh
 @pytest.mark.parametrize("shape", SHAPES, ids=lambda s: f"{s[0]}x{s[1]}")
 @pytest.mark.parametrize("moe", [False, True], ids=["dense", "moe"])
 def test_blackhole_device_follows_the_profile_and_the_env(monkeypatch, env, shape, moe):
-    """A Blackhole device: on for the 4-chip dense profile (or env "1"), off for env "0", the MoE profile, one chip and
-    the (1,8) line (their profiles carry no flag)."""
+    """A Blackhole device: on for the dense profiles that carry the flag (the 4-chip meshes and the (1,8) Galaxy DP
+    line take the whole combined dense set, ``mo.DENSE_FUSED_SHAPES``) or env "1"; off for env "0", the MoE
+    profiles and one chip (their profiles carry no flag)."""
     monkeypatch.setattr(op_module, "is_blackhole", lambda: True)
     mo.set_decode_fusion_profile(shape, blackhole=True, moe=moe)
     if env is not None:
         monkeypatch.setenv("GEMMA4_QKV_NORM_ROPE_PREFILL", env)
-    four_chip_dense = (not moe) and shape in ((1, 4), (4, 1))
-    expect = (env == "1") if env is not None else four_chip_dense
+    dense_fused = (not moe) and shape in mo.DENSE_FUSED_SHAPES
+    expect = (env == "1") if env is not None else dense_fused
     assert QkvNormRopePrefill.enabled() is expect
 
 

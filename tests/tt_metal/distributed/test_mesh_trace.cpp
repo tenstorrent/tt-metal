@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -24,6 +23,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -897,10 +897,8 @@ TEST_F(MeshTraceDynamicAllocationTestSuite, MultipleLiveTracesValidateAgainstMax
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
     mesh_device_->end_mesh_trace(mesh_device_->mesh_command_queue(0), calibration_trace_id);
     auto calibration_trace = mesh_device_->get_mesh_trace(calibration_trace_id);
-    auto* calibration_backing_buffer = calibration_trace->mesh_buffer->get_backing_buffer();
-
     const DeviceAddr trace_buffer_address = calibration_trace->mesh_buffer->address();
-    const DeviceAddr dram_alignment = calibration_backing_buffer->alignment();
+    const DeviceAddr dram_alignment = calibration_trace->mesh_buffer->alignment();
     mesh_device_->release_mesh_trace(calibration_trace_id);
     calibration_trace.reset();
 

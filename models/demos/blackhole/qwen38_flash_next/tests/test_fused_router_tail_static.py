@@ -23,7 +23,9 @@ def test_masked_sort_is_the_llk_sort_with_a_pass_guard():
     # `if (pass_mask & (1u << (face * 2 + col)))` around each pass's phase loop, regenerated from this tree's LLK.
     header = (fp.REPO_ROOT / rt.LANES_HEADER).read_text()
     llk = (
-        (fp.REPO_ROOT / "tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h").read_text().splitlines()
+        (fp.REPO_ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_topk.h")
+        .read_text()
+        .splitlines()
     )
     declaration = next(i for i, l in enumerate(llk) if "inline void _bitonic_topk_phases_steps(" in l)
     start = max(i for i in range(declaration) if llk[i].startswith("template <"))
@@ -69,15 +71,25 @@ def test_live_exp_is_the_llk_precise_loop_with_a_vector_guard():
         .splitlines()
     )
     start = next(i for i, l in enumerate(llk) if l.startswith("void calculate_exponential("))
-    branch = next(
-        i for i in range(start, len(llk)) if llk[i].strip() == "} else {"
-    )  # the fp32-dest (non-replay) branch
-    loop = next(i for i in range(branch, len(llk)) if "for (int d = 0; d < ITERATIONS; d++) {" in llk[i])
-    assert loop == branch + 1, "the LLK's fp32-dest branch gained a statement before its loop: re-derive exp_live.h"
-    close = next(i for i in range(loop, len(llk)) if llk[i].strip() == "}" and "dst_reg++" in llk[i - 1])
+    branch = next(i for i in range(start, len(llk)) if llk[i].strip() == "} else {")  # the fp32-dest branch
+    # its sfpi form, which the replayed form that runs by default is tested bit-exact against
+    sfpi_form = next(i for i in range(branch, len(llk)) if llk[i].strip() == "#ifdef DISABLE_SFPLOADMACRO")
+    assert all(
+        l.strip().startswith("//") for l in llk[branch + 1 : sfpi_form]
+    ), "the LLK's fp32-dest branch gained a statement before its sfpi form: re-derive exp_live.h"
+    loop = next(i for i in range(sfpi_form, len(llk)) if "for (int d = 0; d < ITERATIONS; d++) {" in llk[i])
     assert (
-        llk[close + 1].strip() == "}"
-    ), "the LLK's fp32-dest branch gained a statement after its loop: re-derive exp_live.h"
+        loop == sfpi_form + 1
+    ), "the LLK's fp32-dest sfpi form gained a statement before its loop: re-derive exp_live.h"
+    close = next(i for i in range(loop, len(llk)) if llk[i].strip() == "}" and "dst_reg++" in llk[i - 1])
+    assert [l.strip() for l in llk[close + 1 : close + 5]] == [
+        "#else",
+        "_sfpu_exp_fp32_accurate_tti_<SCALE_EN, ITERATIONS>(exp_base_scale_factor);",
+        "#endif",
+        "}",
+    ], "the LLK's fp32-dest branch changed after its sfpi loop: re-derive exp_live.h"
+    replay_tests = (fp.REPO_ROOT / "tests/tt_metal/tt_metal/llk/test_sfpu_exp_fp32_replay.cpp").read_text()
+    assert "TEST_F(LLKBlackholeSingleCardFixture, TensixSfpuExpFp32ReplayBitExact)" in replay_tests
     body = [l.strip() for l in llk[loop : close + 1]]
     assert body[1:4] == [
         "sfpi::vFloat val = sfpi::dst_reg[0];",

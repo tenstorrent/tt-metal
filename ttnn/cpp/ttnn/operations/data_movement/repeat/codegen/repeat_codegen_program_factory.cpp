@@ -123,7 +123,7 @@ uint32_t spec_aligned_page_bytes(const Tensor& device_tensor, const TensorSpec& 
 
 std::optional<RepeatRmCbPlan> rm_cb_plan_for_call(const Tensor& input, const TensorSpec& output_spec) {
     const uint32_t slot = rm_slot_bytes(
-        static_cast<uint32_t>(input.buffer()->aligned_page_size()), spec_aligned_page_bytes(input, output_spec));
+        static_cast<uint32_t>(input.mesh_buffer().aligned_page_size()), spec_aligned_page_bytes(input, output_spec));
     return plan_rm_cb(slot, ttnn::operations::data_movement::get_max_l1_space(input));
 }
 

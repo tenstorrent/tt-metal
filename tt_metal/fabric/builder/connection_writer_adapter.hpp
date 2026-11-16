@@ -7,8 +7,8 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "core_coord.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
+#include <unordered_set>
 #include <vector>
 
 namespace tt::tt_fabric {

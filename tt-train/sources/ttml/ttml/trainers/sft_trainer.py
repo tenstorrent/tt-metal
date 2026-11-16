@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 import ttml
 from ttml.common.profiler_utils import profiler_marker
 from ttml.common.schedulers import LambdaScheduler, linear_warmup_lambda
-from ttml.common.utils import no_grad
+from ttml.common.utils import no_grad, validate_clip_grad_norm
 from ttml.datasets import Batch, TTMLDataloader
 from ttml.trainers.callback import TrainerCallback
 
@@ -201,7 +201,8 @@ class SFTTrainer:
         self.step = 0  # 0-based; incremented after each optimizer step
         # Axes to all-reduce gradients across each step; empty (single-device / TP-only) = no-op.
         self._grad_sync_axes = self._resolve_grad_sync_axes()
-        self._validate_clip_grad_norm()
+        if self.config.max_grad_norm > 0:
+            validate_clip_grad_norm(self.model)
 
         self._optimizer = self._build_optimizer(optimizer)
         if lr_schedule is not None:
@@ -563,18 +564,6 @@ class SFTTrainer:
         if cfg is None or not hasattr(cfg, "runner_type"):
             return
         target.config = replace(cfg, runner_type=ttml.models.RunnerType.MemoryEfficient)
-
-    def _validate_clip_grad_norm(self) -> None:
-        """clip_grad_norm computes a per-device norm with no cross-mesh reduction, so it is only correct
-        when every parameter is replicated. Reject sharded (FSDP/TP) params up front rather than silently
-        clipping by a wrong per-shard norm."""
-        if self.config.max_grad_norm <= 0:
-            return
-        if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for _, p in self.model.parameters().items()):
-            raise ValueError(
-                "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
-                "only a shard, so the per-shard norm is wrong"
-            )
 
     @staticmethod
     def _resolve_grad_sync_axes() -> tuple[str, ...]:

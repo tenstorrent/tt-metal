@@ -352,14 +352,13 @@ struct Routing2DCodec {
     }
 
     // ---- Decode (packet-side action selection) -----------------------------------
-    // Y row while it still holds an action, X row once it is spent. Independent of facing.
+    // Y row while it still holds an action, X row once it is spent. Independent of facing. Both bytes are read up
+    // front, so the X load does not wait on the Y test.
     static std::uint8_t decode_action_y_first(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         const std::uint8_t action_y = route_buffer[local_y];
-        if (action_y != 0) {
-            return action_y;
-        }
-        return route_buffer[y_size + local_x];
+        const std::uint8_t action_x = route_buffer[y_size + local_x];
+        return action_y != 0 ? action_y : action_x;
     }
 
     // The router at logical (local_y, local_x) reads its action byte from the packet's flat [Y | X]

@@ -9,6 +9,8 @@
 //
 // Build-only: test_gathering_config.py inspects the math ELF and never runs it.
 
+#ifndef ENABLE_GATHERING
 #define ENABLE_GATHERING
+#endif
 
 #include "eltwise_unary_sfpu_test.cpp"

@@ -4,7 +4,7 @@
 #pragma once
 
 #include <optional>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -18,7 +18,7 @@ struct SliceTileProgramFactory {
 
     struct shared_variables_t {
         // Keep the named scalar assignments, not pointers into enqueue/trace runtime storage.
-        tt::tt_metal::experimental::ProgramRunArgs run_args;
+        tt::tt_metal::ProgramRunArgs run_args;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
