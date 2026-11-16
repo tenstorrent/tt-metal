@@ -1068,7 +1068,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 f"Engram tables of layers {ids} {source}: {total / 1e9:.0f} GB in {seconds:.0f}s "
                 f"({total / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
             )
-            lookup_cls = host_rs.RustEngramLookup if host_rs.enabled() else EngramHostLookup
+            lookup_cls = host_rs.RustEngramLookup if host_rs.engram_enabled() else EngramHostLookup
             self._engram_lookup = lookup_cls(
                 cfg, self.loader.snapshot_dir, tables, batch=batch, max_seq=max_seq, sessions=num_sessions
             )
@@ -2365,7 +2365,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 )
                 pre_mix = sm["pre_mix_init"]
             if li in sm.get("taps", {}):
-                row = self._collapse_streams(streams, sm["tap_weights"])
+                # The stream mean as one fp32-accumulated matmul (the ops of _collapse_streams take ~80 us a tap).
+                row = self._collapse_row(streams, sm["tap_weights"])
                 b, hidden = row.shape[0], row.shape[-1]
                 row = ttnn.reshape(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT), [1, 1, b, hidden])
                 for j, piece in enumerate(sm["taps"][li]):
@@ -3861,14 +3862,19 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
     def _block_rows(self, hc_module, streams: ttnn.Tensor, pre_mix: ttnn.Tensor, gain, eps: float) -> ttnn.Tensor:
         """``rms_norm(sum_h pre_mix[j, h] * streams[h, j]) * gain`` of every block row, as ROW_MAJOR ``[1, 1, T, D]``
-        DRAM: the block hyper-connection's collapse and fused norm (its own mixes are dropped), then the
-        ``tile_rows`` row unpermuted."""
-        t, d = self.verify_rows, self.config.hidden_size
-        post, comb, row, pre = hc_module(streams, pre_mix=pre_mix, norm=(gain, eps))
+        DRAM: the block hyper-connection's collapse (its own mixes are dropped), a ``(T, 32)`` block on the collapse
+        cores, then sharded_rmsnorm, which un-tiles the rows as it writes them."""
+        post, comb, collapsed, pre = hc_module(streams, pre_mix=pre_mix)
         for x in (post, comb, pre):
             ttnn.deallocate(x)
-        rows = ttnn.reshape(ttnn.transpose(ttnn.reshape(row, [1, d // 16, t, 16]), 1, 2), [1, 1, t, d])
-        ttnn.deallocate(row)
+        rows = ttnn.experimental.deepseek.sharded_rmsnorm(
+            collapsed,
+            gain,
+            epsilon=eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        ttnn.deallocate(collapsed)
         return rows
 
     def _block_verify_stage(self, sm: dict, odd: bool) -> ttnn.Tensor:
@@ -3989,6 +3995,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         def feed() -> None:
             self._pkt_socket.write_tensor(packet)
+            if callable(engram_rows):  # the lookup runs here, while layer 0 already runs on the packet
+                for layer_idx, rows in engram_rows():
+                    self._engram_by_layer[layer_idx].write_rows(rows)
+                return
             for layer_idx, engram in self._engram_layers:
                 engram.write_rows(engram_rows[layer_idx])
 
@@ -4002,11 +4012,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
             except BaseException as e:  # noqa: BLE001 - re-raised on the dispatching thread
                 errors.append(e)
 
+        timing = getattr(self, "_verify_timing", None)
+        t0 = time.perf_counter()
         writer = threading.Thread(target=run, name="verify_feed", daemon=True)
         writer.start()
         dispatch()
+        t1 = time.perf_counter()
         out = self._read_socket_output().reshape(-1)[: self.verify_rows]
+        t2 = time.perf_counter()
         writer.join()
+        if timing is not None:
+            timing.append({"dispatch": t1 - t0, "read": t2 - t1, "join": time.perf_counter() - t2})
         if errors:
             raise errors[0]
         return [int(x) for x in out]
@@ -4063,21 +4079,30 @@ class DeepSeekV41Model(DeepSeekV4Model):
         sm = self.submeshes_io[0]
         if not sm["block_tids"]:
             raise RuntimeError("capture the verify traces first (capture_spec_traces)")
+        t_start = time.perf_counter()
         self._wait_replays_dispatched()
         self._use_server_rows(t)
         sid = self._resident[0]
         with self._cq_lock:
+            t_lock = time.perf_counter()
             self.ensure_session_capacity(pos + t - 1, sid)
             self._session_pos[sid] = pos + t
             self._spec_dirty.add(self._resident_slot())
-            engram_rows = {}
-            if self._engram_layers:
+            slot = self._slot_of.get(sid, 0)
+
+            def engram_rows():
+                """Each Engram layer's rows, looked up on the feed thread after the dispatch (layer order)."""
                 lookup = self._engram_lookup
-                hashes = lookup.hash_session(self._slot_of.get(sid, 0), torch.tensor([ids], dtype=torch.long), pos)
+                hashes = lookup.hash_session(slot, torch.tensor([ids], dtype=torch.long), pos)
                 for layer_idx, _ in self._engram_layers:
                     ids_of_layer = hashes[:, :, lookup.layout.layer_ids.index(layer_idx)]
-                    engram_rows[layer_idx] = lookup.gather(layer_idx, ids_of_layer).flatten(-2)
+                    yield layer_idx, lookup.gather(layer_idx, ids_of_layer).flatten(-2)
+
+            if not hasattr(self, "_engram_by_layer"):
+                self._engram_by_layer = dict(self._engram_layers)
             tid = sm["block_tids"][pos % 2 == 1]
+            if getattr(self, "_verify_timing", None) is not None:
+                self._verify_timing.append({"pre_lock": t_lock - t_start, "pre": time.perf_counter() - t_lock})
 
             def replay() -> None:
                 ttnn.execute_trace(sm["device"], tid, cq_id=0, blocking=False)
