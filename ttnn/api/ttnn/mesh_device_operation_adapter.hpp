@@ -925,7 +925,7 @@ public:
         // with the io_mesh_tensors positions matching the TensorArgument produced for this call.
         static void refine_bindings(
             std::vector<ResolvedTensorBinding>& bindings,
-            const tt::tt_metal::experimental::Table<TensorParamName, TensorArgument>& factory_tensor_args,
+            const tt::tt_metal::Table<TensorParamName, TensorArgument>& factory_tensor_args,
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
             for (auto& b : bindings) {
                 if (b.candidate_indices.size() <= 1) {
@@ -936,7 +936,7 @@ public:
                     arg.has_value(),
                     "Refinement of cached ProgramSpec failed: factory did not emit TensorArgument '{}'",
                     b.tensor_parameter_name);
-                const auto* target = &tt::tt_metal::experimental::mesh_tensor_of(*arg);
+                const auto* target = &tt::tt_metal::mesh_tensor_of(*arg);
                 ttsl::SmallVector<std::size_t, 2> narrowed;
                 for (const std::size_t idx : b.candidate_indices) {
                     if (idx < io_mesh_tensors.size() && &io_mesh_tensors[idx].get() == target) {

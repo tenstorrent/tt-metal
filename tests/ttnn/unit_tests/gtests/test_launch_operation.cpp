@@ -656,9 +656,9 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
 TEST_F(LaunchOperation2x4Test, SpecBindingSupportResolvesAndRefinesAliasedBindings) {
     using Adapter = device_operation::MeshDeviceOperationAdapter<
         ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
-    using TensorParamName = tt::tt_metal::experimental::TensorParamName;
-    using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
-    using TensorTable = tt::tt_metal::experimental::Table<TensorParamName, TensorArgument>;
+    using TensorParamName = tt::tt_metal::TensorParamName;
+    using TensorArgument = tt::tt_metal::ProgramRunArgs::TensorArgument;
+    using TensorTable = tt::tt_metal::Table<TensorParamName, TensorArgument>;
 
     const tt::tt_metal::TensorSpec spec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
