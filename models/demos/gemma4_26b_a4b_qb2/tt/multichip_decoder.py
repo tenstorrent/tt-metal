@@ -32,7 +32,7 @@ from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import dtype_name
 from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import fidelity as policy_fidelity
 from models.demos.gemma4_26b_a4b_qb2.tt.precision_policy import fidelity_name
 from models.demos.gemma4_26b_a4b_qb2.tt.routing_precision import Router
-from models.demos.gemma4_26b_a4b_qb2.tt.ws2_ops import qkv_heads_norm_rope_b1
+from models.demos.gemma4_26b_a4b_qb2.tt.ws2_ops import pack_rows, qkv_heads_norm_rope_b1, unpack_rows
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
 # WS2 glue cut (perf/WS2.md). Each switch defaults on; "0" restores the previous decode path for A/B runs.
@@ -42,6 +42,7 @@ WS2_GEGLU = os.environ.get("GEMMA4_26B_WS2_GEGLU", "1") != "0"
 WS2_FUSED_CACHE = os.environ.get("GEMMA4_26B_WS2_FUSED_CACHE", "1") != "0"
 WS2_FOLD_SHARED = os.environ.get("GEMMA4_26B_WS2_FOLD_SHARED", "1") != "0"
 WS2_GATHER_SHARDED = os.environ.get("GEMMA4_26B_WS2_GATHER_SHARDED", "1") != "0"
+WS2_PACK_MOE = os.environ.get("GEMMA4_26B_WS2_PACK_MOE", "1") != "0"
 # Fabric links per decode all-reduce (QB2 Linear 1x4). 2 measured ~35% faster than 1 at decode-row sizes.
 WS2_CCL_LINKS = int(os.environ.get("GEMMA4_26B_WS2_CCL_LINKS", "2"))
 
@@ -1291,7 +1292,7 @@ class MultichipDecoder(OptimizedDecoder):
             mcast_in0=True,
         )
         experts.mix_memory = ttnn.L1_MEMORY_CONFIG
-        if self.ws2_norm is not None and self.moe_ccl_bfp8:
+        if self.ws2_norm is not None and self.moe_ccl_bfp8 and not WS2_PACK_MOE:
             # The routed partial goes straight into the BFP8 MoE collective (no typecast after the concat).
             experts.decode_output_dtype = ttnn.bfloat8_b
         experts.enable_indexed_decode(self.layer.moe.router)
@@ -1551,15 +1552,13 @@ class MultichipDecoder(OptimizedDecoder):
         return self.allreduce(ttnn.typecast(value, self.attention_ccl_dtype), role="attention")
 
     def allreduce(self, value, *, role="shared", output_memory=None):
-        """``output_memory`` (one row, persistent CCL only): the all-gather writes this layout directly."""
-        memory = (
-            getattr(self, "collective_memory", ttnn.DRAM_MEMORY_CONFIG)
-            if value.shape[-2] == 1
-            else ttnn.DRAM_MEMORY_CONFIG
-        )
+        """``output_memory`` (one row, persistent CCL only): the all-gather writes this layout directly.
+        Role ``packed`` is one dense row tile from ``ws2_ops.pack_rows`` and takes the one-row path."""
+        one_row = value.shape[-2] == 1 or role.endswith("packed")
+        memory = getattr(self, "collective_memory", ttnn.DRAM_MEMORY_CONFIG) if one_row else ttnn.DRAM_MEMORY_CONFIG
         value = ttnn.to_memory_config(value, memory)
         gather_memory = output_memory if output_memory is not None and self.persistent_ccl else memory
-        if self.persistent_ccl and value.shape[-2] == 1:
+        if self.persistent_ccl and one_row:
             key = (role, tuple(value.shape), tuple(value.padded_shape), value.dtype, str(memory), str(gather_memory))
             if key not in self._collective_buffers:
                 output_shape = list(value.shape)
@@ -1903,13 +1902,20 @@ class MultichipDecoder(OptimizedDecoder):
             shared_input = normalized
         else:
             shared_input = ttnn.mul(normalized, self.shared_norm_weight, dtype=ttnn.bfloat16)
-        collective = ttnn.bfloat8_b if self.moe_ccl_bfp8 else ttnn.bfloat16
+        collective = ttnn.bfloat8_b if self.moe_ccl_bfp8 and not WS2_PACK_MOE else ttnn.bfloat16
         shared = shared_mlp(
             shared_input, reduce_output=False, normalized_input=shared_input is normalized, output_dtype=collective
         )
-        # The reshard into the norm layout also restores bf16 from the BFP8 collective.
-        shared, routed = self._reduce_moe_pair(shared, routed, keep_dtype=True)
-        combined = norm(norm(shard(shared), "ff1"), "ff", residual=norm(shard(routed), "ff2"))
+        if WS2_PACK_MOE:
+            # Only row 0 of the two partials is real: all-reduce them as 8 dense bf16 tiles instead of 176
+            # padded ones, then unpack straight into the norm layout.
+            reduced = self.allreduce(pack_rows(shared, routed), role="moe_packed")
+            shared, routed = unpack_rows(reduced, shared.shape[-1] // 32, shared.shape[-1], cfg.memory)
+            combined = norm(norm(shared, "ff1"), "ff", residual=norm(routed, "ff2"))
+        else:
+            # The reshard into the norm layout also restores bf16 from the BFP8 collective.
+            shared, routed = self._reduce_moe_pair(shared, routed, keep_dtype=True)
+            combined = norm(norm(shard(shared), "ff1"), "ff", residual=norm(shard(routed), "ff2"))
         return ttnn.add(
             residual,
             combined,

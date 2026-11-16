@@ -9,6 +9,7 @@ different cores, which is what ``paged_fused_update_cache`` needs to write both 
 """
 
 import struct
+from pathlib import Path
 
 import ttnn
 from models.demos.gemma4.custom_ops.grid import compute_grid, core_range_set, row_major_cores
@@ -113,3 +114,82 @@ def qkv_heads_norm_rope_b1(x, hq, hkv, head_dim, gq, gk, cos, sin, eps, v_core=t
     ]
     ttnn.generic_op([x, gq, gk, cos, sin] + outs, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
     return outs[0], outs[1], outs[2]
+
+
+PACK_KERNELS = Path(__file__).resolve().parent / "kernels"
+
+
+def pack_rows(a, b):
+    """Row 0 of every tile of ``a`` and ``b`` ([1, 1, 1, W] bf16 TILE interleaved) as one dense
+    ``[1, 1, 32, 32 * n]`` bf16 TILE L1 tensor (n a multiple of 4, the collective's chip count). A batch-1
+    all-reduce of the packed tensor moves n tiles instead of the inputs' na + nb mostly-padding tiles."""
+    for t in (a, b):
+        assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and not t.is_sharded(), t
+        assert [int(v) for v in t.shape][:3] == [1, 1, 1], t.shape
+    na, nb = int(a.shape[-1]) // TILE, int(b.shape[-1]) // TILE
+    n_out = (na + nb + TILE - 1) // TILE
+    n_out = (n_out + 3) // 4 * 4
+    device = a.device()
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, TILE, TILE * n_out]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+    )
+    cores = row_major_cores(compute_grid(device), n_out)
+    core_set = core_range_set(cores)
+    cb = ttnn.CBDescriptor(
+        total_size=TILE * TILE * 2,
+        core_ranges=core_set,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=TILE * TILE * 2)
+        ],
+    )
+    ct = [0, na, nb]
+    for t in (a, b, out):
+        ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+    rt = ttnn.RuntimeArgs()
+    for T, core in enumerate(cores):
+        rt[core.x][core.y] = [a.buffer_address(), b.buffer_address(), out.buffer_address(), T]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=str(PACK_KERNELS / "pack_rows.cpp"),
+        core_ranges=core_set,
+        compile_time_args=ct,
+        runtime_args=rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    return ttnn.generic_op([a, b, out], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb]))
+
+
+def unpack_rows(packed, na, width, memory):
+    """Inverse of ``pack_rows`` into two ``[1, 1, 1, width]`` bf16 TILE tensors in the WIDTH_SHARDED ``memory``
+    (one row tile), each shard core building its own tiles; rows 1-31 of every tile are zero."""
+    assert packed.layout == ttnn.TILE_LAYOUT and packed.dtype == ttnn.bfloat16 and not packed.is_sharded()
+    assert memory.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    assert width // TILE == na
+    shard = memory.shard_spec
+    per = int(shard.shape[1]) // TILE
+    assert shard.orientation == ttnn.ShardOrientation.ROW_MAJOR
+    cores = [
+        ttnn.CoreCoord(x, y)
+        for r in shard.grid.ranges()
+        for y in range(r.start.y, r.end.y + 1)
+        for x in range(r.start.x, r.end.x + 1)
+    ]
+    assert len(cores) * per == na, (len(cores), per, na)
+    device = packed.device()
+    outs = [
+        ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 1, width]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory)
+        for _ in range(2)
+    ]
+    core_set = shard.grid
+    ct = [per, na] + ttnn.TensorAccessorArgs(packed).get_compile_time_args()
+    rt = ttnn.RuntimeArgs()
+    for k, core in enumerate(cores):
+        rt[core.x][core.y] = [packed.buffer_address(), outs[0].buffer_address(), outs[1].buffer_address(), k]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=str(PACK_KERNELS / "unpack_rows.cpp"),
+        core_ranges=core_set,
+        compile_time_args=ct,
+        runtime_args=rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op([packed] + outs, ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[]))
+    return outs[0], outs[1]
