@@ -1440,15 +1440,44 @@ class Qwen36Model:
             )
         return self._rope_rm
 
-    def rope_lookup(self, table_rows, n):
+    def rope_lookup(self, table_rows, n, row_view=False):
         """cos, sin [1, 1, n, rope_head_dim] bf16 TILE of the RoPE table rows ``table_rows`` ([1, n] uint32 ROW_MAJOR on
-        the device), in the layout apply_partial_rope_decode rotates in. The caller frees both."""
+        the device), in the layout apply_partial_rope_decode rotates in. ``row_view``: [1, 1, n * TILE_SIZE,
+        rope_head_dim] instead, each row repeated over its tile (rope_tp.rope_rows_to_row_view), the layout of the row
+        view that rotates without transposes. The caller frees both."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rope_rows_to_row_view
+
         rd = self.args.rope_head_dim
         out = []
         for table in self.rope_rm_tables():
             row = ttnn.embedding(table_rows, table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             out.append(ttnn.reshape(row, (1, 1, n, rd)))
+        if row_view:
+            repeat_mat = self._rope_row_repeat(n)
+            rows = out
+            out = [rope_rows_to_row_view(t, repeat_mat) for t in rows]
+            for t in rows:
+                ttnn.deallocate(t)
         return out[0], out[1]
+
+    def _rope_row_repeat(self, n):
+        """rope_tp.rope_row_repeat_matrix(n) replicated in DRAM, kept for the model's life. Built on first use: the warm
+        pass of each verify body runs before its capture, so no trace writes it."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rope_row_repeat_matrix
+
+        mats = getattr(self, "_rope_row_mats", None)
+        if mats is None:
+            mats = self._rope_row_mats = {}
+        if n not in mats:
+            mats[n] = ttnn.from_torch(
+                rope_row_repeat_matrix(n).reshape(1, 1, n * ttnn.TILE_SIZE, n),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+        return mats[n]
 
     def _residual_ar(self, rows):
         """The DecodeResidualAllReduce a verify forward of ``rows`` rows runs on, or None for the fractured residual:
@@ -1543,7 +1572,7 @@ class Qwen36Model:
         kvpos = ttnn.reshape(ttnn.typecast(positions, ttnn.int32), (rows,))
         ttnn.deallocate(positions)
         rope_idx = ttnn.slice(step, (VERIFY_ROPE, 0), (VERIFY_ROPE + 1, rows))
-        cos, sin = self.rope_lookup(rope_idx, rows)
+        cos, sin = self.rope_lookup(rope_idx, rows, row_view=True)
         ttnn.deallocate(rope_idx)
         x = self.embd(tokens)
         ttnn.deallocate(tokens)

@@ -925,8 +925,8 @@ class TPAttention:
             T paged_update_cache calls per cache; the cache bytes are the same;
           * the fused spec SDPA packs each group's candidates x NH q rows into one q tile (_spec_pack_heads). Its valid
             output rows are the unpacked call's bytes, and the head concat reads only those rows.
-        cos / sin come as [1, 1, B, rope_dim] (Qwen36Model stages them so), so apply_partial_rope_decode does not
-        reshape them."""
+        cos / sin come as [1, 1, B * TILE_SIZE, rope_dim] (Qwen36Model.rope_lookup(row_view=True)), so
+        apply_partial_rope_decode rotates q and k in the row view, with no transpose and no cos / sin reshape."""
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         B = x.shape[-2]
         T = B // spec_n_users

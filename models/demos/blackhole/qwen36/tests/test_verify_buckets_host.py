@@ -488,7 +488,7 @@ def test_the_verify_body_takes_the_given_tables_and_stops_at_the_shard_ids(monke
     m._vfy_kvpt_buf, m._vfy_kvpt_users, m._vfy_kvpt1_buf = "rows8", "users8", "groups8"
     m._vfy_state_idx = m._vfy_conv_sel = None
     m.args = SimpleNamespace(gdn_chunk_size=128)
-    m.rope_lookup = lambda rows, n: (FT((1, 1, n, 64), "cos"), FT((1, 1, n, 64), "sin"))
+    m.rope_lookup = lambda rows, n, row_view=False: (FT((1, 1, n, 64), "cos"), FT((1, 1, n, 64), "sin"))
     m.embd = lambda tok: FT((1, 1, 4, 64), "x")
     m._residual_ar = lambda rows: None
     m.layers = [layer(True), layer(False)]
