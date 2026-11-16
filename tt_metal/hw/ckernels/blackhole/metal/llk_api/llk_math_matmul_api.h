@@ -57,7 +57,7 @@ inline void llk_math_matmul_init_impl(
 // matmul_kernel_lofi_wide over the kernel's CBs (true where unknown)
 constexpr bool llk_math_matmul_kernel_lofi_wide() {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
-    return matmul_kernel_lofi_wide(unpack_src_format, unpack_dst_format);
+    return matmul_kernel_lofi_wide(unpack_src_format);
 #else
     return true;
 #endif

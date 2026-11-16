@@ -449,7 +449,7 @@ constexpr bool matmul_prod_may_pack_32bit = matmul_prod_kernel_has_32bit_cb() ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_A_IN)) ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_B_IN)) ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
-constexpr bool matmul_prod_lofi_wide = ckernel::matmul_kernel_lofi_wide(MATMUL_KERNEL_FORMATS, MATMUL_KERNEL_DST_FORMATS);
+constexpr bool matmul_prod_lofi_wide = ckernel::matmul_kernel_lofi_wide(MATMUL_KERNEL_FORMATS);
 #endif
 // minimal_matmul (MATMUL_PACK_TILES) passes run-time dims: the front end sees no constant block
 #ifdef MATMUL_PACK_TILES
