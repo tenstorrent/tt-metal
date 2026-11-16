@@ -54,9 +54,10 @@ class LCfg:
     mcast_linked: bool = False  # group multicast payloads linked to their flags (WL_MCAST_LINKED)
     arr_write: bool = False  # arrival counts as plain writes after the payloads, no router atomics (WL_ARR_WRITE)
     mc_noc1: bool = False  # column 0 multicasts from its NCRISC on NOC1 too, one x multicast at a time (WL_MC_NOC1)
-    # one multicaster a group a NoC (WL_BCAST): x from every core's BRISC on NOC0 in stream order, h rows gathered on
-    # core 0 and multicast from its NCRISC on NOC1, one at a time
+    # one multicaster a group a NoC, at the NoC's multicast start corner (WL_BCAST): x blocks funneled into core 0 and
+    # multicast from its BRISC on NOC0, h rows gathered on core 19 and multicast from its NCRISC on NOC1, one at a time
     bcast: bool = False
+    xf: int = 2  # funnel slots of x blocks on core 0 (WL_XF)
 
 
 def lane_cores(g):
@@ -215,7 +216,10 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     xflags = w16(NX)
     xprog = w16(GC)
     assert not (lc.bcast and lc.mc_noc1), "bcast and mc_noc1 place the multicasts differently"
-    hcnt = w16(NS) if lc.bcast else None  # core 0's h tiles arrived a ring slot (WL_BCAST)
+    hcnt = w16(NS) if lc.bcast else None  # core 19's h tiles arrived a ring slot (WL_BCAST)
+    # core 0's x funnel slots and their filled flags (WL_XIN, WL_XINF)
+    xin = sharded_l1(mesh, C, [lc.xf * BK * 32, 32], cfg.x_dt, ttnn.TILE_LAYOUT) if lc.bcast else None
+    xinf = w16(lc.xf) if lc.bcast else None
     # DRAM -> L1 reads need the L1 address congruent to the DRAM one mod 64: 64-aligned landing spots inside these
     counts_l1 = sharded_l1(mesh, C, [1, 32 + max(4, cfg.nexp)], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     idx_l1 = sharded_l1(mesh, C, [4, 32], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
@@ -251,10 +255,13 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
     ]
     ydefs = [("WG_XORDER", str(1 if lc.mc_noc1 or lc.bcast else cfg.xorder)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
     ydefs += [("WL_MC_NOC1", "1")] if lc.mc_noc1 else []
-    ydefs += [("WL_BCAST", str(hcnt.buffer_address()))] if lc.bcast else []
+    if lc.bcast:
+        ydefs += [("WL_BCAST", str(hcnt.buffer_address())), ("WL_XIN", str(xin.buffer_address()))]
+        ydefs += [("WL_XINF", str(xinf.buffer_address())), ("WL_XF", str(lc.xf))]
     ydefs += [("WL_OUT_ALL", "1")] if lc.out_all else []
     ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
-    XST = -(-cfg.LOOK // GC) + 4
+    # x staging blocks a core; with the funnel (bcast), core 0's lc.xf funnel slots take two of them on every core
+    XST = -(-cfg.LOOK // GC) + (2 if lc.bcast else 4)
     mpd = ttnn.MeshProgramDescriptor()
     for r in range(R):
         for c in range(Cn):
@@ -408,5 +415,5 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
     io = [x_t, idx_t, counts_t, ws_t, tab_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1]
-    io += [idx_l1, table_l1, warr, cred, freew, arr_stage] + ([hcnt] if hcnt is not None else []) + [st, out_t]
+    io += [idx_l1, table_l1, warr, cred, freew, arr_stage] + ([hcnt, xin, xinf] if lc.bcast else []) + [st, out_t]
     return mpd, io, st

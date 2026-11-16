@@ -47,7 +47,8 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 #define WL_K 3
 #endif
 // WL_MC_NOC1: column 0's x and h-leader multicasts also go out from its NCRISC on NOC1 (none from the BRISCs on NOC0)
-// WL_BCAST: no x or column-leader multicasts here; core 0 multicasts every h row on NOC1 (QL, see wl_writer.cpp)
+// WL_BCAST: no column multicasts here; the x blocks of cores 1.. go on NOC1 into core 0's funnel slots (QA), the ring
+// credits all go to core 0, and core GC - 1 multicasts every h row on NOC1 (QL); see wl_writer.cpp
 #if defined(WL_BCAST)
 constexpr uint32_t MC_COL_MASK = 0;  // (columns that multicast from this RISC: bit c)
 #elif defined(WL_MC_NOC1)
@@ -352,12 +353,43 @@ void kernel_main() {
 
     // x stream helpers: block s -> (expert, index in it); walked forward only
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
-    uint32_t t_cred = 0, t_empty = 0, n_cred = 0, last_t = wall();
+    [[maybe_unused]] uint32_t t_cred = 0, t_empty = 0, n_cred = 0, last_t = wall();
     // ---- QA: own x multicasts
     const uint32_t L0 = 2 * (J % HALF) + J / HALF;
     uint32_t a_n = 0, a_l = L0, a_base = 0;
     const uint32_t scr_addr = get_semaphore(SEM_SCR2);
     volatile tt_l1_ptr uint32_t* scr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr_addr);
+#ifdef WL_BCAST
+    // (cores 1..) own block s into core 0's funnel slot s % WL_XF once block s - WL_XF, the slot's previous one, has
+    // landed here (so core 0 has read it out), then its filled flag through the same command buffer
+    const bool mcx = J != 0;
+    auto qa = [&]() -> bool {
+        while (a_n < nexp_g && a_l >= rows_of(a_n) * BPR) {
+            a_base += rows_of(a_n) * BPR;
+            ++a_n;
+            a_l = L0;
+        }
+        if (!mcx || a_n >= nexp_g || !cb_pages_available_at_front(xst_cb, BK)) {
+            return false;
+        }
+        const uint32_t s = a_base + a_l;
+        if (s >= WL_XF) {
+            invalidate_l1_cache();
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xflags + ((s - WL_XF) % NX) * 16) < s - WL_XF + 1) {
+                return false;
+            }
+        }
+        *scr = s + 1;
+        noc_async_write(
+            get_read_ptr(xst_cb), get_noc_addr(cxs[0], ny0, WL_XIN + (s % WL_XF) * BK * xtile), BK * xtile);
+        noc_async_write(scr_addr, get_noc_addr(cxs[0], ny0, WL_XINF + (s % WL_XF) * 16), 4);
+        noc_async_writes_flushed();
+        cb_pop_front(xst_cb, BK);
+        a_l += GC;
+        return true;
+    };
+#else
+    const bool mcx = (MC_COL_MASK >> (J / HALF)) & 1;
     auto qa = [&]() -> bool {
         while (a_n < nexp_g && a_l >= rows_of(a_n) * BPR) {
             a_base += rows_of(a_n) * BPR;
@@ -415,6 +447,7 @@ void kernel_main() {
         a_l += GC;
         return true;
     };
+#endif
     // ---- QB: x ring pushes + credits
     uint32_t b_s = 0, x_popped_pages = 0, x_credited = 0, w_e = 0, w_base = 0;
     const uintptr_t xacked = (uintptr_t)get_cb_tiles_acked_ptr(xr_cb);
@@ -446,7 +479,11 @@ void kernel_main() {
                     w_base += rows_of(w_e) * BPR;
                     ++w_e;
                 }
+#ifdef WL_BCAST
+                const uint32_t owner = 0;  // (core 0 multicasts every block)
+#else
                 const uint32_t ol = nxt - w_base, owner = (ol % 2) * HALF + (ol / 2) % HALF;
+#endif
                 noc_inline_dw_write(
                     get_noc_addr(cxs[owner / HALF], ny0 + owner % HALF, xprog + J * 16), x_credited + 1);
             }
@@ -479,11 +516,12 @@ void kernel_main() {
     const uint32_t hscr_addr = get_semaphore(SEM_SCRH);
     volatile tt_l1_ptr uint32_t* hscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hscr_addr);
 #ifdef WL_BCAST
-    // core 0: row q once its GC tiles are in ring slot q % NS (the slot's count, GC a use) and row q - 1's last flag
-    // has landed here (one h multicast in flight). The row goes to the other cores only (it is already in place here,
-    // and a loopback copy could land after a producer's next tile for the slot), unlinked; then both column flags to
-    // every core including this one, from the same command buffer, so each lands after the row.
-    const bool mch = J == 0;
+    // core GC - 1 (NOC1's multicast start corner): row q once its GC tiles are in ring slot q % NS (the slot's count,
+    // GC a use) and row q - 1's last flag has landed here (one h multicast in flight). The row goes to the other cores
+    // only (it is already in place here, and a loopback copy could land after a producer's next tile for the slot),
+    // unlinked; then both column flags to every core including this one, from the same command buffer, so each lands
+    // after the row.
+    const bool mch = J == GC - 1;
     uint32_t lq = 0;
     auto ql = [&]() -> bool {
         if (!mch || lq >= total_rows) {
@@ -595,7 +633,6 @@ void kernel_main() {
             tot[i] += dd[i];
             mx[i] = dd[i] > mx[i] ? dd[i] : mx[i];
         }
-        const bool mcx = (MC_COL_MASK >> C) & 1;
         if (!y && !l && !a && !b && !c && !d && drained >= total_rows && (!mch || lq >= total_rows) && w_n >= nexp_g &&
             w_dn >= nexp_g && freed >= nexp_g && slots_done() && (a_n >= nexp_g || !mcx) &&
             b_s >= total_x && x_credited >= total_x && h_q >= total_rows) {

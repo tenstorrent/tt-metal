@@ -32,10 +32,12 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR = 2, SEM_SCRX = 4;
 constexpr uint32_t K = WL_K;  // weight slots a core
 // columns whose x blocks (X_COLS) and h leader rows (H_COLS) this BRISC multicasts on NOC0 (bit c)
 #if defined(WL_BCAST)
-// WL_BCAST: one multicaster a group a NoC. Every core's x blocks go out from its BRISC on NOC0 in stream order (one
-// x multicast in flight); every core sends its h tile of a row to core 0, whose NCRISC multicasts the whole row on
-// NOC1 (one h multicast in flight). WL_BCAST is the L1 address of NS per-slot arrival counters (16 B apart).
-constexpr uint32_t X_COLS = 3, H_COLS = 0;
+// WL_BCAST: one multicaster a group a NoC, each at its NoC's multicast start corner, so no multicast leaves the group
+// rectangle on its way to that corner. x: every producer sends its tilized blocks on NOC1 (west / north) into core 0's
+// funnel slots (WL_XIN, WL_XF slots, filled flags at WL_XINF), and core 0's BRISC multicasts every block on NOC0 in
+// stream order, one at a time. h: every core sends its tile of a row on NOC0 (east / south) to core GC - 1, whose
+// NCRISC multicasts the whole row on NOC1, one at a time. WL_BCAST: NS per-slot h arrival counters (16 B apart).
+constexpr uint32_t X_COLS = 0, H_COLS = 0;
 #elif defined(WL_MC_NOC1)
 constexpr uint32_t X_COLS = 0, H_COLS = 0;  // (column 0's multicasts go out from its NCRISC on NOC1)
 #else
@@ -243,15 +245,15 @@ void kernel_main() {
             return false;
         }
 #ifdef WL_BCAST
-        // core 0's ring slot sent % NS holds row sent - NS until that row's multicast has been read out of it: its
-        // last flag landing here shows the whole row has left core 0
+        // core GC - 1's ring slot sent % NS holds row sent - NS until that row's multicast has been read out of it:
+        // its last flag landing here shows the whole row has left that core
         if (sent >= NS) {
             invalidate_l1_cache();
             if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hflags + ((sent % NS) * 2 + 1) * 16) < sent - NS + 1) {
                 return false;
             }
         }
-        const uint32_t lx = cxs[0], ly = ny0, arr = WL_BCAST + (sent % NS) * 16;
+        const uint32_t lx = cxs[1], ly = ny0 + HALF - 1, arr = WL_BCAST + (sent % NS) * 16;
 #else
         const uint32_t lx = cxs[C], ly = ny0 + sent % HALF, arr = harr;
 #endif
@@ -321,9 +323,67 @@ void kernel_main() {
 #endif
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
     // ---- QX: x multicasts of column 0 (NOC0)
-    uint32_t a_n = 0, a_l = L0, a_base = 0;
+    [[maybe_unused]] uint32_t a_n = 0, a_l = L0, a_base = 0;
     const uint32_t xscr_addr = get_semaphore(SEM_SCRX);
     volatile tt_l1_ptr uint32_t* xscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xscr_addr);
+#ifdef WL_BCAST
+    // (core 0) block s of the stream: from this core's staging if it is one of its own (stream index within the
+    // expert l with l % GC == 0), else from funnel slot s % WL_XF once its producer has filled it; then the ring credit
+    // and one-at-a-time checks of the other modes, and the multicast to every core including this one
+    const uint32_t total_x = total_rows * BPR;
+    uint32_t xs_s = 0, xs_n = 0, xs_base = 0;
+    auto qx = [&]() -> bool {
+        if (J != 0 || xs_s >= total_x) {
+            return false;
+        }
+        const uint32_t s = xs_s;
+        while (xs_n < nexp_g && s >= xs_base + rows_of(xs_n) * BPR) {
+            xs_base += rows_of(xs_n) * BPR;
+            ++xs_n;
+        }
+        const bool own = (s - xs_base) % GC == 0;
+        invalidate_l1_cache();
+        uint32_t src;
+        if (own) {
+            if (!cb_pages_available_at_front(xst_cb, BK)) {
+                return false;
+            }
+            src = get_read_ptr(xst_cb);
+        } else {
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WL_XINF + (s % WL_XF) * 16) < s + 1) {
+                return false;
+            }
+            src = WL_XIN + (s % WL_XF) * BK * xtile;
+        }
+        if (s >= NX) {
+            for (uint32_t c = 0; c < GC; ++c) {
+                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xprog + c * 16) < s - NX + 1) {
+                    return false;
+                }
+            }
+        }
+        if (s >= 1 && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xflags + ((s - 1) % NX) * 16) < s) {
+            return false;
+        }
+        const uint32_t xs = s % NX;
+        *xscr = s + 1;
+        mcast_with_flag(
+            src,
+            get_noc_multicast_addr(gx0, gy0, gx1, gy1, xring + xs * BK * xtile),
+            BK * xtile,
+            ngroup,
+            xscr_addr,
+            get_noc_multicast_addr(gx0, gy0, gx1, gy1, xflags + xs * 16));
+        noc_async_writes_flushed();
+        if (own) {
+            cb_pop_front(xst_cb, BK);
+        }
+        ++xs_s;
+        return true;
+    };
+    auto x_done = [&]() { return J != 0 || xs_s >= total_x; };
+#else
+    auto x_done = [&]() { return !((X_COLS >> C) & 1) || a_n >= nexp_g; };
     auto qx = [&]() -> bool {
         if (!((X_COLS >> C) & 1)) {
             return false;
@@ -385,6 +445,7 @@ void kernel_main() {
         a_l += GC;
         return true;
     };
+#endif
     uint32_t tq[5] = {0, 0, 0, 0, 0}, tmx[5] = {0, 0, 0, 0, 0};
     while (true) {
         const bool o = qo();
@@ -408,9 +469,9 @@ void kernel_main() {
         for (uint32_t i = 0; i < 5; ++i) {
             tmx[i] = dd[i] > tmx[i] ? dd[i] : tmx[i];
         }
-        const bool mcx = (X_COLS >> C) & 1, mch = (H_COLS >> C) & 1;
+        const bool mch = (H_COLS >> C) & 1;
         if (!o && !x && !a && !b && !c && !d && g_n >= nexp_g && sent >= total_rows && (!mch || lq >= total_rows) &&
-            drained >= total_rows && (!mcx || a_n >= nexp_g) && g_state == 0 && qo_done()) {
+            drained >= total_rows && x_done() && g_state == 0 && qo_done()) {
             break;
         }
     }
