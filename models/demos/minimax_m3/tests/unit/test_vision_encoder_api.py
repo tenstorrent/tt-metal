@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Host tests of TtMiniMaxM3VisionEncoder and read_embeddings (vision/encoder.py), with stand-ins for the chip.
+Host tests of TtMiniMaxM3VisionEncoder and read_embeddings (multimodal/encoder.py), with stand-ins for the chip.
 
 They cover forward's input checks and ops, and how __init__ and from_weights_path build the model and what they
 reject. They also cover vision_config, imports without transformers, and read_embeddings' checks and copy. The device
@@ -24,11 +24,11 @@ import torch
 from safetensors.torch import save_file
 
 import ttnn
+from models.demos.minimax_m3.multimodal import encoder as encoder_module
+from models.demos.minimax_m3.multimodal.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 from models.demos.minimax_m3.tt.vision.preprocess import patch_rows
-from models.demos.minimax_m3.vision import encoder as encoder_module
-from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, read_embeddings, vision_config
 
 from .vision_checkpoint import checkpoint_name, random_vision_weights, write_checkpoint
 
@@ -297,7 +297,7 @@ def test_vision_encoder_runs_without_transformers(tmp_path):
             "sys.modules['transformers'] = None  # import transformers now raises ImportError",
             f"sys.path.insert(0, {str(REPO)!r})",
             "import ttnn",
-            "from models.demos.minimax_m3.vision import encoder, media",
+            "from models.demos.minimax_m3.multimodal import encoder, media",
             "ttnn.from_torch = lambda tensor, **kwargs: None",
             "ttnn.ReplicateTensorToMesh = lambda mesh_device: None",
             "mesh = SimpleNamespace(get_num_devices=lambda: 1)",
