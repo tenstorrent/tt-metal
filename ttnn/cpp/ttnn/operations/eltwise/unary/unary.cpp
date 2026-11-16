@@ -8,6 +8,11 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+
+#include <algorithm>
+
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::unary::detail {
 
@@ -64,6 +69,26 @@ Tensor unary_impl(
     auto output_memory_config = optional_output_tensor.has_value()
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
+
+    // A BFLOAT8_B / BFLOAT4_B pack shares one exponent per 16-lane block of a row, padding included. When the logical
+    // width is not a multiple of 16 and the op is inf or nan at the zero padding (reciprocal / rsqrt / log of 0), that
+    // value sets the exponent of the last block and its real lanes are packed as 0. Produce BFLOAT16 and let the
+    // typecast zero the padding before packing.
+    if (is_block_float(output_dtype) && input_tensor.layout() == Layout::TILE &&
+        input_tensor.logical_shape()[-1] % tt::constants::FACE_WIDTH != 0 &&
+        std::ranges::any_of(op_chain, unary::utils::is_non_finite_at_zero)) {
+        Tensor result = prim::unary(
+            input_tensor,
+            op_chain,
+            DataType::BFLOAT16,
+            output_memory_config,
+            fp32_dest_acc_en,
+            preserve_fp32_precision,
+            /*bfp8_pack_precise=*/false,
+            std::nullopt,
+            sub_core_grids);
+        return ttnn::typecast(result, output_dtype, output_memory_config, optional_output_tensor, sub_core_grids);
+    }
 
     return prim::unary(
         input_tensor,

@@ -1298,4 +1298,21 @@ uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, 
         },
         op.base);
 }
+
+bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op) {
+    switch (op.type()) {
+        case UnaryOpType::RECIP:
+        case UnaryOpType::RSQRT:
+        case UnaryOpType::LOG:
+        case UnaryOpType::LOG2:
+        case UnaryOpType::LOG10:
+        case UnaryOpType::ACOSH:
+        case UnaryOpType::LGAMMA:
+        case UnaryOpType::DIGAMMA:
+        case UnaryOpType::POLYGAMMA:
+        case UnaryOpType::RDIV: return true;
+        case UnaryOpType::POWER: return op.get_param_if<float>(0).value_or(0.0f) < 0.0f;
+        default: return false;
+    }
+}
 }  // namespace ttnn::operations::unary::utils

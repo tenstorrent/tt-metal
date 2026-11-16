@@ -4,7 +4,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary.hpp"
+#include <algorithm>
 #include <cmath>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -13,6 +15,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -806,15 +809,15 @@ inline auto invoke_binary_ng_impl(
     // ends with isclose's rtol/atol/equal_nan, the scalar one with scalar_is_lhs. No single call
     // can satisfy both, and while these were two separate call sites the flag was passed on one and
     // forgotten on the other. This lambda is the only place either overload is invoked.
-    auto dispatch = [&](const auto& a, const auto& b) {
+    auto dispatch = [&](const auto& a, const auto& b, DataType dispatch_dtype, const std::optional<Tensor>& out) {
         if constexpr (requires { b.dtype(); }) {
             return ttnn::prim::binary_ng(
                 a,
                 b,
                 binary_op_type,
-                out_dtype,
+                dispatch_dtype,
                 memory_config,
-                output,
+                out,
                 fast_and_approximate_mode,
                 lhs_activations,
                 rhs_activations,
@@ -827,9 +830,9 @@ inline auto invoke_binary_ng_impl(
                 a,
                 b,
                 binary_op_type,
-                out_dtype,
+                dispatch_dtype,
                 memory_config,
-                output,
+                out,
                 fast_and_approximate_mode,
                 lhs_activations,
                 rhs_activations,
@@ -843,13 +846,36 @@ inline auto invoke_binary_ng_impl(
 
     if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
         // is_layout_or_scalar reports a scalar as row-major, so a scalar first operand reaches here too.
-        return dispatch(lhs_eff, rhs_eff);
+        return dispatch(lhs_eff, rhs_eff, out_dtype, output);
     }
     // Either one or both are tiles
     const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);
     const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids);
 
-    auto result = dispatch(input_a, input_b);
+    // A BFLOAT8_B / BFLOAT4_B pack shares one exponent per 16-lane block of a row, padding included. When the output's
+    // logical width is not a multiple of 16 and the op is inf or nan at the zero padding (a division by it, or an
+    // activation such as reciprocal), that value sets the exponent of the last block and its real lanes are packed as
+    // 0. Produce BFLOAT16 and let the typecast zero the padding before packing.
+    const bool divides_by_padding = binary_op_type == operations::binary::BinaryOpType::DIV &&
+                                    ((requires { input_b.logical_shape(); }) || scalar_is_lhs);
+    const bool non_finite_at_padding =
+        divides_by_padding || std::ranges::any_of(lhs_activations, operations::unary::utils::is_non_finite_at_zero) ||
+        std::ranges::any_of(rhs_activations, operations::unary::utils::is_non_finite_at_zero) ||
+        std::ranges::any_of(post_activations, operations::unary::utils::is_non_finite_at_zero);
+    const uint32_t out_width = [&] {
+        const uint32_t a_width = input_a.logical_shape()[-1];
+        if constexpr (requires { input_b.logical_shape(); }) {
+            return a_width == 1 ? input_b.logical_shape()[-1] : a_width;
+        } else {
+            return a_width;
+        }
+    }();
+    if (non_finite_at_padding && is_block_float(out_dtype) && out_width % tt::constants::FACE_WIDTH != 0) {
+        auto result = dispatch(input_a, input_b, DataType::BFLOAT16, std::nullopt);
+        return ttnn::typecast(result, out_dtype, memory_config, output, sub_core_grids);
+    }
+
+    auto result = dispatch(input_a, input_b, out_dtype, output);
 
     // if both inputs are in row major, convert the output to row major
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
