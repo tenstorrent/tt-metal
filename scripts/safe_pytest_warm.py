@@ -320,8 +320,11 @@ def _await_child_ready(ack_r: int) -> str | None:
     return None
 
 
-def _openblas_threads() -> int:
-    """Size of OpenBLAS's thread pool if a loaded library is OpenBLAS (a getter: it starts no threads), else 0."""
+def _openblas_workers() -> int:
+    """Worker threads of every loaded OpenBLAS pool (pool size - 1 each). Getters only: they start no threads.
+
+    numpy 1.x bundles libopenblas64_p (openblas_get_num_threads64_); scipy and numpy 2.x bundle scipy-openblas
+    (scipy_openblas_get_num_threads, scipy_openblas_get_num_threads64_)."""
     paths = set()
     try:
         with open("/proc/self/maps") as maps:
@@ -331,16 +334,22 @@ def _openblas_threads() -> int:
                     paths.add(path)
     except OSError:
         return 0
+    workers = 0
     for path in paths:
         try:
             lib = ctypes.CDLL(path)  # already loaded: returns the same handle
         except OSError:
             continue
-        for sym in ("openblas_get_num_threads64_", "openblas_get_num_threads"):
-            fn = getattr(lib, sym, None)
+        for prefix in ("", "scipy_"):
+            fn = None
+            for suffix in ("64_", ""):
+                fn = getattr(lib, f"{prefix}openblas_get_num_threads{suffix}", None)
+                if fn is not None:
+                    break
             if fn is not None:
-                return int(fn())
-    return 0
+                workers += max(int(fn()) - 1, 0)
+                break
+    return workers
 
 
 def _fork_hazard() -> str | None:
@@ -363,7 +372,7 @@ def _fork_hazard() -> str | None:
     if unknown:
         return f"native thread(s) {unknown} started by a preloaded module"
     unnamed = sum(1 for n in names if n == main_name)
-    blas_workers = max(_openblas_threads() - 1, 0)
+    blas_workers = _openblas_workers()
     if unnamed > blas_workers:
         return f"{unnamed} unnamed native thread(s), but only {blas_workers} are OpenBLAS workers"
     return None

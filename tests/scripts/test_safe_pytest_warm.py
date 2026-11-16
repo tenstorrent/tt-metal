@@ -127,6 +127,8 @@ def test_kill_leaves_no_child_and_frees_lock(warm, tmp_path, victim):
     os.close(lock_fd)  # now only the client and its forked child hold the lock
     try:
         pgid, server_pid = map(int, _wait_for(info, 120).split())
+        # On a cold fallback the client execs pytest in place, so the "server" would be this test process.
+        assert server_pid not in (os.getpid(), client.pid), "run went cold, not through the warm server"
         os.kill(client.pid if victim == "client" else server_pid, signal.SIGKILL)
         assert _gone(pgid, 15), f"child process group {pgid} still alive after kill -9 of the {victim}"
         client.wait(timeout=30)  # a surviving client notices the lost server, kills the run and returns
@@ -154,3 +156,21 @@ def test_fork_hazard_detects_running_thread():
     finally:
         stop.set()
         t.join()
+
+
+def test_fork_hazard_accepts_openblas_pools():
+    """OpenBLAS worker pools (numpy's and scipy's bundled libraries) are fork-safe and must not count as a hazard."""
+    code = textwrap.dedent(
+        f"""
+        import importlib.util, numpy, scipy.linalg
+        numpy.ones((64, 64)) @ numpy.ones((64, 64))       # start numpy's OpenBLAS pool
+        scipy.linalg.blas.dgemm(1.0, numpy.ones((64, 64)), numpy.ones((64, 64)))  # and scipy's
+        spec = importlib.util.spec_from_file_location("safe_pytest_warm", {str(SCRIPT)!r})
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        print(mod._fork_hazard())
+        """
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "None", out.stdout
