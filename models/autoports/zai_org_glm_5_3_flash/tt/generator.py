@@ -1288,6 +1288,18 @@ class Glm53Generator(_ReadinessGenerator):
         self._check_entry(self._binding(kv_cache), 0, entry)
         self.backend.import_snapshot(kv_cache, int(entry), states)
 
+    def export_snapshot_async(self, kv_cache, entry: int, n_tokens: Optional[int] = None):
+        """export_snapshot with the device -> host transfer left in flight (the vLLM adapter's host tier,
+        GLM53_PREFIX_ASYNC_EXPORT): the backend's export_snapshot_async -> (finish, bytes) -- the entry's state is read
+        out in command-queue order, so any later command may rewrite the entry; finish() (any thread, no device
+        command) -> export_snapshot's blob; bytes: the host tier's admission bound -- or None (the backend has no such
+        path, or this entry does not take it): export synchronously"""
+        fn = getattr(self.backend, "export_snapshot_async", None)
+        if fn is None:
+            return None
+        self._check_entry(self._binding(kv_cache), 0, entry)
+        return fn(kv_cache, int(entry), n_tokens=None if n_tokens is None else int(n_tokens))
+
     @staticmethod
     def _check_not_speculating(b: _CacheBinding, what: str) -> None:
         """Slot state is read only between plain steps. While slot 0 speculates, its committed KDA state / conv

@@ -33,6 +33,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -4145,6 +4146,216 @@ def test_prefix_cache_fast_hash_round_trip(monkeypatch):
     assert kv.state[g] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
     assert pc.stats["attaches"] == 1 and pc.stats["fallbacks"] == 0 and pc.report()["hits"] == 1
     assert "ttnn" not in sys.modules
+
+
+@pytest.mark.parametrize("fast", [False, True])
+def test_prefix_cache_running_keys_equal_the_confirm_keys(monkeypatch, fast):
+    """F46 running keys (prefix_cache.KeyChain via StackPrefixCache._key): plan keys each chunk end by extending the
+    generator slot's chain -- every token hashed once (store stats chain_tokens: 384, not 128 + 256 + 384) -- and
+    the keys equal store.key over the whole prefix and the scheduler's confirm-side keys of the plugin's Python list
+    (under the fast scheme the int32 history, an int64 copy and the list give the same bytes), across an attach (the
+    chain starts at the attach key) and on random chunkings; a chain that is not the row's sequence (another prompt's,
+    or ahead of the key) restarts from the seed; an id int32 cannot hold is refused on both sides"""
+    import random
+
+    from models.autoports.zai_org_glm_5_3_flash.tt.prefix_cache import prefix_key
+
+    monkeypatch.setenv("GLM53_PREFIX_FAST_HASH", "1" if fast else "0")
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch)
+    pc = ad.prefix
+    assert pc.store.fast is fast
+    a = _prompt(600, 3)
+    row_a = _blocks(0, len(a))
+    _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, 384, len(a)])
+    g = ad._alias[0]
+    keys = {e.n_tokens: k for k, e in pc.store.entries.items()}
+    assert sorted(keys) == [128, 256, 384]
+    n_ids, _fp, hs = pc._prompt_keys(list(a))
+    for n, k in keys.items():
+        assert k == pc.store.key(a, n) == hs[n // 128 - 1] == pc.store.key(torch.tensor(a, dtype=torch.int64), n)
+    assert pc.store.stats["chain_tokens"] == 384 and pc.chains[g].n == 384 and "chain_restarts" not in pc.store.stats
+    ad.release_request(0)
+    assert g not in pc.chains
+    # ---- B attaches A's 256 and continues: its chain starts at the attach key, its snapshots key B's own prefix
+    b = a[:300] + _prompt(300, 41)
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256
+    row_b = row_a[:4] + _blocks(1, len(b))[4:]
+    start = 256
+    for end in (384, 512, len(b)):
+        out = ad.prefill_forward(_history([b[:end]]), page_table=_table([row_b[: -(-end // BLOCK_SIZE)]], 1),
+                                 kv_cache=kv, prompt_lens=[end], start_pos=[start], empty_slots=[1],
+                                 sampling_params=_greedy(1) if end == len(b) else None)  # fmt: skip
+        start = end
+    gb = ad._alias[1]
+    assert kv.state[gb] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB and pc.stats["attaches"] == 1
+    hb = pc._prompt_keys(list(b))[2]
+    for n in (384, 512):
+        assert pc.store.key(b, n) in pc.store.entries and pc.store.key(b, n) == hb[n // 128 - 1]
+    assert pc.store.stats["chain_tokens"] == 384 + 512  # B: its attach key (256) once, then 128 per chunk end
+    ad.release_request(1)
+    # ---- random chunkings of one prompt: every running key is the whole-prefix key
+    rng = random.Random(7)
+    p = [rng.randrange(VOCAB) for _ in range(3000)]
+    for _ in range(10):
+        ch = None
+        for e in sorted(rng.sample(range(1, 3000 // 128 + 1), 5)):
+            k, ch = pc.store.chain_key(ch, torch.tensor(p, dtype=torch.int32), e * 128)
+            assert k == pc.store.key(p, e * 128) == prefix_key(p, e * 128, pc.store.sig, 128, fast)
+    # ---- a chain that is not this sequence's restarts: the key is still the row's own
+    c = _prompt(300, 17)
+    _k, ch = pc.store.chain_key(None, torch.tensor(b, dtype=torch.int32), 256)
+    k2, ch2 = pc.store.chain_key(ch, torch.tensor(c, dtype=torch.int32), 256)
+    assert k2 == pc.store.key(c, 256) and pc.store.stats["chain_restarts"] == 1
+    k3, _ch = pc.store.chain_key(ch2, torch.tensor(c, dtype=torch.int32), 128)  # behind the chain
+    assert k3 == pc.store.key(c, 128) and pc.store.stats["chain_restarts"] == 2
+    if fast:
+        bad = list(a)
+        bad[5] = 2**31
+        with expect_error(ValueError, "outside"):
+            pc.store.chain_key(None, torch.tensor(bad, dtype=torch.int64), 128)
+        with expect_error(ValueError, "outside"):
+            ad.confirm_prefix_cache_hit(bad, [], 128)
+    assert "ttnn" not in sys.modules
+
+
+def test_prefix_cache_confirm_memoizes_per_token_list(monkeypatch):
+    """F46: the scheduler confirms a waiting request again at every step with the same token list -- its block hashes
+    are memoized per list and reused only while its content is unchanged (a copy compared exactly): the retries answer
+    as the first confirmation; an in-place change of the list (same length) recomputes and answers for the new ids;
+    vLLM's ConstantList (the list in _x) is compared through its list"""
+    from collections.abc import Sequence
+
+    class _ConstantList(Sequence):
+        """vllm.v1.utils.ConstantList: a read-only view of a request's token list (kept in _x)"""
+
+        def __init__(self, x):
+            self._x = x
+
+        def __getitem__(self, i):
+            return self._x[i]
+
+        def __len__(self):
+            return len(self._x)
+
+    monkeypatch.setenv("GLM53_PREFIX_FAST_HASH", "1")
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch)
+    pc = ad.prefix
+    a = _prompt(300, 5)
+    _prefill_steps(ad, kv, a, _blocks(0, len(a)), slot=0, ends=[128, 256, len(a)])
+    ad.release_request(0)
+    q = a[:260] + _prompt(20, 9)
+    assert ad.confirm_prefix_cache_hit(q, [], 256) == 256
+    assert pc.stats["confirm_memo_misses"] == 1 and pc.stats["confirm_memo_hits"] == 0
+    for _ in range(3):  # the scheduler's retries of the waiting request
+        assert ad.confirm_prefix_cache_hit(q, [], 256) == 256
+    assert pc.stats["confirm_memo_hits"] == 3 and len(pc.pins) == 1  # one pin, moved by every retry
+    q[200] = (q[200] + 1) % VOCAB  # changed in place, same length: [128, 256) no longer matches A
+    assert ad.confirm_prefix_cache_hit(q, [], 256) == 128 and pc.stats["confirm_memo_misses"] == 2
+    cl = _ConstantList(a[:260] + _prompt(20, 9))
+    assert ad.confirm_prefix_cache_hit(cl, [], 256) == 256 and ad.confirm_prefix_cache_hit(cl, [], 200) == 128
+    assert pc.stats["confirm_memo_hits"] == 4 and pc.stats["confirm_memo_misses"] == 3
+    assert "ttnn" not in sys.modules
+
+
+class _MockAsyncHostTierBackend(_MockHostTierBackend):
+    """+ export_snapshot_async: the entry's state is taken when the export is enqueued (StackBackend's queue-ordered
+    staging reads), the blob assembled by finish() -- which waits for ``gate`` (the test holds it shut) and fails when
+    ``fail`` was set at the enqueue; the admission bound is above the blob's bytes"""
+
+    BOUND = 1 << 16
+
+    def __init__(self, max_batch: int):
+        super().__init__(max_batch)
+        self.gate = threading.Event()
+        self.fail = False
+        self.async_exports: list = []
+
+    def export_snapshot_async(self, kv, entry: int, n_tokens=None):
+        self.async_exports.append((int(entry), n_tokens))
+        state, fail = list(kv.state[self.max_batch + int(entry)]), self.fail
+
+        def finish():
+            assert self.gate.wait(30)
+            if fail:
+                raise RuntimeError("mock: the staging read failed")
+            return {"state": torch.tensor(state, dtype=torch.int64)}
+
+        return finish, self.BOUND
+
+
+def test_prefix_cache_async_export_ordering(monkeypatch):
+    """GLM53_PREFIX_ASYNC_EXPORT: a full pool's LRU entry is spilled with its transfer in flight -- the snapshot that
+    evicted it reuses the device entry at once, yet the blob holds the evicted state (taken in queue order at the
+    enqueue, assembled later off the engine thread); the host tier admits it at the backend's bound and takes the
+    blob's size when it lands; a restore of the entry waits for its blob before the import and serves the cold
+    prefill's first token; a failed in-flight export drops its entry; nothing blocks on the export otherwise"""
+    from concurrent.futures import wait
+
+    monkeypatch.setattr(gvs, "PREFIX_CACHE", True)
+    monkeypatch.setattr(gvs, "PREFIX_ASYNC_EXPORT", True)
+    monkeypatch.setenv("GLM53_PREFIX_HOST_BYTES", str(1 << 30))
+    monkeypatch.setenv("GLM53_PREFIX_SPILL_MIN", "0")
+    backend = _MockAsyncHostTierBackend(B)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    pc = ad.prefix
+    assert pc.host and pc.async_export
+    doc = _prompt(256, 5)
+    a, b = doc + _prompt(40, 50), doc + _prompt(30, 20)
+    row_a = _blocks(0, len(a))
+    _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, len(a)])
+    ad.release_request(0)
+    key128, key256 = pc.store.key(a, 128), pc.store.key(a, 256)
+    # ---- C needs three entries: A's 128 and 256 are spilled in flight (the gate holds their blobs back) and their
+    #      device entries take C's 256 / 384 snapshots at once
+    c = _prompt(384, 9) + _prompt(10, 33)
+    _prefill_steps(ad, kv, c, _blocks(1, len(c)), slot=1, ends=[128, 256, 384, len(c)])
+    ad.release_request(1)
+    assert [x[0] for x in backend.async_exports] == [0, 1] and backend.exports == []  # no blocking export
+    assert pc.stats["spills_async"] == 2 and len(pc._exports) == 2
+    e128, e256 = pc.store.entries[key128], pc.store.entries[key256]
+    assert e128.tier == e256.tier == "host" and isinstance(e256.host_blob, gvs._PendingExport)
+    assert kv.state[B + 0] == c[:256] and kv.state[B + 1] == c[:384]  # the entries hold C's snapshots now
+    assert pc.store.host_used == 2 * backend.BOUND  # admitted at the bound until they land
+    # ---- B's hit on the in-flight 256 is confirmed (its pages are resident); its restore waits for the blob (the
+    #      gate opens 0.2 s into B's prefill) and imports A's state -- not C's 384, which took A's device entry
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256
+    threading.Timer(0.2, backend.gate.set).start()
+    row_b = row_a[:4] + _blocks(2, len(b))[4:]
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[2], sampling_params=_greedy(1))  # fmt: skip
+    g = ad._alias[2]
+    e256 = pc.store.entries[key256]
+    assert pc.stats["export_waits"] == 1 and pc.stats["export_wait_s"] >= 0.1
+    assert e256.tier == "device" and backend.imports == [e256.device_entry] and kv.state[B + e256.device_entry] == doc
+    assert kv.state[g] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
+    assert pc.stats["restores"] == 1 and pc.stats["attaches"] == 1 and pc.stats["fallbacks"] == 0
+    ad.release_request(2)
+    # ---- the rest land: the evicted states, their real sizes in the host accounting
+    wait([p.future for p in pc._exports.values()], timeout=30)
+    with pc.lock:
+        pc._settle_exports()
+    assert not pc._exports and pc.stats["exports_landed"] == pc.stats["spills_async"] == 3
+    assert torch.equal(pc.store.entries[key128].host_blob["state"], torch.tensor(doc[:128]))
+    assert pc.store.entries[key128].bytes == 128 * 8
+    assert pc.store.host_used == sum(e.bytes for e in pc.store.entries.values() if e.tier == "host")
+    # ---- failed in-flight exports drop their entries (their next hits prefill from 0, as after a blocking failure)
+    backend.fail = True
+    before = {k for k, e in pc.store.entries.items() if e.tier == "device"}
+    d = _prompt(256, 21) + _prompt(10, 1)
+    _prefill_steps(ad, kv, d, _blocks(3, len(d)), slot=3, ends=[128, 256, len(d)])
+    ad.release_request(3)
+    assert pc.stats["spills_async"] == 5  # D's two snapshots spilled two device entries
+    wait([p.future for p in pc._exports.values()], timeout=30)
+    with pc.lock:
+        pc._settle_exports()
+    gone = before - set(pc.store.entries)
+    assert pc.stats["export_failed"] == 2 and len(gone) == 2 and not pc._exports
+    assert pc.store.host_used == sum(e.bytes for e in pc.store.entries.values() if e.tier == "host")
+    assert backend.exports == [] and "ttnn" not in sys.modules
 
 
 # ------------------------------------------------------------------- GLM53_PF_TAIL_SPLIT (Glm53Generator._tail_split)

@@ -168,6 +168,12 @@ PREFIX_EXACT_UNCUT = os.environ.get("GLM53_STACK_PREFIX_EXACT_UNCUT", "1") == "1
 # fewer exports; device-only keeping (no spill) gains nothing: the pool evicts the kept snapshots before they are read).
 PREFIX_KEEP_PREV = os.environ.get("GLM53_STACK_PREFIX_KEEP_PREV", "0") == "1"
 PREFIX_KEEP_PREV_MIN = int(os.environ.get("GLM53_STACK_PREFIX_KEEP_PREV_MIN", "262144"))
+# GLM53_PREFIX_ASYNC_EXPORT=1 (default off; F46): a host-tier spill leaves its device -> host transfer in flight
+# (Glm53Generator.export_snapshot_async: the blocking export's staging rounds with non-blocking reads, in queue order)
+# and one background thread assembles the blob; the pool entry serves the snapshot that evicted it at once, a restore of
+# the spilled entry waits for its blob. The blocking export held the engine thread 0.3-1.9 s per spill (AgentX c16
+# 2026-11-15: 136 spills, 59 restores). Opt-in until a served hash gate with host-tier restores passed on device
+PREFIX_ASYNC_EXPORT = os.environ.get("GLM53_PREFIX_ASYNC_EXPORT", "0") == "1"
 SPEC_ENV = "GLM53_STACK_VLLM_SPEC"
 SPEC_MAX_ROWS = 4  # tt/spec_mtp.py: the speculative step runs at the B <= 4 chunk width (B 4 validated, chain_mk201)
 # GLM53_SPEC_MULTI=1 (default off; design doc/perf/mtp_multi_user_design.md): every live user speculates on a build of
@@ -856,6 +862,16 @@ def _blob_bytes(blob) -> int:
     return 0
 
 
+class _PendingExport:
+    """a host-tier blob still being assembled off the engine thread (GLM53_PREFIX_ASYNC_EXPORT): ``future`` -> the
+    blob; ``bytes``: the admission bound it was registered with (StackPrefixCache._land swaps in the blob, its size)"""
+
+    __slots__ = ("future", "bytes")
+
+    def __init__(self, future, nbytes: int):
+        self.future, self.bytes = future, int(nbytes)
+
+
 class StackPrefixCache:
     """GLM53_STACK_PREFIX=1: the adapter's prefix cache -- tt/prefix_cache.py's ``PrefixStore`` bookkeeping over the
     backend's device snapshot pool (``GLM53_PREFIX_DEVICE_ENTRIES`` entries, the virtual slots max_batch + k). vLLM
@@ -900,6 +916,9 @@ class StackPrefixCache:
     is not grown (GLM53_PREFIX_DEVICE_ENTRIES): a kept entry is the next device victim after the dominated ones, so
     it never displaces a latest snapshot, and it leaves the device to the host tier (spilled from
     GLM53_STACK_PREFIX_KEEP_PREV_MIN tokens, else dropped; the host tier's own LRU bounds the bytes).
+    Keys (F46): ``plan`` keys a request's chunk ends through its generator slot's running key (prefix_cache.KeyChain:
+    each chunk hashes only its new tokens, a 1 M prompt's ids once); ``confirm`` memoizes a prompt's block hashes per
+    token list (vLLM confirms a waiting request again at every step it retries it) -- both exactly the store's keys.
     ``confirm`` runs on vLLM's scheduler thread, the rest on the worker's: one lock around the store."""
 
     def __init__(self, gen, kv, max_batch: int):
@@ -936,10 +955,21 @@ class StackPrefixCache:
             for k in ("confirmed", "confirmed_tokens", "not_resident", "attaches", "fallbacks", "snapshots",
                       "snapshots_skipped", "mm_excluded", "tail_superseded", "exact_splits", "dominated",
                       "confirmed_host", "spills", "restores", "restore_failed", "exact_uncut_splits",
-                      "keep_prev_kept", "keep_prev_released", "keep_prev_hits")  # fmt: skip
+                      "keep_prev_kept", "keep_prev_released", "keep_prev_hits", "confirm_memo_hits",
+                      "confirm_memo_misses", "spills_async", "spills_async_sync", "exports_landed", "export_failed",
+                      "export_waits")  # fmt: skip
         }
-        self.stats.update(spill_s=0.0, restore_s=0.0)
+        self.stats.update(spill_s=0.0, restore_s=0.0, export_wait_s=0.0)
         self.base: dict = {}  # generator slot -> the key of the entry its request attached (dominated past it)
+        # F46: generator slot -> its request's running key (prefix_cache.KeyChain, plan's keys); the scheduler's
+        # confirmations memoized per prompt list: id -> (key scheme, a copy of the list, fingerprint, block hashes)
+        self.chains: dict = {}
+        self._memo: OrderedDict = OrderedDict()
+        self._memo_lock = threading.Lock()
+        self.memo_cap = max(8, int(max_batch))
+        self.async_export = False  # GLM53_PREFIX_ASYNC_EXPORT (wired by _host_tier)
+        self._exports: dict = {}  # key -> its _PendingExport until it lands (_land)
+        self._export_pool = None  # the one background thread that assembles them, in spill order
         self.host = self._host_tier(int(os.environ.get(HOST_BYTES_ENV, "0") or 0))
         self.store.keep_prev_min = PREFIX_KEEP_PREV_MIN  # (only kept entries read it)
         logger.info(
@@ -1006,11 +1036,75 @@ class StackPrefixCache:
         logger.info(
             f"GLM53 stack prefix: host tier of {nbytes / 2**30:.1f} GiB (entries of >= {self.store.spill_min} tokens)"
         )
+        if PREFIX_ASYNC_EXPORT:
+            self.async_export = callable(getattr(self.gen, "export_snapshot_async", None))
+            logger.info(
+                "GLM53 stack prefix: host-tier exports "
+                + ("finish off the engine thread (GLM53_PREFIX_ASYNC_EXPORT)" if self.async_export
+                   else "stay blocking: the generator has no export_snapshot_async")  # fmt: skip
+            )
         return True
 
+    def _pool(self):
+        """the background thread that assembles the in-flight exports' blobs (FIFO: one at a time, in spill order)"""
+        if self._export_pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            self._export_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="glm53-prefix-export")
+        return self._export_pool
+
+    def _land(self, key: str, p) -> bool:
+        """(self.lock held) an in-flight export's result -> its entry: the blob replaces the _PendingExport, its size
+        the admission bound -- waiting for it when it still runs (a restore needs it). False: the export failed (the
+        entry is dropped: its next hit prefills from 0, as after a failed blocking export) or the entry is gone /
+        replaced"""
+        e = self.store.entries.get(key)
+        try:
+            blob = p.future.result()
+        except Exception as exc:  # noqa: BLE001  (an export failure must not fail a request)
+            self.stats["export_failed"] += 1
+            logger.warning(f"GLM53 stack prefix: an in-flight host-tier export failed, its entry is dropped: {exc}")
+            if e is not None and e.host_blob is p:
+                self.store.evict(key)
+            return False
+        if e is None or e.host_blob is not p:  # evicted / replaced meanwhile: nobody reads this blob
+            return False
+        nb = _blob_bytes(blob)
+        self.store.host_used += nb - e.bytes
+        e.host_blob, e.bytes = blob, nb
+        self.stats["exports_landed"] += 1
+        return True
+
+    def _settle_exports(self) -> None:
+        """(self.lock held) land every in-flight export that finished (no wait)"""
+        for key, p in list(self._exports.items()):
+            if p.future.done():
+                del self._exports[key]
+                self._land(key, p)
+
     def _spill(self, e):
-        """PrefixStore.spill_fn (the caller holds self.lock, worker thread): device entry e -> (host blob, bytes)"""
+        """PrefixStore.spill_fn (the caller holds self.lock, worker thread): device entry e -> (host blob, bytes).
+        GLM53_PREFIX_ASYNC_EXPORT: the transfer is left in flight -> (a _PendingExport the background thread completes,
+        its admission bound); the entry serves the snapshot that evicted it as soon as this returns (queue order)"""
         t0 = time.perf_counter()
+        if self.async_export:
+            res = self.gen.export_snapshot_async(self.kv, int(e.device_entry), n_tokens=int(e.n_tokens))
+            if res is not None:
+                finish, nbytes = res
+                p = _PendingExport(self._pool().submit(finish), int(nbytes))
+                self._exports[e.key] = p
+                dt = time.perf_counter() - t0
+                self.stats["spills"] += 1
+                self.stats["spills_async"] += 1
+                self.stats["spill_s"] += dt
+                logger.info(
+                    f"GLM53 stack prefix: spilling [0, {e.n_tokens}) from entry {e.device_entry} to the host tier off "
+                    f"the engine thread (<= {nbytes / 2**20:.0f} MiB, {dt:.3f} s on the engine thread; host "
+                    f"{(self.store.host_used + nbytes) / 2**30:.1f} of {self.store.host_bytes / 2**30:.1f} GiB)"
+                )
+                return p, int(nbytes)
+            self.stats["spills_async_sync"] += 1
+        self._exports.pop(e.key, None)  # (a stale in-flight export of this key: its blob is not this one)
         blob = self.gen.export_snapshot(self.kv, int(e.device_entry), n_tokens=int(e.n_tokens))
         nbytes = _blob_bytes(blob)
         dt = time.perf_counter() - t0
@@ -1026,7 +1120,17 @@ class StackPrefixCache:
     def _restore(self, key: str, e):
         """a confirmed hit on the host tier (worker thread, self.lock held): import its blob into a free device entry ->
         the entry, now on the device; None (the request is prefilled from 0) when no device entry is free or the import
-        fails. A reader guards the entry meanwhile: the spill a reserve may trigger never evicts it from the host."""
+        fails. A reader guards the entry meanwhile: the spill a reserve may trigger never evicts it from the host. An
+        export still in flight (GLM53_PREFIX_ASYNC_EXPORT) lands first: the import reads its blob."""
+        p = self._exports.pop(key, None)
+        if p is not None and e.host_blob is p:
+            t0 = time.perf_counter()
+            ok = self._land(key, p)
+            self.stats["export_waits"] += 1
+            self.stats["export_wait_s"] += time.perf_counter() - t0
+            if not ok:
+                self.stats["restore_failed"] += 1
+                return None
         e.readers += 1
         try:
             ent = self.store.reserve_device()
@@ -1076,12 +1180,7 @@ class StackPrefixCache:
         """the cached tokens the device serves for vLLM's proposed hit of ``num_computed_tokens`` (0: none)"""
         if int(num_computed_tokens) <= 0 or mm_items:
             return 0
-        if self.store.fast:  # GLM53_PREFIX_FAST_HASH: one int64 tensor, fingerprinted by its bytes (the 1 M prompt's
-            ids = torch.as_tensor(prompt_token_ids, dtype=torch.int64).reshape(-1)  # list -> ints -> tuple: ~50 ms)
-            fp = hash(ids.numpy().tobytes())
-        else:
-            ids = [int(t) for t in prompt_token_ids]
-            fp = hash(tuple(ids))
+        n_ids, fp, hs = self._prompt_keys(prompt_token_ids)
         obm = self.gen.dsa_shard_map(self.kv)
         with self.lock:
             old = self.pins.pop(fp, None)
@@ -1093,7 +1192,7 @@ class StackPrefixCache:
                 cap = rmax
                 self.stats["confirm_capped"] = self.stats.get("confirm_capped", 0) + 1
             while cap >= self.store.boundary:
-                pos, e = self.store.longest_cached(ids, max_tokens=cap)
+                pos, e = self.store.longest_in(hs, min(cap, n_ids - 1))
                 if e is None:
                     break
                 if e.tier in ("device", "host") and resident_blocks(obm, e.pages[: -(-pos // BLOCK_SIZE)]):
@@ -1106,10 +1205,45 @@ class StackPrefixCache:
                 cap = pos - 1  # a shorter registered prefix may still be resident
         return 0
 
+    def _prompt_keys(self, prompt_token_ids) -> tuple:
+        """(length, fingerprint, block hashes) of a prompt the scheduler confirms: the store key of every complete
+        boundary block (store.hashes) and the pins' fingerprint (the last block's key + the tail ids: another prompt
+        shares it only through a sha256 collision). Memoized per token list: vLLM confirms a waiting request again at
+        every step it retries it, with the same list (Request.all_token_ids, a read-only view) -- a repeat costs a
+        list == list pass over a copy taken with the hashes (0.6 ms at 1 M ids: the same int objects) instead of the
+        conversion + chain (48 ms at 1 M under the fast scheme, 165 ms under the text one; F46 l2-34 CPU). Exact: the
+        copy's content is what the hashes were computed from, whatever object brings it (the id only finds it)."""
+        raw = prompt_token_ids
+        if not isinstance(raw, list):
+            x = getattr(raw, "_x", None)  # vLLM's ConstantList keeps its list here: compared without a copy
+            raw = x if isinstance(x, list) else raw.tolist() if hasattr(raw, "tolist") else list(raw)
+        scheme, mk = self.store.scheme(), id(prompt_token_ids)
+        with self._memo_lock:
+            m = self._memo.get(mk)
+            if m is not None and m[0] == scheme and len(m[1]) == len(raw) and m[1] == raw:
+                self._memo.move_to_end(mk)
+                self.stats["confirm_memo_hits"] += 1
+                return len(raw), m[2], m[3]
+        hs = self.store.hashes(raw)
+        fp = hash((len(raw), hs[-1] if hs else "", tuple(raw[len(hs) * self.store.boundary :])))
+        with self._memo_lock:
+            self._memo[mk] = (scheme, list(raw), fp, hs)
+            self._memo.move_to_end(mk)
+            while len(self._memo) > self.memo_cap:
+                self._memo.popitem(last=False)
+            self.stats["confirm_memo_misses"] += 1
+        return len(raw), fp, hs
+
     def _ids(self, row: torch.Tensor):
         """a token row for a store key: the tensor itself under GLM53_PREFIX_FAST_HASH (its int32 bytes are hashed),
         else its list (the decimal-text scheme)"""
         return row if self.store.fast else row.tolist()
+
+    def _key(self, tokens: torch.Tensor, i: int, g: int, n: int) -> str:
+        """(self.lock held) row i's store key of its first n tokens through generator slot g's running key: only the
+        tokens past the slot's last key are hashed (PrefixStore.chain_key: exactly store.key(tokens[i], n))"""
+        key, self.chains[int(g)] = self.store.chain_key(self.chains.get(int(g)), tokens[i], n)
+        return key
 
     # ---- one prefill call (worker thread)
     def plan(self, tokens: torch.Tensor, rows: torch.Tensor, gslots: list, starts: list, ends: list, skip=()):
@@ -1125,6 +1259,10 @@ class StackPrefixCache:
         live = set(self.gen.live_slots(self.kv))
         with self.lock:
             self._pending = []
+            self._settle_exports()
+            for i, (g, s0) in enumerate(zip(gslots, starts)):
+                if s0 <= 0 or g not in live or i in skip:  # a request new in g (or an image row): its own running key
+                    self.chains.pop(int(g), None)
             for i, (g, s0) in enumerate(zip(gslots, starts)):
                 if s0 <= 0 or g in live:
                     continue
@@ -1135,7 +1273,7 @@ class StackPrefixCache:
                         f"GLM53 stack prefix: generator slot {g}'s hit at {s0}: an image request, prefilled from 0"
                     )
                     continue
-                key = self.store.key(self._ids(tokens[i, :s0]), s0) if s0 % self.store.boundary == 0 else None
+                key = self._key(tokens, i, g, s0) if s0 % self.store.boundary == 0 else None
                 e = self.store.entries.get(key) if key is not None else None
                 blocks = rows[i, : -(-s0 // BLOCK_SIZE)].tolist()
                 host = e is not None and e.tier == "host"
@@ -1189,7 +1327,7 @@ class StackPrefixCache:
                 if i in skip:  # an image request's state depends on pixels its token-id key does not carry
                     self.stats["mm_excluded"] += 1
                     continue
-                key = self.store.key(self._ids(tokens[i, :end]), end)
+                key = self._key(tokens, i, gslots[i], end)
                 if key in self.store.entries or key in planned:
                     self.stats["snapshots_skipped"] += 1
                     continue
@@ -1293,10 +1431,11 @@ class StackPrefixCache:
             self.store.release_slot(int(gslot))
             self.tail.pop(int(gslot), None)  # a later request in the slot starts its own chain
             self.base.pop(int(gslot), None)
+            self.chains.pop(int(gslot), None)  # (its running key ends with the request)
 
     def report(self) -> dict:
         with self.lock:
-            return {**self.store.report(), "pins": len(self.pins), **self.stats}
+            return {**self.store.report(), "pins": len(self.pins), "exports_pending": len(self._exports), **self.stats}
 
 
 class GLM53StackForCausalLM:

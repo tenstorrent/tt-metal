@@ -2164,6 +2164,143 @@ class StackBackend(ModelBackend):
     def import_snapshot(self, kv: StackCache, entry: int, states: Any) -> None:
         self.import_kda_state(kv, self._entry_slot(kv, entry), states)
 
+    def export_snapshot_async(self, kv: StackCache, entry: int, n_tokens: Optional[int] = None):
+        """export_snapshot with its device -> host reads left in flight (the vLLM adapter's host tier under
+        GLM53_PREFIX_ASYNC_EXPORT): the SAME staging rounds as the blocking export (export_kda_pack, export_dsa_state:
+        per round the SlotOps copy of the entry's rows into the staging), each followed by a NON-blocking read of the
+        staging (ttnn.from_device(blocking=False): read_async's pattern) instead of a blocking to_torch, and one event
+        after the last. The command queue runs them in order: each read takes its round's tiles before the next round's
+        copy (or a later import) rewrites the staging, and every copy reads the entry before any later command (a
+        prefill's snapshot into it) writes it -- the entry may be reused as soon as this returns.
+        Returns (finish, bytes): finish() -- any thread, no device command -- waits for the event, converts the host
+        copies with the blocking path's slicing (bitwise the same blob) and returns export_snapshot's value; bytes: the
+        blob's size as the host tier's admission bound (exact for the KDA pack and the unit-order pooled keys, every
+        chip's copy for the rest; finish's blob may be smaller). None: no KDA pack staging, or a per-slot pooled-key
+        store without DSA staging (the blocking export raises there) -- the caller exports synchronously."""
+        slot = self._entry_slot(kv, entry)
+        c = int(slot) // self.chunk
+        if kv.extra.get("kda_stage_s") is None or not self._kda_layers(kv, c):
+            return None
+        dsa_t = self._dsa_tensors(kv)
+        if dsa_t and kv.extra.get("dsa_stage") is None:
+            return None
+        t0 = _time.perf_counter()
+        mock = MOCK and os.environ.get("GLM53_MOCK_STATE_STUB", "1") == "1"
+        chips = self.tp if self.tp > 1 else 1
+        reads = []  # (staging tensor, its host copy in flight; None under the mock stub)
+
+        def read(stage) -> int:
+            reads.append((stage, None if mock else ttnn.from_device(stage, blocking=False)))
+            return len(reads) - 1
+
+        # ---- the KDA pack (export_kda_pack, source "live"): S pages per round of staged layers, then the conv rows
+        src = self._kda_state_src(kv, slot, n_tokens, "live")
+        ss, sc = kv.extra["kda_stage_s"], kv.extra["kda_stage_c"]
+        n_s = _pages(self._kda_layers(kv, c)[0][2][0]) // self.chunk
+        ls = int(ss.padded_shape[0]) // n_s
+        sa, ca = int(ss.buffer_address()), int(sc.buffer_address())
+        s_rounds, c_rounds = [], []
+        for g in range(0, len(src), ls):
+            grp = src[g : g + ls]
+            self.slot_ops.run([(1, int(S.buffer_address()), s0, sa, j * n_s, n_s, _pages_bytes(S), 0)
+                               for j, (_L, S, s0, _C, _r) in enumerate(grp)])  # fmt: skip
+            self.counters["slot_ops"] += 1
+            s_rounds.append((read(ss), len(grp)))
+        for g in range(0, len(src), 32):
+            grp = src[g : g + 32]
+            self.slot_ops.run([(2, int(C.buffer_address()), 0, ca, 0, _pages(C), _pages_bytes(C), (r << 16) | j)
+                               for j, (_L, _S, _s0, C, r) in enumerate(grp)])  # fmt: skip
+            self.counters["slot_ops"] += 1
+            c_rounds.append((read(sc), len(grp)))
+        layers = [L for L, _S, _s0, _C, _r in src]
+        S0, C0 = self._kda_layers(kv, c)[0][2]
+        nbytes = chips * len(src) * (n_s * _pages_bytes(S0) + _pages(C0) * _pages_bytes(C0) // 32)
+        # ---- the DSA rows (export_dsa_state, pools=True): rounds of the staging, each key's tiles sliced per round
+        dsa = None
+        if dsa_t:
+            stage = kv.extra["dsa_stage"]
+            pools = not self.pooled_paged(kv)
+            units = 0 if not pools else None if n_tokens is None else -(-int(n_tokens) // self.DSA_UNIT)
+            addr = {key: int(t.buffer_address()) for key, t, _r, _p in dsa_t}
+            paged = {key: p for key, _t, _r, p in dsa_t}
+            shard = kv.extra.get("dsa_shard")
+            d_rounds = []
+            da = int(stage.buffer_address())
+            for rnd in self._dsa_rounds(kv, int(slot), units):
+                self.slot_ops.run([(1, addr[k], t0_, da, s0, n, 2048, 0) for k, t0_, n, s0 in rnd])
+                self.counters["slot_ops"] += 1
+                d_rounds.append((read(stage), [(k, s0, n) for k, _t0, n, s0 in rnd]))
+                for k, _t0, n, _s0 in rnd:  # every chip's tiles, except a paged store in unit order (counted below)
+                    nbytes += 0 if (shard is not None and paged[k] and units is not None) else 2048 * n * chips
+            if shard is not None and units is not None:  # one [1, 4 units] row per paged store (unit order)
+                nbytes += 2048 * self.DSA_TILES_PER_UNIT * int(units) * sum(1 for k in paged if paged[k])
+            shard_c = None if shard is None else int(shard[0])
+            dsa = (stage, units, pools, paged, d_rounds, shard_c, [k for k, *_ in dsa_t])
+        ev = None if mock else ttnn.record_event(self.mesh)
+        self.counters["kda_pack_exports"] = self.counters.get("kda_pack_exports", 0) + 1
+        self.counters["snapshot_exports_async"] = self.counters.get("snapshot_exports_async", 0) + 1
+        self._time("export_async_enqueue", _time.perf_counter() - t0)
+        mesh, tp = self.mesh, self.tp
+
+        def host(h: int) -> torch.Tensor:
+            stage, copy = reads[h]
+            assert copy is not False, "a staging read converted twice"
+            reads[h] = (stage, False)  # (released as soon as converted: a 1 M entry reads ~25 staging rounds)
+            if copy is None:  # the mock stub: _stage_read's zeros
+                return self._stage_read(stage)
+            if tp > 1:
+                t = ttnn.to_torch(copy, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+            else:
+                t = ttnn.to_torch(copy)
+            return t.reshape(-1, int(stage.padded_shape[0]), 32, 32)
+
+        def finish() -> list:
+            t1 = _time.perf_counter()
+            if ev is not None:
+                ttnn.event_synchronize(ev)
+            s_parts = []
+            for h, k in s_rounds:
+                hs_ = host(h)
+                s_parts.append(hs_[:, : k * n_s].reshape(hs_.shape[0], k, n_s, 32, 32).clone())
+            c_parts = []
+            for h, k in c_rounds:
+                hc_ = host(h)  # [chips, tiles, 32, 32]: layer j = row j of every tile
+                c_parts.append(hc_[:, :, :k, :].permute(0, 2, 1, 3).clone())
+            out = [dict(kda=dict(kind=self.KDA_PACK, layers=layers, n_s=n_s, S=torch.cat(s_parts, dim=1),
+                                 C=torch.cat(c_parts, dim=1)))]  # fmt: skip
+            if dsa is not None:
+                _stage, units_, pools_, paged_, rounds_, shard_c, keys = dsa
+                parts = {k: [] for k in keys}
+                for h, items in rounds_:
+                    hd = host(h)
+                    for k, s0, n in items:
+                        parts[k].append(hd[:, s0 : s0 + n].clone())
+                    del hd
+                n_chips = next((v[0].shape[0] for v in parts.values() if v), 1)
+                res = {k: torch.cat(v, dim=1) if v else torch.zeros(n_chips, 0, 32, 32, dtype=torch.bfloat16)
+                       for k, v in parts.items()}  # fmt: skip
+                nch = next(iter(res.values())).shape[0]
+                if shard_c is not None:
+                    for k, v in res.items():
+                        if paged_[k]:
+                            res[k] = dsa_units_to_unit_order(v, shard_c, units_, self.DSA_TILES_PER_UNIT)
+                        elif all(torch.equal(v.view(torch.int16)[i], v.view(torch.int16)[0]) for i in range(nch)):
+                            res[k] = v[:1].clone()
+                    same = all(v.shape[0] == 1 for v in res.values())
+                else:
+                    same = all(torch.equal(v.view(torch.int16)[i], v.view(torch.int16)[0]) for v in res.values()
+                               for i in range(nch))  # fmt: skip
+                    if same:
+                        res = {k: v[:1].clone() for k, v in res.items()}
+                self.counters["dsa_exports"] = self.counters.get("dsa_exports", 0) + 1
+                out.append(dict(dsa=dict(kind=self.DSA_BLOB, unit_tokens=self.DSA_UNIT, units=units_, n_tokens=n_tokens,
+                                         chips=nch, replicated=same, layout="unit" if shard_c is not None else "chip",
+                                         pools=bool(pools_), tensors=res)))  # fmt: skip
+            self._time("export_async_finish", _time.perf_counter() - t1)
+            return out
+
+        return finish, int(nbytes)
+
     def _state_ops(self, kv: StackCache, dst: int, src: Optional[int], dsa: bool = True) -> list:
         """KDA S rows (contiguous pages per user) and conv-history rows (a row of every tile) of slot dst <- slot src
         (None: zeros), every layer; dsa=False: not the sparse_dsa slot state (Stage 17's speculative hand-off moves

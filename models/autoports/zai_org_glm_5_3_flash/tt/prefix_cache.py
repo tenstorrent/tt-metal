@@ -28,6 +28,7 @@ generation, PCC-equal to a fresh prefill of the same tokens). Multi-turn chat re
 
 from __future__ import annotations
 
+import array
 import hashlib
 import os
 import time
@@ -109,37 +110,80 @@ def fast_hash_enabled() -> bool:
     return os.environ.get(FAST_HASH_ENV, "0") == "1"
 
 
-def _id_bytes(token_ids) -> bytes:
-    """token ids (a list / tuple, numpy array or CPU torch tensor) -> their little-endian int32 bytes"""
+def id_array(token_ids):
+    """token ids (a list / tuple / any int sequence, numpy array or CPU torch tensor) -> a contiguous little-endian
+    int32 numpy array; ValueError for an id outside [0, 2^31) -- an int64 tensor, an int32 one and the scheduler's
+    Python list of the same ids give the same bytes, an id int32 cannot hold is refused on every side (never truncated
+    into another key). A sequence goes through array("i") (C ints at C speed: 12 ms for a 1,039,872-token list vs 35 ms
+    through torch.as_tensor, F46 2026-11-15 l2-34)."""
     import numpy as np
 
-    a = np.asarray(token_ids)
-    if a.dtype.kind not in "iu":
-        a = np.asarray(token_ids, dtype=np.int64)
+    if hasattr(token_ids, "__array__"):
+        a = np.asarray(token_ids)
+        if a.dtype.kind not in "iu":
+            a = np.asarray(token_ids, dtype=np.int64)
+    else:
+        try:
+            a = np.frombuffer(array.array("i", token_ids), dtype=np.intc)
+        except OverflowError as exc:
+            raise ValueError(f"token ids outside [0, 2^31): {exc}") from None
     if a.size and (int(a.min()) < 0 or int(a.max()) >= 2**31):
         raise ValueError(f"token ids outside [0, 2^31): [{int(a.min())}, {int(a.max())}]")
-    return np.ascontiguousarray(a.reshape(-1), dtype="<i4").tobytes()
+    return np.ascontiguousarray(a.reshape(-1), dtype="<i4")
+
+
+def _id_bytes(token_ids) -> bytes:
+    """token ids (a list / tuple, numpy array or CPU torch tensor) -> their little-endian int32 bytes"""
+    return id_array(token_ids).tobytes()
+
+
+def chain_seed(sig: str, fast: bool) -> bytes:
+    """the chain state before a key scheme's first block: the salted seed (sig + "|i32" under the fast scheme)"""
+    return (sig + "|i32").encode() if fast else sig.encode()
+
+
+def chain_digests(prev: bytes, token_ids, boundary: int = BOUNDARY, fast: bool = False) -> list:
+    """the chained digests after each complete ``boundary``-token block of ``token_ids``, chained on from ``prev`` (a
+    scheme's seed, or the digest of the block before token_ids[0]). prefix_hashes is this from the seed; a running key
+    (KeyChain) is this from the digest it stopped at -- the same bytes either way. ``fast``: sha256(prev + the block's
+    int32 bytes); else sha256(prev + the block's ids as comma-joined decimal text)."""
+    n = len(token_ids) // boundary
+    out = []
+    if fast:
+        buf, step = _id_bytes(token_ids[: n * boundary]), 4 * boundary
+        for j in range(n):
+            prev = hashlib.sha256(prev + buf[j * step : (j + 1) * step]).digest()
+            out.append(prev)
+        return out
+    ids = token_ids[: n * boundary]
+    ids = ids.tolist() if hasattr(ids, "tolist") else ids  # (a tensor / array: its ints once, not one 0-d item each)
+    for j in range(n):
+        h = hashlib.sha256(prev)
+        h.update(",".join(str(int(t)) for t in ids[j * boundary : (j + 1) * boundary]).encode())
+        prev = h.digest()
+        out.append(prev)
+    return out
 
 
 def prefix_hashes(token_ids: Sequence[int], sig: str, boundary: int = BOUNDARY, fast: bool = False) -> list[str]:
     """Chained block hashes: hashes[j] = key of the first (j + 1) * boundary tokens (only complete blocks). ``fast``
     (GLM53_PREFIX_FAST_HASH): each block's int32 bytes, chained from the salted seed sig + "|i32"."""
-    n = len(token_ids) // boundary
-    if fast:
-        buf, step = _id_bytes(token_ids[: n * boundary]), 4 * boundary
-        out, prev = [], (sig + "|i32").encode()
-        for j in range(n):
-            prev = hashlib.sha256(prev + buf[j * step : (j + 1) * step]).digest()
-            out.append(prev.hex())
-        return out
-    out, prev = [], sig.encode()
-    for j in range(n):
-        blk = token_ids[j * boundary : (j + 1) * boundary]
-        h = hashlib.sha256(prev)
-        h.update(",".join(str(int(t)) for t in blk).encode())
-        prev = h.digest()
-        out.append(prev.hex())
-    return out
+    return [d.hex() for d in chain_digests(chain_seed(sig, fast), token_ids, boundary, fast)]
+
+
+@dataclass(frozen=True)
+class KeyChain:
+    """A running key (PrefixStore.chain_key): the chain state after the first ``n`` tokens (a multiple of the boundary)
+    of one token sequence -- a request's prompt as its prefill advances -- so each chunk hashes only its new tokens
+    (prefix_key over [0, end) at every chunk hashed a 1 M prompt's ids ~64 times over: 0.45 s of the engine thread per
+    1 M prefill under the fast scheme, ~8 s under the text one; F46 2026-11-15). ``prev``: the digest after block
+    n / boundary (the scheme's seed at n = 0; the key of [0, n) is prev.hex()). ``tail``: the int32 bytes of tokens
+    [n - boundary, n), the continuation's guard. ``scheme``: the store's (sig, fast, boundary) it was seeded with."""
+
+    n: int
+    prev: bytes
+    scheme: tuple
+    tail: bytes = b""
 
 
 def prefix_key(token_ids: Sequence[int], n_tokens: int, sig: str, boundary: int = BOUNDARY, fast: bool = False) -> str:
@@ -206,6 +250,31 @@ class PrefixStore:
     def hashes(self, token_ids: Sequence[int]) -> list[str]:
         return prefix_hashes(token_ids, self.sig, self.boundary, self.fast)
 
+    def scheme(self) -> tuple:
+        """what a key depends on besides the ids: (signature, fast scheme, boundary)"""
+        return (self.sig, self.fast, self.boundary)
+
+    def chain_key(self, chain: Optional[KeyChain], token_ids, n_tokens: int) -> tuple:
+        """(the key of token_ids[:n_tokens] -- exactly self.key(token_ids, n_tokens) --, the chain advanced to
+        n_tokens). ``chain``: a running key of the SAME sequence's first chain.n tokens (None: none yet); only tokens
+        [chain.n, n_tokens) are hashed. A chain that cannot go on restarts from the seed (stats chain_restarts):
+        another scheme / signature (invalidate), past n_tokens, or its last block's ids differ from token_ids' (not
+        this sequence)."""
+        b, n = self.boundary, int(n_tokens)
+        if n <= 0 or n % b or n > len(token_ids):
+            raise ValueError(f"prefix key needs a positive multiple of {b} tokens within the prompt ({n_tokens})")
+        stale = chain is not None and (chain.scheme != self.scheme() or chain.n > n)
+        if chain is not None and (stale or (chain.n and _id_bytes(token_ids[chain.n - b : chain.n]) != chain.tail)):
+            self.stats["chain_restarts"] = self.stats.get("chain_restarts", 0) + 1
+            chain = None
+        if chain is None:
+            chain = KeyChain(0, chain_seed(self.sig, self.fast), self.scheme())
+        if chain.n < n:
+            ds = chain_digests(chain.prev, token_ids[chain.n : n], b, self.fast)
+            chain = KeyChain(n, ds[-1], chain.scheme, _id_bytes(token_ids[n - b : n]))
+            self.stats["chain_tokens"] = self.stats.get("chain_tokens", 0) + len(ds) * b
+        return chain.prev.hex(), chain
+
     def boundaries(self, n_tokens: int) -> list[int]:
         """the snapshot positions of an n-token prompt: every boundary below it (a prompt that is itself a multiple of
         the boundary snapshots at n - boundary: its last token must be prefilled to produce logits)"""
@@ -221,9 +290,13 @@ class PrefixStore:
         (0, None) when nothing matches. Partial matches count: the suffix is prefilled from the resume position."""
         n = len(token_ids) - 1 if max_tokens is None else min(int(max_tokens), len(token_ids) - 1)
         n = max(n, 0) // self.boundary * self.boundary
-        hs = self.hashes(token_ids[:n])
-        for j in range(len(hs) - 1, -1, -1):
-            e = self.entries.get(hs[j])
+        return self.longest_in(self.hashes(token_ids[:n]), n)
+
+    def longest_in(self, hashes: Sequence[str], max_tokens: int) -> tuple[int, Optional[Entry]]:
+        """longest_cached over a prompt's precomputed block hashes (hashes[j] = the key of its first (j + 1) * boundary
+        tokens): the longest cached boundary <= max_tokens (the caller bounds it by len - 1)"""
+        for j in range(min(max(int(max_tokens), 0) // self.boundary, len(hashes)) - 1, -1, -1):
+            e = self.entries.get(hashes[j])
             if e is not None:
                 return (j + 1) * self.boundary, e
         return 0, None
