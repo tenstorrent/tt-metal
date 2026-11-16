@@ -1177,8 +1177,8 @@ class TPGatedDeltaNet:
         GDN_PATH_CALLS["decode_rows", "packed" if self._gdn_packed else "split"] += 1
         if self._gdn_packed:
             # Packed rows in L1 for the op; only the conv tap copy needs the qkv columns on their own.
-            rows = self._project_rows(x, B, ttnn.L1_MEMORY_CONFIG)
-            qkv = ttnn.slice(rows, (0, 0, 0), (1, B, C), memory_config=ttnn.L1_MEMORY_CONFIG)
+            packed = self._project_rows(x, B, ttnn.L1_MEMORY_CONFIG)
+            qkv = ttnn.slice(packed, (0, 0, 0), (1, B, C), memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
             # Split inputs from DRAM.
             qkv, z, a, b = self._project_qkvzab(x, B)
@@ -1198,7 +1198,7 @@ class TPGatedDeltaNet:
         self._conv_win_stale = True
         if self._gdn_packed:
             ttnn.deallocate(qkv)
-            gated = self._gdn_fused_op(rows, None, None, None, hist)
+            gated = self._gdn_fused_op(packed, None, None, None, hist)
         else:
             gated = self._gdn_fused_op(qkv, z, a, b, hist)
         ttnn.deallocate(hist)
