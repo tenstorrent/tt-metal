@@ -5,13 +5,13 @@ kernels/chain_inputs.cpp).
 
 * test_the_chain_trace_writes_the_host_block_and_ctrl_pages: eager and replayed from a trace on fresh inputs, the
   kernel writes the verify step buffer and the GDN ctrl pages the host stages for the same block
-  (test_spec_chain_host._chain_case: random predecessors and chained verifies, held rows included), and with a device
-  sampler continues drawn users from their draws and writes the sampler seeds of each user's count; and the replay
-  time.
+  (test_spec_chain_host._chain_case: random predecessors and chained verifies, held rows included, every other one
+  with rows that continue another predecessor row), and with a device sampler continues drawn users from their draws
+  and writes the sampler seeds of each user's count; and the replay time.
 * test_the_chain_kernel_writes_the_op_graph_words_and_replays_faster: the kernel and the op graph it replaced
-  (tests/spec_op_graphs.py OpGraphChain) on the same inputs, every count of the predecessor: every word of the step
-  buffer, the ctrl pages and the seeds is equal (outputs filled with a marker before each run), eager and replayed
-  from traces; the kernel's trace replays faster.
+  (tests/spec_op_graphs.py OpGraphChain) on the same inputs, every count of the predecessor, rows that stay and rows
+  that move: every word of the step buffer, the ctrl pages and the seeds is equal (outputs filled with a marker
+  before each run), eager and replayed from traces; the kernel's trace replays faster.
 
     MESH_DEVICE=P150x8 pytest models/demos/blackhole/qwen36/tests/test_spec_chain.py
 """
@@ -91,8 +91,8 @@ def test_the_chain_trace_writes_the_host_block_and_ctrl_pages(mesh_device, B, sa
             ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
     finally:
         mesh_device.set_program_cache_misses_allowed(True)
-    for _ in range(20):
-        case = _chain_case(rng, B, K, groups, nv, sampled)
+    for i in range(20):
+        case = _chain_case(rng, B, K, groups, nv, sampled, moved=i % 2 == 1)
         stage(case)
         ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
         check(case)
@@ -130,7 +130,7 @@ def test_the_chain_kernel_writes_the_op_graph_words_and_replays_faster(mesh_devi
     rng = random.Random(100 + B + sampled)
     cases, seen = [], set()
     while len(cases) < 22 or seen != set(range(T)):
-        cases.append(_chain_case(rng, B, K, groups, nv, sampled))
+        cases.append(_chain_case(rng, B, K, groups, nv, sampled, moved=len(cases) % 2 == 1))
         seen |= set(cases[-1].m)
     rep = ttnn.ReplicateTensorToMesh(mesh_device)
 

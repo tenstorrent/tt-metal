@@ -10,6 +10,9 @@
   the state of exactly the tokens its request committed.
 * A chained verify at a block crossing under asynchronous scheduling: the ctrl start words of the device count
   (GdnBlockState.ctrl_candidates) and the window equal those of the drained verify of the same step.
+* The device tests' asynchronous runner (test_mtp_gdn_blocks._async_run) against a stand-in of the model class that
+  checks the plugin contract on every call: the chained and the drained run of the same requests agree, also while
+  requests leave middle rows and the runner sends slot_remap.
 * GdnBlockState.set_verify_blocks: one ctrl page and one index per MambaSpec group, bound per group at allocation.
 * MTPBlockEngine's bookkeeping: the drafter starts only after a prompt's last chunk, a row's first verify writes the
   drafter KV of the prompt's last position before the verify, and a row move moves no GDN state.
@@ -537,3 +540,197 @@ def test_a_verify_passes_the_fast_gdn_spec_step_options_at_the_tested_geometry(m
     assert kw["conv_hist"] == "h" and kw["ring_pool2"] == "rv" and kw["ring_page_idx"] == "idx"
     for key, value in tp.SPEC_STEP_FAST_OPTIONS.items():
         assert kw.get(key) == (value if fast else None), f"{key} at geometry {geometry}, T = {T}"
+
+
+def _next_token(seq, vocab):
+    """The stand-in model's greedy token after the token sequence ``seq``."""
+    h = len(seq)
+    for t in seq[-6:]:
+        h = (h * 1000003 + int(t)) % 2147483647
+    return h % vocab
+
+
+def _stand_in_drafts(seq, K, vocab):
+    """The stand-in drafter's K drafts after ``seq``: the model's tokens, about one in three of them wrong."""
+    out = []
+    for k in range(K):
+        t = _next_token(seq + out, vocab)
+        out.append((t + 1) % vocab if _next_token(seq + out + [k + 7], 97) < 30 else t)
+    return out
+
+
+def _accept(drafts, ids):
+    c = 0
+    while c < len(drafts) and drafts[c] == ids[c]:
+        c += 1
+    return c + 1
+
+
+class _ContractModel:
+    """Stand-in of Qwen36MTPContractForCausalLM for _async_run, on the host: a deterministic language model and drafter
+    over B state slots. Each slot holds the inputs its request consumed; a verify of a slot first consumes the inputs of
+    the slot's last verify up to the count of the greedy walk, then answers the model's token after each input. A
+    chained verify (spec_predecessor) builds each live row from the predecessor row that slot_remap names: the token at
+    the walk's count, then the drafter's drafts. Every call checks what the plugin promises: a slot_remap is a
+    permutation applied before the step; a drained verify's tokens, positions and counts continue the slot's last
+    verify; a chained row continues a live row of the predecessor whose slot was not released, at the placeholder
+    positions of a full acceptance; a propose names the committed tokens of the oldest verify still to propose, in its
+    rows."""
+
+    def __init__(self, B, K, vocab):
+        self.B, self.K, self.T, self.vocab = B, K, K + 1, vocab
+        self.slots = [None] * B  # per slot: (inputs consumed, its last verify's row or None)
+        self.to_propose = []  # per verify still to propose: its rows {row: (inputs before it, block, ids)}
+        self.engine = SimpleNamespace(chained_steps=0, materialized_steps=0)
+        self.last = None
+
+    def _engine(self):
+        return self.engine
+
+    def zero_kv_cache_blocks(self, kv, block_ids):
+        pass
+
+    def release_request(self, slot):
+        assert self.slots[slot] is not None, f"slot {slot} holds no request"
+        self.slots[slot] = None
+
+    def prefill_forward(self, tokens, page_table, kv, prompt_lens, start_pos, empty_slots, mamba_state):
+        (slot,) = empty_slots
+        prompt = tokens[0, : prompt_lens[0]].tolist()
+        self.slots[slot] = (prompt, None)
+        logits = torch.zeros(1, 1, self.vocab)
+        logits[0, 0, _next_token(prompt, self.vocab)] = 1
+        return logits, None
+
+    def _consumed(self, slot):
+        """The slot's inputs after its last verify's commit, and the next input (the token at the walk's count)."""
+        seq, row = self.slots[slot]
+        if row is None:
+            return seq, None
+        base, block, ids, nv = row
+        c = _accept(block[1 : nv + 1], ids)
+        return base + block[:c], ids[c - 1]
+
+    def decode_forward(self, tokens, start_pos, page_table, slot_remap=None, spec_predecessor=None, **kw):
+        B, T, K = self.B, self.T, self.K
+        if slot_remap is not None:
+            remap = [int(x) for x in slot_remap]
+            assert sorted(remap) == list(range(B)), remap
+            self.slots = [self.slots[s] for s in remap]
+        if "spec_mode" not in kw:  # an ordinary [B, 1] decode: a verify of no draft, as the model runs it
+            out = torch.zeros(B, 1, self.vocab)
+            rows = {}
+            for r in range(B):
+                if int(start_pos[r]) < 0:
+                    continue
+                seq, row = self.slots[r]
+                assert row is None and int(start_pos[r]) == len(seq)
+                tok = int(tokens[r, 0])
+                rows[r] = (seq, [tok], [_next_token(seq + [tok], self.vocab)], 0)
+                self.slots[r] = (seq, rows[r])
+                out[r, 0, rows[r][2][0]] = 1
+            self.to_propose.append(rows)
+            return out
+        nv = torch.as_tensor(kw["num_valid_drafts"]).tolist()
+        rows = {}
+        if spec_predecessor is not None:
+            assert spec_predecessor is self.last, "the predecessor is the last verify"
+            pred_rows = self.to_propose[-1]
+            self.engine.chained_steps += 1
+        for r in range(B):
+            if int(start_pos[r, 0]) < 0:
+                continue
+            assert self.slots[r] is not None, f"row {r} reads a released slot"
+            seq, x = self._consumed(r)
+            if spec_predecessor is None:
+                n = nv[r]
+                block = [int(t) for t in tokens[r, : n + 1]]
+                assert block[0] == x, f"row {r}: block {block} does not continue with {x}"
+                assert block[1:] == _stand_in_drafts(seq + [block[0]], K, self.vocab)[:n], f"row {r}: drafts"
+                assert int(start_pos[r, 0]) == len(seq), f"row {r}: position {int(start_pos[r, 0])} != {len(seq)}"
+                last_row = self.slots[r][1]
+                c = _accept(last_row[1][1 : last_row[3] + 1], last_row[2])
+                assert int(kw["accepted_counts"][r]) == c, f"row {r}: accepted_counts"
+            else:
+                last_row = self.slots[r][1]
+                assert any(last_row is v for v in pred_rows.values()), f"row {r} continues no row of the predecessor"
+                assert int(start_pos[r, 0]) == len(last_row[0]) + T, f"row {r}: placeholder positions"
+                n = min(nv[r], K)
+                block = [x] + _stand_in_drafts(seq + [x], K, self.vocab)[:n]
+            ids = [_next_token(seq + block[: j + 1], self.vocab) for j in range(n + 1)]
+            rows[r] = (seq, block, ids, n)
+            self.slots[r] = (seq, rows[r])
+        self.to_propose.append(rows)
+        ids = torch.full((B, T), -1, dtype=torch.int64)
+        for r, (_, _, i, _) in rows.items():
+            ids[r, : len(i)] = torch.tensor(i)
+        self.last = SimpleNamespace(argmax_ids=ids)
+        return self.last
+
+    def read_decode_output(self, ids):
+        return ids
+
+    def propose_draft_tokens(self, K, committed, positions, counts):
+        rows = self.to_propose.pop(0)
+        drafts = torch.zeros(self.B, K, dtype=torch.int32)
+        num_valid = torch.zeros(self.B, dtype=torch.int32)
+        for r, (base, block, ids, n) in rows.items():
+            c = _accept(block[1 : n + 1], ids)
+            assert int(counts[r]) == c and committed[r, :c].tolist() == ids[:c], f"row {r}: the commit of another row"
+            assert int(positions[r, 0]) == len(base) + 1, f"row {r}: committed positions"
+            drafts[r] = torch.tensor(_stand_in_drafts(base + block[:c] + [ids[c - 1]], K, self.vocab))
+            num_valid[r] = K
+        return SimpleNamespace(draft_token_ids=drafts, num_valid=num_valid)
+
+
+def _contract_pair(B=4, K=3, block_size=64):
+    layout = SimpleNamespace(block_size=block_size, num_groups=2, group_names=[("a",), ("b",)], num_blocks=4096)
+    bpu = 8
+    return SimpleNamespace(
+        K=K, bmax=B, bs=block_size, vocab=1000, layout=layout, bpu=bpu, kv_spec=None, spec_model=None,
+        spec=_ContractModel(B, K, 1000),
+        pages=lambda q: torch.arange(1 + q * bpu, 1 + (q + 1) * bpu, dtype=torch.int32),
+        state=lambda model, blocks: {0: [(torch.tensor(blocks), torch.tensor(blocks))]},
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("kind", ["finish", "skip"])
+def test_the_async_runner_moves_rows_as_the_plugin_does(kind):
+    """test_mtp_gdn_blocks._async_run on the contract stand-in: requests leave middle rows (finished and released, or
+    left out with their slots held and released one verify later), the runner condenses the rows and sends slot_remap;
+    every call keeps the plugin contract, and the chained run equals the drained run (committed tokens, counts and
+    the blocks of each remaining request's last committed count)."""
+    from models.demos.blackhole.qwen36.tests.test_mtp_gdn_blocks import _async_run, _condense
+
+    assert _condense([0, 1, 2, 3], {1}) == [0, 3, 2] and _condense([0, 3, 2], {0}) == [2, 3]
+    assert _condense([0, 1, 2, 3], {3}) == [0, 1, 2] and _condense([0, 1, 2, 3], {0, 2}) == [3, 1]
+    K = 3
+    prompts = {q: list(range(10 + q, 60 + 7 * q)) for q in range(4)}
+    hint = lambda q, p0: K if p0 % 5 else 1
+    leave = {9: {1: kind}, 19: {0: kind}}
+    runs = {}
+    for chained in (False, True):
+        pair = _contract_pair()
+        runs[chained] = _async_run(pair, prompts, chained, hint, 30, leave)
+        assert all(s is None for s in pair.spec.slots), "every slot released at the end"
+    (drained, drained_states, _, _), (chained, chained_states, moved, remapped) = runs[False], runs[True]
+    assert drained == chained and len(drained) == 30
+    assert {q for q in drained[8]} == {0, 1, 2, 3} and {q for q in drained[9]} == {0, 2, 3}
+    assert {q for q in drained[19]} == {2, 3}
+    assert remapped == 2 and set(drained_states) == {2, 3}
+    for q in drained_states:
+        assert torch.equal(drained_states[q][0][0][0], chained_states[q][0][0][0])
+    accepted = {c for record in drained for _, (p0, commits) in record.items() for c in [len(commits)]}
+    assert accepted == set(range(1, K + 2)), "every count"
+
+
+def test_the_async_runner_without_moves_keeps_its_rows():
+    """Without requests that leave, _async_run sends no slot_remap and both runs agree (the block crossing test's
+    runs)."""
+    from models.demos.blackhole.qwen36.tests.test_mtp_gdn_blocks import _async_run
+
+    K = 3
+    prompts = {q: list(range(5 + q, 40 + 9 * q)) for q in range(4)}
+    hint = lambda q, p0: K
+    runs = [_async_run(_contract_pair(), prompts, chained, hint, 20) for chained in (False, True)]
+    assert runs[0][0] == runs[1][0] and runs[1][3] == 0

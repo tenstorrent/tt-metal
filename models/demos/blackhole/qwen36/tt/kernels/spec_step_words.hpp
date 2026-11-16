@@ -35,7 +35,7 @@ constexpr uint32_t pack_rows(uint32_t K) { return 2 * K + 5; }
 constexpr uint32_t draft_anchor(uint32_t K) { return K + 3; }
 // tt/spec_chain.py overlay rows (CH_*), one word per user
 constexpr uint32_t CH_P0_PREV = 0, CH_ACTIVE = 1, CH_DELTA = 2, CH_NUM_VALID = 3, CH_DECLINED = 4, CH_KEEP = 5;
-constexpr uint32_t CH_DRAWN_PREV = 6, CH_DRAWN = 7, CHAIN_OVERLAY_ROWS = 8;
+constexpr uint32_t CH_DRAWN_PREV = 6, CH_DRAWN = 7, CH_SRC = 8, CHAIN_OVERLAY_ROWS = 9;
 
 // Every L1 slot starts on this boundary: a NOC read needs the L1 and DRAM addresses equal modulo the DRAM read
 // alignment, 64 B on Blackhole (32 B on Wormhole), and every DRAM page (and column chunk) starts on it.
@@ -146,12 +146,12 @@ struct ChainShape {
 };
 
 struct ChainIn {
-    const uint32_t* ids;     // verify argmax lanes of the predecessor, word u * T + j
+    const uint32_t* ids;     // verify argmax lanes of the predecessor, word src * T + j
     const uint32_t* draws;   // the predecessor's sampler draws, or nullptr without a device sampler
-    const uint32_t* anchor;  // drafter pack row draft_anchor(K): u * T + m[u]
+    const uint32_t* anchor;  // drafter pack row draft_anchor(K): src * T + m[src]
     const int32_t* overlay;  // CHAIN_OVERLAY_ROWS rows of B words, overlay_stride apart
     uint32_t overlay_stride;
-    const uint32_t* drafts;  // draft k of user u at word (k * B + u) * draft_stride
+    const uint32_t* drafts;  // draft k of predecessor row src at word (k * B + src) * draft_stride
     uint32_t draft_stride;
     const int32_t* cand;  // ctrl candidates: row c * B + u, 2 * nv_heads * groups words, cand_stride apart
     uint32_t cand_stride;
@@ -167,10 +167,13 @@ struct ChainOut {
     uint32_t* seeds;  // B * T words, or nullptr without a sampler
 };
 
-// spec_chain.chain_graph: with m the predecessor's accepted drafts (anchor - u * T) and c = m + 1 its count, the next
-// verify's tokens [ids[u, m], drafts...] (a draft column at or past num_valid repeats column 0), positions
-// p0_prev + c + j, RoPE rows, the acceptance rows, and the ctrl words and seeds of candidate row m * B + u. An m
-// outside [0, T) picks nothing: column 0, the ctrl words and the seeds are 0, as the graph's one-hot sum gives.
+// spec_chain.chain_graph: row u of the next verify continues the predecessor's row src = overlay CH_SRC[u]. With m the
+// predecessor's accepted drafts on row src (anchor[src] - src * T) and c = m + 1 its count, row u's tokens
+// [ids[src, m], drafts of src...] (a draft column at or past num_valid repeats column 0), positions p0_prev + c + j,
+// RoPE rows, the acceptance rows, and the ctrl words and seeds of candidate row m * B + u; every overlay word and
+// candidate row is staged for row u. A src outside [0, B) reads 0 for its anchor, ids, draws and drafts, as the
+// graph's one-hot gather gives. An m outside [0, T) picks nothing: column 0, the ctrl words and the seeds are 0, as
+// the graph's one-hot sum gives.
 inline void chain_words(const ChainShape& s, const ChainIn& in, const ChainOut& out) {
     const uint32_t B = s.B, K = s.K, T = K + 1, NV = s.nv_heads;
     for (uint32_t i = 0; i < VERIFY_STEP_ROWS; ++i) {
@@ -186,17 +189,21 @@ inline void chain_words(const ChainShape& s, const ChainIn& in, const ChainOut& 
     auto ovr = [&](uint32_t row, uint32_t u) { return in.overlay[row * in.overlay_stride + u]; };
     auto step = [&](uint32_t row, uint32_t w) -> uint32_t& { return out.step[row * out.step_stride + w]; };
     for (uint32_t u = 0; u < B; ++u) {
-        const int32_t m = s32(in.anchor[u]) - static_cast<int32_t>(u * T);
+        const int32_t src = ovr(CH_SRC, u);
+        const bool known = src >= 0 && src < static_cast<int32_t>(B);
+        const uint32_t pred_row = known ? static_cast<uint32_t>(src) : 0u;
+        const int32_t m = known ? s32(in.anchor[pred_row]) - static_cast<int32_t>(pred_row * T) : 0;
         const bool picked = m >= 0 && m < static_cast<int32_t>(T);
         const int32_t p0_prev = ovr(CH_P0_PREV, u), act = ovr(CH_ACTIVE, u), delta = ovr(CH_DELTA, u);
         const int32_t nv = ovr(CH_NUM_VALID, u), drawn_prev = ovr(CH_DRAWN_PREV, u);
-        const int32_t tok0 = picked ? merged_id(in.ids, in.draws, drawn_prev, u * T + static_cast<uint32_t>(m)) : 0;
+        const int32_t tok0 =
+            picked && known ? merged_id(in.ids, in.draws, drawn_prev, pred_row * T + static_cast<uint32_t>(m)) : 0;
         const int32_t p0 = (p0_prev + (m + 1)) * act;
         for (uint32_t j = 0; j < T; ++j) {
             const int32_t ji = static_cast<int32_t>(j);
             int32_t tok = tok0;
             if (j > 0 && ji - 1 < nv) {
-                tok = s32(in.drafts[((j - 1) * B + u) * in.draft_stride]);
+                tok = known ? s32(in.drafts[((j - 1) * B + pred_row) * in.draft_stride]) : 0;
             }
             const uint32_t r = u * T + j;
             step(VERIFY_TOKENS, r) = to_u32(tok * act);

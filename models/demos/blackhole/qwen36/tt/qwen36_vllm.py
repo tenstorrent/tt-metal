@@ -640,7 +640,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_async_decode": True,
         "supports_async_spec_decode": True,
         # A verify submitted over the unread one before it builds its rows on the device (spec_chain): greedy rows, and
-        # on a device-sampled step sampled rows, which draw with the seeds of the positions the device computes.
+        # on a device-sampled step sampled rows, which draw with the seeds of the positions the device computes. Row i
+        # continues the unread verify's row slot_remap[i], so a row the runner moved keeps chaining.
         "supports_chained_spec_verify": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": True,

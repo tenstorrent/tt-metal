@@ -5,10 +5,10 @@
 // verify n + 1 from the unread verify n, chain_words in spec_step_words.hpp.
 //
 // Inputs (ROW_MAJOR, one page per row):
-//   ids        uint32 [1, 1, 1, 32]          verify n's argmax lanes, word u * T + j
+//   ids        uint32 [1, 1, 1, 32]          verify n's argmax lanes, word src * T + j
 //   draws      uint32 [1, 1, 1, R]           verify n's sampler draws (SAMPLER only)
 //   pack       uint32 [2K + 5, >= R]         the drafter pack of verify n (row draft_anchor(K) is read)
-//   overlay    int32  [8, >= B]              the host rows of verify n + 1 (spec_chain.chain_overlay)
+//   overlay    int32  [9, >= B]              the host rows of verify n + 1 (spec_chain.chain_overlay)
 //   draft k    uint32 [1, 1, B, 1]           K tensors: the drafts made from verify n's commit, one id per page
 //   cand       int32  [T * B, 2 * NV * G]    the ctrl candidates of every count (GdnBlockState.ctrl_candidates)
 //   seed_cand  int32  [T * B, T]             the seed candidates of every count (SAMPLER only)

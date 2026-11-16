@@ -63,10 +63,12 @@ def _ctrl_words(B, nv):
     return -(-(1 + B + 2 * B * nv) // 16) * 16
 
 
-def _chain_case(rng, B, K, groups, nv_heads, sampler):
+def _chain_case(rng, B, K, groups, nv_heads, sampler, moved=False):
     """A random predecessor (its ids, with a device ``sampler`` its draws for the drawn users, the drafter pack its
     step trace wrote, its drafts) and a chained verify over it (the overlay, random ctrl candidates, with a sampler
-    random seed candidates), with the block, ctrl pages and seeds the host stages for that verify."""
+    random seed candidates), with the block, ctrl pages and seeds the host stages for that verify. ``moved``: row u of
+    the chained verify continues row src[u] of a random permutation src of the predecessor's rows (the runner's
+    slot_remap after a row move), else row u. ``m``: the count each row of the chained verify continues."""
     T = K + 1
     ids, tokens, accept = _case(rng, B, K)
     for u in range(B):
@@ -87,16 +89,20 @@ def _chain_case(rng, B, K, groups, nv_heads, sampler):
     )
     m = m.reshape(-1).tolist()
     drafts = [torch.tensor([rng.randrange(VOCAB) for _ in range(B)]) for _ in range(K)]
+    src = list(range(B))
+    if moved:
+        rng.shuffle(src)
     pred_active = [p > 0 for p in accept[STEP_P0]]
-    active = [a and rng.random() < 0.85 for a in pred_active]
+    active = [pred_active[src[u]] and rng.random() < 0.85 for u in range(B)]
     hint = [rng.randrange(K + 1) for _ in range(B)]
-    nv = [min(h, K) if a and not accept[STEP_DECLINED][u] else 0 for u, (a, h) in enumerate(zip(active, hint))]
+    nv = [min(hint[u], K) if active[u] and not accept[STEP_DECLINED][src[u]] else 0 for u in range(B)]
     deltas = [rng.choice([0, -rng.randrange(1, 30), rng.randrange(1, 5)]) for _ in range(B)]
     declined = [not a or rng.random() < 0.15 for a in active]
     keep = [d and a and rng.random() < 0.5 for d, a in zip(declined, active)]
-    p0_prev = [accept[STEP_P0][u] if active[u] else 0 for u in range(B)]
+    p0_prev = [accept[STEP_P0][src[u]] if active[u] else 0 for u in range(B)]
     drawn = [int(sampler and a and rng.random() < 0.5) for a in active]
-    overlay = chain_overlay(p0_prev, active, deltas, nv, declined, keep, accept[STEP_DRAWN], drawn)
+    drawn_prev = [accept[STEP_DRAWN][s] for s in src]
+    overlay = chain_overlay(p0_prev, active, deltas, nv, declined, keep, drawn_prev, drawn, src)
     seed_cand = torch.randint(1, 1_000_001, (T * B, T)).to(torch.float32) if sampler else None
     width = 2 * nv_heads * groups
     cand = torch.randint(0, 1 << 20, (T * B, width), dtype=torch.int64)
@@ -106,11 +112,12 @@ def _chain_case(rng, B, K, groups, nv_heads, sampler):
     # The block the host stages for the chained verify.
     tok = torch.zeros(B, T, dtype=torch.int64)
     p0 = torch.zeros(B, dtype=torch.int64)
+    m = [m[s] for s in src]  # the count each row continues
     for u in range(B):
         if not active[u]:
             continue
-        tok[u] = int(merged[u, m[u]])
-        tok[u, 1 : nv[u] + 1] = torch.tensor([int(drafts[k][u]) for k in range(nv[u])], dtype=torch.int64)
+        tok[u] = int(merged[src[u], m[u]])
+        tok[u, 1 : nv[u] + 1] = torch.tensor([int(drafts[k][src[u]]) for k in range(nv[u])], dtype=torch.int64)
         p0[u] = p0_prev[u] + m[u] + 1
     pos = (p0.reshape(B, 1) + torch.arange(T)).reshape(-1)
     rows = {
@@ -148,23 +155,26 @@ def _chain_case(rng, B, K, groups, nv_heads, sampler):
         ctrls=want_ctrls,
         seeds=want_seeds,
         m=m,
-        drawn_prev=accept[STEP_DRAWN],
+        drawn_prev=drawn_prev,
         p0_prev=p0_prev,
         active=active,
+        src=src,
     )
 
 
+@pytest.mark.parametrize("moved", [False, True], ids=["rows-stay", "rows-move"])
 @pytest.mark.parametrize("sampler", [False, True])
 @pytest.mark.parametrize("B,K", [(1, 3), (2, 3), (4, 3), (8, 3), (4, 7), (2, 11)])
-def test_the_chain_program_writes_the_block_the_host_stages(B, K, sampler):
+def test_the_chain_program_writes_the_block_the_host_stages(B, K, sampler, moved):
     """chain_graph (the device arithmetic, in torch) == the step buffer verify_enqueue stages for the chained block,
     the ctrl pages of each row's count and, with a device sampler, the seeds of that count, over random predecessors
-    and chained verifies; a drawn predecessor user continues from its draw."""
-    rng = random.Random(B * 13 + K + 1000 * sampler)
+    and chained verifies; a drawn predecessor user continues from its draw. With moved rows each row continues the
+    predecessor row its slot_remap names."""
+    rng = random.Random(B * 13 + K + 1000 * sampler + 7 * moved)
     groups, nv_heads = 3, 6
     counts, drawn_tokens = set(), 0
     for _ in range(40):
-        case = _chain_case(rng, B, K, groups, nv_heads, sampler)
+        case = _chain_case(rng, B, K, groups, nv_heads, sampler, moved)
         step, ctrls, seeds = chain_reference(
             case.ids,
             case.pack,
@@ -273,19 +283,29 @@ def chained(monkeypatch):
     """An MTPBlockEngine whose device is a stand-in: each verify's ids are the next of state["ids"], and a device-sampled
     verify's draws the next of state["draws"]; the step trace runs as spec_accept.graph in torch over the step buffer
     the verify staged or the chain program wrote (spec_chain.chain_reference over the predecessor's ids, draws, pack
-    and drafts, and the staged seed candidates); the drafter answers state["drafts"]."""
+    and drafts, and the staged ctrl and seed candidates); the drafter answers state["drafts"]."""
+    return _chained_engine(monkeypatch)
+
+
+@pytest.fixture
+def make_chained(monkeypatch):
+    """Builds ``chained`` engines; each one patches ttnn.execute_trace, so the last one built is the one to run."""
+    return lambda: _chained_engine(monkeypatch)
+
+
+def _chained_engine(monkeypatch):
     B, K = 4, 3
     T = K + 1
     log = {
-        "traces": [], "traced": [], "enqueue": [], "staged": [], "overlay": [], "seed_cand": [], "blocks": [],
-        "chain_seeds": [],
+        "traces": [], "traced": [], "enqueue": [], "staged": [], "overlay": [], "cand": [], "seed_cand": [],
+        "blocks": [], "chain_seeds": [], "chain_ctrls": [],
     }  # fmt: skip
     state = {"ids": [], "draws": [], "drafts": [torch.arange(100 * k, 100 * k + B) for k in range(K)]}
     gdn = SimpleNamespace(remap_spec_slots=lambda idx: None)
     blocks = SimpleNamespace(
         verify_tokens=T,
         set_verify_blocks=lambda s, stage_ctrl=True: log["blocks"].append(("set", stage_ctrl, s)),
-        ctrl_candidates=lambda s: torch.zeros(T * B, 2 * 6 * 3),
+        ctrl_candidates=lambda s: _start_candidates(s, B, T),
         ctrl_written=lambda: log["blocks"].append(("written",)),
     )
     model = SimpleNamespace(
@@ -334,12 +354,14 @@ def chained(monkeypatch):
     eng = spec_engine.MTPBlockEngine(model, B, K)
     eng.captured, eng.nb, eng.block_size, eng._scratch_block = True, 8, 64, 999
     eng._active = set(range(B))
+    eng._last_hidden = [f"last_hidden{u}" for u in range(B)]
     eng._acc_trace, eng._dr_trace, eng._chain_trace = "step", "drafter", "chain"
     eng._accept = SimpleNamespace(stage_pt_rows=lambda rows: log.setdefault("pt_rows", []).append(rows))
     eng.sample_on_device = True
 
     def stage(overlay, cand, seed_cand=None):
         log["overlay"].append(overlay)
+        log["cand"].append(cand)
         log["seed_cand"].append(seed_cand)
 
     eng._chain = SimpleNamespace(stage=stage)
@@ -351,14 +373,15 @@ def chained(monkeypatch):
         if trace == "chain":
             pred = log["enqueue"][-1]
             seed_cand = log["seed_cand"][-1]
-            step, _, seeds = chain_reference(
-                _lanes(pred.ids), pred.pack, log["overlay"][-1], torch.zeros(T * B, 36), state["drafts"],
+            step, ctrls, seeds = chain_reference(
+                _lanes(pred.ids), pred.pack, log["overlay"][-1], log["cand"][-1], state["drafts"],
                 B, K, ROWS, _ctrl_words(B, 6), 6, 3,
                 draws=_lanes(torch.zeros(B * T) if pred.draws is None else pred.draws),
                 seed_cand=torch.zeros(T * B, T) if seed_cand is None else seed_cand,
             )  # fmt: skip
             log.setdefault("chain_step", []).append(step)
             log["chain_seeds"].append(seeds)
+            log["chain_ctrls"].append(ctrls)
 
     monkeypatch.setattr(ttnn, "execute_trace", execute_trace)
 
@@ -393,6 +416,16 @@ def chained(monkeypatch):
     return eng, log, state
 
 
+def _start_candidates(mamba_state, B, T):
+    """Stand-in GdnBlockState.ctrl_candidates: every word of candidate row c * B + u is row u's start block of count
+    c + 1 (start_blocks_by_count), so the chain program's ctrl page names the start block each row picked."""
+    by_count = torch.as_tensor(mamba_state.groups[0].start_blocks_by_count)
+    cand = torch.zeros(T * B, 2 * 6 * 3)
+    for c in range(T):
+        cand[c * B : (c + 1) * B] = by_count[:, c].reshape(B, 1).to(torch.float32)
+    return cand
+
+
 def _host_verify(eng, tokens, starts, nv, sampling=None):
     T = eng.T
     start_pos = torch.tensor([[s + j if s >= 0 else -1 for j in range(T)] for s in starts])
@@ -416,7 +449,7 @@ def _mamba(eng):
     return SimpleNamespace(groups=(group,))
 
 
-def _chained_verify(eng, res, upper_starts, hint, rows=None, sampling=None):
+def _chained_verify(eng, res, upper_starts, hint, rows=None, sampling=None, slot_remap=None):
     """The runner's chained call: placeholders at the positions of a full acceptance, with ``res`` the predecessor."""
     B, T = eng.B, eng.T
     rows = [s >= 0 for s in upper_starts] if rows is None else rows
@@ -433,6 +466,7 @@ def _chained_verify(eng, res, upper_starts, hint, rows=None, sampling=None):
         sampling=sampling,
         defer=True,
         predecessor=res.argmax_ids,
+        slot_remap=slot_remap,
     )
 
 
@@ -784,3 +818,264 @@ def test_a_sampled_chained_verify_built_from_the_read_predecessor_stages_the_see
     assert e.positions[0] == 103 and e.tokens[0][0] == 42, "count 3 over the draws"
     want = sampling_plan(sampling, [103, 203, edge + 3, 403], T, fresh_seed=lambda: 0)
     assert e.kw["sample_plan"].seeds == want.seeds
+
+
+# ----------------------------------------------------------------------------------------- rows that move
+
+
+def _slot_state(eng):
+    """The engine's per-slot state, which remap_slots moves."""
+    return dict(
+        offered=set(eng._offered),
+        no_draft=set(eng._no_draft),
+        speculated=set(eng._speculated),
+        streak=dict(eng._withheld_streak),
+        deltas=list(eng._rope_deltas),
+        fresh=dict(eng._fresh),
+        active=set(eng._active),
+    )
+
+
+def _requests_sampling(rows):
+    """Per-request sampling parameters in the given row order (None: a padding row): A seeded, B and C greedy, D
+    seeded."""
+    params = {"A": (0.8, 5, 77), "B": (0.0, 1, None), "C": (0.0, 1, None), "D": (0.7, 20, 80), None: (0.0, 1, None)}
+    return SimpleNamespace(
+        temperature=[params[r][0] for r in rows],
+        top_k=[params[r][1] for r in rows],
+        top_p=[1.0] * len(rows),
+        seed=[params[r][2] for r in rows],
+    )
+
+
+def _host_step_words(e, B, T):
+    """The verify step buffer a host-staged verify (log["enqueue"] entry ``e``) stages, as the chain program writes it
+    for a chained verify: tokens, positions p0 + j, RoPE rows and the acceptance rows."""
+    p0 = e.positions
+    positions = [p0[u] + j for u in range(B) for j in range(T)]
+    rope = rope_rows(positions, [d for d in e.kw["rope_deltas"] for _ in range(T)], ROWS).tolist()
+    tokens = torch.tensor(e.tokens).reshape(-1).tolist()
+    return step_rows_reference(tokens, positions, rope, e.accept, B, T).to(torch.int64)
+
+
+def _moved_run(eng, log, state, order, leave, release, sampled, host_drafted=False):
+    """Verify v0 of requests A, B, C, D in rows 0 .. 3, then verify v1 of the same requests less the one in row
+    ``leave``: the runner moves the request of the last row into row ``leave`` (InputBatch.condense) and sends that
+    slot_remap. ``release``: the request finished (release_request of its slot before v1); else vLLM left it out and
+    its slot is held. ``order``: "chained" (v1 submitted over the unread v0, built by the chain program),
+    "materialized" (the same without a chain trace: built from the engine's read of v0) or "drained" (v0 read and
+    proposed first, then v1 built by the runner from that propose). ``host_drafted``: C's window leaves the paged KV
+    at some counts, so v0 runs no device drafter and its propose drafts on the host (C must leave: ``leave`` 2).
+    Returns what every order must give alike."""
+    B, T, K = eng.B, eng.T, eng.K
+    if order == "materialized":
+        eng._chain_trace = None
+    eng.no_draft_streak = 1  # a row offered with no valid draft and never speculated is marked at once
+    eng._no_draft = {3}  # the runner withholds D's drafts: v0's propose declines row 3
+    eng._rope_deltas = [0, -7, 3, 5]
+    src = list(range(B))
+    src[leave], src[B - 1] = B - 1, leave
+    rows1 = [r for r in range(B) if r != B - 1]
+    names0 = ["A", "B", "C", "D"]
+    names1 = [names0[src[u]] if u in rows1 else None for u in range(B)]
+    sampling0 = _requests_sampling(names0) if sampled else None
+    sampling1 = _requests_sampling(names1) if sampled else None
+    tokens0 = torch.tensor([[1, 7, 8, 9], [2, 11, 12, 13], [3, 3, 3, 3], [4, 31, 32, 4]])
+    starts0, nv0 = [100, 200, 300, 400], [3, 3, 0, 2]
+    walk0 = torch.tensor([[7, 8, 50, 51], [11, 60, 61, 62], [21, 22, 23, 24], [31, 32, 70, 71]])
+    if host_drafted:
+        if leave != 2:
+            raise ValueError("C's window cannot take a chained verify: C must leave")
+        starts0[2] = eng.nb * eng.block_size - 1 - K - 2
+        tokens0[2], nv0[2], walk0[2] = torch.tensor([3, 21, 22, 23]), 3, torch.tensor([5, 5, 5, 5])
+    drafts = torch.stack(state["drafts"], dim=1)
+    # v1 (rows 0 .. 2 live): row u continues v0's row src[u]; row 0 accepts two drafts, row 1 one (when it has
+    # drafts), row 2 none.
+    walk1 = torch.zeros(B, T, dtype=torch.int64)
+    walk1[0] = torch.tensor([int(drafts[src[0], 0]), int(drafts[src[0], 1]), 7, 7])
+    walk1[1] = torch.tensor([int(drafts[src[1], 0]), 9, 9, 9])
+    walk1[2] = torch.tensor([5, 5, 5, 5])
+    hint1 = [K, 2, 0, K]
+    if sampled:
+        # A drawn row walks its draws; its argmax ids are something else.
+        drawn0 = torch.tensor([n in ("A", "D") for n in names0]).reshape(B, 1)
+        drawn1 = torch.tensor([n in ("A", "D") for n in names1]).reshape(B, 1)
+        state["ids"] = [torch.where(drawn0, 999, walk0), torch.where(drawn1, 998, walk1)]
+        state["draws"] = [walk0.reshape(-1), walk1.reshape(-1)]
+    else:
+        state["ids"] = [walk0, walk1]
+    upper1 = [starts0[src[u]] + T if u in rows1 else -1 for u in range(B)]
+
+    res0 = _host_verify(eng, tokens0, starts0, nv0, sampling0)
+    assert (res0.argmax_ids.plan is None) == host_drafted
+    committed0, counts0 = _walk(res0, tokens0, nv0)
+    assert counts0.tolist() == [3, 2, 1, 3]
+    if order == "drained":
+        out0 = _propose(eng, starts0, committed0, counts0)
+        if release:
+            eng.release(leave)
+        block1 = torch.zeros(B, T, dtype=torch.int64)
+        starts1 = [-1] * B
+        nv1 = [0] * B
+        for u in rows1:
+            s, c = src[u], int(counts0[src[u]])
+            n = min(hint1[u], int(out0.num_valid[s]))
+            block1[u] = int(committed0[s, c - 1])
+            block1[u, 1 : n + 1] = out0.draft_token_ids[s, :n].to(torch.int64)
+            starts1[u], nv1[u] = starts0[s] + c, n
+        start_pos = torch.tensor([[p + j if p >= 0 else -1 for j in range(T)] for p in starts1])
+        res1 = eng.decode_forward(
+            block1,
+            start_pos,
+            num_valid_drafts=torch.tensor(nv1, dtype=torch.int32),
+            accepted_counts=torch.tensor([int(counts0[src[u]]) if u in rows1 else 1 for u in range(B)]),
+            page_table=torch.arange(1, B * eng.nb + 1, dtype=torch.int32).reshape(B, eng.nb),
+            spec_mode="argmax_ids",
+            mamba_state=spec_engine._with_start_blocks(
+                _mamba(eng), torch.tensor([int(counts0[src[u]]) - 1 if u in rows1 else 0 for u in range(B)])
+            ),
+            sampling=sampling1,
+            defer=True,
+            slot_remap=torch.tensor(src, dtype=torch.int32),
+        )
+        after = _slot_state(eng)
+    else:
+        if release:
+            eng.release(leave)
+        res1 = _chained_verify(eng, res0, upper1, hint1, sampling=sampling1, slot_remap=torch.tensor(src))
+        out0 = _propose(eng, starts0, committed0, counts0)
+        after = _slot_state(eng)
+    succ, e = res1.argmax_ids, log["enqueue"][-1]
+    if order == "chained" and not host_drafted:
+        assert (eng.chained_steps, eng.materialized_steps) == (1, 0)
+        assert log["overlay"][-1][8, :B].tolist() == src
+        ctrl = log["chain_ctrls"][-1][0]
+        starts = [int(ctrl[0, 1 + B + u * 6]) for u in range(B)]
+        seeds = log["chain_seeds"][-1]
+        step_words = e.step.to(torch.int64)
+    else:
+        assert eng.chained_steps == 0 and eng.materialized_steps == int(order != "drained")
+        state_set = [b[2] for b in log["blocks"] if b[0] == "set"][-1]
+        starts = state_set.groups[0].start_blocks.tolist()
+        plan = e.kw.get("sample_plan")
+        seeds = None if plan is None else torch.tensor(plan.seeds)
+        step_words = _host_step_words(e, B, T)
+    p1 = [int(succ.p0[u]) if bool(succ.active[u]) else -1 for u in range(B)]
+    committed1, counts1 = _walk(res1, succ.tokens.clone(), succ.num_valid.tolist())
+    out1 = _propose(eng, p1, committed1, counts1)
+    assert not eng._pending and eng.one_enqueue_host_proposes == 0
+    live = torch.tensor([u in rows1 for u in range(B)])
+    return dict(
+        drafts0=out0.draft_token_ids.tolist(),
+        offered0=out0.num_valid.tolist(),
+        host_packs0=[h.tolist() for b, h in log["staged"] if b == "pack"],
+        tokens1=succ.tokens[live].tolist(),
+        p0_1=p1,
+        nv1=succ.num_valid.tolist(),
+        step_words1=step_words.tolist(),
+        starts1=[starts[u] for u in rows1],
+        seeds1=None
+        if seeds is None or not sampled
+        else [seeds[u * T : (u + 1) * T].tolist() for u in rows1 if names1[u] in ("A", "D")],
+        counts1=counts1.tolist(),
+        drafts1=out1.draft_token_ids.tolist(),
+        offered1=out1.num_valid.tolist(),
+        after_step=after,
+        after_propose=_slot_state(eng),
+    )
+
+
+@pytest.mark.parametrize("sampled", [False, True], ids=["greedy", "sampled"])
+@pytest.mark.parametrize("release", [True, False], ids=["finished", "held"])
+@pytest.mark.parametrize("leave", [1, 2])
+def test_a_chained_verify_over_a_row_move_equals_the_drained_verify(make_chained, sampled, release, leave):
+    """A request in a middle row leaves (finished and released, or left out by vLLM with its slot held) and the runner
+    moves the last row into its row (slot_remap). The chained verify over the unread predecessor, built by the chain
+    program or from the engine's read, gives what the drained order gives (the predecessor read and proposed, then
+    the runner's verify with that slot_remap): the predecessor's drafts, the verify block, its positions and valid
+    drafts, every word of the verify step buffer, the start block of each row's count, a seeded row's seeds, the walk
+    and drafts of the next propose, and the engine's per-slot state after the step and after the next propose."""
+    results = {}
+    for order in ("drained", "chained", "materialized"):
+        eng, log, state = make_chained()
+        results[order] = _moved_run(eng, log, state, order, leave, release, sampled)
+    want = results["drained"]
+    # D's drafts were withheld at v0: its row has no valid draft in v1.
+    assert want["nv1"][src_row_of(3, leave)] == 0
+    assert want["counts1"] == ([3, 1, 1, 1] if leave == 1 else [3, 2, 1, 1])
+    if leave == 1:
+        # C, never speculated and offered with no valid draft, is marked: v1's propose declines its row.
+        assert want["offered1"][2] == 0 and 2 in want["after_step"]["no_draft"]
+    if sampled:
+        assert want["seeds1"]
+    for order in ("chained", "materialized"):
+        got = results[order]
+        for key in want:
+            assert got[key] == want[key], f"{order}: {key} {got[key]} != drained {want[key]}"
+
+
+@pytest.mark.parametrize("release", [True, False], ids=["finished", "held"])
+def test_a_moved_chained_verify_over_a_host_drafted_predecessor_equals_the_drained_verify(make_chained, release):
+    """A predecessor that ran no device drafter (a row's window leaves the paged KV at some counts; that request then
+    leaves): the engine reads it and drafts on the host in the predecessor's rows with the withheld slots and M-RoPE
+    deltas the predecessor ran with (a release before it resets the engine's), as the drained order's propose does,
+    then moves the rows: the drafter pack the host propose stages and everything the drained verify gives match."""
+    results = {}
+    for order in ("drained", "chained"):
+        eng, log, state = make_chained()
+        results[order] = _moved_run(eng, log, state, order, 2, release, False, host_drafted=True)
+    want = results["drained"]
+    assert len(want["host_packs0"]) == 1 and want["offered0"][3] == 0
+    for key in want:
+        assert results["chained"][key] == want[key], f"{key} {results['chained'][key]} != drained {want[key]}"
+
+
+def src_row_of(pred_row, leave):
+    """The row of the chained verify that continues ``pred_row`` after the last row moved into row ``leave``."""
+    return leave if pred_row == 3 else pred_row
+
+
+def test_a_chained_verify_refuses_a_slot_remap_it_cannot_follow(chained, expect_error):
+    """A slot_remap that is not a permutation, a moved row whose predecessor row is padding, and a row that continues a
+    released slot raise before any engine state moves."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    state["ids"] = [torch.zeros(B, T, dtype=torch.int64)]
+    starts0 = [100, 200, -1, 300]
+    res0 = _host_verify(eng, torch.zeros(B, T, dtype=torch.int64), starts0, [0, 0, 0, 0])
+    eng._rope_deltas, eng._withheld_streak, eng._speculated = [1, 2, 3, 4], {0: 1, 3: 2}, {3}
+    before = _slot_state(eng)
+    with expect_error(ValueError, "is not a permutation"):
+        _chained_verify(eng, res0, [104, 204, 304, -1], [K] * B, slot_remap=[0, 1, 3, 3])
+    with expect_error(ValueError, "are not rows of the predecessor"):
+        _chained_verify(eng, res0, [104, 204, 304, -1], [K] * B, slot_remap=[0, 1, 2, 3])
+    with expect_error(ValueError, "are not rows of the predecessor"):
+        _chained_verify(eng, res0, [104, 304, -1, -1], [K] * B, slot_remap=[0, 2, 3, 1])
+    assert _slot_state(eng) == before
+    eng.release(1)
+    before = _slot_state(eng)
+    with expect_error(ValueError, "whose slots were released"):
+        _chained_verify(eng, res0, [104, 204, 304, -1], [K] * B, slot_remap=[0, 1, 3, 2])
+    assert _slot_state(eng) == before
+    assert eng.chained_steps == eng.materialized_steps == 0 and "chain" not in log["traces"]
+
+
+def test_the_chain_decides_with_the_withheld_slots_where_the_rows_move(chained):
+    """The chain program needs the chained verify's propose decided alike at every count; it reads the withheld slots
+    after the move. B's drafts are withheld (slot 1); vLLM leaves B out (slot held) and moves D from row 3 into row 1,
+    where D's window leaves the paged KV at some counts only: the propose of row 1 depends on the count, so the
+    engine builds the verify from its read of the predecessor, and D's row is not taken for B's withheld one."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    eng._no_draft = {1}
+    edge = eng.nb * eng.block_size - 9  # every count of v0 fits here, but not every count of the chained verify
+    starts0, nv0 = [100, 200, 300, edge], [3, 3, 3, 3]
+    tokens0 = torch.tensor([[1, 7, 8, 9]] * B)
+    state["ids"] = [torch.tensor([[7, 8, 9, 10]] * B), torch.zeros(B, T, dtype=torch.int64)]
+    res0 = _host_verify(eng, tokens0, starts0, nv0)
+    assert res0.argmax_ids.plan is not None and res0.argmax_ids.plan.declined == [False, True, False, False]
+    src = [0, 3, 2, 1]
+    upper = [starts0[s] + T for s in src[:3]] + [-1]
+    _chained_verify(eng, res0, upper, [K] * B, slot_remap=src)
+    assert (eng.chained_steps, eng.materialized_steps) == (0, 1) and "chain" not in log["traces"]
+    assert eng._no_draft == {3}, "B's withheld slot moved to row 3 with B"

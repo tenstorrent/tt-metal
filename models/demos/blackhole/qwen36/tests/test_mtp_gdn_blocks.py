@@ -19,7 +19,9 @@ EOS or length cut (a count below the matched drafts) occur. The block ids follow
 test_a_chained_run_across_block_boundaries_equals_a_drained_run runs the MTP class alone, as the plugin runs it under
 asynchronous scheduling, twice on the same blocks: once reading every verify before the next, once chaining every
 verify over the unread one (supports_chained_spec_verify), across block boundaries; the committed tokens, counts and
-GDN states must be equal bit for bit.
+GDN states must be equal bit for bit. test_a_chained_run_across_row_moves_equals_a_drained_run does the same while
+requests leave middle rows (finished, or left out by vLLM with their slots held) and the runner moves the last row
+into theirs (slot_remap).
 
     MESH_DEVICE=P150x8 HF_MODEL=<Qwen3.8-27B dir> pytest models/demos/blackhole/qwen36/tests/test_mtp_gdn_blocks.py
 """
@@ -582,29 +584,71 @@ def _walk(drafts, ids):
     return j + 1
 
 
-def _async_run(pair, prompts, chained, hint, steps):
-    """Run ``prompts`` {row: tokens} through Qwen36MTPContractForCausalLM as vllm-tt-plugin runs them under
-    asynchronous scheduling in mode "align": a prefill per row, one ordinary [B, 1] decode of all rows, then ``steps``
-    verifies of all rows. vLLM schedules each verify after the first while the one before it is unread and counts that
-    one's drafts as accepted, so the window follows that count (SpecBlocks ``scheduled``). Drained: the runner reads,
-    walks and proposes each verify before it builds the next, which reads the start block of the committed count.
-    Chained: the runner submits each verify over the unread one (``spec_predecessor``, ``start_blocks_by_count``,
-    placeholders), then reads, walks and proposes the unread one, whose drafts fill the chained verify's rows.
-    ``hint(row, p0)``: the row's valid drafts in the verify after its verify at column-0 position p0.
+def _condense(order, gone):
+    """vLLM's InputBatch.condense of the rows ``order`` (a request per row) less the requests ``gone``: each empty row,
+    lowest first, takes the request of the last occupied row behind it."""
+    rows = [q if q not in gone else None for q in order]
+    while None in rows:
+        hole = rows.index(None)
+        last = max((i for i, q in enumerate(rows) if q is not None), default=-1)
+        if last < hole:
+            break
+        rows[hole], rows[last] = rows[last], None
+    return [q for q in rows if q is not None]
 
-    Returns (per verify {row: (column-0 position, committed tokens)}, per row the GDN state of its last committed count,
-    {predecessor count: chained verifies whose window begins one column past the column of their last query token})."""
+
+def _async_run(pair, prompts, chained, hint, steps, leave=None):
+    """Run ``prompts`` {request: tokens} through Qwen36MTPContractForCausalLM as vllm-tt-plugin runs them under
+    asynchronous scheduling in mode "align": a prefill per request into the row and state slot of its key, one ordinary
+    [B, 1] decode of all rows, then ``steps`` verifies. vLLM schedules each verify after the first while the one before
+    it is unread and counts that one's drafts as accepted, so the window follows that count (SpecBlocks ``scheduled``).
+    Drained: the runner reads, walks and proposes each verify before it builds the next, which reads the start block of
+    the committed count. Chained: the runner submits each verify over the unread one (``spec_predecessor``,
+    ``start_blocks_by_count``, placeholders), then reads, walks and proposes the unread one, whose drafts fill the
+    chained verify's rows. ``hint(request, p0)``: the request's valid drafts in the verify after its verify at
+    column-0 position p0.
+
+    ``leave`` {verify k: {request: "finish" or "skip"}}: the requests verify k leaves out. A finished request is released
+    (release_request of its slot) before verify k is built; a skipped one (vLLM leaves out a request whose verify in
+    flight reaches max_tokens) keeps its slot and is released before verify k + 1. The runner moves the last rows into
+    the rows left empty (InputBatch.condense) and sends the slot_remap that takes each request's state to its row, the
+    slots of no row (held or free) at its tail in slot order, as vllm-tt-plugin's _decode_state_slot_remap does; a
+    chained verify then continues row i from the predecessor's row slot_remap[i].
+
+    Returns (per verify {request: (column-0 position, committed tokens)}, per request still in the batch the GDN state
+    of its last committed count, {predecessor count: chained verifies whose window begins one column past the column of
+    their last query token}, the number of chained verifies with a slot_remap that the chain program built)."""
     K, T, B, bs, vocab = pair.K, pair.K + 1, pair.bmax, pair.bs, pair.vocab
     spec, kv = pair.spec, pair.kv_spec
+    engine = spec._engine()
     blocks = SpecBlocks(pair.layout, K, "align", free=range(1 + B * pair.bpu, pair.layout.num_blocks))
-    rows = sorted(prompts)
-    pt = torch.zeros(B, pair.bpu, dtype=torch.int32)
-    for r in rows:
-        pt[r] = pair.pages(r)
+    leave = leave or {}
+    order = sorted(prompts)  # the request in each row of the last verify submitted
+    slot_of = {q: q for q in order}  # the state slot of each request that holds one
+
+    def table(order):
+        pt = torch.zeros(B, pair.bpu, dtype=torch.int32)
+        for row, q in enumerate(order):
+            pt[row] = pair.pages(q)
+        return pt
+
+    def release(q):
+        spec.release_request(slot_of.pop(q))
+        blocks.release(q)
+
+    def slot_remap(rows):
+        """The slot_remap of a verify of requests ``rows``; moves slot_of as the plugin settles it after the decode."""
+        want = [slot_of[q] for q in rows]
+        remap = want + [s for s in range(B) if s not in want]
+        for q in slot_of:
+            slot_of[q] = remap.index(slot_of[q])
+        return None if remap == list(range(B)) else torch.tensor(remap, dtype=torch.int32)
+
     # vLLM's new_block_ids_to_zero, so that both runs start from the same bytes.
     spec.zero_kv_cache_blocks(kv, list(range(1, pair.layout.num_blocks)))
+    pt = table(order)
     nxt = {}
-    for r in rows:
+    for r in order:
         prompt = list(prompts[r])
         blocks.admit(r)
         state = blocks.state({r: blocks.prefill(r, 0, len(prompt))}, B, intermediate=())
@@ -623,7 +667,7 @@ def _async_run(pair, prompts, chained, hint, steps):
     tok = torch.zeros(B, 1, dtype=torch.int32)
     pos = torch.full((B,), -1, dtype=torch.int32)
     sel = {}
-    for r in rows:
+    for r in order:
         tok[r, 0], pos[r] = nxt[r], len(prompts[r])
         sel[r] = blocks.decode(r, len(prompts[r]), 1)
     out = spec.decode_forward(
@@ -638,96 +682,120 @@ def _async_run(pair, prompts, chained, hint, steps):
     )
     committed = torch.full((B, T), -1, dtype=torch.int32)
     cpos = torch.full((B, T), -1, dtype=torch.int32)
-    for r in rows:
+    for r in order:
         blocks.commit(r, 1)
         committed[r, 0], cpos[r, 0] = int(out[r, -1, :vocab].argmax()), len(prompts[r]) + 1
     drafted = spec.propose_draft_tokens(K, committed, cpos, torch.ones(B, dtype=torch.int32))
     cur = {}
-    for r in rows:
+    for r in order:
         n = min(K, int(drafted.num_valid[r]))
         cur[r] = (int(cpos[r, 0]), [int(committed[r, 0])] + drafted.draft_token_ids[r, :n].tolist())
 
-    def submit(cur, sel, counts, predecessor=None, by_count=None, hints=None):
+    def submit(cur, rows, sel, counts, predecessor=None, by_count=None, hints=None, remap=None):
         tokens = torch.full((B, T), -1, dtype=torch.int32)
         start = torch.full((B, T), -1, dtype=torch.int32)
         nv = torch.zeros(B, dtype=torch.int32)
         acc = torch.ones(B, dtype=torch.int32)
-        for r, (p0, block) in cur.items():
+        for r, q in enumerate(rows):
+            p0, block = cur[q]
             if predecessor is None:
                 tokens[r, : len(block)] = torch.tensor(block, dtype=torch.int32)
                 start[r, : len(block)] = torch.arange(p0, p0 + len(block), dtype=torch.int32)
-                nv[r], acc[r] = len(block) - 1, counts[r]
+                nv[r], acc[r] = len(block) - 1, counts[q]
             else:
                 # Placeholders: the positions of a predecessor that accepted all its drafts.
                 start[r] = torch.arange(p0 + T, p0 + 2 * T, dtype=torch.int32)
-                nv[r] = hints[r]
+                nv[r] = hints[q]
         return spec.decode_forward(
             tokens=tokens,
             start_pos=start,
-            page_table=pt,
+            page_table=table(rows),
             kv_cache=kv,
             enable_trace=True,
             read_from_device=False,
             num_valid_drafts=nv,
             accepted_counts=acc,
             spec_mode="argmax_ids",
-            mamba_state=blocks.state(sel, B, by_count=by_count),
+            mamba_state=blocks.state(
+                {r: sel[q] for r, q in enumerate(rows)},
+                B,
+                by_count=None if by_count is None else {r: by_count[q] for r, q in enumerate(rows)},
+            ),
             **({} if predecessor is None else {"spec_predecessor": predecessor}),
+            **({} if remap is None else {"slot_remap": remap}),
             **_decode_flags(),
         )
 
-    def finish(out, cur):
-        """Read, walk and propose the verify ``out`` of blocks ``cur``: (counts, committed tokens, drafts, offered)."""
+    def finish(out, cur, rows):
+        """Read, walk and propose the verify ``out`` of blocks ``cur`` over requests ``rows``: per request (count,
+        committed tokens, drafts, offered drafts)."""
         ids = spec.read_decode_output(out.argmax_ids)
         committed = torch.full((B, T), -1, dtype=torch.int32)
         cpos = torch.full((B, T), -1, dtype=torch.int32)
         counts, commits = {}, {}
         acc = torch.ones(B, dtype=torch.int32)
-        for r, (p0, block) in cur.items():
+        for r, q in enumerate(rows):
+            p0, block = cur[q]
             c = _walk(block[1:], ids[r].tolist())
-            counts[r], commits[r] = c, [int(t) for t in ids[r, :c]]
+            counts[q], commits[q] = c, [int(t) for t in ids[r, :c]]
             committed[r, :c] = ids[r, :c]
             cpos[r, :c] = torch.arange(p0 + 1, p0 + 1 + c, dtype=torch.int32)
             acc[r] = c
         drafted = spec.propose_draft_tokens(K, committed, cpos, acc)
-        return counts, commits, drafted.draft_token_ids, drafted.num_valid
+        drafts = {q: drafted.draft_token_ids[r].tolist() for r, q in enumerate(rows)}
+        offered = {q: int(drafted.num_valid[r]) for r, q in enumerate(rows)}
+        return counts, commits, drafts, offered
 
-    sel = {r: blocks.decode(r, cur[r][0], T) for r in rows}
-    out = submit(cur, sel, {r: 1 for r in rows})
-    record, moved = [], {}
+    sel = {q: blocks.decode(q, cur[q][0], T) for q in order}
+    out = submit(cur, order, sel, {q: 1 for q in order})
+    record, moved, remapped, held = [], {}, 0, []
     for step in range(steps):
         last = step == steps - 1
+        if not last:
+            gone = leave.get(step + 1, {})
+            rows = _condense(order, set(gone))
+            leaving = held + [q for q, kind in gone.items() if kind == "finish"]
+            held = [q for q, kind in gone.items() if kind == "skip"]
         if chained and not last:
-            hints = {r: hint(r, cur[r][0]) for r in rows}
+            # The runner releases the finished requests while it builds the step (TTModelRunner._update_states).
+            for q in leaving:
+                release(q)
+            remap = slot_remap(rows)
+            hints = {q: hint(q, cur[q][0]) for q in rows}
             sel, by_count = {}, {}
-            for r in rows:
-                win, by_count[r] = blocks.chained(r, scheduled=cur[r][0] + T)
-                sel[r] = (win, None)
-            following = submit(cur, sel, None, predecessor=out, by_count=by_count, hints=hints)
-        counts, commits, drafts, offered = finish(out, cur)
-        record.append({r: (cur[r][0], commits[r]) for r in rows})
+            for q in rows:
+                win, by_count[q] = blocks.chained(q, scheduled=cur[q][0] + T)
+                sel[q] = (win, None)
+            built = engine.chained_steps
+            following = submit(cur, rows, sel, None, predecessor=out, by_count=by_count, hints=hints, remap=remap)
+            remapped += int(remap is not None and engine.chained_steps > built)
+        counts, commits, drafts, offered = finish(out, cur, order)
+        record.append({q: (cur[q][0], commits[q]) for q in order})
         if last:
             break
         if not chained:
-            hints = {r: hint(r, cur[r][0]) for r in rows}
+            hints = {q: hint(q, cur[q][0]) for q in rows}
         following_cur = {}
-        for r in rows:
-            p0, c = cur[r][0], counts[r]
-            n = min(hints[r], int(offered[r]))
-            following_cur[r] = (p0 + c, [commits[r][-1]] + drafts[r, :n].tolist())
+        for q in rows:
+            p0, c = cur[q][0], counts[q]
+            n = min(hints[q], offered[q])
+            following_cur[q] = (p0 + c, [commits[q][-1]] + drafts[q][:n])
             if chained and (p0 + T + K) // bs != (p0 + c + K) // bs:
                 moved[c] = moved.get(c, 0) + 1
         if not chained:
+            for q in leaving:
+                release(q)
+            remap = slot_remap(rows)
             sel = {}
-            for r in rows:
-                blocks.commit(r, counts[r])
-                sel[r] = blocks.decode(r, following_cur[r][0], T, scheduled=cur[r][0] + T)
-            following = submit(following_cur, sel, counts)
-        out, cur = following, following_cur
-    states = {r: pair.state(pair.spec_model, [w[counts[r] - 1] for w in blocks.last[r]]) for r in rows}
-    for r in rows:
-        spec.release_request(r)
-    return record, states, moved
+            for q in rows:
+                blocks.commit(q, counts[q])
+                sel[q] = blocks.decode(q, following_cur[q][0], T, scheduled=cur[q][0] + T)
+            following = submit(following_cur, rows, sel, counts, remap=remap)
+        out, cur, order = following, following_cur, rows
+    states = {q: pair.state(pair.spec_model, [w[counts[q] - 1] for w in blocks.last[q]]) for q in order}
+    for q in list(slot_of):
+        spec.release_request(slot_of[q])
+    return record, states, moved, remapped
 
 
 @torch.no_grad()
@@ -760,8 +828,8 @@ def test_a_chained_run_across_block_boundaries_equals_a_drained_run(mesh_device,
             return target[row] - 1
         return K
 
-    drained, drained_states, _ = _async_run(pair, prompts, False, hint, steps)
-    chained, chained_states, moved = _async_run(pair, prompts, True, hint, steps)
+    drained, drained_states, _, _ = _async_run(pair, prompts, False, hint, steps)
+    chained, chained_states, moved, _ = _async_run(pair, prompts, True, hint, steps)
     engine = pair.spec._engine()
     logger.info(
         f"chained run: moved windows after predecessor counts {moved}; chained verifies built on the device "
@@ -775,3 +843,47 @@ def test_a_chained_run_across_block_boundaries_equals_a_drained_run(mesh_device,
             for d, ((rec_a, hist_a), (rec_b, hist_b)) in enumerate(zip(devices, chained_states[r][layer])):
                 assert torch.equal(rec_a, rec_b) and torch.equal(hist_a, hist_b), f"row {r} layer {layer} device {d}"
     assert moved.get(1), f"no chained verify with a moved window after a count of 1: {moved}"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@_parametrize_pair
+def test_a_chained_run_across_row_moves_equals_a_drained_run(mesh_device, monkeypatch, reset_seeds, ensure_gc):
+    """K = 3, mode "align", 1024-token blocks as served, four requests. When a request leaves the batch the runner moves
+    the last row into its row (InputBatch.condense) and sends slot_remap; a chained verify then continues each row from
+    the predecessor row slot_remap names. Two pairs of runs of the same requests, each chained (every verify submitted
+    over the unread one) against drained (every verify read first): "finish", the request in row 1 finishes and is
+    released before verify 9, the one in row 0 before verify 19; "skip", vLLM leaves the same requests out at those
+    verifies (their verifies in flight reach max_tokens) with their slots held at the slot_remap's tail, and the runner
+    releases them before the next verify. Each chained run equals its drained run: the committed tokens and counts of
+    every verify, and the GDN state of the last committed count of the two requests left, bit for bit; the chain
+    program builds the chained verifies with a slot_remap. QWEN36_PAIR_LAYERS sets the layer count."""
+    K, steps = 3, 30
+    pair = Pair(mesh_device, monkeypatch, K, "align", n_layers=PAIR_LAYERS, block_size=1024)
+    lens = {0: 300, 1: 421, 2: 517, 3: 650}
+    prompts = {q: p[: lens[q]].tolist() for q, p in zip(lens, _prompts(4, 700, seed=43))}
+
+    def hint(q, p0):
+        return K if p0 % 5 else 1
+
+    engine = pair.spec._engine()
+    for kind in ("finish", "skip"):
+        leave = {9: {1: kind}, 19: {0: kind}}
+        drained, drained_states, _, _ = _async_run(pair, prompts, False, hint, steps, leave)
+        built = engine.chained_steps, engine.materialized_steps
+        chained, chained_states, _, remapped = _async_run(pair, prompts, True, hint, steps, leave)
+        logger.info(
+            f"chained run ({kind}): chained verifies built on the device {engine.chained_steps - built[0]}, from a "
+            f"read predecessor {engine.materialized_steps - built[1]}; built on the device with a slot_remap {remapped}"
+        )
+        assert remapped == 2, f"{kind}: {remapped} chained verifies with a slot_remap ran the chain program, not 2"
+        for step, (a, b) in enumerate(zip(drained, chained)):
+            assert a == b, f"{kind}: verify {step}: drained {a}, chained {b}"
+        assert len(drained) == len(chained) == steps
+        assert set(drained_states) == set(chained_states) == {2, 3}
+        for q in drained_states:
+            for layer, devices in drained_states[q].items():
+                for d, ((rec_a, hist_a), (rec_b, hist_b)) in enumerate(zip(devices, chained_states[q][layer])):
+                    assert torch.equal(rec_a, rec_b) and torch.equal(
+                        hist_a, hist_b
+                    ), f"{kind}: request {q} layer {layer} device {d}"

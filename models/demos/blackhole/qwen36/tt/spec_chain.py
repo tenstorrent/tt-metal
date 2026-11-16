@@ -24,10 +24,12 @@ The chain program (ChainInputs.body, traced) runs before the verify trace of n +
     candidates the host stages for every count (spec_sample.chained_sampling_plan), so a seeded user draws column j
     with the seed of its input position p0 + m + 1 + j, as an unchained verify at that position does.
 
-What the host knows before n is read rides in the overlay (CH_* rows): n's column-0 positions, the rows n + 1 runs,
-their M-RoPE deltas, n + 1's valid drafts and propose decisions (decided for every count n can accept), and the users
-whose ids are draws in n and in n + 1. Every value is an integer below 2**24 (token ids, positions, table rows, page
-indices, device seeds) or -1 (SPEC_STEP_HOLD, a held row's ctrl word).
+What the host knows before n is read rides in the overlay (CH_* rows, one word per row u of n + 1): the row s of n
+that u continues (CH_SRC: ``slot_remap[u]``, u when no row moved), s's column-0 position in n, the rows n + 1 runs,
+their M-RoPE deltas, n + 1's valid drafts and propose decisions (decided for every count n can accept), and whether s's
+ids are draws in n and u's in n + 1. Row u reads n's anchor, ids, draws and drafts at row s; every other input (the
+overlay, the ctrl and seed candidates) the host stages for row u. Every value is an integer below 2**24 (token ids,
+positions, table rows, page indices, device seeds) or -1 (SPEC_STEP_HOLD, a held row's ctrl word).
 
 The chain program is one single-core kernel (kernels/chain_inputs.cpp; its arithmetic is chain_words in
 kernels/spec_step_words.hpp). ``chain_graph`` states the same arithmetic as the float32 op graph the kernel replaced,
@@ -56,21 +58,23 @@ from models.demos.blackhole.qwen36.tt.spec_step import VERIFY_STEP_ROWS, draft_a
 CHAIN_INPUTS_KERNEL = str(Path(__file__).resolve().parent / "kernels" / "chain_inputs.cpp")
 
 # Overlay rows (B words each).
-CH_P0_PREV, CH_ACTIVE, CH_DELTA, CH_NUM_VALID, CH_DECLINED, CH_KEEP, CH_DRAWN_PREV, CH_DRAWN = range(8)
-CHAIN_OVERLAY_ROWS = 8
+CH_P0_PREV, CH_ACTIVE, CH_DELTA, CH_NUM_VALID, CH_DECLINED, CH_KEEP, CH_DRAWN_PREV, CH_DRAWN, CH_SRC = range(9)
+CHAIN_OVERLAY_ROWS = 9
 
 
-def chain_overlay(p0_prev, active, deltas, num_valid, declined, keep, drawn_prev=None, drawn=None):
-    """int32 [CHAIN_OVERLAY_ROWS, pack_width(B)]: the host rows of a chained step. ``p0_prev`` [B]: the column-0
-    position of each row in the predecessor (0 where the chained step has no row), ``active`` [B], ``deltas`` [B] (the
-    slots' M-RoPE deltas, any sign), ``num_valid`` [B] (the chained step's valid drafts), ``declined`` and ``keep`` [B]
-    (its propose decisions), ``drawn_prev`` and ``drawn`` [B] (the users whose ids are draws in the predecessor and in
-    the chained step; None: none)."""
+def chain_overlay(p0_prev, active, deltas, num_valid, declined, keep, drawn_prev=None, drawn=None, src=None):
+    """int32 [CHAIN_OVERLAY_ROWS, pack_width(B)]: the host rows of a chained step, one word per row u of the chained
+    step. ``p0_prev`` [B]: the column-0 position in the predecessor of the row u continues (0 where the chained step has
+    no row), ``active`` [B], ``deltas`` [B] (the slots' M-RoPE deltas, any sign), ``num_valid`` [B] (the chained step's
+    valid drafts), ``declined`` and ``keep`` [B] (its propose decisions), ``drawn_prev`` and ``drawn`` [B] (whether the
+    ids of the predecessor row u continues are draws, and u's in the chained step; None: none), ``src`` [B] (the
+    predecessor row each row continues, the runner's slot_remap; None: row u continues row u)."""
     B = len(p0_prev)
     drawn_prev = [0] * B if drawn_prev is None else drawn_prev
     drawn = [0] * B if drawn is None else drawn
+    src = list(range(B)) if src is None else src
     rows = [p0_prev, [int(a) for a in active], deltas, num_valid, [int(d) for d in declined], [int(k) for k in keep]]
-    rows += [[int(d) for d in drawn_prev], [int(d) for d in drawn]]
+    rows += [[int(d) for d in drawn_prev], [int(d) for d in drawn], [int(s) for s in src]]
     out = torch.zeros(CHAIN_OVERLAY_ROWS, pack_width(B), dtype=torch.int64)
     for i, r in enumerate(rows):
         out[i, :B] = torch.as_tensor(r, dtype=torch.int64).reshape(-1)
@@ -83,20 +87,31 @@ def chain_graph(o, B, K, W, groups, nv_heads, ctrl_words):
     """The chain program's arithmetic over the op set ``o``: returns (step buffer [VERIFY_STEP_ROWS, W], [ctrl page
     [1, ctrl_words] per table group], sampler seeds [1, B * T] or None without ``o.seed_cand``) as float32."""
     T, R = K + 1, B * (K + 1)
-    anchor = o.transpose(o.rows(o.pack, draft_anchor(K), draft_anchor(K) + 1, B))  # [B, 1]: u * T + m
-    m = o.sub(anchor, o.user_rows)
     ov = o.transpose(o.rows(o.overlay, 0, CHAIN_OVERLAY_ROWS, B))  # [B, rows]
 
     def column(i):
         return o.slice(ov, (0, i), (B, i + 1))
 
-    p0_prev, act, delta, nv, dec, keep, drawn_prev, drawn = (column(i) for i in range(CHAIN_OVERLAY_ROWS))
-    ids = o.lanes(o.ids, B, T)
+    p0_prev, act, delta, nv, dec, keep, drawn_prev, drawn, src = (column(i) for i in range(CHAIN_OVERLAY_ROWS))
+    # [B, B]: 1 at (u, s) for the predecessor row s that row u continues; a source outside [0, B) has no 1, so the
+    # gathered values of that row are 0.
+    from_row = o.eq(src, o.iota_b)
+
+    def gather(x):
+        """[B, 1] over predecessor rows -> [B, 1] over rows: x[src[u]] (a single nonzero term, exact)."""
+        return o.sum(o.mul(from_row, o.transpose(x)))
+
+    def gather_columns(x, n):
+        return o.concat([gather(o.slice(x, (0, j), (B, j + 1))) for j in range(n)], 1)
+
+    anchor = gather(o.transpose(o.rows(o.pack, draft_anchor(K), draft_anchor(K) + 1, B)))  # [B, 1]: s * T + m
+    m = o.sub(anchor, gather(o.user_rows))
+    ids = gather_columns(o.lanes(o.ids, B, T), T)
     if o.draws is not None:
-        ids = o.add(ids, o.mul(drawn_prev, o.sub(o.lanes(o.draws, B, T), ids)))
+        ids = o.add(ids, o.mul(drawn_prev, o.sub(gather_columns(o.lanes(o.draws, B, T), T), ids)))
     pick = o.eq(o.iota_t, m)  # [B, T]: 1 at column m, the count's one-hot
     tok0 = o.sum(o.mul(pick, ids))  # [B, 1]: the last committed token
-    drafts = o.concat([o.draft(k, B) for k in range(K)], 1)  # [B, K]
+    drafts = o.concat([gather(o.draft(k, B)) for k in range(K)], 1)  # [B, K]
     valid = o.lt(o.iota_k, nv)
     cols = o.add(o.mul(drafts, valid), o.mul(tok0, o.rsub1(valid)))
     tokens = o.mul(o.concat([tok0, cols], 1), act)
@@ -155,6 +170,7 @@ class ChainTorchOps(TorchOps):
         self._drafts = [f(d).reshape(-1) for d in drafts]
         self.iota_t = f(torch.arange(T).reshape(1, T))
         self.iota_k = f(torch.arange(K).reshape(1, K))
+        self.iota_b = f(torch.arange(B).reshape(1, B))
         self.user_rows = f((torch.arange(B) * T).reshape(B, 1))
         self.top = f(torch.tensor([[int(table_rows) - 1]]))
         self.one = f(torch.ones(1, 1))
