@@ -5468,6 +5468,100 @@ def test_ring_joint_attention_logical_tensor_accuracy(is_causal, is_balanced):
     )
 
 
+# (tile rows per chip, k_chunk_size, pad rows, fp32 accumulation, logical_n as a device tensor); q_chunk_size is 128.
+# In the first eight a Q chunk's causal cut ends before the length-boundary tile of its K chunk; the rest are controls.
+CAUSAL_PARTIAL_TILE_CASES = [
+    (5, 512, 20, False, True),
+    (5, 512, 20, False, False),
+    (5, 160, 31, False, True),
+    (5, 96, 20, False, True),
+    (9, 512, 40, False, True),
+    (9, 512, 1, False, True),
+    (17, 512, 40, False, True),
+    (17, 256, 40, False, True),
+    (9, 128, 20, False, True),
+    (5, 512, 40, False, True),
+    (17, 512, 20, False, True),
+    (9, 512, 20, True, True),
+]
+# Per-row relative squared error against the CPU reference: correct rows measure up to 0.01, rows that lost keys 1.0.
+CAUSAL_PARTIAL_TILE_ROW_ERROR_BOUND = 0.1
+
+
+@pytest.mark.timeout(600)
+def test_ring_joint_attention_causal_logical_n_inside_tile():
+    """Causal attention with logical_n ending inside a tile: every real row must equal the run of the same data
+    with no pad rows, and stay within the per-row error bound of the CPU reference. PCC does not see a few rows."""
+    mesh_config = _h3_dynamic_mesh_config()
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        heads_per_chip, head_dim = 4, 128
+        failures = []
+        for tile_rows, k_chunk_size, pad_rows, fp32_dest_acc_en, logical_as_tensor in CAUSAL_PARTIAL_TILE_CASES:
+            rows_per_chip = tile_rows * 32
+            sq = rows_per_chip * mesh_config.sp_size
+            logical_n = sq - pad_rows
+            torch.manual_seed(1234)
+            # K = Q: every row attends mostly to itself, so a row that loses its newest keys is far from the reference.
+            q, v = (
+                torch.randn(1, heads_per_chip * mesh_config.tp_size, sq, head_dim, dtype=torch.bfloat16)
+                for _ in range(2)
+            )
+            gather_k, gather_v = _h3_dynamic_gather_buffers(
+                runtime, mesh_config, head_dim, heads_per_chip=heads_per_chip, capacity_tiles=tile_rows
+            )
+            outputs = []
+            for n in (sq, logical_n):
+                tt_q, tt_k, tt_v, n_tensor = _h3_dynamic_device_inputs(runtime, q, q, v, n)
+                tt_out = call_sdpa(
+                    tt_q,
+                    tt_k,
+                    tt_v,
+                    n_tensor if logical_as_tensor else n,
+                    is_causal=True,
+                    is_balanced=False,
+                    p_buf_k=gather_k,
+                    p_buf_v=gather_v,
+                    program_config=ttnn.SDPAProgramConfig(
+                        compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                        q_chunk_size=128,
+                        k_chunk_size=k_chunk_size,
+                        exp_approx_mode=False,
+                    ),
+                    compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                        runtime.mesh_device.arch(),
+                        math_fidelity=ttnn.MathFidelity.HiFi2,
+                        math_approx_mode=False,
+                        fp32_dest_acc_en=fp32_dest_acc_en,
+                    ),
+                    ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                    num_links=runtime.num_links,
+                    sp_axis=runtime.sp_axis,
+                    mesh_device=runtime.mesh_device,
+                    topology=runtime.topology,
+                    worker_sub_device_id=runtime.worker_sub_device_id,
+                    ccl_column=runtime.ccl_column,
+                )
+                outputs.append(_h3_dynamic_to_torch(runtime, tt_out)[0, :, :logical_n].float())
+            unpadded, padded = outputs
+            changed = torch.nonzero((padded != unpadded).any(-1).any(0)).flatten()
+            ref = torch_sdpa_reference(q.float(), q.float(), v.float(), is_causal=True)[0, :, :logical_n]
+            row_error = (((padded - ref) ** 2).sum(-1) / (ref**2).sum(-1)).amax(0)
+            result = (
+                f"tiles={tile_rows} k_chunk={k_chunk_size} pad={pad_rows} fp32={fp32_dest_acc_en} "
+                f"tensor={logical_as_tensor}: {changed.numel()} real rows differ from the run with no pad rows, "
+                f"per chip {torch.bincount(changed // rows_per_chip, minlength=mesh_config.sp_size).tolist()}, "
+                f"first and last {changed[[0, -1]].tolist() if changed.numel() else None}; "
+                f"max row error {float(row_error.max()):.5f}"
+            )
+            logger.info(result)
+            if changed.numel() or not row_error.max() < CAUSAL_PARTIAL_TILE_ROW_ERROR_BOUND:
+                failures.append(result)
+        assert not failures, "\n".join(failures)
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
