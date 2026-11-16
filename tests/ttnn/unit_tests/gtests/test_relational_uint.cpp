@@ -22,11 +22,10 @@
 
 namespace ttnn::operations::unary::test {
 
-namespace {
-
 enum class RelationalOp { Eq, Ne, Gt, Ge, Lt, Le };
-
 using RelationalUintParam = std::tuple<RelationalOp, uint32_t>;
+
+namespace {
 
 std::string op_name(RelationalOp op) {
     switch (op) {
