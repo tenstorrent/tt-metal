@@ -19,6 +19,11 @@ supports_chained_spec_verify).
   a device-sampled step the same holds for sampled rows: the device counts over the draws, the chained verify
   stages no seeds (the chain program writes those of its positions), and a commit of the argmax instead of the draws
   raises.
+* Rows that move (slot_remap): when a request leaves a middle row (finished and released, or left out with its slot
+  held) and the runner moves the last row into it, the chained verify built by the chain program or from the
+  engine's read gives what the drained order gives: the drafts, the verify block and step buffer, the start blocks,
+  the seeds, the next propose and the per-slot state; a slot_remap that is not a permutation, a moved row over a
+  padding row and a row over a released slot raise before any state moves.
 """
 
 import inspect
