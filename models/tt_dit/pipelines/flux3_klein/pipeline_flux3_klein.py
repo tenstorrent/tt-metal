@@ -481,13 +481,16 @@ class Flux3KleinPipeline:
             tokens = self._upload_rows(text_rows, sp)
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
-            key = (model, sp, tuple(sorted(lengths.items())), text_valid, cond_valid, _ids_digest(sample_ids))
+            # one plan per mode lengths and image / text ids; the prompt length and the reference's size and ids are
+            # written into it when they change
+            key = (model, sp, tuple(sorted(lengths.items())), _ids_digest({"image": ids, "text": text_ids}))
             plan = self._plan_cache.get(key)
             if plan is None:
                 plan = self._plan_cache[key] = transformer.prepare_plan(layout, sample_ids)
-                # every reference shape has its own ids: keep the newest plans only (a request uses at most two)
                 while len(self._plan_cache) > PLAN_CACHE_SIZE:
                     self._plan_cache.pop(next(iter(self._plan_cache))).deallocate()
+            elif not plan.serves(layout, sample_ids):
+                transformer.update_plan(plan, layout, sample_ids)
             return plan, embedded
 
         samples = [sample(*text)]
