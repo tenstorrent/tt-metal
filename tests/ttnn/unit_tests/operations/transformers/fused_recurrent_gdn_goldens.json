@@ -7,108 +7,108 @@
    "state": "97e73b4937ac8acc9919b025793987c7368202e9a0ac9dcbedefdf7e605879fc",
    "pcc_o": 0.9999987,
    "pcc_state": 0.9999998,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen27b_tp4/B1/T1/zero": {
    "o": "e266aab162dee54ade1f27f9571bdcea00e8825312d5e62f239703677de07d32",
    "state": "43f03d55435e1f53e7cb7a2a3b5c3690e665a1db4cb3a557358068a208ac2fd8",
    "pcc_o": 1.0,
    "pcc_state": 0.9999999,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen27b_tp4/B8/T1/s0": {
    "o": "cd1b96259d79824e1d5fa260ad07535d14085a8534640b5920638033de1d1607",
    "state": "2db55b18d1ccda8496c7addb2ccb1ec11e84843ef03a4f31c45d1e3461acd44a",
    "pcc_o": 0.9999998,
    "pcc_state": 0.9999998,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen27b_tp4/B8/T1/zero": {
    "o": "ba5e1692f7051c2b28b7d8629640482cb184857190cfde71c2ea430d0cba3b5c",
    "state": "e15347072adce32ccc73552da6fac5b864ba317676a01f08dae242d76cc22366",
    "pcc_o": 0.9999997,
    "pcc_state": 0.9999999,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen27b_tp4/B1/T8/s0": {
    "o": "3c515f9bde518a8888b699397b3a9723988877f5fcf0ef11bcf0f3aa9159f636",
    "state": "2e367e4caae747922ec2cf96e5fd8c4aaacda375688b7c1d62654972e42e43c4",
    "pcc_o": 0.9999998,
    "pcc_state": 0.9999999,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen27b_tp4/B1/T8/zero": {
    "o": "15ac4e1dae5379e5a51b3489c9ab02280f752a07ae7c8c20590208ca6fd916d3",
    "state": "0658084ce708a646d9d635f2529020e891f01f294c57d02ef214119eefbc7efe",
    "pcc_o": 0.9999996,
    "pcc_state": 0.9999999,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen27b_tp8/B1/T1/s0": {
    "o": "4b92d331d0b7701fb871dc9ff30372216569e77c825182ea531109560404f07d",
    "state": "c4dac6c94b4090899a0ef1ea617d7f829b75614fb56041dd872f4b10827d2ca4",
    "pcc_o": 0.9999996,
    "pcc_state": 0.9999998,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen27b_tp8/B1/T1/zero": {
    "o": "4bd1680a6e7e663fc1749f6169ba141c9575f862cb10c50127849d4dda4a29e8",
    "state": "9dcafb2dc8fee090aa7baa6bc0aa244a4dcdddf53794a10c887bd1d3e8f88712",
    "pcc_o": 1.0,
    "pcc_state": 0.9999999,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen9b_tp1/B1/T1/s0": {
    "o": "0ae951157d91a4547183da39b27478719e998fa1fbefd9874d289cca88fc6b7b",
    "state": "43299fb48dde290d5a4ae5a4edd77f7f57a337a18a49602d12e7a513f934f4ae",
    "pcc_o": 0.9999998,
    "pcc_state": 0.9999998,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen9b_tp1/B1/T1/zero": {
    "o": "795f37eedae466a15a8940c8ee014711f00015c2274d808daf6327ef777ffced",
    "state": "7d59c929108e455438c4162aa5a4edd688fb0e2978ad4d97503d3cdf41d9b72d",
    "pcc_o": 0.9999998,
    "pcc_state": 0.9999999,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen35b_a3b_tp4/B4/T4/s0": {
    "o": "6028eee711b1a36693631c27251228fcb6e3d7f8845857f916eb376c77a47b28",
    "state": "11920201e8d7130c3a7ebcfeed39e1658fd9a4a4bccf8bd82a0d721154be01fd",
    "pcc_o": 0.9999997,
    "pcc_state": 0.9999999,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   },
   "qwen35b_a3b_tp4/B4/T4/zero": {
    "o": "e62123468a4624bcabc068ac5fe7710d58f9d988689adfd7d2fae1f286690b52",
    "state": "c1e2faefbf8542f07f1cb22727af906b2748a5bab93c79c3e612658f6810460a",
    "pcc_o": 0.9999997,
    "pcc_state": 0.9999999,
-   "commit": "f61c24754ea-dirty",
+   "commit": "9959deaf94d",
    "device": "blackhole",
-   "date": "2026-10-30"
+   "date": "2026-11-16"
   }
  }
 }
