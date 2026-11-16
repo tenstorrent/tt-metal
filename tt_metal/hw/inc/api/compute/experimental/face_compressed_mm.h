@@ -97,6 +97,7 @@ ALWI void face_compressed_mm_block_init_short(
     constexpr bool dense_packing = true;  // only dense packing is supported
     if constexpr (dense_packing) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
+        PACK((ckernel::packer::llk_pack_live_forget()));
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
     }
@@ -242,6 +243,7 @@ ALWI void face_compressed_mm_block_uninit(const std::uint32_t in0_cb_id, const s
     constexpr bool dense_packing = true;  // only dense packing is supported
     if constexpr (dense_packing) {
         // Restore default packing stride of 64 rows between tiles
+        PACK((ckernel::packer::llk_pack_live_forget()));
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
 }

@@ -42,6 +42,7 @@ inline void _llk_pack_hw_cleanup_configure_current_bank_()
  */
 inline void _llk_pack_hw_cleanup_poison_pack_ambient_()
 {
+    ckernel::packer::llk_pack_live_forget();
     _llk_pack_configure_addrmod_<PackMode::Default>();
 
     // 1x1 NOP double-loop so accidental MOP runs are inert.

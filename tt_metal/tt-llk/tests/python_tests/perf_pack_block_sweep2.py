@@ -9,6 +9,7 @@ import pytest
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, DestSync
+from helpers.pack_sweep import NEW_ARMS, SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -29,27 +30,30 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     generate_input_dim,
 )
-from helpers.pack_sweep import NEW_ARMS, SHIM_CONFIG, bind_pack_src_b, sweep_templates
 from helpers.tile_constants import get_tile_params
 
 F = DataFormat
 BFP = [F.Bfp8_b, F.Bfp4_b, F.Bfp2_b, F.Bfp8, F.Bfp4, F.Bfp2]
 BLOCKS = 6
-ARMS = [
-    (0, 0),
-    (0, 1),
-    (0, 2),
-    (1, 0),
-    (1, 1),
-    (2, 0),
-    (2, 1),
-    (2, 2),
-    (2, 3),
-    (4, 0),
-    (5, 0),
-    (6, 0),
-    (8, 2),
-] + NEW_ARMS  # pack_sweep.py: arm ids; pk-limit5: (8, 2) W under the cb0ac rule in a CB of two blocks (bit 15); (4|5|6, 0) main per tile in steady / init / reconfigure (bit 14)  # (state, form)
+ARMS = (
+    [
+        (0, 0),
+        (0, 1),
+        (0, 2),
+        (1, 0),
+        (1, 1),
+        (2, 0),
+        (2, 1),
+        (2, 2),
+        (2, 3),
+        (4, 0),
+        (5, 0),
+        (6, 0),
+        (8, 2),
+    ]
+    + NEW_ARMS
+    + [(3, 0), (3, 5)]
+)  # room-pk: (3, x) a reconfigure to the one output before every block; pack_sweep.py: arm ids; pk-limit5: (8, 2) W under the cb0ac rule in a CB of two blocks (bit 15); (4|5|6, 0) main per tile in steady / init / reconfigure (bit 14)  # (state, form)
 BYTES = {F.Float32: 4, F.Int32: 4, F.UInt32: 4, F.Float16_b: 2}
 BFP_DATA = {F.Bfp8_b: 16, F.Bfp8: 16, F.Bfp4_b: 8, F.Bfp4: 8, F.Bfp2_b: 4, F.Bfp2: 4}
 

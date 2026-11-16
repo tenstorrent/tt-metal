@@ -791,10 +791,25 @@ template <bool is_fp32_dest_acc_en>
 __attribute__((always_inline)) inline void llk_pack_block_per_tile(
     const std::uint32_t start_tile_index, const std::uint8_t output_id, const std::uint32_t ntiles)
 {
-    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++)
+    if constexpr (llk_pack_pre_on<is_fp32_dest_acc_en, PackMode::Default>())
     {
+        // Only the first tile can find its destination written, and only the last sets the next: no per-tile bookkeeping.
         std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
-        llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default, false>(tile_index, pack_tile_addr, output_id);
+        llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default, false>(start_tile_index, pack_tile_addr, output_id);
+        for (std::uint32_t tile_index = start_tile_index + 1; tile_index < start_tile_index + ntiles; tile_index++)
+        {
+            pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+            llk_pack_impl<is_fp32_dest_acc_en, PackMode::Default, false>(tile_index, pack_tile_addr);
+        }
+        llk_pack_pre_set<is_fp32_dest_acc_en>(pack_tile_addr + get_local_cb_interface(output_id).fifo_page_size);
+    }
+    else
+    {
+        for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++)
+        {
+            std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+            llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default, false>(tile_index, pack_tile_addr, output_id);
+        }
     }
 }
 
@@ -817,6 +832,7 @@ __attribute__((always_inline)) inline void llk_pack_block_tiles(const std::uint3
             get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
             _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, true, false>(
                 start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+            llk_pack_pre_set<is_fp32_dest_acc_en>(0);
             return;
         }
     }
@@ -827,6 +843,7 @@ __attribute__((always_inline)) inline void llk_pack_block_tiles(const std::uint3
         llk_pack_tile_of_output<is_fp32_dest_acc_en, PackMode::Default, false>(start_tile_index, addr0, output_id);
         const std::uint32_t addr1 = get_output_tile_address<false, PackMode::Default>(output_id, 0);
         _llk_pack_next_<DST_SYNC_MODE, false>(start_tile_index + 1, addr1, addr0);
+        llk_pack_pre_set<is_fp32_dest_acc_en>(addr1 + get_local_cb_interface(output_id).fifo_page_size);
         return;
     }
     llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
@@ -997,6 +1014,7 @@ __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_ti
         llk_pack_block_tiles<is_fp32_dest_acc_en, ntiles, guard_dest_straddle>(start_tile_index, output_id);
         return;
     }
+    llk_pack_pre_set<is_fp32_dest_acc_en>(0);
     if (llk_pack_block_is_contiguous(output_id))
     {
         std::uint32_t pack_tile_addr = get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;

@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <type_traits>
+#include <utility>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -332,6 +333,21 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 [[maybe_unused]] alignas(4) static std::uint8_t pack_state[4] = {0, 0, 0, 0};
 constexpr std::uint8_t LLK_PACK_STATE_FU_OPEN = 0xff;
 constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
+// The output (id + 1) whose configuration the last llk_pack_reconfig_data_format wrote, 0 when unknown: a reconfigure to
+// the same output then writes nothing. Every other writer of the fields it writes forgets it; unread, its stores drop.
+[[maybe_unused]] static std::uint8_t pack_live_output = 0;
+#define LLK_PACK_LIVE_OUTPUT 1
+
+
+// The next default per-tile pack's destination, predicted by the compute API's per-tile pack; a half-sync release writes it
+// inside the packer drain and sets LLK_PACK_PRE_WRITTEN, and a pack to it then writes none. 0: none. Every pack, per tile or
+// block, replaces or clears it.
+[[maybe_unused]] static std::uint32_t pack_pre_next = 0;
+constexpr std::uint32_t LLK_PACK_PRE_WRITTEN        = 0x80000000u;
+inline void llk_pack_live_forget()
+{
+    pack_live_output = 0;
+}
 inline std::uint32_t llk_pack_state_half()
 {
     std::uint16_t half;
@@ -403,6 +419,13 @@ struct llk_pack_lofi_api
     static constexpr bool value = false;
 };
 
+// Specialized from the kernel's DEST mode and CB formats (llk_pack_common_api.h): fp32 DEST, in0 at 32 bit and an in1 that is not.
+template <int api>
+struct llk_pack_in0_only32
+{
+    static constexpr bool value = false;
+};
+
 // Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_kernel()
@@ -440,6 +463,15 @@ template <int N, std::uint32_t dep>
 constexpr bool llk_pack_shape_marked(...)
 {
     return false;
+}
+
+// A LoFi fp32 DEST matmul whose in0 alone is 32 bit binds on its pack (a 32-bit output at the 32-bit rate, mm_r3_1), and
+// unpacker A, which an early release costs L1 grants, reads a 16-bit in1.
+template <std::uint32_t dep>
+constexpr bool llk_pack_matmul_pack_bound()
+{
+    return llk_pack_lofi_api<dep * 0 + 1>::value && llk_pack_in0_only32<dep * 0 + 1>::value && llk_pack_matmul_kernel<dep>() &&
+           !llk_pack_norm_api<dep * 0 + 1>::value;
 }
 
 // A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST or at LoFi an earlier pack start
@@ -537,6 +569,7 @@ inline constexpr PackMode llk_pack_default_mode = PackMode::Default;
 template <PackMode pack_mode = PackMode::Default, bool reconfigured = false, bool store_state = true, bool zero_ch1 = false, bool ch1_u2d = false>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
+    llk_pack_live_forget();
     std::uint32_t x_stride = datum_size_in_bytes(pack_src_format);
     // The state stores first: behind the config writes they wait for them.
     if constexpr (store_state)
@@ -846,6 +879,105 @@ constexpr std::uint32_t llk_pack_reconfig_skip_all(
 template <int tag>
 inline constexpr bool pack_init_writer = false;
 
+// No other pack program, stride or init writer linked. dep: a template argument of the caller, so the tags are read at its
+// instantiation.
+template <std::uint32_t dep, DstSync sync>
+constexpr bool llk_pack_only_default_program()
+{
+    constexpr int t = static_cast<int>(dep * 0);
+    return !(pack_fast_tilize_linked<sync> || pack_fast_untilize_linked<sync> || pack_strides_writer<t + 1> || pack_strides_writer<t + 2> ||
+             pack_strides_writer<t + 3> || pack_strides_writer<t + 4> || pack_strides_writer<t + 5> || pack_strides_writer<t + 6> ||
+             pack_strides_writer<t + 7> || pack_strides_writer<t + 8> || pack_strides_writer<t + 9> || pack_strides_writer<t + 10> ||
+             pack_init_writer<t + 1> || pack_init_writer<t + 2> || pack_init_writer<t + 3>);
+}
+
+// A block-float or 32-bit output: a 16-bit one drains too fast for the release to hide the write.
+constexpr bool llk_pack_pre_format(const unsigned char f)
+{
+    return llk_pack_out32(f) || IS_BFP_FORMAT(f);
+}
+
+// Marks the output CB of each compute API pack_tile call as the kernel is parsed (pack.h): completing llk_pack_out_set<N> makes
+// llk_pack_out_used(llk_pack_out_tag<N>) callable. N: the CB id when a constant, 0xFF for a run-time one, 0xFE for a pack_block.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnon-template-friend"
+template <int>
+struct llk_pack_out_tag
+{
+    friend auto llk_pack_out_used(llk_pack_out_tag);
+};
+#pragma GCC diagnostic pop
+template <int N>
+struct llk_pack_out_set
+{
+    friend auto llk_pack_out_used(llk_pack_out_tag<N>)
+    {
+        return true;
+    }
+};
+template <int N, std::uint32_t dep, typename = decltype(llk_pack_out_used(llk_pack_out_tag<N + 0 * dep>{}))>
+constexpr bool llk_pack_out_marked(int)
+{
+    return true;
+}
+template <int N, std::uint32_t dep>
+constexpr bool llk_pack_out_marked(...)
+{
+    return false;
+}
+template <std::uint32_t dep, int... n>
+constexpr int llk_pack_one_output_of(std::integer_sequence<int, n...>)
+{
+    constexpr bool m[] = {llk_pack_out_marked<n, dep>(0)...};
+    int found          = -1;
+    for (int i = 0; i < static_cast<int>(sizeof...(n)); i++)
+    {
+        if (m[i])
+        {
+            if (found >= 0)
+            {
+                return -1;
+            }
+            found = i;
+        }
+    }
+    return (llk_pack_out_marked<0xFF, dep>(0) || llk_pack_out_marked<0xFE, dep>(0)) ? -1 : found;
+}
+// The one output CB the kernel's pack_tile calls name, or -1 (none, several, a run-time one, or a pack_block). dep: a template
+// argument of the caller, so the marks of the whole kernel are read.
+template <std::uint32_t dep>
+constexpr int llk_pack_one_output()
+{
+    return llk_pack_one_output_of<dep>(std::make_integer_sequence<int, 64> {});
+}
+
+// Specialized where the kernel's formats are known (llk_pack_block_tile.h): whether output cb is block float or 32 bit.
+template <int api>
+struct llk_pack_pre_format_api
+{
+    static constexpr bool of(int)
+    {
+        return false;
+    }
+};
+
+// The kernel's one output (llk_pack_one_output) is block float or 32 bit.
+template <std::uint32_t dep>
+constexpr bool llk_pack_pre_output()
+{
+    constexpr int one = llk_pack_one_output<dep>();
+    return one >= 0 && llk_pack_pre_format_api<static_cast<int>(dep * 0 + 1)>::of(one);
+}
+
+// Half sync, no other pack program linked, not in size mode, one block-float or 32-bit output: the release may write the next
+// destination (pack_pre_next). Its callers add 16-bit DEST: with fp32 DEST no row gained and some paid (+1.4 to +2.8).
+template <DstSync sync>
+constexpr bool llk_pack_pre_dst_sync()
+{
+    return sync == DstSync::SyncHalf && !pack_size_mode<sync> && llk_pack_only_default_program<0, sync>() &&
+           llk_pack_pre_output<static_cast<std::uint32_t>(sync)>();
+}
+
 // No other writer of the default program's address modes, strides or X counter linked: hw_configure leaves the address
 // modes and X counter live, and a default init writes the strides only where they differ (llk_pack_width_single, else
 // pack_strides_width). Programs that mark themselves (LLK_PACK_OTHER_PROGRAM_SET) are checked at run time. dep: a template argument of the caller, so the tags are read at
@@ -1030,6 +1162,7 @@ __attribute__((always_inline)) inline void reconfig_packer_data_format_impl(
     const std::uint32_t num_faces,
     const bool partial_face)
 {
+    llk_pack_live_forget();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
     const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
@@ -1350,6 +1483,7 @@ template <
     std::uint32_t num_faces>
 TT_ALWAYS_INLINE void reconfig_packer_data_format_imm_and_state()
 {
+    llk_pack_live_forget();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(
@@ -1408,6 +1542,7 @@ inline void configure_pack(
     const bool partial_face                         = false,
     const std::uint32_t relu_config                 = 0)
 {
+    llk_pack_live_forget();
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format & 0xF), static_cast<DataFormat>(pack_dst_format & 0xF)),

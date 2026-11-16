@@ -278,15 +278,33 @@ ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_confi
 #define PACK_BLOCK_CAT(a, b) PACK_BLOCK_CAT_(a, b)
 #define PACK_BLOCK_CALL_1(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_2(...) pack_block(__VA_ARGS__)
-#define PACK_BLOCK_CALL_3(d, cb, n) \
-    pack_block(                     \
-        d,                          \
-        cb,                         \
-        ::ckernel::pack_block_count<(__builtin_constant_p(::ckernel::pack_fe_n(n)) ? ::ckernel::pack_fe_n(n) : 0)>(n))
+// The count's template argument also marks a pack_block for the pack (llk_pack_out_set<0xFE>); a qualified call still
+// expands.
+#define PACK_BLOCK_CALL_3(d, cb, n)                                                         \
+    pack_block(                                                                             \
+        d,                                                                                  \
+        cb,                                                                                 \
+        ::ckernel::pack_block_count<                                                        \
+            (__builtin_constant_p(::ckernel::pack_fe_n(n)) ? ::ckernel::pack_fe_n(n) : 0) + \
+            0 * sizeof(::ckernel::packer::llk_pack_out_set<0xFE>)>(n))
 #define PACK_BLOCK_CALL_4(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_5(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_6(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_7(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_8(...) pack_block(__VA_ARGS__)
 #define pack_block(...) PACK_BLOCK_CAT(PACK_BLOCK_CALL_, PACK_BLOCK_NARGS(__VA_ARGS__))(__VA_ARGS__)
+namespace ckernel {
+// pack_tile whose template argument marks the output CB for the pack (llk_pack_out_set); a qualified call still
+// expands.
+template <std::size_t mark>
+ALWI void pack_tile_marked(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
+    pack_tile(ifrom_dst, icb, output_tile_index);
+}
+}  // namespace ckernel
+// The mark: the CB id when a constant, 0xFF else.
+#define PACK_TILE_MARK(cb) \
+    (0 * sizeof(::ckernel::packer::llk_pack_out_set<(__builtin_constant_p(::ckernel::pack_fe_n(cb)) ? static_cast<int>(::ckernel::pack_fe_n(cb)) : 0xFF)>))
+#define PACK_TILE_CALL_2(d, cb) pack_tile_marked<PACK_TILE_MARK(cb)>(d, cb)
+#define PACK_TILE_CALL_3(d, cb, i) pack_tile_marked<PACK_TILE_MARK(cb)>(d, cb, i)
+#define pack_tile(...) PACK_BLOCK_CAT(PACK_TILE_CALL_, PACK_BLOCK_NARGS(__VA_ARGS__))(__VA_ARGS__)
 #endif

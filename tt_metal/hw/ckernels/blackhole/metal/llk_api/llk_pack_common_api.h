@@ -20,6 +20,11 @@
 namespace ckernel::packer {
 template <>
 inline constexpr bool pack_size_mode<DST_SYNC_MODE> = LLK_SIZE_MODE;
+template <>
+struct llk_pack_in0_only32<1> {
+    static constexpr bool value = DST_ACCUM_MODE && llk_pack_out32(unpack_src_format[0]) &&
+                                  unpack_src_format[1] != static_cast<std::uint8_t>(DataFormat::Invalid) && !llk_pack_out32(unpack_src_format[1]);
+};
 }  // namespace ckernel::packer
 
 /*************************************************************************
@@ -37,6 +42,7 @@ inline constexpr bool pack_size_mode<DST_SYNC_MODE> = LLK_SIZE_MODE;
 inline void llk_pack_wait_fp32_dest_acc(bool enable) {
     SAN_HOOK(unsupported());
     _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(enable);
+    ckernel::packer::llk_pack_live_forget();
 }
 
 /**
@@ -303,6 +309,60 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
     }
 }
 
+// A constant-output reconfigure to the output whose configuration is live writes nothing (pack_live_output); not in size mode,
+// nor at half sync where its writes keep the pack off the unpackers' L1 grants (the u2d gate, unpack-bound matmul). A run-time
+// output keeps the full reconfigure: its compare, on every real switch, spills registers in the switching loop.
+template <bool is_fp32_dest_acc_en>
+constexpr bool llk_pack_live_skip() {
+    constexpr bool skip_all =
+        (ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), true>(
+             pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face) &
+         ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
+    return !LLK_SIZE_MODE && !skip_all &&
+           !ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() &&
+           !(DST_SYNC_MODE == DstSync::SyncHalf &&
+             ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(is_fp32_dest_acc_en)>(is_fp32_dest_acc_en));
+}
+
+// The kernel's reconfigures (reconfig_data_format.h marks, 256 + the output, 256 + 0xFF for a run-time one) all name outputs
+// of one pack format: on a real switch between formats the skip's compare and store cost the loop more than it saves.
+template <std::uint32_t dep, int... n>
+constexpr bool llk_pack_live_one_format_of(std::integer_sequence<int, n...>) {
+    constexpr bool m[] = {ckernel::packer::llk_pack_out_marked<256 + n, dep>(0)...};
+    if (ckernel::packer::llk_pack_out_marked<256 + 0xFF, dep>(0)) {
+        return false;
+    }
+    int f = -1;
+    for (int i = 0; i < static_cast<int>(sizeof...(n)); i++) {
+        if (m[i]) {
+            if (f >= 0 && pack_dst_format[i] != f) {
+                return false;
+            }
+            f = pack_dst_format[i];
+        }
+    }
+    return true;
+}
+// The live-output byte of an output: 1 + the first output whose pack configuration (formats and tile geometry) it shares, so
+// a reconfigure between outputs that differ only in their CB writes nothing.
+template <std::uint32_t o>
+constexpr std::uint8_t llk_pack_live_class() {
+    for (std::uint32_t i = 0; i < o; i++) {
+        if (pack_src_format[i] == pack_src_format[o] && pack_dst_format[i] == pack_dst_format[o] &&
+            pack_tile_num_faces[i] == pack_tile_num_faces[o] && pack_partial_face[i] == pack_partial_face[o] &&
+            pack_tile_face_r_dim[i] == pack_tile_face_r_dim[o] && pack_narrow_tile[i] == pack_narrow_tile[o] &&
+            pack_tile_r_dim[i] == pack_tile_r_dim[o] && pack_tile_c_dim[i] == pack_tile_c_dim[o]) {
+            return static_cast<std::uint8_t>(i + 1);
+        }
+    }
+    return static_cast<std::uint8_t>(o + 1);
+}
+
+template <std::uint32_t dep>
+constexpr bool llk_pack_live_one_format() {
+    return llk_pack_live_one_format_of<dep>(std::make_integer_sequence<int, sizeof(pack_dst_format)>{});
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     if constexpr (ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>()) {
@@ -394,6 +454,12 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
             }
         } else {
             llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, false>();
+        }
+    } else if constexpr (llk_pack_live_skip<is_fp32_dest_acc_en>() && llk_pack_live_one_format<new_output>()) {
+        constexpr std::uint8_t live = llk_pack_live_class<new_output>();
+        if (ckernel::packer::pack_live_output != live) {
+            llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();
+            ckernel::packer::pack_live_output = live;
         }
     } else {
         llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();

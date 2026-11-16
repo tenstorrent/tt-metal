@@ -96,6 +96,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_configure_addrmod_()
 
 __attribute__((noinline)) void _llk_pack_fast_tilize_load_replay_()
 {
+    ckernel::packer::llk_pack_live_forget();
     // Tile replay [0..15]: 16 PACRs, Last=1 on final.
     ckernel::load_replay_buf(
         REPLAY_TILE_OFFSET,
@@ -158,6 +159,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     [[maybe_unused]] const std::uint32_t num_faces = 4,
     const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b)
 {
+    ckernel::packer::llk_pack_live_forget();
     // DEST remap (remap_addrs + swizzle_32b) is set by _llk_math_fast_tilize_init_
     // on the math thread (mirrors pack_untilize_dest_init; tracked by
     // tt-metal#17132 / tt-llk#989). No action needed here, no uninit.
@@ -293,6 +295,7 @@ inline void _llk_pack_fast_tilize_uninit_(
     [[maybe_unused]] const std::uint32_t num_faces,
     const std::uint32_t pack_src_format = (std::uint32_t)DataFormat::Float16_b)
 {
+    ckernel::packer::llk_pack_live_forget();
     if constexpr (is_fp32_dest_acc_en)
     {
         // Mirror of init: restore caller's pack_src_format via reconfig, which also

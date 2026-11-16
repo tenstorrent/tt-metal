@@ -754,6 +754,7 @@ ALWI void sdpa_tail(
     // TODO: Update the tile locs in ms_reduce to enable dense packing during entire reduction
     if constexpr (dense && !untilize) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
+        PACK((ckernel::packer::llk_pack_live_forget()));
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
             (TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2)));
     }
@@ -797,6 +798,7 @@ ALWI void sdpa_tail(
 
     if constexpr (dense && !untilize) {
         // Restore packing stride from tile to tile to 64 rows
+        PACK((ckernel::packer::llk_pack_live_forget()));
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
 

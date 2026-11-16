@@ -231,6 +231,7 @@ inline void _llk_pack_fast_untilize_program_output_row_stride_(const std::uint32
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_init_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
 {
+    ckernel::packer::llk_pack_live_forget();
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize supports block_ct_dim 2, 3, or 4");
 
     pack_fast_untilize_seen = true;
