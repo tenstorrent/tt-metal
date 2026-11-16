@@ -15,8 +15,11 @@
 #   HC_SETUP          glue/check_env.sh: checks that `import ttnn` resolves inside TT_METAL_HOME; installs nothing
 #   H3_TT_METAL_BUILD a view of this checkout for synthetic H3 (no pinned tt-metal sha, no pip, no wheel)
 #   TRAY_RUN_PARENT   where run folders go: HC2_OUT_DIR, default $TT_METAL_HOME/generated/hc2
-#   max-util          the checkout's build/test/didt/unit_tests_didt_max_util when built and the core takes it
-#                     (TRAY_MAXUTIL_BIN), else FLEET_MAXUTIL_SKIP, so the core skips it with its WARNING
+#   max-util          nothing: the core runs its pinned prebuilt archive (core/fleet/maxutil.pin), the same build and
+#                     load tray-test runs. This checkout's own unit_tests_didt_max_util cannot run it: its fast dispatch
+#                     refuses kernels on active Ethernet cores, which the workload's DRAM streaming uses. A caller may
+#                     still set TRAY_MAXUTIL_BIN. A core without a pin takes the checkout's binary when built (else
+#                     FLEET_MAXUTIL_SKIP, so the core skips max-util with its WARNING)
 # HC_HOLDFILE, HC_HOLD and HC_SITE_FILE are not set here (hold scripts and site data are off unless the caller sets them).
 # HC2_CORE names another core (a core/ copy, or a tray-test checkout with traytest/run.sh).
 # Resets in the core are tt-smi -glx_reset with the root-port rescan; nothing here runs tt-smi -r.
@@ -71,9 +74,10 @@ if [ -z "${H3_TT_METAL_BUILD:-}" ]; then
     export H3_TT_METAL_BUILD
 fi
 
-# max-util: the checkout's own binary, never the core's pinned prebuilt archive
+# max-util: the core's pinned prebuilt archive, the build tray-test runs. This checkout's own binary refuses the
+# workload under fast dispatch ("Fast dispatch to ACTIVE_ETH cores is unsupported"), so it is never the default.
 MU_BIN=$TT_METAL_HOME/build/test/didt/unit_tests_didt_max_util
-if [ -z "${FLEET_MAXUTIL_SKIP:-}" ] && [ -z "${TRAY_MAXUTIL_BIN:-}" ]; then
+if [ -z "${FLEET_MAXUTIL_SKIP:-}" ] && [ -z "${TRAY_MAXUTIL_BIN:-}" ] && [ ! -f "$RUN_DIR/fleet/maxutil.pin" ]; then
     if [ ! -x "$MU_BIN" ]; then
         export FLEET_MAXUTIL_SKIP="unit_tests_didt_max_util is not built in $TT_METAL_HOME (build tt-metal with its tests)"
     elif grep -qs TRAY_MAXUTIL_BIN "$RUN_DIR/fleet/maxutil.py"; then
