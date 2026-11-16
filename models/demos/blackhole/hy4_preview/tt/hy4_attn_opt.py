@@ -271,27 +271,45 @@ class Hy4AttentionOpt(Hy4Attention):
                 d["iw"] = self._lin(o, h, ix.w_p, "idx_wp", ckc=ix.ckc)
         qa_g = self.mesh_config.allgather(qa_c, self.ccl, axis=1, dim=3, **({"memory_config": mc} if mc else {}))
         ttnn.deallocate(qa_c)
-        if o.rmssh:
-            smc, spc = self._lazy_rms()
-            xs = ttnn.to_memory_config(qa_g, smc)
-            y = ttnn.rms_norm(
-                xs,
-                weight=self.q_a_norm,
-                epsilon=cfg.rms_norm_eps,
-                program_config=spc,
-                memory_config=smc,
-                compute_kernel_config=self.ckc,
-            )
-            qa = ttnn.to_memory_config(y, ttnn.L1_MEMORY_CONFIG)
-            for t in (xs, y):
-                ttnn.deallocate(t)
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as _FN
+
+        if (
+            _FN.norm_enabled()
+            and 1 <= S <= 8
+            and qa_g.layout == ttnn.TILE_LAYOUT
+            and kv.layout == ttnn.TILE_LAYOUT
+            and qa_g.dtype == ttnn.bfloat16
+            and kv.dtype == ttnn.bfloat16
+            and not qa_g.memory_config().is_sharded()
+            and not kv.memory_config().is_sharded()
+        ):  # HY4_NORM_FUSE=1 (B22): q_a rms + kv latent rms + k_pe split as ONE program (replaces 6 ops)
+            qa, lat, k_pe_raw = _FN.fused_norms(qa_g, kv, self.q_a_norm, self.kv_a_norm, cfg.rms_norm_eps, mc)
+            ttnn.deallocate(qa_g)
+            ttnn.deallocate(kv)
+            d["qa"] = qa
+            k_pe = self._rope(o, k_pe_raw, cos, sin)
         else:
-            qa = self._rms(qa_g, self.q_a_norm)
-        ttnn.deallocate(qa_g)
-        d["qa"] = qa
-        lat = self._rms(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, S, cfg.kv_lora_rank]), self.kv_a_norm)
-        k_pe = self._rope(o, ttnn.slice(kv, [0, 0, 0, cfg.kv_lora_rank], [1, 1, S, cfg.kv_a_out]), cos, sin)
-        ttnn.deallocate(kv)
+            if o.rmssh:
+                smc, spc = self._lazy_rms()
+                xs = ttnn.to_memory_config(qa_g, smc)
+                y = ttnn.rms_norm(
+                    xs,
+                    weight=self.q_a_norm,
+                    epsilon=cfg.rms_norm_eps,
+                    program_config=spc,
+                    memory_config=smc,
+                    compute_kernel_config=self.ckc,
+                )
+                qa = ttnn.to_memory_config(y, ttnn.L1_MEMORY_CONFIG)
+                for t in (xs, y):
+                    ttnn.deallocate(t)
+            else:
+                qa = self._rms(qa_g, self.q_a_norm)
+            ttnn.deallocate(qa_g)
+            d["qa"] = qa
+            lat = self._rms(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, S, cfg.kv_lora_rank]), self.kv_a_norm)
+            k_pe = self._rope(o, ttnn.slice(kv, [0, 0, 0, cfg.kv_lora_rank], [1, 1, S, cfg.kv_a_out]), cos, sin)
+            ttnn.deallocate(kv)
         d["lat"], d["k_pe"] = lat, k_pe
         # q path
         q = self._lin(o, qa, self.w_q_b, "q_b")
@@ -335,14 +353,31 @@ class Hy4AttentionOpt(Hy4Attention):
         mc = ttnn.L1_MEMORY_CONFIG if o.l1 else None
         from models.demos.blackhole.hy4_preview.tt import hy4_fuse_attn as FA
 
+        part = None
         if (
             FA.enabled("back")
             and int(o_lat.shape[2]) <= 4
             and o_lat.layout == ttnn.TILE_LAYOUT
             and self.w_uv_t.dtype == ttnn.bfloat16
         ):  # HY4_ATTN_FUSE=1 (S <= 4, head-major o_lat): value up-projection + head concat + gate in ONE program
-            og = FA.fused_back(o_lat, self.w_uv_t, g, gfold)
-            ttnn.deallocate(g)
+            from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyLinear
+            from models.demos.blackhole.hy4_preview.tt.hy4_skinny import enabled as sk_enabled
+
+            if (
+                FA.back_fuse_enabled()
+                and sk_enabled("oproj")
+                and int(o_lat.shape[1]) == 8
+                and self.w_uv_t.shape[3] == 256
+                and int(self.w_uv_t.shape[2]) == 512
+            ):  # HY4_BACK_FUSE=1 (B22): ... and the skinny o-proj in the same program
+                if getattr(self, "_sk_o", None) is None:
+                    self._sk_o = SkinnyLinear(self.md, self.host_w["o_proj"].tensor.reshape(-1, self.cfg.hidden_size))
+                part = FA.fused_back_oproj(o_lat, self.w_uv_t, g, gfold, self._sk_o)
+                ttnn.deallocate(g)
+                og = None
+            else:
+                og = FA.fused_back(o_lat, self.w_uv_t, g, gfold)
+                ttnn.deallocate(g)
         else:
             x = ttnn.matmul(o_lat, self.w_uv_t, compute_kernel_config=self.ckc, memory_config=mc)
             x = ttnn.experimental.nlp_concat_heads(x, memory_config=mc or ttnn.DRAM_MEMORY_CONFIG)
@@ -351,9 +386,10 @@ class Hy4AttentionOpt(Hy4Attention):
                 ttnn.deallocate(g)
             else:
                 og = ttnn.multiply(x, g)
-        sk = self._skinny_o(og)
-        part = sk if sk is not None else self._lin(o, og, self.w_o, "o_proj")
-        ttnn.deallocate(og)
+        if part is None:
+            sk = self._skinny_o(og)
+            part = sk if sk is not None else self._lin(o, og, self.w_o, "o_proj")
+            ttnn.deallocate(og)
         if (
             getattr(self, "far_defer", False)
             and not part.memory_config().is_sharded()
