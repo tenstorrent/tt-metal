@@ -110,6 +110,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     const std::uint32_t in1_tile_size = TILE_SIZE_UNPACK_B / TILE_NUM_FACES * num_faces_B;
+    // in0 is packed densely: per k-tile two [M, 16] Float16_b faces, 4 * M 16-byte words. The SrcB walk strides by
+    // this, and a kt_dim = 256 call starts its second walk 128 of these past the first.
+    const std::uint32_t in0_k_tile_size = 4 * in0_face_r_dim;
 
     {
         START_PERF_MEASURE("INIT")
@@ -160,11 +163,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
                         L1_ADDRESS(buffer_B[0]),
-                        L1_ADDRESS(buffer_A[0]) + call * kt_per_call * 4 * in0_face_r_dim,
+                        L1_ADDRESS(buffer_A[0]) + call * kt_per_call * in0_k_tile_size,
                         call * kt_per_call * CT_DIM /* tile_index_a */,
                         0 /* tile_index_b */,
                         in1_tile_size,
-                        TILE_SIZE_UNPACK_A,
+                        in0_k_tile_size,
                         kt_per_call,
                         CT_DIM);
                 }

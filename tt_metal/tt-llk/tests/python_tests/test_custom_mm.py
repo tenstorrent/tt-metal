@@ -510,6 +510,61 @@ def test_custom_mm_long_k(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
 
 
+def _face_walk_operands(M, kt, ct):
+    """Exact operands that tell the SrcB face walk's last face (511) from the face 256 below it (255).
+
+    One walk reads faces 0..510; a single 256-k-tile walk would read face 511, the second face of k-tile 255, from
+    face 255, the second face of k-tile 127 (see _llk_unpack_AB_custom_mm_iter_insns). A carries -1 on face 255 and
+    +1 on face 511 (when kt reaches it), and 1 on the first face of k-tile 0, so every walk contributes; B holds small
+    integers. Every product and partial sum is an exact bf16 integer, so a face read from the wrong k-tile changes
+    the result by a whole B face sum instead of hiding inside a K-scaled tolerance.
+    """
+    torch.manual_seed(0)
+    torch_a = torch.zeros((M, kt * DEFAULT_TILE_R_DIM), dtype=torch.float32)
+    torch_a[:, :FACE_C_DIM] = 1
+    torch_a[:, 255 * FACE_C_DIM : 256 * FACE_C_DIM] = -1
+    if kt == 256:
+        torch_a[:, 511 * FACE_C_DIM : 512 * FACE_C_DIM] = 1
+    torch_b = torch.randint(
+        -2, 3, (kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM)
+    ).to(torch.float32)
+    return torch_a, torch_b
+
+
+# kt = 256 is unpacked as two face walks of 128 k-tiles; 255 is the longest single walk. Bfp8_b weights keep
+# kt = 256 x ct = 2 within L1, and its integers in [-2, 2] are exact.
+FACE_WALK_CASES = [
+    pytest.param(
+        M,
+        kt,
+        ct,
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, in1_format),
+        id=f"m{M}-k{kt}-ct{ct}-{in1_format.name}",
+    )
+    for M, kt, ct, in1_format in (
+        (1, 256, 1, DataFormat.Float16_b),
+        (8, 256, 1, DataFormat.Float16_b),
+        (8, 256, 2, DataFormat.Bfp8_b),
+        (8, 255, 1, DataFormat.Float16_b),
+    )
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", FACE_WALK_CASES)
+def test_custom_mm_face_walk_exact(formats, M, kt, ct):
+    """kt_dim at the face walk's reach, compared exactly: a one-walk kt = 256 reads face 511 from face 255."""
+    torch_a, torch_b = _face_walk_operands(M, kt, ct)
+    res = _run_custom_mm(
+        M, kt, ct, formats, DestAccumulation.No, operands=(torch_a, torch_b)
+    )
+    golden = (torch_a @ torch_b).to(res.dtype)
+    assert torch.equal(res, golden), (
+        f"custom_mm kt={kt}: {(res != golden).sum().item()} of {res.numel()} "
+        "outputs differ from the exact golden"
+    )
+
+
 ODD_K_CASES = [
     pytest.param(
         1,
