@@ -94,7 +94,7 @@ stated as such in `perf/WSN.md` with the gap; less than that does not land):
 | WS1 | batch-32 native step ≤ 35 ms (WS0: 501); batched vs serialized per user PCC ≥ 0.999 at B 2/3/8/32 with mixed positions and pages; KV writes exact per slot; inactive slots untouched; 16-user serving tok/s/user ≥ 25 ; router + experts ≤ 10 device programs per decode layer at batch 1 and 32 (WS0: 34) |
 | WS2 | batch-1 native step ≤ 11.5 ms (WS0: 18.6); device programs per sliding decode layer **in WS2's scope** (everything except router and experts) ≤ 30 in a 2-layer device profile (WS0: ~98 of 132) |
 | WS3 | stopped (see "WS3 decision") |
-| WS4 | op unit tests pass vs torch for Gemma (H 2816, I 704, E 32/128, k 8, B 1/8/32) and gpt-oss (H 2880, I 2880, E 32, k 4, bias) shapes, BFP8 and BFP4; expert weight read ≥ 400 GB/s per chip; MoE block ≤ 35 µs per layer in the model |
+| WS4 | `moe_decode` is the **batch-1** MoE op (batch 2-32 stays on WS1's expert-parallel path, already ~490-500 GB/s); op unit tests pass vs torch at B=1 for Gemma (H 2816, I 704, E 128, k 8) and gpt-oss (H 2880, I 2880, E 32, k 4, bias) shapes, BFP8 and BFP4; expert weight read ≥ 400 GB/s per chip; MoE block ≤ 35 µs per layer in the model |
 | WS5 | batch-1 native step ≤ 5 ms; 2-layer fused decode vs HF over 8 steps PCC ≥ 0.995 |
 | WS6 | greedy speculative output token-identical to plain greedy on 10 prompts; effective batch-1 tok/s/user ≥ 1.5× the previous `integration` on real prompts |
 
