@@ -5,6 +5,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_qkv_to_meta_format,
     map_hf_to_meta_keys,
     map_hf_to_meta_keys_vision_only,
+    map_vision_meta_to_hf_keys,
     split_hf_keys,
 )
 
