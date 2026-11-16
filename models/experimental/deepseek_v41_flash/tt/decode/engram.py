@@ -66,6 +66,10 @@ def _value(weight) -> torch.Tensor:
     return weight() if callable(weight) else weight
 
 
+# The rows a write sends to one device before moving on to the next: the sockets' default FIFO depth.
+ENGRAM_WRITE_CHUNK = 2
+
+
 def rows_page_bytes(config) -> int:
     """One user's bf16 Engram rows ``[kin]``: the page of a rows socket."""
     return (config.engram_max_ngram_size - 1) * config.engram_n_heads * config.engram_head_dim * 2
@@ -244,11 +248,20 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         """
         rows = rows.reshape(-1, self.kin).to(torch.bfloat16)
         assert rows.shape[0] in (self.batch, self.verify_rows), (rows.shape[0], self.batch, self.verify_rows)
-        for rank, socket in enumerate(self.sockets):
-            # Under TP the sockets are in rank order along the 1xTP mesh, the order ShardTensorToMesh cuts wkv in.
-            ranked = torch.roll(rows, -rank * self.local_kin, dims=-1) if self.tp_size > 1 else rows
-            # The socket copies raw bytes; an integer view keeps bf16 out of the DLPack dtype check.
-            socket.write_tensor(ranked.contiguous().view(torch.int16))
+        # Under TP the sockets are in rank order along the 1xTP mesh, the order ShardTensorToMesh cuts wkv in. The
+        # socket copies raw bytes; an integer view keeps bf16 out of the DLPack dtype check.
+        ranked = [
+            (torch.roll(rows, -rank * self.local_kin, dims=-1) if self.tp_size > 1 else rows)
+            .contiguous()
+            .view(torch.int16)
+            for rank in range(len(self.sockets))
+        ]
+        # A block's rows go out a FIFO's worth at a time to every device in turn: written one device after another,
+        # each later device's first rows would wait until the earlier one's step drained its FIFO.
+        chunk = ENGRAM_WRITE_CHUNK
+        for start in range(0, rows.shape[0], chunk):
+            for socket, part in zip(self.sockets, ranked):
+                socket.write_tensor(part[start : start + chunk])
 
     def forward(self, streams: ttnn.Tensor) -> ttnn.Tensor:
         """``streams`` ``[B, 1, hc, D]`` bf16 ROW_MAJOR in :attr:`streams_memory_config` -> the same shape and
