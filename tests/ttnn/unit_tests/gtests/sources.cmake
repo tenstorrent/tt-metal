@@ -45,6 +45,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_program_cache_l1.cpp
     test_reduction.cpp
     test_relational_int.cpp
+    test_relational_uint.cpp
     test_rsub_int.cpp
     test_sort_prim_validation.cpp
     test_codegen_gates_unallocated.cpp
