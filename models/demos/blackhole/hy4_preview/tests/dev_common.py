@@ -3,8 +3,13 @@
 """Shared helpers of the standalone device scripts (python -m ...tests.dev_*): mesh open/close, PCC, real-activation loader."""
 
 
+import os
+
 import ttnn
 
+DEFAULT_WORKER_L1_BH = (
+    1460864  # Blackhole default worker L1 above the 69 KB kernel-config ring (probe_l1.py: l1_bank_size)
+)
 ACTS = "/mnt/tt-data/ssinghal/hy4-logs/program/layer-moe/acts/"
 
 
@@ -14,7 +19,13 @@ def p(*a):
 
 def open_mesh(trace=200_000_000):
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
-    return ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=16384, trace_region_size=trace)
+    kw = {}
+    # B10 (default OFF): HY4_RING_KB=N grows the per-core kernel-config ring buffer (69 KB default) by N KB at the cost of N KB of worker L1 (CBs / L1 tensors start N KB higher).
+    # The trace replay stalls the dispatcher whenever the next program's config does not fit in the ring (go signal sent ~5-10 us after the previous program ended).
+    ring_kb = int(os.environ.get("HY4_RING_KB", "0"))
+    if ring_kb:
+        kw["worker_l1_size"] = DEFAULT_WORKER_L1_BH - ring_kb * 1024
+    return ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=16384, trace_region_size=trace, **kw)
 
 
 def close_mesh(md):
