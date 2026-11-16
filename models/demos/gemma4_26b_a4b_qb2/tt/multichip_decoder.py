@@ -54,6 +54,9 @@ WS1_BATCHED = os.environ.get("GEMMA4_26B_WS1_BATCHED", "1") != "0"
 WS5_FUSED = os.environ.get("GEMMA4_26B_WS5_FUSED", "1") != "0"
 # WS5: the batch-1 shared MLP through moe_decode (one always-routed expert) instead of the ttnn shared MLP.
 WS5_SHARED_B1 = os.environ.get("GEMMA4_26B_WS5_SHARED_B1", "1") != "0"
+# WS5: ... and as always-routed virtual experts inside the routed experts' programs (one gate|up and one down program
+# for both; both pre-norm gammas folded into the weights, so the batch-1 path needs WS5_FUSED).
+WS5_MERGED = os.environ.get("GEMMA4_26B_WS5_MERGED", "1") != "0"
 
 
 class DecodeRopeRows:
@@ -1431,8 +1434,49 @@ class MultichipDecoder(OptimizedDecoder):
             banks = mesh_device.dram_grid_size().x
             inter_pad = -(-config.moe_intermediate_size // (4 * 32)) * 4 * 32
             local_readers = 3  # bank-local gate|up: 3 readers on each DRAM bank's row (measured 3 = 6 > 2 invalid)
-            gu, dn = tp_expert_layouts(state_dict, tp=4, banks=banks, inter_pad=inter_pad, local_readers=local_readers)
             gate_dtype, down_dtype = experts.gate_up.dtype, experts.down.dtype
+            shared_dtypes = (
+                (ttnn.bfloat8_b, ttnn.bfloat8_b)
+                if precision_config is None
+                else tuple(policy_dtype(precision_config[f"shared_{n}_dtype"]) for n in ("gate", "down"))
+            )
+            merged = (
+                WS5_FUSED
+                and WS5_SHARED_B1
+                and WS5_MERGED
+                and WS2_FOLD_SHARED
+                and shared_dtypes == (gate_dtype, down_dtype)
+                and all(
+                    key in state_dict
+                    for key in (
+                        "mlp.gate_proj.weight",
+                        "pre_feedforward_layernorm.weight",
+                        "pre_feedforward_layernorm_2.weight",
+                    )
+                )
+            )
+            expert_state, extra = state_dict, None
+            if merged:
+                # WS5: the shared MLP as always-routed virtual experts 128.. of the same programs; both pre-norm
+                # gammas fold into the gate|up rows, so every slot takes the plain normed vector.
+                from models.demos.gemma4_26b_a4b_qb2.tt.moe_decode import shared_virtual_experts
+
+                expert_gamma = state_dict["pre_feedforward_layernorm_2.weight"].float()
+                expert_state = {
+                    "experts.gate_up_proj": state_dict["experts.gate_up_proj"].float() * expert_gamma,
+                    "experts.down_proj": state_dict["experts.down_proj"],
+                }
+                shared_gamma = state_dict["pre_feedforward_layernorm.weight"].float()[None, :]
+                extra = shared_virtual_experts(
+                    state_dict["mlp.gate_proj.weight"].float() * shared_gamma,
+                    state_dict["mlp.up_proj.weight"].float() * shared_gamma,
+                    state_dict["mlp.down_proj.weight"],
+                    tp=4,
+                    inter_chip=inter_pad // 4,
+                )
+            gu, dn = tp_expert_layouts(
+                expert_state, tp=4, banks=banks, inter_pad=inter_pad, local_readers=local_readers, extra=extra
+            )
             self.moe_b1 = SimpleNamespace(
                 op=MoeDecodeB1(
                     mesh_device,
@@ -1448,11 +1492,31 @@ class MultichipDecoder(OptimizedDecoder):
                 down_dtype=down_dtype,
             )
             self.moe_b1.op.local_readers = local_readers
-            del gu, dn
+            self.moe_b1.merged = None
+            if merged:
+                slots = extra[0][0].shape[0]
+                self.moe_b1.merged = MoeDecodeB1(
+                    mesh_device,
+                    hidden=config.hidden_size,
+                    inter_chip=inter_pad // 4,
+                    k=config.top_k_experts + slots,
+                    weight_dtype=gate_dtype,
+                    down_dtype=down_dtype,
+                    split=config.top_k_experts,
+                )
+                self.moe_b1.merged.local_readers = local_readers
+                self.moe_b1.shared_slots = slots
+            del gu, dn, expert_state, extra
             for name in ("gate_up", "down"):
                 ttnn.deallocate(getattr(experts, name))
         self.shared_b1 = None
-        if WS5_FUSED and WS5_SHARED_B1 and self.moe_b1 is not None and "mlp.gate_proj.weight" in state_dict:
+        if (
+            WS5_FUSED
+            and WS5_SHARED_B1
+            and self.moe_b1 is not None
+            and self.moe_b1.merged is None
+            and "mlp.gate_proj.weight" in state_dict
+        ):
             # WS5: the batch-1 shared MLP as one always-routed bank-streamed expert (moe_decode, k = 1, weight 1):
             # its tensor-parallel slice of the intermediate dimension, pre_feedforward_layernorm folded into gate|up.
             from models.demos.gemma4_26b_a4b_qb2.tt.moe_decode import MoeDecodeB1, tp_expert_layouts, upload_per_chip
@@ -2154,7 +2218,13 @@ class MultichipDecoder(OptimizedDecoder):
         self.fused = SimpleNamespace(
             boundary=boundary,
             input_gamma=vec(layer.input_layernorm.tt_weight),
-            g_attn=boundary.gammas([vec(layer.post_attention_layernorm.tt_weight), vec(self.expert_norm_weight)]),
+            # merged MoE: the expert pre-norm gamma is folded into the expert weights (expert_in = the plain normed n)
+            g_attn=boundary.gammas(
+                [
+                    vec(layer.post_attention_layernorm.tt_weight),
+                    None if self.moe_b1.merged is not None else vec(self.expert_norm_weight),
+                ]
+            ),
             router_scale=boundary.fp32_vector(vec(source.scale) * float(source.source.scalar_root_size)),
             g_moe=boundary.gammas(
                 [
@@ -2179,8 +2249,14 @@ class MultichipDecoder(OptimizedDecoder):
                 ttnn.L1_MEMORY_CONFIG,
             )
             self.fused.router = RouterB1(
-                boundary.mesh, weight, pes, self.config.top_k_experts, skip=[(boundary.core.x, boundary.core.y)]
+                boundary.mesh,
+                weight,
+                pes,
+                self.config.top_k_experts,
+                skip=[(boundary.core.x, boundary.core.y)],
+                extra=getattr(self.moe_b1, "shared_slots", 0) if self.moe_b1.merged is not None else 0,
             )
+        assert self.moe_b1.merged is None or (boundary.flat_router and boundary.flat_moe), "merged MoE: flat boundary"
 
     def fused_decode(self, x, *, rope_mats, current_pos, cache_pos, page_table, kv_cache):
         """WS5 batch-1 decode layer between two fused boundaries: x is this layer's normed input (the previous
@@ -2211,6 +2287,13 @@ class MultichipDecoder(OptimizedDecoder):
         moe = self.moe_b1
         boundary = f.boundary
         flat = boundary.flat_moe
+        if moe.merged is not None:
+            # routed experts (slots 0..7) and the shared MLP (always-routed virtual experts) in one gate|up and one
+            # down program; the down writes both partials flat into the boundary
+            moe.merged(
+                expert_in, packed, moe.w_gu, moe.w_down, x_flat=True, flat_out=(boundary.part, boundary.T * 2048, 0)
+            )
+            return boundary.moe_pregathered(f.g_moe, f.layer_scalar)
         if flat and self.shared_b1 is not None:
             # both MoE partials go straight into the boundary's flat partial buffer (no row gather)
             sb = self.shared_b1
