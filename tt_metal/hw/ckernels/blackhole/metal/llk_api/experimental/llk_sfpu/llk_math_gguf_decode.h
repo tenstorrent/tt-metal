@@ -24,9 +24,10 @@ inline void llk_math_gguf_decode_init() {
     sfpu::sfpu_gguf_decode_init<FMT, BESIDE_UNPACK>();
 }
 
-template <std::uint32_t FMT>
+// DELTA: the results also to the tiles DELTA further.
+template <std::uint32_t FMT, int DELTA = 0>
 inline void llk_math_gguf_decode_group(const std::uint32_t dst_index, const std::uint32_t rows) {
-    sfpu::sfpu_gguf_decode_group<FMT>(dst_index, rows);
+    sfpu::sfpu_gguf_decode_group<FMT, DELTA>(dst_index, rows);
 }
 
 // The group step's results at dst_index copied to the tiles DELTA further, in place of a group step there.

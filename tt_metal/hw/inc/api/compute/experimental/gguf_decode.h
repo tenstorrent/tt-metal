@@ -46,10 +46,12 @@ ALWI void gguf_decode_init() {
 
 // Group step of the formats that convert a group's scales once (Q4_K, Q5_K, Q3_K, Q2_K; nothing for the others): call
 // before the first tile of a group that gguf_decode_tile decodes at idst and rows, with any page of the group in tile
-// idst + 1. Until the group ends, nothing else may write tile idst + 2 or tile idst + 1 past its page.
-template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math>
+// idst + 1. Until the group ends, nothing else may write tile idst + 2 or tile idst + 1 past its page. delta: the
+// results also go to the tiles at idst + delta (the other DEST set), in place of gguf_decode_group_copy there; the same
+// rule holds there.
+template <std::uint32_t fmt, GgufDecodeThread thr = GgufDecodeThread::Math, int delta = 0>
 ALWI void gguf_decode_group(const std::uint32_t idst, const std::uint32_t rows = 0) {
-    GGUF_DECODE_ON(thr, llk_math_gguf_decode_group<fmt>(idst, rows));
+    GGUF_DECODE_ON(thr, llk_math_gguf_decode_group<fmt, delta>(idst, rows));
 }
 
 // In place of gguf_decode_group at idst + delta for the same group: copies the results of the one at idst (Q4_K, Q5_K,
