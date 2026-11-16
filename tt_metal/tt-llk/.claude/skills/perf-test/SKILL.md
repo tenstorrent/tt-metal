@@ -288,8 +288,10 @@ option in functional (and so in perf), with the matching golden
 Reachability is not enough for a regression variant. Trace the state it is
 meant to perturb through the complete INIT order and prove that a later init
 does not overwrite it before the operation under test. As a negative control,
-removing the targeted write should make the variant fail or observably change;
-if it still passes unchanged, the variant does not cover that behavior.
+disable the implementation fix and verify that the regression variant fails;
+restore the fix and verify that it passes. If the variant passes without the
+fix, it does not cover that behavior. Removing the setup perturbation instead
+may legitimately leave a correct implementation passing.
 
 ## 6. Perf schema
 
@@ -297,10 +299,11 @@ Adding a template or runtime field adds CSV columns. Update the module's
 entry in `helpers/perf/test_schemas.py` and bump its `version` once per PR,
 relative to main. The hardware-free header gate fails on any drift.
 
-`helpers/perf/wide_schema.py` is one shared table across modules:
+`helpers/perf/wide_schema.py` is one table shared by Wormhole and Blackhole
+modules; Quasar uses the separate `helpers/perf/wide_schema_quasar.py`. In the
+schema for the target architecture:
 
-- put every test-emitted configuration column above the timing comment and
-  `_TIMING_COLUMNS`;
+- put every test-emitted configuration column above `_TIMING_COLUMNS`;
 - add a shared column once, never once per module;
 - use an operation-qualified name when a generic name such as `capacity` or
   `dest_tiles` would be ambiguous in the shared warehouse;

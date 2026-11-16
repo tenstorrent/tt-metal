@@ -64,8 +64,10 @@ comparison.
   passes. The per-module column set is in
   `helpers/perf/test_schemas.py`; the hardware-free header gate
   (`tests/hardware_free/perf/test_perf_header_gate.py`) fails on drift.
-- `helpers/perf/wide_schema.py` is the shared warehouse schema. Test-emitted
-  configuration columns belong above the timing comment and
+- The warehouse schema is chosen per architecture by `schema_for_arch` in
+  `helpers/perf/parquet.py`: `helpers/perf/wide_schema.py` for Wormhole and
+  Blackhole, `helpers/perf/wide_schema_quasar.py` for Quasar. In the target
+  architecture's schema, test-emitted configuration columns belong above
   `_TIMING_COLUMNS`; provenance stays below timing. Generic names must be
   globally meaningful, otherwise qualify them with the operation.
 
