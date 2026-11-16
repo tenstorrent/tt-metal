@@ -90,6 +90,27 @@ std::string default_manifest_path(const std::string& out_kernel_root) {
     return (p.parent_path().parent_path() / "kernel_prewarm.manifest").string();
 }
 
+// "<cache_root><build_key>/kernel_prewarm.live": touched each time a device opens with that build_key
+// (maybe_launch_prewarm), so the offline prewarm can tell the build keys this machine still uses
+// from ones a past mesh or firmware config left in the shared manifest. Those old keys never get
+// asked for again, and against today's sources most of their kernels fail to compile (cs04, 11-16:
+// 19192 entries of a 09-29 key held the offline pass for 15 min after the live key built in 90 s).
+std::string live_stamp_path(const std::string& out_kernel_root) {
+    fs::path p(out_kernel_root);
+    if (p.filename().empty()) {
+        p = p.parent_path();
+    }
+    return (p.parent_path() / "kernel_prewarm.live").string();
+}
+
+void touch_live_stamp(const std::string& out_kernel_root) {
+    const fs::path stamp = live_stamp_path(out_kernel_root);
+    std::error_code ec;
+    fs::create_directories(stamp.parent_path(), ec);
+    std::ofstream(stamp, std::ios::trunc).flush();
+    fs::last_write_time(stamp, fs::file_time_type::clock::now(), ec);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Build one target from a portable recipe.
 //
@@ -657,6 +678,33 @@ std::size_t run_prewarm(
     std::atomic<size_t> deferred{0}, genfiles_failed{0};
     std::unordered_map<std::string, std::optional<std::string>> toolchains;
     const bool retry_failed = env_truthy("TT_METAL_KERNEL_PREWARM_RETRY_FAILED");
+    // A shared manifest keeps every build_key this cache root has seen, and the foreign-tree filter
+    // below keys on the tree's path only. A build_key last captured by an older commit of the SAME
+    // path passes both filters, and its recipes (old compile-time args, defines, generated bindings)
+    // replayed against the new sources mostly fail: on cs04 (2026-11-16, ltx-rt 6796f8d2b3e) a 09-29
+    // build_key's 26200 targets gave 21409 failures and 4791 successes in ~10 min after the live
+    // build_key built clean in 90 s. Once this many targets have failed (or were skipped as
+    // previously failed) and failures are at least twice the successes, the build_key is stale: stop
+    // queueing its work. A live build_key fails a handful at most. 0 disables the cutoff.
+    std::size_t stale_limit = 256;
+    if (const char* v = env_or_null("TT_METAL_KERNEL_PREWARM_STALE_LIMIT")) {
+        stale_limit = std::strtoull(v, nullptr, 10);
+    }
+    std::atomic<bool> stale{false};
+    std::atomic<size_t> abandoned{0};
+    const auto note_failure = [&]() {
+        const size_t fails = failed.load() + previously_failed.load();
+        if (stale_limit != 0 && fails >= stale_limit && fails >= 2 * successful.load() && !stale.exchange(true)) {
+            log_warning(
+                tt::LogMetal,
+                "kernel prewarm: build_key {} abandoned after {} failed and {} built targets; its manifest "
+                "entries were captured by an older source tree and mostly no longer compile. Set "
+                "TT_METAL_KERNEL_PREWARM_STALE_LIMIT=0 to disable this cutoff.",
+                build_key,
+                fails,
+                successful.load());
+        }
+    };
     size_t skipped_build_key = 0;
     size_t skipped_dup = 0;
     size_t skipped_device_init = 0;
@@ -735,6 +783,10 @@ std::size_t run_prewarm(
         launch_build_step(
             [&, kernel]() {
                 const auto& kernel_dir = kernel.directory;
+                if (stale.load()) {
+                    abandoned += kernel.targets.size();
+                    return;
+                }
                 std::optional<failure::KernelLock> lock;
                 try {
                     lock.emplace(kernel_dir + ".prewarm.lock");
@@ -753,7 +805,12 @@ std::size_t run_prewarm(
                         e.what());
                     return;
                 }
-                for (const auto& work : kernel.targets) {
+                for (size_t index = 0; index != kernel.targets.size(); ++index) {
+                    if (stale.load()) {
+                        abandoned += kernel.targets.size() - index;
+                        break;
+                    }
+                    const auto& work = kernel.targets[index];
                     const auto& req = *work.request;
                     const auto& resolved = work.target;
                     const auto& toolchain = std::as_const(toolchains).at(req.gpp);
@@ -762,6 +819,7 @@ std::size_t run_prewarm(
                         resolved.target_name.find('/') != std::string::npos) {
                         ++failed;
                         log_warning(tt::LogMetal, "kernel prewarm: invalid target name");
+                        note_failure();
                         continue;
                     }
                     const auto result = failure::target(
@@ -775,11 +833,15 @@ std::size_t run_prewarm(
                         [&]() { fs::remove_all(out_dir); });
                     switch (result.outcome) {
                         case failure::Outcome::Successful: ++successful; break;
-                        case failure::Outcome::PreviouslyFailed: ++previously_failed; break;
+                        case failure::Outcome::PreviouslyFailed:
+                            ++previously_failed;
+                            note_failure();
+                            break;
                         case failure::Outcome::Failed:
                             ++failed;
                             log_warning(
                                 tt::LogMetal, "kernel prewarm: build {} failed: {}", out_dir, result.diagnostic);
+                            note_failure();
                             break;
                     }
                 }
@@ -793,7 +855,7 @@ std::size_t run_prewarm(
         tt::LogMetal,
         "kernel prewarm: attempted={} successful={} failed={} previously-failed-skipped={} in {}ms "
         "(duplicate-targets={} device-init-entries={} build-key-mismatch-entries={} foreign-tree-entries={} "
-        "deferred-targets={} genfiles-or-lock-failures={}); best-effort",
+        "deferred-targets={} genfiles-or-lock-failures={} stale-abandoned-targets={}); best-effort",
         successful.load() + failed.load(),
         successful.load(),
         failed.load(),
@@ -804,7 +866,8 @@ std::size_t run_prewarm(
         skipped_build_key,
         skipped_foreign_tree,
         deferred.load(),
-        genfiles_failed.load());
+        genfiles_failed.load(),
+        abandoned.load());
     if (skipped_foreign_tree > 0) {
         log_warning(
             tt::LogMetal,
@@ -905,6 +968,8 @@ void maybe_launch_prewarm(
         return;
     }
     std::call_once(g_launch_once, [&]() {
+        // Best effort: an unwritable cache only costs the offline pass its live-key filter.
+        touch_live_stamp(out_kernel_root);
         // Enable capture unconditionally (explicit override else cache-root default). On a cold cache
         // this run's op-by-op compiles populate the manifest; that reuse is what makes the *next* run
         // fast with no manual setup.
@@ -986,9 +1051,45 @@ std::size_t prewarm_manifest_offline(const std::string& out_root, const std::str
         return 0;
     }
 
-    std::unordered_set<std::uint64_t> build_keys;
+    std::unordered_map<std::uint64_t, std::size_t> entries_per_key;
     for (const auto& req : requests) {
-        build_keys.insert(req.build_key);
+        entries_per_key[req.build_key]++;
+    }
+
+    // Build only the keys a device opened here within live_days (their kernel_prewarm.live stamp).
+    // A cache from before the stamps existed has none: build every key then, as before; the first
+    // device run stamps its key. TT_METAL_KERNEL_PREWARM_ALL_KEYS=1 builds every key regardless.
+    std::uint64_t live_days = 14;
+    if (const char* v = env_or_null("TT_METAL_KERNEL_PREWARM_LIVE_DAYS"); v != nullptr && *v != '\0') {
+        live_days = std::strtoull(v, nullptr, 10);
+    }
+    const auto now = fs::file_time_type::clock::now();
+    std::vector<std::uint64_t> stamped;
+    for (const auto& [bk, n] : entries_per_key) {
+        std::error_code ec;
+        const auto t = fs::last_write_time(live_stamp_path(out_root + std::to_string(bk) + "/kernels/"), ec);
+        if (!ec && now - t <= std::chrono::hours(24 * live_days)) {
+            stamped.push_back(bk);
+        }
+    }
+    std::vector<std::uint64_t> build_keys;
+    if (stamped.empty() || env_truthy("TT_METAL_KERNEL_PREWARM_ALL_KEYS")) {
+        for (const auto& [bk, n] : entries_per_key) {
+            build_keys.push_back(bk);
+        }
+    } else {
+        build_keys = stamped;
+        for (const auto& [bk, n] : entries_per_key) {
+            if (std::find(stamped.begin(), stamped.end(), bk) == stamped.end()) {
+                log_info(
+                    tt::LogMetal,
+                    "kernel prewarm (offline): build_key {} skipped ({} entries): no device opened it here in {} "
+                    "days (no fresh kernel_prewarm.live)",
+                    bk,
+                    n,
+                    live_days);
+            }
+        }
     }
 
     std::size_t total = 0;

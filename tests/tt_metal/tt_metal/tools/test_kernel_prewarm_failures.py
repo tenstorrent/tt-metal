@@ -254,6 +254,33 @@ REVIEW_MAIN = r"""
 int main(int argc,char** argv) {
  assert(argc==4); fs::path root=argv[1];fs::create_directories(root);
  std::string mode=argv[2]; int expected=std::stoi(argv[3]);
+ if(mode=="stale") {
+  // A build_key captured by an older commit of this tree path: most recipes fail against the new
+  // sources (cs04, ltx-rt 6796f8d2b3e: 21409 of 26200). The loop stops after the cutoff instead of
+  // replaying all of them, also when some old kernels still build (mode 3); a key whose successes
+  // outnumber half its failures is live (mode 1) and is never cut; mode 2 disables the cutoff.
+  const bool live=expected==1, disabled=expected==2, mixed=expected==3;
+  if(disabled)setenv("TT_METAL_KERNEL_PREWARM_STALE_LIMIT","0",1);
+  std::vector<jit_server::CompileRequest> requests;
+  const int oks=live ? 300 : mixed ? 50 : 0;
+  for(int i=0;i<oks;++i) {
+   jit_server::CompileRequest ok;ok.kernel_name="live"+std::to_string(i);ok.gpp="batch";
+   jit_build::TargetRecipe target;target.target_name="first";ok.targets={target};requests.push_back(ok);
+  }
+  for(int i=0;i<400;++i) {
+   jit_server::CompileRequest req;req.kernel_name="stale"+std::to_string(i);req.gpp="batch-stale";
+   jit_build::TargetRecipe target;target.target_name="first";req.targets={target};requests.push_back(req);
+  }
+  auto count=run_prewarm(requests,root.string()+"/","",7,"",false);
+  if(live || disabled) {
+   assert(count==size_t(oks) && summary[2]==400 && summary[11]==0 && attempts==int(requests.size()));
+  } else {
+   assert(count==size_t(oks) && summary[2]==256 && summary[11]==144 && attempts==oks+256);
+   assert(!fs::exists(root/"stale300"));
+  }
+  std::cout<<"stale build_key: mode="<<expected<<" failed="<<summary[2]<<" abandoned="<<summary[11]<<" passed\n";
+  return 0;
+ }
  if(mode=="batch") {
   struct rlimit limit{32,32};assert(setrlimit(RLIMIT_NOFILE,&limit)==0);
   fail_generated=expected==3;
@@ -361,7 +388,7 @@ class PrewarmFailureTests(unittest.TestCase):
   assert(!competing.acquired());
   int fd=::open((dir+"active").c_str(),O_CREAT|O_EXCL|O_WRONLY,0600);assert(fd>=0);
   usleep(1000);assert(::close(fd)==0);assert(::unlink((dir+"active").c_str())==0);
-  if(gpp=="batch-fail" && t.target_name=="second")throw std::runtime_error("injected build failure");
+  if((gpp=="batch-fail" && t.target_name=="second") || gpp=="batch-stale")throw std::runtime_error("injected build failure");
   std::ofstream(dir+"complete")<<"ok";return;
  }""",
         )
@@ -395,6 +422,16 @@ class PrewarmFailureTests(unittest.TestCase):
                 with self.subTest(batch_concurrent=concurrent):
                     subprocess.run(
                         [str(path / "test"), str(path / f"batch{concurrent}"), "batch", str(concurrent)],
+                        check=True,
+                        timeout=30,
+                    )
+            for case in (0, 1, 2, 3):
+                with self.subTest(stale_build_key=case):
+                    env = os.environ.copy()
+                    env.pop("TT_METAL_KERNEL_PREWARM_STALE_LIMIT", None)
+                    subprocess.run(
+                        [str(path / "test"), str(path / f"stale{case}"), "stale", str(case)],
+                        env=env,
                         check=True,
                         timeout=30,
                     )
