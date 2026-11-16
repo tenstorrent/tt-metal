@@ -359,14 +359,14 @@ class Hy4Engine:
             f"HY4 dram[{tag}]: alloc {v['alloc_per_bank'] / 1e6:.0f} MB/bank, free {v['free_per_bank'] / 1e6:.0f} MB/bank, largest free {v['largest_free_per_bank'] / 1e6:.0f} MB"
         )
 
-    # B22fix: the L1 scratch of the traces vs lazily created persistent L1 buffers. L1 buffers are allocated TOP-DOWN, so a persistent buffer created after the captures (the GlobalSemaphores of an all_broadcast /
-    # composite all_gather workload for a prompt shape the warm-up did not run, cached for the life of the program cache) is placed in the highest free hole = exactly where the trace intermediates lived, and the
-    # next trace replay overwrites it (decode replays, then the next prefill hangs on that semaphore: found with HY4_NORM_FUSE=1, whose L1 outputs sit at the very top and shifted onto them).
-    # HY4_TRACE_L1_GUARD_KB=N: after the captures allocate a persistent N KB/bank L1 block in the highest free hole = over the trace scratch (extent measured below); later persistent L1 buffers are then
-    # placed under it. (A guard HELD DURING the captures instead, "stash", made the first capture hang in MoE selective_reduce_combine: tried, rejected.)
-    def _l1_guard(self):
-        kb = int(os.environ.get("HY4_TRACE_L1_GUARD_KB", "0"))
-        self._l1_log("after captures, before guard")
+    # B22fix (root cause of the HY4_NORM_FUSE=1 wedge, see program/product-integ/RESULT_B22FIX.md): L1 buffers are allocated TOP-DOWN and the L1 region that is legal for buffers next to the static CB region of the
+    # big programs is only the top ~7.7 KB/bank (a program's CBs may reach address 1494400 of a 1502144 top: a guard / stash block below that is rejected: "Statically allocated circular buffers clash with L1 buffers",
+    # or hangs a capture). The trace scratch (decode L1 intermediates) and every persistent L1 buffer created LAZILY after the captures (the GlobalSemaphores a new all_gather / all_broadcast workload allocates for a
+    # prompt shape the warm-up did not run, alive as long as the program cache entry) therefore share the same few KB: the next trace replay rewrites such a semaphore and the next prefill using that workload hangs on it
+    # (first seen at the first prompt chunk past the 3072-token warm-up, after one decode). HY4_NORM_OUT=dram keeps the B22 fused-norm outputs (6 KB/bank, written at the very top) out of that region. This only logs
+    # where the next lazily created persistent L1 buffer would land.
+    def _l1_report(self):
+        self._l1_log("after captures")
         pr = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.md, ttnn.L1_MEMORY_CONFIG
         )
@@ -374,17 +374,6 @@ class Hy4Engine:
             f"HY4 L1 probe after captures: a new persistent L1 buffer would be placed at addr {pr.buffer_address()}"
         )
         ttnn.deallocate(pr)
-        if kb <= 0:
-            return
-        g = self.md.compute_with_storage_grid_size()
-        tiles = (
-            g.x * g.y * max(kb // 2, 1)
-        )  # one 2 KB tile page per bank per 2 KB (pages go round-robin over the L1 banks)
-        self._guard = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, 32, 32 * tiles]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.md, ttnn.L1_MEMORY_CONFIG
-        )
-        logger.info(f"HY4 L1 guard {kb} KB/bank held at addr {self._guard.buffer_address()}")
-        self._l1_log("after guard")
 
     def _l1_peak(self, fn, tag):
         """run fn (an eager round body) while a sampler thread polls the L1 allocator: the peak per-bank L1 use of the body (= the extent of its trace scratch, a lower bound: the polling can miss short peaks)."""
@@ -462,7 +451,7 @@ class Hy4Engine:
             if self.sampled:
                 self.runner.capture("S")
                 self._dram("after S capture")
-            self._l1_guard()
+            self._l1_report()
             logger.info(f"HY4 warm-up: spec traces captured ({list(self.runner.traces)})")
         else:
             self.dl.capture(self.loop_variants)
