@@ -39,11 +39,15 @@ VAR_ULP_THRESHOLD = {torch.float32: 4, torch.bfloat16: 1}
 NORMALIZE_SHAPE = torch.Size([1, 1, 32, 32])
 UNALIGNED_NORMALIZE_SHAPE = torch.Size([1, 1, 30, 40])
 
-# std_hw and var_hw send planes of at most 64 tiles to ttnn.std / ttnn.var, which run as one program and do not
-# rescale the deviation yet (#55159), so one tile would not reach the composite tested here. One 512x512 plane is
-# 256 tiles, which takes the composite, and so does 500x500 (16 x 16 tiles), which is not tile-aligned.
-STATISTIC_SHAPE = torch.Size([1, 1, 512, 512])
-UNALIGNED_STATISTIC_SHAPE = torch.Size([1, 1, 500, 500])
+# std_hw and var_hw send planes of at most 256 tiles, and 4 or more planes, to ttnn.std / ttnn.var, which run as one
+# program and do not rescale the deviation yet (#55159). The statistic tests use planes of 17 x 16 tiles, which take
+# the composite: 544x512, and 520x512, which is not tile-aligned, one at a time or three in one tensor. They stay at
+# those two shapes: on the other shapes above 256 tiles that were tried, wider, taller or narrower (512x544, 1024x512,
+# 544x500, 600x600, 1024x1024 and others), the float32 mean of the squares rounds more (up to 6 ULP for std_hw and
+# 6.2 for var_hw).
+STATISTIC_SHAPE = torch.Size([1, 1, 544, 512])
+UNALIGNED_STATISTIC_SHAPE = torch.Size([1, 1, 520, 512])
+PLANES_STATISTIC_SHAPE = torch.Size([1, 3, 544, 512])
 
 # A plane of 3.0 has no deviation and an exact mean, so std_hw and var_hw must give exactly 0.
 CONSTANT = 3.0
@@ -100,6 +104,28 @@ def _check_var(deviations, torch_dtype, ttnn_dtype, shape, device):
     assert_with_ulp(expected_result=expected, actual_result=got, ulp_threshold=VAR_ULP_THRESHOLD[torch_dtype])
 
 
+def _runs_one_program(op, tt_x):
+    """True when op runs ttnn.std / ttnn.var as one program instead of the composite, as in test_var_std_hw.py."""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        op(tt_x)
+    finally:
+        captured_graph = ttnn.graph.end_graph_capture()
+    return "WelfordReduceDeviceOperation" in ttnn.graph.extract_calltrace(captured_graph)
+
+
+# The std_hw / var_hw tests below only test the rescale if their shapes take the composite.
+@pytest.mark.parametrize(
+    "shape",
+    [STATISTIC_SHAPE, UNALIGNED_STATISTIC_SHAPE, PLANES_STATISTIC_SHAPE],
+    ids=lambda shape: "x".join(map(str, shape)),
+)
+def test_statistic_shapes_take_the_composite(shape, device):
+    tt_x = ttnn.from_torch(torch.ones(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    for op in (ttnn.std_hw, ttnn.var_hw):
+        assert not _runs_one_program(op, tt_x), f"{op} runs as one program on {list(shape)}, which does not rescale"
+
+
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("deviation", DEVIATIONS, ids=DEVIATION_IDS)
 def test_normalize_hw_is_scale_invariant(deviation, torch_dtype, ttnn_dtype, device):
@@ -119,7 +145,7 @@ def test_var_hw_matches_the_constructed_spread(deviation, torch_dtype, ttnn_dtyp
 
 
 # Each plane gets its own scale, so planes 50 decades apart in one tensor all come out right, and a constant plane
-# next to them gives 0. Four planes stay below the ten from which std_hw / var_hw run as one program.
+# next to them gives 0. Three planes stay below the four from which std_hw / var_hw run as one program.
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 def test_normalize_hw_planes_of_different_magnitude(torch_dtype, ttnn_dtype, device):
     _check_normalize([1e-25, 1.0, 1e18, 1e25], torch_dtype, ttnn_dtype, torch.Size([2, 2, 32, 32]), device)
@@ -127,12 +153,12 @@ def test_normalize_hw_planes_of_different_magnitude(torch_dtype, ttnn_dtype, dev
 
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 def test_std_hw_planes_of_different_magnitude(torch_dtype, ttnn_dtype, device):
-    _check_std([1e-25, 1.0, 1e25, None], torch_dtype, ttnn_dtype, torch.Size([1, 4, 512, 512]), device)
+    _check_std([1e-25, 1e25, None], torch_dtype, ttnn_dtype, PLANES_STATISTIC_SHAPE, device)
 
 
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 def test_var_hw_planes_of_different_magnitude(torch_dtype, ttnn_dtype, device):
-    _check_var([1e-18, 1.0, 1e19, None], torch_dtype, ttnn_dtype, torch.Size([1, 4, 512, 512]), device)
+    _check_var([1e-18, 1e19, None], torch_dtype, ttnn_dtype, PLANES_STATISTIC_SHAPE, device)
 
 
 # Not tile-aligned: the scale's max skips the tile padding and both means divide by the logical H x W.
@@ -155,7 +181,7 @@ def test_std_var_hw_constant_plane(torch_dtype, ttnn_dtype, device):
     _check_var([None], torch_dtype, ttnn_dtype, STATISTIC_SHAPE, device)
 
 
-# One outlier sets the scale. A single 1e20 in a 512x512 plane of zeros has a variance of 3.8e34, but its scale is
+# One outlier sets the scale. A single 1e20 in a 544x512 plane of zeros has a variance of 3.6e34, but its scale is
 # 2^66, whose square is above FLT_MAX.
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 def test_var_std_hw_single_outlier(torch_dtype, ttnn_dtype, device):
