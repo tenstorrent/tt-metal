@@ -5,7 +5,6 @@
 #pragma once
 
 #include <device.hpp>
-#include <functional>
 #include <memory>
 #include <set>
 #include <unordered_map>

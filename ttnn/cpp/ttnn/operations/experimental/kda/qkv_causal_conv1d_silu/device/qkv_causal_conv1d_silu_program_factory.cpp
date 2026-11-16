@@ -10,12 +10,12 @@
 #include <internal/fabric.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -33,7 +33,7 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 using qkv_conv::no_fabric_connection;
 
 const SemaphoreSpecName predecessor_ready_semaphore{"predecessor_ready"};
@@ -51,6 +51,10 @@ struct ExchangeRoute {
     uint32_t successor_hops = 0;
     uint32_t successor_chip = 0;
     uint32_t successor_mesh = 0;
+    // On a 2D fabric whose SP axis turns, a multicast cannot follow the axis: the barrier and the carry go to each
+    // other rank as a 2D unicast, through the connection its route leaves on. Per peer: connection, chip, mesh.
+    bool unicast_peers = false;
+    std::vector<uint32_t> peer_args;
 };
 
 ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoordinate& coordinate, uint32_t axis) {
@@ -78,12 +82,41 @@ ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoo
     route.backward_range = ring ? sp_size - 1 - sp_size / 2 : rank;
     route.successor_connection = successor_forward ? route.forward_connection : route.backward_connection;
     route.successor_hops = successor_forward ? 1 : sp_size - 1;
+    route.unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
+                          !ttnn::ccl::is_axis_straight(device, axis);
+    if (route.unicast_peers) {
+        const auto source = device.get_fabric_node_id(coordinate);
+        // Connections use link 0 (compute_fabric_connection_rt_args below). A peer's route may leave on a link that is
+        // neither SP neighbor's (a shortcut across a 2x4 mesh): it gets a connection of its own.
+        std::vector<tt::tt_metal::CoreCoord> connection_eth_cores;
+        connection_eth_cores.reserve(qkv_conv::max_fabric_connections);
+        for (const auto& neighbor : route.neighbors) {
+            connection_eth_cores.push_back(tt::tt_fabric::get_forwarding_eth_core(device, source, neighbor, 0));
+        }
+        for (uint32_t step = 1; step < sp_size; ++step) {
+            const auto peer = at_rank((rank + step) % sp_size);
+            const auto first_hop = tt::tt_fabric::get_forwarding_eth_core(device, source, peer, 0);
+            auto connection = std::find(connection_eth_cores.begin(), connection_eth_cores.end(), first_hop);
+            if (connection == connection_eth_cores.end()) {
+                TT_FATAL(
+                    route.neighbors.size() < qkv_conv::max_fabric_connections,
+                    "qkv_causal_conv1d_silu: the routes to the other SP ranks leave on more than {} links",
+                    qkv_conv::max_fabric_connections);
+                route.neighbors.push_back(peer);
+                connection_eth_cores.push_back(first_hop);
+                connection = connection_eth_cores.end() - 1;
+            }
+            route.peer_args.push_back(static_cast<uint32_t>(connection - connection_eth_cores.begin()));
+            route.peer_args.push_back(peer.chip_id);
+            route.peer_args.push_back(*peer.mesh_id);
+        }
+    }
     return route;
 }
 
 // The exchange core's packets go to the ETH cores above the first Tensix row, so its kernel uses the NoC that routes
 // toward lower rows (NOC_1) rather than inheriting whichever the writer placement picks.
-tt::tt_metal::experimental::DataMovementHardwareConfig exchange_datamovement_config() {
+DataMovementHardwareConfig exchange_datamovement_config() {
     auto config = ttnn::create_writer_datamovement_config();
     config.config_1xx->noc = tt::tt_metal::NOC::NOC_1;
     return config;
@@ -103,13 +136,8 @@ void add_history_exchange(
     const auto& device = in.input.mesh_tensor().device();
     const uint32_t axis = attrs.sequence_parallel_axis;
     const uint32_t sp_size = device.shape()[axis];
-    // A 2D multicast is routed by the connection's ETH direction, so every hop must leave in the same direction.
-    // 1D fabric follows its routing plane, which may turn (the QuietBox ring).
-    TT_FATAL(
-        sp_size == 1 || !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
-            ttnn::ccl::is_axis_straight(device, axis),
-        "qkv_causal_conv1d_silu: the 2D fabric history exchange needs a straight SP axis");
     const uint32_t row_bytes = channel_tiles * qkv_conv::tile_row_bytes;
+    const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
     // A single rank sends nothing; any aligned value satisfies the kernel's static_assert.
     const uint32_t max_payload = sp_size > 1
                                      ? static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes())
@@ -126,8 +154,18 @@ void add_history_exchange(
     const TensorParamName final_history_tensor{"final_history"};
     const KernelSpecName exchange_kernel{"exchange"};
     const ScratchpadSpecName exchange_scratch{"exchange_scratch"};
-    const SemaphoreSpecName teardown[2] = {SemaphoreSpecName{"teardown0"}, SemaphoreSpecName{"teardown1"}};
-    const SemaphoreSpecName buffer_index[2] = {SemaphoreSpecName{"buffer_index0"}, SemaphoreSpecName{"buffer_index1"}};
+    // Up to four fabric connections: the two SP neighbors, and on a turning 2D axis the other links peer routes leave
+    // on.
+    const SemaphoreSpecName teardown[qkv_conv::max_fabric_connections] = {
+        SemaphoreSpecName{"teardown0"},
+        SemaphoreSpecName{"teardown1"},
+        SemaphoreSpecName{"teardown2"},
+        SemaphoreSpecName{"teardown3"}};
+    const SemaphoreSpecName buffer_index[qkv_conv::max_fabric_connections] = {
+        SemaphoreSpecName{"buffer_index0"},
+        SemaphoreSpecName{"buffer_index1"},
+        SemaphoreSpecName{"buffer_index2"},
+        SemaphoreSpecName{"buffer_index3"}};
     const CoreRangeSet exchange_nodes{CoreRange(exchange_core)};
     const std::vector<std::string> semaphore_args = {"entry_semaphore", "predecessor_semaphore", "carry_semaphore"};
 
@@ -141,6 +179,7 @@ void add_history_exchange(
             varargs = tt::tt_metal::internal::compute_fabric_connection_rt_args(
                 device.get_fabric_node_id(coordinate), route.neighbors, {0}, unbound_semaphores, unbound_semaphores);
             varargs.insert(varargs.end(), convolution_core_xy.begin(), convolution_core_xy.end());
+            varargs.insert(varargs.end(), route.peer_args.begin(), route.peer_args.end());
         }
 
         KernelSpec kernel{
@@ -156,6 +195,10 @@ void add_history_exchange(
                     SemaphoreBinding{buffer_index[0], "buffer_index0"},
                     SemaphoreBinding{teardown[1], "teardown1"},
                     SemaphoreBinding{buffer_index[1], "buffer_index1"},
+                    SemaphoreBinding{teardown[2], "teardown2"},
+                    SemaphoreBinding{buffer_index[2], "buffer_index2"},
+                    SemaphoreBinding{teardown[3], "teardown3"},
+                    SemaphoreBinding{buffer_index[3], "buffer_index3"},
                 },
             .scratchpad_bindings = {{exchange_scratch, "exchange_scratch"}},
             .tensor_bindings =
@@ -182,7 +225,10 @@ void add_history_exchange(
                  {"sp_rank", coordinate[axis]},
                  {"sp_size", sp_size},
                  {"local_rows", attrs.sequence},
-                 {"has_actual_end", uint32_t(in.actual_end.has_value())}},
+                 {"has_actual_end", uint32_t(in.actual_end.has_value())},
+                 {"token_paged", uint32_t(tail.token_paged)},
+                 {"page_channels", tail.page_channels},
+                 {"unicast_peers", uint32_t(route.unicast_peers)}},
             .runtime_arg_schema = {.runtime_arg_names = {semaphore_args.begin(), semaphore_args.end()}},
             .hw_config = exchange_datamovement_config(),
         };
@@ -201,7 +247,7 @@ void add_history_exchange(
         spec.tensor_parameters.push_back(
             {.unique_id = final_history_tensor, .spec = final_history.mesh_tensor().tensor_spec()});
         program.run_params.tensor_args.emplace(final_history_tensor, final_history.mesh_tensor());
-        for (uint32_t i = 0; i < 2; ++i) {
+        for (uint32_t i = 0; i < qkv_conv::max_fabric_connections; ++i) {
             spec.semaphores.push_back(SemaphoreSpec{.unique_id = teardown[i], .target_nodes = exchange_nodes});
             spec.semaphores.push_back(SemaphoreSpec{.unique_id = buffer_index[i], .target_nodes = exchange_nodes});
         }
@@ -264,34 +310,34 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const uint32_t max_staged_ct =
         exchange ? qkv_causal_conv1d_silu_staged_ct(Ct, static_cast<uint32_t>(dist.cores.size())) : 0;
     const auto exchange_core_xy = device.worker_core_from_logical_core(exchange_core);
+    const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
 
-    const tt::tt_metal::experimental::KernelSpecName reader_kernel_name{"reader"};
-    const tt::tt_metal::experimental::KernelSpecName writer_kernel_name{"writer"};
-    const tt::tt_metal::experimental::KernelSpecName compute_kernel_name{"compute"};
+    const KernelSpecName reader_kernel_name{"reader"};
+    const KernelSpecName writer_kernel_name{"writer"};
+    const KernelSpecName compute_kernel_name{"compute"};
 
-    const tt::tt_metal::experimental::ScratchpadSpecName act_window_name{"act_window"};
-    const tt::tt_metal::experimental::ScratchpadSpecName staging_name{"staging"};
-    const tt::tt_metal::experimental::DFBSpecName act_tile_dfb_name{"act_tile"};
-    const tt::tt_metal::experimental::DFBSpecName taps_dfb_name{"taps"};
-    const tt::tt_metal::experimental::DFBSpecName eye_dfb_name{"eye"};
-    const tt::tt_metal::experimental::DFBSpecName weights_dfb_name{"weights"};
-    const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
+    const ScratchpadSpecName act_window_name{"act_window"};
+    const ScratchpadSpecName staging_name{"staging"};
+    const DFBSpecName act_tile_dfb_name{"act_tile"};
+    const DFBSpecName taps_dfb_name{"taps"};
+    const DFBSpecName eye_dfb_name{"eye"};
+    const DFBSpecName weights_dfb_name{"weights"};
+    const DFBSpecName output_dfb_name{"output"};
 
-    const tt::tt_metal::experimental::TensorParamName input_tensor_name{"input"};
-    const tt::tt_metal::experimental::TensorParamName history_tensor_name{"history"};
-    const tt::tt_metal::experimental::TensorParamName tap0_tensor_name{"tap0"};
-    const tt::tt_metal::experimental::TensorParamName tap1_tensor_name{"tap1"};
-    const tt::tt_metal::experimental::TensorParamName tap2_tensor_name{"tap2"};
-    const tt::tt_metal::experimental::TensorParamName tap3_tensor_name{"tap3"};
-    const tt::tt_metal::experimental::TensorParamName q_tensor_name{"q"};
-    const tt::tt_metal::experimental::TensorParamName k_tensor_name{"k"};
-    const tt::tt_metal::experimental::TensorParamName v_tensor_name{"v"};
+    const TensorParamName input_tensor_name{"input"};
+    const TensorParamName history_tensor_name{"history"};
+    const TensorParamName tap0_tensor_name{"tap0"};
+    const TensorParamName tap1_tensor_name{"tap1"};
+    const TensorParamName tap2_tensor_name{"tap2"};
+    const TensorParamName tap3_tensor_name{"tap3"};
+    const TensorParamName q_tensor_name{"q"};
+    const TensorParamName k_tensor_name{"k"};
+    const TensorParamName v_tensor_name{"v"};
 
     const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t tile_size = tt::tile_size(input_data_format);
-    auto make_dfb = [input_data_format, tile_size](
-                        const tt::tt_metal::experimental::DFBSpecName& name, uint32_t tiles) {
-        return tt::tt_metal::experimental::DataflowBufferSpec{
+    auto make_dfb = [input_data_format, tile_size](const DFBSpecName& name, uint32_t tiles) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = tile_size,
             .num_entries = tiles,
@@ -309,7 +355,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const uint32_t window_bytes = qkv_conv::ReaderScratch{block_ct}.bytes();
 
     const auto dfb_tiles = qkv_causal_conv1d_silu_dfb_tiles(block_ct, dest_limit);
-    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
+    Group<DataflowBufferSpec> dfbs = {
         make_dfb(act_tile_dfb_name, dfb_tiles.act_tile),
         make_dfb(taps_dfb_name, dfb_tiles.taps),
         make_dfb(eye_dfb_name, dfb_tiles.eye),
@@ -317,31 +363,27 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         make_dfb(output_dfb_name, dfb_tiles.output),
     };
 
-    tt::tt_metal::experimental::KernelSpec reader{
+    KernelSpec reader{
         .unique_id = reader_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
             "reader_qkv_causal_conv1d_silu.cpp",
         .dfb_bindings =
             {
-                tt::tt_metal::experimental::DFBBinding{
-                    act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    taps_dfb_name, "taps", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    eye_dfb_name, "eye", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                DFBBinding{act_tile_dfb_name, "act_tile", DFBEndpointType::PRODUCER},
+                DFBBinding{taps_dfb_name, "taps", DFBEndpointType::PRODUCER},
+                DFBBinding{eye_dfb_name, "eye", DFBEndpointType::PRODUCER},
             },
-        .semaphore_bindings = {tt::tt_metal::experimental::SemaphoreBinding{
-            predecessor_ready_semaphore, "predecessor_ready"}},
+        .semaphore_bindings = {SemaphoreBinding{predecessor_ready_semaphore, "predecessor_ready"}},
         .scratchpad_bindings = {{act_window_name, "act_window"}},
         .tensor_bindings =
             {
-                tt::tt_metal::experimental::TensorBinding{input_tensor_name, "input"},
-                tt::tt_metal::experimental::TensorBinding{history_tensor_name, "history"},
-                tt::tt_metal::experimental::TensorBinding{tap0_tensor_name, "tap0"},
-                tt::tt_metal::experimental::TensorBinding{tap1_tensor_name, "tap1"},
-                tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
-                tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
+                TensorBinding{input_tensor_name, "input"},
+                TensorBinding{history_tensor_name, "history"},
+                TensorBinding{tap0_tensor_name, "tap0"},
+                TensorBinding{tap1_tensor_name, "tap1"},
+                TensorBinding{tap2_tensor_name, "tap2"},
+                TensorBinding{tap3_tensor_name, "tap3"},
             },
         .compile_time_args =
             {{"block_ct", block_ct},
@@ -349,33 +391,34 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
              {"group", group},
              {"input_wt", input_wt},
              {"input_ct_offset", input_ct_offset},
-             {"exchange", uint32_t(exchange)}},
+             {"exchange", uint32_t(exchange)},
+             {"token_paged", uint32_t(tail.token_paged)},
+             {"page_channels", tail.page_channels}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    const tt::tt_metal::experimental::TensorParamName actual_start_name{"actual_start"};
-    const tt::tt_metal::experimental::TensorParamName predecessor_name{"predecessor_carry"};
+    const TensorParamName actual_start_name{"actual_start"};
+    const TensorParamName predecessor_name{"predecessor_carry"};
     reader.tensor_bindings.push_back({actual_start_name, "actual_start"});
     reader.tensor_bindings.push_back({predecessor_name, "predecessor_carry"});
 
-    tt::tt_metal::experimental::KernelSpec writer{
+    KernelSpec writer{
         .unique_id = writer_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
             "writer_qkv_causal_conv1d_silu.cpp",
-        .dfb_bindings = {tt::tt_metal::experimental::DFBBinding{
-            output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::CONSUMER}},
-        .semaphore_bindings = {tt::tt_metal::experimental::SemaphoreBinding{staged_semaphore, "staged"}},
+        .dfb_bindings = {DFBBinding{output_dfb_name, "output", DFBEndpointType::CONSUMER}},
+        .semaphore_bindings = {SemaphoreBinding{staged_semaphore, "staged"}},
         .scratchpad_bindings = {{staging_name, "staging"}},
         .tensor_bindings =
             {
-                tt::tt_metal::experimental::TensorBinding{q_tensor_name, "q"},
-                tt::tt_metal::experimental::TensorBinding{k_tensor_name, "k"},
-                tt::tt_metal::experimental::TensorBinding{v_tensor_name, "v"},
-                tt::tt_metal::experimental::TensorBinding{input_tensor_name, "input"},
-                tt::tt_metal::experimental::TensorBinding{actual_start_name, "actual_start"},
-                tt::tt_metal::experimental::TensorBinding{predecessor_name, "exchange_buffer"},
+                TensorBinding{q_tensor_name, "q"},
+                TensorBinding{k_tensor_name, "k"},
+                TensorBinding{v_tensor_name, "v"},
+                TensorBinding{input_tensor_name, "input"},
+                TensorBinding{actual_start_name, "actual_start"},
+                TensorBinding{predecessor_name, "exchange_buffer"},
             },
         .compile_time_args =
             {{"Qt", Qt},
@@ -394,7 +437,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    tt::tt_metal::experimental::KernelSpec compute{
+    KernelSpec compute{
         .unique_id = compute_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/"
@@ -402,18 +445,12 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
-                tt::tt_metal::experimental::DFBBinding{
-                    act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    taps_dfb_name, "taps", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    eye_dfb_name, "eye", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                DFBBinding{act_tile_dfb_name, "act_tile", DFBEndpointType::CONSUMER},
+                DFBBinding{taps_dfb_name, "taps", DFBEndpointType::CONSUMER},
+                DFBBinding{eye_dfb_name, "eye", DFBEndpointType::CONSUMER},
+                DFBBinding{weights_dfb_name, "weights", DFBEndpointType::PRODUCER},
+                DFBBinding{weights_dfb_name, "weights", DFBEndpointType::CONSUMER},
+                DFBBinding{output_dfb_name, "output", DFBEndpointType::PRODUCER},
             },
         .compile_time_args =
             {{"block_ct", block_ct},
@@ -425,37 +462,37 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         .hw_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config),
     };
 
-    tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
-    tt::tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel_name};
-    tt::tt_metal::experimental::KernelRunArgs compute_run_args{.kernel = compute_kernel_name};
+    KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
+    KernelRunArgs writer_run_args{.kernel = writer_kernel_name};
+    KernelRunArgs compute_run_args{.kernel = compute_kernel_name};
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {
         const auto& core = dist.cores[i];
-        tt::tt_metal::experimental::AddRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-        tt::tt_metal::experimental::AddRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-        tt::tt_metal::experimental::AddRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             compute_run_args.runtime_arg_values,
             core,
             {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
         const uint32_t staged_begin = std::min(Ct, i * max_staged_ct);
         const uint32_t staged_end = std::min(Ct, staged_begin + max_staged_ct);
-        tt::tt_metal::experimental::AddRuntimeArgsForNode(
+        AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
             {{"staged_ct_start", staged_begin}, {"staged_ct_count", staged_end - staged_begin}});
     }
 
-    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {
-        tt::tt_metal::experimental::TensorParameter{.unique_id = input_tensor_name, .spec = input.tensor_spec()},
-        tt::tt_metal::experimental::TensorParameter{.unique_id = history_tensor_name, .spec = history.tensor_spec()},
-        tt::tt_metal::experimental::TensorParameter{.unique_id = tap0_tensor_name, .spec = tap0.tensor_spec()},
-        tt::tt_metal::experimental::TensorParameter{.unique_id = tap1_tensor_name, .spec = tap1.tensor_spec()},
-        tt::tt_metal::experimental::TensorParameter{.unique_id = tap2_tensor_name, .spec = tap2.tensor_spec()},
-        tt::tt_metal::experimental::TensorParameter{.unique_id = tap3_tensor_name, .spec = tap3.tensor_spec()},
-        tt::tt_metal::experimental::TensorParameter{.unique_id = q_tensor_name, .spec = q.tensor_spec()},
-        tt::tt_metal::experimental::TensorParameter{.unique_id = k_tensor_name, .spec = k.tensor_spec()},
-        tt::tt_metal::experimental::TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
+    Group<TensorParameter> tensor_parameters = {
+        TensorParameter{.unique_id = input_tensor_name, .spec = input.tensor_spec()},
+        TensorParameter{.unique_id = history_tensor_name, .spec = history.tensor_spec()},
+        TensorParameter{.unique_id = tap0_tensor_name, .spec = tap0.tensor_spec()},
+        TensorParameter{.unique_id = tap1_tensor_name, .spec = tap1.tensor_spec()},
+        TensorParameter{.unique_id = tap2_tensor_name, .spec = tap2.tensor_spec()},
+        TensorParameter{.unique_id = tap3_tensor_name, .spec = tap3.tensor_spec()},
+        TensorParameter{.unique_id = q_tensor_name, .spec = q.tensor_spec()},
+        TensorParameter{.unique_id = k_tensor_name, .spec = k.tensor_spec()},
+        TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
     };
 
     tensor_parameters.push_back({.unique_id = actual_start_name, .spec = in.actual_start.mesh_tensor().tensor_spec()});
@@ -468,15 +505,13 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         semaphore_cores = semaphore_cores.merge(CoreRangeSet(CoreRange(exchange_core)));
     }
 
-    tt::tt_metal::experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu",
         .dataflow_buffers = std::move(dfbs),
         .semaphores =
             {
-                tt::tt_metal::experimental::SemaphoreSpec{
-                    .unique_id = predecessor_ready_semaphore, .target_nodes = semaphore_cores},
-                tt::tt_metal::experimental::SemaphoreSpec{
-                    .unique_id = staged_semaphore, .target_nodes = semaphore_cores},
+                SemaphoreSpec{.unique_id = predecessor_ready_semaphore, .target_nodes = semaphore_cores},
+                SemaphoreSpec{.unique_id = staged_semaphore, .target_nodes = semaphore_cores},
             },
         .scratchpads =
             {{.unique_id = act_window_name, .size_per_node = window_bytes},
@@ -484,7 +519,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         .tensor_parameters = std::move(tensor_parameters),
         .work_units =
             {
-                tt::tt_metal::experimental::WorkUnitSpec{
+                WorkUnitSpec{
                     .name = "main",
                     .kernels = {reader_kernel_name, writer_kernel_name, compute_kernel_name},
                     .target_nodes = cores,
@@ -492,7 +527,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
             },
     };
 
-    tt::tt_metal::experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     run_args.kernel_run_args.reserve(3);
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));

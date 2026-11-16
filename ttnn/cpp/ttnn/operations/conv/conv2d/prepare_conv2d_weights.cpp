@@ -1275,6 +1275,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt) {
+    validate_conv_params(in_channels, out_channels, batch_size, kernel_size, stride, groups);
     DataType conv_output_dtype = output_dtype.value_or(input_dtype);
 
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);

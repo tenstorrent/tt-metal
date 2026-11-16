@@ -50,6 +50,41 @@ TT_ALWAYS_INLINE void configure_gathering()
 #endif
 }
 
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+// STREAM_SCRATCH_0 of overlay stream 0 (24 bits, host readable, outside L1 and the Tensix register bus): BRISC marks the
+// launch done there (brisc.cpp), so the host waits on a kernel without touching anything the kernel uses.
+namespace host_signal
+{
+#if defined(ARCH_WORMHOLE)
+constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 248;
+#else
+constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 36;
+#endif
+constexpr std::uint32_t NOC_OVERLAY_START_ADDR = 0xFFB40000;
+
+constexpr std::uint32_t LAUNCH_DONE_MASK = 0xFFFFFF; // the register's 24 bits (HOST_SIGNAL_MASK on the host)
+
+TT_ALWAYS_INLINE volatile std::uint32_t* launch_done()
+{
+    return reinterpret_cast<volatile std::uint32_t*>(NOC_OVERLAY_START_ADDR + STREAM_SCRATCH_REG_INDEX * 4);
+}
+} // namespace host_signal
+#elif defined(ARCH_QUASAR)
+// Quasar has no overlay streams: TT_CLUSTER_CTRL_SCRATCH_28..31 (host readable, outside L1, unused elsewhere) carry the
+// TRISC completion flags in slots 0..3, so the host can wait on a kernel without reading its L1.
+namespace host_signal
+{
+constexpr std::uint32_t CLUSTER_CTRL_SCRATCH_28 = 0x030000B0;
+
+TT_ALWAYS_INLINE void write([[maybe_unused]] std::uint32_t slot, [[maybe_unused]] std::uint32_t value)
+{
+#if !defined(TT_METAL_TTSIM) // ttsim models no cluster control scratch registers; the host polls L1 there
+    *reinterpret_cast<volatile std::uint32_t*>(CLUSTER_CTRL_SCRATCH_28 + slot * 4) = value;
+#endif
+}
+} // namespace host_signal
+#endif
+
 __attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
 {
     asm volatile(
@@ -166,10 +201,20 @@ TT_ALWAYS_INLINE void device_setup()
     ckernel::t6_semaphore_init(ckernel::semaphore::PACK_DONE, 0, 1);
     ckernel::t6_semaphore_init(ckernel::semaphore::UNPACK_OPERAND_SYNC, 0, 1);
 #endif
+    // The REG_RMW mutex keeps its last grantee across kernels (chip reset only) and the unpack and pack inits race for
+    // it, so take and release it here: every launch then starts with the same thread ahead in its round robin.
+    TTI_ATGETM(ckernel::mutex::REG_RMW);
+    TTI_ATRELM(ckernel::mutex::REG_RMW);
 #endif
 }
 
-constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
+#if defined(ARCH_QUASAR)
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000; // TRISC1..3 (TRISC0 is bit 11): what unpack releases
+#else
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK  = RISCV_SOFT_RESET_0_TRISCS;
+constexpr std::uint32_t TRISC1_SOFT_RESET_MASK = 0x2000; // math: tensix.h has no per TRISC bit
+static_assert((TRISC1_SOFT_RESET_MASK & RISCV_SOFT_RESET_0_TRISCS) == TRISC1_SOFT_RESET_MASK);
+#endif
 
 #ifndef ARCH_QUASAR
 
@@ -206,17 +251,6 @@ TT_ALWAYS_INLINE void clear_trisc_soft_reset()
     soft_reset &= ~TRISC_SOFT_RESET_MASK;
     ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
 
-    do
-    {
-        asm volatile("nop");
-    } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != soft_reset);
-}
-
-TT_ALWAYS_INLINE void set_triscs_soft_reset()
-{
-    std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
-    soft_reset |= TRISC_SOFT_RESET_MASK;
-    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
     do
     {
         asm volatile("nop");

@@ -23,9 +23,9 @@ bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
-    const experimental::KernelSpec::CompilerOptions::Defines defines = {
+    const KernelSpec::CompilerOptions::Defines defines = {
         {"LOOP_COUNT", std::to_string(loop_count)}, {"LOOP_SIZE", std::to_string(loop_size)}};
 
     const std::string dm_src =
@@ -36,88 +36,88 @@ bool RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         "custom_cycle_count_compute_slow_dispatch.cpp";
 
     // The kernel layout is architecture-dependent because num_threads > 1 is only legal on Quasar.
-    std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<experimental::KernelSpecName> wu_kernels;
+    std::vector<KernelSpec> kernel_specs;
+    std::vector<KernelSpecName> wu_kernels;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         // One multi-threaded DM kernel across all six user DMs (DM2-DM7; DM0/DM1 are reserved) plus one
         // four-Neo compute kernel.
-        const experimental::KernelSpecName DM_KERNEL{"custom_cycle_count_sd_dm"};
-        const experimental::KernelSpecName COMPUTE_KERNEL{"custom_cycle_count_sd_compute"};
+        const KernelSpecName DM_KERNEL{"custom_cycle_count_sd_dm"};
+        const KernelSpecName COMPUTE_KERNEL{"custom_cycle_count_sd_compute"};
         kernel_specs = {
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = dm_src,
                 .num_threads = 6,
                 .compiler_options = {.defines = defines},
-                .hw_config = experimental::DataMovementHardwareConfig{},
+                .hw_config = DataMovementHardwareConfig{},
             },
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = COMPUTE_KERNEL,
                 .source = compute_src,
                 .num_threads = 4,
                 .compiler_options = {.defines = defines},
-                .hw_config = experimental::ComputeHardwareConfig{},
+                .hw_config = ComputeHardwareConfig{},
             },
         };
         wu_kernels = {DM_KERNEL, COMPUTE_KERNEL};
     } else {
-        const experimental::KernelSpecName BRISC_KERNEL{"custom_cycle_count_sd_brisc"};
-        const experimental::KernelSpecName NCRISC_KERNEL{"custom_cycle_count_sd_ncrisc"};
-        const experimental::KernelSpecName COMPUTE_KERNEL{"custom_cycle_count_sd_compute"};
+        const KernelSpecName BRISC_KERNEL{"custom_cycle_count_sd_brisc"};
+        const KernelSpecName NCRISC_KERNEL{"custom_cycle_count_sd_ncrisc"};
+        const KernelSpecName COMPUTE_KERNEL{"custom_cycle_count_sd_compute"};
         kernel_specs = {
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = BRISC_KERNEL,
                 .source = dm_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
                 .hw_config =
-                    experimental::DataMovementHardwareConfig{
+                    DataMovementHardwareConfig{
                         .config_1xx =
-                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
                                 .processor = DataMovementProcessor::RISCV_0,
                                 .noc = NOC::RISCV_0_default,
                             },
                     },
             },
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = NCRISC_KERNEL,
                 .source = dm_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
                 .hw_config =
-                    experimental::DataMovementHardwareConfig{
+                    DataMovementHardwareConfig{
                         .config_1xx =
-                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
                                 .processor = DataMovementProcessor::RISCV_1,
                                 .noc = NOC::RISCV_1_default,
                             },
                     },
             },
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = COMPUTE_KERNEL,
                 .source = compute_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
-                .hw_config = experimental::ComputeHardwareConfig{},
+                .hw_config = ComputeHardwareConfig{},
             },
         };
         wu_kernels = {BRISC_KERNEL, NCRISC_KERNEL, COMPUTE_KERNEL};
     }
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "custom_cycle_sd",
         .kernels = wu_kernels,
         .target_nodes = node,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "custom_cycle_count_slow_dispatch",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-    experimental::ProgramRunArgs params;  // kernels take no runtime args
-    experimental::SetProgramRunArgs(program, params);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    ProgramRunArgs params;  // kernels take no runtime args
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);

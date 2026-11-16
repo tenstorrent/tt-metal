@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/dispatch_telemetry.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_metal.hpp>

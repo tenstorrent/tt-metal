@@ -580,7 +580,7 @@ ProgramDescriptor build_program_descriptor(
 
         // Set reader runtime args. Slot 0 is the input buffer; slot 1 is the caller-owned semaphore.
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),  // tensor_address0, replaced with the input Buffer*
+            input_tensor.mesh_buffer().address(),  // tensor_address0, replaced with the input Buffer*
             semaphore_address,
             input_tensor_shard_num_pages,
             worker_num_tiles_to_read,                            // num_tiles_to_read
@@ -600,8 +600,8 @@ ProgramDescriptor build_program_descriptor(
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         std::vector<uint32_t> writer_rt_args = {
-            temp_tensor.buffer()->address(),  // tensor_address0, replaced with the buffer tensor Buffer*
-            semaphore_address,                // out_ready_sem_bank_addr (absolute address)
+            temp_tensor.mesh_buffer().address(),  // tensor_address0, replaced with the buffer tensor Buffer*
+            semaphore_address,                    // out_ready_sem_bank_addr (absolute address)
             input_tensor_shard_num_pages,
             worker_num_tiles_to_read,                             // num_tiles_to_read
             output_first_core_tile_start_offset,                  // first_core_tile_start_offset
@@ -652,13 +652,25 @@ ProgramDescriptor build_program_descriptor(
         if (forward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, forward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                forward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
         writer_rt_args.push_back(static_cast<uint32_t>(backward_fabric_node_id.has_value()));
         if (backward_fabric_node_id.has_value()) {
             const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
-                target_device_fabric_node_id, backward_fabric_node_id.value(), link, desc, core, writer_rt_args);
+                *mesh_device,
+                target_device_fabric_node_id,
+                backward_fabric_node_id.value(),
+                link,
+                desc,
+                core,
+                writer_rt_args);
         }
 
         desc.kernels[kWorkerWriterKernelIdx].emplace_runtime_args(

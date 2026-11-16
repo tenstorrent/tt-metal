@@ -308,3 +308,37 @@ def test_pipeline_outliers_accuracy_time(mesh_device, device_params, case, monke
     # the max error is a one-element statistic (0.017-0.034 of the output scale on these rows, +-15 % run to run):
     # a gross-error guard only; the PCC above is the accuracy bar
     assert res["fp32acc"][1] <= res["base"][1] * 1.5, (res["fp32acc"][1], res["base"][1])
+
+
+# ===== Prefill with the fp32-Dest compute config of the prefill linears (compute_config.prefill_linear_compute_kernel_config):
+# fp32 accumulation gives the 2D matmul an fp32 partials block next to its bf16 output block, so the slab that fits
+# with the bf16 Dest default overflows L1. Each prompt length takes a different path through __call__: 2016 rows (the
+# 31B gate_up TP=4 case of PR #60786's review: per_core_M 7 at one shot = 2.6 MB of CBs) and 2560 (the bf16 slab) are
+# single matmuls under the old rule and slab + remainder chunks under the fp32 slab; 4096 is the bf16-slab chunk path.
+@pytest.mark.parametrize(
+    "K, N",
+    [(5376, 10752), (5376, 5376), (5376, 4096), (2048, 5376), (3840, 7680)],
+    ids=["gateup31b_tp4", "down31b_tp4", "wqkv31b_tp4", "oproj31b_tp4", "gateup12b_tp4"],
+)
+@pytest.mark.parametrize("M", [32, 2016, 2560, 4096], ids=["m32", "m2016", "m2560", "m4096"])
+@pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
+def test_prefill_fp32_acc_fits_l1(mesh_device, device_params, K, N, M):
+    from models.demos.gemma4.tt.compute_config import prefill_linear_compute_kernel_config
+
+    if not can_dram_shard(K, N, dtype=ttnn.bfloat8_b):
+        pytest.skip(f"[{K}, {N}] has no DRAM-sharded config on this grid")
+    torch.manual_seed(0)
+    w = (torch.randn(1, 1, K, N) * 0.02).to(torch.bfloat16)
+    x = (torch.randn(1, 1, M, K) * 2).to(torch.bfloat16)
+    lin = DramShardedLinear(w, mesh_device, None, k=K, n=N, dtype=ttnn.bfloat8_b, cache_file_name=None)
+    ckc = prefill_linear_compute_kernel_config(mesh_device)
+    tx = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    out = lin(tx, compute_kernel_config=ckc, prefill=True)
+    got = ttnn.to_torch(out).float()
+    assert list(out.shape) == [1, 1, M, N], out.shape
+    golden = (x.float() @ w.float().reshape(K, N)).reshape(1, 1, M, N)
+    pcc = _pcc(got, golden)
+    slab = getattr(lin, "_slab_rows_by_acc", {}).get(True)
+    print(f"[K{K} N{N} M{M}] fp32-acc prefill slab {slab} rows, pcc vs torch {pcc:.6f}")
+    assert torch.isfinite(got).all()
+    assert pcc > 0.9995, f"pcc vs torch {pcc}"

@@ -19,7 +19,6 @@
 #include <limits>
 #include <map>
 #include <numeric>
-#include <optional>
 #include <set>
 #include <memory>
 #include <string>
@@ -28,6 +27,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -1735,10 +1735,17 @@ inline bool typecast_is_mx(tt::DataFormat fmt) {
 
 // Integer endpoints whose value compares exactly (and that the SFPU round-to-nearest produces).
 inline bool typecast_is_int(tt::DataFormat fmt) {
-    return fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::Int16 || fmt == tt::DataFormat::UInt8;
+    return fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::Int16 || fmt == tt::DataFormat::Int8 ||
+           fmt == tt::DataFormat::UInt8;
 }
 
 inline bool typecast_is_unsigned(tt::DataFormat fmt) { return fmt == tt::DataFormat::UInt8; }
+
+// One-byte integer endpoints. Int8 and UInt8 share a datum width. The L1 encoding differs:
+// sign-magnitude for Int8, raw unsigned bytes for UInt8.
+inline bool typecast_is_8bit_int(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Int8 || fmt == tt::DataFormat::UInt8;
+}
 
 // Device-side ckernel::DataFormat enum NAME (the kernel chain references formats by name, since the
 // compute kernel compiles against the device enum whose values differ from the host tt::DataFormat).
@@ -1748,11 +1755,54 @@ inline std::string typecast_device_format_name(tt::DataFormat fmt) {
         case tt::DataFormat::Float32: return "Float32";
         case tt::DataFormat::Int32: return "Int32";
         case tt::DataFormat::Int16: return "Int16";
+        case tt::DataFormat::Int8: return "Int8";
         case tt::DataFormat::UInt8: return "UInt8";
         case tt::DataFormat::MxFp8R: return "MxFp8R";
         case tt::DataFormat::MxFp8P: return "MxFp8P";
         default: TT_THROW("typecast test: unsupported format {}", static_cast<int>(fmt));
     }
+}
+
+// -128 is the value Int8 cannot hold.
+constexpr int32_t kInt8SmagMax = 127;
+constexpr unsigned kInt8Bits = 8;
+constexpr unsigned kInt16Bits = 16;
+
+// Sign-magnitude pack/decode for a Bits-wide lane (8 or 16). Sign in the top bit, magnitude
+// in the rest, lanes packed into a 32-bit word.
+template <unsigned Bits>
+uint32_t sign_mag_encode(int32_t s) {
+    constexpr uint32_t mag_mask = (1u << (Bits - 1)) - 1u;
+    constexpr uint32_t sign_bit = 1u << (Bits - 1);
+    constexpr int32_t mag_max = static_cast<int32_t>(mag_mask);
+    s = std::clamp(s, -mag_max, mag_max);
+    return (s < 0 ? sign_bit : 0u) | (static_cast<uint32_t>(std::abs(s)) & mag_mask);
+}
+
+template <unsigned Bits>
+std::vector<uint32_t> pack_sign_mag(const std::vector<float>& vals) {
+    constexpr unsigned lanes = 32 / Bits;
+    std::vector<uint32_t> out((vals.size() + lanes - 1) / lanes, 0);
+    for (size_t i = 0; i < vals.size(); ++i) {
+        const uint32_t enc = sign_mag_encode<Bits>(static_cast<int32_t>(std::lround(vals[i])));
+        out[i / lanes] |= enc << (Bits * (i % lanes));
+    }
+    return out;
+}
+
+template <unsigned Bits>
+std::vector<float> decode_sign_mag(const std::vector<uint32_t>& bytes) {
+    constexpr unsigned lanes = 32 / Bits;
+    constexpr uint32_t lane_mask = (1u << Bits) - 1u;
+    constexpr uint32_t mag_mask = (1u << (Bits - 1)) - 1u;
+    constexpr uint32_t sign_bit = 1u << (Bits - 1);
+    std::vector<float> out(bytes.size() * lanes);
+    for (size_t i = 0; i < out.size(); ++i) {
+        const uint32_t b = (bytes[i / lanes] >> (Bits * (i % lanes))) & lane_mask;
+        const int32_t mag = static_cast<int32_t>(b & mag_mask);
+        out[i] = static_cast<float>((b & sign_bit) ? -mag : mag);
+    }
+    return out;
 }
 
 // Pack tile-ordered whole-number floats into `fmt`'s on-device L1 tile encoding.
@@ -1779,18 +1829,13 @@ inline std::vector<uint32_t> typecast_pack(tt::DataFormat fmt, const std::vector
             }
             return out;
         }
-        case tt::DataFormat::Int16: {
-            // Quasar Int16 in L1 is sign-magnitude 16-bit (SMAG16): sign in bit 15, 14-bit magnitude;
-            // two elements packed per 32-bit word (element 2i in the low half, 2i+1 in the high half).
-            std::vector<uint32_t> out((vals.size() + 1) / 2, 0);
-            for (size_t i = 0; i < vals.size(); ++i) {
-                const int32_t s = static_cast<int32_t>(std::lround(vals[i]));
-                const uint16_t enc =
-                    static_cast<uint16_t>((s < 0 ? 0x8000u : 0u) | (static_cast<uint32_t>(std::abs(s)) & 0x7fffu));
-                out[i / 2] |= static_cast<uint32_t>(enc) << (16 * (i % 2));
-            }
-            return out;
-        }
+        case tt::DataFormat::Int16:
+            // Quasar Int16 in L1 is sign-magnitude 16-bit (SMAG16).
+            return pack_sign_mag<kInt16Bits>(vals);
+        case tt::DataFormat::Int8:
+            // Quasar Int8 in L1 is sign-magnitude 8-bit (SMAG8), range [-kInt8SmagMax, kInt8SmagMax].
+            // Wormhole/Blackhole store two's complement and declare the buffer UInt8.
+            return pack_sign_mag<kInt8Bits>(vals);
         case tt::DataFormat::UInt8: {
             // UInt8 in L1 is raw unsigned bytes (four per 32-bit word).
             std::vector<uint32_t> out((vals.size() + 3) / 4, 0);
@@ -1833,15 +1878,8 @@ inline std::vector<float> typecast_decode(tt::DataFormat fmt, const std::vector<
             }
             return out;
         }
-        case tt::DataFormat::Int16: {
-            std::vector<float> out(bytes.size() * 2);
-            for (size_t i = 0; i < out.size(); ++i) {
-                const uint16_t h = static_cast<uint16_t>(bytes[i / 2] >> (16 * (i % 2)));
-                const int32_t mag = h & 0x7fff;
-                out[i] = static_cast<float>((h & 0x8000) ? -mag : mag);
-            }
-            return out;
-        }
+        case tt::DataFormat::Int16: return decode_sign_mag<kInt16Bits>(bytes);
+        case tt::DataFormat::Int8: return decode_sign_mag<kInt8Bits>(bytes);
         case tt::DataFormat::UInt8: {
             std::vector<float> out(bytes.size() * 4);
             for (size_t i = 0; i < out.size(); ++i) {
@@ -1857,6 +1895,7 @@ inline std::vector<float> typecast_decode(tt::DataFormat fmt, const std::vector<
 
 // Whole-number stimulus, range chosen so every endpoint represents it losslessly: small magnitudes
 // for MX (block-float steps), non-negative for an unsigned endpoint (UInt8), wider signed otherwise.
+// The signed +/-64 span stays inside Int8's sign-magnitude [-127, 127], so it needs no narrower case.
 inline std::vector<float> generate_typecast_input(
     size_t numel, int seed, tt::DataFormat in_fmt, tt::DataFormat out_fmt) {
     const bool mx = typecast_is_mx(in_fmt) || typecast_is_mx(out_fmt);
@@ -1887,6 +1926,10 @@ inline std::vector<float> typecast_golden(
             v = static_cast<float>(std::lround(v));  // float->int rounds to nearest
             if (typecast_is_unsigned(out_fmt)) {
                 v = std::clamp(v, 0.0f, 255.0f);
+            } else if (out_fmt == tt::DataFormat::Int8) {
+                // Sign-magnitude saturates at kInt8SmagMax and has no -128. This sweep stays inside
+                // that range; saturation and nearest-even ties are test_typecast_fp32_to_int8_edge_cases_quasar.
+                v = std::clamp(v, -static_cast<float>(kInt8SmagMax), static_cast<float>(kInt8SmagMax));
             }
         }
     }
@@ -1952,8 +1995,7 @@ struct SfpuConfig {
 
 // Builds a DataflowBufferSpec. `entry_size` is derived from `fmt` so that input and output
 // DFBs are correctly sized even when their formats differ (e.g. Int8 in → Int32 out).
-experimental::DataflowBufferSpec make_dfb_spec(
-    const experimental::DFBSpecName& id, const SfpuConfig& cfg, tt::DataFormat fmt) {
+DataflowBufferSpec make_dfb_spec(const DFBSpecName& id, const SfpuConfig& cfg, tt::DataFormat fmt) {
     return {
         .unique_id = id,
         .entry_size = static_cast<uint32_t>(tt::tile_size(fmt)),
@@ -1963,8 +2005,8 @@ experimental::DataflowBufferSpec make_dfb_spec(
 }
 
 // Converts a string→string defines map to the CompilerOptions::Defines vector form.
-experimental::KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::map<std::string, std::string>& m) {
-    experimental::KernelSpec::CompilerOptions::Defines defines;
+KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::map<std::string, std::string>& m) {
+    KernelSpec::CompilerOptions::Defines defines;
     for (const auto& [k, v] : m) {
         defines.emplace(k, v);
     }
@@ -2009,94 +2051,92 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const CoreRange& core_range = *test_config.cores.ranges().begin();
     TT_FATAL(core_range.start_coord == core_range.end_coord, "sfpu test expects a single-core CoreRange");
     const CoreCoord core = core_range.start_coord;
-    const experimental::NodeCoord node{core.x, core.y};
+    const NodeCoord node{core.x, core.y};
 
-    const experimental::DFBSpecName IN_DFB{"in_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName IN_DFB{"in_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    const experimental::DataflowBufferSpec in_dfb_spec =
-        make_dfb_spec(IN_DFB, test_config, test_config.l1_input_data_format);
-    experimental::DataflowBufferSpec out_dfb_spec =
-        make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format);
+    const DataflowBufferSpec in_dfb_spec = make_dfb_spec(IN_DFB, test_config, test_config.l1_input_data_format);
+    DataflowBufferSpec out_dfb_spec = make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format);
     out_dfb_spec.num_entries = static_cast<uint32_t>(num_output_tiles);
     if (test_config.out_dfb_entries != 0) {
         out_dfb_spec.num_entries = static_cast<uint32_t>(test_config.out_dfb_entries);
     }
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
+    DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
                 },
         };
     }
 
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = IN_DFB,
             .accessor_name = "out",
-            .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .access_pattern = DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "bank_id", "num_tiles"}},
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
+    DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
         };
     }
 
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
             .accessor_name = "in",
-            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
+    ComputeHardwareConfig compute_hw_config;
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
     if (test_config.unpack_to_dest) {
         unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     const bool fp32_dest_acc_en = test_config.en_32bit_dest;
-    compute_hw_config = experimental::ComputeHardwareConfig{
+    compute_hw_config = ComputeHardwareConfig{
         .sfpu_precision_mode =
             test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
         .enable_32_bit_dest = fp32_dest_acc_en,
@@ -2124,7 +2164,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
     const uint32_t per_core_block_cnt = static_cast<uint32_t>(
         test_config.section_ntiles != 0 ? test_config.num_tiles / test_config.section_ntiles : test_config.num_tiles);
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = test_config.compute_kernel.empty()
                       ? "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp"
@@ -2135,26 +2175,26 @@ std::vector<uint32_t> run_sfpu_pipeline(
             {{
                  .dfb_spec_name = IN_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_size", 1u}},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "sfpu_compute",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {in_dfb_spec, out_dfb_spec},
@@ -2163,25 +2203,25 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src_addr", input_dram_buffer->address()},
                  {"bank_id", 0u},
                  {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", output_dram_buffer->address()},
                  {"bank_id", 0u},
                  {"num_tiles", static_cast<uint32_t>(num_output_tiles)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -2633,7 +2673,7 @@ bool run_sfpu_welford(distributed::MeshDevice& mesh_device, SfpuConfig test_conf
 namespace {
 
 // Validates that cfg describes a single-core CoreRange and returns the Quasar NodeCoord.
-experimental::NodeCoord extract_single_core_node(const SfpuConfig& cfg, const char* context) {
+NodeCoord extract_single_core_node(const SfpuConfig& cfg, const char* context) {
     TT_FATAL(cfg.cores.ranges().size() == 1, "{} expects a single CoreRange (got {})", context, cfg.cores.size());
     const CoreRange& cr = *cfg.cores.ranges().begin();
     TT_FATAL(cr.start_coord == cr.end_coord, "{} expects a single-core CoreRange", context);
@@ -2641,8 +2681,7 @@ experimental::NodeCoord extract_single_core_node(const SfpuConfig& cfg, const ch
 }
 
 // Builds a writer_unary KernelSpec bound to a single output DFB.
-experimental::KernelSpec make_writer_unary_quasar_spec(
-    const experimental::KernelSpecName& kernel_id, const experimental::DFBSpecName& out_dfb_id) {
+KernelSpec make_writer_unary_quasar_spec(const KernelSpecName& kernel_id, const DFBSpecName& out_dfb_id) {
     return {
         .unique_id = kernel_id,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
@@ -2650,14 +2689,14 @@ experimental::KernelSpec make_writer_unary_quasar_spec(
         .dfb_bindings = {{
             .dfb_spec_name = out_dfb_id,
             .accessor_name = "in",
-            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_2xx =
-                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
                         .disable_dfb_implicit_sync_for_all = true,
                     },
             },
@@ -2678,8 +2717,8 @@ tt_metal::KernelHandle create_legacy_writer_kernel(tt_metal::Program& program, c
 // returns the raw output tile data. Shared by the binary and ternary Quasar SFPU runners.
 std::vector<uint32_t> sfpu_quasar_run(
     distributed::MeshDevice& mesh_device,
-    const experimental::ProgramSpec& spec,
-    const experimental::ProgramRunArgs& params,
+    const ProgramSpec& spec,
+    const ProgramRunArgs& params,
     const std::vector<std::pair<std::shared_ptr<distributed::MeshBuffer>, const std::vector<uint32_t>*>>& inputs,
     const std::shared_ptr<distributed::MeshBuffer>& out_buf) {
     auto program = experimental::MakeProgramFromSpec(mesh_device, spec);
@@ -2799,14 +2838,14 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
     }
 
     const auto node = extract_single_core_node(test_config, "Metal 2.0 binary SFPU path");
-    const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
-    const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName IN0_DFB{"in0_dfb"};
+    const DFBSpecName IN1_DFB{"in1_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp",
         .num_threads = 1,
@@ -2814,35 +2853,35 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
             {{
                  .dfb_spec_name = IN0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = IN1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_2xx =
-                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
                         .disable_dfb_implicit_sync_for_all = true,
                     },
             },
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    compute_hw_config = experimental::ComputeHardwareConfig{
+    ComputeHardwareConfig compute_hw_config;
+    compute_hw_config = ComputeHardwareConfig{
         .sfpu_precision_mode =
             test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
         .enable_32_bit_dest =
             is_int8_op || test_config.sfpu_op == "add_top_row" || sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op),
     };
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
         .num_threads = 1,
@@ -2851,57 +2890,56 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
             {{
                  .dfb_spec_name = IN0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = IN1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args =
             {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
         .hw_config = compute_hw_config,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "sfpu_binary_compute",
         .kernels = {reader_spec, make_writer_unary_quasar_spec(WRITER, OUT_DFB), compute_spec},
         .dataflow_buffers =
             {make_dfb_spec(IN0_DFB, test_config, test_config.l1_input_data_format),
              make_dfb_spec(IN1_DFB, test_config, test_config.l1_input_data_format),
              make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format)},
-        .work_units = {experimental::WorkUnitSpec{
-            .name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
     };
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src0_addr", input0_dram_buffer->address()},
                  {"src0_bank_id", 0u},
                  {"src1_addr", input1_dram_buffer->address()},
                  {"src1_bank_id", 0u},
                  {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}})},
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", output_dram_buffer->address()},
                  {"bank_id", 0u},
                  {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
 
     const auto dest = sfpu_quasar_run(
@@ -2960,17 +2998,17 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
 
     std::vector<uint32_t> dest_buffer_data;
     if (mesh_device.arch() == ARCH::QUASAR) {
-        const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
-        const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
-        const experimental::DFBSpecName IN2_DFB{"in2_dfb"};
-        const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-        const experimental::KernelSpecName READER{"reader"};
-        const experimental::KernelSpecName WRITER{"writer"};
-        const experimental::KernelSpecName COMPUTE{"compute"};
+        const DFBSpecName IN0_DFB{"in0_dfb"};
+        const DFBSpecName IN1_DFB{"in1_dfb"};
+        const DFBSpecName IN2_DFB{"in2_dfb"};
+        const DFBSpecName OUT_DFB{"out_dfb"};
+        const KernelSpecName READER{"reader"};
+        const KernelSpecName WRITER{"writer"};
+        const KernelSpecName COMPUTE{"compute"};
 
         const auto node = extract_single_core_node(test_config, "Metal 2.0 ternary SFPU path");
 
-        experimental::KernelSpec reader_spec{
+        KernelSpec reader_spec{
             .unique_id = READER,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp",
             .num_threads = 1,
@@ -2979,20 +3017,20 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
                 {{
                      .dfb_spec_name = IN0_DFB,
                      .accessor_name = "in0",
-                     .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                     .endpoint_type = DFBEndpointType::PRODUCER,
+                     .access_pattern = DFBAccessPattern::STRIDED,
                  },
                  {
                      .dfb_spec_name = IN1_DFB,
                      .accessor_name = "in1",
-                     .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                     .endpoint_type = DFBEndpointType::PRODUCER,
+                     .access_pattern = DFBAccessPattern::STRIDED,
                  },
                  {
                      .dfb_spec_name = IN2_DFB,
                      .accessor_name = "in2",
-                     .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                     .endpoint_type = DFBEndpointType::PRODUCER,
+                     .access_pattern = DFBAccessPattern::STRIDED,
                  }},
             .runtime_arg_schema =
                 {.runtime_arg_names =
@@ -3004,21 +3042,21 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
                       "src2_addr",
                       "src2_bank_id"}},
             .hw_config =
-                experimental::DataMovementHardwareConfig{
+                DataMovementHardwareConfig{
                     .config_2xx =
-                        experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                        DataMovementHardwareConfig::DataMovement2XXConfig{
                             .disable_dfb_implicit_sync_for_all = true,
                         },
                 },
         };
 
-        experimental::ComputeHardwareConfig compute_hw_config;
-        compute_hw_config = experimental::ComputeHardwareConfig{
+        ComputeHardwareConfig compute_hw_config;
+        compute_hw_config = ComputeHardwareConfig{
             .sfpu_precision_mode =
                 test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
         };
 
-        experimental::KernelSpec compute_spec{
+        KernelSpec compute_spec{
             .unique_id = COMPUTE,
             .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
             .num_threads = 1,
@@ -3027,33 +3065,33 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
                 {{
                      .dfb_spec_name = IN0_DFB,
                      .accessor_name = "in0",
-                     .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                     .endpoint_type = DFBEndpointType::CONSUMER,
+                     .access_pattern = DFBAccessPattern::STRIDED,
                  },
                  {
                      .dfb_spec_name = IN1_DFB,
                      .accessor_name = "in1",
-                     .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                     .endpoint_type = DFBEndpointType::CONSUMER,
+                     .access_pattern = DFBAccessPattern::STRIDED,
                  },
                  {
                      .dfb_spec_name = IN2_DFB,
                      .accessor_name = "in2",
-                     .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                     .endpoint_type = DFBEndpointType::CONSUMER,
+                     .access_pattern = DFBAccessPattern::STRIDED,
                  },
                  {
                      .dfb_spec_name = OUT_DFB,
                      .accessor_name = "out",
-                     .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                     .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                     .endpoint_type = DFBEndpointType::PRODUCER,
+                     .access_pattern = DFBAccessPattern::STRIDED,
                  }},
             .compile_time_args =
                 {{"per_core_block_cnt", 1u}, {"per_core_block_size", static_cast<uint32_t>(test_config.num_tiles)}},
             .hw_config = compute_hw_config,
         };
 
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "sfpu_ternary_compute",
             .kernels = {reader_spec, make_writer_unary_quasar_spec(WRITER, OUT_DFB), compute_spec},
             .dataflow_buffers =
@@ -3061,15 +3099,14 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
                  make_dfb_spec(IN1_DFB, test_config, test_config.l1_input_data_format),
                  make_dfb_spec(IN2_DFB, test_config, test_config.l1_input_data_format),
                  make_dfb_spec(OUT_DFB, test_config, test_config.l1_output_data_format)},
-            .work_units = {experimental::WorkUnitSpec{
-                .name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
+            .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
         };
 
-        experimental::ProgramRunArgs params;
+        ProgramRunArgs params;
         params.kernel_run_args = {
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = READER,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     node,
                     {{"src0_addr", input0_dram_buffer->address()},
                      {"src0_bank_id", 0u},
@@ -3079,15 +3116,15 @@ bool run_sfpu_ternary_three_input_buffer(distributed::MeshDevice& mesh_device, c
                      {"src2_addr", input2_dram_buffer->address()},
                      {"src2_bank_id", 0u}}),
             },
-            experimental::ProgramRunArgs::KernelRunArgs{
+            ProgramRunArgs::KernelRunArgs{
                 .kernel = WRITER,
-                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                     node,
                     {{"dst_addr", output_dram_buffer->address()},
                      {"bank_id", 0u},
                      {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}),
             },
-            experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+            ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
         };
         dest_buffer_data = sfpu_quasar_run(
             mesh_device,
@@ -3187,21 +3224,22 @@ bool run_sfpu_typecast(
     const bool in_is_32bit = in_fmt == tt::DataFormat::Float32 || in_fmt == tt::DataFormat::Int32;
     const bool out_is_32bit = out_fmt == tt::DataFormat::Float32 || out_fmt == tt::DataFormat::Int32;
 
-    // preserve_fp32_precision: a Float32 input, an 8-bit-output promotion from a bf16/MX source, or a
-    // UInt8 input.
-    const bool preserve_fp32 = in_fmt == tt::DataFormat::Float32 ||
-                               (out_fmt == tt::DataFormat::UInt8 &&
-                                (in_fmt == tt::DataFormat::Float16_b || sfpu_util::typecast_is_mx(in_fmt))) ||
-                               in_fmt == tt::DataFormat::UInt8;
+    // Narrow integer sources (Int8 / Int16 / UInt8) unpack to Dest.
+    // See param_config.py:_resolve_quasar_typecast_variant.
+    const bool narrow_int_source = sfpu_util::typecast_is_int(in_fmt) && !in_is_32bit;
 
-    // dest_acc (fp32_dest_acc_en): a 32-bit endpoint or preserve_fp32. Narrow integer pairs (e.g. Int16 ->
-    // Float16_b) stay in a 16-bit Dest, exactly as production runs them.
+    // preserve_fp32_precision: a Float32 input, or an 8-bit output promoted from a bf16/MX source.
+    // An 8-bit input is neither, so it does not set this flag.
+    const bool preserve_fp32 = in_fmt == tt::DataFormat::Float32 ||
+                               (sfpu_util::typecast_is_8bit_int(out_fmt) &&
+                                (in_fmt == tt::DataFormat::Float16_b || sfpu_util::typecast_is_mx(in_fmt)));
+
+    // fp32_dest_acc_en: a 32-bit endpoint or preserve_fp32. A narrow source is neither, so this is out_is_32bit.
+    // Production uses 32-bit Dest for an 8-bit input; this follows the LLK resolver.
     const bool fp32_dest_acc = preserve_fp32 || in_is_32bit || out_is_32bit;
 
-    // unpack-to-Dest only changes the datapath for genuine 32-bit inputs (the narrow-input unpack MOP gates
-    // on is_32bit_input, so the flag is inert for Int16/UInt8 -- they reach Dest via FPU A2D datacopy).
-    // Wiring UnpackToDestFp32 for a narrow input drives the wrong datapath (UInt8 hangs, Int16 corrupts).
-    const bool unpack_to_dest = in_is_32bit;
+    // 32-bit inputs and narrow integer sources unpack to Dest so the SFPU load sees the L1 bits.
+    const bool unpack_to_dest = in_is_32bit || narrow_int_source;
 
     // typecast_tile_init<IN, OUT>() + typecast_tile<IN, OUT>(0), with the format pair baked into the
     // template args via the device-side ckernel::DataFormat enum names.
@@ -4386,9 +4424,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
     }
 }
 
-// Typecast test fixture: one (in_format -> out_format) pair per instance, covering the Quasar typecast
-// matrix over Float16_b, Float32, Int32, Int16 (SMAG16), UInt8, and MX (MxFp8P / MxFp8R). UInt16 maps to
-// Int16; UInt32 / MxFp4 are out of scope. Unsupported pairs are skipped by the gate in the test body.
+// Typecast test fixture: one (in_format -> out_format) pair per instance. The matrix is Float16_b,
+// Float32, Int32, Int16, Int8, UInt8, and MxFp8P / MxFp8R. UInt16, UInt32, and MxFp4 are out of scope.
+// UInt8 -> Int32 and UInt8 -> Int16 are not part of the matrix.
 class SingleCoreSingleMeshDeviceSfpuTypecastFixture
     : public LLKMeshDeviceFixture,
       public testing::WithParamInterface<std::tuple<tt::DataFormat, tt::DataFormat>> {};
@@ -4399,26 +4437,6 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
 
     if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Typecast compute-API test is currently Quasar-only";
-    }
-
-    // Typecast pairs not yet wired through the metal2 compute-API datapath (they hang or throw today):
-    //  * any UInt8 endpoint;
-    //  * any Int16 endpoint (the data_format.cpp Int16 enablement is reverted until the full narrow-int
-    //    datapath lands, so an Int16 endpoint trips the format-consistency / pack_src derivation);
-    //  * a non-Float32 input widening into a 32-bit Int output (Float16_b/MX -> Int32);
-    //  * Int32 narrowed to Float16_b (hangs, tenstorrent/tt-metal#59923).
-    // Float32 <-> Int32 and Float16_b/MX <-> Float32 still run.
-    // Int16/UInt8 support through the metal2 compute-API path is tracked in tenstorrent/tt-metal#48601.
-    const bool uint8_endpoint = (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8);
-    const bool int16_endpoint = (in_fmt == tt::DataFormat::Int16 || out_fmt == tt::DataFormat::Int16);
-    const bool widen_to_int32 = (out_fmt == tt::DataFormat::Int32 && in_fmt != tt::DataFormat::Float32);
-    const bool int32_to_bf16 = (in_fmt == tt::DataFormat::Int32 && out_fmt == tt::DataFormat::Float16_b);
-    if (int32_to_bf16) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
-    if (uint8_endpoint || int16_endpoint || widen_to_int32) {
-        GTEST_SKIP() << "typecast format not yet supported through the metal2 compute-API path "
-                        "(tenstorrent/tt-metal#48601)";
     }
 
     log_info(
@@ -4439,6 +4457,7 @@ static std::vector<std::tuple<tt::DataFormat, tt::DataFormat>> typecast_pairs() 
         tt::DataFormat::Float32,
         tt::DataFormat::Int32,
         tt::DataFormat::Int16,
+        tt::DataFormat::Int8,
         tt::DataFormat::UInt8,
         tt::DataFormat::MxFp8P,
         tt::DataFormat::MxFp8R};
