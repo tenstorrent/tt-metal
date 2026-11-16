@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/experimental/command_list.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 
 #include "ttnn/common/guard.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -55,9 +58,13 @@ public:
 
     // Adds one workload to the recording. binary_upload_cq_id is the command queue that writes its kernel binaries to
     // the device.
-    void record(QueueId binary_upload_cq_id, tt::tt_metal::distributed::MeshWorkload& workload);
+    void record(
+        QueueId binary_upload_cq_id,
+        tt::tt_metal::distributed::MeshWorkload& workload,
+        std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors = nullptr);
 
 private:
+    std::vector<std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors_;
     tt::tt_metal::experimental::CommandListBuilder metal_builder_;
     bool recording_ = false;
 };
@@ -81,8 +88,11 @@ public:
 
 private:
     friend class CommandListBuilder;
-    explicit CommandList(tt::tt_metal::experimental::CommandList metal_list);
+    CommandList(
+        tt::tt_metal::experimental::CommandList metal_list,
+        std::vector<std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors = {});
 
+    std::vector<std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>>> op_owned_tensors_;
     tt::tt_metal::experimental::CommandList metal_list_;
 };
 
