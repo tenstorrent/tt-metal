@@ -33,7 +33,11 @@ void kernel_main() {
     uint32_t mcast_end_x = get_compile_time_arg_val(16);
     uint32_t mcast_end_y = get_compile_time_arg_val(17);
     constexpr bool output_is_sharded = get_compile_time_arg_val(18) != 0;
-    constexpr auto out_args = TensorAccessorArgs<19>();
+    constexpr bool output_is_rm = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t h = get_compile_time_arg_val(20);
+    constexpr uint32_t out_rows = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_row_stage_id = get_compile_time_arg_val(22);
+    constexpr auto out_args = TensorAccessorArgs<23>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_idx = get_arg_val<uint32_t>(1);
@@ -125,8 +129,34 @@ void kernel_main() {
         cb_scale.push_back(1);
     }
 
-    // 3. A sharded output was packed in place; an interleaved one gets this core's tiles, one page each.
-    if constexpr (!output_is_sharded) {
+    // 3. A sharded output was packed in place; an interleaved one gets this core's tiles, one page each, or (ROW_MAJOR)
+    // this core's columns of each row: an (h x 32) tile is two faces of h rows x 16 values, so row r of tile t is
+    // face 0's row r then face 1's row r. They are staged into contiguous rows, then each written into its page.
+    if constexpr (output_is_rm) {
+        constexpr uint32_t face_row_bytes = 16 * sizeof(uint16_t);
+        constexpr uint32_t face_bytes = h * face_row_bytes;
+        constexpr uint32_t row_bytes = w_tiles * 2 * face_row_bytes;
+        CircularBuffer cb_out(cb_out_id);
+        CircularBuffer cb_stage(cb_row_stage_id);
+        cb_out.wait_front(w_tiles);
+        cb_stage.reserve_back(h);
+        const uint32_t src = cb_out.get_read_ptr();
+        const uint32_t stage = cb_stage.get_write_ptr();
+        for (uint32_t r = 0; r < out_rows; ++r) {
+            for (uint32_t t = 0; t < w_tiles; ++t) {
+                const uint32_t tile = src + t * block_bytes + r * face_row_bytes;
+                const uint32_t dst = stage + r * row_bytes + t * 2 * face_row_bytes;
+                sharded_rmsnorm_detail::copy_l1_words(dst, tile, face_row_bytes);
+                sharded_rmsnorm_detail::copy_l1_words(dst + face_row_bytes, tile + face_bytes, face_row_bytes);
+            }
+        }
+        const auto out_acc = TensorAccessor(out_args, out_addr);
+        for (uint32_t r = 0; r < out_rows; ++r) {
+            noc_async_write(stage + r * row_bytes, out_acc.get_noc_addr(r, core_idx * row_bytes), row_bytes);
+        }
+        noc_async_write_barrier();
+        cb_out.pop_front(w_tiles);
+    } else if constexpr (!output_is_sharded) {
         CircularBuffer cb_out(cb_out_id);
         cb_out.wait_front(w_tiles);
         const auto out_acc = TensorAccessor(out_args, out_addr);

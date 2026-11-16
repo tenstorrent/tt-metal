@@ -71,6 +71,9 @@ ShardedRmsNormProgramFactory::cached_program_t create_rows(
     const uint32_t w_tiles = in_shard.shape[1] / constants::TILE_WIDTH;
     const uint32_t d = static_cast<uint32_t>(input.logical_shape()[3]);
     const bool output_is_sharded = output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    // ROW_MAJOR output: each core un-tiles its (h x 32) tiles into its columns of every row.
+    const bool output_is_rm = output.layout() == Layout::ROW_MAJOR;
+    const uint32_t out_rows = static_cast<uint32_t>(input.logical_shape()[2]);
     const bool gamma_replicated = weight.tensor_spec().tile().get_height() == h;
 
     IDevice* device = input.device();
@@ -108,6 +111,14 @@ ShardedRmsNormProgramFactory::cached_program_t create_rows(
     make_cb(kCbOnes, 1, bf16, full_tile, nullptr);
     const CBHandle cb_out_handle =
         make_cb(kCbOut, w_tiles, bf16, block_tile, output_is_sharded ? output.buffer() : nullptr);
+    if (output_is_rm) {
+        // The core's columns of each row, staged contiguously: h rows of w_tiles * 32 values.
+        const uint32_t row_bytes = w_tiles * constants::TILE_WIDTH * 2;
+        CreateCircularBuffer(
+            program,
+            all_cores,
+            CircularBufferConfig(h * row_bytes, {{kCbTileOut, bf16}}).set_page_size(kCbTileOut, row_bytes));
+    }
 
     const uint32_t arrive_sem_id = CreateSemaphore(program, all_cores, 0);
     const uint32_t ready_sem_id = CreateSemaphore(program, all_cores, 0);
@@ -153,6 +164,10 @@ ShardedRmsNormProgramFactory::cached_program_t create_rows(
         static_cast<uint32_t>(mcast_end_phys.x),
         static_cast<uint32_t>(mcast_end_phys.y),
         output_is_sharded ? 1u : 0u,
+        output_is_rm ? 1u : 0u,
+        h,
+        out_rows,
+        kCbTileOut,
     };
     TensorAccessorArgs(output_is_sharded ? static_cast<const Buffer*>(nullptr) : output.buffer())
         .append_to(writer_ct_args);

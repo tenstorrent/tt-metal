@@ -90,12 +90,19 @@ void validate_row_block(const ShardedRmsNormParams& attributes, const ShardedRms
         weight.logical_shape());
 
     TT_FATAL(
-        attributes.output_layout == Layout::TILE,
-        "sharded_rmsnorm: row-block output is TILE in the input's {}x{} tiles",
+        attributes.output_layout == Layout::TILE || attributes.output_layout == Layout::ROW_MAJOR,
+        "sharded_rmsnorm: row-block output is TILE in the input's {}x{} tiles, or ROW_MAJOR rows",
         h,
         TILE_WIDTH);
     const auto& out_mem = attributes.output_mem_config;
-    if (out_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+    if (attributes.output_layout == Layout::ROW_MAJOR) {
+        // The block's rows un-tiled: [1, 1, rows, D], one page per row.
+        TT_FATAL(
+            out_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                (out_mem.buffer_type() == BufferType::DRAM || out_mem.buffer_type() == BufferType::L1),
+            "sharded_rmsnorm: a row-block ROW_MAJOR output must be DRAM or L1 INTERLEAVED, got {}",
+            out_mem);
+    } else if (out_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
         TT_FATAL(
             out_mem.buffer_type() == BufferType::DRAM || out_mem.buffer_type() == BufferType::L1,
             "sharded_rmsnorm: interleaved output must be DRAM or L1");
