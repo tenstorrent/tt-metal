@@ -1,0 +1,47 @@
+---
+# Platform package cache P0 (torrentci #2835): what the LLK job image offers a
+# hostAliases + injected-CA mirror. Probe: identity, tools, user namespaces,
+# and whether download.pytorch.org publishes #sha256= fragments.
+# No triggers: run it by hand.
+jobs:
+  - id: pkg-mirror-p0-probe
+    description: Probe the LLK image for the package-mirror client matrix
+    timeout: 15m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests: {cpu: '2', memory: 4Gi, ephemeral-storage: 4Gi}
+          limits: {memory: 4Gi, ephemeral-storage: 6Gi}
+    env:
+      - {name: HOME, value: /tmp/home}
+    steps:
+      - id: probe
+        kind: shell
+        shell:
+          run:
+            - |
+              set +e
+              mkdir -p "$HOME"
+              echo "== id"; id; ls -l /etc/hosts; cat /etc/hosts
+              echo "== tools"
+              for t in curl wget git openssl strace unshare ltrace gnutls-cli python3 pip; do printf '%s: ' "$t"; command -v "$t" || echo missing; done
+              curl --version | head -1; wget --version | head -1; git --version; openssl version; python3 -m pip --version
+              python3 -c 'import ssl; print(ssl.OPENSSL_VERSION)'
+              python3 -c 'import requests; print("requests", requests.__version__)' 2>&1 | tail -1
+              echo "== env"; env | grep -E -i 'SSL|CERT|PROXY|PIP_|UV_' || echo none
+              echo "== userns"
+              cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null; cat /proc/sys/user/max_user_namespaces 2>/dev/null
+              grep -E 'Seccomp|CapEff|NoNewPrivs' /proc/self/status
+              unshare --user --map-root-user --mount sh -c 'id; printf "127.0.0.1 pypi.org\n" > /tmp/h; mount --bind /tmp/h /etc/hosts && getent hosts pypi.org' ; echo "unshare rc=$?"
+              echo "== pytorch sha fragments"
+              curl -s https://download.pytorch.org/whl/cpu/torch/ | grep -o 'href="[^"]*"' | head -3
+              n=$(curl -s https://download.pytorch.org/whl/cpu/torch/ | grep -c 'href='); s=$(curl -s https://download.pytorch.org/whl/cpu/torch/ | grep -c 'sha256='); echo "torch hrefs=$n with_sha256=$s"
+              curl -s -H 'Accept: application/vnd.pypi.simple.v1+json' https://download.pytorch.org/whl/cpu/torch/ | head -c 400; echo
+              curl -sI https://download.pytorch.org/whl/cpu/torch/ | grep -i -E 'content-type|etag|last-modified|cache-control'
+              curl -sI https://pypi.org/simple/numpy/ | grep -i -E 'content-type|etag|last-modified|cache-control'
+              echo "== resolution of upstream hosts"
+              getent ahosts pypi.org | head -3; getent ahosts files.pythonhosted.org | head -2; getent ahosts download.pytorch.org | head -2
+              exit 0
