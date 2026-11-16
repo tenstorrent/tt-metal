@@ -39,10 +39,12 @@ FORCE_INLINE void send_chunk_packet(
     uint32_t payload_bytes,
     bool last) {
     if (last) {
-        // flush: the receiving router lands every write of the chunk before the increment, which tells the
-        // destination core that the chunk is complete.
+        // No flush. Every packet of a chunk takes the same route, so one receiving router issues all the chunk's
+        // writes and then this increment, to the same core, on one NoC and one static VC; the NoC delivers requests
+        // on one VC in issue order, so the increment cannot pass the writes. A flush would stall that router until
+        // the writes are acknowledged.
         pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dest_noc_addr, sem_noc_addr, 1, true}, payload_bytes);
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dest_noc_addr, sem_noc_addr, 1, false}, payload_bytes);
     } else {
         pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dest_noc_addr}, payload_bytes);
     }

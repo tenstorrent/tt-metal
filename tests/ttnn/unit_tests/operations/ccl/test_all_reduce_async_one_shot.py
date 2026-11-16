@@ -29,9 +29,20 @@ def _fabric_params(fabric_config, trace_bytes=8 << 20):
     return {"fabric_config": fabric_config, "trace_region_size": trace_bytes}
 
 
+def _fabric_params_8k(fabric_config, trace_bytes):
+    """The fabric as the Qwen3.8 MTP class opens it on Blackhole: 8 KB packets, so each 4-tile chunk is one packet."""
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = 8192
+    return {**_fabric_params(fabric_config, trace_bytes), "fabric_router_config": router}
+
+
 FABRICS = [
     pytest.param(_fabric_params(ttnn.FabricConfig.FABRIC_1D), id="fabric_1d"),
     pytest.param(_fabric_params(ttnn.FabricConfig.FABRIC_1D_RING), id="fabric_1d_ring"),
+]
+FABRICS_8K = [
+    pytest.param(_fabric_params_8k(ttnn.FabricConfig.FABRIC_1D, 32 << 20), id="fabric_1d_8k"),
+    pytest.param(_fabric_params_8k(ttnn.FabricConfig.FABRIC_1D_RING, 32 << 20), id="fabric_1d_ring_8k"),
 ]
 MESH_1X8 = [pytest.param((1, 8), id="1x8")]
 TOPOLOGIES = [pytest.param(ttnn.Topology.Ring, id="ring"), pytest.param(ttnn.Topology.Linear, id="linear")]
@@ -196,6 +207,52 @@ def test_all_reduce_async_one_shot_chain_in_trace(mesh_device):
         load(parts_b, x0_b)
         ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
         _assert_same(_per_device(traced), refs["b"], "traced chain, new inputs")
+    finally:
+        ttnn.release_trace(mesh_device, tid)
+    ttnn.deallocate(traced)
+
+
+@pytest.mark.parametrize("device_params", FABRICS_8K, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESH_1X8, indirect=True)
+@pytest.mark.parametrize("rows", [4, 32])
+def test_all_reduce_async_one_shot_verify_chain_replays(mesh_device, rows):
+    """The all-reduces of one MTP verify (CHAIN fused one_shot calls on one persistent buffer, x(i+1) = x(i) + sum)
+    in one trace, replayed REPLAYS times. An owner core reduces its slots as soon as their increments arrive, so a
+    slot reduced before its data landed changes the chained result: every replay must equal the default-mode chain
+    run with a sync after each call."""
+    CHAIN, REPLAYS = 128, 20
+    tp, mem, sems, buf = _setup(mesh_device)
+    g = torch.Generator().manual_seed(29 + rows)
+    parts = [torch.randn(1, tp, rows, DIM, generator=g).to(torch.bfloat16) for _ in range(2)]
+    x0_t = (torch.randn(1, 1, rows, DIM, generator=g) * 4.0).to(torch.bfloat16)
+    inps = [_partials_host(mesh_device, p).to(mesh_device, mem) for p in parts]
+    x0 = _replicated_host(mesh_device, x0_t).to(mesh_device, mem)
+
+    def chain(one_shot):
+        x = x0
+        for i in range(CHAIN):
+            y = _ar(mesh_device, inps[i % 2], buf, sems[i % 2], mem, one_shot, residual=x)
+            if not one_shot:
+                ttnn.synchronize_device(mesh_device)
+            if x is not x0:
+                ttnn.deallocate(x)
+            x = y
+        return x
+
+    out = chain(one_shot=False)
+    ref = _per_device(out)
+    ttnn.deallocate(out)
+    out = chain(one_shot=True)
+    _assert_same(_per_device(out), ref, f"rows={rows}: eager one_shot chain")
+    ttnn.deallocate(out)
+
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    traced = chain(one_shot=True)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    try:
+        for rep in range(REPLAYS):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+            _assert_same(_per_device(traced), ref, f"rows={rows}: traced chain replay {rep}")
     finally:
         ttnn.release_trace(mesh_device, tid)
     ttnn.deallocate(traced)
