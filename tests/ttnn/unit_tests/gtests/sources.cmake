@@ -40,11 +40,13 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_moreh_mean_backward.cpp
     test_moreh_sum_backward.cpp
     test_matmul.cpp
+    test_matmul_dram_sharded_placement.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
     test_program_cache_l1.cpp
     test_reduction.cpp
     test_relational_int.cpp
+    test_relational_uint.cpp
     test_rsub_int.cpp
     test_sort_prim_validation.cpp
     test_codegen_gates_unallocated.cpp

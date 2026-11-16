@@ -787,16 +787,19 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     }
 
     // ---- port cores ----
+    // use_column_major_ccl stacks every port in one column: on NoC0 (+x, then +y) the reader's pulls all funnel through
+    // that column's links, so there it pulls on NoC1 (-y, then -x) and the sender takes NoC0.
+    const bool reader_noc1 = attrs.plan_inputs.column_major_ccl;
     KernelDescriptor port_reader;
     port_reader.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_port_reader.cpp");
     port_reader.compile_time_args = port_ct;
-    port_reader.config =
-        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_0_default};
+    port_reader.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1, .noc = reader_noc1 ? NOC::NOC_1 : NOC::NOC_0};
     KernelDescriptor port_sender;
     port_sender.kernel_source = mrs_kernel_path("matmul_reduce_scatter_prefill_port_sender.cpp");
     port_sender.compile_time_args = std::move(port_ct);
-    port_sender.config =
-        DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_1_default};
+    port_sender.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0, .noc = reader_noc1 ? NOC::NOC_0 : NOC::NOC_1};
 
     const auto src_node = mesh->get_fabric_node_id(coord);
     std::vector<CoreRange> port_ranges;

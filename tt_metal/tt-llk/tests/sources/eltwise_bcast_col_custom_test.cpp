@@ -30,20 +30,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t loop_factor = params.LOOP_FACTOR;
-#else
-    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
-#endif
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t num_blocks         = 1;
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
-#else
+    const std::uint32_t loop_factor        = params.LOOP_FACTOR;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
     const std::uint32_t test_num_faces     = params.num_faces;
+#else
+    constexpr std::uint32_t loop_factor        = LOOP_FACTOR;
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces     = num_faces;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces);
 
@@ -88,7 +85,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_PROFILER
             for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
             {
-                _llk_unpack_AB_sub_bcast_col_custom_(PERF_ADDRESS(PERF_INPUT_A, 0), PERF_ADDRESS(PERF_INPUT_B, 0), num_tiles_in_block);
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    _llk_unpack_AB_sub_bcast_col_custom_(
+                        PERF_ADDRESS(PERF_INPUT_A, block * num_tiles_in_block), PERF_ADDRESS(PERF_INPUT_B, 0), num_tiles_in_block);
+                }
             }
 #else
             for (std::uint32_t block = 0; block < num_blocks; ++block)
@@ -117,20 +118,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t loop_factor = params.LOOP_FACTOR;
-#else
-    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
-#endif
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t num_blocks         = 1;
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
-#else
+    const std::uint32_t loop_factor        = params.LOOP_FACTOR;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
     const std::uint32_t test_num_faces     = params.num_faces;
+#else
+    constexpr std::uint32_t loop_factor        = LOOP_FACTOR;
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces     = num_faces;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces);
 
@@ -179,18 +177,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_PROFILER
             for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
             {
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                    }
 #ifdef ARCH_BLACKHOLE
-                _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP, MATH_FIDELITY>(num_tiles_in_block, tensor_shape);
+                    _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP, MATH_FIDELITY>(num_tiles_in_block, tensor_shape);
 #else
-                _llk_math_sub_bcast_cols_reuse_custom_(num_tiles_in_block, tensor_shape);
+                    _llk_math_sub_bcast_cols_reuse_custom_(num_tiles_in_block, tensor_shape);
 #endif
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
                 }
             }
 #else
@@ -226,20 +227,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-#ifdef LLK_PROFILER
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t loop_factor = params.LOOP_FACTOR;
-#else
-    constexpr std::uint32_t loop_factor = LOOP_FACTOR;
-#endif
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
-#else
+    [[maybe_unused]] const std::uint32_t loop_factor = params.LOOP_FACTOR;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
     const std::uint32_t test_num_faces     = params.num_faces;
+#else
+    constexpr std::uint32_t loop_factor        = LOOP_FACTOR;
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim    = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces     = num_faces;
 #endif
 
     {
@@ -261,18 +260,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_PROFILER
             for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
             {
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
                 {
-                    _llk_packer_wait_for_math_done_();
-                }
-                for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
-                {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
-                }
-                // Wormhole: the isolate loops also release the dest section as production's tile_regs_release does
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_PACK_SECTION_RELEASE)
-                {
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
+                    for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
+                    {
+                        const std::uint32_t result_tile = block * num_tiles_in_block + tile;
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, PERF_ADDRESS(PERF_OUTPUT, result_tile));
+                    }
+                    // Wormhole: the isolate loops also release the dest section as production's tile_regs_release does
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
                 }
             }
 #else
