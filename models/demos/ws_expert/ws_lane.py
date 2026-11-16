@@ -53,6 +53,7 @@ class LCfg:
     wpoll: int = 2  # the reader serves its weight queues every wpoll turns of its loop (WL_WPOLL)
     mcast_linked: bool = False  # group multicast payloads linked to their flags (WL_MCAST_LINKED)
     arr_write: bool = False  # arrival counts as plain writes after the payloads, no router atomics (WL_ARR_WRITE)
+    mc_noc1: bool = False  # column 0 multicasts from its NCRISC on NOC1 too, one x multicast at a time (WL_MC_NOC1)
 
 
 def lane_cores(g):
@@ -243,7 +244,8 @@ def build_lane(mesh, cfg: GCfg, lc: LCfg, x_t, idx_t, counts_t, ws_t, out_t, tab
         ("EXPERT_ACTIVATION_LIMIT", "7.0f"),
         ("EXPERT_ACTIVATION_ALPHA", "1.702f"),
     ]
-    ydefs = [("WG_XORDER", str(cfg.xorder)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
+    ydefs = [("WG_XORDER", str(1 if lc.mc_noc1 else cfg.xorder)), ("WG_Y_NCRISC", "1"), ("WL_K", str(K))]
+    ydefs += [("WL_MC_NOC1", "1")] if lc.mc_noc1 else []
     ydefs += [("WL_OUT_ALL", "1")] if lc.out_all else []
     ydefs += [("WL_MCAST_LINKED", "1")] if lc.mcast_linked else []
     XST = -(-cfg.LOOK // GC) + 4

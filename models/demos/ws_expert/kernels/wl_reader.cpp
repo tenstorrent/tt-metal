@@ -46,6 +46,12 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 #ifndef WL_K
 #define WL_K 3
 #endif
+// WL_MC_NOC1: column 0's x and h-leader multicasts also go out from its NCRISC on NOC1 (none from the BRISCs on NOC0)
+#ifdef WL_MC_NOC1
+constexpr uint32_t MC_COL_MASK = 3;  // (columns that multicast from this RISC: bit c)
+#else
+constexpr uint32_t MC_COL_MASK = 2;
+#endif
 constexpr uint32_t K = WL_K;  // weight slots a core
 static_assert(K >= 1 && K <= 4);  // (2-bit slot fields in the tables)
 
@@ -358,7 +364,7 @@ void kernel_main() {
         const uint32_t now = wall();
         const uint32_t dt = now - last_t;
         last_t = now;
-        if (a_n >= nexp_g || J / HALF != 1) {  // (column 0 multicasts x from its BRISC, on NOC0)
+        if (a_n >= nexp_g || !((MC_COL_MASK >> (J / HALF)) & 1)) {  // (else column 0's BRISC multicasts on NOC0)
             return false;
         }
         if (!cb_pages_available_at_front(xst_cb, BK)) {
@@ -470,7 +476,7 @@ void kernel_main() {
     const uint32_t harr = get_semaphore(SEM_HARR), hscr_addr = get_semaphore(SEM_SCRH);
     volatile tt_l1_ptr uint32_t* hscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hscr_addr);
     auto ql = [&]() -> bool {
-        if (C != 1 || lq >= total_rows) {
+        if (!((MC_COL_MASK >> C) & 1) || lq >= total_rows) {
             return false;
         }
         invalidate_l1_cache();
@@ -551,8 +557,9 @@ void kernel_main() {
             tot[i] += dd[i];
             mx[i] = dd[i] > mx[i] ? dd[i] : mx[i];
         }
-        if (!y && !l && !a && !b && !c && !d && drained >= total_rows && (C != 1 || lq >= total_rows) &&
-            w_n >= nexp_g && w_dn >= nexp_g && freed >= nexp_g && slots_done() && (a_n >= nexp_g || J / HALF != 1) &&
+        const bool mc = (MC_COL_MASK >> C) & 1;
+        if (!y && !l && !a && !b && !c && !d && drained >= total_rows && (!mc || lq >= total_rows) && w_n >= nexp_g &&
+            w_dn >= nexp_g && freed >= nexp_g && slots_done() && (a_n >= nexp_g || !mc) &&
             b_s >= total_x && x_credited >= total_x && h_q >= total_rows) {
             break;
         }

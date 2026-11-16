@@ -30,6 +30,11 @@ constexpr uint32_t SEM_HARR = 1, SEM_SCR = 2, SEM_SCRX = 4;
 #define WL_K 3
 #endif
 constexpr uint32_t K = WL_K;  // weight slots a core
+#ifdef WL_MC_NOC1
+constexpr bool MC_COL0 = false;  // (column 0's multicasts go out from its NCRISC on NOC1)
+#else
+constexpr bool MC_COL0 = true;
+#endif
 
 // A group multicast and its flag through the same command buffer, the flag as a 4-byte multicast write (not
 // noc_semaphore_set_multicast): on this architecture the write and write-register command buffers are not sent in
@@ -246,7 +251,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* scr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr_addr);
     constexpr uint32_t ngroup = (gx1 - gx0 + 1) * (gy1 - gy0 + 1);
     auto q3 = [&]() -> bool {
-        if (C != 0 || lq >= total_rows) {  // (column 1's leaders multicast on NOC1 from the NCRISC)
+        if (!MC_COL0 || C != 0 || lq >= total_rows) {  // (column 1's leaders multicast on NOC1 from the NCRISC)
             return false;
         }
         invalidate_l1_cache();
@@ -302,7 +307,7 @@ void kernel_main() {
     const uint32_t xscr_addr = get_semaphore(SEM_SCRX);
     volatile tt_l1_ptr uint32_t* xscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xscr_addr);
     auto qx = [&]() -> bool {
-        if (C != 0) {
+        if (!MC_COL0 || C != 0) {
             return false;
         }
         while (a_n < nexp_g && a_l >= rows_of(a_n) * BPR) {
@@ -385,8 +390,9 @@ void kernel_main() {
         for (uint32_t i = 0; i < 5; ++i) {
             tmx[i] = dd[i] > tmx[i] ? dd[i] : tmx[i];
         }
-        if (!o && !x && !a && !b && !c && !d && g_n >= nexp_g && sent >= total_rows && (C != 0 || lq >= total_rows) &&
-            drained >= total_rows && (C != 0 || a_n >= nexp_g) && g_state == 0 && qo_done()) {
+        const bool mc = MC_COL0 && C == 0;
+        if (!o && !x && !a && !b && !c && !d && g_n >= nexp_g && sent >= total_rows && (!mc || lq >= total_rows) &&
+            drained >= total_rows && (!mc || a_n >= nexp_g) && g_state == 0 && qo_done()) {
             break;
         }
     }

@@ -481,3 +481,10 @@ then 20 + 5 plain and WS_DEFER; stage B (cmds/ws_sf_b.sh) once the tray is clean
   5, group 0's column-0 core (1,7) BRISC NOC0, every write sent but the 20 acks of its last multicast missing (the
   linked hangs: writes issued but not sent). Unlinked multicasts do not remove the wedge; the hang is somewhere in the
   group program's NOC0 traffic under fabric load, not in the multicast linking. No further runs.
+- Isolation soaks (hold 214106): (a) the single-chip group program (ws_group, on-chip injectors with NoC atomic
+  arrival increments, linked multicasts, 160 experts a group, G 4, T 31250, M 586, BK 20 / NX 9): 2267 launches in
+  180 s, no hang, util tile 76.7%, PCC 0.99994 - the wedge needs the lane design's fabric traffic. (b) the lane design
+  on the tray with the arrival counts as plain writes after the payloads (no router atomics; unlinked multicasts):
+  util tile 42.5%, hung after about 150-200 launches (device timeout at 00:47:36), host MMIO reads to device 5 timed
+  out (4 B load 56 ms), the watcher cancelled the test step, and the node went down and rebooted (boot 00:49:23).
+  Router atomics are not the cause either. Not run: (c) column 0's multicasts on NOC1 (WL_MC_NOC1, built, untested).
